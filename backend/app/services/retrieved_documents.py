@@ -455,13 +455,9 @@ class RetrievedDocumentFreezer:
         if not isinstance(context, FetchCheckpointContext):
             raise TypeError("context must be a FetchCheckpointContext")
         started = _aware_utc(started_at)
-        # Persist one coherent provider-completion timestamp.  The runner
-        # observes retrieval just before entering this atomic checkpoint, so
-        # a second real-clock read can otherwise make the attempt appear to
-        # finish after its artifact was retrieved and quarantine valid data.
-        finished = max(self._now(), _aware_utc(context.retrieved_at))
+        finished = _aware_utc(context.retrieved_at)
         if finished < started:
-            raise ValueError("attempt finished_at must not precede started_at")
+            raise ValueError("retrieved_at must not precede started_at")
         digest = hashlib.sha256(envelope.content).hexdigest()
 
         with self._write_session(sqlite_immediate=True) as session:
@@ -562,9 +558,9 @@ class RetrievedDocumentFreezer:
         if not isinstance(context, FetchCheckpointContext):
             raise TypeError("context must be a FetchCheckpointContext")
         started = _aware_utc(started_at)
-        finished = max(self._now(), _aware_utc(context.retrieved_at))
-        if finished < started:
-            raise ValueError("attempt finished_at must not precede started_at")
+        provider_observed_at = _aware_utc(context.retrieved_at)
+        if provider_observed_at < started:
+            raise ValueError("retrieved_at must not precede started_at")
         digest = hashlib.sha256(envelope.content).hexdigest()
         metadata = _thaw_json(reference.metadata)
         metadata["retrieval_locator"] = _thaw_json(reference.fetch_locator)
@@ -595,12 +591,6 @@ class RetrievedDocumentFreezer:
                 source_role=reference.source_role,
                 metadata_json=metadata,
             )
-            # Inline providers discover the reference and return its bytes in
-            # one call.  Model the persisted fetch sub-operation as beginning
-            # no earlier than that newly frozen reference, while the separate
-            # search attempt retains the original provider-call start time.
-            attempt_started = max(started, _aware_utc(reference_row.created_at))
-            finished = max(finished, self._now(), attempt_started)
             self._validate_envelope_identity(reference_row, envelope)
             existing = session.scalar(
                 select(RetrievalArtifact)
@@ -619,6 +609,16 @@ class RetrievedDocumentFreezer:
                 ):
                     raise ValueError("persisted inline fetch checkpoint is inconsistent")
                 return reference_row.id, existing.id, attempt.id
+            # Inline providers discover the reference and return its bytes in
+            # one search call.  Preserve that provider-response observation in
+            # metadata, then model a separate persistence sub-operation from
+            # the newly frozen reference to this explicit checkpoint time.
+            attempt_started = _aware_utc(reference_row.created_at)
+            finished = self._now()
+            if finished < attempt_started:
+                raise ValueError("checkpoint time must not precede reference creation")
+            if finished < provider_observed_at:
+                raise ValueError("checkpoint time must not precede provider observation")
             attempt_no = (
                 session.scalar(
                     select(func.max(AcquisitionAttempt.attempt_no)).where(
@@ -644,6 +644,7 @@ class RetrievedDocumentFreezer:
                     "source_reference_id": str(reference_row.id),
                     "claim_attempt": context.claim_attempt,
                     "checkpoint": "inline_search_result",
+                    "provider_response_observed_at": provider_observed_at.isoformat(),
                 },
             )
             artifact = RetrievalArtifact(

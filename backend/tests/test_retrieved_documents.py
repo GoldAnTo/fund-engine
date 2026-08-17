@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import sessionmaker
 
-from app.acquisition.sources import RetrievedEnvelope
+from app.acquisition.sources import RetrievedEnvelope, SourceReferenceValue
 from app.datasources.docling import ParsedSpan
 from app.documents.locators import SourceLocatorV1, TextPosition, TextQuote
 from app.models.acquisition import (
@@ -35,6 +35,7 @@ from app.repositories.documents import DocumentRepository
 from app.repositories.acquisition import StaleLeaseError
 from app.services.ingest import DocumentService
 from app.services.retrieved_documents import (
+    FetchCheckpointContext,
     FrozenRequestContext,
     RetrievedDocumentFreezer,
 )
@@ -93,7 +94,7 @@ def _factory(session):
     return sessionmaker(bind=session.get_bind(), future=True, expire_on_commit=False)
 
 
-def _seed_job(session, *, tenant_id="team-a"):
+def _seed_job(session, *, tenant_id="team-a", stage="freezing"):
     case = ResearchCase(
         title=f"case-{uuid.uuid4().hex}",
         industry_topic="test",
@@ -119,7 +120,7 @@ def _seed_job(session, *, tenant_id="team-a"):
         request_snapshot={},
         policy_snapshot={"version": "test-v1"},
         status="running",
-        stage="freezing",
+        stage=stage,
         attempt=1,
         reference_count=0,
         fetched_count=0,
@@ -235,6 +236,159 @@ def _envelope(content=b"first line\nsecond line\n", *, final_url=None, mime=None
         provider_request_id="request-123",
         metadata={"adapter_key": "fixture.exchange"},
     )
+
+
+def _fetch_context(job, case, *, retrieved_at=NOW):
+    return FetchCheckpointContext(
+        job_id=job.id,
+        research_case_id=case.id,
+        tenant_id=job.tenant_id,
+        declared_actor="system:acquisition-worker@test",
+        lease_token=LEASE_TOKEN,
+        claim_attempt=job.attempt,
+        retrieved_at=retrieved_at,
+    )
+
+
+def _checkpoint_reference(session, job):
+    reference = SourceReference(
+        job_id=job.id,
+        adapter_key="fixture.exchange",
+        external_record_id=uuid.uuid4().hex,
+        external_version="v1",
+        canonical_url="https://issuer.example/report.txt",
+        title="Issuer checkpoint report",
+        published_at=NOW,
+        source_role="company_disclosure",
+        metadata_json={"provider_identity": "issuer.example"},
+        created_at=NOW,
+    )
+    session.add(reference)
+    session.commit()
+    return reference
+
+
+def _inline_reference():
+    return SourceReferenceValue(
+        adapter_key="fixture.exchange",
+        external_record_id="inline-report-1",
+        external_version="v1",
+        canonical_url="https://issuer.example/inline.txt",
+        title="Issuer inline report",
+        published_at=NOW,
+        source_role="company_disclosure",
+        fetch_locator={"canonical_url": "https://issuer.example/inline.txt"},
+        metadata={"provider_identity": "issuer.example"},
+    )
+
+
+def test_fetch_checkpoint_rejects_provider_observation_before_attempt_start(session):
+    case, job = _seed_job(session, stage="fetching")
+    reference = _checkpoint_reference(session, job)
+    freezer = RetrievedDocumentFreezer(
+        _factory(session), clock=MutableClock(NOW + timedelta(minutes=10))
+    )
+
+    with pytest.raises(
+        ValueError, match="retrieved_at must not precede started_at"
+    ):
+        freezer.checkpoint_fetch(
+            reference,
+            _envelope(),
+            _fetch_context(job, case, retrieved_at=NOW + timedelta(seconds=1)),
+            started_at=NOW + timedelta(seconds=2),
+        )
+
+    with _factory(session)() as verify:
+        assert verify.scalar(select(func.count(RetrievalArtifact.id))) == 0
+        assert verify.scalar(select(func.count(AcquisitionAttempt.id))) == 0
+        persisted_job = verify.get(AcquisitionJob, job.id)
+        assert persisted_job is not None and persisted_job.status == "running"
+
+
+def test_fetch_checkpoint_preserves_exact_provider_observation_and_retry_is_idempotent(
+    session,
+):
+    case, job = _seed_job(session, stage="fetching")
+    reference = _checkpoint_reference(session, job)
+    observed_at = NOW + timedelta(seconds=1)
+    freezer = RetrievedDocumentFreezer(
+        _factory(session), clock=MutableClock(NOW + timedelta(minutes=10))
+    )
+    context = _fetch_context(job, case, retrieved_at=observed_at)
+
+    first_artifact_id, first_attempt_id = freezer.checkpoint_fetch(
+        reference, _envelope(), context, started_at=NOW
+    )
+    replay_artifact_id, replay_attempt_id = freezer.checkpoint_fetch(
+        reference,
+        _envelope(),
+        _fetch_context(job, case, retrieved_at=NOW + timedelta(minutes=5)),
+        started_at=NOW,
+    )
+
+    assert (replay_artifact_id, replay_attempt_id) == (
+        first_artifact_id,
+        first_attempt_id,
+    )
+    with _factory(session)() as verify:
+        artifact = verify.get(RetrievalArtifact, first_artifact_id)
+        attempt = verify.get(AcquisitionAttempt, first_attempt_id)
+        assert artifact is not None and attempt is not None
+        assert attempt.finished_at == observed_at.replace(tzinfo=None)
+        assert artifact.retrieved_at == observed_at.replace(tzinfo=None)
+        assert verify.scalar(select(func.count(RetrievalArtifact.id))) == 1
+        assert verify.scalar(select(func.count(AcquisitionAttempt.id))) == 1
+
+
+def test_inline_checkpoint_retains_provider_observation_and_monotonic_persisted_time(
+    session,
+):
+    case, job = _seed_job(session, stage="searching")
+    provider_observed_at = NOW + timedelta(seconds=1)
+    checkpoint_at = NOW + timedelta(seconds=2)
+    freezer = RetrievedDocumentFreezer(
+        _factory(session), clock=MutableClock(checkpoint_at)
+    )
+    reference = _inline_reference()
+    envelope = _envelope(
+        b"inline response",
+        final_url="https://issuer.example/inline.txt",
+    )
+
+    reference_id, artifact_id, attempt_id = freezer.checkpoint_search_result(
+        reference,
+        envelope,
+        _fetch_context(job, case, retrieved_at=provider_observed_at),
+        started_at=NOW,
+    )
+    replay_ids = freezer.checkpoint_search_result(
+        reference,
+        envelope,
+        _fetch_context(job, case, retrieved_at=NOW + timedelta(minutes=5)),
+        started_at=NOW,
+    )
+
+    assert replay_ids == (reference_id, artifact_id, attempt_id)
+    with _factory(session)() as verify:
+        persisted_reference = verify.get(SourceReference, reference_id)
+        artifact = verify.get(RetrievalArtifact, artifact_id)
+        attempt = verify.get(AcquisitionAttempt, attempt_id)
+        assert (
+            persisted_reference is not None
+            and artifact is not None
+            and attempt is not None
+        )
+        assert attempt.safe_metadata["provider_response_observed_at"] == (
+            provider_observed_at.isoformat()
+        )
+        assert persisted_reference.created_at <= attempt.started_at
+        assert attempt.started_at <= attempt.finished_at
+        assert attempt.finished_at == artifact.retrieved_at
+        assert attempt.finished_at == checkpoint_at.replace(tzinfo=None)
+        assert verify.scalar(select(func.count(SourceReference.id))) == 1
+        assert verify.scalar(select(func.count(RetrievalArtifact.id))) == 1
+        assert verify.scalar(select(func.count(AcquisitionAttempt.id))) == 1
 
 
 def _seed_file_sqlite(tmp_path, *, reference_count=2):
