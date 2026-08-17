@@ -455,7 +455,11 @@ class RetrievedDocumentFreezer:
         if not isinstance(context, FetchCheckpointContext):
             raise TypeError("context must be a FetchCheckpointContext")
         started = _aware_utc(started_at)
-        finished = self._now()
+        # Persist one coherent provider-completion timestamp.  The runner
+        # observes retrieval just before entering this atomic checkpoint, so
+        # a second real-clock read can otherwise make the attempt appear to
+        # finish after its artifact was retrieved and quarantine valid data.
+        finished = max(self._now(), _aware_utc(context.retrieved_at))
         if finished < started:
             raise ValueError("attempt finished_at must not precede started_at")
         digest = hashlib.sha256(envelope.content).hexdigest()
@@ -536,7 +540,7 @@ class RetrievedDocumentFreezer:
                 etag=envelope.etag,
                 last_modified=envelope.last_modified,
                 provider_request_id=envelope.provider_request_id,
-                retrieved_at=context.retrieved_at,
+                retrieved_at=finished,
             )
             session.add_all((attempt, artifact))
             session.flush()
@@ -558,7 +562,7 @@ class RetrievedDocumentFreezer:
         if not isinstance(context, FetchCheckpointContext):
             raise TypeError("context must be a FetchCheckpointContext")
         started = _aware_utc(started_at)
-        finished = self._now()
+        finished = max(self._now(), _aware_utc(context.retrieved_at))
         if finished < started:
             raise ValueError("attempt finished_at must not precede started_at")
         digest = hashlib.sha256(envelope.content).hexdigest()
@@ -591,6 +595,12 @@ class RetrievedDocumentFreezer:
                 source_role=reference.source_role,
                 metadata_json=metadata,
             )
+            # Inline providers discover the reference and return its bytes in
+            # one call.  Model the persisted fetch sub-operation as beginning
+            # no earlier than that newly frozen reference, while the separate
+            # search attempt retains the original provider-call start time.
+            attempt_started = max(started, _aware_utc(reference_row.created_at))
+            finished = max(finished, self._now(), attempt_started)
             self._validate_envelope_identity(reference_row, envelope)
             existing = session.scalar(
                 select(RetrievalArtifact)
@@ -625,7 +635,7 @@ class RetrievedDocumentFreezer:
                 adapter_key=reference.adapter_key,
                 operation="fetch",
                 attempt_no=attempt_no,
-                started_at=started,
+                started_at=attempt_started,
                 finished_at=finished,
                 outcome="succeeded",
                 error_code=None,
@@ -648,7 +658,7 @@ class RetrievedDocumentFreezer:
                 etag=envelope.etag,
                 last_modified=envelope.last_modified,
                 provider_request_id=envelope.provider_request_id,
-                retrieved_at=context.retrieved_at,
+                retrieved_at=finished,
             )
             session.add_all((attempt, artifact))
             session.flush()
