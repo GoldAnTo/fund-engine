@@ -37,7 +37,15 @@ from app.models.ledger import Base, _uuid
 # --------------------------------------------------------------------------- #
 # Jobs
 # --------------------------------------------------------------------------- #
-JobStatus = Literal["queued", "running", "waiting_for_review", "succeeded", "failed", "cancelled"]
+JobStatus = Literal[
+    "queued",
+    "running",
+    "waiting_for_sources",
+    "waiting_for_review",
+    "succeeded",
+    "failed",
+    "cancelled",
+]
 JobKind = Literal["ingest", "extract", "propose", "assess", "project", "parse", "prepare_research"]
 
 
@@ -337,6 +345,7 @@ EVENT_RESEARCH_LIFECYCLE_STATES = frozenset(
         "continuing",
         "awaiting_scope",
         "draft_ready",
+        "completed",
         "published",
         "exhausted",
     }
@@ -355,7 +364,7 @@ class EventResearchLifecycle(Base):
     __table_args__ = (
         CheckConstraint(
             "status IN ('extracting', 'researching', 'awaiting_key_review', "
-            "'continuing', 'awaiting_scope', 'draft_ready', 'published', 'exhausted')",
+            "'continuing', 'awaiting_scope', 'draft_ready', 'completed', 'published', 'exhausted')",
             name="ck_event_research_lifecycle_status",
         ),
     )

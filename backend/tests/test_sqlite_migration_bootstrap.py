@@ -34,7 +34,7 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
     assert result.returncode == 0, result.stderr
     engine = sa.create_engine(f"sqlite:///{database_path}")
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0058"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0059"
         assessment_columns = {
             column["name"]
             for column in sa.inspect(connection).get_columns("ai_assessments")
@@ -357,7 +357,7 @@ with SessionLocal() as session:
 
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0058"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0059"
         assert {
             "research_preparations",
             "research_preparation_artifacts",
@@ -1121,7 +1121,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0058"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0059"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -1175,7 +1175,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0058"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0059"
 
 
 def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> None:
@@ -1232,7 +1232,7 @@ def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> 
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == "0058"
+        ).scalar_one() == "0059"
         assert connection.execute(
             sa.text(
                 "SELECT research_source_type FROM source_contracts WHERE id = :id"

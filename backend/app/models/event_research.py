@@ -31,6 +31,12 @@ class EventResearchBrief(Base):
     """Immutable, confirmed interpretation of the original event input."""
 
     __tablename__ = "event_research_briefs"
+    __table_args__ = (
+        CheckConstraint(
+            "workflow_mode IN ('reviewed', 'automatic')",
+            name="ck_event_research_briefs_workflow_mode",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     research_case_id: Mapped[uuid.UUID] = mapped_column(
@@ -46,6 +52,9 @@ class EventResearchBrief(Base):
     event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     market_reaction: Mapped[str | None] = mapped_column(Text, nullable=True)
     research_question: Mapped[str] = mapped_column(Text, nullable=False)
+    workflow_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="reviewed", server_default="reviewed"
+    )
     extraction_state: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

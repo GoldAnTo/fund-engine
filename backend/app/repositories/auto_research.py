@@ -9,6 +9,9 @@ from app.models.operational import ResearchRun, ResearchTask, Job, JobEvent, Tas
 from app.services.case_monitor import ResearchRunEventRepository
 
 
+_ACTIVE_RUN_STATUSES = ("queued", "running", "waiting_for_sources", "waiting_for_review")
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -78,7 +81,7 @@ class AutoResearchRepository:
         runs = self._session.scalars(
             select(ResearchRun)
             .where(ResearchRun.research_case_id == research_case_id)
-            .where(ResearchRun.status.in_(["queued", "running", "waiting_for_review"]))
+            .where(ResearchRun.status.in_(_ACTIVE_RUN_STATUSES))
             .order_by(ResearchRun.created_at.desc(), ResearchRun.id.desc())
         )
         return next(
@@ -147,7 +150,7 @@ class AutoResearchRepository:
         )
 
     def cancel_run(self, run: ResearchRun) -> bool:
-        if run.status not in {"running", "queued", "waiting_for_review"}:
+        if run.status not in _ACTIVE_RUN_STATUSES:
             return False
         run.status = "cancelled"
         run.stage = "stopped"
