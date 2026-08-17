@@ -10,6 +10,7 @@ import { setResearchClient } from "./data/researchClient";
 // 正常访问不带该参数时行为不变。
 import "./styles/research-os.css";
 import "./styles/research-os-overrides.css";
+import "./styles/automatic-research.css";
 
 async function bootstrap() {
   const mockRequested =

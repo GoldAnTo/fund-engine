@@ -45,7 +45,6 @@ describe("Research OS route inventory", () => {
     ["/network", /无法读取跨 Case 关联/],
     ["/monitoring", /无法读取实际运行记录/],
     ["/governance/case-admissions", /当前身份不能读取历史 Case 准入队列/],
-    ["/events/new", /无法读取可归入 Case 清单/],
     ["/retired-prototype-route", /暂时无法读取事件研究/],
   ])("renders an explicit live-data error for %s", async (path, message) => {
     render(
@@ -56,6 +55,20 @@ describe("Research OS route inventory", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(message);
     expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("renders the automatic research entry without loading an existing Case list", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/new"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "告诉系统你想研究什么" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "开始自动研究" })).toBeDisabled();
+    expect(screen.queryByText(/无法读取可归入 Case 清单/)).not.toBeInTheDocument();
   });
 
   it.each(caseRoutes)(
