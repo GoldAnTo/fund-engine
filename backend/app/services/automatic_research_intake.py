@@ -35,6 +35,13 @@ class AutomaticResearchIntakeService:
         text = raw_input.strip()
         if not text:
             raise ValueError("automatic research input must not be blank")
+        normalized_tenant_id = tenant_id.strip()
+        if not normalized_tenant_id:
+            raise ValueError("automatic research tenant_id must not be blank")
+        if len(normalized_tenant_id) > 121:
+            raise ValueError(
+                "automatic research tenant_id must not exceed 121 characters"
+            )
 
         extracted = self._extractor.extract(raw_input=text, source_url=None)
         event_title = (
@@ -65,9 +72,9 @@ class AutomaticResearchIntakeService:
                 research_question=extracted.research_question,
                 candidate_factors=list(extracted.candidate_factors),
                 research_protocol_required=False,
-                created_by=f"tenant:{tenant_id}",
+                created_by=f"tenant:{normalized_tenant_id}",
             ),
-            tenant_id=tenant_id,
+            tenant_id=normalized_tenant_id,
             workflow_mode="automatic",
         )
         if created.run_id is None:

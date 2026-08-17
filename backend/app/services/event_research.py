@@ -28,6 +28,9 @@ from app.services.auto_research import AutoResearchService
 from app.errors import ValidationFailedError
 
 
+_AUTOMATIC_ACTOR = "system:automatic-intake"
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -71,6 +74,11 @@ class EventResearchService:
     ) -> CreatedEventResearch:
         if workflow_mode not in {"reviewed", "automatic"}:
             raise ValueError("workflow_mode must be 'reviewed' or 'automatic'")
+        scope_actor = (
+            payload.created_by
+            if workflow_mode == "reviewed"
+            else _AUTOMATIC_ACTOR
+        )
         research = ResearchService(ResearchRepository(self._session))
         case = research.add_case(
             title=payload.event_title,
@@ -138,7 +146,7 @@ class EventResearchService:
         scope = EventResearchScopeVersion(
             research_case_id=case.id,
             version=1,
-            changed_by=payload.created_by,
+            changed_by=scope_actor,
             change_summary="Initial event research factors",
             created_at=now,
         )
@@ -160,7 +168,11 @@ class EventResearchService:
                     research_case_id=case.id,
                     statement=statement,
                     position=position,
-                    created_by="human",
+                    created_by=(
+                        "human"
+                        if workflow_mode == "reviewed"
+                        else _AUTOMATIC_ACTOR
+                    ),
                     created_at=now,
                 )
             )
@@ -168,7 +180,7 @@ class EventResearchService:
                 research.add_thesis(
                     case.id,
                     statement=statement,
-                    created_by=payload.created_by,
+                    created_by=scope_actor,
                     creator_type="human" if workflow_mode == "reviewed" else "ai",
                     review_state="confirmed" if workflow_mode == "reviewed" else "draft",
                     research_protocol_required=payload.research_protocol_required,
@@ -277,17 +289,16 @@ class EventResearchService:
                         },
                     },
                 )
-                lifecycle = EventResearchLifecycle(
-                    research_case_id=case.id,
-                    status="researching",
-                    active_run_id=run.id,
-                    current_round=1,
-                    status_summary="自动研究已排队",
-                    current_gap=None,
-                    next_human_action=None,
-                    updated_at=_utcnow(),
-                )
-                self._session.add(lifecycle)
+                if lifecycle is None:
+                    lifecycle = EventResearchLifecycle(research_case_id=case.id)
+                    self._session.add(lifecycle)
+                lifecycle.status = "researching"
+                lifecycle.active_run_id = run.id
+                lifecycle.current_round = 1
+                lifecycle.status_summary = "自动研究已排队"
+                lifecycle.current_gap = None
+                lifecycle.next_human_action = None
+                lifecycle.updated_at = _utcnow()
             self._session.commit()
         except Exception:
             # Preparation is part of event intake's one unit of work.  In
