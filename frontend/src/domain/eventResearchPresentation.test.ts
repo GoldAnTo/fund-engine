@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { EventWorkbench } from "./eventResearch";
 import {
   eventActionPresentation,
+  eventDeskRoute,
   eventResearchStage,
   EVENT_RESEARCH_STAGES,
 } from "./eventResearchPresentation";
@@ -73,6 +74,22 @@ function preparationWorkbench(
 }
 
 describe("event research presentation", () => {
+  it("routes automatic desk items to the encoded canonical process page", () => {
+    const automaticEvent = workbench("researching", { kind: "wait", label: "自动研究中" }).event;
+    automaticEvent.id = "case/with space?#";
+    automaticEvent.workflowMode = "automatic";
+
+    expect(eventDeskRoute(automaticEvent)).toBe(
+      "/events/case%2Fwith%20space%3F%23/automatic-research",
+    );
+  });
+
+  it("keeps reviewed desk items on their existing route", () => {
+    expect(
+      eventDeskRoute(workbench("researching", { kind: "wait", label: "系统补证中" }).event),
+    ).toBe("/events/event-1");
+  });
+
   it("maps backend lifecycle states onto the six user-facing research stages", () => {
     expect(EVENT_RESEARCH_STAGES.map((stage) => stage.label)).toEqual([
       "资料接入",

@@ -74,6 +74,19 @@ describe("Research OS route inventory", () => {
     expect(screen.queryByText(/从事件开始/)).not.toBeInTheDocument();
   });
 
+  it("routes the canonical automatic research URL to its safe process-page error", async () => {
+    render(
+      <MemoryRouter initialEntries={["/events/case-route/automatic-research"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "暂时无法读取这项自动研究",
+    );
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
   it.each(caseRoutes)(
     "renders a Case-specific live-data error for %s",
     async (path) => {

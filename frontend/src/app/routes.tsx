@@ -18,6 +18,7 @@ import {
   MonitorConfigPage,
 } from "../features/case/CasePages";
 import { EventCreatePage } from "../features/events/EventCreatePage";
+import { AutomaticResearchPage } from "../features/events/AutomaticResearchPage";
 import { EventDeskPage } from "../features/events/EventDeskPage";
 import { ResearchPreparationPage } from "../features/events/ResearchPreparationPage";
 import { GlobalMonitoringPage } from "../features/events/GlobalMonitoringPage";
@@ -34,6 +35,10 @@ export function ResearchOsRoutes() {
         <Route path="monitoring" element={<GlobalMonitoringPage />} />
         <Route path="governance/case-admissions" element={<LegacyAdmissionPage />} />
         <Route path="events/new" element={<EventCreatePage />} />
+        <Route
+          path="events/:caseId/automatic-research"
+          element={<AutomaticResearchPage />}
+        />
         <Route path="events/:caseId/preparation" element={<ResearchPreparationPage />} />
         <Route path="events/:caseId" element={<CaseConclusionPage />} />
         <Route

@@ -218,6 +218,9 @@ export function eventActionPresentation(
 }
 
 export function eventDeskRoute(event: EventResearchListItem): string {
+  if (event.workflowMode === "automatic") {
+    return `/events/${encodeURIComponent(event.id)}/automatic-research`;
+  }
   const base = `/events/${event.id}`;
   if (isPreparationDeskEvent(event)) return `${base}/preparation`;
   if (event.nextActionKind === "complete_research_protocol") return `${base}/protocol`;

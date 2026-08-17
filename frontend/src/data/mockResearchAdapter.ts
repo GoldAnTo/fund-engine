@@ -3169,15 +3169,80 @@ function mockResearchPreparation(scenario: PreparationScenario): ResearchPrepara
   return preparation;
 }
 
+function mockAutomaticResearchView(
+  caseId: string,
+  runId: string,
+  title: string,
+  status: "running" | "completed" | "failed",
+): AutomaticResearchView {
+  const completed = status === "completed";
+  const failed = status === "failed";
+  const stageDefinitions: Array<Pick<
+    AutomaticResearchView["stages"][number],
+    "key" | "label" | "summary"
+  >> = [
+    { key: "acquire", label: "采集资料", summary: completed ? "已找到 3 份资料" : "正在查找允许使用的资料" },
+    { key: "parse", label: "解析内容", summary: completed ? "已提取原文内容" : "等待资料采集" },
+    { key: "admit", label: "证据准入", summary: completed ? "已自动纳入 2 条证据" : "等待内容解析" },
+    { key: "analyze", label: "分析证据", summary: completed ? "已比较支持证据与反证" : "等待证据准入" },
+    { key: "conclude", label: "形成结论", summary: completed ? "已生成自动结论" : "等待证据分析" },
+  ];
+  const stages: AutomaticResearchView["stages"] = stageDefinitions.map((stage, index) => ({
+    ...stage,
+    status: completed
+      ? "completed"
+      : failed
+        ? index < 2 ? "completed" : index === 2 ? "failed" : "pending"
+        : index === 0 ? "running" : "pending",
+    startedAt: completed || index === 0 ? "2026-08-17T01:00:00Z" : null,
+    completedAt: completed ? "2026-08-17T01:01:05Z" : null,
+  }));
+
+  return {
+    caseId,
+    runId,
+    title: title || "自动研究",
+    status,
+    stages,
+    stats: completed
+      ? { sourceCount: 3, admittedEvidenceCount: 2, skippedCount: 1, durationSeconds: 65 }
+      : { sourceCount: 0, admittedEvidenceCount: 0, skippedCount: 0, durationSeconds: 0 },
+    recentActivity: completed
+      ? ["完成来源采集", "生成自动结论"]
+      : failed ? ["证据准入未能完成"] : ["正在采集资料"],
+    exceptions: completed
+      ? [{ reason: "来源许可不满足", stage: "admit", count: 1 }]
+      : failed ? [{ reason: "必要来源暂时不可读取", stage: "admit", count: 1 }] : [],
+    failureReason: failed ? "必要来源暂时不可读取，请重新运行。" : null,
+    result: completed ? {
+      label: "系统生成，未经人工审核",
+      humanReviewed: false,
+      conclusion: "现有资料显示，事件可能对相关供应链需求形成增量影响。",
+      keyFindings: ["公开资料中的需求信号方向一致"],
+      counterEvidence: ["部分交付仍可能受到产能与周期约束"],
+      limitations: ["结论仅基于当前可用公开资料"],
+      sources: [{
+        title: "示例公司公告",
+        url: "https://example.com/automatic-research-source",
+        role: "supports",
+        reviewState: "automatically_admitted",
+      }],
+    } : null,
+  };
+}
+
 export class MockResearchAdapter implements ResearchClient {
   private scenario: MockScenario;
   private readonly preparationScenario: PreparationScenario;
+  private readonly automaticResearchScenario: "completed" | "failed";
+  private failNextAutomaticResearch: boolean;
   private preparation: ResearchPreparation;
   // mutable per-instance copies for tests that write review decisions.
   private queue: ReviewQueueItem[];
   private researchRuns: ResearchRunDetail[];
   private createdResearchRunCount = 0;
   private createdAutomaticResearchCount = 0;
+  private automaticResearchViews = new Map<string, AutomaticResearchView>();
   // track decision history so submitReviewDecision has stable semantics.
   private decisions: { itemId: string; outcome: ReviewOutcome; reason: string }[] = [];
   private eventTsmReviewDecision: EventTsmReviewDecision | null = null;
@@ -3195,51 +3260,61 @@ export class MockResearchAdapter implements ResearchClient {
   async startAutomaticResearch(input: string): Promise<AutomaticResearchStart> {
     this.throwIfOffline();
     this.createdAutomaticResearchCount += 1;
-    return simulateLatency({
+    const started: AutomaticResearchStart = {
       caseId: `automatic-case-${this.createdAutomaticResearchCount}`,
       runId: `automatic-run-${this.createdAutomaticResearchCount}`,
       status: "queued",
-    });
+    };
+    this.automaticResearchViews.set(
+      started.caseId,
+      mockAutomaticResearchView(started.caseId, started.runId, input.trim(), "running"),
+    );
+    return simulateLatency(started);
   }
 
   async getAutomaticResearch(caseId: string): Promise<AutomaticResearchView> {
     this.throwIfOffline();
-    return simulateLatency({
-      caseId,
-      runId: `automatic-run-${this.createdAutomaticResearchCount || 1}`,
-      title: "自动研究",
-      status: "completed",
-      stages: [
-        { key: "acquire", label: "采集", status: "completed", summary: "已完成", startedAt: null, completedAt: null },
-        { key: "parse", label: "解析", status: "completed", summary: "已完成", startedAt: null, completedAt: null },
-        { key: "admit", label: "准入", status: "completed", summary: "已完成", startedAt: null, completedAt: null },
-        { key: "analyze", label: "分析", status: "completed", summary: "已完成", startedAt: null, completedAt: null },
-        { key: "conclude", label: "结论", status: "completed", summary: "已完成", startedAt: null, completedAt: null },
-      ],
-      stats: { sourceCount: 0, admittedEvidenceCount: 0, skippedCount: 0, durationSeconds: 0 },
-      recentActivity: [],
-      exceptions: [],
-      failureReason: null,
-      result: {
-        label: "系统生成，未经人工审核",
-        humanReviewed: false,
-        conclusion: "自动研究已完成。",
-        keyFindings: [],
-        counterEvidence: [],
-        limitations: [],
-        sources: [],
-      },
-    });
+    const current = this.automaticResearchViews.get(caseId);
+    if (!current) throw new Error("automatic research not found");
+    if (current.status !== "running") return simulateLatency(current);
+    if (this.failNextAutomaticResearch) {
+      this.failNextAutomaticResearch = false;
+      const failed = mockAutomaticResearchView(
+        current.caseId,
+        current.runId,
+        current.title,
+        "failed",
+      );
+      this.automaticResearchViews.set(caseId, failed);
+      return simulateLatency(failed);
+    }
+    const completed = mockAutomaticResearchView(
+      current.caseId,
+      current.runId,
+      current.title,
+      "completed",
+    );
+    this.automaticResearchViews.set(caseId, completed);
+    return simulateLatency(completed);
   }
 
   async retryAutomaticResearch(caseId: string): Promise<AutomaticResearchStart> {
     this.throwIfOffline();
+    const previous = this.automaticResearchViews.get(caseId);
+    if (!previous || previous.status !== "failed") {
+      throw new Error("only failed automatic research can be retried");
+    }
     this.createdAutomaticResearchCount += 1;
-    return simulateLatency({
+    const started: AutomaticResearchStart = {
       caseId,
       runId: `automatic-run-${this.createdAutomaticResearchCount}`,
       status: "queued",
-    });
+    };
+    this.automaticResearchViews.set(
+      caseId,
+      mockAutomaticResearchView(caseId, started.runId, previous.title, "running"),
+    );
+    return simulateLatency(started);
   }
   private createdDocuments = new Map<string, {
     document: SourceDocumentView;
@@ -3249,9 +3324,15 @@ export class MockResearchAdapter implements ResearchClient {
   private createdSupplementCount = 0;
   private extractedDocumentIds = new Set<string>();
 
-  constructor(opts: { scenario?: MockScenario; preparationScenario?: PreparationScenario } = {}) {
+  constructor(opts: {
+    scenario?: MockScenario;
+    preparationScenario?: PreparationScenario;
+    automaticResearchScenario?: "completed" | "failed";
+  } = {}) {
     this.scenario = opts.scenario ?? "typical";
     this.preparationScenario = opts.preparationScenario ?? "review_claims";
+    this.automaticResearchScenario = opts.automaticResearchScenario ?? "completed";
+    this.failNextAutomaticResearch = this.automaticResearchScenario === "failed";
     this.preparation = mockResearchPreparation(this.preparationScenario);
     this.queue = REVIEW_QUEUE.map((r) => ({ ...r }));
     this.researchRuns = MOCK_RESEARCH_RUNS.map(cloneResearchRun);
@@ -3268,6 +3349,9 @@ export class MockResearchAdapter implements ResearchClient {
     this.eventConclusionPublicationsInFlight.clear();
     this.eventMutationRevisions.clear();
     this.eventStates.clear();
+    this.automaticResearchViews.clear();
+    this.createdAutomaticResearchCount = 0;
+    this.failNextAutomaticResearch = this.automaticResearchScenario === "failed";
     this.createdDocuments.clear();
     this.createdEventCount = 0;
     this.createdSupplementCount = 0;
