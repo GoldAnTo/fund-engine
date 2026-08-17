@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 
 from sqlalchemy import func, select
@@ -18,9 +19,26 @@ from app.domain.acquisition import (
     EvidenceObjective,
 )
 from app.models.acquisition import AcquisitionJob, AutomaticAdmissionDecision
-from app.models.event_research import EventResearchBrief
-from app.models.ledger import AIAssessment, CaseTenantAdmission, EvidenceLink, Thesis
-from app.models.operational import EventResearchLifecycle, ResearchRun, ResearchTask
+from app.models.event_research import (
+    EventResearchBrief,
+    EventResearchScopeEvidenceAssignment,
+    EventResearchScopeFactor,
+    EventResearchScopeVersion,
+)
+from app.models.ledger import (
+    AIAssessment,
+    CaseTenantAdmission,
+    EvidenceLink,
+    EvidenceSnapshot,
+    ResearchCase,
+    Thesis,
+)
+from app.models.operational import (
+    EventResearchLifecycle,
+    Job,
+    ResearchRun,
+    ResearchTask,
+)
 from app.models.research_monitor import ResearchRunEvent
 from app.repositories.acquisition import AcquisitionRepository
 from app.repositories.auto_research import AutoResearchRepository
@@ -83,7 +101,10 @@ class AutomaticResearchPipeline:
             raise ValueError("automatic research run is no longer dispatchable")
 
         run.round = max(1, run.round or 1)
+        scope_payload = self._latest_scope(run)
+        current_scope_id = self._validate_current_scope(run, scope_payload)
         tasks = self._round_tasks(run)
+        self._validate_result_task_matrix(run, tasks, scope_payload)
         source_tasks = [task for task in tasks if task.task_type != "result"]
         if not source_tasks or all(
             not isinstance(task.result, dict)
@@ -107,12 +128,23 @@ class AutomaticResearchPipeline:
 
         self._reconcile_sources(run, source_tasks, jobs)
         run.budget_used = self._acquisition_count(run)
-        admitted_count = self._admitted_count(run)
+        allowed_evidence = self._allowed_evidence_by_thesis(
+            run,
+            scope_version_id=current_scope_id,
+        )
+        admitted_count = sum(len(link_ids) for link_ids in allowed_evidence.values())
         final_attempt = run.round >= run.max_rounds or run.budget_used >= run.budget
         if admitted_count == 0 and final_attempt:
             return self._fail_no_usable_evidence(run)
 
-        assessments = self._assess_result_tasks(run, tasks)
+        assessments = self._assess_result_tasks(
+            run,
+            tasks,
+            allowed_evidence=allowed_evidence,
+            frozen_scope=scope_payload,
+            scope_version_id=current_scope_id,
+            research_job=locked_job,
+        )
         gaps = sorted(
             {
                 str(gap).strip()
@@ -177,6 +209,7 @@ class AutomaticResearchPipeline:
 
     def _dispatch_locked(self, run: ResearchRun) -> str:
         scope = self._latest_scope(run)
+        self._validate_current_scope(run, scope)
         plan_by_factor = self._frozen_plan(scope)
         admission = self._session.scalar(
             select(CaseTenantAdmission).where(
@@ -210,6 +243,8 @@ class AutomaticResearchPipeline:
                 .order_by(ResearchTask.created_at, ResearchTask.id)
             )
         )
+        all_current_tasks = self._round_tasks(run)
+        self._validate_result_task_matrix(run, all_current_tasks, scope)
         expected = self._expected_task_matrix(
             run=run,
             scope=scope,
@@ -331,7 +366,6 @@ class AutomaticResearchPipeline:
             self._session.scalars(
                 select(ResearchTask)
                 .where(ResearchTask.run_id == run.id)
-                .where(ResearchTask.research_case_id == run.research_case_id)
                 .where(ResearchTask.round == run.round)
                 .order_by(ResearchTask.created_at, ResearchTask.id)
             )
@@ -339,6 +373,85 @@ class AutomaticResearchPipeline:
         if not tasks:
             raise ValueError("automatic research current round has no tasks")
         return tasks
+
+    def _validate_result_task_matrix(
+        self,
+        run: ResearchRun,
+        tasks: list[ResearchTask],
+        scope: dict,
+    ) -> None:
+        try:
+            scoped_ids = [uuid.UUID(str(value)) for value in scope["factor_ids"]]
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("automatic result task matrix has invalid frozen scope") from exc
+        allowed_types = {*_TASK_OBJECTIVES, "result"}
+        for task in tasks:
+            if (
+                task.run_id != run.id
+                or task.research_case_id != run.research_case_id
+                or task.round != run.round
+                or task.thesis_id not in scoped_ids
+                or task.task_type not in allowed_types
+            ):
+                raise ValueError(
+                    "automatic result task matrix crosses the frozen run scope"
+                )
+        result_tasks = [task for task in tasks if task.task_type == "result"]
+        actual_ids = [task.thesis_id for task in result_tasks]
+        if len(result_tasks) != len(scoped_ids) or set(actual_ids) != set(scoped_ids):
+            raise ValueError(
+                "automatic result task matrix must contain exactly one task per thesis"
+            )
+        if any(
+            task.status not in {"queued", "done"}
+            or (task.status == "done" and task.stage != "completed")
+            for task in result_tasks
+        ):
+            raise ValueError("automatic result task matrix contains a non-writable task")
+
+    def _validate_current_scope(self, run: ResearchRun, scope: dict) -> uuid.UUID:
+        factor_ids = scope.get("factor_ids")
+        factor_statements = scope.get("factor_statements")
+        if not isinstance(factor_ids, list) or not isinstance(factor_statements, list):
+            raise ValueError("automatic frozen scope identity is incomplete")
+        try:
+            frozen_ids = [uuid.UUID(str(value)) for value in factor_ids]
+            run_ids = [uuid.UUID(str(value)) for value in (run.scope_thesis_ids or [])]
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("automatic frozen scope identity is invalid") from exc
+        if run_ids != frozen_ids or len(frozen_ids) != len(factor_statements):
+            raise ValueError("automatic run and frozen scope identities differ")
+        for thesis_id, statement in zip(frozen_ids, factor_statements):
+            thesis = self._session.get(Thesis, thesis_id)
+            if (
+                thesis is None
+                or thesis.research_case_id != run.research_case_id
+                or thesis.statement != statement
+            ):
+                raise ValueError("automatic frozen scope thesis identity is invalid")
+
+        current_scope = self._session.scalar(
+            select(EventResearchScopeVersion)
+            .where(EventResearchScopeVersion.research_case_id == run.research_case_id)
+            .order_by(EventResearchScopeVersion.version.desc())
+            .limit(1)
+        )
+        if current_scope is None:
+            raise ValueError("automatic current scope is missing")
+        current_statements = list(
+            self._session.scalars(
+                select(EventResearchScopeFactor.statement)
+                .where(EventResearchScopeFactor.scope_version_id == current_scope.id)
+                .order_by(EventResearchScopeFactor.position, EventResearchScopeFactor.id)
+            )
+        )
+        if (
+            len(current_statements) != len(factor_statements)
+            or len(set(current_statements)) != len(current_statements)
+            or set(current_statements) != set(factor_statements)
+        ):
+            raise ValueError("automatic current scope no longer matches the frozen scope")
+        return current_scope.id
 
     def _linked_jobs(
         self,
@@ -427,6 +540,11 @@ class AutomaticResearchPipeline:
         self,
         run: ResearchRun,
         tasks: list[ResearchTask],
+        *,
+        allowed_evidence: dict[uuid.UUID, list[uuid.UUID]],
+        frozen_scope: dict,
+        scope_version_id: uuid.UUID,
+        research_job: Job,
     ) -> list[AIAssessment]:
         assessments: list[AIAssessment] = []
         generator = self._generator()
@@ -434,6 +552,9 @@ class AutomaticResearchPipeline:
             if task.task_type != "result":
                 continue
             assessment = None
+            if task.thesis_id is None or task.thesis_id not in allowed_evidence:
+                raise ValueError("automatic result task thesis is outside evidence scope")
+            allowed_ids = allowed_evidence[task.thesis_id]
             if task.status == "done" and isinstance(task.result, dict):
                 try:
                     assessment = self._session.get(
@@ -443,15 +564,35 @@ class AutomaticResearchPipeline:
                 except (TypeError, ValueError, AttributeError):
                     assessment = None
             if assessment is None:
-                if task.thesis_id is None:
-                    raise ValueError("automatic result task has no thesis")
+                job_attempt = research_job.attempt
+                job_claim_token = research_job.claim_token
                 assessment = generator.generate(
                     task.thesis_id,
                     datetime.now(UTC),
                     self._session,
+                    evidence_link_ids=allowed_ids,
+                    before_persist=partial(
+                        self._claim_assessment_output_slot,
+                        run_id=run.id,
+                        case_id=run.research_case_id,
+                        job_id=research_job.id,
+                        job_attempt=job_attempt,
+                        job_claim_token=job_claim_token,
+                        task_id=task.id,
+                        thesis_id=task.thesis_id,
+                        round=run.round,
+                        frozen_scope=frozen_scope,
+                        scope_version_id=scope_version_id,
+                        evidence_link_ids=tuple(allowed_ids),
+                    ),
                 )
                 if assessment is None:
-                    raise ValueError("automatic assessment was cancelled")
+                    raise ValueError("automatic assessment was cancelled or stale")
+                run = self._session.get(ResearchRun, run.id)
+                task = self._session.get(ResearchTask, task.id)
+                if run is None or task is None:
+                    raise ValueError("automatic assessment output slot is stale")
+                self._validate_assessment_binding(task, assessment, allowed_ids)
                 task.result = {
                     "task_type": "result",
                     "assessment_id": str(assessment.id),
@@ -460,10 +601,163 @@ class AutomaticResearchPipeline:
                 }
                 task.status, task.stage = "done", "completed"
                 task.updated_at = datetime.now(UTC)
+            else:
+                self._validate_assessment_binding(task, assessment, allowed_ids)
             assessments.append(assessment)
         if not assessments:
             raise ValueError("automatic research current round has no result task")
         return assessments
+
+    def _validate_assessment_binding(
+        self,
+        task: ResearchTask,
+        assessment: AIAssessment,
+        evidence_link_ids: list[uuid.UUID],
+    ) -> None:
+        snapshot = self._session.get(EvidenceSnapshot, assessment.snapshot_id)
+        expected_ids = [str(link_id) for link_id in evidence_link_ids]
+        if (
+            snapshot is None
+            or snapshot.thesis_id != task.thesis_id
+            or snapshot.evidence_link_ids != expected_ids
+        ):
+            raise ValueError(
+                "automatic assessment thesis or evidence scope does not match its task"
+            )
+
+    def _claim_assessment_output_slot(
+        self,
+        *,
+        run_id: uuid.UUID,
+        case_id: uuid.UUID,
+        job_id: uuid.UUID,
+        job_attempt: int,
+        job_claim_token: str | None,
+        task_id: uuid.UUID,
+        thesis_id: uuid.UUID,
+        round: int,
+        frozen_scope: dict,
+        scope_version_id: uuid.UUID,
+        evidence_link_ids: tuple[uuid.UUID, ...],
+    ) -> bool:
+        with self._session.no_autoflush:
+            case = self._session.scalar(
+                select(ResearchCase)
+                .where(ResearchCase.id == case_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            current_run = self._session.scalar(
+                select(ResearchRun)
+                .where(ResearchRun.id == run_id)
+                .where(ResearchRun.research_case_id == case_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            current_job = self._session.scalar(
+                select(Job)
+                .where(Job.id == job_id)
+                .where(Job.target_type == "research_run")
+                .where(Job.target_id == run_id)
+                .where(Job.research_case_id == case_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            current_task = self._session.scalar(
+                select(ResearchTask)
+                .where(ResearchTask.id == task_id)
+                .where(ResearchTask.run_id == run_id)
+                .where(ResearchTask.research_case_id == case_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            lifecycle = self._session.scalar(
+                select(EventResearchLifecycle)
+                .where(EventResearchLifecycle.research_case_id == case_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        if (
+            case is None
+            or current_run is None
+            or current_job is None
+            or current_task is None
+            or lifecycle is None
+            or lifecycle.active_run_id != run_id
+            or current_run.status
+            not in {"queued", "running", "waiting_for_sources"}
+            or current_run.round != round
+            or current_job.status
+            not in {"queued", "running", "waiting_for_sources"}
+            or current_job.cancel_requested
+            or current_job.attempt != job_attempt
+            or current_job.claim_token != job_claim_token
+            or current_task.round != round
+            or current_task.thesis_id != thesis_id
+            or current_task.task_type != "result"
+            or current_task.status != "queued"
+        ):
+            return False
+        try:
+            if self._latest_scope(current_run) != frozen_scope:
+                return False
+            if self._validate_current_scope(current_run, frozen_scope) != scope_version_id:
+                return False
+            current_ids = self._allowed_evidence_by_thesis(
+                current_run,
+                scope_version_id=scope_version_id,
+            ).get(thesis_id, [])
+        except ValueError:
+            return False
+        return current_ids == list(evidence_link_ids)
+
+    def _allowed_evidence_by_thesis(
+        self,
+        run: ResearchRun,
+        *,
+        scope_version_id: uuid.UUID,
+    ) -> dict[uuid.UUID, list[uuid.UUID]]:
+        try:
+            thesis_ids = [
+                uuid.UUID(str(value)) for value in (run.scope_thesis_ids or [])
+            ]
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("automatic run thesis scope is invalid") from exc
+        result = {thesis_id: [] for thesis_id in thesis_ids}
+        rows = self._session.execute(
+            select(EvidenceLink.id, EvidenceLink.thesis_id)
+            .join(
+                AutomaticAdmissionDecision,
+                AutomaticAdmissionDecision.id
+                == EvidenceLink.automatic_admission_decision_id,
+            )
+            .join(
+                AcquisitionJob,
+                AcquisitionJob.id == AutomaticAdmissionDecision.job_id,
+            )
+            .join(
+                EventResearchScopeEvidenceAssignment,
+                EventResearchScopeEvidenceAssignment.evidence_link_id
+                == EvidenceLink.id,
+            )
+            .join(Thesis, Thesis.id == EvidenceLink.thesis_id)
+            .where(
+                AcquisitionJob.research_run_id == run.id,
+                AcquisitionJob.research_case_id == run.research_case_id,
+                AcquisitionJob.thesis_id == EvidenceLink.thesis_id,
+                EventResearchScopeEvidenceAssignment.scope_version_id
+                == scope_version_id,
+                EventResearchScopeEvidenceAssignment.disposition == "mapped",
+                EventResearchScopeEvidenceAssignment.factor_statement
+                == Thesis.statement,
+                EvidenceLink.review_state == "automatically_admitted",
+                EvidenceLink.thesis_id.in_(thesis_ids),
+            )
+            .order_by(EvidenceLink.thesis_id, EvidenceLink.created_at, EvidenceLink.id)
+        )
+        for link_id, thesis_id in rows:
+            result[thesis_id].append(link_id)
+        return result
 
     def _generator(self):
         if self._assessment_generator is None:

@@ -56,10 +56,17 @@ def run_once(*, recover_after_minutes: int = 30) -> bool:
         if job is None:
             session.commit()
             return bool(scheduled_fund_runs)
+        claim_token = job.claim_token
         run = session.get(ResearchRun, job.target_id)
         session.commit()  # publish the claim before provider work begins
         if run is None:
-            service.repo.record_job_completion(job, status="failed", step="failed", error="run missing")
+            service.repo.record_job_completion(
+                job,
+                status="failed",
+                step="failed",
+                error="run missing",
+                expected_claim_token=claim_token,
+            )
             session.commit()
             return True
         try:
@@ -72,6 +79,7 @@ def run_once(*, recover_after_minutes: int = 30) -> bool:
                     status="cancelled" if run.status == "cancelled" else run.status,
                     step=run.stage,
                     run=run,
+                    expected_claim_token=claim_token,
                 )
             session.commit()
         except Exception:
@@ -82,6 +90,7 @@ def run_once(*, recover_after_minutes: int = 30) -> bool:
                 step="failed",
                 error=AI_OPERATION_ERROR_MESSAGE,
                 run=run,
+                expected_claim_token=claim_token,
             )
             session.commit()
             raise

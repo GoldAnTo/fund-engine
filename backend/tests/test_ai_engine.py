@@ -371,6 +371,64 @@ def test_assessment_snapshot_contains_exact_prompt_evidence_when_link_arrives_du
     assert run.input_ref["link_count"] == 1
 
 
+def test_assessment_explicit_evidence_ids_exclude_other_visible_links(
+    session, research_service, thesis, statement
+):
+    excluded = research_service.link_evidence(
+        thesis.id,
+        statement.id,
+        role="supports",
+        reason="visible but outside this automatic run",
+        scope={"run": "older"},
+    )
+    included = research_service.link_evidence(
+        thesis.id,
+        statement.id,
+        role="contradicts",
+        reason="current automatic run evidence",
+        scope={"run": "current"},
+    )
+
+    assessment = AssessmentGenerator(
+        LLMClient(model_version="mock-test", mock=True)
+    ).generate(
+        thesis.id,
+        datetime(2026, 12, 31, tzinfo=UTC),
+        session,
+        evidence_link_ids=[included.id],
+    )
+
+    snapshot = session.get(EvidenceSnapshot, assessment.snapshot_id)
+    assert snapshot is not None
+    assert snapshot.evidence_link_ids == [str(included.id)]
+    assert str(excluded.id) not in snapshot.evidence_link_ids
+
+
+def test_assessment_explicit_evidence_ids_reject_cross_thesis_link(
+    session, research_service, thesis, statement
+):
+    other = research_service.add_thesis(
+        thesis.research_case_id,
+        statement="另一命题",
+        created_by="test",
+    )
+    wrong = research_service.link_evidence(
+        other.id,
+        statement.id,
+        role="supports",
+        reason="belongs to another thesis",
+        scope={"run": "wrong-thesis"},
+    )
+
+    with pytest.raises(ValueError, match="visible|snapshot thesis"):
+        AssessmentGenerator(LLMClient(model_version="mock-test", mock=True)).generate(
+            thesis.id,
+            datetime(2026, 12, 31, tzinfo=UTC),
+            session,
+            evidence_link_ids=[wrong.id],
+        )
+
+
 def test_assessment_releases_read_transaction_before_provider(
     session, research_service, thesis, statement
 ):

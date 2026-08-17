@@ -1,5 +1,6 @@
 """Repository for automatic research runs and tasks."""
 from __future__ import annotations
+import secrets
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import or_, select, func
@@ -106,7 +107,8 @@ class AutoResearchRepository:
             return None
         job.status = "running"
         job.step = "extract"
-        job.started_at = job.started_at or _utcnow()
+        job.claim_token = secrets.token_hex(16)
+        job.started_at = _utcnow()
         self._append_job_event(job, status="running", step="extract", message="worker claimed run")
         return job
 
@@ -124,6 +126,8 @@ class AutoResearchRepository:
         for job in jobs:
             job.status = "queued"
             job.step = "recovered"
+            job.claim_token = None
+            job.started_at = None
             job.error = "worker lease expired; requeued"
             self._append_job_event(job, status="queued", step="recovered", message=job.error)
         return len(jobs)
@@ -153,6 +157,7 @@ class AutoResearchRepository:
         current_run.updated_at = now
         current_job.status = "waiting_for_sources"
         current_job.step = "retrieve"
+        current_job.claim_token = None
         current_job.finished_at = None
         self._append_job_event(
             current_job,
@@ -261,6 +266,7 @@ class AutoResearchRepository:
             run.updated_at = _utcnow()
             job.status = "queued"
             job.step = "analyze"
+            job.claim_token = None
             job.error = None
             job.started_at = None
             job.finished_at = None
@@ -325,6 +331,7 @@ class AutoResearchRepository:
         if job is not None and job.status not in {"succeeded", "failed", "cancelled"}:
             job.cancel_requested = True
             job.status = "cancelled"
+            job.claim_token = None
             job.finished_at = _utcnow()
             self._append_job_event(job, status="cancelled", step="stopped", message="cancel requested")
         return True
@@ -337,6 +344,7 @@ class AutoResearchRepository:
         step: str,
         error: str | None = None,
         run: ResearchRun | None = None,
+        expected_claim_token: str | None = None,
     ) -> None:
         """Serialize the worker terminal write with public Job cancellation.
 
@@ -365,6 +373,12 @@ class AutoResearchRepository:
             job_id=job_id,
         )
         if current_job is None:
+            return
+        if (
+            expected_claim_token is not None
+            and current_job.claim_token != expected_claim_token
+        ):
+            self._session.rollback()
             return
         if current_job.status in {"succeeded", "failed"}:
             # A different worker already won terminal ownership.  Nothing
@@ -487,6 +501,7 @@ class AutoResearchRepository:
         job.status = status
         job.step = step
         job.error = error
+        job.claim_token = None
         job.finished_at = _utcnow()
         self._append_job_event(
             job,

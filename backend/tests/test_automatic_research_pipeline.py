@@ -55,10 +55,12 @@ def _automatic_run(
     session,
     *,
     factor: str = "需求增长",
+    factors: list[str] | None = None,
     plan_mutation=None,
     max_rounds: int = 3,
     budget: int = 100,
 ) -> ResearchRun:
+    factor_statements = factors or [factor]
     now = datetime.now(timezone.utc)
     case = ResearchCase(
         title="需求事件",
@@ -98,20 +100,23 @@ def _automatic_run(
             ),
         ]
     )
-    thesis = Thesis(
-        research_case_id=case.id,
-        statement=factor,
-        created_by="system:automatic-intake",
-        creator_type="ai",
-        review_state="draft",
-        created_at=now,
-    )
-    session.add(thesis)
+    theses = [
+        Thesis(
+            research_case_id=case.id,
+            statement=statement,
+            created_by="system:automatic-intake",
+            creator_type="ai",
+            review_state="draft",
+            created_at=now,
+        )
+        for statement in factor_statements
+    ]
+    session.add_all(theses)
     session.flush()
     repo = AutoResearchRepository(session)
     run = repo.create_run(
         research_case_id=case.id,
-        scope_thesis_ids=[str(thesis.id)],
+        scope_thesis_ids=[str(thesis.id) for thesis in theses],
         max_rounds=max_rounds,
         budget=budget,
     )
@@ -126,11 +131,14 @@ def _automatic_run(
     session.flush()
     session.add_all(
         [
-            EventResearchScopeFactor(
-                scope_version_id=scope.id,
-                statement=factor,
-                position=0,
-            ),
+            *[
+                EventResearchScopeFactor(
+                    scope_version_id=scope.id,
+                    statement=statement,
+                    position=position,
+                )
+                for position, statement in enumerate(factor_statements)
+            ],
             EventResearchLifecycle(
                 research_case_id=case.id,
                 status="researching",
@@ -145,13 +153,13 @@ def _automatic_run(
     )
     scope_payload = {
         "workflow_mode": "automatic",
-        "factor_ids": [str(thesis.id)],
-        "factor_statements": [factor],
-        "automatic_protocol": {"factors": [factor]},
+        "factor_ids": [str(thesis.id) for thesis in theses],
+        "factor_statements": factor_statements,
+        "automatic_protocol": {"factors": factor_statements},
         "automatic_evidence_plan": {
             "items": [
                 {
-                    "factor": factor,
+                    "factor": statement,
                     "objectives": [
                         "support",
                         "contradict",
@@ -162,6 +170,7 @@ def _automatic_run(
                         "licensed_provider",
                     ],
                 }
+                for statement in factor_statements
             ]
         },
     }
@@ -174,14 +183,15 @@ def _automatic_run(
         message="scope frozen",
         payload_json=scope_payload,
     )
-    for task_type in ("support", "contradict", "result", "alternative"):
-        repo.create_task(
-            run_id=run.id,
-            research_case_id=case.id,
-            thesis_id=thesis.id,
-            task_type=task_type,
-            query=f"{task_type}: {factor}",
-        )
+    for thesis in theses:
+        for task_type in ("support", "contradict", "result", "alternative"):
+            repo.create_task(
+                run_id=run.id,
+                research_case_id=case.id,
+                thesis_id=thesis.id,
+                task_type=task_type,
+                query=f"{task_type}: {thesis.statement}",
+            )
     repo.enqueue_run_job(run)
     return run
 
@@ -305,17 +315,44 @@ def _admit_link(session, job: AcquisitionJob) -> EvidenceLink:
 
 
 class _AssessmentGenerator:
-    def __init__(self, *, conclusion="supported", gaps=None):
+    def __init__(
+        self,
+        *,
+        conclusion="supported",
+        gaps=None,
+        before_persist_hook=None,
+    ):
         self.conclusion = conclusion
         self.gaps = list(gaps or [])
+        self.before_persist_hook = before_persist_hook
         self.calls = []
 
-    def generate(self, thesis_id, cutoff, session):
-        self.calls.append(thesis_id)
+    def generate(
+        self,
+        thesis_id,
+        cutoff,
+        session,
+        *,
+        evidence_link_ids=None,
+        before_persist=None,
+    ):
+        self.calls.append(
+            {
+                "thesis_id": thesis_id,
+                "evidence_link_ids": list(evidence_link_ids or []),
+            }
+        )
+        # Match AssessmentGenerator's provider boundary: reads and any caller
+        # work are committed before the external call returns.
+        session.commit()
+        if self.before_persist_hook is not None:
+            self.before_persist_hook(session)
+        if before_persist is not None and not before_persist():
+            return None
         snapshot = EvidenceSnapshot(
             thesis_id=thesis_id,
             cutoff=cutoff,
-            evidence_link_ids=[],
+            evidence_link_ids=[str(value) for value in (evidence_link_ids or [])],
             created_at=cutoff,
         )
         session.add(snapshot)
@@ -815,6 +852,38 @@ def test_requeued_source_ready_job_gets_a_fresh_stale_recovery_clock(session) ->
     assert claimed.attempt == 2
 
 
+def test_recovered_research_job_gets_a_new_claim_fence(session) -> None:
+    run = _automatic_run(session)
+    repo = AutoResearchRepository(session)
+    first = repo.claim_next_run_job()
+    assert first is not None
+    first_token = first.claim_token
+    assert first_token
+    first.started_at = datetime.now(timezone.utc) - timedelta(hours=2)
+
+    assert repo.recover_stale_run_jobs(
+        before=datetime.now(timezone.utc) - timedelta(minutes=30)
+    ) == 1
+    second = repo.claim_next_run_job()
+    assert second is not None and second.id == first.id
+    assert second.claim_token
+    assert second.claim_token != first_token
+    second_id = second.id
+    second_token = second.claim_token
+    session.commit()
+
+    repo.record_job_completion(
+        second,
+        status="failed",
+        step="failed",
+        error="stale worker",
+        expected_claim_token=first_token,
+    )
+    persisted = session.get(Job, second_id)
+    assert persisted is not None and persisted.status == "running"
+    assert persisted.claim_token == second_token
+
+
 def test_advance_completes_from_one_admitted_partial_source_without_human_gates(
     session,
 ) -> None:
@@ -848,11 +917,15 @@ def test_advance_completes_from_one_admitted_partial_source_without_human_gates(
     assert conclusion is not None
     assert conclusion.state == "system_generated"
     assert conclusion.evidence_link_ids == [str(admitted.id)]
+    assert "失败 1" in conclusion.text
+    assert "取消 1" in conclusion.text
+    assert "未执行 0" in conclusion.text
     lifecycle = session.get(EventResearchLifecycle, run.research_case_id)
     assert lifecycle is not None
     assert lifecycle.status == "completed"
     assert lifecycle.next_human_action is None
-    assert generator.calls == [jobs[0].thesis_id]
+    assert [call["thesis_id"] for call in generator.calls] == [jobs[0].thesis_id]
+    assert generator.calls[0]["evidence_link_ids"] == [admitted.id]
     assert session.scalar(select(func.count()).select_from(TaskItem)) == 0
 
     source_tasks = list(
@@ -1041,3 +1114,388 @@ def test_advance_creates_exact_next_round_for_gaps_and_is_idempotent(session) ->
         .select_from(ResearchTask)
         .where(ResearchTask.run_id == run.id)
     ) == 8
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate"])
+def test_advance_rejects_non_exact_multi_thesis_result_task_matrix(
+    session, mutation: str
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, factors=["需求增长", "利润改善"])
+    result_tasks = list(
+        session.scalars(
+            select(ResearchTask)
+            .where(ResearchTask.run_id == run.id)
+            .where(ResearchTask.task_type == "result")
+            .order_by(ResearchTask.id)
+        )
+    )
+    if mutation == "missing":
+        session.delete(result_tasks[0])
+        session.flush()
+    else:
+        AutoResearchRepository(session).create_task(
+            run_id=run.id,
+            research_case_id=run.research_case_id,
+            thesis_id=result_tasks[0].thesis_id,
+            task_type="result",
+            query="duplicate result",
+        )
+
+    with pytest.raises(ValueError, match="result task matrix"):
+        AutomaticResearchPipeline(
+            session, assessment_generator=_AssessmentGenerator()
+        ).advance(run)
+
+    assert session.scalar(select(func.count()).select_from(AcquisitionJob)) == 0
+
+
+def test_advance_rejects_reused_assessment_bound_to_the_wrong_scoped_thesis(
+    session,
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(
+        session, factors=["需求增长", "利润改善"], max_rounds=1
+    )
+    second = session.get(Thesis, uuid.UUID((run.scope_thesis_ids or [])[1]))
+    assert second is not None
+    pipeline = AutomaticResearchPipeline(
+        session, assessment_generator=_AssessmentGenerator()
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    first_thesis_id = uuid.UUID((run.scope_thesis_ids or [])[0])
+    admitted_job = next(job for job in jobs if job.thesis_id == first_thesis_id)
+    admitted = _admit_link(session, admitted_job)
+    for job in jobs:
+        job.status, job.stage = "failed", "failed"
+    admitted_job.status, admitted_job.stage, admitted_job.admitted_count = (
+        "succeeded",
+        "succeeded",
+        1,
+    )
+    wrong_snapshot = EvidenceSnapshot(
+        thesis_id=second.id,
+        cutoff=datetime.now(timezone.utc),
+        evidence_link_ids=[],
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(wrong_snapshot)
+    session.flush()
+    wrong_assessment = AIAssessment(
+        snapshot_id=wrong_snapshot.id,
+        conclusion="supported",
+        rationale="wrong thesis",
+        gaps=[],
+        displayed_as_provisional=True,
+        creator_type="ai",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(wrong_assessment)
+    session.flush()
+    first_result = session.scalar(
+        select(ResearchTask).where(
+            ResearchTask.run_id == run.id,
+            ResearchTask.task_type == "result",
+            ResearchTask.thesis_id == first_thesis_id,
+        )
+    )
+    assert first_result is not None
+    first_result.status, first_result.stage = "done", "completed"
+    first_result.result = {
+        "task_type": "result",
+        "assessment_id": str(wrong_assessment.id),
+        "conclusion": wrong_assessment.conclusion,
+        "gaps": [],
+    }
+
+    with pytest.raises(ValueError, match="assessment.*thesis|evidence scope"):
+        pipeline.advance(run)
+    assert session.scalar(select(func.count()).select_from(EventResearchConclusion)) == 0
+    assert admitted.id is not None
+
+
+def test_advance_assessment_excludes_prior_run_and_reviewed_visible_evidence(
+    session,
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=1)
+    generator = _AssessmentGenerator()
+    pipeline = AutomaticResearchPipeline(session, assessment_generator=generator)
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    current = _admit_link(session, jobs[0])
+    prior_run = AutoResearchRepository(session).create_run(
+        research_case_id=run.research_case_id,
+        scope_thesis_ids=run.scope_thesis_ids,
+    )
+    prior_job = AcquisitionJob(
+        tenant_id=jobs[0].tenant_id,
+        research_case_id=run.research_case_id,
+        thesis_id=jobs[0].thesis_id,
+        research_run_id=prior_run.id,
+        idempotency_key=f"prior:{uuid.uuid4()}",
+        request_snapshot=dict(jobs[0].request_snapshot),
+        policy_snapshot=dict(jobs[0].policy_snapshot),
+        status="succeeded",
+        stage="succeeded",
+        attempt=1,
+        reference_count=1,
+        fetched_count=1,
+        frozen_count=1,
+        admitted_count=1,
+        exception_count=0,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    session.add(prior_job)
+    session.flush()
+    prior = _admit_link(session, prior_job)
+    reviewed = EvidenceLink(
+        thesis_id=jobs[0].thesis_id,
+        source_statement_id=current.source_statement_id,
+        role="supports",
+        reason="reviewed evidence outside automatic run",
+        scope={"source": "reviewed"},
+        available_at=datetime.now(timezone.utc),
+        creator_type="human",
+        review_state="reviewed",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(reviewed)
+    for index, job in enumerate(jobs):
+        job.status = "succeeded" if index == 0 else "failed"
+        job.stage = job.status
+    jobs[0].admitted_count = 1
+
+    assert pipeline.advance(run) == "completed"
+    result_task = session.scalar(
+        select(ResearchTask).where(
+            ResearchTask.run_id == run.id,
+            ResearchTask.task_type == "result",
+        )
+    )
+    assert result_task is not None and result_task.result is not None
+    assessment = session.get(
+        AIAssessment, uuid.UUID(result_task.result["assessment_id"])
+    )
+    assert assessment is not None
+    snapshot = session.get(EvidenceSnapshot, assessment.snapshot_id)
+    assert snapshot is not None
+    assert snapshot.evidence_link_ids == [str(current.id)]
+    assert str(prior.id) not in snapshot.evidence_link_ids
+    assert str(reviewed.id) not in snapshot.evidence_link_ids
+    conclusion = session.scalar(
+        select(EventResearchConclusion).where(
+            EventResearchConclusion.research_case_id == run.research_case_id
+        )
+    )
+    assert conclusion is not None
+    assert conclusion.evidence_link_ids == snapshot.evidence_link_ids
+
+
+def test_advance_rejects_replaced_current_scope_before_mapping_or_assessment(
+    session,
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=1)
+    generator = _AssessmentGenerator()
+    pipeline = AutomaticResearchPipeline(session, assessment_generator=generator)
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    _admit_link(session, jobs[0])
+    for index, job in enumerate(jobs):
+        job.status = "succeeded" if index == 0 else "failed"
+        job.stage = job.status
+    jobs[0].admitted_count = 1
+    current_scope = session.scalar(
+        select(EventResearchScopeVersion)
+        .where(EventResearchScopeVersion.research_case_id == run.research_case_id)
+        .order_by(EventResearchScopeVersion.version.desc())
+        .limit(1)
+    )
+    assert current_scope is not None
+    replacement = EventResearchScopeVersion(
+        research_case_id=run.research_case_id,
+        version=current_scope.version + 1,
+        changed_by="human:reviewer",
+        change_summary="replace frozen automatic scope",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(replacement)
+    session.flush()
+    session.add(
+        EventResearchScopeFactor(
+            scope_version_id=replacement.id,
+            statement="替换后的范围",
+            position=0,
+        )
+    )
+
+    with pytest.raises(ValueError, match="current scope"):
+        pipeline.advance(run)
+    assert generator.calls == []
+    assert session.scalar(
+        select(func.count()).select_from(EventResearchScopeEvidenceAssignment)
+    ) == 0
+
+
+def test_automatic_conclusion_id_is_run_derived_and_ignores_overlapping_result(
+    session,
+) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+    from app.services.event_conclusion import EventConclusionService
+
+    run = _automatic_run(session, max_rounds=1)
+    pipeline = AutomaticResearchPipeline(
+        session, assessment_generator=_AssessmentGenerator()
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    _admit_link(session, jobs[0])
+    for index, job in enumerate(jobs):
+        job.status = "succeeded" if index == 0 else "failed"
+        job.stage = job.status
+    jobs[0].admitted_count = 1
+    assert pipeline.advance(run) == "completed"
+    original = session.scalar(select(EventResearchConclusion))
+    assert original is not None
+    overlapping = EventResearchConclusion(
+        research_case_id=original.research_case_id,
+        scope_version_id=original.scope_version_id,
+        state="system_generated",
+        text=original.text,
+        primary_factor=original.primary_factor,
+        evidence_link_ids=original.evidence_link_ids,
+        based_on_conclusion_id=None,
+        reviewer=None,
+        created_at=original.created_at + timedelta(seconds=1),
+    )
+    session.add(overlapping)
+    session.flush()
+
+    retried = EventConclusionService(session).create_automatic_result(
+        run.research_case_id, run.id
+    )
+    expected_id = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"fund-engine:event-research:automatic:{run.id}",
+    )
+    assert retried.id == expected_id
+    assert retried.id == original.id
+    assert retried.id != overlapping.id
+
+
+def test_automatic_clean_success_still_reports_evidence_boundary(session) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session, max_rounds=1)
+    pipeline = AutomaticResearchPipeline(
+        session, assessment_generator=_AssessmentGenerator(gaps=[])
+    )
+    assert pipeline.advance(run) == "waiting_for_sources"
+    jobs = list(
+        session.scalars(
+            select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+        )
+    )
+    _admit_link(session, jobs[0])
+    for job in jobs:
+        job.status, job.stage = "succeeded", "succeeded"
+    jobs[0].admitted_count = 1
+
+    assert pipeline.advance(run) == "completed"
+    conclusion = session.scalar(select(EventResearchConclusion))
+    assert conclusion is not None
+    assert "局限" in conclusion.text
+    assert "冻结范围" in conclusion.text
+
+
+def test_cancel_after_provider_prevents_assessment_attachment_and_conclusion(
+    tmp_path,
+) -> None:
+    from app.models.ledger import Base
+    from app.services.auto_research import AutoResearchService
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'cancel-automatic-assessment.db'}", future=True
+    )
+    session_local = sessionmaker(bind=engine, future=True)
+    Base.metadata.create_all(engine)
+    worker = session_local()
+    try:
+        run = _automatic_run(worker, max_rounds=1)
+        pipeline = AutomaticResearchPipeline(
+            worker, assessment_generator=_AssessmentGenerator()
+        )
+        assert pipeline.advance(run) == "waiting_for_sources"
+        jobs = list(
+            worker.scalars(
+                select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+            )
+        )
+        _admit_link(worker, jobs[0])
+        for index, job in enumerate(jobs):
+            job.status = "succeeded" if index == 0 else "failed"
+            job.stage = job.status
+        jobs[0].admitted_count = 1
+        run_id, case_id = run.id, run.research_case_id
+        worker.commit()
+
+        def cancel_in_other_session(_worker_session):
+            with session_local() as cancelling:
+                AutoResearchService(cancelling).cancel_run(
+                    run_id,
+                    actor="human:test",
+                    change_reason="cancel after provider",
+                )
+
+        pipeline = AutomaticResearchPipeline(
+            worker,
+            assessment_generator=_AssessmentGenerator(
+                before_persist_hook=cancel_in_other_session
+            ),
+        )
+        stale = worker.get(ResearchRun, run_id)
+        assert stale is not None
+        with pytest.raises(ValueError, match="cancelled|stale"):
+            pipeline.advance(stale)
+        worker.rollback()
+    finally:
+        worker.close()
+
+    with Session(engine) as check:
+        persisted = check.get(ResearchRun, run_id)
+        assert persisted is not None and persisted.status == "cancelled"
+        assert check.scalar(select(func.count()).select_from(AIAssessment)) == 0
+        assert check.scalar(select(func.count()).select_from(EventResearchConclusion)) == 0
+        result_task = check.scalar(
+            select(ResearchTask).where(
+                ResearchTask.run_id == run_id,
+                ResearchTask.task_type == "result",
+            )
+        )
+        assert result_task is not None
+        assert result_task.status == "cancelled"
+        assert result_task.result is None

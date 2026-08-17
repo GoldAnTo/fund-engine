@@ -76,6 +76,7 @@ class AssessmentGenerator:
         cutoff: datetime,
         session: Session,
         *,
+        evidence_link_ids: list[uuid.UUID | str] | None = None,
         before_persist: Callable[[], bool] | None = None,
     ) -> AIAssessment | None:
         started_at = datetime.now(timezone.utc)
@@ -116,7 +117,22 @@ class AssessmentGenerator:
             # assessment — a refusal therefore leaves nothing behind except
             # the failed AIRun recorded below (the ledger's immutability
             # guard forbids deleting a half-frozen snapshot).
-            links = repo.visible_links(thesis_id=thesis_id, cutoff=cutoff)
+            if evidence_link_ids is None:
+                links = repo.visible_links(thesis_id=thesis_id, cutoff=cutoff)
+            else:
+                try:
+                    explicit_ids = [
+                        uuid.UUID(str(link_id)) for link_id in evidence_link_ids
+                    ]
+                except (TypeError, ValueError, AttributeError) as exc:
+                    raise ValueError(
+                        "explicit evidence link IDs must be UUID values"
+                    ) from exc
+                links = repo.visible_links_by_ids(
+                    thesis_id=thesis_id,
+                    cutoff=cutoff,
+                    evidence_link_ids=explicit_ids,
+                )
             prompt_link_ids = [link.id for link in links]
             input_ref["evidence_link_ids"] = [
                 str(link_id) for link_id in prompt_link_ids

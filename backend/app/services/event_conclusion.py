@@ -13,6 +13,7 @@ from app.models.event_research import (
     EventResearchBrief,
     EventResearchConclusion,
     EventResearchScopeEvidenceAssignment,
+    EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
 from app.models.acquisition import AcquisitionJob, AutomaticAdmissionDecision
@@ -116,6 +117,7 @@ class EventConclusionService:
             .where(ResearchRun.id == run_id)
             .where(ResearchRun.research_case_id == case_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if run is None:
             raise ValidationFailedError("automatic result run does not belong to case")
@@ -151,39 +153,101 @@ class EventConclusionService:
         if scope is None:
             raise ValidationFailedError("automatic result requires a current scope")
 
-        assessment_ids: list[uuid.UUID] = []
-        for task in self._session.scalars(
-            select(ResearchTask)
-            .where(ResearchTask.run_id == run.id)
-            .where(ResearchTask.research_case_id == case_id)
-            .where(ResearchTask.task_type == "result")
-            .where(ResearchTask.status == "done")
-            .where(ResearchTask.stage == "completed")
-            .order_by(ResearchTask.round, ResearchTask.created_at, ResearchTask.id)
-        ):
-            if not isinstance(task.result, dict):
-                continue
-            try:
-                assessment_ids.append(uuid.UUID(str(task.result["assessment_id"])))
-            except (KeyError, TypeError, ValueError, AttributeError):
-                continue
-        if not assessment_ids:
-            raise ValidationFailedError("automatic result has no completed assessments")
-
-        assessment_rows = list(
-            self._session.execute(
-                select(AIAssessment, EvidenceSnapshot, Thesis)
-                .join(EvidenceSnapshot, EvidenceSnapshot.id == AIAssessment.snapshot_id)
-                .join(Thesis, Thesis.id == EvidenceSnapshot.thesis_id)
-                .where(AIAssessment.id.in_(assessment_ids))
-                .where(Thesis.research_case_id == case_id)
-                .where(Thesis.id.in_([uuid.UUID(value) for value in run.scope_thesis_ids or []]))
-                .order_by(Thesis.statement, Thesis.id, AIAssessment.created_at, AIAssessment.id)
+        try:
+            scoped_thesis_ids = [
+                uuid.UUID(str(value)) for value in (run.scope_thesis_ids or [])
+            ]
+            frozen_thesis_ids = [
+                uuid.UUID(str(value)) for value in scope_payload["factor_ids"]
+            ]
+            frozen_statements = list(scope_payload["factor_statements"])
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise ValidationFailedError("automatic result frozen scope is invalid") from exc
+        current_statements = list(
+            self._session.scalars(
+                select(EventResearchScopeFactor.statement)
+                .where(EventResearchScopeFactor.scope_version_id == scope.id)
+                .order_by(EventResearchScopeFactor.position, EventResearchScopeFactor.id)
             )
         )
-        loaded_ids = {assessment.id for assessment, _snapshot, _thesis in assessment_rows}
-        if loaded_ids != set(assessment_ids):
-            raise ValidationFailedError("automatic result assessment crosses run scope")
+        if (
+            scoped_thesis_ids != frozen_thesis_ids
+            or len(scoped_thesis_ids) != len(frozen_statements)
+            or len(current_statements) != len(frozen_statements)
+            or len(set(current_statements)) != len(current_statements)
+            or set(current_statements) != set(frozen_statements)
+        ):
+            raise ValidationFailedError(
+                "automatic result current scope differs from the frozen run scope"
+            )
+        for thesis_id, statement in zip(scoped_thesis_ids, frozen_statements):
+            thesis = self._session.get(Thesis, thesis_id)
+            if (
+                thesis is None
+                or thesis.research_case_id != case_id
+                or thesis.statement != statement
+            ):
+                raise ValidationFailedError(
+                    "automatic result frozen thesis identity is invalid"
+                )
+
+        result_tasks = list(
+            self._session.scalars(
+                select(ResearchTask)
+                .where(ResearchTask.run_id == run.id)
+                .where(ResearchTask.research_case_id == case_id)
+                .where(ResearchTask.round == run.round)
+                .where(ResearchTask.task_type == "result")
+                .where(ResearchTask.status == "done")
+                .where(ResearchTask.stage == "completed")
+                .order_by(ResearchTask.created_at, ResearchTask.id)
+            )
+        )
+        if (
+            len(result_tasks) != len(scoped_thesis_ids)
+            or {task.thesis_id for task in result_tasks} != set(scoped_thesis_ids)
+        ):
+            raise ValidationFailedError(
+                "automatic result requires exactly one completed task per thesis"
+            )
+
+        assessment_rows: list[tuple[AIAssessment, EvidenceSnapshot, Thesis]] = []
+        seen_assessment_ids: set[uuid.UUID] = set()
+        for task in result_tasks:
+            if not isinstance(task.result, dict) or task.thesis_id is None:
+                raise ValidationFailedError("automatic result task binding is missing")
+            try:
+                assessment_id = uuid.UUID(str(task.result["assessment_id"]))
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                raise ValidationFailedError(
+                    "automatic result task assessment binding is invalid"
+                ) from exc
+            if assessment_id in seen_assessment_ids:
+                raise ValidationFailedError(
+                    "automatic result assessment is bound to more than one task"
+                )
+            assessment = self._session.get(AIAssessment, assessment_id)
+            snapshot = (
+                self._session.get(EvidenceSnapshot, assessment.snapshot_id)
+                if assessment is not None
+                else None
+            )
+            thesis = self._session.get(Thesis, task.thesis_id)
+            if (
+                assessment is None
+                or snapshot is None
+                or thesis is None
+                or snapshot.thesis_id != task.thesis_id
+                or thesis.research_case_id != case_id
+            ):
+                raise ValidationFailedError(
+                    "automatic result assessment crosses its task thesis"
+                )
+            seen_assessment_ids.add(assessment_id)
+            assessment_rows.append((assessment, snapshot, thesis))
+        assessment_rows.sort(
+            key=lambda row: (row[2].statement, str(row[2].id), str(row[0].id))
+        )
 
         evidence_rows = list(
             self._session.execute(
@@ -215,9 +279,22 @@ class EventConclusionService:
                 .order_by(EvidenceLink.created_at, EvidenceLink.id)
             )
         )
-        evidence_link_ids = [str(link.id) for link, _thesis in evidence_rows]
-        if not evidence_link_ids:
+        valid_evidence_link_ids = [str(link.id) for link, _thesis in evidence_rows]
+        if not valid_evidence_link_ids:
             raise ValidationFailedError("automatic result has no admitted evidence")
+        assessment_evidence_ids = [
+            str(link_id)
+            for _assessment, snapshot, _thesis in assessment_rows
+            for link_id in snapshot.evidence_link_ids
+        ]
+        if (
+            len(assessment_evidence_ids) != len(set(assessment_evidence_ids))
+            or set(assessment_evidence_ids) != set(valid_evidence_link_ids)
+        ):
+            raise ValidationFailedError(
+                "automatic result evidence snapshot differs from assessment evidence"
+            )
+        evidence_link_ids = assessment_evidence_ids
 
         labels = {
             "supported": "得到当前证据支持",
@@ -241,24 +318,50 @@ class EventConclusionService:
             )
         unique_gaps = sorted(set(gaps))
         if unique_gaps:
-            text_lines.append("局限（证据不足）：" + "；".join(unique_gaps))
+            text_lines.append("证据缺口：" + "；".join(unique_gaps))
+        acquisition_statuses = []
+        skipped = 0
+        for task in self._session.scalars(
+            select(ResearchTask)
+            .where(ResearchTask.run_id == run.id)
+            .where(ResearchTask.research_case_id == case_id)
+            .where(ResearchTask.task_type != "result")
+        ):
+            status = (
+                task.result.get("acquisition_status")
+                if isinstance(task.result, dict)
+                else None
+            )
+            if status is None:
+                skipped += 1
+            else:
+                acquisition_statuses.append(status)
+        failed_count = acquisition_statuses.count("failed")
+        cancelled_count = acquisition_statuses.count("cancelled")
+        text_lines.append(
+            "局限：结论仅基于本次冻结范围内自动准入且映射到当前范围的证据。"
+            f"采集任务：失败 {failed_count}，取消 {cancelled_count}，未执行 {skipped}。"
+        )
         text = "\n".join(text_lines)
 
-        existing = self._session.scalar(
-            select(EventResearchConclusion)
-            .where(EventResearchConclusion.research_case_id == case_id)
-            .where(EventResearchConclusion.scope_version_id == scope.id)
-            .where(EventResearchConclusion.state == "system_generated")
-            .where(EventResearchConclusion.created_at >= run.created_at)
-            .order_by(EventResearchConclusion.created_at.desc(), EventResearchConclusion.id.desc())
-            .limit(1)
+        conclusion_id = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"fund-engine:event-research:automatic:{run.id}",
         )
+        existing = self._session.get(EventResearchConclusion, conclusion_id)
         if existing is not None:
-            if existing.evidence_link_ids != evidence_link_ids or existing.text != text:
+            if (
+                existing.research_case_id != case_id
+                or existing.scope_version_id != scope.id
+                or existing.state != "system_generated"
+                or existing.evidence_link_ids != evidence_link_ids
+                or existing.text != text
+            ):
                 raise ValidationFailedError("automatic result snapshot is immutable")
             result = existing
         else:
             result = EventResearchConclusion(
+                id=conclusion_id,
                 research_case_id=case_id,
                 scope_version_id=scope.id,
                 state="system_generated",
