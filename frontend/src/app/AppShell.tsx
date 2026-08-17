@@ -28,7 +28,7 @@ function pageLabel(pathname: string) {
   if (pathname.endsWith("/market")) return "市场与表达";
   if (pathname.includes("/monitor")) return "监控与版本";
   if (pathname.endsWith("/review")) return "待我审核";
-  if (pathname.endsWith("/new")) return "从事件开始";
+  if (pathname.endsWith("/new")) return "自动研究";
   return "研究调度";
 }
 type RunStageEvent = {
@@ -395,7 +395,7 @@ export function AppShell() {
           <NavLink to="/events?attention=1">
             待我审核 {needsReview > 0 && <b>{needsReview}</b>}
           </NavLink>
-          <Link to="/events/new">资料收件箱</Link>
+          <Link to="/events/new">自动研究</Link>
         </nav>
         <span className="ros-nav-label">研究资产</span>
         <nav className="ros-nav">
@@ -488,14 +488,14 @@ export function AppShell() {
                   </ul>
                 ) : (
                   <small>
-                    搜索不会猜测当前团队未准入或不可展示的记录；可从“从事件开始”录入新材料。
+                    搜索不会猜测当前团队未准入或不可展示的记录；可从“自动研究”入口提交主题或材料。
                   </small>
                 )}
               </section>
             )}
           </div>
           <Link className="ros-topbar__create" to="/events/new">
-            ＋ 从事件开始
+            ＋ 自动研究
           </Link>
         </header>
         {runLoadError && (

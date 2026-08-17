@@ -41,7 +41,7 @@
   width: 100%;
   min-height: 11rem;
   padding: 1rem;
-  border: 1px solid var(--ros-strong);
+  border: 1px solid var(--automatic-entry-field-border);
   border-radius: .5rem;
   background: var(--ros-surface);
   color: var(--ros-ink);
@@ -51,7 +51,8 @@
 }
 
 .automatic-research-entry__form textarea::placeholder {
-  color: var(--ros-muted);
+  color: var(--automatic-entry-secondary);
+  opacity: 1;
 }
 
 .automatic-research-entry__form textarea:disabled {
@@ -61,12 +62,23 @@
 
 .automatic-research-entry__help {
   margin: 0;
-  color: var(--ros-muted);
+  color: var(--automatic-entry-secondary);
+  font-size: .75rem;
+}
+
+.automatic-research-entry__status {
+  margin: .35rem 0 0;
+  color: var(--automatic-entry-secondary);
   font-size: .75rem;
 }
 
 .automatic-research-entry__form .ros-error {
   margin: .4rem 0 0;
+}
+
+.automatic-research-entry__error:focus {
+  outline: 2px solid var(--ros-blue);
+  outline-offset: 2px;
 }
 
 .automatic-research-entry__submit {

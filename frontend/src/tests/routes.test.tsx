@@ -69,6 +69,9 @@ describe("Research OS route inventory", () => {
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "开始自动研究" })).toBeDisabled();
     expect(screen.queryByText(/无法读取可归入 Case 清单/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: /自动研究/ })).toHaveLength(2);
+    expect(screen.queryByText("资料收件箱")).not.toBeInTheDocument();
+    expect(screen.queryByText(/从事件开始/)).not.toBeInTheDocument();
   });
 
   it.each(caseRoutes)(
