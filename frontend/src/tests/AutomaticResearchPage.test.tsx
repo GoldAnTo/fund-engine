@@ -203,6 +203,10 @@ describe("AutomaticResearchPage", () => {
     expect(details).toHaveTextContent("供应商口径仍需后续财报验证");
     expect(details).toHaveTextContent("产品公告");
     expect(details).toHaveTextContent("未命名来源");
+    expect(screen.getByText("反证", { selector: ".automatic-research-process__source-role" }))
+      .toBeInTheDocument();
+    expect(screen.getAllByText("系统自动纳入，未经人工审核")).toHaveLength(2);
+    expect(screen.queryByText("自动纳入", { exact: true })).not.toBeInTheDocument();
     expect(details).toHaveTextContent("部分订单仍受交付周期约束");
     const sourceLink = screen.getByRole("link", { name: "产品公告" });
     expect(sourceLink).toHaveAttribute("href", "https://example.com/report");

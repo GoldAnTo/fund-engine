@@ -102,7 +102,7 @@ function SourceItem({ source }: { source: AutomaticResearchSource }) {
       ) : (
         <span>{title}</span>
       )}
-      <small>自动纳入</small>
+      <small>系统自动纳入，未经人工审核</small>
     </li>
   );
 }
