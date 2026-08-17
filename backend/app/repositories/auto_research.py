@@ -212,6 +212,7 @@ class AutoResearchRepository:
             job.status = "queued"
             job.step = "analyze"
             job.error = None
+            job.started_at = None
             job.finished_at = None
             job.attempt += 1
             self._append_job_event(

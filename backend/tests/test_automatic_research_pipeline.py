@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import func, select
@@ -312,3 +312,32 @@ def test_requeue_source_ready_runs_keeps_job_waiting_when_no_sources_exist(sessi
     assert run.status == "waiting_for_sources"
     assert research_job.status == "waiting_for_sources"
     assert research_job.attempt == 1
+
+
+def test_requeued_source_ready_job_gets_a_fresh_stale_recovery_clock(session) -> None:
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+
+    run = _automatic_run(session)
+    AutomaticResearchPipeline(session).dispatch_sources(run)
+    repo = AutoResearchRepository(session)
+    research_job = repo.job_for_run(run.id)
+    assert research_job is not None
+    old_started_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    research_job.started_at = old_started_at
+    repo.wait_for_sources(run, research_job)
+    for source_job in session.scalars(
+        select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)
+    ):
+        source_job.status = "succeeded"
+
+    assert repo.requeue_source_ready_runs() == 1
+    assert research_job.started_at is None
+
+    claimed = repo.claim_next_run_job()
+    assert claimed is not None and claimed.id == research_job.id
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+    assert claimed.started_at is not None
+    assert claimed.started_at > stale_cutoff
+    assert repo.recover_stale_run_jobs(before=stale_cutoff) == 0
+    assert claimed.status == "running"
+    assert claimed.attempt == 2
