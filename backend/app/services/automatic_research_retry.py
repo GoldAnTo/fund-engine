@@ -129,7 +129,7 @@ class AutomaticResearchRetryService:
                 AUTOMATIC_RESEARCH_SCOPE_CONFLICT_MESSAGE
             ) from exc
 
-        frozen = copy.deepcopy(validated_scope.payload)
+        frozen = validated_scope.snapshot()
         expected_payload = copy.deepcopy(frozen)
         expected_payload["trigger"] = "retry"
         expected_payload["retried_from_run_id"] = str(old_run.id)
@@ -143,7 +143,7 @@ class AutomaticResearchRetryService:
                 monitor_version_id=old_run.monitor_version_id,
                 trigger="retry",
                 allowed_source_types=(
-                    list(frozen["allowed_source_types"])
+                    list(validated_scope.allowed_source_types)
                     if old_run.monitor_version_id is not None
                     else None
                 ),

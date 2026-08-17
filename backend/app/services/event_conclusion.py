@@ -13,13 +13,11 @@ from app.models.event_research import (
     EventResearchBrief,
     EventResearchConclusion,
     EventResearchScopeEvidenceAssignment,
-    EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
 from app.models.acquisition import AcquisitionJob, AutomaticAdmissionDecision
 from app.models.ledger import AIAssessment, EvidenceLink, EvidenceSnapshot, Thesis
 from app.models.operational import ResearchRun, ResearchTask
-from app.models.research_monitor import ResearchRunEvent
 from app.services.event_research_scope_evidence import (
     has_current_scope_evidence_coverage,
     current_mapped_evidence_ids,
@@ -27,6 +25,10 @@ from app.services.event_research_scope_evidence import (
 )
 from app.services.automatic_source_bindings import (
     validate_automatic_source_bindings,
+)
+from app.services.automatic_research_scope import (
+    AutomaticResearchScopeError,
+    load_automatic_research_scope,
 )
 from app.services.automatic_research_conclusion import (
     AutomaticAssessmentInput,
@@ -135,76 +137,24 @@ class EventConclusionService:
             .order_by(EventResearchBrief.created_at.desc(), EventResearchBrief.id.desc())
             .limit(1)
         )
-        scope_event = self._session.scalar(
-            select(ResearchRunEvent)
-            .where(ResearchRunEvent.run_id == run.id)
-            .where(ResearchRunEvent.stage == "scope")
-            .order_by(ResearchRunEvent.seq.desc())
-            .limit(1)
-        )
-        scope_payload = scope_event.payload_json if scope_event is not None else None
-        if (
-            brief_mode != "automatic"
-            or not isinstance(scope_payload, dict)
-            or scope_payload.get("workflow_mode") != "automatic"
-        ):
+        if brief_mode != "automatic":
             raise ValidationFailedError("automatic result requires an automatic workflow")
         if lifecycle is None or lifecycle.active_run_id != run.id:
             raise ValidationFailedError("automatic result run is not the active lifecycle run")
 
-        scope = self._session.scalar(
-            select(EventResearchScopeVersion)
-            .where(EventResearchScopeVersion.research_case_id == case_id)
-            .order_by(EventResearchScopeVersion.version.desc())
-            .limit(1)
-        )
-        if scope is None:
-            raise ValidationFailedError("automatic result requires a current scope")
-
         try:
-            scoped_thesis_ids = [
-                uuid.UUID(str(value)) for value in (run.scope_thesis_ids or [])
-            ]
-            frozen_thesis_ids = [
-                uuid.UUID(str(value)) for value in scope_payload["factor_ids"]
-            ]
-            frozen_statements = list(scope_payload["factor_statements"])
-        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            validated_scope = load_automatic_research_scope(self._session, run)
+        except AutomaticResearchScopeError as exc:
             raise ValidationFailedError("automatic result frozen scope is invalid") from exc
-        current_statements = list(
-            self._session.scalars(
-                select(EventResearchScopeFactor.statement)
-                .where(EventResearchScopeFactor.scope_version_id == scope.id)
-                .order_by(EventResearchScopeFactor.position, EventResearchScopeFactor.id)
-            )
-        )
-        if (
-            scoped_thesis_ids != frozen_thesis_ids
-            or len(scoped_thesis_ids) != len(frozen_statements)
-            or len(current_statements) != len(frozen_statements)
-            or len(set(current_statements)) != len(current_statements)
-            or set(current_statements) != set(frozen_statements)
-        ):
-            raise ValidationFailedError(
-                "automatic result current scope differs from the frozen run scope"
-            )
-        for thesis_id, statement in zip(scoped_thesis_ids, frozen_statements):
-            thesis = self._session.get(Thesis, thesis_id)
-            if (
-                thesis is None
-                or thesis.research_case_id != case_id
-                or thesis.statement != statement
-            ):
-                raise ValidationFailedError(
-                    "automatic result frozen thesis identity is invalid"
-                )
+        scoped_thesis_ids = list(validated_scope.factor_ids)
+        frozen_statements = list(validated_scope.factor_statements)
 
         self._session.flush()
         try:
             source_bindings = validate_automatic_source_bindings(
                 self._session,
                 run,
-                scope_payload,
+                validated_scope,
                 lock=True,
             )
         except ValueError as exc:
@@ -287,7 +237,8 @@ class EventConclusionService:
                     AcquisitionJob.id == AutomaticAdmissionDecision.job_id,
                 )
                 .where(
-                    EventResearchScopeEvidenceAssignment.scope_version_id == scope.id,
+                    EventResearchScopeEvidenceAssignment.scope_version_id
+                    == validated_scope.current_scope_id,
                     EventResearchScopeEvidenceAssignment.disposition == "mapped",
                     EventResearchScopeEvidenceAssignment.factor_statement == Thesis.statement,
                     Thesis.research_case_id == case_id,
@@ -382,7 +333,7 @@ class EventConclusionService:
         if existing is not None:
             if (
                 existing.research_case_id != case_id
-                or existing.scope_version_id != scope.id
+                or existing.scope_version_id != validated_scope.current_scope_id
                 or existing.state != "system_generated"
                 or existing.evidence_link_ids != evidence_link_ids
                 or existing.text != text
@@ -396,7 +347,7 @@ class EventConclusionService:
             result = EventResearchConclusion(
                 id=conclusion_id,
                 research_case_id=case_id,
-                scope_version_id=scope.id,
+                scope_version_id=validated_scope.current_scope_id,
                 state="system_generated",
                 text=text,
                 primary_factor=primary_factor,

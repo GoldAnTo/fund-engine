@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import uuid
 from dataclasses import dataclass
 from enum import Enum
@@ -13,9 +14,9 @@ from app.models.event_research import (
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
-from app.models.ledger import Thesis
+from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, Thesis
 from app.models.operational import ResearchRun
-from app.models.research_monitor import CaseMonitorVersion
+from app.models.research_monitor import CaseMonitorVersion, ResearchRunEvent
 
 
 _OBJECTIVES = ["support", "contradict", "alternative_explanation"]
@@ -47,11 +48,60 @@ def _frozen_invalid(detail: str) -> AutomaticResearchScopeError:
 
 
 @dataclass(frozen=True, slots=True)
+class AutomaticResearchFactorScope:
+    thesis_id: uuid.UUID
+    statement: str
+    objectives: tuple[str, ...]
+    allowed_source_roles: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ValidatedAutomaticResearchScope:
-    payload: dict
-    factor_ids: tuple[uuid.UUID, ...]
-    factor_statements: tuple[str, ...]
+    _snapshot_json: str
+    factors: tuple[AutomaticResearchFactorScope, ...]
     current_scope_id: uuid.UUID
+    max_rounds: int
+    budget: int
+    allowed_source_types: tuple[str, ...]
+    monitor_version_id: uuid.UUID | None
+    research_question: str
+    input_kind: str
+    material_document_version_id: uuid.UUID | None
+
+    @property
+    def factor_ids(self) -> tuple[uuid.UUID, ...]:
+        return tuple(factor.thesis_id for factor in self.factors)
+
+    @property
+    def factor_statements(self) -> tuple[str, ...]:
+        return tuple(factor.statement for factor in self.factors)
+
+    def snapshot(self) -> dict:
+        """Return an isolated JSON copy for retry persistence or stale-claim checks."""
+        return json.loads(self._snapshot_json)
+
+    def factor(self, thesis_id: uuid.UUID) -> AutomaticResearchFactorScope:
+        for factor in self.factors:
+            if factor.thesis_id == thesis_id:
+                return factor
+        raise KeyError(thesis_id)
+
+
+def load_automatic_research_scope(
+    session: Session,
+    run: ResearchRun,
+) -> ValidatedAutomaticResearchScope:
+    """Load and exactly validate a run's latest immutable scope snapshot."""
+    event = session.scalar(
+        select(ResearchRunEvent)
+        .where(ResearchRunEvent.run_id == run.id)
+        .where(ResearchRunEvent.stage == "scope")
+        .order_by(ResearchRunEvent.seq.desc())
+        .limit(1)
+    )
+    if event is None or not isinstance(event.payload_json, dict):
+        raise _frozen_invalid("automatic research scope event is missing")
+    return validate_automatic_research_scope(session, run, event.payload_json)
 
 
 def validate_automatic_research_scope(
@@ -120,14 +170,30 @@ def validate_automatic_research_scope(
         or len(plan["items"]) != len(factor_statements)
     ):
         raise _frozen_invalid("automatic research evidence plan is invalid")
-    for item, statement in zip(plan["items"], factor_statements):
-        if (
-            not isinstance(item, dict)
-            or item.get("factor") != statement
-            or item.get("objectives") != _OBJECTIVES
-            or item.get("allowed_source_roles") != _SOURCE_ROLES
+    factor_scopes: list[AutomaticResearchFactorScope] = []
+    for thesis_id, item, statement in zip(factor_ids, plan["items"], factor_statements):
+        if not isinstance(item, dict) or item.get("factor") != statement:
+            raise _frozen_invalid("automatic research evidence plan factor is invalid")
+        objectives = item.get("objectives")
+        if not isinstance(objectives, list) or any(
+            not isinstance(value, str) for value in objectives
         ):
-            raise _frozen_invalid("automatic research evidence plan item is invalid")
+            raise _frozen_invalid("automatic research evidence plan objective is invalid")
+        if len(objectives) != len(_OBJECTIVES):
+            raise _frozen_invalid("automatic research evidence plan objective missing")
+        if objectives != _OBJECTIVES:
+            raise _frozen_invalid("automatic research evidence plan objective is invalid")
+        roles = item.get("allowed_source_roles")
+        if roles != _SOURCE_ROLES:
+            raise _frozen_invalid("automatic research evidence plan source roles are invalid")
+        factor_scopes.append(
+            AutomaticResearchFactorScope(
+                thesis_id=thesis_id,
+                statement=statement,
+                objectives=tuple(objectives),
+                allowed_source_roles=tuple(roles),
+            )
+        )
     allowed_source_types = payload.get("allowed_source_types")
     if (
         not isinstance(allowed_source_types, list)
@@ -137,6 +203,37 @@ def validate_automatic_research_scope(
         raise _frozen_invalid("automatic research source scope is invalid")
     if "source_scope" in payload and not isinstance(payload["source_scope"], dict):
         raise _frozen_invalid("automatic research source scope is invalid")
+
+    input_kind = payload.get("input_kind", "topic")
+    material_document_version_id: uuid.UUID | None = None
+    if input_kind == "material":
+        try:
+            material_document_version_id = uuid.UUID(
+                str(payload["intake_material_document_version_id"])
+            )
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise _frozen_invalid("automatic material source binding is invalid") from exc
+        admission = session.scalar(
+            select(CaseTenantAdmission).where(
+                CaseTenantAdmission.research_case_id == run.research_case_id,
+                CaseTenantAdmission.initial_document_version_id
+                == material_document_version_id,
+            )
+        )
+        attachment = session.scalar(
+            select(CaseDocumentVersion.id).where(
+                CaseDocumentVersion.research_case_id == run.research_case_id,
+                CaseDocumentVersion.document_version_id
+                == material_document_version_id,
+            )
+        )
+        if admission is None or attachment is None:
+            raise _frozen_invalid("automatic material document crosses its Case")
+    elif input_kind == "topic":
+        if "intake_material_document_version_id" in payload:
+            raise _frozen_invalid("automatic topic scope cannot bind intake material")
+    else:
+        raise _frozen_invalid("automatic research input kind is invalid")
 
     expected_monitor_id = (
         str(run.monitor_version_id) if run.monitor_version_id is not None else None
@@ -213,8 +310,14 @@ def validate_automatic_research_scope(
             "automatic research current scope has drifted",
         )
     return ValidatedAutomaticResearchScope(
-        payload=copy.deepcopy(payload),
-        factor_ids=factor_ids,
-        factor_statements=factor_statements,
+        _snapshot_json=json.dumps(copy.deepcopy(payload), ensure_ascii=False),
+        factors=tuple(factor_scopes),
         current_scope_id=current_scope.id,
+        max_rounds=run.max_rounds,
+        budget=run.budget,
+        allowed_source_types=tuple(allowed_source_types),
+        monitor_version_id=run.monitor_version_id,
+        research_question=protocol["research_question"],
+        input_kind=input_kind,
+        material_document_version_id=material_document_version_id,
     )

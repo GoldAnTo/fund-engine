@@ -1012,8 +1012,15 @@ def _automatic_run(
         "workflow_mode": "automatic",
         "factor_ids": [str(thesis.id) for thesis in theses],
         "factor_statements": factor_statements,
-        "automatic_protocol": {"factors": factor_statements},
+        "automatic_protocol": {
+            "generated_by": "system",
+            "research_question": case.title,
+            "factors": factor_statements,
+        },
+        "budget": run.budget,
         "automatic_evidence_plan": {
+            "max_rounds": run.max_rounds,
+            "budget": run.budget,
             "items": [
                 {
                     "factor": statement,
@@ -1030,6 +1037,12 @@ def _automatic_run(
                 for statement in factor_statements
             ]
         },
+        "allowed_source_types": [],
+        "monitor_version_id": None,
+        "frequency": None,
+        "next_verification_event": None,
+        "configured_by": None,
+        "configuration_change_reason": None,
     }
     if plan_mutation is not None:
         plan_mutation(scope_payload)

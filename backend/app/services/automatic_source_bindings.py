@@ -8,8 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.acquisition import AcquisitionJob
-from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, Thesis
 from app.models.operational import ResearchRun, ResearchTask
+from app.services.automatic_research_scope import ValidatedAutomaticResearchScope
 
 
 _TASK_BINDINGS = {
@@ -22,11 +22,6 @@ _TASK_BINDINGS = {
     ),
     "intake_material": ("support", "supports"),
 }
-_EXPECTED_OBJECTIVES = frozenset(
-    {"support", "contradict", "alternative_explanation"}
-)
-
-
 @dataclass(frozen=True)
 class ValidatedAutomaticSourceBindings:
     tasks_by_id: dict[uuid.UUID, ResearchTask]
@@ -47,7 +42,7 @@ class ValidatedAutomaticSourceBindings:
 def validate_automatic_source_bindings(
     session: Session,
     run: ResearchRun,
-    frozen_scope: dict,
+    scope: ValidatedAutomaticResearchScope,
     *,
     allow_unbound_current_round: bool = False,
     lock: bool = False,
@@ -55,95 +50,19 @@ def validate_automatic_source_bindings(
     """Fail closed unless every source task and run job has one exact binding."""
     if not isinstance(run.round, int) or run.round < 1:
         raise ValueError("automatic source binding round is invalid")
-    try:
-        run_thesis_ids = [
-            uuid.UUID(str(value)) for value in (run.scope_thesis_ids or [])
-        ]
-        frozen_thesis_ids = [
-            uuid.UUID(str(value)) for value in frozen_scope["factor_ids"]
-        ]
-        factor_statements = list(frozen_scope["factor_statements"])
-        plan_items = frozen_scope["automatic_evidence_plan"]["items"]
-    except (KeyError, TypeError, ValueError, AttributeError) as exc:
-        raise ValueError("automatic source binding frozen scope is invalid") from exc
-    if (
-        not run_thesis_ids
-        or run_thesis_ids != frozen_thesis_ids
-        or len(frozen_thesis_ids) != len(factor_statements)
-        or len(frozen_thesis_ids) != len(set(frozen_thesis_ids))
-        or len(factor_statements) != len(set(factor_statements))
-        or not isinstance(plan_items, list)
-    ):
-        raise ValueError("automatic source binding frozen scope is inconsistent")
-
-    theses_by_id: dict[uuid.UUID, Thesis] = {}
-    for thesis_id, statement in zip(frozen_thesis_ids, factor_statements):
-        thesis = session.get(Thesis, thesis_id)
-        if (
-            thesis is None
-            or thesis.research_case_id != run.research_case_id
-            or thesis.statement != statement
-        ):
-            raise ValueError("automatic source binding thesis crosses its frozen scope")
-        theses_by_id[thesis_id] = thesis
-
-    objectives_by_statement: dict[str, frozenset[str]] = {}
-    for item in plan_items:
-        if not isinstance(item, dict) or not isinstance(item.get("factor"), str):
-            raise ValueError("automatic source binding evidence plan is invalid")
-        factor = item["factor"]
-        objectives = item.get("objectives")
-        if (
-            factor in objectives_by_statement
-            or factor not in factor_statements
-        ):
-            raise ValueError("automatic source binding evidence plan factor is invalid")
-        if (
-            not isinstance(objectives, list)
-            or any(not isinstance(value, str) for value in objectives)
-            or len(objectives) != len(_EXPECTED_OBJECTIVES)
-            or set(objectives) != _EXPECTED_OBJECTIVES
-        ):
-            raise ValueError("automatic source binding evidence plan is invalid")
-        objectives_by_statement[factor] = frozenset(objectives)
-    if set(objectives_by_statement) != set(factor_statements):
-        raise ValueError("automatic source binding evidence plan is incomplete")
-
     expected = {
-        (round_number, run.research_case_id, thesis_id, objective)
+        (round_number, run.research_case_id, factor.thesis_id, objective)
         for round_number in range(1, run.round + 1)
-        for thesis_id, statement in zip(frozen_thesis_ids, factor_statements)
-        for objective in objectives_by_statement[statement]
+        for factor in scope.factors
+        for objective in factor.objectives
     }
-    material_document_id: uuid.UUID | None = None
-    if frozen_scope.get("input_kind", "topic") == "material":
-        try:
-            material_document_id = uuid.UUID(
-                str(frozen_scope["intake_material_document_version_id"])
-            )
-        except (KeyError, TypeError, ValueError, AttributeError) as exc:
-            raise ValueError("automatic material source binding is invalid") from exc
-        admission = session.scalar(
-            select(CaseTenantAdmission).where(
-                CaseTenantAdmission.research_case_id == run.research_case_id,
-                CaseTenantAdmission.initial_document_version_id
-                == material_document_id,
-            )
-        )
-        attachment = session.scalar(
-            select(CaseDocumentVersion.id).where(
-                CaseDocumentVersion.research_case_id == run.research_case_id,
-                CaseDocumentVersion.document_version_id == material_document_id,
-            )
-        )
-        if admission is None or attachment is None:
-            raise ValueError("automatic material document crosses its Case")
+    material_document_id = scope.material_document_version_id
+    if scope.input_kind == "material":
+        assert material_document_id is not None
         expected.update(
             (1, run.research_case_id, thesis_id, "intake_material")
-            for thesis_id in frozen_thesis_ids
+            for thesis_id in scope.factor_ids
         )
-    elif "intake_material_document_version_id" in frozen_scope:
-        raise ValueError("automatic topic scope cannot bind intake material")
     task_query = (
         select(ResearchTask)
         .where(ResearchTask.run_id == run.id)
@@ -161,7 +80,7 @@ def validate_automatic_source_bindings(
         if (
             binding is None
             or task.research_case_id != run.research_case_id
-            or task.thesis_id not in theses_by_id
+            or task.thesis_id not in scope.factor_ids
             or task.round < 1
             or task.round > run.round
         ):

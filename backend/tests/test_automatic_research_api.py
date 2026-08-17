@@ -1338,6 +1338,34 @@ def test_scope_validator_exposes_stable_frozen_error_reason(
     assert exc_info.value.reason is AutomaticResearchScopeReason.FROZEN_INVALID
 
 
+def test_validated_scope_exposes_one_immutable_typed_interface(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    from app.services.automatic_research_scope import validate_automatic_research_scope
+
+    created = _start(cmd_client, monkeypatch)
+    run = cmd_session.get(ResearchRun, uuid.UUID(created["run_id"]))
+    assert run is not None
+    payload = _scope_payload(cmd_session, run.id)
+
+    scope = validate_automatic_research_scope(cmd_session, run, payload)
+    snapshot = scope.snapshot()
+    snapshot["factor_statements"].append("caller mutation")
+
+    assert scope.factor_ids == tuple(uuid.UUID(value) for value in payload["factor_ids"])
+    assert scope.factor_statements == tuple(payload["factor_statements"])
+    assert scope.factors[0].objectives == (
+        "support",
+        "contradict",
+        "alternative_explanation",
+    )
+    assert scope.factors[0].allowed_source_roles == (
+        "company_disclosure",
+        "licensed_provider",
+    )
+    assert scope.snapshot() == payload
+
+
 def test_completed_view_returns_machine_result_and_display_safe_sources(
     cmd_client, cmd_session, monkeypatch
 ) -> None:

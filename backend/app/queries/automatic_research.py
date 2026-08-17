@@ -54,6 +54,7 @@ from app.services.automatic_research_conclusion import (
 from app.services.automatic_research_scope import (
     AUTOMATIC_RESEARCH_SCOPE_CONFLICT_MESSAGE,
     AutomaticResearchScopeError,
+    ValidatedAutomaticResearchScope,
     validate_automatic_research_scope,
 )
 from app.services.source_admission import source_contract_is_active
@@ -187,7 +188,7 @@ class AutomaticResearchQueries:
                 bindings = validate_automatic_source_bindings(
                     self._session,
                     run,
-                    frozen_scope,
+                    validated_scope,
                     allow_unbound_current_round=run.status == "queued",
                 )
             except ValueError:
@@ -219,7 +220,7 @@ class AutomaticResearchQueries:
         links = self._validated_links(
             case_id,
             validated_scope.current_scope_id,
-            frozen_scope,
+            validated_scope,
             job_ids,
         )
         exceptions = self._exceptions(job_ids)
@@ -228,7 +229,7 @@ class AutomaticResearchQueries:
                 case_id,
                 run,
                 validated_scope.current_scope_id,
-                frozen_scope,
+                validated_scope,
                 links,
                 jobs,
             )
@@ -459,15 +460,12 @@ class AutomaticResearchQueries:
         self,
         case_id: uuid.UUID,
         current_scope_id: uuid.UUID | None,
-        frozen_scope: dict,
+        scope: ValidatedAutomaticResearchScope,
         job_ids: frozenset[uuid.UUID],
     ) -> list[tuple[EvidenceLink, SourceStatement, DocumentVersion, SourceContract | None]]:
         if not job_ids or current_scope_id is None:
             return []
-        try:
-            thesis_ids = {uuid.UUID(str(value)) for value in frozen_scope["factor_ids"]}
-        except (KeyError, TypeError, ValueError):
-            return []
+        thesis_ids = set(scope.factor_ids)
         rows = list(
             self._session.execute(
                 select(EvidenceLink, SourceStatement, DocumentVersion, SourceContract)
@@ -513,7 +511,7 @@ class AutomaticResearchQueries:
         case_id: uuid.UUID,
         run: ResearchRun,
         current_scope_id: uuid.UUID | None,
-        frozen_scope: dict,
+        scope: ValidatedAutomaticResearchScope,
         links: list[tuple[EvidenceLink, SourceStatement, DocumentVersion, SourceContract | None]],
         jobs: list[AcquisitionJob],
     ) -> _ResultProjection:
@@ -552,18 +550,8 @@ class AutomaticResearchQueries:
         ):
             return _ResultProjection(result=None, failure_stage=4)
         ordered_links = [links_by_id[link_id] for link_id in conclusion_link_ids]
-        try:
-            thesis_ids = [
-                uuid.UUID(str(value)) for value in frozen_scope["factor_ids"]
-            ]
-            factor_statements = list(frozen_scope["factor_statements"])
-        except (KeyError, TypeError, ValueError, AttributeError):
-            return _ResultProjection(result=None, failure_stage=3)
-        if (
-            len(thesis_ids) != len(factor_statements)
-            or any(not isinstance(value, str) for value in factor_statements)
-        ):
-            return _ResultProjection(result=None, failure_stage=3)
+        thesis_ids = list(scope.factor_ids)
+        factor_statements = list(scope.factor_statements)
         tasks = list(self._session.scalars(
             select(ResearchTask)
             .where(
