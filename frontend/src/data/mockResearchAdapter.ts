@@ -3181,11 +3181,11 @@ function mockAutomaticResearchView(
     AutomaticResearchView["stages"][number],
     "key" | "label" | "summary"
   >> = [
-    { key: "acquire", label: "采集资料", summary: completed ? "已找到 3 份资料" : "正在查找允许使用的资料" },
-    { key: "parse", label: "解析内容", summary: completed ? "已提取原文内容" : "等待资料采集" },
-    { key: "admit", label: "证据准入", summary: completed ? "已自动纳入 2 条证据" : "等待内容解析" },
-    { key: "analyze", label: "分析证据", summary: completed ? "已比较支持证据与反证" : "等待证据准入" },
-    { key: "conclude", label: "形成结论", summary: completed ? "已生成自动结论" : "等待证据分析" },
+    { key: "acquire", label: "资料获取", summary: completed ? "已找到 3 份资料" : "正在查找允许使用的资料" },
+    { key: "parse", label: "内容解析", summary: completed ? "已提取原文内容" : "等待资料采集" },
+    { key: "admit", label: "证据校验", summary: completed ? "已自动纳入 2 条证据" : "等待内容解析" },
+    { key: "analyze", label: "分析判断", summary: completed ? "已比较支持证据与反证" : "等待证据准入" },
+    { key: "conclude", label: "生成结论", summary: completed ? "已生成自动结论" : "等待证据分析" },
   ];
   const baseTime = Date.parse("2026-08-17T01:00:00Z");
   const stages: AutomaticResearchView["stages"] = stageDefinitions.map((stage, index) => {

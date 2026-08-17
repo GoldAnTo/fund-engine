@@ -60,11 +60,11 @@ from app.services.case_tenant_access import CaseTenantAccess
 
 
 _STAGES = (
-    ("acquire", "采集来源"),
-    ("parse", "解析材料"),
-    ("admit", "准入证据"),
-    ("analyze", "分析证据"),
-    ("conclude", "形成结论"),
+    ("acquire", "资料获取"),
+    ("parse", "内容解析"),
+    ("admit", "证据校验"),
+    ("analyze", "分析判断"),
+    ("conclude", "生成结论"),
 )
 _ACQUISITION_STAGE = {
     "queued": 0,
