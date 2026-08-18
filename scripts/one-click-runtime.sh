@@ -7,6 +7,8 @@ readonly COMPOSE_FILE="$REPO_ROOT/docker-compose.one-click.yml"
 readonly BASE_ENV_FILE="$REPO_ROOT/.env"
 readonly RUNTIME_ENV_FILE="$REPO_ROOT/.env.one-click.local"
 readonly LEGACY_PROJECT="fund-engine-event"
+readonly LEGACY_STOPPED_STATE_DIR="$REPO_ROOT/.one-click-runtime"
+readonly LEGACY_STOPPED_STATE_FILE="$LEGACY_STOPPED_STATE_DIR/legacy-stopped-containers"
 
 die() {
   printf 'one-click runtime: %s\n' "$*" >&2
@@ -54,42 +56,98 @@ init_runtime_environment() {
   printf 'Created local one-click runtime environment.\n'
 }
 
+legacy_service_is_allowed() {
+  case "$1" in
+    api|frontend|research-worker|acquisition-worker|scheduler) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+begin_legacy_stop_state() {
+  local temporary_state_file
+  (
+    umask 077
+    mkdir -p "$LEGACY_STOPPED_STATE_DIR"
+    chmod 700 "$LEGACY_STOPPED_STATE_DIR"
+    temporary_state_file="$(mktemp "$LEGACY_STOPPED_STATE_DIR/legacy-stopped-containers.XXXXXX")"
+    chmod 600 "$temporary_state_file"
+    mv "$temporary_state_file" "$LEGACY_STOPPED_STATE_FILE"
+  )
+}
+
+record_stopped_legacy_container() {
+  local service="$1"
+  local container_id="$2"
+  printf '%s\t%s\n' "$service" "$container_id" >> "$LEGACY_STOPPED_STATE_FILE"
+}
+
 stop_legacy_application_services() {
   local service container_id
+  [[ -e "$LEGACY_STOPPED_STATE_FILE" ]] && return 0
+  begin_legacy_stop_state
+
   for service in api frontend research-worker acquisition-worker scheduler; do
     while IFS= read -r container_id; do
       [[ -n "$container_id" ]] || continue
-      docker stop "$container_id" >/dev/null
+      if ! docker stop "$container_id" >/dev/null; then
+        return 1
+      fi
+      record_stopped_legacy_container "$service" "$container_id"
     done < <(
       docker ps -q \
         --filter "label=com.docker.compose.project=${LEGACY_PROJECT}" \
         --filter "label=com.docker.compose.service=${service}"
     )
   done
+
+  if [[ ! -s "$LEGACY_STOPPED_STATE_FILE" ]]; then
+    rm -f "$LEGACY_STOPPED_STATE_FILE"
+    rmdir "$LEGACY_STOPPED_STATE_DIR" 2>/dev/null || true
+  fi
 }
 
-start_legacy_application_services() {
-  local service container_id running
-  for service in api frontend research-worker acquisition-worker scheduler; do
-    while IFS= read -r container_id; do
-      [[ -n "$container_id" ]] || continue
-      running="$(docker inspect --format '{{.State.Running}}' "$container_id")"
-      [[ "$running" == "true" ]] && continue
-      docker start "$container_id" >/dev/null
-    done < <(
-      docker ps -aq \
-        --filter "label=com.docker.compose.project=${LEGACY_PROJECT}" \
-        --filter "label=com.docker.compose.service=${service}"
-    )
-  done
+restore_legacy_application_services() {
+  local service container_id extra_field actual_id actual_project actual_service running
+  [[ -e "$LEGACY_STOPPED_STATE_FILE" ]] || return 0
+
+  while IFS=$'\t' read -r service container_id extra_field; do
+    [[ -n "$service" && -n "$container_id" && -z "$extra_field" ]] || {
+      printf 'one-click runtime: invalid legacy stop state\n' >&2
+      return 1
+    }
+    legacy_service_is_allowed "$service" || {
+      printf 'one-click runtime: unexpected legacy service in stop state\n' >&2
+      return 1
+    }
+    actual_id="$(docker inspect --format '{{.Id}}' "$container_id" 2>/dev/null)" || return 1
+    actual_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id")" || return 1
+    actual_service="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_id")" || return 1
+    [[ "$actual_id" == "$container_id" && "$actual_project" == "$LEGACY_PROJECT" && "$actual_service" == "$service" ]] || {
+      printf 'one-click runtime: legacy stop state identity check failed\n' >&2
+      return 1
+    }
+    running="$(docker inspect --format '{{.State.Running}}' "$container_id")" || return 1
+    [[ "$running" == "true" ]] || docker start "$container_id" >/dev/null || return 1
+  done < "$LEGACY_STOPPED_STATE_FILE"
+
+  rm -f "$LEGACY_STOPPED_STATE_FILE"
+  rmdir "$LEGACY_STOPPED_STATE_DIR" 2>/dev/null || true
 }
 
 start_one_click_runtime() {
   require_command docker
   init_runtime_environment
   require_runtime_files
-  stop_legacy_application_services
-  compose up -d --build --scale acquisition-worker=3
+  compose config -q
+  compose build
+  if ! stop_legacy_application_services; then
+    restore_legacy_application_services || die "failed to restore legacy application containers after cutover failed"
+    die "failed to stop legacy application containers"
+  fi
+  if ! compose up -d --no-build --scale acquisition-worker=3; then
+    restore_legacy_application_services || die "failed to restore legacy application containers after one-click startup failed"
+    die "one-click startup failed; restored legacy application containers"
+  fi
 }
 
 stop_one_click_runtime() {
@@ -110,7 +168,7 @@ show_runtime_status() {
 
 rollback_runtime() {
   stop_one_click_runtime
-  start_legacy_application_services
+  restore_legacy_application_services
   printf 'Restored legacy application containers.\n'
 }
 

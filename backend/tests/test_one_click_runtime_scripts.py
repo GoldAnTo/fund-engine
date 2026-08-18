@@ -1,3 +1,4 @@
+import os
 import shutil
 import stat
 import subprocess
@@ -27,16 +28,74 @@ def test_runtime_control_script_keeps_credentials_local_and_switches_only_app_se
 
 def test_rollback_restarts_only_legacy_application_containers() -> None:
     script = (ROOT / "scripts" / "one-click-runtime.sh").read_text()
-    rollback = script[script.index("start_legacy_application_services"): script.index("usage()")]
+    rollback = script[script.index("restore_legacy_application_services"): script.index("usage()")]
 
     assert "rollback_runtime" in rollback
     assert "stop_one_click_runtime" in rollback
     assert "docker start" in rollback
-    assert "docker ps -aq" in rollback
+    assert "LEGACY_STOPPED_STATE_FILE" in rollback
+    assert "docker ps" not in rollback
+    allowed_services = script[script.index("legacy_service_is_allowed"): script.index("begin_legacy_stop_state")]
     for service in ("api", "frontend", "research-worker", "acquisition-worker", "scheduler"):
-        assert service in rollback
+        assert service in allowed_services
     assert "postgres" not in rollback
     assert "keycloak" not in rollback
+
+
+def test_up_builds_before_cutover_and_restores_only_recorded_containers_on_failure(tmp_path: Path) -> None:
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    script = scripts_dir / "one-click-runtime.sh"
+    shutil.copy(ROOT / "scripts" / "one-click-runtime.sh", script)
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    (tmp_path / "docker-compose.one-click.yml").touch()
+    (tmp_path / ".env").touch()
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$DOCKER_LOG"
+case "$1" in
+  compose)
+    [[ "$*" == *" config -q"* || "$*" == *" build"* ]] && exit 0
+    [[ "$*" == *" up -d --no-build"* ]] && exit 1
+    ;;
+  ps)
+    [[ "$*" == *"service=api"* ]] && printf 'legacy-api\\n'
+    [[ "$*" == *"service=frontend"* ]] && printf 'legacy-frontend\\n'
+    exit 0
+    ;;
+  inspect)
+    container_id="${!#}"
+    [[ "$*" == *"{{.Id}}"* ]] && printf '%s\\n' "$container_id"
+    [[ "$*" == *"com.docker.compose.project"* ]] && printf 'fund-engine-event\\n'
+    [[ "$*" == *"com.docker.compose.service"* && "$container_id" == "legacy-api" ]] && printf 'api\\n'
+    [[ "$*" == *"com.docker.compose.service"* && "$container_id" == "legacy-frontend" ]] && printf 'frontend\\n'
+    [[ "$*" == *".State.Running"* ]] && printf 'false\\n'
+    exit 0
+    ;;
+  stop|start) exit 0 ;;
+esac
+"""
+    )
+    fake_docker.chmod(fake_docker.stat().st_mode | stat.S_IXUSR)
+    log = tmp_path / "docker.log"
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "DOCKER_LOG": str(log)}
+
+    completed = subprocess.run([script, "up"], capture_output=True, text=True, env=env)
+
+    assert completed.returncode != 0
+    commands = log.read_text().splitlines()
+    config_index = next(index for index, command in enumerate(commands) if " config -q" in command)
+    build_index = next(index for index, command in enumerate(commands) if command.endswith(" build"))
+    first_stop_index = next(index for index, command in enumerate(commands) if command.startswith("stop "))
+    up_index = next(index for index, command in enumerate(commands) if " up -d --no-build" in command)
+    assert config_index < build_index < first_stop_index < up_index
+    assert {command for command in commands if command.startswith("start ")} == {"start legacy-api", "start legacy-frontend"}
+    assert not (tmp_path / ".one-click-runtime" / "legacy-stopped-containers").exists()
 
 
 def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> None:
