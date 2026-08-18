@@ -43,6 +43,10 @@ def test_rollback_restarts_only_legacy_application_containers() -> None:
 
 
 def test_up_builds_before_cutover_and_restores_only_recorded_containers_on_failure(tmp_path: Path) -> None:
+    api_short = "89c5b6eb2322"
+    api_full = api_short + "a" * 52
+    frontend_short = "3d70c9b8e735"
+    frontend_full = frontend_short + "b" * 52
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
     script = scripts_dir / "one-click-runtime.sh"
@@ -55,7 +59,7 @@ def test_up_builds_before_cutover_and_restores_only_recorded_containers_on_failu
     fake_bin.mkdir()
     fake_docker = fake_bin / "docker"
     fake_docker.write_text(
-        """#!/usr/bin/env bash
+        f"""#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
 case "$1" in
@@ -64,16 +68,20 @@ case "$1" in
     [[ "$*" == *" up -d --no-build"* ]] && exit 1
     ;;
   ps)
-    [[ "$*" == *"service=api"* ]] && printf 'legacy-api\\n'
-    [[ "$*" == *"service=frontend"* ]] && printf 'legacy-frontend\\n'
+    [[ "$*" == *"service=api"* ]] && printf '{api_short}\\n'
+    [[ "$*" == *"service=frontend"* ]] && printf '{frontend_short}\\n'
     exit 0
     ;;
   inspect)
-    container_id="${!#}"
-    [[ "$*" == *"{{.Id}}"* ]] && printf '%s\\n' "$container_id"
+    container_id="${{!#}}"
+    case "$container_id" in
+      {api_short}|{api_full}) canonical_id="{api_full}"; service="api" ;;
+      {frontend_short}|{frontend_full}) canonical_id="{frontend_full}"; service="frontend" ;;
+      *) exit 1 ;;
+    esac
+    [[ "$*" == *"{{{{.Id}}}}"* ]] && printf '%s\\n' "$canonical_id"
     [[ "$*" == *"com.docker.compose.project"* ]] && printf 'fund-engine-event\\n'
-    [[ "$*" == *"com.docker.compose.service"* && "$container_id" == "legacy-api" ]] && printf 'api\\n'
-    [[ "$*" == *"com.docker.compose.service"* && "$container_id" == "legacy-frontend" ]] && printf 'frontend\\n'
+    [[ "$*" == *"com.docker.compose.service"* ]] && printf '%s\\n' "$service"
     [[ "$*" == *".State.Running"* ]] && printf 'false\\n'
     exit 0
     ;;
@@ -94,7 +102,8 @@ esac
     first_stop_index = next(index for index, command in enumerate(commands) if command.startswith("stop "))
     up_index = next(index for index, command in enumerate(commands) if " up -d --no-build" in command)
     assert config_index < build_index < first_stop_index < up_index
-    assert {command for command in commands if command.startswith("start ")} == {"start legacy-api", "start legacy-frontend"}
+    assert {command for command in commands if command.startswith("stop ")} == {f"stop {api_full}", f"stop {frontend_full}"}
+    assert {command for command in commands if command.startswith("start ")} == {f"start {api_full}", f"start {frontend_full}"}
     assert not (tmp_path / ".one-click-runtime" / "legacy-stopped-containers").exists()
 
 

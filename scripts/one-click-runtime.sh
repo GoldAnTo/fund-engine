@@ -81,18 +81,52 @@ record_stopped_legacy_container() {
   printf '%s\t%s\n' "$service" "$container_id" >> "$LEGACY_STOPPED_STATE_FILE"
 }
 
+normalize_legacy_stop_state() {
+  local service container_id extra_field actual_id temporary_state_file
+  (
+    umask 077
+    temporary_state_file="$(mktemp "$LEGACY_STOPPED_STATE_DIR/legacy-stopped-containers.XXXXXX")" || exit 1
+    chmod 600 "$temporary_state_file"
+    while IFS=$'\t' read -r service container_id extra_field; do
+      [[ -n "$service" && -n "$container_id" && -z "$extra_field" ]] || {
+        rm -f "$temporary_state_file"
+        exit 1
+      }
+      legacy_service_is_allowed "$service" || {
+        rm -f "$temporary_state_file"
+        exit 1
+      }
+      [[ "$container_id" =~ ^[0-9a-f]{12}([0-9a-f]{52})?$ ]] || {
+        rm -f "$temporary_state_file"
+        exit 1
+      }
+      actual_id="$(docker inspect --format '{{.Id}}' "$container_id" 2>/dev/null)" || {
+        rm -f "$temporary_state_file"
+        exit 1
+      }
+      [[ "$actual_id" == "$container_id"* ]] || {
+        rm -f "$temporary_state_file"
+        exit 1
+      }
+      printf '%s\t%s\n' "$service" "$actual_id" >> "$temporary_state_file"
+    done < "$LEGACY_STOPPED_STATE_FILE"
+    mv "$temporary_state_file" "$LEGACY_STOPPED_STATE_FILE"
+  )
+}
+
 stop_legacy_application_services() {
-  local service container_id
+  local service container_id full_container_id
   [[ -e "$LEGACY_STOPPED_STATE_FILE" ]] && return 0
   begin_legacy_stop_state
 
   for service in api frontend research-worker acquisition-worker scheduler; do
     while IFS= read -r container_id; do
       [[ -n "$container_id" ]] || continue
-      if ! docker stop "$container_id" >/dev/null; then
+      full_container_id="$(docker inspect --format '{{.Id}}' "$container_id")" || return 1
+      if ! docker stop "$full_container_id" >/dev/null; then
         return 1
       fi
-      record_stopped_legacy_container "$service" "$container_id"
+      record_stopped_legacy_container "$service" "$full_container_id"
     done < <(
       docker ps -q \
         --filter "label=com.docker.compose.project=${LEGACY_PROJECT}" \
@@ -109,6 +143,10 @@ stop_legacy_application_services() {
 restore_legacy_application_services() {
   local service container_id extra_field actual_id actual_project actual_service running
   [[ -e "$LEGACY_STOPPED_STATE_FILE" ]] || return 0
+  normalize_legacy_stop_state || {
+    printf 'one-click runtime: unable to normalize legacy stop state\n' >&2
+    return 1
+  }
 
   while IFS=$'\t' read -r service container_id extra_field; do
     [[ -n "$service" && -n "$container_id" && -z "$extra_field" ]] || {
