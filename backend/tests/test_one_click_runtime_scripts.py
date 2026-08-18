@@ -25,6 +25,20 @@ def test_runtime_control_script_keeps_credentials_local_and_switches_only_app_se
     assert "--volumes" not in script
 
 
+def test_rollback_restarts_only_legacy_application_containers() -> None:
+    script = (ROOT / "scripts" / "one-click-runtime.sh").read_text()
+    rollback = script[script.index("start_legacy_application_services"): script.index("usage()")]
+
+    assert "rollback_runtime" in rollback
+    assert "stop_one_click_runtime" in rollback
+    assert "docker start" in rollback
+    assert "docker ps -aq" in rollback
+    for service in ("api", "frontend", "research-worker", "acquisition-worker", "scheduler"):
+        assert service in rollback
+    assert "postgres" not in rollback
+    assert "keycloak" not in rollback
+
+
 def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> None:
     script = (ROOT / "scripts" / "verify-one-click-runtime.sh").read_text()
 
@@ -36,6 +50,11 @@ def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> Non
     assert "0059" in script
     assert "0062" in script
     assert "fund-engine-event" in script
+    assert 'LEGACY_DATABASE_CONTAINER="fund-engine-event-postgres-1"' in script
+    assert 'docker inspect --format \'{{.Id}}\' "$LEGACY_DATABASE_CONTAINER"' in script
+    assert '"$legacy_name" == "/$LEGACY_DATABASE_CONTAINER"' in script
+    assert '"$legacy_project" == "$LEGACY_PROJECT"' in script
+    assert '"$legacy_service" == "$LEGACY_DATABASE_SERVICE"' in script
 
 
 def test_init_generates_private_local_credentials_without_echoing_them(tmp_path: Path) -> None:

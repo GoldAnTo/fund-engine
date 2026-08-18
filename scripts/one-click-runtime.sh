@@ -68,6 +68,22 @@ stop_legacy_application_services() {
   done
 }
 
+start_legacy_application_services() {
+  local service container_id running
+  for service in api frontend research-worker acquisition-worker scheduler; do
+    while IFS= read -r container_id; do
+      [[ -n "$container_id" ]] || continue
+      running="$(docker inspect --format '{{.State.Running}}' "$container_id")"
+      [[ "$running" == "true" ]] && continue
+      docker start "$container_id" >/dev/null
+    done < <(
+      docker ps -aq \
+        --filter "label=com.docker.compose.project=${LEGACY_PROJECT}" \
+        --filter "label=com.docker.compose.service=${service}"
+    )
+  done
+}
+
 start_one_click_runtime() {
   require_command docker
   init_runtime_environment
@@ -94,7 +110,8 @@ show_runtime_status() {
 
 rollback_runtime() {
   stop_one_click_runtime
-  printf 'Legacy application containers remain stopped; restart them from the legacy checkout if needed.\n'
+  start_legacy_application_services
+  printf 'Restored legacy application containers.\n'
 }
 
 usage() {

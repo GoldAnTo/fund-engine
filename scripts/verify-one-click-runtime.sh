@@ -8,6 +8,7 @@ readonly BASE_ENV_FILE="$REPO_ROOT/.env"
 readonly RUNTIME_ENV_FILE="$REPO_ROOT/.env.one-click.local"
 readonly LEGACY_PROJECT="fund-engine-event"
 readonly LEGACY_DATABASE_SERVICE="postgres"
+readonly LEGACY_DATABASE_CONTAINER="fund-engine-event-postgres-1"
 
 die() {
   printf 'one-click runtime verification: %s\n' "$*" >&2
@@ -46,7 +47,7 @@ require_revision() {
 }
 
 main() {
-  local database_user database_name new_revision legacy_container legacy_revision
+  local database_user database_name new_revision legacy_container legacy_name legacy_project legacy_service legacy_running legacy_revision
 
   require_command docker
   require_command curl
@@ -68,8 +69,16 @@ main() {
   new_revision="$(compose exec -T postgres psql -U "$database_user" -d "$database_name" -Atc 'SELECT version_num FROM alembic_version;')"
   require_revision "$new_revision" 0059
 
-  legacy_container="$(docker ps -q --filter "label=com.docker.compose.project=${LEGACY_PROJECT}" --filter "label=com.docker.compose.service=${LEGACY_DATABASE_SERVICE}" | head -n 1)"
-  [[ -n "$legacy_container" ]] || die "legacy postgres container is not running"
+  legacy_container="$(docker inspect --format '{{.Id}}' "$LEGACY_DATABASE_CONTAINER" 2>/dev/null)" \
+    || die "legacy postgres container is unavailable: $LEGACY_DATABASE_CONTAINER"
+  legacy_name="$(docker inspect --format '{{.Name}}' "$legacy_container")"
+  legacy_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$legacy_container")"
+  legacy_service="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$legacy_container")"
+  legacy_running="$(docker inspect --format '{{.State.Running}}' "$legacy_container")"
+  [[ "$legacy_name" == "/$LEGACY_DATABASE_CONTAINER" ]] || die "legacy database container identity does not match"
+  [[ "$legacy_project" == "$LEGACY_PROJECT" ]] || die "legacy database container belongs to unexpected compose project"
+  [[ "$legacy_service" == "$LEGACY_DATABASE_SERVICE" ]] || die "legacy database container has unexpected compose service"
+  [[ "$legacy_running" == "true" ]] || die "legacy postgres container is not running"
   legacy_revision="$(docker exec "$legacy_container" sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT version_num FROM alembic_version;"')"
   require_revision "$legacy_revision" 0062
 
