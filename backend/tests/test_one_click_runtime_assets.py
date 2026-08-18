@@ -75,3 +75,4 @@ def test_compose_healthchecks_http_services_before_starting_frontend() -> None:
         assert "app.scripts.check_worker_heartbeat" in worker
         assert f"--worker-kind {kind}" in worker
         assert "--worker-id $$HOSTNAME" in worker
+        assert "restart: unless-stopped" in worker

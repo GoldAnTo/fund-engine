@@ -26,6 +26,7 @@ from app.db import SessionLocal
 from app.repositories.acquisition import AcquisitionRepository
 from app.services.acquisition_runner import AcquisitionRunner
 from app.services.research_worker_heartbeat import WorkerHeartbeatService
+from app.services.worker_heartbeat_publisher import WorkerHeartbeatPublisher
 
 
 _KNOWN_ADAPTERS = frozenset({"gildata", "sse", "szse"})
@@ -209,12 +210,19 @@ def main(argv: Sequence[str] | None = None) -> None:
             run_once(**common)
             _touch(mode="once", state="idle")
             return
-        while not stop.is_set():
-            _touch(mode="loop", state="polling")
-            found = run_once(**common)
-            _touch(mode="loop", state="polling")
-            if not found:
-                stop.wait(args.poll_seconds)
+        publisher = WorkerHeartbeatPublisher(
+            session_factory=SessionLocal,
+            worker_id=socket.gethostname()[:128],
+            worker_kind="acquisition",
+        )
+        publisher.start()
+        try:
+            while not stop.is_set():
+                found = run_once(**common)
+                if not found:
+                    stop.wait(args.poll_seconds)
+        finally:
+            publisher.stop()
     except KeyboardInterrupt:
         stop.set()
     finally:

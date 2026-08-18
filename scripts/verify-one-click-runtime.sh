@@ -40,17 +40,21 @@ require_running_service() {
   compose ps --status running --services | grep -Fxq "$service" || die "service is not running: $service"
 }
 
-require_healthy_service() {
+require_expected_healthy_replicas() {
   local service="$1"
+  local expected_count="$2"
   local container_id health_status
-  local count=0
-  while IFS= read -r container_id; do
+  local running_status
+  local container_ids=()
+  mapfile -t container_ids < <(compose ps --all --quiet "$service")
+  [[ "${#container_ids[@]}" -eq "$expected_count" ]] || die "expected ${expected_count} containers for ${service}, got ${#container_ids[@]}"
+  for container_id in "${container_ids[@]}"; do
     [[ -n "$container_id" ]] || continue
-    count=$((count + 1))
+    running_status="$(docker inspect --format '{{.State.Status}}' "$container_id")"
     health_status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
+    [[ "$running_status" == "running" ]] || die "service is not running: $service"
     [[ "$health_status" == "healthy" ]] || die "service is not healthy: $service"
-  done < <(compose ps -q "$service")
-  [[ "$count" -gt 0 ]] || die "service has no containers: $service"
+  done
 }
 
 require_revision() {
@@ -73,9 +77,8 @@ main() {
   for service in postgres api research-worker acquisition-worker frontend; do
     require_running_service "$service"
   done
-  for service in research-worker acquisition-worker; do
-    require_healthy_service "$service"
-  done
+  require_expected_healthy_replicas research-worker 1
+  require_expected_healthy_replicas acquisition-worker 3
 
   curl --fail --silent --show-error http://127.0.0.1:8000/health >/dev/null
   curl --fail --silent --show-error http://127.0.0.1:8080/health >/dev/null

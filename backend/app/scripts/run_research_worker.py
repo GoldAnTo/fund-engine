@@ -27,6 +27,7 @@ from app.services.auto_research import AutoResearchService
 from app.services.monitor_scheduler import MonitorScheduler
 from app.services.fund_disclosure_sync_scheduler import FundDisclosureSyncScheduler
 from app.services.research_worker_heartbeat import WorkerHeartbeatService
+from app.services.worker_heartbeat_publisher import WorkerHeartbeatPublisher
 
 
 def _worker_id() -> str:
@@ -110,12 +111,19 @@ def main() -> None:
         run_once()
         _touch(mode="once", state="idle")
         return
-    while True:
-        _touch(mode="loop", state="polling")
-        found = run_once()
-        _touch(mode="loop", state="polling")
-        if not found:
-            time.sleep(max(args.poll_seconds, 0.1))
+    publisher = WorkerHeartbeatPublisher(
+        session_factory=SessionLocal,
+        worker_id=_worker_id(),
+        worker_kind="research_run",
+    )
+    publisher.start()
+    try:
+        while True:
+            found = run_once()
+            if not found:
+                time.sleep(max(args.poll_seconds, 0.1))
+    finally:
+        publisher.stop()
 
 
 if __name__ == "__main__":
