@@ -67,6 +67,32 @@ cd frontend && PYTHON=../backend/.venv/bin/python PW_BROWSER_CHANNEL=chrome node
 本仓库要求 Node.js 20+（`.nvmrc` 固定为 24）。真实人工闭环需要同时运行 API
 与后台 worker：`cd backend && python -m app.scripts.run_research_worker --loop`。
 
+## 一键本地运行（Docker）
+
+日常使用只需执行以下命令；它会启动 API、研究 worker、资料采集 worker 和前端，
+首次启动会构建当前代码镜像并创建独立的本地 PostgreSQL 数据卷。
+
+```bash
+# `.env` 保留你已有的 LLM、资料提供商等外部凭证；init 只生成本机运行所需凭证。
+scripts/one-click-runtime.sh init
+scripts/one-click-runtime.sh up
+scripts/verify-one-click-runtime.sh
+```
+
+前端入口是 [http://127.0.0.1:8080/events/new](http://127.0.0.1:8080/events/new)，
+API 地址是 [http://127.0.0.1:8000](http://127.0.0.1:8000)。查看状态、停止新运行环境或
+恢复旧应用服务分别使用：
+
+```bash
+scripts/one-click-runtime.sh status
+scripts/one-click-runtime.sh down
+scripts/one-click-runtime.sh rollback
+```
+
+`init` 生成的本地凭证保存在忽略的 `.env.one-click.local`，不会打印密钥；不要提交或
+手工分享该文件。`down` 保留一键运行环境的数据卷。`rollback` 停止一键运行环境后，只恢复
+本工具此前停止的旧应用容器。旧版 PostgreSQL 和 Keycloak 始终保留，既有数据不会被迁移或删除。
+
 ### 一键自动研究运行条件
 
 真实环境要让一键研究从排队持续推进到结论，需要由 supervisor 把 API、研究

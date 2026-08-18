@@ -125,6 +125,25 @@ def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> Non
     assert '"$legacy_service" == "$LEGACY_DATABASE_SERVICE"' in script
 
 
+def test_readme_documents_the_local_one_click_runtime_without_secrets() -> None:
+    readme = (ROOT / "README.md").read_text()
+
+    assert "## 一键本地运行（Docker）" in readme
+    for command in (
+        "scripts/one-click-runtime.sh init",
+        "scripts/one-click-runtime.sh up",
+        "scripts/one-click-runtime.sh status",
+        "scripts/one-click-runtime.sh down",
+        "scripts/one-click-runtime.sh rollback",
+    ):
+        assert command in readme
+    assert "http://127.0.0.1:8080/events/new" in readme
+    assert "http://127.0.0.1:8000" in readme
+    assert "`.env`" in readme
+    assert "不会打印密钥" in readme
+    assert "旧版 PostgreSQL 和 Keycloak" in readme
+
+
 def test_init_generates_private_local_credentials_without_echoing_them(tmp_path: Path) -> None:
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
