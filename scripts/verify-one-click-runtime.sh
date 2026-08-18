@@ -40,6 +40,19 @@ require_running_service() {
   compose ps --status running --services | grep -Fxq "$service" || die "service is not running: $service"
 }
 
+require_healthy_service() {
+  local service="$1"
+  local container_id health_status
+  local count=0
+  while IFS= read -r container_id; do
+    [[ -n "$container_id" ]] || continue
+    count=$((count + 1))
+    health_status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
+    [[ "$health_status" == "healthy" ]] || die "service is not healthy: $service"
+  done < <(compose ps -q "$service")
+  [[ "$count" -gt 0 ]] || die "service has no containers: $service"
+}
+
 require_revision() {
   local actual="$1"
   local expected="$2"
@@ -59,6 +72,9 @@ main() {
 
   for service in postgres api research-worker acquisition-worker frontend; do
     require_running_service "$service"
+  done
+  for service in research-worker acquisition-worker; do
+    require_healthy_service "$service"
   done
 
   curl --fail --silent --show-error http://127.0.0.1:8000/health >/dev/null

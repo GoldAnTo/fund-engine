@@ -52,7 +52,17 @@ class WorkerHeartbeatService:
         self._session.flush()
         return heartbeat
 
-    def latest(self, *, worker_kind: str = "research_run") -> ResearchWorkerHeartbeat | None:
+    def latest(
+        self, *, worker_kind: str = "research_run", worker_id: str | None = None
+    ) -> ResearchWorkerHeartbeat | None:
+        if worker_id is not None:
+            heartbeat = self._session.get(
+                ResearchWorkerHeartbeat,
+                self._storage_worker_id(worker_id, worker_kind),
+            )
+            if heartbeat is None and worker_kind == "research_run":
+                heartbeat = self._session.get(ResearchWorkerHeartbeat, worker_id)
+            return heartbeat
         prefix = f"{worker_kind}:%"
         # 0053 classifies raw pre-migration IDs by kind.  Keep those rows
         # visible alongside namespaced IDs until their worker next touches.
@@ -72,9 +82,14 @@ class WorkerHeartbeatService:
         )
 
     def status(
-        self, *, now: datetime | None = None, worker_kind: str = "research_run"
+        self,
+        *,
+        now: datetime | None = None,
+        worker_kind: str = "research_run",
+        worker_id: str | None = None,
+        stale_after: timedelta | None = None,
     ) -> dict[str, str | None]:
-        heartbeat = self.latest(worker_kind=worker_kind)
+        heartbeat = self.latest(worker_kind=worker_kind, worker_id=worker_id)
         if heartbeat is None:
             return {
                 "status": "unavailable",
@@ -89,7 +104,7 @@ class WorkerHeartbeatService:
         # meaning before comparing them with the current UTC clock.
         if last_seen_at.tzinfo is None:
             last_seen_at = last_seen_at.replace(tzinfo=timezone.utc)
-        fresh = last_seen_at >= observed_at - self.stale_after
+        fresh = last_seen_at >= observed_at - (stale_after or self.stale_after)
         available = heartbeat.mode == "loop" and fresh
         return {
             "status": "available" if available else "stale",

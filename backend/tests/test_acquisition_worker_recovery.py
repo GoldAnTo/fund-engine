@@ -6,7 +6,8 @@ from dataclasses import replace
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import sessionmaker
 
 from app.acquisition.policy import B_SCOPE_POLICY, SourcePolicy
 from app.acquisition.sources import (
@@ -1056,6 +1057,7 @@ def test_once_entry_builds_identity_runs_one_claim_and_closes_adapters(monkeypat
     )
     monkeypatch.setattr(worker, "build_llm_client", FakeExtractionClient)
     monkeypatch.setattr(worker, "run_once", lambda **kwargs: calls.append(kwargs) or False)
+    monkeypatch.setattr(worker, "_touch", lambda **_kwargs: None)
 
     worker.main(
         [
@@ -1075,3 +1077,25 @@ def test_once_entry_builds_identity_runs_one_claim_and_closes_adapters(monkeypat
     )
     assert calls[0]["lease_for"] == timedelta(seconds=30)
     assert adapter.closed is True
+
+
+def test_acquisition_worker_records_a_container_scoped_loop_heartbeat(tmp_path, monkeypatch):
+    from app.models.ledger import Base
+    from app.services.research_worker_heartbeat import WorkerHeartbeatService
+
+    worker = importlib.import_module("app.scripts.run_acquisition_worker")
+    engine = create_engine(f"sqlite:///{tmp_path / 'acquisition-heartbeat.db'}", future=True)
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    monkeypatch.setattr(worker, "SessionLocal", sessions)
+    monkeypatch.setattr(worker.socket, "gethostname", lambda: "acquisition-container")
+
+    worker._touch(mode="loop", state="polling")
+
+    with sessions() as session:
+        status = WorkerHeartbeatService(session).status(
+            worker_kind="acquisition", worker_id="acquisition-container"
+        )
+
+    assert status["status"] == "available"
+    assert status["mode"] == "loop"

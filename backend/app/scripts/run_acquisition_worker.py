@@ -25,6 +25,7 @@ from app.datasources.gildata.research_source import GildataResearchSource
 from app.db import SessionLocal
 from app.repositories.acquisition import AcquisitionRepository
 from app.services.acquisition_runner import AcquisitionRunner
+from app.services.research_worker_heartbeat import WorkerHeartbeatService
 
 
 _KNOWN_ADAPTERS = frozenset({"gildata", "sse", "szse"})
@@ -127,6 +128,17 @@ def worker_id_from_env() -> str:
     return value
 
 
+def _touch(*, mode: str, state: str) -> None:
+    with SessionLocal() as session:
+        WorkerHeartbeatService(session).touch(
+            worker_id=socket.gethostname()[:128],
+            mode=mode,
+            state=state,
+            worker_kind="acquisition",
+        )
+        session.commit()
+
+
 def run_once(
     *,
     runner: AcquisitionRunner,
@@ -193,10 +205,14 @@ def main(argv: Sequence[str] | None = None) -> None:
             "lease_for": timedelta(seconds=args.lease_seconds),
         }
         if args.once:
+            _touch(mode="once", state="executing")
             run_once(**common)
+            _touch(mode="once", state="idle")
             return
         while not stop.is_set():
+            _touch(mode="loop", state="polling")
             found = run_once(**common)
+            _touch(mode="loop", state="polling")
             if not found:
                 stop.wait(args.poll_seconds)
     except KeyboardInterrupt:

@@ -67,6 +67,12 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python -m app.scripts.check_worker_heartbeat --worker-kind research_run --worker-id $$HOSTNAME --max-age-seconds 300"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
 
   acquisition-worker:
     image: fund-engine-one-click-backend:local
@@ -85,6 +91,12 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python -m app.scripts.check_worker_heartbeat --worker-kind acquisition --worker-id $$HOSTNAME --max-age-seconds 300"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
 
   frontend:
     image: fund-engine-one-click-frontend:local

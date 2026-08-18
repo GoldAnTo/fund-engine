@@ -123,6 +123,8 @@ def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> Non
     assert '"$legacy_name" == "/$LEGACY_DATABASE_CONTAINER"' in script
     assert '"$legacy_project" == "$LEGACY_PROJECT"' in script
     assert '"$legacy_service" == "$LEGACY_DATABASE_SERVICE"' in script
+    assert "require_healthy_service" in script
+    assert 'require_healthy_service "$service"' in script
 
 
 def test_readme_documents_the_local_one_click_runtime_without_secrets() -> None:

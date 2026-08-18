@@ -61,6 +61,8 @@ def test_compose_has_separate_data_and_automatic_services() -> None:
 def test_compose_healthchecks_http_services_before_starting_frontend() -> None:
     compose = (ROOT / "docker-compose.one-click.yml").read_text()
     api = compose[compose.index("  api:\n") : compose.index("  research-worker:\n")]
+    research_worker = compose[compose.index("  research-worker:\n") : compose.index("  acquisition-worker:\n")]
+    acquisition_worker = compose[compose.index("  acquisition-worker:\n") : compose.index("  frontend:\n")]
     frontend = compose[compose.index("  frontend:\n") : compose.index("\nvolumes:\n")]
 
     assert "http://127.0.0.1:8000/health" in api
@@ -68,3 +70,8 @@ def test_compose_healthchecks_http_services_before_starting_frontend() -> None:
     assert "healthcheck:" in api
     assert "healthcheck:" in frontend
     assert "api:\n        condition: service_healthy" in frontend
+    for worker, kind in ((research_worker, "research_run"), (acquisition_worker, "acquisition")):
+        assert "healthcheck:" in worker
+        assert "app.scripts.check_worker_heartbeat" in worker
+        assert f"--worker-kind {kind}" in worker
+        assert "--worker-id $$HOSTNAME" in worker
