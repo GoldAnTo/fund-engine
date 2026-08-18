@@ -1,0 +1,98 @@
+name: fund-engine-one-click
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${ONE_CLICK_POSTGRES_DB:?}
+      POSTGRES_USER: ${ONE_CLICK_POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${ONE_CLICK_POSTGRES_PASSWORD:?}
+    volumes:
+      - fund-engine-one-click-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    image: fund-engine-one-click-backend:local
+    build:
+      context: ./backend
+    restart: "no"
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql+psycopg://${ONE_CLICK_POSTGRES_USER:?}:${ONE_CLICK_POSTGRES_PASSWORD:?}@postgres:5432/${ONE_CLICK_POSTGRES_DB:?}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    image: fund-engine-one-click-backend:local
+    build:
+      context: ./backend
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:8000:8000
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://${ONE_CLICK_POSTGRES_USER:?}:${ONE_CLICK_POSTGRES_PASSWORD:?}@postgres:5432/${ONE_CLICK_POSTGRES_DB:?}
+      RESEARCH_TENANT_TOKENS: ${RESEARCH_TENANT_TOKENS:?}
+      LLM_API_KEY: ${LLM_API_KEY:?}
+      LLM_BASE_URL: ${LLM_BASE_URL:?}
+      LLM_MODEL: ${LLM_MODEL:?}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  research-worker:
+    image: fund-engine-one-click-backend:local
+    build:
+      context: ./backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.scripts.run_research_worker", "--loop", "--poll-seconds", "1"]
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://${ONE_CLICK_POSTGRES_USER:?}:${ONE_CLICK_POSTGRES_PASSWORD:?}@postgres:5432/${ONE_CLICK_POSTGRES_DB:?}
+      LLM_API_KEY: ${LLM_API_KEY:?}
+      LLM_BASE_URL: ${LLM_BASE_URL:?}
+      LLM_MODEL: ${LLM_MODEL:?}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  acquisition-worker:
+    image: fund-engine-one-click-backend:local
+    build:
+      context: ./backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.scripts.run_acquisition_worker", "--loop", "--poll-seconds", "1"]
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://${ONE_CLICK_POSTGRES_USER:?}:${ONE_CLICK_POSTGRES_PASSWORD:?}@postgres:5432/${ONE_CLICK_POSTGRES_DB:?}
+      GILDATA_TOKEN: ${GILDATA_TOKEN:?}
+      ACQUISITION_ENABLED_ADAPTERS: ${ACQUISITION_ENABLED_ADAPTERS:?}
+      LLM_API_KEY: ${LLM_API_KEY:?}
+      LLM_BASE_URL: ${LLM_BASE_URL:?}
+      LLM_MODEL: ${LLM_MODEL:?}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    image: fund-engine-one-click-frontend:local
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:8080:8080
+    environment:
+      RESEARCH_BEARER_TOKEN: ${RESEARCH_BEARER_TOKEN:?}
+    depends_on:
+      api:
+        condition: service_started
+
+volumes:
+  fund-engine-one-click-data:
+    name: fund-engine-one-click-data
