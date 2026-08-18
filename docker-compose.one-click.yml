@@ -45,6 +45,12 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; assert urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
 
   research-worker:
     image: fund-engine-one-click-backend:local
@@ -91,7 +97,13 @@ services:
       RESEARCH_BEARER_TOKEN: ${RESEARCH_BEARER_TOKEN:?}
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
 
 volumes:
   fund-engine-one-click-data:

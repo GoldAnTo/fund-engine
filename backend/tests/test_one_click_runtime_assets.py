@@ -56,3 +56,15 @@ def test_compose_has_separate_data_and_automatic_services() -> None:
     assert "RESEARCH_TENANT_TOKENS" in environment
     assert "ACQUISITION_ENABLED_ADAPTERS=sse,szse,gildata" in environment
     assert ".env.one-click.local" in ignore
+
+
+def test_compose_healthchecks_http_services_before_starting_frontend() -> None:
+    compose = (ROOT / "docker-compose.one-click.yml").read_text()
+    api = compose[compose.index("  api:\n") : compose.index("  research-worker:\n")]
+    frontend = compose[compose.index("  frontend:\n") : compose.index("\nvolumes:\n")]
+
+    assert "http://127.0.0.1:8000/health" in api
+    assert "http://127.0.0.1:8080/health" in frontend
+    assert "healthcheck:" in api
+    assert "healthcheck:" in frontend
+    assert "api:\n        condition: service_healthy" in frontend
