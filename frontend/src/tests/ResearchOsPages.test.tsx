@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// @ts-expect-error Vitest executes this regression check in Node; app builds omit Node types.
+import { readFileSync } from "node:fs";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
@@ -67,6 +69,11 @@ const historicalRunSummaries = [
     next_action: "人工审核临时评估",
   },
 ];
+
+const researchOsOverridesCss = readFileSync(
+  "src/styles/research-os-overrides.css",
+  "utf8",
+);
 
 function MonitorLocationProbe() {
   const location = useLocation();
@@ -221,6 +228,15 @@ describe("Research OS event entry", () => {
       await screen.findByText("自动研究不提供人工审核或发布操作"),
     ).toBeVisible();
     expect(screen.queryByRole("button", { name: /审核|发布/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the new-Case protocol notice in a readable single column", () => {
+    expect(researchOsOverridesCss).toMatch(
+      /\.ros-protocol-optin\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s,
+    );
+    expect(researchOsOverridesCss).toMatch(
+      /\.ros-protocol-optin\s*>\s*span\s*\{[^}]*min-width:\s*0/s,
+    );
   });
 
   it("groups Case navigation into research stages", async () => {

@@ -304,6 +304,28 @@ function CaseFrame({
     return () => { active = false; };
   }, [caseId, reload]);
   useEffect(() => {
+    if (!caseId || !data) return undefined;
+    const liveStatuses = new Set(["extracting", "researching", "continuing"]);
+    if (!liveStatuses.has(data.lifecycle.status)) return undefined;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const workbench = await researchClient.getEventWorkbench(caseId);
+        if (active) {
+          setData(workbench);
+          setLoadError(false);
+        }
+      } catch {
+        if (active) setLoadError(true);
+      }
+    };
+    const interval = window.setInterval(() => { void refresh(); }, 5000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [caseId, data?.lifecycle.status]);
+  useEffect(() => {
     let active = true;
     researchClient
       .listEventResearch()

@@ -310,6 +310,50 @@ def test_expired_lease_reclaim_rotates_token_and_fences_old_worker(
     assert [event.seq for event in repo.events(job.id)] == [1, 2, 3, 4]
 
 
+def test_renew_extends_lease_for_holder_and_fences_everyone_else(
+    repo, clock, research_case, thesis
+):
+    """``renew`` gives long-running stages a fresh budget without rotation.
+
+    A 30s claim that renews for 300s must keep the job unclaimable by other
+    workers past the ORIGINAL expiry, and renewal itself stays fenced on the
+    live token — foreign tokens and expired leases both lose.
+    """
+    job = _create_job(repo, research_case, thesis)
+    claim = repo.claim_next(worker_id="worker-a", lease_for=timedelta(seconds=30))
+    assert claim is not None
+
+    with pytest.raises(ValueError):
+        repo.renew(job.id, lease_token=claim.lease_token, lease_for=timedelta(0))
+
+    renewed = repo.renew(
+        job.id, lease_token=claim.lease_token, lease_for=timedelta(seconds=300)
+    )
+    # The DB can drop tzinfo when round-tripping; normalise before comparing.
+    assert renewed.lease_expires_at.replace(tzinfo=UTC) == clock.now + timedelta(
+        seconds=300
+    )
+
+    # Past the ORIGINAL 30s expiry the renewed lease still holds: no takeover.
+    clock.advance(timedelta(seconds=31))
+    assert (
+        repo.claim_next(worker_id="worker-b", lease_for=timedelta(seconds=30))
+        is None
+    )
+    # Only the live holder can renew; a foreign token is fenced out.
+    with pytest.raises(StaleLeaseError):
+        repo.renew(job.id, lease_token="wrong-token", lease_for=timedelta(seconds=30))
+
+    # Once the RENEWED lease finally expires, renewal is refused and another
+    # worker may take over.
+    clock.advance(timedelta(seconds=270))
+    with pytest.raises(StaleLeaseError):
+        repo.renew(job.id, lease_token=claim.lease_token, lease_for=timedelta(seconds=30))
+    takeover = repo.claim_next(worker_id="worker-b", lease_for=timedelta(seconds=30))
+    assert takeover is not None
+    assert takeover.attempt == 2
+
+
 def test_advance_validates_stages_updates_counters_and_freezes_terminal_job(
     repo, research_case, thesis
 ):

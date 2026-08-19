@@ -292,7 +292,8 @@
 .ros-protocol-form__two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
 .ros-protocol-rail .ros-rulebox { margin-bottom: 0; }
 .ros-protocol-rail .ros-definition { grid-template-columns: minmax(0, 1fr); }
-.ros-protocol-optin { display: grid; grid-template-columns: 1rem minmax(0, 1fr); gap: .6rem; align-items: start; padding: .8rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .45rem; background: var(--ros-moss-soft, #edf5ee); cursor: pointer; }
+.ros-protocol-optin { display: grid; grid-template-columns: minmax(0, 1fr); gap: .6rem; align-items: start; padding: .8rem; border: 1px solid var(--ros-rule, #ded9ce); border-radius: .45rem; background: var(--ros-moss-soft, #edf5ee); cursor: pointer; }
+.ros-protocol-optin > span { min-width: 0; }
 .ros-protocol-optin input { width: auto; margin-top: .18rem; }
 .ros-protocol-optin b, .ros-protocol-optin small { display: block; }
 .ros-protocol-optin small { margin-top: .24rem; color: var(--ros-soft, #59615d); font-size: .72rem; line-height: 1.45; }

@@ -29,7 +29,7 @@ from app.models.acquisition import (
     RetrievalArtifactDocument,
 )
 from app.models.ledger import AtomicClaimReview, EvidenceLink, SourceStatement
-from app.repositories.acquisition import AcquisitionRepository
+from app.repositories.acquisition import AcquisitionRepository, StaleLeaseError
 from app.services.acquisition import AcquisitionModule
 from app.services.acquisition_runner import AcquisitionRunner
 from tests.tenant_admission import admit_case
@@ -741,3 +741,337 @@ def test_missing_policy_enabled_adapter_fails_before_external_work(
     assert exception is not None
     assert exception.reason_code == "configured_adapter_unavailable"
     assert exception.detail_json == {"adapter_key": "sse"}
+
+
+def _expire_claim_for_job(session_factory, job_id) -> None:
+    """Rotate the live token so the holder's lease becomes stale immediately.
+
+    Mimics what another worker does after the lease window elapses — the
+    regression target — without needing real time to advance.  Accepts a
+    sessionmaker so it can be passed the same factory the runner uses.
+    """
+    with session_factory() as rotate_session:
+        AcquisitionRepository(rotate_session)._session.execute(  # noqa: SLF001
+            AcquisitionJob.__table__.update()
+            .where(AcquisitionJob.id == job_id)
+            .values(
+                lease_token="rotated-by-takeover",
+                lease_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+            )
+        )
+        rotate_session.commit()
+
+
+def test_search_returns_quietly_when_renew_sees_a_rotated_lease(
+    session, research_case, thesis, document
+):
+    """Regression: a stale lease mid-search must not crash the worker loop.
+
+    Without the try/except the worker would die, restart, re-claim, and crash
+    again — the same crash-loop that pinned the page on "执行补证" all night.
+    """
+    clock = MutableClock()
+    admit_case(
+        session,
+        research_case.id,
+        tenant_id="team-a",
+        document_version_id=document.id,
+    )
+    principal = AcquisitionPrincipal("team-a", "system:task8-requester")
+    module = AcquisitionModule(session, policy=SSE_ONLY_POLICY)
+    job = module.request(make_request(research_case, thesis), principal=principal)
+    session.commit()
+    claim = AcquisitionRepository(session, clock=clock).claim_next(
+        worker_id="system:acquisition-worker@task8-v1#worker-a",
+        lease_for=timedelta(seconds=30),
+    )
+    assert claim is not None
+    session.commit()
+
+    class RenewRep:
+        """Forces the very next ``renew`` to see a rotated lease."""
+
+        def __init__(
+            self,
+            session_factory,
+            clock,
+        ) -> None:
+            self._session_factory = session_factory
+            self._clock = clock
+            self._triggered = False
+
+        def renew(self, job_id, *, lease_token, lease_for):  # noqa: D401
+            if not self._triggered:
+                self._triggered = True
+                _expire_claim_for_job(self._session_factory, job_id)
+            with self._session_factory() as session:
+                return AcquisitionRepository(session, clock=self._clock).renew(
+                    job_id, lease_token=lease_token, lease_for=lease_for
+                )
+
+    captured: dict[str, object] = {}
+
+    class FakeRunner(AcquisitionRunner):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self._renew_proxy = RenewRep(args[0], clock)
+
+        def _renew(self, claim):  # noqa: D401
+            return self._renew_proxy.renew(
+                claim.job_id,
+                lease_token=claim.lease_token,
+                lease_for=self._lease_for,
+            )
+
+    adapter = FakeSSEAdapter()
+    runner = FakeRunner(
+        make_session_factory(session),
+        adapters={"sse": adapter},
+        llm_client=FakeExtractionClient(),
+        clock=clock,
+    )
+    # Must surface as StaleLeaseError so the worker entry-point (run_once)
+    # can swallow it and keep polling — without this the worker loop
+    # crashes on the first rotation and the page pins on "执行补证".
+    with pytest.raises(StaleLeaseError):
+        runner.run_claim(claim)
+
+    session.expire_all()
+    # The job is still 'running' because the renew guarded the first search
+    # call.  The stage never advances to 'fetching' — a fresh worker will
+    # resume from its durable checkpoints on the next claim.
+    persisted = session.get(AcquisitionJob, job.id)
+    assert persisted is not None
+    assert persisted.status == "running"
+    assert persisted.stage == "searching"
+    # No 'succeeded' event was published — the run was abandoned cleanly.
+    assert module.get(job.id, principal=principal).status == "running"
+
+
+def test_fetch_returns_quietly_when_renew_sees_a_rotated_lease(
+    session, research_case, thesis, document
+):
+    """Regression: stale lease in the fetch stage must not crash the worker.
+
+    Sets up a job that has already produced references and advances the
+    stage to ``fetching`` so the ``_fetch`` branch is exercised.
+    """
+    clock = MutableClock()
+    admit_case(
+        session,
+        research_case.id,
+        tenant_id="team-a",
+        document_version_id=document.id,
+    )
+    principal = AcquisitionPrincipal("team-a", "system:task8-requester")
+    module = AcquisitionModule(session, policy=SSE_ONLY_POLICY)
+    job = module.request(make_request(research_case, thesis), principal=principal)
+    session.commit()
+    claim = AcquisitionRepository(session, clock=clock).claim_next(
+        worker_id="system:acquisition-worker@task8-v1#worker-a",
+        lease_for=timedelta(seconds=30),
+    )
+    assert claim is not None
+    # Move the job past searching by recording a reference + advancing stage.
+    repository = AcquisitionRepository(session, clock=clock)
+    reference = repository.create_or_get_reference(
+        job_id=job.id,
+        lease_token=claim.lease_token,
+        adapter_key="sse",
+        external_record_id="task8-fetch-regression",
+        external_version="v1",
+        canonical_url="https://www.sse.com.cn/disclosure/task8-fetch.txt",
+        title="Example Corp announcement",
+        published_at=NOW,
+        source_role="company_disclosure",
+        metadata_json={"retrieval_locator": {"canonical_url": "https://x"}},
+    )
+    repository.advance(
+        job.id,
+        lease_token=claim.lease_token,
+        stage="fetching",
+        status="running",
+    )
+    session.commit()
+
+    class RenewRep:
+        def __init__(
+            self,
+            session_factory,
+            clock,
+        ) -> None:
+            self._session_factory = session_factory
+            self._clock = clock
+            self._triggered = False
+
+        def renew(self, job_id, *, lease_token, lease_for):
+            if not self._triggered:
+                self._triggered = True
+                _expire_claim_for_job(self._session_factory, job_id)
+            with self._session_factory() as session:
+                return AcquisitionRepository(session, clock=self._clock).renew(
+                    job_id, lease_token=lease_token, lease_for=lease_for
+                )
+
+    class FakeRunner(AcquisitionRunner):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self._renew_proxy = RenewRep(args[0], clock)
+
+        def _renew(self, claim):
+            return self._renew_proxy.renew(
+                claim.job_id,
+                lease_token=claim.lease_token,
+                lease_for=self._lease_for,
+            )
+
+    adapter = FakeSSEAdapter()
+    runner = FakeRunner(
+        make_session_factory(session),
+        adapters={"sse": adapter},
+        llm_client=FakeExtractionClient(),
+        clock=clock,
+    )
+    # Must surface as StaleLeaseError so the worker entry-point can swallow
+    # it and keep polling — see the test above for context.
+    with pytest.raises(StaleLeaseError):
+        runner.run_claim(claim)
+
+    session.expire_all()
+    persisted = session.get(AcquisitionJob, job.id)
+    assert persisted is not None
+    assert persisted.status == "running"
+    assert persisted.stage == "fetching"
+    assert module.get(job.id, principal=principal).status == "running"
+    assert reference.id is not None  # fixture sanity
+
+
+def test_freeze_returns_quietly_when_renew_sees_a_rotated_lease(
+    session, research_case, thesis, document
+):
+    """Regression: stale lease in the freeze stage must not crash the worker.
+
+    Seeds an artifact so the ``_freeze`` branch sees a real unbound artifact,
+    then rotates the lease so the very first renew raises.
+    """
+    from app.models.acquisition import RetrievalArtifact
+    from app.documents.locators import compute_text_sha256
+
+    clock = MutableClock()
+    admit_case(
+        session,
+        research_case.id,
+        tenant_id="team-a",
+        document_version_id=document.id,
+    )
+    principal = AcquisitionPrincipal("team-a", "system:task8-requester")
+    module = AcquisitionModule(session, policy=SSE_ONLY_POLICY)
+    job = module.request(make_request(research_case, thesis), principal=principal)
+    session.commit()
+    claim = AcquisitionRepository(session, clock=clock).claim_next(
+        worker_id="system:acquisition-worker@task8-v1#worker-a",
+        lease_for=timedelta(seconds=30),
+    )
+    assert claim is not None
+    repository = AcquisitionRepository(session, clock=clock)
+    reference = repository.create_or_get_reference(
+        job_id=job.id,
+        lease_token=claim.lease_token,
+        adapter_key="sse",
+        external_record_id="task8-freeze-regression",
+        external_version="v1",
+        canonical_url="https://www.sse.com.cn/disclosure/task8-freeze.txt",
+        title="Example Corp announcement",
+        published_at=NOW,
+        source_role="company_disclosure",
+        metadata_json={"retrieval_locator": {"canonical_url": "https://x"}},
+    )
+    repository.record_attempt(
+        job_id=job.id,
+        lease_token=claim.lease_token,
+        adapter_key="sse",
+        operation="fetch",
+        started_at=NOW,
+        finished_at=NOW,
+        outcome="succeeded",
+        retryable=False,
+    )
+    attempt = session.scalar(
+        select(AcquisitionAttempt)
+        .where(AcquisitionAttempt.job_id == job.id)
+        .order_by(AcquisitionAttempt.started_at.desc())
+    )
+    assert attempt is not None
+    session.add(
+        RetrievalArtifact(
+            source_reference_id=reference.id,
+            attempt_id=attempt.id,
+            content_sha256=compute_text_sha256(
+                "Example Corp 2026-08-12 Revenue was 100 USD."
+            ),
+            raw_bytes=b"Example Corp 2026-08-12 Revenue was 100 USD.",
+            mime_type="text/plain; charset=utf-8",
+            byte_size=len(b"Example Corp 2026-08-12 Revenue was 100 USD."),
+            final_url="https://www.sse.com.cn/disclosure/task8-freeze.txt",
+            etag='"task8-v1"',
+            last_modified="Thu, 13 Aug 2026 08:00:00 GMT",
+            provider_request_id="task8-freeze-request",
+            retrieved_at=NOW,
+        )
+    )
+    repository.advance(
+        job.id,
+        lease_token=claim.lease_token,
+        stage="freezing",
+        status="running",
+    )
+    session.commit()
+
+    class RenewRep:
+        def __init__(
+            self,
+            session_factory,
+            clock,
+        ) -> None:
+            self._session_factory = session_factory
+            self._clock = clock
+            self._triggered = False
+
+        def renew(self, job_id, *, lease_token, lease_for):
+            if not self._triggered:
+                self._triggered = True
+                _expire_claim_for_job(self._session_factory, job_id)
+            with self._session_factory() as session:
+                return AcquisitionRepository(session, clock=self._clock).renew(
+                    job_id, lease_token=lease_token, lease_for=lease_for
+                )
+
+    class FakeRunner(AcquisitionRunner):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self._renew_proxy = RenewRep(args[0], clock)
+
+        def _renew(self, claim):
+            return self._renew_proxy.renew(
+                claim.job_id,
+                lease_token=claim.lease_token,
+                lease_for=self._lease_for,
+            )
+
+    runner = FakeRunner(
+        make_session_factory(session),
+        adapters={"sse": FakeSSEAdapter()},
+        llm_client=FakeExtractionClient(),
+        clock=clock,
+    )
+    # Must surface as StaleLeaseError so the worker entry-point can swallow
+    # it and keep polling — see the test above for context.
+    with pytest.raises(StaleLeaseError):
+        runner.run_claim(claim)
+
+    session.expire_all()
+    persisted = session.get(AcquisitionJob, job.id)
+    assert persisted is not None
+    assert persisted.status == "running"
+    assert persisted.stage == "freezing"
+    assert module.get(job.id, principal=principal).status == "running"

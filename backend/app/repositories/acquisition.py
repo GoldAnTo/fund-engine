@@ -484,6 +484,43 @@ class AcquisitionRepository:
         self._session.refresh(job)
         return job
 
+    def renew(
+        self,
+        job_id: uuid.UUID,
+        *,
+        lease_token: str,
+        lease_for: timedelta,
+    ) -> AcquisitionJob:
+        """Extend the current holder's lease by ``lease_for``.
+
+        Unlike ``fence`` (a pure CAS check), ``renew`` pushes
+        ``lease_expires_at`` forward so a long-running stage — LLM extraction
+        per document can take minutes — keeps its claim instead of being
+        re-claimed by another worker mid-flight.  Renewal is still fenced on
+        the token: only the live holder can extend, and only before expiry.
+        """
+        if lease_for <= timedelta(0):
+            raise ValueError("lease_for must be positive")
+        now = self._now()
+        result = self._session.execute(
+            update(AcquisitionJob)
+            .where(
+                AcquisitionJob.id == job_id,
+                AcquisitionJob.status == "running",
+                AcquisitionJob.lease_token == lease_token,
+                AcquisitionJob.lease_expires_at.is_not(None),
+                AcquisitionJob.lease_expires_at > now,
+            )
+            .values(lease_expires_at=now + lease_for, updated_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise StaleLeaseError("acquisition lease is stale")
+        job = self.get_record(job_id)
+        assert job is not None
+        self._session.refresh(job)
+        return job
+
     def record_attempt(
         self,
         job_id: uuid.UUID,

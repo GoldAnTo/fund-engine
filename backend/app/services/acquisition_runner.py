@@ -63,6 +63,7 @@ from app.models.source_governance import SourceContract
 from app.repositories.acquisition import (
     AcquisitionClaim,
     AcquisitionRepository,
+    StaleLeaseError,
 )
 from app.repositories.documents import DocumentRepository
 from app.services.atomic_claims import AtomicClaimService
@@ -141,6 +142,7 @@ class AcquisitionRunner:
         retry_jitter_ratio: float = 0.2,
         jitter_source: JitterSource = _SYSTEM_RANDOM.random,
         max_attempts: int = 3,
+        lease_for: timedelta = timedelta(seconds=1800),
     ) -> None:
         if not callable(session_factory):
             raise TypeError("session_factory must be callable")
@@ -163,6 +165,8 @@ class AcquisitionRunner:
             or max_attempts < 1
         ):
             raise ValueError("max_attempts must be a positive integer")
+        if lease_for <= timedelta(0):
+            raise ValueError("lease_for must be positive")
         normalized: dict[str, SourceAdapter] = {}
         for key, adapter in adapters.items():
             if key in normalized:
@@ -181,6 +185,7 @@ class AcquisitionRunner:
         self._retry_jitter_ratio = float(retry_jitter_ratio)
         self._jitter_source = jitter_source
         self._max_attempts = max_attempts
+        self._lease_for = lease_for
         self._searched_adapters: set[str] = set()
 
     def _now(self) -> datetime:
@@ -685,6 +690,22 @@ class AcquisitionRunner:
             )
             session.commit()
 
+    def _renew(self, claim: AcquisitionClaim) -> None:
+        """Give the current claim a fresh lease budget.
+
+        Called before each long unit of work (per-document LLM extraction) so
+        a multi-document job — dozens of documents at minutes per extraction
+        — does not outlive the single lease granted at claim time.  Losing the
+        lease raises ``StaleLeaseError`` for the caller to abandon the claim.
+        """
+        with self._session_factory() as session:
+            AcquisitionRepository(session, clock=self._clock).renew(
+                claim.job_id,
+                lease_token=claim.lease_token,
+                lease_for=self._lease_for,
+            )
+            session.commit()
+
     def _record_attempt(
         self,
         claim: AcquisitionClaim,
@@ -741,7 +762,14 @@ class AcquisitionRunner:
     def _search(self, claim, request, queries) -> None:
         for adapter_key, planned in queries.items():
             adapter = self._adapters[adapter_key]
-            self._fence(claim)
+            try:
+                # Renew BEFORE each adapter: a search call can run long when
+                # the upstream is slow, and the queue may carry several
+                # adapters.  The single lease from claim time cannot cover all
+                # of them, and a stale lease here must not crash the worker.
+                self._renew(claim)
+            except StaleLeaseError:
+                return
             started_at = self._now()
             try:
                 items = adapter.search(planned.query, request.cutoff)
@@ -904,7 +932,14 @@ class AcquisitionRunner:
                     reference_id=reference.id,
                 )
                 continue
-            self._fence(claim)
+            try:
+                # Renew BEFORE each reference fetch: a single retrieval can
+                # take minutes (large PDFs, slow mirrors), and a job can carry
+                # dozens of references.  Keep the claim budget fresh and let
+                # stale leases abort the run quietly.
+                self._renew(claim)
+            except StaleLeaseError:
+                return
             started_at = self._now()
             try:
                 value = self._reference_value(reference)
@@ -1028,6 +1063,15 @@ class AcquisitionRunner:
 
     def _freeze(self, claim, request, policy) -> None:
         for artifact, reference in self._unbound_artifacts(claim.job_id):
+            try:
+                # Renew BEFORE each artifact freeze: pdf parsing + admission
+                # can take minutes per artifact and a job can carry dozens.
+                # Already-frozen artifacts are skipped on resume via the
+                # unbound query above, so losing the lease here just stops
+                # this run quietly.
+                self._renew(claim)
+            except StaleLeaseError:
+                return
             envelope = RetrievedEnvelope(
                 content=artifact.raw_bytes,
                 mime_type=artifact.mime_type,
@@ -1087,7 +1131,10 @@ class AcquisitionRunner:
         for document_id in self._documents_for_job(claim.job_id):
             if self._has_successful_extraction(document_id):
                 continue
-            self._fence(claim)
+            # Renew BEFORE each document: one LLM extraction can take minutes,
+            # and a job may carry dozens of documents, so the single lease
+            # granted at claim time can never cover them all.
+            self._renew(claim)
             session = self._session_factory()
             try:
                 try:
@@ -1102,10 +1149,19 @@ class AcquisitionRunner:
                             allowed_stages=frozenset({"extracting"}),
                         ),
                     )
-                except Exception:
-                    AcquisitionRepository(session, clock=self._clock).fence(
-                        claim.job_id, lease_token=claim.lease_token
-                    )
+                except Exception as exc:
+                    # A rotated lease surfaces here as StaleLeaseError; let
+                    # it propagate so run_once / run_claim can decide whether
+                    # to abandon the claim (the worker loop must keep polling
+                    # — another worker now owns the job).
+                    if isinstance(exc, StaleLeaseError):
+                        raise
+                    try:
+                        AcquisitionRepository(session, clock=self._clock).fence(
+                            claim.job_id, lease_token=claim.lease_token
+                        )
+                    except StaleLeaseError:
+                        raise
                     session.commit()
                     self._record_exception(
                         claim,
@@ -1113,9 +1169,16 @@ class AcquisitionRunner:
                         detail={"document_version_id": str(document_id)},
                     )
                     continue
-                AcquisitionRepository(session, clock=self._clock).fence(
-                    claim.job_id, lease_token=claim.lease_token
-                )
+                try:
+                    AcquisitionRepository(session, clock=self._clock).fence(
+                        claim.job_id, lease_token=claim.lease_token
+                    )
+                except StaleLeaseError:
+                    # Extraction already committed its own durable work under
+                    # its pre-commit guard; losing the lease afterwards only
+                    # means another worker owns the job — propagate so the
+                    # caller can stop quietly without crashing the worker.
+                    raise
                 session.commit()
             except BaseException:
                 session.rollback()

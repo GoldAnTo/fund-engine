@@ -12,6 +12,7 @@ import os
 import re
 import signal
 import socket
+import sys
 import threading
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
@@ -23,7 +24,10 @@ from app.datasources.exchanges.szse import SZSEAnnouncementSource
 from app.datasources.gildata.client import GildataMCPClient
 from app.datasources.gildata.research_source import GildataResearchSource
 from app.db import SessionLocal
-from app.repositories.acquisition import AcquisitionRepository
+from app.repositories.acquisition import (
+    AcquisitionRepository,
+    StaleLeaseError,
+)
 from app.services.acquisition_runner import AcquisitionRunner
 from app.services.research_worker_heartbeat import WorkerHeartbeatService
 from app.services.worker_heartbeat_publisher import WorkerHeartbeatPublisher
@@ -155,7 +159,18 @@ def run_once(
         session.commit()
     if claim is None:
         return False
-    runner.run_claim(claim)
+    try:
+        runner.run_claim(claim)
+    except StaleLeaseError:
+        # Losing a lease is normal operation (expiry mid-stage, or another
+        # worker re-claimed after expiry).  The job is durable and will be
+        # re-claimed from its checkpoints; the worker must keep polling.
+        print(
+            f"acquisition lease lost for job {claim.job_id}; "
+            "it will be re-claimed from its checkpoints",
+            file=sys.stderr,
+            flush=True,
+        )
     return True
 
 
@@ -176,7 +191,7 @@ def _parser() -> argparse.ArgumentParser:
     modes = parser.add_mutually_exclusive_group(required=True)
     modes.add_argument("--once", action="store_true", help="claim at most one job")
     modes.add_argument("--loop", action="store_true", help="poll until interrupted")
-    parser.add_argument("--lease-seconds", type=_positive_float, default=300.0)
+    parser.add_argument("--lease-seconds", type=_positive_float, default=1800.0)
     parser.add_argument("--retry-seconds", type=_positive_float, default=60.0)
     parser.add_argument("--poll-seconds", type=_positive_float, default=1.0)
     return parser
@@ -198,6 +213,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             adapters=adapters,
             llm_client=build_llm_client(),
             retry_delay=timedelta(seconds=args.retry_seconds),
+            lease_for=timedelta(seconds=args.lease_seconds),
         )
         common = {
             "runner": runner,
