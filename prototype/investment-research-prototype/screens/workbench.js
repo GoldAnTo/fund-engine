@@ -167,7 +167,7 @@ function isTextEntry(target) {
 
 function hasVariantKeyboardScope(target) {
   if (!(target instanceof Element)) return false;
-  return target === document.body || target.closest('[data-prototype-switcher]') !== null;
+  return target.closest('[data-prototype-switcher]') !== null;
 }
 
 function sharedContext(securityCode, security) {

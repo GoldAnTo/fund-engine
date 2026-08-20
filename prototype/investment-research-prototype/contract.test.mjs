@@ -427,9 +427,17 @@ test('floating prototype switcher wraps, survives unrelated keys, and preserves 
   await page.close();
 });
 
-test('variant arrow shortcuts are scoped to the prototype switcher, not workbench controls', async () => {
+test('variant arrow shortcuts are scoped exclusively to prototype switcher focus', async () => {
   const page = await browser.newPage();
   await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+
+  await page.evaluate(() => {
+    document.body.tabIndex = -1;
+    document.body.focus();
+  });
+  await assert.equal(await page.locator('body').evaluate((element) => element === document.activeElement), true);
+  await page.keyboard.press('ArrowRight');
+  await assert.match(page.url(), /variant=A$/);
 
   await page.getByRole('button', { name: /搜索广告经济性/ }).focus();
   await page.keyboard.press('ArrowRight');
@@ -443,6 +451,10 @@ test('variant arrow shortcuts are scoped to the prototype switcher, not workbenc
   await page.locator('[data-prototype-switcher] a[aria-current="page"]').focus();
   await page.keyboard.press('ArrowRight');
   await page.waitForURL(/variant=B$/);
+  await assert.equal(
+    await page.locator('[data-prototype-switcher] a[aria-current="page"]').evaluate((element) => element === document.activeElement),
+    true,
+  );
 
   await page.close();
 });
