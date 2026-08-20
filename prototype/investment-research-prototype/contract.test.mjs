@@ -154,6 +154,191 @@ test('workbench deep links use security as the canonical share class', async () 
   await page.close();
 });
 
+test('default workbench leads with the current judgment and exactly four decision factors', async () => {
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL`);
+
+  await assertPageText(page, [
+    '选择主体',
+    '定义问题',
+    '维护判断',
+    'Alphabet',
+    'GOOGL Class A',
+    '以 3–5 年视角，这家公司靠什么创造价值，当前价格要求哪些假设成立？',
+    '3–5 年',
+    '模拟数据',
+    '价格时间',
+    '证据截止',
+    '研究员暂定判断',
+    '证据冲突，暂定判断',
+    '当前允许得出的判断',
+    '最大反证',
+    '当前价格问题',
+    '搜索广告经济性',
+    'Cloud 单位经济性',
+    'AI 资本效率',
+    '竞争与监管',
+    '公司如何赚钱',
+    '行业位置',
+    '预测与估值传导',
+    '最大未知',
+  ]);
+  await assert.equal(await page.locator('[data-workbench-variant]').getAttribute('data-workbench-variant'), 'A');
+  await assert.equal(await page.getByTestId('factor-row').count(), 4);
+  await assert.equal(await page.locator('[data-key-factor]').count(), 4);
+  await assert.equal(await page.locator('[data-primary-next-action]').count(), 1);
+  await assert.equal(await page.locator('[data-primary-next-action] button').count(), 0);
+  await assert.equal(await page.getByRole('heading', { name: '当前允许得出的判断', exact: true }).count(), 1);
+  await assert.equal(await page.getByRole('heading', { name: '最大反证', exact: true }).count(), 1);
+  await assert.equal(await page.getByRole('heading', { name: '当前价格问题', exact: true }).count(), 1);
+  await assert.equal(await page.locator('aside').count(), 0);
+  await assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+
+  await page.close();
+});
+
+test('factor reasoning expands inline in a fixed order with typed metric boundaries', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+  const factorButton = page.getByRole('button', { name: /搜索广告经济性/ });
+
+  await assert.equal(await factorButton.getAttribute('aria-expanded'), 'false');
+  await factorButton.focus();
+  await page.keyboard.press('Enter');
+  await assert.equal(await factorButton.getAttribute('aria-expanded'), 'true');
+
+  const detail = page.getByTestId('factor-detail');
+  await assert.equal(await detail.count(), 1);
+  await assert.equal(
+    await detail.evaluate((element) => element.previousElementSibling?.getAttribute('data-testid')),
+    'factor-row',
+  );
+  const detailText = await detail.innerText();
+  const orderedLabels = ['机制假设', '观察事实', '支持 / 反证 / 替代解释', '验证指标和日期', '财务与估值影响', '对当前判断的影响'];
+  for (let index = 1; index < orderedLabels.length; index += 1) {
+    assert.ok(detailText.indexOf(orderedLabels[index - 1]) < detailText.indexOf(orderedLabels[index]));
+  }
+  await assertPageText(page, ['Actual', 'Guidance', 'Consensus', 'Implied', 'House', '期间', '单位', '截至', '来源边界']);
+  await assert.equal(await detail.locator('.metric-consensus').count(), 1);
+  await assert.equal(await detail.locator('.metric-implied').count(), 1);
+  await assert.notEqual(
+    await detail.locator('.metric-consensus').getAttribute('class'),
+    await detail.locator('.metric-implied').getAttribute('class'),
+  );
+  const evidenceCutoff = await page.locator('[data-evidence-cutoff]').getAttribute('data-evidence-cutoff');
+  const metricDates = await detail.locator('[data-as-of]').evaluateAll((rows) => rows.map((row) => row.dataset.asOf));
+  assert.ok(metricDates.every((date) => date <= evidenceCutoff));
+
+  await factorButton.click();
+  await assert.equal(await factorButton.getAttribute('aria-expanded'), 'false');
+  await assert.equal(await detail.count(), 0);
+
+  await page.close();
+});
+
+test('workbench offers three structurally distinct URL variants with canonical security identity', async () => {
+  const page = await browser.newPage();
+
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+  await assert.equal(await page.locator('[data-workbench-variant="A"] .variant-a').count(), 1);
+
+  await page.goto(`${origin}/?screen=workbench&security=GOOG&variant=B`);
+  const variantB = page.locator('[data-workbench-variant="B"]');
+  await assert.equal(await variantB.locator('.variant-b').count(), 1);
+  await assert.equal(await variantB.locator('.variant-a, .factor-table').count(), 0);
+  await assertPageText(page, ['经营驱动树', '模型分歧', 'House', 'Consensus', 'Implied', '判断摘要', 'GOOG Class C']);
+  const variantBText = await variantB.innerText();
+  assert.ok(variantBText.indexOf('经营驱动树') < variantBText.indexOf('判断摘要'));
+  assert.ok(variantBText.indexOf('模型分歧') < variantBText.indexOf('判断摘要'));
+  await assert.equal(await variantB.locator('[data-factor-name]').count(), 4);
+
+  await page.goto(`${origin}/?screen=workbench&security=GOOG&variant=C`);
+  const variantC = page.locator('[data-workbench-variant="C"]');
+  await assert.equal(await variantC.locator('.pm-memo').count(), 1);
+  await assert.equal(await variantC.locator('.variant-a, .variant-b, .factor-table').count(), 0);
+  const memoText = await variantC.innerText();
+  const memoOrder = ['研究问题', '关键分歧', '估值传导', '最强反证 / 证伪', '唯一下一动作'];
+  for (let index = 1; index < memoOrder.length; index += 1) {
+    assert.ok(memoText.indexOf(memoOrder[index - 1]) < memoText.indexOf(memoOrder[index]));
+  }
+  await assert.equal(await variantC.locator('[data-factor-name]').count(), 4);
+  await assertPageText(page, ['GOOG Class C']);
+
+  await page.close();
+});
+
+test('floating prototype switcher wraps, survives unrelated keys, and preserves URL identity', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=workbench&security=GOOG&variant=A`);
+  const switcher = page.locator('[data-prototype-switcher]');
+
+  await assert.equal(await switcher.count(), 1);
+  await assert.equal(await switcher.evaluate((element) => element.closest('main') === null), true);
+  await assertPageText(page, ['PROTOTYPE', 'A 判断优先', 'B 模型优先', 'C PM 备忘录']);
+  assert.deepEqual(await switcher.locator('a').evaluateAll((links) => links.map((link) => link.getAttribute('href'))), [
+    '?screen=workbench&security=GOOG&variant=A',
+    '?screen=workbench&security=GOOG&variant=B',
+    '?screen=workbench&security=GOOG&variant=C',
+  ]);
+  assert.equal(
+    await switcher.locator('button, a').evaluateAll((controls) => controls.every((control) => {
+      const bounds = control.getBoundingClientRect();
+      return bounds.width >= 44 && bounds.height >= 44;
+    })),
+    true,
+  );
+  await page.keyboard.press('KeyX');
+  await page.keyboard.press('ArrowRight');
+  await page.waitForURL(/screen=workbench&security=GOOG&variant=B$/);
+  await assert.equal(await page.locator('[data-workbench-variant="B"]').count(), 1);
+  await assertPageText(page, ['GOOG Class C']);
+
+  await page.evaluate(() => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', altKey: true, bubbles: true }));
+  });
+  await assert.match(page.url(), /variant=B$/);
+
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowRight');
+  await page.waitForURL(/variant=C$/);
+  await page.getByRole('button', { name: '下一个原型方案' }).click();
+  await page.waitForURL(/variant=A$/);
+  await page.getByRole('button', { name: '上一个原型方案' }).click();
+  await page.waitForURL(/variant=C$/);
+
+  await page.reload();
+  await assert.equal(await page.locator('[data-workbench-variant="C"]').count(), 1);
+  await assertPageText(page, ['GOOG Class C']);
+
+  await page.evaluate(() => {
+    const textarea = document.createElement('textarea');
+    textarea.setAttribute('aria-label', '临时输入');
+    document.body.append(textarea);
+    textarea.focus();
+  });
+  await page.keyboard.press('ArrowLeft');
+  await assert.match(page.url(), /variant=C$/);
+
+  await page.evaluate(() => {
+    const input = document.createElement('input');
+    document.body.append(input);
+    input.focus();
+  });
+  await page.keyboard.press('ArrowLeft');
+  await assert.match(page.url(), /variant=C$/);
+
+  await page.evaluate(() => {
+    const editable = document.createElement('div');
+    editable.contentEditable = 'true';
+    document.body.append(editable);
+    editable.focus();
+  });
+  await page.keyboard.press('ArrowLeft');
+  await assert.match(page.url(), /variant=C$/);
+
+  await page.close();
+});
+
 test('in-app navigation and browser history move focus to the new route heading', async () => {
   const page = await browser.newPage();
   await page.goto(`${origin}/?screen=setup&security=GOOGL`);
@@ -168,22 +353,28 @@ test('in-app navigation and browser history move focus to the new route heading'
 
 test('new source and rendered routes keep the independent language boundary', async () => {
   const forbiddenTerms = [
-    ['Research', 'Case'].join(''),
+    ['ResearchC', 'ase'].join(''),
     ['Research', 'Run'].join(''),
     ['Event', ' Research'].join(''),
     ['证据', '图谱'].join(''),
     ['自动研究', '完成'].join(''),
+    ['r', 'un'].join(''),
+    ['worker', ' monitor'].join(''),
+    ['news', ' feed'].join(''),
+    ['source-count', ' KPI'].join(''),
     ['买', '入'].join(''),
     ['卖', '出'].join(''),
     ['目标', '价'].join(''),
     ['AI ', '置信度'].join(''),
     ['综合', '评分'].join(''),
   ];
+  const standaloneForbidden = new RegExp(`\\b${['C', 'ase'].join('')}\\b`);
   const sourceFiles = ['index.html', 'app.js', 'screens/search.js', 'screens/setup.js', 'screens/workbench.js', 'styles/tokens.css', 'styles/app.css', 'contract.test.mjs'];
 
   for (const relativePath of sourceFiles) {
     const source = await readFile(join(root, relativePath), 'utf8');
     for (const term of forbiddenTerms) assert.equal(source.includes(term), false, `${relativePath} contains forbidden copy`);
+    assert.equal(standaloneForbidden.test(source), false, `${relativePath} contains forbidden standalone copy`);
   }
 
   const page = await browser.newPage();
@@ -191,6 +382,7 @@ test('new source and rendered routes keep the independent language boundary', as
     await page.goto(`${origin}/?screen=${route}&security=GOOGL`);
     const text = await page.locator('body').innerText();
     for (const term of forbiddenTerms) assert.equal(text.includes(term), false, `${route} renders forbidden copy`);
+    assert.equal(standaloneForbidden.test(text), false, `${route} renders forbidden standalone copy`);
   }
   await page.close();
 });
