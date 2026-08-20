@@ -917,12 +917,15 @@ test('valuation steps disclose uncertainty type source period cutoff and falsifi
   const text = await bridge.innerText();
   assert.doesNotMatch(text, /Base\s*(?:205|255)/u);
   const steps = bridge.locator('[data-valuation-step]');
+  const allowedTypes = new Set(['Actual', 'Guidance', 'Consensus', 'Implied', 'House', 'Scenario', 'Estimate']);
   await assert.equal(await steps.count(), 5);
   for (let index = 0; index < 5; index += 1) {
     const step = steps.nth(index);
     for (const attribute of ['data-value-type', 'data-source-boundary', 'data-as-of', 'data-period', 'data-verification-condition']) {
       assert.ok(await step.getAttribute(attribute), `step ${index} missing ${attribute}`);
     }
+    assert.equal(allowedTypes.has(await step.getAttribute('data-value-type')), true);
+    await assert.equal(await step.locator('[data-source-boundary-label]').count(), 1);
     const stepText = await step.innerText();
     for (const expected of ['类型', '来源', '期间', '截至', '验证 / 证伪']) assert.ok(stepText.includes(expected), `step ${index} missing ${expected}`);
   }
@@ -939,12 +942,14 @@ test('reasoning claims expose evidence type and verification state without overs
   }
   const claims = detail.locator('[data-evidence-claim]');
   await assert.equal(await claims.count() >= 8, true);
-  const allowedTypes = new Set(['Actual', 'Guidance', 'Consensus', 'Implied', 'House', 'Assumption']);
+  const allowedTypes = new Set(['Actual', 'Guidance', 'Consensus', 'Implied', 'House', 'Scenario', 'Estimate']);
   for (let index = 0; index < await claims.count(); index += 1) {
     const claim = claims.nth(index);
     assert.equal(allowedTypes.has(await claim.getAttribute('data-evidence-type')), true);
     assert.ok(await claim.getAttribute('data-verification-state'));
+    assert.ok(await claim.getAttribute('data-source-boundary'));
     await assert.equal(await claim.locator('.claim-boundary').count(), 1);
+    await assert.equal(await claim.locator('[data-source-boundary-label]').count(), 1);
   }
   await page.close();
 });
@@ -955,7 +960,7 @@ test('research state axes lead with canonical controlled values and secondary pr
   const axes = page.locator('[data-research-state] [data-state-axis]');
   await assert.equal(await axes.count(), 4);
   assert.deepEqual(await axes.locator('[data-canonical-state]').allInnerTexts(), [
-    '部分可用', 'AI 提取未核对', '假设草案，未到验证期', '暂定判断，证据冲突',
+    '部分可用', 'AI 提取未核对', '假设草案', '冲突未决',
   ]);
   await assert.equal(await axes.locator('small').count(), 4);
   await page.close();
@@ -965,6 +970,9 @@ test('responsive stylesheet solely owns breakpoints without duplicate mobile sel
   const appCss = await readFile(join(root, 'styles/app.css'), 'utf8');
   const responsiveCss = await readFile(join(root, 'styles/responsive.css'), 'utf8');
   assert.doesNotMatch(appCss, /@media/u);
+  assert.equal(responsiveCss.trimStart().startsWith('@media'), true);
+  assert.match(appCss, /\.model-ledger :is\(th, td\):first-child\s*\{/u);
+  assert.match(appCss, /\.factor-row > th,\s*\.factor-row > td\s*\{/u);
   assert.equal([...responsiveCss.matchAll(/@media \(max-width: 700px\)/gu)].length, 1);
   const mobileBlock = responsiveCss.match(/@media \(max-width: 700px\) \{([\s\S]*?)\n\}\n(?:\n@media|$)/u)?.[1] ?? '';
   for (const selector of ['.prototype-options a', '.workbench-screen', '.workbench-context']) {

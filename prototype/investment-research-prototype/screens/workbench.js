@@ -351,8 +351,8 @@ function renderResearchState() {
     <dl class="research-state" data-research-state aria-label="研究状态四维">
       <div data-state-axis="data"><dt>数据处理状态</dt><dd><strong data-canonical-state>部分可用</strong><small>原型样本已载入，未连接外部数据源</small></dd></div>
       <div data-state-axis="evidence"><dt>证据状态</dt><dd><strong data-canonical-state>AI 提取未核对</strong><small>示例证据存在冲突，核心来源待人工核对</small></dd></div>
-      <div data-state-axis="forecast"><dt>预测状态</dt><dd><strong data-canonical-state>假设草案，未到验证期</strong><small>模拟假设已成形，等待后续示例披露窗口</small></dd></div>
-      <div data-state-axis="judgment"><dt>判断状态</dt><dd><strong data-canonical-state>暂定判断，证据冲突</strong><small>尚未形成经过人工确认的判断版本</small></dd></div>
+      <div data-state-axis="forecast"><dt>预测状态</dt><dd><strong data-canonical-state>假设草案</strong><small>未到验证期；等待后续示例披露窗口</small></dd></div>
+      <div data-state-axis="judgment"><dt>判断状态</dt><dd><strong data-canonical-state>冲突未决</strong><small>研究员仅有暂定倾向，尚未人工确认</small></dd></div>
     </dl>
   `;
 }
@@ -363,7 +363,7 @@ function renderValuationBridge(entity) {
     ['收入', bridge.revenue, 'House', '模拟经营 fixture', 'FY2027E', '下一次示例业绩需验证收入增速与分部口径'],
     ['营业利润', bridge.operatingProfit, 'House', '模拟利润率 fixture', 'FY2027E', '若示例经营利润率低于区间下沿，该步失效'],
     ['自由现金流', bridge.freeCashFlow, 'House', '模拟现金流 fixture', 'FY2027E', '核对示例资本开支、营运资本与现金转换'],
-    ['稀释后每股价值', bridge.perShareValue, 'Assumption', '模拟 DCF / 稀释股数 fixture', '3–5 年', '若稀释股数或折现率超出假设区间，需重算'],
+    ['稀释后每股价值', bridge.perShareValue, 'Scenario', '模拟 DCF / 稀释股数 fixture', '3–5 年', '若稀释股数或折现率超出假设区间，需重算'],
     ['估值区间', bridge.valuationRange, 'Scenario', '模拟 DCF 情景 fixture', '3–5 年', '增长、利润率或折现率任一越界即更新区间'],
   ];
   return `
@@ -372,7 +372,8 @@ function renderValuationBridge(entity) {
       <ol>${steps.map(([label, value, type, source, period, verification]) => `
         <li data-valuation-step data-value-type="${type}" data-source-boundary="${source}" data-as-of="2026-08-19" data-period="${period}" data-verification-condition="${verification}">
           <span>${label}</span><strong>${value}</strong>
-          <small class="valuation-step-boundary">类型 ${type} · 来源 ${source} · 期间 ${period} · 截至 2026-08-19</small>
+          <small class="valuation-step-boundary">类型 ${type} · 期间 ${period} · 截至 2026-08-19</small>
+          <small class="valuation-step-source" data-source-boundary-label>来源边界 · ${source}</small>
           <small class="valuation-step-check">验证 / 证伪 · ${verification}</small>
         </li>
       `).join('')}</ol>
@@ -704,17 +705,17 @@ function renderFactorDetail(factor) {
   return `
     <section class="factor-detail" id="factor-detail-${factor.id}" data-testid="factor-detail" aria-label="${factor.name} 推理详情" hidden>
       <div class="reasoning-step reasoning-mechanism">
-        <span>01</span><div><h3>机制假设</h3>${evidenceClaim('mechanism', 'Assumption', '机制草案，待经营数据验证', factor.mechanism)}</div>
+        <span>01</span><div><h3>机制假设</h3>${evidenceClaim('mechanism', 'Scenario', '机制草案，待经营数据验证', '研究员机制草案 · 模拟研究 fixture', factor.mechanism)}</div>
       </div>
       <div class="reasoning-step">
-        <span>02</span><div><h3>观察事实</h3><ul>${factor.observations.map((item) => evidenceClaim('observation', 'Actual', '原型摘录，未核对外部披露', item, 'li')).join('')}</ul></div>
+        <span>02</span><div><h3>观察事实</h3><ul>${factor.observations.map((item) => evidenceClaim('observation', 'Actual', '原型摘录，未核对外部披露', '示例经营摘要 · 未核对外部披露', item, 'li')).join('')}</ul></div>
       </div>
       <div class="reasoning-step">
         <span>03</span><div><h3>支持 / 反证 / 替代解释</h3>
           <dl class="reasoning-arguments">
-            <div><dt>支持</dt><dd>${evidenceClaim('support', 'Assumption', '支持性解释，待验证', factor.support)}</dd></div>
-            <div><dt>反证</dt><dd>${evidenceClaim('counter', 'Assumption', '反向假设，待验证', factor.counter)}</dd></div>
-            <div><dt>替代解释</dt><dd>${evidenceClaim('alternative', 'Assumption', '替代解释，未排除', factor.alternativeExplanation)}</dd></div>
+            <div><dt>支持</dt><dd>${evidenceClaim('support', 'Estimate', '支持性解释，待验证', '研究员综合判断 · 基于原型 fixture', factor.support)}</dd></div>
+            <div><dt>反证</dt><dd>${evidenceClaim('counter', 'Scenario', '反向假设，待验证', '研究员反面情景 · 模拟研究 fixture', factor.counter)}</dd></div>
+            <div><dt>替代解释</dt><dd>${evidenceClaim('alternative', 'Scenario', '替代解释，未排除', '研究员替代情景 · 模拟研究 fixture', factor.alternativeExplanation)}</dd></div>
           </dl>
         </div>
       </div>
@@ -722,17 +723,17 @@ function renderFactorDetail(factor) {
         <span>04</span><div><h3>验证指标和日期</h3>${renderMetrics(factor.metrics)}<p class="validation-date">下一验证 · ${factor.nextValidation}</p></div>
       </div>
       <div class="reasoning-step">
-        <span>05</span><div><h3>财务与估值影响</h3>${evidenceClaim('financial-impact', 'Assumption', '模拟传导，待口径核对', factor.financialImpact)}${evidenceClaim('falsifier', 'Assumption', '预设证伪条件，等待观察', `<strong>证伪条件：</strong>${factor.falsifier}`)}</div>
+        <span>05</span><div><h3>财务与估值影响</h3>${evidenceClaim('financial-impact', 'Scenario', '模拟传导，待口径核对', '模拟经营至估值传导', factor.financialImpact)}${evidenceClaim('falsifier', 'Scenario', '预设证伪条件，等待观察', '研究员预设证伪规则', `<strong>证伪条件：</strong>${factor.falsifier}`)}</div>
       </div>
       <div class="reasoning-step reasoning-conclusion">
-        <span>06</span><div><h3>对当前判断的影响</h3>${evidenceClaim('conclusion', 'House', '暂定判断，证据冲突', factor.state)}${evidenceClaim('unknown', 'Assumption', '仍未知，未验证', `<strong>仍未知：</strong>${factor.unknown}`)}</div>
+        <span>06</span><div><h3>对当前判断的影响</h3>${evidenceClaim('conclusion', 'House', '暂定判断，证据冲突', '内部暂定判断 · 未人工确认', factor.state)}${evidenceClaim('unknown', 'Estimate', '仍未知，未验证', '研究缺口登记 · 尚无外部证据', `<strong>仍未知：</strong>${factor.unknown}`)}</div>
       </div>
     </section>
   `;
 }
 
-function evidenceClaim(role, type, verificationState, content, tag = 'div') {
-  return `<${tag} class="evidence-claim" data-evidence-claim data-evidence-role="${role}" data-evidence-type="${type}" data-verification-state="${verificationState}"><span class="claim-text">${content}</span><small class="claim-boundary"><b>${type}</b> · ${verificationState}</small></${tag}>`;
+function evidenceClaim(role, type, verificationState, sourceBoundary, content, tag = 'div') {
+  return `<${tag} class="evidence-claim" data-evidence-claim data-evidence-role="${role}" data-evidence-type="${type}" data-verification-state="${verificationState}" data-source-boundary="${sourceBoundary}"><span class="claim-text">${content}</span><small class="claim-boundary"><b>类型 ${type}</b> · ${verificationState}</small><small class="claim-source" data-source-boundary-label><b>来源边界</b> · ${sourceBoundary}</small></${tag}>`;
 }
 
 function renderMetrics(metrics) {
