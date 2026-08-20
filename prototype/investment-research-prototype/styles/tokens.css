@@ -1,0 +1,29 @@
+:root {
+  color-scheme: light;
+
+  --mineral-50: oklch(97.4% 0.009 82);
+  --mineral-100: oklch(94.8% 0.012 81);
+  --mineral-200: oklch(89.7% 0.015 78);
+  --paper-cool: oklch(96.2% 0.008 253);
+  --paper-raised: oklch(98.4% 0.006 258);
+  --graphite-950: oklch(22% 0.018 258);
+  --graphite-800: oklch(33% 0.019 258);
+  --graphite-650: oklch(47% 0.019 258);
+  --graphite-500: oklch(58% 0.018 258);
+  --line: oklch(86% 0.013 260);
+  --line-strong: oklch(76% 0.018 260);
+  --accent-700: oklch(47% 0.105 281);
+  --accent-600: oklch(54% 0.112 279);
+  --accent-200: oklch(87% 0.04 278);
+  --accent-100: oklch(93% 0.023 278);
+  --warning-700: oklch(52% 0.09 55);
+  --warning-100: oklch(93% 0.032 60);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --shadow-soft: 0 18px 55px oklch(28% 0.02 270 / 0.08);
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --focus-ring: 0 0 0 3px oklch(76% 0.08 279 / 0.55);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
