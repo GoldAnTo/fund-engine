@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -101,8 +102,60 @@ async function capture(page, origin, { file, route, viewport, populateSearch = f
   if (dimensions.scrollY !== 0) throw new Error(`${file} capture did not start at the page top`);
   const png = await page.screenshot({ type: 'png', fullPage: false, animations: 'disabled' });
   assertPng(png, viewport, file);
-  await writeFile(join(outputDir, file), png);
-  process.stdout.write(`${file} ${viewport.width}x${viewport.height} width=${dimensions.documentWidth}px scrollY=${dimensions.scrollY} ${png.length} bytes\n`);
+  return {
+    file,
+    png,
+    summary: `${file} ${viewport.width}x${viewport.height} width=${dimensions.documentWidth}px scrollY=${dimensions.scrollY} ${png.length} bytes`,
+  };
+}
+
+async function removePaths(paths) {
+  const results = await Promise.allSettled(paths.map((path) => rm(path, { force: true })));
+  return results.filter((result) => result.status === 'rejected').map((result) => result.reason);
+}
+
+export async function publishCaptureSet(captures, { directory = outputDir, generation = randomUUID() } = {}) {
+  await mkdir(directory, { recursive: true });
+  const entries = captures.map(({ file, png }) => ({
+    finalPath: join(directory, file),
+    png,
+    stagePath: join(directory, `.${file}.capture-stage-${generation}`),
+    backupPath: join(directory, `.${file}.capture-backup-${generation}`),
+  }));
+  const stageResults = await Promise.allSettled(entries.map(({ stagePath, png }) => writeFile(stagePath, png, { flag: 'wx' })));
+  const stageErrors = stageResults.filter((result) => result.status === 'rejected').map((result) => result.reason);
+  if (stageErrors.length) {
+    const cleanupErrors = await removePaths(entries.map(({ stagePath }) => stagePath));
+    throw new AggregateError([...stageErrors, ...cleanupErrors], 'Could not stage the complete capture set');
+  }
+
+  const backedUp = [];
+  const published = [];
+  try {
+    for (const entry of entries) {
+      try {
+        await rename(entry.finalPath, entry.backupPath);
+        backedUp.push(entry);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
+    for (const entry of entries) {
+      await rename(entry.stagePath, entry.finalPath);
+      published.push(entry);
+    }
+  } catch (error) {
+    const removeResults = await Promise.allSettled(published.map(({ finalPath }) => rm(finalPath, { force: true })));
+    const restoreResults = await Promise.allSettled(backedUp.reverse().map(({ backupPath, finalPath }) => rename(backupPath, finalPath)));
+    const rollbackErrors = [...removeResults, ...restoreResults]
+      .filter((result) => result.status === 'rejected')
+      .map((result) => result.reason);
+    const cleanupErrors = await removePaths(entries.flatMap(({ stagePath, backupPath }) => [stagePath, backupPath]));
+    throw new AggregateError([error, ...rollbackErrors, ...cleanupErrors], 'Could not publish the complete capture set');
+  }
+
+  const cleanupErrors = await removePaths(entries.map(({ backupPath }) => backupPath));
+  if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'Capture set published but backup cleanup failed');
 }
 
 async function main() {
@@ -114,16 +167,26 @@ async function main() {
   const page = await browser.newPage({ deviceScaleFactor: 1 });
   try {
     const desktop = { width: 1600, height: 1000 };
-    await capture(page, server.origin, { file: '01-search.png', route: '?screen=search', viewport: desktop, populateSearch: true });
-    await capture(page, server.origin, { file: '02-setup.png', route: '?screen=setup&security=GOOGL', viewport: desktop });
-    await capture(page, server.origin, { file: '03-workbench-a.png', route: '?screen=workbench&security=GOOGL&variant=A', viewport: desktop });
-    await capture(page, server.origin, { file: '04-workbench-b.png', route: '?screen=workbench&security=GOOGL&variant=B', viewport: desktop });
-    await capture(page, server.origin, { file: '05-workbench-c.png', route: '?screen=workbench&security=GOOGL&variant=C', viewport: desktop });
-    await capture(page, server.origin, { file: '06-workbench-mobile.png', route: '?screen=workbench&security=GOOGL&variant=A', viewport: { width: 390, height: 844 } });
+    const captureSpecs = [
+      { file: '01-search.png', route: '?screen=search', viewport: desktop, populateSearch: true },
+      { file: '02-setup.png', route: '?screen=setup&security=GOOGL', viewport: desktop },
+      { file: '03-workbench-a.png', route: '?screen=workbench&security=GOOGL&variant=A', viewport: desktop },
+      { file: '04-workbench-b.png', route: '?screen=workbench&security=GOOGL&variant=B', viewport: desktop },
+      { file: '05-workbench-c.png', route: '?screen=workbench&security=GOOGL&variant=C', viewport: desktop },
+      { file: '06-workbench-mobile.png', route: '?screen=workbench&security=GOOGL&variant=A', viewport: { width: 390, height: 844 } },
+    ];
+    const captures = [];
+    const failAfter = Number(process.env.CAPTURE_FAIL_AFTER ?? 0);
+    for (const spec of captureSpecs) {
+      captures.push(await capture(page, server.origin, spec));
+      if (failAfter > 0 && captures.length >= failAfter) throw new Error(`Injected capture failure after ${failAfter} images`);
+    }
+    await publishCaptureSet(captures);
+    for (const item of captures) process.stdout.write(`${item.summary}\n`);
   } finally {
     await browser.close();
     await server.close();
   }
 }
 
-await main();
+if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) await main();

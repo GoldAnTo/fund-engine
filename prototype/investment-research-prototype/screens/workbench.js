@@ -74,8 +74,10 @@ export function renderWorkbench(root, { navigate, params }) {
 
   root.innerHTML = `
     <main class="workbench-screen" id="main-content" data-workbench-variant="${variant}">
-      ${sharedContext(securityCode, security)}
-      ${variant === 'A' ? renderVariantA() : variant === 'B' ? renderVariantB() : renderVariantC()}
+      ${variant === 'A' ? renderAccessibleVariantA(securityCode, security) : `
+        ${sharedContext(securityCode, security)}
+        ${variant === 'B' ? renderVariantB() : renderVariantC()}
+      `}
     </main>
     ${renderPrototypeSwitcher(securityCode, variant)}
   `;
@@ -170,7 +172,7 @@ function hasVariantKeyboardScope(target) {
   return target.closest('[data-prototype-switcher]') !== null;
 }
 
-function sharedContext(securityCode, security) {
+function sharedNavigation(securityCode) {
   return `
     <a class="back-link" href="?screen=setup&security=${securityCode}">
       <span aria-hidden="true">←</span> 返回研究设置
@@ -180,26 +182,62 @@ function sharedContext(securityCode, security) {
       <li><span>02</span>定义问题</li>
       <li class="is-current" aria-current="step"><span>03</span>维护判断</li>
     </ol>
+  `;
+}
+
+function workbenchIdentity(security) {
+  return `
+    <div class="workbench-identity">
+      <span class="identity-mark workbench-mark" aria-hidden="true">A</span>
+      <div>
+        <p class="eyebrow">研究工作台 · 公司与特定证券</p>
+        <h1>Alphabet</h1>
+        <p>${security} <span>NASDAQ · USD</span></p>
+      </div>
+    </div>
+  `;
+}
+
+function workbenchQuestion() {
+  return `
+    <div class="workbench-question">
+      <span>研究问题</span>
+      <strong>${RESEARCH_QUESTION}</strong>
+      <small>研究视角 · 3–5 年</small>
+    </div>
+  `;
+}
+
+function contextLedger() {
+  return `
+    <dl class="context-ledger">
+      <div><dt>当前价格 <em>模拟数据</em></dt><dd>$201.42</dd><small>价格时间 2026-08-19 16:00 ET</small></div>
+      <div data-evidence-cutoff="2026-08-19"><dt>证据截止</dt><dd>2026-08-19</dd><small>已冻结研究边界</small></div>
+      <div><dt>判断产品类型</dt><dd>研究员暂定判断</dd><small class="conflict-state">证据冲突，暂定判断</small></div>
+    </dl>
+  `;
+}
+
+function sharedContext(securityCode, security) {
+  return `
+    ${sharedNavigation(securityCode)}
     <header class="workbench-context">
-      <div class="workbench-identity">
-        <span class="identity-mark workbench-mark" aria-hidden="true">A</span>
-        <div>
-          <p class="eyebrow">研究工作台 · 公司与特定证券</p>
-          <h1>Alphabet</h1>
-          <p>${security} <span>NASDAQ · USD</span></p>
-        </div>
-      </div>
-      <div class="workbench-question">
-        <span>研究问题</span>
-        <strong>${RESEARCH_QUESTION}</strong>
-        <small>研究视角 · 3–5 年</small>
-      </div>
-      <dl class="context-ledger">
-        <div><dt>当前价格 <em>模拟数据</em></dt><dd>$201.42</dd><small>价格时间 2026-08-19 16:00 ET</small></div>
-        <div data-evidence-cutoff="2026-08-19"><dt>证据截止</dt><dd>2026-08-19</dd><small>已冻结研究边界</small></div>
-        <div><dt>判断产品类型</dt><dd>研究员暂定判断</dd><small class="conflict-state">证据冲突，暂定判断</small></div>
-      </dl>
+      ${workbenchIdentity(security)}
+      ${workbenchQuestion()}
+      ${contextLedger()}
     </header>
+  `;
+}
+
+function renderAccessibleVariantA(securityCode, security) {
+  return `
+    ${sharedNavigation(securityCode)}
+    <header class="workbench-context-a">${workbenchIdentity(security)}</header>
+    ${renderVariantA()}
+    <section class="workbench-secondary-context" aria-label="研究问题与证据边界">
+      ${workbenchQuestion()}
+      ${contextLedger()}
+    </section>
   `;
 }
 

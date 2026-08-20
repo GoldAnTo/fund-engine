@@ -20,15 +20,17 @@ cd prototype/investment-research-prototype && python3 -m http.server 8010
 
 ## 验证
 
-在仓库根目录运行：
+从仓库根目录使用 `.nvmrc` 中的 Node 版本，然后进入原型目录：
 
 ```bash
-/Users/xiongjiali/.nvm/versions/node/v22.21.1/bin/node --test prototype/investment-research-prototype/contract.test.mjs
-/Users/xiongjiali/.nvm/versions/node/v22.21.1/bin/node prototype/investment-research-prototype/capture.mjs
+nvm use
+cd prototype/investment-research-prototype
+node --test contract.test.mjs
+node capture.mjs
 ```
 
 `capture.mjs` 也可直接用当前 `node` 运行；低于 Node 20 时会自动寻找已安装的兼容版本并重新执行。截图输出到 `output/`。
 
 ## Visual QA
 
-逐张检查六张截图后，桌面搜索与设置页的主次关系清楚，A/B/C 保持了三种不同的阅读构图；表格密度较高但没有页面级裁切，局部表格可独立横向滚动。首轮移动截图里，重复的研究问题位于公司身份与当前判断之间，推迟了核心推理；B 方案截图还保留了上一页面的滚动位置。最终修正将移动端的次要问题与价格/证据台账移到完整推理流之后，并让每次截图在写入前显式回到页面顶部。复查重点包括层级、裁切、密度、文案、移动顺序，以及避免等宽卡片仪表盘式外观。
+逐张检查六张截图后，桌面搜索与设置页的主次关系清楚，A/B/C 保持了三种不同的阅读构图；表格密度较高但没有页面级裁切，局部表格可独立横向滚动。首轮移动截图里，重复的研究问题位于公司身份与当前判断之间，推迟了核心推理；B 方案截图还保留了上一页面的滚动位置。最终修正重组了 A 方案的实际标记与辅助技术阅读顺序，把次要问题与价格/证据台账放在完整推理流之后，再用桌面网格恢复宽屏构图；每次截图也会在写入前显式回到页面顶部。复查重点包括层级、裁切、密度、文案、移动顺序，以及避免等宽卡片仪表盘式外观。

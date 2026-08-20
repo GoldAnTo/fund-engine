@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test, { after, before } from 'node:test';
@@ -261,7 +262,14 @@ test('all routes fit the required responsive viewports and mobile preserves the 
   const sectionTops = await page.locator(orderedMobileSections.join(', ')).evaluateAll((elements, selectors) => {
     return selectors.map((selector) => document.querySelector(selector).getBoundingClientRect().top);
   }, orderedMobileSections);
-  assert.deepEqual(sectionTops, [...sectionTops].sort((left, right) => left - right));
+  assert.equal(sectionTops.every((top, index) => index === 0 || top > sectionTops[index - 1]), true);
+  const accessibleDomSequence = [...orderedMobileSections, '.workbench-question', '.context-ledger'];
+  assert.equal(await page.evaluate((selectors) => {
+    const elements = selectors.map((selector) => document.querySelector(selector));
+    return elements.every((element, index) => index === 0 || Boolean(
+      elements[index - 1].compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING
+    ));
+  }, accessibleDomSequence), true);
   const secondaryContextTops = await page.locator('.workbench-question, .context-ledger').evaluateAll((elements) => (
     elements.map((element) => element.getBoundingClientRect().top)
   ));
@@ -616,6 +624,29 @@ test('every rendered route and workbench variant excludes decision-language shor
   }
 
   await page.close();
+});
+
+test('failed capture generation leaves the complete published image set unchanged', async () => {
+  const captureFiles = [
+    '01-search.png',
+    '02-setup.png',
+    '03-workbench-a.png',
+    '04-workbench-b.png',
+    '05-workbench-c.png',
+    '06-workbench-mobile.png',
+  ];
+  const outputDirectory = join(root, 'output');
+  const before = await Promise.all(captureFiles.map((file) => readFile(join(outputDirectory, file))));
+  const child = spawnSync(process.execPath, [join(root, 'capture.mjs')], {
+    encoding: 'utf8',
+    env: { ...process.env, CAPTURE_FAIL_AFTER: '3' },
+  });
+  const after = await Promise.all(captureFiles.map((file) => readFile(join(outputDirectory, file))));
+  const leftovers = (await readdir(outputDirectory)).filter((file) => file.includes('.capture-'));
+
+  assert.notEqual(child.status, 0, 'injected capture failure must make the command fail');
+  assert.deepEqual(after, before, 'capture failure must not publish a mixed generation');
+  assert.deepEqual(leftovers, [], 'capture failure must clean staged siblings');
 });
 
 async function assertPageText(page, fragments) {
