@@ -50,8 +50,10 @@ export function renderSearch(root) {
   }
 
   input.addEventListener('input', updateResults);
-  document.addEventListener('keydown', focusShortcut, { once: true });
+  document.addEventListener('keydown', focusShortcut);
   updateResults();
+
+  return () => document.removeEventListener('keydown', focusShortcut);
 
   function focusShortcut(event) {
     if (event.key === '/' && document.activeElement !== input) {
@@ -113,15 +115,14 @@ function resultGroups(query) {
         <h2 id="industry-heading">行业</h2>
         <span>1</span>
       </div>
-      <button class="result-row compact-result" data-testid="industry-result" type="button">
+      <div class="result-row compact-result" data-testid="industry-result">
         <span class="entity-monogram industry-monogram" aria-hidden="true">云</span>
         <span class="result-identity">
           <strong>云计算基础设施</strong>
           <span>行业 · 主题匹配</span>
         </span>
         <span class="result-description">数据中心、算力、云平台与基础模型服务</span>
-        <span class="result-arrow" aria-hidden="true">↗</span>
-      </button>
+      </div>
     </section>
   `;
 }

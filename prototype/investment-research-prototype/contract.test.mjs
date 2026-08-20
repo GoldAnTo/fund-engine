@@ -84,6 +84,30 @@ test('matching search reveals grouped, distinguishable entities', async () => {
   await page.close();
 });
 
+test('search shortcut survives unrelated keys and focuses the searchbox', async () => {
+  const page = await browser.newPage();
+  await page.goto(origin);
+  const searchbox = page.getByRole('searchbox', { name: '搜索股票、公司或行业' });
+
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('/');
+
+  await assert.equal(await searchbox.evaluate((element) => element === document.activeElement), true);
+  await page.close();
+});
+
+test('non-destination shell and industry labels are not focusable controls', async () => {
+  const page = await browser.newPage();
+  await page.goto(origin);
+
+  await assert.equal(await page.getByText('我的研究', { exact: true }).evaluate(isInteractive), false);
+  await assert.equal(await page.getByRole('button', { name: '账户：研究员 XJ' }).count(), 0);
+
+  await page.getByRole('searchbox', { name: '搜索股票、公司或行业' }).fill('GOOGL');
+  await assert.equal(await page.getByTestId('industry-result').evaluate(isInteractive), false);
+  await page.close();
+});
+
 test('selecting the Class A security opens setup with intentional defaults', async () => {
   const page = await browser.newPage();
   await page.goto(origin);
@@ -117,6 +141,28 @@ test('selecting the Class A security opens setup with intentional defaults', asy
   await page.waitForURL(/screen=workbench&security=GOOGL&variant=A$/);
   await assertPageText(page, ['研究工作台', 'Alphabet', 'GOOGL Class A']);
 
+  await page.close();
+});
+
+test('workbench deep links use security as the canonical share class', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=workbench&security=GOOG`);
+
+  await assertPageText(page, ['Alphabet', 'GOOG Class C']);
+  await assert.equal((await page.locator('body').innerText()).includes('GOOGL Class A'), false);
+  await assert.equal(await page.getByRole('link', { name: '返回研究设置' }).getAttribute('href'), '?screen=setup&security=GOOG');
+  await page.close();
+});
+
+test('in-app navigation and browser history move focus to the new route heading', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=setup&security=GOOGL`);
+  await page.getByRole('button', { name: '建立研究' }).click();
+
+  await assert.equal(await page.locator('h1').evaluate((element) => element === document.activeElement), true);
+  await page.goBack();
+  await assert.equal(await page.locator('h1').evaluate((element) => element === document.activeElement), true);
+  await assert.equal(await page.locator('h1').innerText(), 'Alphabet');
   await page.close();
 });
 
@@ -156,4 +202,8 @@ async function assertPageText(page, fragments) {
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isInteractive(element) {
+  return element.matches('a, button, input, select, textarea, [tabindex]');
 }

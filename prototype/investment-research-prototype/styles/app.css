@@ -345,7 +345,6 @@ button {
   gap: 15px;
   padding: 16px 18px;
   background: var(--paper-raised);
-  cursor: pointer;
   text-align: left;
   transition: background-color 160ms var(--ease-out), transform 160ms var(--ease-out);
 }
@@ -354,7 +353,11 @@ button {
   border-top: 1px solid var(--line);
 }
 
-.result-row:hover {
+.result-row:is(a, button) {
+  cursor: pointer;
+}
+
+.result-row:is(a, button):hover {
   z-index: 1;
   background: var(--accent-100);
 }
