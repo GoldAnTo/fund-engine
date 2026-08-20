@@ -24,13 +24,15 @@ export function renderSearch(root, { navigate }) {
           <kbd aria-hidden="true">/</kbd>
         </div>
 
-        <div class="search-stage" aria-live="polite"></div>
+        <p class="search-result-status" role="status" aria-live="polite" aria-atomic="true"></p>
+        <div class="search-stage"></div>
       </section>
     </main>
   `;
 
   const input = root.querySelector('input[type="search"]');
   const stage = root.querySelector('.search-stage');
+  const status = root.querySelector('.search-result-status');
 
   function updateResults() {
     const query = input.value.trim();
@@ -38,6 +40,13 @@ export function renderSearch(root, { navigate }) {
     const matchesCatl = query && catlAliases.some((alias) => normalized.includes(alias) || alias.includes(normalized));
     const matchesAlphabet = query && alphabetAliases.some((alias) => normalized.includes(alias) || alias.includes(normalized));
     stage.innerHTML = matchesCatl ? catlResultGroups(query) : matchesAlphabet ? alphabetResultGroups(query) : emptyState();
+    status.textContent = matchesCatl
+      ? '找到 2 个原型样本实体'
+      : matchesAlphabet
+        ? '找到 4 个原型样本实体'
+        : query
+          ? '未找到原型样本实体'
+          : '等待输入搜索词';
     bindExamples();
   }
 
@@ -172,7 +181,7 @@ function catlResultGroups(query) {
             <span><b>货币</b>CNY</span>
             <span><b>公司对应证券</b>宁德时代 → 300750.SZ</span>
             <span><b>核心业务</b>动力电池、储能电池与电池材料</span>
-            <span><b>覆盖截止</b>2026-06-30</span>
+            <span><b>原型样本数据截止</b>2026-06-30</span>
             <span class="data-gap"><b>数据缺口</b>细分出货量与海外产能口径待补齐</span>
           </span>
           <span class="result-arrow" aria-hidden="true">↗</span>
@@ -210,7 +219,7 @@ function securityResult({ ticker, shareClass, matchMethod, company, dataGap, hre
         <span><b>货币</b>USD</span>
         <span><b>公司对应证券</b>${company} → ${ticker}</span>
         <span><b>核心业务</b>搜索广告、云服务、AI</span>
-        <span><b>覆盖截止</b>2026-06-30</span>
+        <span><b>原型样本数据截止</b>2026-06-30</span>
         <span class="data-gap"><b>数据缺口</b>${dataGap}</span>
       </span>
       <span class="result-arrow" aria-hidden="true">↗</span>

@@ -74,7 +74,7 @@ test('matching search reveals grouped, distinguishable entities', async () => {
     'NASDAQ',
     'USD',
     '核心业务',
-    '覆盖截止',
+    '原型样本数据截止',
     '数据缺口',
     '代码匹配',
   ]);
@@ -117,7 +117,7 @@ test('the CATL example preserves the company-to-security mapping through setup a
     '深圳证券交易所',
     'CNY',
     '动力电池、储能电池与电池材料',
-    '覆盖截止',
+    '原型样本数据截止',
     '数据缺口',
     '公司对应证券',
   ]);
@@ -766,6 +766,144 @@ test('top-level consensus summaries define metric, forecast period, range, cover
   await page.close();
 });
 
+test('prototype fixture disclosures remain visible and qualify sample dates and typed sources', async () => {
+  const page = await browser.newPage();
+  for (const route of ['?screen=setup&security=GOOGL', '?screen=workbench&security=GOOGL&variant=A']) {
+    await page.goto(`${origin}/${route}`);
+    const disclosure = page.locator('[data-prototype-disclosure]');
+    await assert.equal(await disclosure.count(), 1);
+    await assert.equal(await disclosure.isVisible(), true);
+    await assertPageText(page, ['交互原型', '模拟示例', '不代表已核验外部披露']);
+  }
+
+  await page.goto(origin);
+  await page.getByRole('searchbox', { name: '搜索股票、公司或行业' }).fill('GOOGL');
+  await assertPageText(page, ['原型样本数据截止']);
+  assert.equal((await page.locator('main').innerText()).includes('覆盖截止'), false);
+
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+  await assert.equal(await page.locator('[data-fixture-boundary]').count() >= 2, true);
+  await page.getByRole('button', { name: /Cloud 单位经济性/ }).click();
+  const actualSource = await page.locator('#factor-detail-cloud [data-metric-kind="Actual"] [data-label="来源边界"]').innerText();
+  const guidanceSource = await page.locator('#factor-detail-cloud [data-metric-kind="Guidance"] [data-label="来源边界"]').innerText();
+  assert.match(actualSource, /示例：公司已披露口径/u);
+  assert.match(guidanceSource, /示例：管理层口径/u);
+  await page.close();
+});
+
+test('every workbench variant exposes a traceable simulated per-share valuation bridge', async () => {
+  const page = await browser.newPage();
+  for (const variant of ['A', 'B', 'C']) {
+    await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=${variant}`);
+    const bridge = page.locator('[data-valuation-bridge]');
+    await assert.equal(await bridge.count(), 1, `${variant} valuation bridge count`);
+    const text = await bridge.innerText();
+    for (const expected of ['收入', '营业利润', '自由现金流', '稀释后每股价值', '估值区间', '敏感性', '方法', '截至 2026-08-19', '模拟示例']) {
+      assert.ok(text.includes(expected), `${variant} valuation bridge missing ${expected}`);
+    }
+    const steps = ['收入', '营业利润', '自由现金流', '稀释后每股价值', '估值区间'];
+    for (let index = 1; index < steps.length; index += 1) assert.ok(text.indexOf(steps[index - 1]) < text.indexOf(steps[index]));
+  }
+  await page.close();
+});
+
+test('workbench renders four orthogonal research states as separate dimensions', async () => {
+  const page = await browser.newPage();
+  for (const variant of ['A', 'B', 'C']) {
+    await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=${variant}`);
+    const state = page.locator('[data-research-state]');
+    await assert.equal(await state.count(), 1);
+    assert.deepEqual(await state.locator('dt').allInnerTexts(), ['数据处理状态', '证据状态', '预测状态', '判断状态']);
+    await assert.equal(await state.locator('dd').count(), 4);
+  }
+  await page.close();
+});
+
+test('Variant B mobile keeps model factors before company industry valuation and next action', async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=B`);
+  const selectors = [
+    '.workbench-identity', '.workbench-question', '.context-ledger',
+    '.judgment-primary', '.judgment-band article:nth-child(2)', '.judgment-band article:nth-child(3)',
+    '.driver-model', '.model-explanation-grid article:nth-child(1)', '.model-explanation-grid article:nth-child(2)',
+    '[data-valuation-bridge]', '.model-explanation-grid article:nth-child(4)', '.model-next-action',
+  ];
+  const order = await page.evaluate((orderedSelectors) => orderedSelectors.map((selector) => {
+    const element = document.querySelector(selector);
+    return { selector, top: element?.getBoundingClientRect().top, exists: Boolean(element) };
+  }), selectors);
+  assert.equal(order.every(({ exists }) => exists), true, JSON.stringify(order));
+  assert.equal(order.every(({ top }, index) => index === 0 || top > order[index - 1].top), true, JSON.stringify(order));
+  assert.equal(await page.evaluate((orderedSelectors) => orderedSelectors.every((selector, index) => index === 0 || Boolean(
+    document.querySelector(orderedSelectors[index - 1]).compareDocumentPosition(document.querySelector(selector)) & Node.DOCUMENT_POSITION_FOLLOWING
+  )), selectors), true);
+  await page.close();
+});
+
+test('duplicate URL params are first-wins canonicalized before rendering and variant switching', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=workbench&screen=search&security=GOOG&security=GOOGL&variant=A&variant=C&q=%E7%AC%AC%E4%B8%80%E9%97%AE%E9%A2%98&q=%E7%AC%AC%E4%BA%8C%E9%97%AE%E9%A2%98&h=1-2&h=5-plus`);
+  await assertPageText(page, ['GOOG Class C', '第一问题', '1–2 年']);
+  for (const key of ['screen', 'security', 'variant', 'q', 'h']) assert.equal(new URL(page.url()).searchParams.getAll(key).length, 1, key);
+  await page.locator('[data-prototype-switcher] a[data-variant-link="B"]').click();
+  const switched = new URL(page.url());
+  assert.deepEqual(Object.fromEntries(['screen', 'security', 'variant', 'q', 'h'].map((key) => [key, switched.searchParams.getAll(key)])), {
+    screen: ['workbench'], security: ['GOOG'], variant: ['B'], q: ['第一问题'], h: ['1-2'],
+  });
+  await assertPageText(page, ['GOOG Class C', '第一问题', '1–2 年']);
+  await page.close();
+});
+
+test('validation records are scoped to research identity and corrupted records fail closed', async () => {
+  const page = await browser.newPage();
+  const firstUrl = `${origin}/?screen=workbench&security=GOOGL&variant=A&q=%E7%A0%94%E7%A9%B6%E9%97%AE%E9%A2%98%E4%B8%80&h=3-5`;
+  await page.goto(firstUrl);
+  await page.getByRole('button', { name: '记录本次验证', exact: true }).click();
+  const firstKey = await page.locator('[data-validation-form]').getAttribute('data-validation-key');
+  await page.getByLabel('验证备注').fill('只属于第一项研究。');
+  await page.getByRole('button', { name: '记录到本次会话' }).click();
+
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A&q=%E7%A0%94%E7%A9%B6%E9%97%AE%E9%A2%98%E4%BA%8C&h=3-5`);
+  await assert.equal(await page.getByRole('button', { name: '记录本次验证', exact: true }).count(), 1);
+  await page.getByRole('button', { name: '记录本次验证', exact: true }).click();
+  const secondKey = await page.locator('[data-validation-form]').getAttribute('data-validation-key');
+  assert.notEqual(firstKey, secondKey);
+
+  await page.evaluate((key) => sessionStorage.setItem(key, '{not-json'), secondKey);
+  await page.reload();
+  await assertPageText(page, ['研究工作台', '研究问题二']);
+  await assert.equal(await page.getByRole('button', { name: '记录本次验证', exact: true }).count(), 1);
+
+  await page.getByRole('button', { name: '记录本次验证', exact: true }).click();
+  const identity = await page.locator('[data-validation-form]').getAttribute('data-validation-identity');
+  await page.evaluate(({ key, identityValue }) => sessionStorage.setItem(key, JSON.stringify({ note: '错误归属', updatedAt: new Date().toISOString(), researchIdentity: `${identityValue}-mismatch` })), { key: secondKey, identityValue: identity });
+  await page.reload();
+  await assert.equal(await page.getByRole('button', { name: '记录本次验证', exact: true }).count(), 1);
+  await page.close();
+});
+
+test('search announces only a concise dedicated result status', async () => {
+  const page = await browser.newPage();
+  await page.goto(origin);
+  const liveRegions = page.locator('[aria-live="polite"]');
+  await assert.equal(await liveRegions.count(), 1);
+  await assert.equal(await liveRegions.first().getAttribute('role'), 'status');
+  await assert.equal(await page.locator('.search-stage').getAttribute('aria-live'), null);
+  await page.getByRole('searchbox', { name: '搜索股票、公司或行业' }).fill('GOOGL');
+  await assert.match(await liveRegions.first().innerText(), /找到 4 个原型样本实体/u);
+  await assert.equal(await page.locator('.result-group[aria-live], .result-list[aria-live]').count(), 0);
+  await page.close();
+});
+
+test('responsive stylesheet excludes unreachable split-context selectors and conflicting base switcher rules', async () => {
+  const responsiveCss = await readFile(join(root, 'styles/responsive.css'), 'utf8');
+  assert.doesNotMatch(responsiveCss, /workbench-context-a|workbench-secondary-context/u);
+  const beforeFirstBreakpoint = responsiveCss.split('@media')[0];
+  assert.doesNotMatch(beforeFirstBreakpoint, /main\[data-workbench-variant='A'\]|\.prototype-switcher\s*\{/u);
+  assert.doesNotMatch(responsiveCss, /\.question-templates button,\s*\.question-templates button/u);
+  assert.doesNotMatch(responsiveCss, /^\.factor-comparison\s*\{|^\.metric-row\.metric-/mu);
+});
+
 test('docked prototype switcher wraps, survives unrelated keys, and preserves all URL research state', async () => {
   const page = await browser.newPage();
   const state = '&q=%E8%87%AA%E5%AE%9A%E4%B9%89%E9%97%AE%E9%A2%98&h=1-2&hp=%E5%88%9D%E5%A7%8B%E5%81%87%E8%AE%BE&c=%E6%9C%80%E5%A4%A7%E6%8B%85%E5%BF%A7';
@@ -907,6 +1045,7 @@ test('new source and rendered routes keep the independent language boundary', as
   const sourceFiles = [
     'index.html',
     'app.js',
+    'url-state.js',
     'screens/search.js',
     'screens/setup.js',
     'screens/workbench.js',
