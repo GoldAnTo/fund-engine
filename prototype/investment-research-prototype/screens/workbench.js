@@ -96,11 +96,13 @@ export function renderWorkbench(root, { navigate, params }) {
   root.addEventListener('click', handleFactorToggle);
   root.addEventListener('click', handleValidationToggle);
   root.addEventListener('click', handleVariantClick);
+  root.addEventListener('submit', handleValidationSubmit);
   document.addEventListener('keydown', handleVariantKeydown);
   return () => {
     root.removeEventListener('click', handleFactorToggle);
     root.removeEventListener('click', handleValidationToggle);
     root.removeEventListener('click', handleVariantClick);
+    root.removeEventListener('submit', handleValidationSubmit);
     document.removeEventListener('keydown', handleVariantKeydown);
     delete root.dataset.route;
   };
@@ -138,6 +140,25 @@ export function renderWorkbench(root, { navigate, params }) {
     const shouldOpen = button.getAttribute('aria-expanded') !== 'true';
     button.setAttribute('aria-expanded', String(shouldOpen));
     draft.hidden = !shouldOpen;
+  }
+
+  function handleValidationSubmit(event) {
+    const form = event.target.closest('[data-validation-form]');
+    if (!form || !root.contains(form)) return;
+    event.preventDefault();
+    const note = new FormData(form).get('validation-note').trim();
+    if (!note) {
+      form.querySelector('[data-validation-status]').textContent = '请先填写验证备注。';
+      form.elements['validation-note'].focus();
+      return;
+    }
+    const record = { note, updatedAt: new Date().toISOString() };
+    const isUpdate = sessionStorage.getItem(form.dataset.validationKey) !== null;
+    sessionStorage.setItem(form.dataset.validationKey, JSON.stringify(record));
+    form.querySelector('[data-validation-status]').textContent = isUpdate ? '已更新本次浏览会话记录' : '已记录到本次浏览会话';
+    form.querySelector('[data-validation-record-host]').innerHTML = renderValidationRecord(record);
+    form.querySelector('button[type="submit"]').textContent = '更新本次会话记录';
+    root.querySelector(`[aria-controls="${form.closest('.validation-draft').id}"]`).childNodes[0].textContent = '更新本次验证 ';
   }
 
   function handleVariantClick(event) {
@@ -301,7 +322,6 @@ function sharedContext(params, entity, research) {
     </header>
     ${params.get('industry') === 'cloud-infrastructure' ? '<p class="industry-context-badge">行业语境 · 云计算基础设施</p>' : ''}
     ${userHypothesis(research)}
-    ${marketNarrative(entity)}
   `;
 }
 
@@ -310,7 +330,7 @@ function marketNarrative(entity) {
     <section class="market-narrative" data-market-narrative aria-labelledby="market-narrative-title">
       <div><p class="section-kicker" id="market-narrative-title">市场叙事 / Market Narrative</p><strong>市场语境，不是已证实驱动</strong></div>
       <p>${entity.narrative}</p>
-      <dl><div><dt>Consensus</dt><dd>覆盖 31 位分析师 · 预测区间见各因素 · 近 30 天修订方向</dd></div><div><dt>Implied</dt><dd>反推方法：由模拟价格求解等价经营假设 · 展示敏感性，不是唯一答案</dd></div></dl>
+      <dl><div><dt>Consensus</dt><dd>${entity.consensusSummary}</dd></div><div><dt>Implied</dt><dd>反推方法：由模拟价格求解等价经营假设 · 展示敏感性，不是唯一答案</dd></div></dl>
     </section>
   `;
 }
@@ -335,6 +355,8 @@ function renderVariantA(factors, entity) {
           <small>价格本身不是结论，它决定需要验证的假设强度。</small>
         </article>
       </section>
+
+      ${marketNarrative(entity)}
 
       <section class="factor-section" aria-labelledby="factor-title">
         <div class="section-heading">
@@ -379,7 +401,7 @@ function renderVariantA(factors, entity) {
         </div>
         <div class="next-action" data-primary-next-action>
           <div><p class="section-kicker">唯一下一动作</p><h3>${entity.nextAction}</h3></div>
-          ${renderValidationAction(factors)}
+          ${renderValidationAction(factors, entity)}
         </div>
       </section>
     </div>
@@ -389,6 +411,27 @@ function renderVariantA(factors, entity) {
 function renderVariantB(factors, entity) {
   return `
     <div class="variant-b" aria-label="模型优先工作台">
+      <section class="model-essentials" aria-label="关键判断与研究闭环">
+        <section class="judgment-band" aria-labelledby="model-current-judgment">
+          <article class="judgment-primary">
+            <h2 class="section-kicker" id="model-current-judgment">当前允许得出的判断</h2>
+            <strong class="current-judgment">${entity.judgment}</strong>
+            <p>${entity.judgmentDetail}</p>
+          </article>
+          <article><h3 class="section-kicker rust">最大反证</h3><strong>${entity.counter}</strong></article>
+          <article><h3 class="section-kicker amber">当前价格问题</h3><strong>${entity.priceQuestion}</strong></article>
+        </section>
+        <section class="model-explanation-grid" aria-label="公司、行业与估值闭环">
+          <article><p class="section-kicker">公司如何赚钱</p><h3>${entity.businessModel}</h3><p>${entity.businessDetail}</p></article>
+          <article><p class="section-kicker">行业位置</p><h3>${entity.industryPosition}</h3><p>${entity.industryDetail}</p></article>
+          <article><p class="section-kicker">预测与估值传导</p><h3>${entity.operatingBridge}</h3><p>${entity.valuationMemo}</p></article>
+          <article><p class="section-kicker rust">最大未知</p><h3>${entity.largestUnknown}</h3></article>
+          <article class="model-next-action" data-primary-next-action><p class="section-kicker">唯一下一动作</p><h3>${entity.nextAction}</h3>${renderValidationAction(factors, entity)}</article>
+        </section>
+      </section>
+
+      ${marketNarrative(entity)}
+
       <section class="driver-model" aria-labelledby="driver-title">
         <div class="driver-tree-panel">
           <div class="section-heading compact-heading"><div><p class="section-kicker">经营模型</p><h2 id="driver-title">经营驱动树</h2></div></div>
@@ -471,28 +514,56 @@ function renderVariantC(research, factors, entity) {
 
       <section class="memo-section memo-action" data-primary-next-action>
         <span class="memo-number">05</span>
-        <div><h3>唯一下一动作</h3><p>用下一季披露同时核对资本开支、关键业务利润率与单位经济性，口径齐备后再更新判断版本。</p>${renderValidationAction(factors)}</div>
+        <div><h3>唯一下一动作</h3><p>用下一季披露同时核对资本开支、关键业务利润率与单位经济性，口径齐备后再更新判断版本。</p>${renderValidationAction(factors, entity)}</div>
       </section>
     </article>
   `;
 }
 
-function renderValidationAction(factors) {
+function renderValidationAction(factors, entity) {
+  const validationKey = `investment-research-validation:${entity.securityLabel}:${factors[2].id}`;
+  const record = readValidationRecord(validationKey);
+  const draftId = `validation-draft-${entity.securityLabel.replaceAll(/[^a-z0-9]/giu, '-').toLowerCase()}-${factors[2].id}`;
   return `
     <div class="validation-action">
-      <button class="next-action-label" type="button" data-validation-toggle aria-expanded="false" aria-controls="q3-validation-draft">
-        建立 Q3 验证记录 <span aria-hidden="true">→</span>
+      <button class="next-action-label" type="button" data-validation-toggle aria-expanded="false" aria-controls="${draftId}">
+        ${record ? '更新本次验证' : '记录本次验证'} <span aria-hidden="true">→</span>
       </button>
-      <section class="validation-draft" id="q3-validation-draft" aria-label="验证记录草稿" hidden>
-        <div class="validation-draft-heading"><strong>验证记录草稿</strong><span>仅保存在本次原型会话</span></div>
+      <section class="validation-draft" id="${draftId}" aria-label="验证记录草稿" hidden>
+        <div class="validation-draft-heading"><strong>验证记录草稿</strong><span>仅存于当前浏览标签页，不会同步到服务器</span></div>
         <dl>
           <div><dt>关联因素</dt><dd>${factors[2].name}</dd></div>
           <div><dt>KPI</dt><dd>${factors[2].metrics[0].name}</dd></div>
           <div><dt>验证窗口</dt><dd>2026 Q3 业绩披露</dd></div>
           <div><dt>证伪条件</dt><dd>${factors[2].falsifier}</dd></div>
         </dl>
+        <form data-validation-form data-validation-key="${validationKey}">
+          <label for="${draftId}-note">验证备注</label>
+          <textarea id="${draftId}-note" name="validation-note" rows="3" placeholder="记录本次核对的口径、发现或待办。">${record ? escapeHtml(record.note) : ''}</textarea>
+          <div class="validation-form-actions"><p role="status" data-validation-status></p><button type="submit">${record ? '更新本次会话记录' : '记录到本次会话'}</button></div>
+          <div data-validation-record-host>${record ? renderValidationRecord(record) : ''}</div>
+        </form>
       </section>
     </div>
+  `;
+}
+
+function readValidationRecord(key) {
+  try {
+    const value = sessionStorage.getItem(key);
+    return value ? JSON.parse(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderValidationRecord(record) {
+  return `
+    <section class="validation-record" data-validation-record aria-label="本次会话记录">
+      <strong>本次会话记录 · 1 条</strong>
+      <p>${escapeHtml(record.note)}</p>
+      <small>更新于 ${escapeHtml(record.updatedAt.slice(0, 16).replace('T', ' '))} · 当前浏览标签页</small>
+    </section>
   `;
 }
 
@@ -520,11 +591,11 @@ function renderFactorRow(factor, index) {
 }
 
 function metricChip(metric) {
-  return `<span class="metric-chip metric-${metric.kind.toLowerCase()}"><b>${metric.kind}</b>${metric.value}${metric.unit}</span>`;
+  return `<span class="metric-chip metric-${metric.kind.toLowerCase()}"><b>${metric.kind}</b>${metric.value}${metric.unit}${metric.kind === 'Consensus' ? `<small class="consensus-disclosure">${disclosureText(metric.disclosure)}</small>` : ''}</span>`;
 }
 
 function metricValue(metric) {
-  return `<span class="model-${metric.kind.toLowerCase()}"><b>${metric.value}${metric.unit}</b><small>${metric.period}</small></span>`;
+  return `<span class="model-${metric.kind.toLowerCase()}"><b>${metric.value}${metric.unit}</b><small>${metric.period}</small>${metric.kind === 'Consensus' ? `<small class="consensus-disclosure">${disclosureText(metric.disclosure)}</small>` : ''}</span>`;
 }
 
 function renderFactorDetail(factor) {
@@ -574,20 +645,44 @@ function renderMetrics(metrics) {
 }
 
 function metricSet(name, actual, guidance, consensus, implied, house, unit) {
-  const consensusContext = name === 'Cloud 营业利润率'
-    ? '卖方一致预期；覆盖 31 位分析师；预测区间 19.8%–23.4%；近 30 天修订 +0.6pct'
-    : '卖方一致预期；覆盖 31 位分析师；预测区间与修订方向为模拟研究语境';
+  const disclosure = consensusDisclosure(name, consensus, unit);
   return [
     metric('Actual', name, actual, '2026 Q2', unit, '2026-07-23', '公司已披露'),
     metric('Guidance', name, guidance, '2026 Q3', unit, '2026-07-23', '管理层口径'),
-    metric('Consensus', name, consensus, '2026 Q3', unit, '2026-08-18', consensusContext),
+    metric('Consensus', name, consensus, '2026 Q3', unit, '2026-08-18', `卖方一致预期；${disclosureText(disclosure)}`, disclosure),
     metric('Implied', name, implied, '3–5 年', unit, '2026-08-19', '反推方法：固定其他 House 假设，求解与模拟价格等价的单一经营变量；敏感性：折现率每变动 1pct，隐含值约变动 1.5–2.5pct；不是唯一答案'),
     metric('House', name, house, '2026 Q3', unit, '2026-08-19', '内部暂定假设'),
   ];
 }
 
-function metric(kind, name, value, period, unit, asOf, sourceBoundary) {
-  return { kind, name, value, period, unit, asOf, sourceBoundary };
+function metric(kind, name, value, period, unit, asOf, sourceBoundary, disclosure = null) {
+  return { kind, name, value, period, unit, asOf, sourceBoundary, disclosure };
+}
+
+function consensusDisclosure(name, value, unit) {
+  const isCatl = ['动力电池收入增速', '储能收入增速', '海外产能利用率', '动力电池毛利率'].includes(name);
+  const overrides = {
+    '搜索收入增速': ['10.4%–13.0%', '近 30 天上修 0.2pct（模拟）'],
+    'Cloud 营业利润率': ['19.8%–23.4%', '近 30 天上修 0.6pct（模拟）'],
+    '资本开支 / 收入': ['19.1%–22.2%', '近 30 天上修 0.4pct（模拟）'],
+    '流量获取成本率': ['19.9%–21.7%', '近 30 天持平（模拟）'],
+    '动力电池收入增速': ['13.0%–20.0%', '近 30 天下修 0.8pct（模拟）'],
+    '储能收入增速': ['27.0%–36.0%', '近 30 天上修 1.1pct（模拟）'],
+    '海外产能利用率': ['56.0%–68.0%', '近 30 天持平（模拟）'],
+    '动力电池毛利率': ['21.0%–24.2%', '近 30 天下修 0.3pct（模拟）'],
+  };
+  const numeric = Number.parseFloat(value);
+  const fallbackRange = `${(numeric - 1.2).toFixed(1)}${unit}–${(numeric + 1.2).toFixed(1)}${unit}`;
+  const [range, revision] = overrides[name] ?? [fallbackRange, '近 30 天持平（模拟）'];
+  return {
+    coverage: `覆盖 ${isCatl ? 24 : 31} 位分析师（模拟）`,
+    range: `预测区间 ${range}（模拟）`,
+    revision,
+  };
+}
+
+function disclosureText(disclosure) {
+  return `${disclosure.coverage} · ${disclosure.range} · ${disclosure.revision}`;
 }
 
 function researchFactor(id, name, mechanism, whyKey, state, metricName, actual, guidance, consensus, implied, house) {
@@ -609,6 +704,7 @@ function entityFor(securityCode) {
   if (securityCode === '300750.SZ') return {
     company: '宁德时代', securityLabel: '300750.SZ', mark: '宁', exchange: '深圳证券交易所', currency: 'CNY', price: '¥260（模拟）',
     narrative: '多头叙事强调储能与海外扩张，空头叙事强调价格下降和产能回报；两者都需要用出货、单位利润与现金流核对。',
+    consensusSummary: '覆盖 24 位分析师（模拟） · 预测区间 12.4–15.8 CNY/股（模拟） · 近 30 天下修 0.7%（模拟）',
     judgment: '动力电池规模仍有韧性，但价格要求储能增长与海外产能回报共同兑现。',
     judgmentDetail: '现有证据只支持暂定判断。动力电池提供底盘，储能提供增量，海外产能利用率与技术迭代决定增长能否转为每股现金流。',
     counter: '电池价格持续下降，且海外产能利用率不足以覆盖新增折旧。',
@@ -629,6 +725,7 @@ function entityFor(securityCode) {
   return {
     company: 'Alphabet', securityLabel: isClassC ? 'GOOG Class C' : 'GOOGL Class A', mark: 'A', exchange: 'NASDAQ', currency: 'USD', price: '$201（模拟）',
     narrative: '多头叙事强调 AI 分发与 Cloud 利润扩张，空头叙事强调搜索变现稀释和资本强度；目前只把它们作为待核对的市场语境。',
+    consensusSummary: '覆盖 31 位分析师（模拟） · 预测区间 2.18–2.54 USD/股（模拟） · 近 30 天上修 1.2%（模拟）',
     judgment: '核心现金流仍有韧性，但当前价格要求 Cloud 利润扩张与 AI 投入回收同时成立。',
     judgmentDetail: '现有证据只支持把判断维持在暂定状态。搜索广告提供底盘，Cloud 提供增量，AI 资本效率与监管结果决定上行是否真正转化为每股现金流。',
     counter: '资本开支持续快于收入增长，且搜索变现同时被新交互稀释。',

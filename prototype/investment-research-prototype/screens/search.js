@@ -62,7 +62,7 @@ export function renderSearch(root, { navigate }) {
   };
 
   function navigateResult(event) {
-    const link = event.target.closest('a.result-row[href]');
+    const link = event.target.closest('a[href*="screen=setup"]');
     if (!link || !root.contains(link)) return;
     event.preventDefault();
     navigate(Object.fromEntries(new URL(link.href).searchParams));
@@ -113,15 +113,22 @@ function alphabetResultGroups(query) {
         <h2 id="company-heading">公司</h2>
         <span>1</span>
       </div>
-      <a class="result-row compact-result" data-testid="company-result" href="?screen=setup&security=GOOGL">
-        <span class="entity-monogram company-monogram" aria-hidden="true">A</span>
-        <span class="result-identity">
-          <strong>Alphabet Inc.</strong>
-          <span>公司 · 名称匹配</span>
-        </span>
-        <span class="result-description">搜索、广告、云服务与前沿技术业务的母公司</span>
-        <span class="result-arrow" aria-hidden="true">↗</span>
-      </a>
+      <details class="company-selector" data-testid="company-result">
+        <summary class="result-row compact-result">
+          <span class="entity-monogram company-monogram" aria-hidden="true">A</span>
+          <span class="result-identity">
+            <strong>Alphabet Inc.</strong>
+            <span>公司 · 名称匹配</span>
+          </span>
+          <span class="result-description">搜索、广告、云服务与前沿技术业务的母公司</span>
+          <span class="result-arrow" aria-hidden="true">＋</span>
+        </summary>
+        <div class="company-security-choices">
+          <div><strong>请选择具体证券</strong><p>公司主体对应两个上市股权类别，研究必须绑定具体证券与投票权类别。</p></div>
+          <a href="?screen=setup&security=GOOGL" aria-label="选择 GOOGL Class A"><b>GOOGL Class A</b><span>NASDAQ · 有投票权</span></a>
+          <a href="?screen=setup&security=GOOG" aria-label="选择 GOOG Class C"><b>GOOG Class C</b><span>NASDAQ · 无投票权</span></a>
+        </div>
+      </details>
     </section>
     <section class="result-group" aria-labelledby="industry-heading">
       <div class="group-heading">

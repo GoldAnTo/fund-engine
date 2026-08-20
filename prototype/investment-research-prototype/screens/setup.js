@@ -8,7 +8,7 @@ export function renderSetup(root, { navigate, params }) {
   const entity = entityFor(params.get('security'));
   const industry = params.get('industry') === 'cloud-infrastructure' ? '云计算基础设施' : '';
   const variant = entity.securityCode === 'GOOG' ? 'C' : 'A';
-  const question = params.has('q') ? params.get('q') : defaultQuestion;
+  const question = params.has('q') ? params.get('q') : entity.defaultQuestion;
   const horizon = ['1-2', '3-5', '5-plus'].includes(params.get('h')) ? params.get('h') : '3-5';
   const hypothesis = params.get('hp') ?? '';
   const concern = params.get('c') ?? '';
@@ -94,14 +94,11 @@ export function renderSetup(root, { navigate, params }) {
           </div>
           <h2 id="preview-title">这项研究将从五个角度展开</h2>
           <ol class="preview-questions">
-            <li><span>01</span><p>核心业务如何获得用户注意力，并把它转化为可持续收入？</p></li>
-            <li><span>02</span><p>搜索分发、数据与计算基础设施形成了怎样的竞争优势？</p></li>
-            <li><span>03</span><p>云服务与 AI 投入会如何改变利润率和资本回报？</p></li>
-            <li><span>04</span><p>当前价格隐含了怎样的增长、盈利与再投资假设？</p></li>
+            ${entity.previewQuestions.map((item, index) => `<li><span>0${index + 1}</span><p>${item}</p></li>`).join('')}
           </ol>
           <div class="counter-question">
             <span>反向检验</span>
-            <p>什么事实会证明核心业务增长无法转化为每股自由现金流？</p>
+            <p>${entity.counterQuestion}</p>
           </div>
           <p class="preview-note">这些问题将作为初始框架，而不是预设答案。</p>
         </aside>
@@ -116,7 +113,7 @@ export function renderSetup(root, { navigate, params }) {
       form.elements.question.focus();
     });
   });
-  root.querySelector('[data-use-default]').addEventListener('click', () => submitFrame(defaultQuestion));
+  root.querySelector('[data-use-default]').addEventListener('click', () => submitFrame(entity.defaultQuestion));
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     submitFrame();
@@ -144,18 +141,42 @@ function entityFor(securityCode) {
     exchange: '深圳证券交易所', currency: 'CNY',
     business: '动力电池、储能电池与电池材料构成主要收入与资本投入方向。',
     context: '市场正在判断储能增长、海外产能利用率与电池价格下降如何共同影响资本回报。',
+    defaultQuestion: '动力电池需求增长能否抵消单位价格下降，并转化为可持续自由现金流？',
+    previewQuestions: [
+      '动力电池需求增长能否抵消单位价格下降，并转化为可持续自由现金流？',
+      '储能业务的增长与利润贡献如何验证？',
+      '海外产能利用率何时能够覆盖新增折旧与资本成本？',
+      '当前价格隐含了怎样的出货、单位利润与再投资假设？',
+    ],
+    counterQuestion: '什么事实会证明规模增长无法覆盖价格下降与新增资本投入？',
   };
   if (securityCode === 'GOOG') return {
     securityCode: 'GOOG', securityLabel: 'GOOG Class C', company: 'Alphabet', mark: 'A',
     exchange: 'NASDAQ', currency: 'USD',
     business: '搜索与广告构成现金流基础，Google Cloud 与 AI 基础设施扩展长期增长边界。',
     context: '市场正在重新判断资本开支、AI 分发优势与云业务利润率之间的关系。',
+    defaultQuestion,
+    previewQuestions: [
+      '核心业务如何获得用户注意力，并把它转化为可持续收入？',
+      '搜索分发、数据与计算基础设施形成了怎样的竞争优势？',
+      '云服务与 AI 投入会如何改变利润率和资本回报？',
+      '当前价格隐含了怎样的增长、盈利与再投资假设？',
+    ],
+    counterQuestion: '什么事实会证明核心业务增长无法转化为每股自由现金流？',
   };
   return {
     securityCode: 'GOOGL', securityLabel: 'GOOGL Class A', company: 'Alphabet', mark: 'A',
     exchange: 'NASDAQ', currency: 'USD',
     business: '搜索与广告构成现金流基础，Google Cloud 与 AI 基础设施扩展长期增长边界。',
     context: '市场正在重新判断资本开支、AI 分发优势与云业务利润率之间的关系。',
+    defaultQuestion,
+    previewQuestions: [
+      '核心业务如何获得用户注意力，并把它转化为可持续收入？',
+      '搜索分发、数据与计算基础设施形成了怎样的竞争优势？',
+      '云服务与 AI 投入会如何改变利润率和资本回报？',
+      '当前价格隐含了怎样的增长、盈利与再投资假设？',
+    ],
+    counterQuestion: '什么事实会证明核心业务增长无法转化为每股自由现金流？',
   };
 }
 

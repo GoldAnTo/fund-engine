@@ -20,7 +20,7 @@ cd prototype/investment-research-prototype && python3 -m http.server 8010
 - `?screen=workbench&security=GOOGL&variant=B`：模型优先工作台。
 - `?screen=workbench&security=GOOGL&variant=C`：PM 备忘录工作台。
 
-研究问题、期限、个人假设和担忧通过 URL 参数在三个工作台方案间传递。验证记录按钮只展开本次原型会话中的草稿，不连接持久化存储。
+研究问题、期限、个人假设和担忧通过 URL 参数在三个工作台方案间传递。验证记录可在当前浏览标签页中创建和更新，使用 `sessionStorage` 保留到刷新后；它不会同步到服务器，也不是产品级持久化存储。
 
 ## 验证
 

@@ -85,6 +85,21 @@ test('matching search reveals grouped, distinguishable entities', async () => {
   await page.close();
 });
 
+test('the Alphabet company result requires an explicit A or C security choice', async () => {
+  const page = await browser.newPage();
+  await page.goto(origin);
+  await page.getByRole('searchbox', { name: '搜索股票、公司或行业' }).fill('Alphabet');
+
+  const company = page.getByTestId('company-result');
+  await assert.equal(await company.getAttribute('href'), null);
+  await company.locator('summary').click();
+  await assertPageText(page, ['请选择具体证券', 'GOOGL Class A', 'GOOG Class C', '投票权类别']);
+  await company.getByRole('link', { name: /GOOG Class C/ }).click();
+  await assert.equal(new URL(page.url()).searchParams.get('security'), 'GOOG');
+  await assertPageText(page, ['Alphabet', 'GOOG Class C']);
+  await page.close();
+});
+
 test('the CATL example preserves the company-to-security mapping through setup and workbench', async () => {
   const page = await browser.newPage();
   await page.goto(origin);
@@ -109,7 +124,14 @@ test('the CATL example preserves the company-to-security mapping through setup a
   await assert.equal(await page.getByTestId('catl-security-result').count(), 1);
   await assert.equal(await page.getByTestId('catl-company-result').count(), 1);
   await page.getByTestId('catl-security-result').click();
-  await assertPageText(page, ['宁德时代', '300750.SZ', '深圳证券交易所', 'CNY', '公司对应证券']);
+  await assertPageText(page, [
+    '宁德时代', '300750.SZ', '深圳证券交易所', 'CNY', '公司对应证券',
+    '动力电池需求增长能否抵消单位价格下降，并转化为可持续自由现金流？',
+    '储能业务的增长与利润贡献如何验证？',
+    '海外产能利用率何时能够覆盖新增折旧与资本成本？',
+  ]);
+  const catlSetup = await page.locator('main').innerText();
+  for (const alphabetOnly of ['用户注意力', '搜索分发', '云服务与 AI']) assert.equal(catlSetup.includes(alphabetOnly), false);
   await page.getByRole('button', { name: '建立研究' }).click();
   await assertPageText(page, ['研究工作台', '宁德时代', '300750.SZ', '动力电池与储能系统', '上游材料议价与海外本地化']);
   const catlWorkbench = await page.locator('main').innerText();
@@ -295,7 +317,7 @@ test('default workbench leads with the current judgment and exactly four decisio
     '市场语境，不是已证实驱动',
     '覆盖 31 位分析师',
     '预测区间',
-    '近 30 天修订',
+    '近 30 天上修',
     '反推方法',
     '敏感性',
   ]);
@@ -303,7 +325,7 @@ test('default workbench leads with the current judgment and exactly four decisio
   await assert.equal(await page.getByTestId('factor-row').count(), 4);
   await assert.equal(await page.locator('[data-key-factor]').count(), 4);
   await assert.equal(await page.locator('[data-primary-next-action]').count(), 1);
-  await assert.equal(await page.locator('[data-primary-next-action] button').count(), 1);
+  await assert.equal(await page.locator('[data-primary-next-action] button[data-validation-toggle]').count(), 1);
   await assert.equal(await page.getByRole('heading', { name: '当前允许得出的判断', exact: true }).count(), 1);
   await assert.equal(await page.getByRole('heading', { name: '最大反证', exact: true }).count(), 1);
   await assert.equal(await page.getByRole('heading', { name: '当前价格问题', exact: true }).count(), 1);
@@ -324,7 +346,7 @@ test('market context and typed expectations disclose distinct evidence boundarie
   const detailText = await detail.innerText();
   for (const expected of [
     'Actual', 'Guidance', 'Consensus', 'Implied', 'House',
-    '覆盖 31 位分析师', '预测区间 19.8%–23.4%', '近 30 天修订 +0.6pct',
+    '覆盖 31 位分析师', '预测区间 19.8%–23.4%', '近 30 天上修 0.6pct',
     '反推方法', '敏感性', '不是唯一答案',
   ]) assert.ok(detailText.includes(expected), `missing ${expected}`);
   const kinds = ['actual', 'guidance', 'consensus', 'implied', 'house'];
@@ -333,38 +355,28 @@ test('market context and typed expectations disclose distinct evidence boundarie
   await page.close();
 });
 
-test('primary next action reveals an accessible session-only validation draft', async () => {
+test('primary next action creates and updates a session-local validation record', async () => {
   const page = await browser.newPage();
+  const note = '先核对资本开支口径，再比较 Cloud 利润率修订。';
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+  const action = page.getByRole('button', { name: '记录本次验证', exact: true });
+  await assert.equal(await action.getAttribute('aria-expanded'), 'false');
+  await action.focus();
+  await page.keyboard.press('Enter');
+  await assert.equal(await action.getAttribute('aria-expanded'), 'true');
+  await assertPageText(page, ['验证记录草稿', '关联因素', 'AI 资本效率', '验证窗口', '2026 Q3 业绩披露']);
+  await page.getByLabel('验证备注').fill(note);
+  await page.getByRole('button', { name: '记录到本次会话' }).click();
+  await assertPageText(page, ['已记录到本次浏览会话', '本次会话记录 · 1 条', note]);
 
-  for (const variant of ['A', 'C']) {
-    await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=${variant}`);
-    const action = page.getByRole('button', { name: '建立 Q3 验证记录', exact: true });
-    await assert.equal(await action.getAttribute('aria-expanded'), 'false');
-    const draftId = await action.getAttribute('aria-controls');
-    await assert.equal(await page.locator(`#${draftId}`).isHidden(), true);
-
-    await action.focus();
-    await page.keyboard.press('Enter');
-    await assert.equal(await action.getAttribute('aria-expanded'), 'true');
-    await assert.equal(await action.evaluate((element) => element === document.activeElement), true);
-    const draft = page.locator(`#${draftId}`);
-    await assert.equal(await draft.isVisible(), true);
-    await assertPageText(page, [
-      '验证记录草稿',
-      '关联因素',
-      'AI 资本效率',
-      'KPI',
-      '资本开支 / 收入',
-      '验证窗口',
-      '2026 Q3 业绩披露',
-      '证伪条件',
-      '仅保存在本次原型会话',
-    ]);
-
-    await action.click();
-    await assert.equal(await action.getAttribute('aria-expanded'), 'false');
-    await assert.equal(await draft.isHidden(), true);
-  }
+  await page.reload();
+  await page.getByRole('button', { name: '更新本次验证', exact: true }).click();
+  await assertPageText(page, ['本次会话记录 · 1 条', note, '仅存于当前浏览标签页，不会同步到服务器']);
+  const updatedNote = 'Cloud 指引口径已复核，下一步等待资本开支披露。';
+  await page.getByLabel('验证备注').fill(updatedNote);
+  await page.getByRole('button', { name: '更新本次会话记录' }).click();
+  await assertPageText(page, ['已更新本次浏览会话记录', '本次会话记录 · 1 条', updatedNote]);
+  assert.equal((await page.locator('[data-validation-record]').innerText()).includes('已持久化'), false);
 
   await page.close();
 });
@@ -501,6 +513,7 @@ test('all routes fit the required responsive viewports and mobile preserves the 
     '.judgment-primary',
     '.judgment-band article:nth-child(2)',
     '.judgment-band article:nth-child(3)',
+    '.market-narrative',
     '.factor-section',
     '.business-core',
     '.industry-position',
@@ -539,6 +552,7 @@ test('all routes fit the required responsive viewports and mobile preserves the 
         return style.display !== 'none'
           && style.visibility !== 'hidden'
           && style.opacity !== '0'
+          && control.getClientRects().length > 0
           && (bounds.width < 44 || bounds.height < 44);
       })
       .map((control) => `${control.tagName}:${control.getAttribute('aria-label') ?? control.textContent.trim().slice(0, 30)}`));
@@ -665,7 +679,10 @@ test('workbench offers three structurally distinct URL variants with canonical s
   const variantB = page.locator('[data-workbench-variant="B"]');
   await assert.equal(await variantB.locator('.variant-b').count(), 1);
   await assert.equal(await variantB.locator('.variant-a, .factor-table').count(), 0);
-  await assertPageText(page, ['经营驱动树', '模型分歧', 'House', 'Consensus', 'Implied', '判断摘要', 'GOOG Class C']);
+  await assertPageText(page, [
+    '经营驱动树', '模型分歧', 'House', 'Consensus', 'Implied', '判断摘要', 'GOOG Class C',
+    '最大反证', '当前价格问题', '公司如何赚钱', '行业位置', '预测与估值传导', '最大未知', '唯一下一动作',
+  ]);
   const variantBText = await variantB.innerText();
   assert.ok(variantBText.indexOf('经营驱动树') < variantBText.indexOf('判断摘要'));
   assert.ok(variantBText.indexOf('模型分歧') < variantBText.indexOf('判断摘要'));
@@ -683,6 +700,29 @@ test('workbench offers three structurally distinct URL variants with canonical s
   await assert.equal(await variantC.locator('[data-factor-name]').count(), 4);
   await assertPageText(page, ['GOOG Class C']);
 
+  await page.close();
+});
+
+test('every displayed consensus includes numeric coverage, range, and revision direction', async () => {
+  const page = await browser.newPage();
+  const assertDisclosure = async (locator, label) => {
+    const texts = await locator.evaluateAll((elements) => elements.map((element) => element.textContent));
+    assert.ok(texts.length > 0, `${label} has no consensus disclosures`);
+    for (const text of texts) {
+      assert.match(text, /覆盖\s*\d+\s*位/u, `${label} lacks coverage: ${text}`);
+      assert.match(text, /预测区间\s*-?\d/u, `${label} lacks a numeric range: ${text}`);
+      assert.match(text, /近\s*30\s*天.*(?:上修|下修|持平)/u, `${label} lacks revision direction: ${text}`);
+      assert.equal(text.includes('见各因素'), false);
+    }
+  };
+
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+  await assertDisclosure(page.locator('.metric-chip.metric-consensus'), 'factor table');
+  await assertDisclosure(page.locator('.metric-row.metric-consensus'), 'metric table');
+  await assertDisclosure(page.locator('[data-market-narrative] dd').first(), 'market narrative');
+
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=B`);
+  await assertDisclosure(page.locator('.model-consensus'), 'model table');
   await page.close();
 });
 
