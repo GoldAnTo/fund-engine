@@ -216,6 +216,75 @@ test('workbench variants never create page-level horizontal overflow at supporte
   await page.close();
 });
 
+test('all routes fit the required responsive viewports and mobile preserves the reasoning order', async () => {
+  const page = await browser.newPage();
+  const viewports = [
+    { width: 1600, height: 1000 },
+    { width: 1180, height: 820 },
+    { width: 1000, height: 800 },
+    { width: 390, height: 844 },
+  ];
+  const routes = [
+    '?screen=search',
+    '?screen=setup&security=GOOGL',
+    '?screen=workbench&security=GOOGL&variant=A',
+    '?screen=workbench&security=GOOGL&variant=B',
+    '?screen=workbench&security=GOOGL&variant=C',
+  ];
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    for (const route of routes) {
+      await page.goto(`${origin}/${route}`);
+      assert.equal(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        true,
+        `${route} overflows at ${viewport.width}x${viewport.height}`,
+      );
+    }
+  }
+
+  await assert.equal(await page.locator('link[href="./styles/responsive.css"]').count(), 1);
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+  const orderedMobileSections = [
+    '.workbench-identity',
+    '.judgment-primary',
+    '.judgment-band article:nth-child(2)',
+    '.judgment-band article:nth-child(3)',
+    '.factor-section',
+    '.business-core',
+    '.industry-position',
+    '.valuation-transmission',
+    '.largest-unknown',
+    '.next-action',
+  ];
+  const sectionTops = await page.locator(orderedMobileSections.join(', ')).evaluateAll((elements, selectors) => {
+    return selectors.map((selector) => document.querySelector(selector).getBoundingClientRect().top);
+  }, orderedMobileSections);
+  assert.deepEqual(sectionTops, [...sectionTops].sort((left, right) => left - right));
+  const secondaryContextTops = await page.locator('.workbench-question, .context-ledger').evaluateAll((elements) => (
+    elements.map((element) => element.getBoundingClientRect().top)
+  ));
+  assert.equal(secondaryContextTops.every((top) => top > sectionTops.at(-1)), true);
+
+  for (const route of routes) {
+    await page.goto(`${origin}/${route}`);
+    const undersizedTargets = await page.locator('a, button, summary, input, textarea').evaluateAll((controls) => controls
+      .filter((control) => {
+        const style = getComputedStyle(control);
+        const bounds = control.getBoundingClientRect();
+        return style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && style.opacity !== '0'
+          && (bounds.width < 44 || bounds.height < 44);
+      })
+      .map((control) => `${control.tagName}:${control.getAttribute('aria-label') ?? control.textContent.trim().slice(0, 30)}`));
+    assert.deepEqual(undersizedTargets, [], `${route} has undersized mobile targets`);
+  }
+
+  await page.close();
+});
+
 test('factor reasoning expands inline in a fixed order with typed metric boundaries', async () => {
   const page = await browser.newPage();
   await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
@@ -487,9 +556,22 @@ test('new source and rendered routes keep the independent language boundary', as
     ['目标', '价'].join(''),
     ['AI ', '置信度'].join(''),
     ['综合', '评分'].join(''),
+    ['新闻', '导致'].join(''),
   ];
   const standaloneForbidden = new RegExp(`\\b${['C', 'ase'].join('')}\\b`);
-  const sourceFiles = ['index.html', 'app.js', 'screens/search.js', 'screens/setup.js', 'screens/workbench.js', 'styles/tokens.css', 'styles/app.css', 'contract.test.mjs'];
+  const sourceFiles = [
+    'index.html',
+    'app.js',
+    'screens/search.js',
+    'screens/setup.js',
+    'screens/workbench.js',
+    'styles/tokens.css',
+    'styles/app.css',
+    'styles/responsive.css',
+    'capture.mjs',
+    'README.md',
+    'contract.test.mjs',
+  ];
 
   for (const relativePath of sourceFiles) {
     const source = await readFile(join(root, relativePath), 'utf8');
@@ -504,6 +586,35 @@ test('new source and rendered routes keep the independent language boundary', as
     for (const term of forbiddenTerms) assert.equal(text.includes(term), false, `${route} renders forbidden copy`);
     assert.equal(standaloneForbidden.test(text), false, `${route} renders forbidden standalone copy`);
   }
+  await page.close();
+});
+
+test('every rendered route and workbench variant excludes decision-language shortcuts', async () => {
+  const forbiddenTerms = [
+    ['ResearchC', 'ase'].join(''),
+    ['自动研究', '完成'].join(''),
+    ['买', '入'].join(''),
+    ['卖', '出'].join(''),
+    ['目标', '价'].join(''),
+    ['AI ', '置信度'].join(''),
+    ['综合', '评分'].join(''),
+    ['新闻', '导致'].join(''),
+  ];
+  const routes = [
+    '?screen=search',
+    '?screen=setup&security=GOOGL',
+    '?screen=workbench&security=GOOGL&variant=A',
+    '?screen=workbench&security=GOOGL&variant=B',
+    '?screen=workbench&security=GOOGL&variant=C',
+  ];
+  const page = await browser.newPage();
+
+  for (const route of routes) {
+    await page.goto(`${origin}/${route}`);
+    const renderedText = await page.locator('body').innerText();
+    for (const term of forbiddenTerms) assert.equal(renderedText.includes(term), false, `${route} renders forbidden copy`);
+  }
+
   await page.close();
 });
 
