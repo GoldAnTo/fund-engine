@@ -1948,10 +1948,8 @@ textarea:focus {
 }
 
 .prototype-switcher {
-  position: fixed;
+  position: static;
   z-index: 50;
-  bottom: 18px;
-  left: 50%;
   display: flex;
   min-height: 48px;
   align-items: center;
@@ -1962,7 +1960,6 @@ textarea:focus {
   background: var(--graphite-950);
   color: var(--mineral-100);
   box-shadow: 0 10px 28px oklch(22% 0.018 258 / 0.2);
-  transform: translateX(-50%);
 }
 
 .prototype-label {
@@ -2156,14 +2153,6 @@ textarea:focus {
 
   .metric-table-scroll {
     overflow-x: auto;
-  }
-
-  .factor-table {
-    min-width: 900px;
-  }
-
-  .metric-table {
-    min-width: 760px;
   }
 
   .business-transmission {

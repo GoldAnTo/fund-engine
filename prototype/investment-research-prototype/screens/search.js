@@ -1,6 +1,7 @@
-const searchAliases = ['googl', 'alphabet', '谷歌', '云计算'];
+const alphabetAliases = ['googl', 'alphabet', '谷歌', '云计算'];
+const catlAliases = ['catl', '300750', '宁德时代'];
 
-export function renderSearch(root) {
+export function renderSearch(root, { navigate }) {
   root.innerHTML = `
     <main class="search-screen" id="main-content">
       <section class="search-intro" aria-labelledby="search-title">
@@ -34,8 +35,9 @@ export function renderSearch(root) {
   function updateResults() {
     const query = input.value.trim();
     const normalized = query.toLocaleLowerCase();
-    const hasMatch = query && searchAliases.some((alias) => normalized.includes(alias) || alias.includes(normalized));
-    stage.innerHTML = hasMatch ? resultGroups(query) : emptyState();
+    const matchesCatl = query && catlAliases.some((alias) => normalized.includes(alias) || alias.includes(normalized));
+    const matchesAlphabet = query && alphabetAliases.some((alias) => normalized.includes(alias) || alias.includes(normalized));
+    stage.innerHTML = matchesCatl ? catlResultGroups(query) : matchesAlphabet ? alphabetResultGroups(query) : emptyState();
     bindExamples();
   }
 
@@ -50,10 +52,21 @@ export function renderSearch(root) {
   }
 
   input.addEventListener('input', updateResults);
+  root.addEventListener('click', navigateResult);
   document.addEventListener('keydown', focusShortcut);
   updateResults();
 
-  return () => document.removeEventListener('keydown', focusShortcut);
+  return () => {
+    root.removeEventListener('click', navigateResult);
+    document.removeEventListener('keydown', focusShortcut);
+  };
+
+  function navigateResult(event) {
+    const link = event.target.closest('a.result-row[href]');
+    if (!link || !root.contains(link)) return;
+    event.preventDefault();
+    navigate(Object.fromEntries(new URL(link.href).searchParams));
+  }
 
   function focusShortcut(event) {
     if (event.key === '/' && document.activeElement !== input) {
@@ -78,7 +91,7 @@ function emptyState() {
   `;
 }
 
-function resultGroups(query) {
+function alphabetResultGroups(query) {
   const matchMethod = query.toLocaleLowerCase().includes('goog') ? '代码匹配' : '名称匹配';
   return `
     <div class="result-summary">
@@ -91,8 +104,8 @@ function resultGroups(query) {
         <span>2</span>
       </div>
       <div class="result-list">
-        ${securityResult({ ticker: 'GOOGL', shareClass: 'Class A', matchMethod, dataGap: '细分资本开支口径待核对', href: '?screen=setup&security=GOOGL' })}
-        ${securityResult({ ticker: 'GOOG', shareClass: 'Class C', matchMethod: '关联代码匹配', dataGap: '投票权差异需纳入判断', href: '?screen=setup&security=GOOG' })}
+        ${securityResult({ ticker: 'GOOGL', shareClass: 'Class A', matchMethod, company: 'Alphabet Inc.', dataGap: '细分资本开支口径待核对', href: '?screen=setup&security=GOOGL' })}
+        ${securityResult({ ticker: 'GOOG', shareClass: 'Class C', matchMethod: '关联代码匹配', company: 'Alphabet Inc.', dataGap: '投票权差异需纳入判断', href: '?screen=setup&security=GOOG' })}
       </div>
     </section>
     <section class="result-group" aria-labelledby="company-heading">
@@ -115,19 +128,69 @@ function resultGroups(query) {
         <h2 id="industry-heading">行业</h2>
         <span>1</span>
       </div>
-      <div class="result-row compact-result" data-testid="industry-result">
+      <a class="result-row compact-result" data-testid="industry-result" href="?screen=setup&security=GOOGL&industry=cloud-infrastructure" aria-label="云计算基础设施，从代表公司 Alphabet 开始">
         <span class="entity-monogram industry-monogram" aria-hidden="true">云</span>
         <span class="result-identity">
           <strong>云计算基础设施</strong>
           <span>行业 · 主题匹配</span>
         </span>
         <span class="result-description">数据中心、算力、云平台与基础模型服务</span>
-      </div>
+        <span class="result-arrow" aria-hidden="true">↗</span>
+      </a>
     </section>
   `;
 }
 
-function securityResult({ ticker, shareClass, matchMethod, dataGap, href }) {
+function catlResultGroups(query) {
+  const matchMethod = query.toLocaleLowerCase().includes('300750') ? '代码匹配' : '名称匹配';
+  return `
+    <div class="result-summary" data-catl-results>
+      <span>匹配结果</span>
+      <span>2 个实体 · 研究覆盖有限</span>
+    </div>
+    <section class="result-group" aria-labelledby="catl-security-heading" data-catl-results>
+      <div class="group-heading">
+        <h2 id="catl-security-heading">证券</h2>
+        <span>1</span>
+      </div>
+      <div class="result-list">
+        <a class="result-row security-result" data-testid="catl-security-result" href="?screen=setup&security=300750.SZ" aria-label="300750.SZ CATL，宁德时代新能源科技股份有限公司">
+          <span class="entity-monogram" aria-hidden="true">C</span>
+          <span class="result-identity">
+            <strong>300750.SZ <small>CATL</small></strong>
+            <span>证券 · ${matchMethod}</span>
+          </span>
+          <span class="security-facts">
+            <span><b>交易所</b>深圳证券交易所</span>
+            <span><b>货币</b>CNY</span>
+            <span><b>公司对应证券</b>宁德时代 → 300750.SZ</span>
+            <span><b>核心业务</b>动力电池、储能电池与电池材料</span>
+            <span><b>覆盖截止</b>2026-06-30</span>
+            <span class="data-gap"><b>数据缺口</b>细分出货量与海外产能口径待补齐</span>
+          </span>
+          <span class="result-arrow" aria-hidden="true">↗</span>
+        </a>
+      </div>
+    </section>
+    <section class="result-group" aria-labelledby="catl-company-heading" data-catl-results>
+      <div class="group-heading">
+        <h2 id="catl-company-heading">公司</h2>
+        <span>1</span>
+      </div>
+      <a class="result-row compact-result" data-testid="catl-company-result" href="?screen=setup&security=300750.SZ">
+        <span class="entity-monogram company-monogram" aria-hidden="true">宁</span>
+        <span class="result-identity">
+          <strong>宁德时代新能源科技股份有限公司</strong>
+          <span>公司 · 关联实体</span>
+        </span>
+        <span class="result-description">CATL · 公司对应证券：300750.SZ</span>
+        <span class="result-arrow" aria-hidden="true">↗</span>
+      </a>
+    </section>
+  `;
+}
+
+function securityResult({ ticker, shareClass, matchMethod, company, dataGap, href }) {
   return `
     <a class="result-row security-result" data-testid="security-result" href="${href}" aria-label="${ticker} ${shareClass}，Alphabet Inc.">
       <span class="entity-monogram" aria-hidden="true">${ticker.slice(0, 1)}</span>
@@ -138,6 +201,7 @@ function securityResult({ ticker, shareClass, matchMethod, dataGap, href }) {
       <span class="security-facts">
         <span><b>交易所</b>NASDAQ</span>
         <span><b>货币</b>USD</span>
+        <span><b>公司对应证券</b>${company} → ${ticker}</span>
         <span><b>核心业务</b>搜索广告、云服务、AI</span>
         <span><b>覆盖截止</b>2026-06-30</span>
         <span class="data-gap"><b>数据缺口</b>${dataGap}</span>

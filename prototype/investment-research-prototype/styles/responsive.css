@@ -145,10 +145,6 @@ main[data-workbench-variant='A'] > .variant-a {
     grid-template-columns: minmax(240px, 0.72fr) minmax(0, 1.28fr);
   }
 
-  .factor-table {
-    min-width: 880px;
-  }
-
   .business-core {
     grid-column: span 7;
   }
@@ -313,10 +309,6 @@ main[data-workbench-variant='A'] > .variant-a {
     gap: 4px;
   }
 
-  .model-ledger {
-    min-width: 520px;
-  }
-
   .model-judgment {
     gap: 15px;
   }
@@ -463,5 +455,427 @@ main[data-workbench-variant='A'] > .variant-a {
   .prototype-options a {
     padding-inline: 3px;
     font-size: 8px;
+  }
+}
+
+/* Recovery pass: keep comparison evidence readable and the prototype controls in flow. */
+main[data-workbench-variant='A'] {
+  display: block;
+}
+
+.prototype-switcher {
+  position: static;
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  margin: 14px auto 0;
+  transform: none;
+}
+
+.prototype-label,
+.prototype-switcher button,
+.prototype-switcher a {
+  font-size: 11px;
+}
+
+.question-templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.question-templates button,
+.secondary-button {
+  min-height: 44px;
+  padding: 8px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--paper-raised);
+  color: var(--accent-700);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.industry-entry {
+  margin-bottom: 22px;
+  padding: 16px 18px;
+  border: 1px solid var(--accent-200);
+  border-radius: 12px;
+  background: var(--accent-100);
+}
+
+.industry-entry strong,
+.industry-entry p {
+  margin: 0;
+}
+
+.industry-entry > p:last-child {
+  max-width: 66ch;
+  margin-top: 5px;
+  color: var(--graphite-650);
+  font-size: 12px;
+}
+
+.industry-context-badge {
+  width: fit-content;
+  margin: 12px 0 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--accent-100);
+  color: var(--accent-700);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.workbench-identity small {
+  display: block;
+  margin-top: 4px;
+  color: var(--graphite-500);
+  font-size: 11px;
+}
+
+.user-hypothesis {
+  display: grid;
+  margin-top: 12px;
+  padding: 14px 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 22px;
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+}
+
+.user-hypothesis p,
+.user-hypothesis small {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.user-hypothesis p strong {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--graphite-500);
+  font-size: 11px;
+}
+
+.user-hypothesis > small {
+  grid-column: 1 / -1;
+  color: var(--warning-700);
+}
+
+.market-narrative {
+  display: grid;
+  margin-top: 12px;
+  padding: 13px 16px;
+  grid-template-columns: minmax(190px, 0.65fr) minmax(260px, 1fr) minmax(360px, 1.35fr);
+  gap: 18px;
+  align-items: center;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--paper-cool);
+}
+
+.market-narrative p,
+.market-narrative dl,
+.market-narrative dt,
+.market-narrative dd {
+  margin: 0;
+}
+
+.market-narrative strong,
+.market-narrative p,
+.market-narrative dd {
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.market-narrative p,
+.market-narrative dd {
+  color: var(--graphite-650);
+}
+
+.market-narrative dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.market-narrative dt {
+  color: var(--accent-700);
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.validation-action {
+  min-width: min(100%, 360px);
+}
+
+.next-action-label {
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.validation-draft {
+  margin-top: 10px;
+  padding: 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--paper-raised);
+  color: var(--graphite-800);
+}
+
+.validation-draft-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.validation-draft-heading span {
+  color: var(--warning-700);
+  font-size: 11px;
+}
+
+.validation-draft dl {
+  display: grid;
+  margin: 10px 0 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+}
+
+.validation-draft dt,
+.validation-draft dd {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.validation-draft dt {
+  color: var(--graphite-500);
+}
+
+.validation-draft dd {
+  margin-top: 2px;
+  font-weight: 650;
+}
+
+.factor-table-head th,
+.security-facts span,
+.security-facts b,
+.result-summary,
+.group-heading > span,
+.preview-heading > span,
+.preview-questions span,
+.counter-question span,
+.preview-note,
+.workbench-identity .eyebrow,
+.workbench-question > span,
+.context-ledger dt,
+.context-ledger small,
+.section-kicker,
+.judgment-band article:not(.judgment-primary) small,
+.section-heading > p,
+.factor-name small,
+.factor-state,
+.factor-impact p,
+.factor-impact small,
+.metric-chip,
+.metric-chip b,
+.reasoning-step p,
+.reasoning-step li,
+.reasoning-arguments dt,
+.reasoning-arguments dd,
+.metric-table-head th,
+.metric-row th,
+.metric-row td,
+.driver-root small,
+.driver-branch > span,
+.driver-branch h3,
+.driver-branch p,
+.driver-branch small,
+.model-ledger-head th,
+.model-ledger-row th,
+.model-ledger-row td,
+.model-ledger-row small,
+.model-reading span,
+.model-reading p,
+.model-judgment dt,
+.model-judgment dd,
+.memo-heading > p:last-child,
+.memo-number,
+.memo-section h3,
+.memo-section p,
+.memo-section small,
+.memo-disagreements li strong,
+.memo-disagreements li p,
+.memo-disagreements li small {
+  font-size: 11px;
+}
+
+.metric-row.metric-actual {
+  background: var(--paper-raised);
+}
+
+.metric-row.metric-guidance {
+  background: var(--mineral-100);
+}
+
+.metric-row.metric-consensus {
+  background: var(--accent-100);
+}
+
+.metric-row.metric-implied {
+  background: var(--warning-100);
+}
+
+.metric-row.metric-house {
+  background: var(--graphite-950);
+  color: var(--mineral-100);
+}
+
+.metric-row.metric-house th,
+.metric-row.metric-house td,
+.metric-row.metric-house b {
+  color: var(--mineral-100);
+}
+
+@media (max-width: 700px) {
+  .prototype-switcher {
+    width: min(calc(100% - 20px), 370px);
+    margin-top: 10px;
+  }
+
+  .prototype-options a {
+    font-size: 11px;
+  }
+
+  .workbench-screen {
+    padding-bottom: 48px;
+  }
+
+  .workbench-context,
+  .user-hypothesis,
+  .market-narrative,
+  .market-narrative dl,
+  .validation-draft dl {
+    grid-template-columns: 1fr;
+  }
+
+  .workbench-question,
+  .context-ledger {
+    border-top: 1px solid var(--line);
+  }
+
+  .market-narrative {
+    gap: 10px;
+    padding: 14px 15px;
+  }
+
+  .factor-table-scroll,
+  .metric-table-scroll,
+  .model-differences {
+    overflow-x: visible;
+  }
+
+  .factor-table,
+  .metric-table,
+  .model-ledger {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .factor-table colgroup,
+  .factor-table thead,
+  .metric-table thead,
+  .model-ledger thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .factor-table tbody,
+  .metric-table tbody,
+  .model-ledger tbody {
+    display: block;
+  }
+
+  .factor-row,
+  .metric-row,
+  .model-ledger-row {
+    display: grid;
+    width: 100%;
+    grid-template-columns: 1fr;
+  }
+
+  .factor-row > th,
+  .factor-row > td,
+  .metric-row > th,
+  .metric-row > td,
+  .model-ledger-row > th,
+  .model-ledger-row > td {
+    display: grid;
+    width: 100% !important;
+    height: auto;
+    min-height: 44px;
+    grid-template-columns: minmax(98px, 0.34fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .factor-row > th {
+    display: block;
+  }
+
+  .factor-row > td::before,
+  .metric-row > :is(th, td)::before,
+  .model-ledger-row > :is(th, td)::before {
+    color: var(--graphite-500);
+    content: attr(data-label);
+    font-size: 11px;
+    font-weight: 720;
+  }
+
+  .metric-row.metric-house > :is(th, td)::before {
+    color: var(--mineral-200);
+  }
+
+  .factor-comparison {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .factor-detail-row {
+    display: block;
+    width: 100%;
+  }
+
+  .factor-detail-row[hidden] {
+    display: none;
+  }
+
+  .factor-detail-row > td {
+    display: block;
+    width: 100%;
+  }
+
+  .metric-row + .metric-row,
+  .model-ledger-row + .model-ledger-row {
+    margin-top: 8px;
+  }
+
+  .setup-actions {
+    gap: 10px;
+  }
+
+  .secondary-button,
+  .primary-button {
+    width: 100%;
   }
 }

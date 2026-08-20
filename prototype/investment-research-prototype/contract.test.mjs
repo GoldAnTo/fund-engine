@@ -85,6 +85,61 @@ test('matching search reveals grouped, distinguishable entities', async () => {
   await page.close();
 });
 
+test('the CATL example preserves the company-to-security mapping through setup and workbench', async () => {
+  const page = await browser.newPage();
+  await page.goto(origin);
+  await page.getByRole('button', { name: '宁德时代', exact: true }).click();
+
+  await assert.equal(await page.getByRole('searchbox', { name: '搜索股票、公司或行业' }).inputValue(), '宁德时代');
+  await assertPageText(page, [
+    '证券',
+    '公司',
+    '300750.SZ',
+    'CATL',
+    '宁德时代新能源科技股份有限公司',
+    '证券 · 名称匹配',
+    '公司 · 关联实体',
+    '深圳证券交易所',
+    'CNY',
+    '动力电池、储能电池与电池材料',
+    '覆盖截止',
+    '数据缺口',
+    '公司对应证券',
+  ]);
+  await assert.equal(await page.getByTestId('catl-security-result').count(), 1);
+  await assert.equal(await page.getByTestId('catl-company-result').count(), 1);
+  await page.getByTestId('catl-security-result').click();
+  await assertPageText(page, ['宁德时代', '300750.SZ', '深圳证券交易所', 'CNY', '公司对应证券']);
+  await page.getByRole('button', { name: '建立研究' }).click();
+  await assertPageText(page, ['研究工作台', '宁德时代', '300750.SZ', '动力电池与储能系统', '上游材料议价与海外本地化']);
+  const catlWorkbench = await page.locator('main').innerText();
+  assert.equal(catlWorkbench.includes('Alphabet'), false);
+  assert.equal(catlWorkbench.includes('搜索广告'), false);
+
+  await page.close();
+});
+
+test('selecting an industry result opens an industry-first representative-company setup', async () => {
+  const page = await browser.newPage();
+  await page.goto(origin);
+  await page.getByRole('button', { name: '云计算基础设施', exact: true }).click();
+  await page.getByRole('link', { name: /云计算基础设施/ }).click();
+
+  const url = new URL(page.url());
+  assert.equal(url.searchParams.get('industry'), 'cloud-infrastructure');
+  await assertPageText(page, [
+    '行业入口',
+    '云计算基础设施',
+    '先从代表公司验证行业判断',
+    '代表公司',
+    'Alphabet',
+    'GOOGL Class A',
+  ]);
+  await page.getByRole('button', { name: '建立研究' }).click();
+  await assertPageText(page, ['行业语境 · 云计算基础设施', 'Alphabet', 'GOOGL Class A']);
+  await page.close();
+});
+
 test('search shortcut survives unrelated keys and focuses the searchbox', async () => {
   const page = await browser.newPage();
   await page.goto(origin);
@@ -97,7 +152,7 @@ test('search shortcut survives unrelated keys and focuses the searchbox', async 
   await page.close();
 });
 
-test('non-destination shell and industry labels are not focusable controls', async () => {
+test('non-destination shell labels are inert while industry results are keyboard destinations', async () => {
   const page = await browser.newPage();
   await page.goto(origin);
 
@@ -105,7 +160,7 @@ test('non-destination shell and industry labels are not focusable controls', asy
   await assert.equal(await page.getByRole('button', { name: '账户：研究员 XJ' }).count(), 0);
 
   await page.getByRole('searchbox', { name: '搜索股票、公司或行业' }).fill('GOOGL');
-  await assert.equal(await page.getByTestId('industry-result').evaluate(isInteractive), false);
+  await assert.equal(await page.getByTestId('industry-result').evaluate(isInteractive), true);
   await page.close();
 });
 
@@ -127,6 +182,7 @@ test('selecting the Class A security opens setup with intentional defaults', asy
     '5 年以上',
     '我已经有一些想法',
     '系统建议，待确认',
+    '使用默认问题',
     '什么事实会证明核心业务增长无法转化为每股自由现金流？',
   ]);
   await assert.equal(
@@ -139,8 +195,60 @@ test('selecting the Class A security opens setup with intentional defaults', asy
   await assert.equal(await page.getByLabel('你的假设').count(), 1);
 
   await page.getByRole('button', { name: '建立研究' }).click();
-  await page.waitForURL(/screen=workbench&security=GOOGL&variant=A$/);
+  await page.waitForURL((url) => url.searchParams.get('screen') === 'workbench' && url.searchParams.get('security') === 'GOOGL');
   await assertPageText(page, ['研究工作台', 'Alphabet', 'GOOGL Class A']);
+
+  await page.close();
+});
+
+test('question templates and the default-question action update the submitted frame', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=setup&security=GOOGL`);
+  const question = page.getByLabel('你想回答什么问题？');
+
+  await page.getByRole('button', { name: /资本回报/ }).click();
+  assert.match(await question.inputValue(), /资本投入.*每股自由现金流/u);
+  await question.fill('临时自定义问题');
+  await page.getByRole('button', { name: '使用默认问题' }).click();
+  await page.waitForURL((url) => url.searchParams.get('screen') === 'workbench');
+  await assertPageText(page, [
+    '以 3–5 年视角，这家公司靠什么创造价值，当前价格要求哪些假设成立？',
+    '研究视角 · 3–5 年',
+  ]);
+  await page.close();
+});
+
+test('setup carries every edited research input into a shareable workbench URL and visible hypothesis context', async () => {
+  const page = await browser.newPage();
+  const question = '若储备现金转向 AI 基础设施，五年以上的每股现金回报会怎样？';
+  const hypothesis = 'Cloud 的增量毛利将在五年内覆盖新增折旧。';
+  const concern = '搜索单位变现下降会与资本强度上升同时发生。';
+  await page.goto(`${origin}/?screen=setup&security=GOOGL`);
+
+  await page.getByLabel('你想回答什么问题？').fill(question);
+  await page.getByRole('radio', { name: '5 年以上', exact: true }).check();
+  await page.locator('details summary').click();
+  await page.getByLabel('你的假设', { exact: true }).fill(hypothesis);
+  await page.getByLabel('你最担心什么？', { exact: true }).fill(concern);
+  await page.getByRole('button', { name: '建立研究' }).click();
+
+  const url = new URL(page.url());
+  assert.deepEqual(Object.fromEntries(['q', 'h', 'hp', 'c'].map((key) => [key, url.searchParams.get(key)])), {
+    q: question,
+    h: '5-plus',
+    hp: hypothesis,
+    c: concern,
+  });
+  await assertPageText(page, ['研究问题', question, '研究视角 · 5 年以上', '你的假设', hypothesis, '你最担心什么？', concern]);
+  await assert.equal(await page.locator('.user-hypothesis').evaluate((element) => element.closest('.context-ledger') === null), true);
+
+  await page.getByRole('link', { name: 'B 模型优先' }).click();
+  const variantUrl = new URL(page.url());
+  assert.equal(variantUrl.searchParams.get('variant'), 'B');
+  for (const [key, value] of [['q', question], ['h', '5-plus'], ['hp', hypothesis], ['c', concern]]) {
+    assert.equal(variantUrl.searchParams.get(key), value);
+  }
+  await assertPageText(page, [question, '研究视角 · 5 年以上', hypothesis, concern]);
 
   await page.close();
 });
@@ -183,17 +291,80 @@ test('default workbench leads with the current judgment and exactly four decisio
     '行业位置',
     '预测与估值传导',
     '最大未知',
+    '市场叙事 / Market Narrative',
+    '市场语境，不是已证实驱动',
+    '覆盖 31 位分析师',
+    '预测区间',
+    '近 30 天修订',
+    '反推方法',
+    '敏感性',
   ]);
   await assert.equal(await page.locator('[data-workbench-variant]').getAttribute('data-workbench-variant'), 'A');
   await assert.equal(await page.getByTestId('factor-row').count(), 4);
   await assert.equal(await page.locator('[data-key-factor]').count(), 4);
   await assert.equal(await page.locator('[data-primary-next-action]').count(), 1);
-  await assert.equal(await page.locator('[data-primary-next-action] button').count(), 0);
+  await assert.equal(await page.locator('[data-primary-next-action] button').count(), 1);
   await assert.equal(await page.getByRole('heading', { name: '当前允许得出的判断', exact: true }).count(), 1);
   await assert.equal(await page.getByRole('heading', { name: '最大反证', exact: true }).count(), 1);
   await assert.equal(await page.getByRole('heading', { name: '当前价格问题', exact: true }).count(), 1);
   await assert.equal(await page.locator('aside').count(), 0);
   await assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+
+  await page.close();
+});
+
+test('market context and typed expectations disclose distinct evidence boundaries', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+  const narrative = page.locator('[data-market-narrative]');
+  await assert.equal(await narrative.count(), 1);
+  assert.equal((await narrative.innerText()).includes('驱动因素'), false);
+  await page.getByRole('button', { name: /Cloud 单位经济性/ }).click();
+  const detail = page.locator('#factor-detail-cloud');
+  const detailText = await detail.innerText();
+  for (const expected of [
+    'Actual', 'Guidance', 'Consensus', 'Implied', 'House',
+    '覆盖 31 位分析师', '预测区间 19.8%–23.4%', '近 30 天修订 +0.6pct',
+    '反推方法', '敏感性', '不是唯一答案',
+  ]) assert.ok(detailText.includes(expected), `missing ${expected}`);
+  const kinds = ['actual', 'guidance', 'consensus', 'implied', 'house'];
+  for (const kind of kinds) await assert.equal(await detail.locator(`.metric-${kind}`).count(), 1);
+  assert.equal(new Set(await detail.locator('[data-metric-kind]').evaluateAll((rows) => rows.map((row) => getComputedStyle(row).backgroundColor))).size, 5);
+  await page.close();
+});
+
+test('primary next action reveals an accessible session-only validation draft', async () => {
+  const page = await browser.newPage();
+
+  for (const variant of ['A', 'C']) {
+    await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=${variant}`);
+    const action = page.getByRole('button', { name: '建立 Q3 验证记录', exact: true });
+    await assert.equal(await action.getAttribute('aria-expanded'), 'false');
+    const draftId = await action.getAttribute('aria-controls');
+    await assert.equal(await page.locator(`#${draftId}`).isHidden(), true);
+
+    await action.focus();
+    await page.keyboard.press('Enter');
+    await assert.equal(await action.getAttribute('aria-expanded'), 'true');
+    await assert.equal(await action.evaluate((element) => element === document.activeElement), true);
+    const draft = page.locator(`#${draftId}`);
+    await assert.equal(await draft.isVisible(), true);
+    await assertPageText(page, [
+      '验证记录草稿',
+      '关联因素',
+      'AI 资本效率',
+      'KPI',
+      '资本开支 / 收入',
+      '验证窗口',
+      '2026 Q3 业绩披露',
+      '证伪条件',
+      '仅保存在本次原型会话',
+    ]);
+
+    await action.click();
+    await assert.equal(await action.getAttribute('aria-expanded'), 'false');
+    await assert.equal(await draft.isHidden(), true);
+  }
 
   await page.close();
 });
@@ -214,6 +385,82 @@ test('workbench variants never create page-level horizontal overflow at supporte
     }
   }
 
+  await page.close();
+});
+
+test('essential factor, model, and memo evidence remains at least 11px on desktop', async () => {
+  const page = await browser.newPage();
+  const selectors = {
+    A: [
+      '.factor-table-head th', '.factor-name small', '.factor-state', '.factor-impact p', '.factor-impact small',
+      '.metric-chip', '.metric-chip b', '.reasoning-step p', '.reasoning-step li', '.reasoning-arguments dt',
+      '.reasoning-arguments dd', '.metric-table-head th', '.metric-row th', '.metric-row td',
+    ],
+    B: [
+      '.driver-root small', '.driver-branch > span', '.driver-branch h3', '.driver-branch p', '.driver-branch small',
+      '.model-ledger-head th', '.model-ledger-row th', '.model-ledger-row td', '.model-ledger-row small',
+      '.model-reading span', '.model-reading p', '.model-judgment dt', '.model-judgment dd',
+    ],
+    C: [
+      '.memo-heading > p:last-child', '.memo-number', '.memo-section h3', '.memo-section p', '.memo-section small',
+      '.memo-disagreements li strong', '.memo-disagreements li p', '.memo-disagreements li small',
+    ],
+  };
+
+  for (const width of [1000, 1100, 1180, 1600]) {
+    await page.setViewportSize({ width, height: width === 1180 ? 820 : width === 1000 ? 800 : 1000 });
+    for (const variant of ['A', 'B', 'C']) {
+      await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=${variant}`);
+      if (variant === 'A') await page.getByRole('button', { name: /搜索广告经济性/ }).click();
+      const undersized = await page.locator(selectors[variant].join(',')).evaluateAll((elements) => elements
+        .filter((element) => Number.parseFloat(getComputedStyle(element).fontSize) < 11)
+        .map((element) => `${element.tagName}.${element.className}:${getComputedStyle(element).fontSize}`));
+      assert.deepEqual(undersized, [], `${variant} has undersized evidence at ${width}px`);
+    }
+  }
+
+  await page.close();
+});
+
+test('the dedicated variant switcher stays in normal flow and never overlaps research content', async () => {
+  const page = await browser.newPage();
+  const viewports = [
+    { width: 1600, height: 1000 },
+    { width: 1180, height: 820 },
+    { width: 1000, height: 800 },
+    { width: 390, height: 844 },
+  ];
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    for (const variant of ['A', 'B', 'C']) {
+      await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=${variant}`);
+      const geometry = await page.evaluate(() => {
+        const main = document.querySelector('.workbench-screen').getBoundingClientRect();
+        const dock = document.querySelector('[data-prototype-switcher]').getBoundingClientRect();
+        const researchSelectors = [
+          '.workbench-identity', '.workbench-question', '.context-ledger', '.judgment-band article',
+          '.factor-section', '.business-transmission > div', '.driver-model > div', '.model-judgment',
+          '.memo-heading', '.memo-section',
+        ];
+        const visibleResearch = [...document.querySelectorAll(researchSelectors.join(','))]
+          .map((element) => element.getBoundingClientRect())
+          .filter((rect) => rect.bottom > main.top && rect.top < main.bottom && rect.right > main.left && rect.left < main.right);
+        const overlaps = visibleResearch.filter((rect) => (
+          Math.max(rect.left, dock.left) < Math.min(rect.right, dock.right)
+          && Math.max(rect.top, dock.top) < Math.min(rect.bottom, dock.bottom)
+        )).length;
+        return { dockPosition: getComputedStyle(document.querySelector('[data-prototype-switcher]')).position, dockBottom: dock.bottom, mainTop: main.top, dockTop: dock.top, overlaps };
+      });
+      assert.equal(geometry.dockPosition, 'static');
+      assert.equal(geometry.dockBottom <= geometry.mainTop, true, `${variant} dock is not before main at ${viewport.width}x${viewport.height}`);
+      assert.equal(geometry.dockBottom <= viewport.height, true, `${variant} dock leaves viewport at ${viewport.width}x${viewport.height}`);
+      assert.equal(geometry.overlaps, 0, `${variant} dock overlaps visible research at ${viewport.width}x${viewport.height}`);
+    }
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
   await page.close();
 });
 
@@ -249,6 +496,8 @@ test('all routes fit the required responsive viewports and mobile preserves the 
   await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
   const orderedMobileSections = [
     '.workbench-identity',
+    '.workbench-question',
+    '.context-ledger',
     '.judgment-primary',
     '.judgment-band article:nth-child(2)',
     '.judgment-band article:nth-child(3)',
@@ -263,17 +512,23 @@ test('all routes fit the required responsive viewports and mobile preserves the 
     return selectors.map((selector) => document.querySelector(selector).getBoundingClientRect().top);
   }, orderedMobileSections);
   assert.equal(sectionTops.every((top, index) => index === 0 || top > sectionTops[index - 1]), true);
-  const accessibleDomSequence = [...orderedMobileSections, '.workbench-question', '.context-ledger'];
   assert.equal(await page.evaluate((selectors) => {
     const elements = selectors.map((selector) => document.querySelector(selector));
     return elements.every((element, index) => index === 0 || Boolean(
       elements[index - 1].compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING
     ));
-  }, accessibleDomSequence), true);
-  const secondaryContextTops = await page.locator('.workbench-question, .context-ledger').evaluateAll((elements) => (
-    elements.map((element) => element.getBoundingClientRect().top)
-  ));
-  assert.equal(secondaryContextTops.every((top) => top > sectionTops.at(-1)), true);
+  }, orderedMobileSections), true);
+
+  await page.getByRole('button', { name: /搜索广告经济性/ }).click();
+  for (const selector of ['[data-factor-table]', '#factor-detail-search-ads [data-metric-table]']) {
+    const table = page.locator(selector);
+    assert.equal(await table.evaluate((element) => element.scrollWidth <= element.clientWidth), true, `${selector} scrolls horizontally on mobile`);
+    assert.equal(await table.locator('tbody tr').first().evaluate((row) => getComputedStyle(row).display), 'grid');
+  }
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=B`);
+  const modelTable = page.locator('[data-model-table]');
+  assert.equal(await modelTable.evaluate((element) => element.scrollWidth <= element.clientWidth), true);
+  assert.equal(await modelTable.locator('tbody tr').first().evaluate((row) => getComputedStyle(row).display), 'grid');
 
   for (const route of routes) {
     await page.goto(`${origin}/${route}`);
@@ -431,19 +686,21 @@ test('workbench offers three structurally distinct URL variants with canonical s
   await page.close();
 });
 
-test('floating prototype switcher wraps, survives unrelated keys, and preserves URL identity', async () => {
+test('docked prototype switcher wraps, survives unrelated keys, and preserves all URL research state', async () => {
   const page = await browser.newPage();
-  await page.goto(`${origin}/?screen=workbench&security=GOOG&variant=A`);
+  const state = '&q=%E8%87%AA%E5%AE%9A%E4%B9%89%E9%97%AE%E9%A2%98&h=1-2&hp=%E5%88%9D%E5%A7%8B%E5%81%87%E8%AE%BE&c=%E6%9C%80%E5%A4%A7%E6%8B%85%E5%BF%A7';
+  await page.goto(`${origin}/?screen=workbench&security=GOOG&variant=A${state}`);
   const switcher = page.locator('[data-prototype-switcher]');
 
   await assert.equal(await switcher.count(), 1);
   await assert.equal(await switcher.evaluate((element) => element.closest('main') === null), true);
   await assertPageText(page, ['PROTOTYPE', 'A 判断优先', 'B 模型优先', 'C PM 备忘录']);
-  assert.deepEqual(await switcher.locator('a').evaluateAll((links) => links.map((link) => link.getAttribute('href'))), [
-    '?screen=workbench&security=GOOG&variant=A',
-    '?screen=workbench&security=GOOG&variant=B',
-    '?screen=workbench&security=GOOG&variant=C',
-  ]);
+  assert.deepEqual(await switcher.locator('a').evaluateAll((links) => links.map((link) => {
+    const url = new URL(link.href);
+    return Object.fromEntries(['screen', 'security', 'variant', 'q', 'h', 'hp', 'c'].map((key) => [key, url.searchParams.get(key)]));
+  })), ['A', 'B', 'C'].map((variant) => ({
+    screen: 'workbench', security: 'GOOG', variant, q: '自定义问题', h: '1-2', hp: '初始假设', c: '最大担忧',
+  })));
   assert.equal(
     await switcher.locator('button, a').evaluateAll((controls) => controls.every((control) => {
       const bounds = control.getBoundingClientRect();
@@ -454,22 +711,22 @@ test('floating prototype switcher wraps, survives unrelated keys, and preserves 
   await switcher.locator('a[aria-current="page"]').focus();
   await page.keyboard.press('KeyX');
   await page.keyboard.press('ArrowRight');
-  await page.waitForURL(/screen=workbench&security=GOOG&variant=B$/);
+  await page.waitForURL((url) => url.searchParams.get('variant') === 'B');
   await assert.equal(await page.locator('[data-workbench-variant="B"]').count(), 1);
-  await assertPageText(page, ['GOOG Class C']);
+  await assertPageText(page, ['GOOG Class C', '自定义问题', '初始假设', '最大担忧']);
 
   await page.evaluate(() => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', altKey: true, bubbles: true }));
   });
-  await assert.match(page.url(), /variant=B$/);
+  await assert.equal(new URL(page.url()).searchParams.get('variant'), 'B');
 
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowRight');
-  await page.waitForURL(/variant=C$/, { timeout: 1000 });
+  await page.waitForURL((url) => url.searchParams.get('variant') === 'C', { timeout: 1000 });
   await page.getByRole('button', { name: '下一个原型方案' }).click();
-  await page.waitForURL(/variant=A$/);
+  await page.waitForURL((url) => url.searchParams.get('variant') === 'A');
   await page.getByRole('button', { name: '上一个原型方案' }).click();
-  await page.waitForURL(/variant=C$/);
+  await page.waitForURL((url) => url.searchParams.get('variant') === 'C');
 
   await page.reload();
   await assert.equal(await page.locator('[data-workbench-variant="C"]').count(), 1);
@@ -482,7 +739,7 @@ test('floating prototype switcher wraps, survives unrelated keys, and preserves 
     textarea.focus();
   });
   await page.keyboard.press('ArrowLeft');
-  await assert.match(page.url(), /variant=C$/);
+  await assert.equal(new URL(page.url()).searchParams.get('variant'), 'C');
 
   await page.evaluate(() => {
     const input = document.createElement('input');
@@ -490,7 +747,7 @@ test('floating prototype switcher wraps, survives unrelated keys, and preserves 
     input.focus();
   });
   await page.keyboard.press('ArrowLeft');
-  await assert.match(page.url(), /variant=C$/);
+  await assert.equal(new URL(page.url()).searchParams.get('variant'), 'C');
 
   await page.evaluate(() => {
     const editable = document.createElement('div');
@@ -499,7 +756,7 @@ test('floating prototype switcher wraps, survives unrelated keys, and preserves 
     editable.focus();
   });
   await page.keyboard.press('ArrowLeft');
-  await assert.match(page.url(), /variant=C$/);
+  await assert.equal(new URL(page.url()).searchParams.get('variant'), 'C');
 
   await page.close();
 });
