@@ -217,13 +217,25 @@ function researchState(params) {
   const horizonLabels = { '1-2': '1–2 年', '3-5': '3–5 年', '5-plus': '5 年以上' };
   const horizon = horizonLabels[params.get('h')] ? params.get('h') : '3-5';
   const rawQuestion = params.has('q') ? params.get('q') : RESEARCH_QUESTION;
+  const rawHypothesis = params.get('hp') ?? '';
+  const rawConcern = params.get('c') ?? '';
   return {
     question: escapeHtml(rawQuestion),
-    identityQuestion: rawQuestion.trim().replaceAll(/\s+/gu, ' ').toLocaleLowerCase(),
     horizon: horizonLabels[horizon],
-    hypothesis: escapeHtml(params.get('hp') ?? ''),
-    concern: escapeHtml(params.get('c') ?? ''),
+    hypothesis: escapeHtml(rawHypothesis),
+    concern: escapeHtml(rawConcern),
+    identityFields: [
+      ['question', normalizeIdentityField(rawQuestion)],
+      ['horizon', horizon],
+      ['industry', normalizeIdentityField(params.get('industry') ?? '')],
+      ['hypothesis', normalizeIdentityField(rawHypothesis)],
+      ['concern', normalizeIdentityField(rawConcern)],
+    ],
   };
+}
+
+function normalizeIdentityField(value) {
+  return String(value).trim().replaceAll(/\s+/gu, ' ').toLocaleLowerCase();
 }
 
 function escapeHtml(value) {
@@ -337,26 +349,33 @@ function marketNarrative(entity) {
 function renderResearchState() {
   return `
     <dl class="research-state" data-research-state aria-label="研究状态四维">
-      <div><dt>数据处理状态</dt><dd>原型样本已载入，未连接外部数据源</dd></div>
-      <div><dt>证据状态</dt><dd>示例证据存在冲突，核心来源待核对</dd></div>
-      <div><dt>预测状态</dt><dd>模拟假设已成形，尚待后续披露验证</dd></div>
-      <div><dt>判断状态</dt><dd>研究员暂定判断，未人工确认</dd></div>
+      <div data-state-axis="data"><dt>数据处理状态</dt><dd><strong data-canonical-state>部分可用</strong><small>原型样本已载入，未连接外部数据源</small></dd></div>
+      <div data-state-axis="evidence"><dt>证据状态</dt><dd><strong data-canonical-state>AI 提取未核对</strong><small>示例证据存在冲突，核心来源待人工核对</small></dd></div>
+      <div data-state-axis="forecast"><dt>预测状态</dt><dd><strong data-canonical-state>假设草案，未到验证期</strong><small>模拟假设已成形，等待后续示例披露窗口</small></dd></div>
+      <div data-state-axis="judgment"><dt>判断状态</dt><dd><strong data-canonical-state>暂定判断，证据冲突</strong><small>尚未形成经过人工确认的判断版本</small></dd></div>
     </dl>
   `;
 }
 
 function renderValuationBridge(entity) {
   const bridge = entity.valuationBridge;
+  const steps = [
+    ['收入', bridge.revenue, 'House', '模拟经营 fixture', 'FY2027E', '下一次示例业绩需验证收入增速与分部口径'],
+    ['营业利润', bridge.operatingProfit, 'House', '模拟利润率 fixture', 'FY2027E', '若示例经营利润率低于区间下沿，该步失效'],
+    ['自由现金流', bridge.freeCashFlow, 'House', '模拟现金流 fixture', 'FY2027E', '核对示例资本开支、营运资本与现金转换'],
+    ['稀释后每股价值', bridge.perShareValue, 'Assumption', '模拟 DCF / 稀释股数 fixture', '3–5 年', '若稀释股数或折现率超出假设区间，需重算'],
+    ['估值区间', bridge.valuationRange, 'Scenario', '模拟 DCF 情景 fixture', '3–5 年', '增长、利润率或折现率任一越界即更新区间'],
+  ];
   return `
     <section class="valuation-bridge" data-valuation-bridge aria-label="模拟估值传导桥">
       <div class="valuation-bridge-heading"><p class="section-kicker">预测与估值传导</p><span>模拟示例 · Scenario / House</span></div>
-      <ol>
-        <li><span>收入</span><strong>${bridge.revenue}</strong></li>
-        <li><span>营业利润</span><strong>${bridge.operatingProfit}</strong></li>
-        <li><span>自由现金流</span><strong>${bridge.freeCashFlow}</strong></li>
-        <li><span>稀释后每股价值</span><strong>${bridge.perShareValue}</strong></li>
-        <li><span>估值区间</span><strong>${bridge.valuationRange}</strong></li>
-      </ol>
+      <ol>${steps.map(([label, value, type, source, period, verification]) => `
+        <li data-valuation-step data-value-type="${type}" data-source-boundary="${source}" data-as-of="2026-08-19" data-period="${period}" data-verification-condition="${verification}">
+          <span>${label}</span><strong>${value}</strong>
+          <small class="valuation-step-boundary">类型 ${type} · 来源 ${source} · 期间 ${period} · 截至 2026-08-19</small>
+          <small class="valuation-step-check">验证 / 证伪 · ${verification}</small>
+        </li>
+      `).join('')}</ol>
       <dl class="valuation-method">
         <div><dt>方法</dt><dd>${bridge.method}</dd></div>
         <div><dt>敏感性</dt><dd>${bridge.sensitivity}</dd></div>
@@ -560,7 +579,12 @@ function renderVariantC(research, factors, entity) {
 }
 
 function renderValidationAction(research, factors, entity) {
-  const researchIdentity = `${entity.securityCode}:${stableHash(`${research.identityQuestion}|${research.horizon}`)}`;
+  const serializedIdentity = JSON.stringify([
+    ['entity', normalizeIdentityField(entity.company)],
+    ['security', entity.securityCode],
+    ...research.identityFields,
+  ]);
+  const researchIdentity = `${entity.securityCode}:${stableHash(serializedIdentity)}`;
   const validationKey = `investment-research-validation:v2:${researchIdentity}:${factors[2].id}`;
   const record = readValidationRecord(validationKey, researchIdentity);
   const draftId = `validation-draft-${entity.securityLabel.replaceAll(/[^a-z0-9]/giu, '-').toLowerCase()}-${factors[2].id}`;
@@ -680,17 +704,17 @@ function renderFactorDetail(factor) {
   return `
     <section class="factor-detail" id="factor-detail-${factor.id}" data-testid="factor-detail" aria-label="${factor.name} 推理详情" hidden>
       <div class="reasoning-step reasoning-mechanism">
-        <span>01</span><div><h3>机制假设</h3><p>${factor.mechanism}</p></div>
+        <span>01</span><div><h3>机制假设</h3>${evidenceClaim('mechanism', 'Assumption', '机制草案，待经营数据验证', factor.mechanism)}</div>
       </div>
       <div class="reasoning-step">
-        <span>02</span><div><h3>观察事实</h3><ul>${factor.observations.map((item) => `<li>${item}</li>`).join('')}</ul></div>
+        <span>02</span><div><h3>观察事实</h3><ul>${factor.observations.map((item) => evidenceClaim('observation', 'Actual', '原型摘录，未核对外部披露', item, 'li')).join('')}</ul></div>
       </div>
       <div class="reasoning-step">
         <span>03</span><div><h3>支持 / 反证 / 替代解释</h3>
           <dl class="reasoning-arguments">
-            <div><dt>支持</dt><dd>${factor.support}</dd></div>
-            <div><dt>反证</dt><dd>${factor.counter}</dd></div>
-            <div><dt>替代解释</dt><dd>${factor.alternativeExplanation}</dd></div>
+            <div><dt>支持</dt><dd>${evidenceClaim('support', 'Assumption', '支持性解释，待验证', factor.support)}</dd></div>
+            <div><dt>反证</dt><dd>${evidenceClaim('counter', 'Assumption', '反向假设，待验证', factor.counter)}</dd></div>
+            <div><dt>替代解释</dt><dd>${evidenceClaim('alternative', 'Assumption', '替代解释，未排除', factor.alternativeExplanation)}</dd></div>
           </dl>
         </div>
       </div>
@@ -698,13 +722,17 @@ function renderFactorDetail(factor) {
         <span>04</span><div><h3>验证指标和日期</h3>${renderMetrics(factor.metrics)}<p class="validation-date">下一验证 · ${factor.nextValidation}</p></div>
       </div>
       <div class="reasoning-step">
-        <span>05</span><div><h3>财务与估值影响</h3><p>${factor.financialImpact}</p><p><strong>证伪条件：</strong>${factor.falsifier}</p></div>
+        <span>05</span><div><h3>财务与估值影响</h3>${evidenceClaim('financial-impact', 'Assumption', '模拟传导，待口径核对', factor.financialImpact)}${evidenceClaim('falsifier', 'Assumption', '预设证伪条件，等待观察', `<strong>证伪条件：</strong>${factor.falsifier}`)}</div>
       </div>
       <div class="reasoning-step reasoning-conclusion">
-        <span>06</span><div><h3>对当前判断的影响</h3><p>${factor.state}</p><p><strong>仍未知：</strong>${factor.unknown}</p></div>
+        <span>06</span><div><h3>对当前判断的影响</h3>${evidenceClaim('conclusion', 'House', '暂定判断，证据冲突', factor.state)}${evidenceClaim('unknown', 'Assumption', '仍未知，未验证', `<strong>仍未知：</strong>${factor.unknown}`)}</div>
       </div>
     </section>
   `;
+}
+
+function evidenceClaim(role, type, verificationState, content, tag = 'div') {
+  return `<${tag} class="evidence-claim" data-evidence-claim data-evidence-role="${role}" data-evidence-type="${type}" data-verification-state="${verificationState}"><span class="claim-text">${content}</span><small class="claim-boundary"><b>${type}</b> · ${verificationState}</small></${tag}>`;
 }
 
 function renderMetrics(metrics) {
@@ -802,7 +830,7 @@ function entityFor(securityCode) {
       revenue: 'FY2027E 410–440 CNY bn',
       operatingProfit: '55–65 CNY bn · 示例经营利润率 13%–15%',
       freeCashFlow: '38–50 CNY bn · 扣除示例资本开支',
-      perShareValue: '按 4.5bn 稀释股数与示例 DCF 折现，Base 255 CNY/股',
+      perShareValue: '按 4.4–4.6bn 稀释股数与示例 DCF 折现，235–275 CNY/股',
       valuationRange: '示例 DCF 220–290 CNY/股',
       method: '示例 DCF，并以自由现金流收益率交叉核对',
       sensitivity: '收入增速 ±2pct 或经营利润率 ±1pct，示例区间约变化 8%–12%',
@@ -832,7 +860,7 @@ function entityFor(securityCode) {
       revenue: 'FY2027E 410–430 USD bn',
       operatingProfit: '132–145 USD bn · 示例经营利润率 32%–34%',
       freeCashFlow: '100–112 USD bn · 扣除示例资本开支',
-      perShareValue: '按 12.2bn 稀释股数与示例 DCF 折现，Base 205 USD/股',
+      perShareValue: '按 12.0–12.4bn 稀释股数与示例 DCF 折现，190–220 USD/股',
       valuationRange: '示例 DCF 180–230 USD/股',
       method: '示例 DCF，并以自由现金流收益率交叉核对',
       sensitivity: '收入增速 ±2pct 或经营利润率 ±1pct，示例区间约变化 7%–11%',

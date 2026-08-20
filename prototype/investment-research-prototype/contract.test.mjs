@@ -882,6 +882,111 @@ test('validation records are scoped to research identity and corrupted records f
   await page.close();
 });
 
+test('validation identity also isolates industry hypothesis and concern context', async () => {
+  const page = await browser.newPage();
+  const base = '?screen=workbench&security=GOOGL&variant=A&q=同一问题&h=3-5';
+  const contexts = [
+    base,
+    '?screen=workbench&security=GOOG&variant=A&q=同一问题&h=3-5',
+    '?screen=workbench&security=300750.SZ&variant=A&q=同一问题&h=3-5',
+    `${base}&industry=cloud-infrastructure`,
+    `${base}&hp=不同假设`,
+    `${base}&c=不同担忧`,
+  ];
+  const keys = [];
+  for (let index = 0; index < contexts.length; index += 1) {
+    await page.goto(`${origin}/${contexts[index]}`);
+    await assert.equal(await page.getByRole('button', { name: '记录本次验证', exact: true }).count(), 1, contexts[index]);
+    await page.getByRole('button', { name: '记录本次验证', exact: true }).click();
+    keys.push(await page.locator('[data-validation-form]').getAttribute('data-validation-key'));
+    if (index === 0) {
+      await page.getByLabel('验证备注').fill('只属于无行业、无假设、无担忧的研究。');
+      await page.getByRole('button', { name: '记录到本次会话' }).click();
+    }
+  }
+  assert.equal(new Set(keys).size, contexts.length);
+  await page.goto(`${origin}/${base}`);
+  await assert.equal(await page.getByRole('button', { name: '更新本次验证', exact: true }).count(), 1);
+  await page.close();
+});
+
+test('valuation steps disclose uncertainty type source period cutoff and falsification locally', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+  const bridge = page.locator('[data-valuation-bridge]');
+  const text = await bridge.innerText();
+  assert.doesNotMatch(text, /Base\s*(?:205|255)/u);
+  const steps = bridge.locator('[data-valuation-step]');
+  await assert.equal(await steps.count(), 5);
+  for (let index = 0; index < 5; index += 1) {
+    const step = steps.nth(index);
+    for (const attribute of ['data-value-type', 'data-source-boundary', 'data-as-of', 'data-period', 'data-verification-condition']) {
+      assert.ok(await step.getAttribute(attribute), `step ${index} missing ${attribute}`);
+    }
+    const stepText = await step.innerText();
+    for (const expected of ['类型', '来源', '期间', '截至', '验证 / 证伪']) assert.ok(stepText.includes(expected), `step ${index} missing ${expected}`);
+  }
+  await page.close();
+});
+
+test('reasoning claims expose evidence type and verification state without overstating', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+  await page.getByRole('button', { name: /搜索广告经济性/ }).click();
+  const detail = page.locator('#factor-detail-search-ads');
+  for (const role of ['observation', 'support', 'counter', 'alternative', 'conclusion']) {
+    await assert.equal(await detail.locator(`[data-evidence-role="${role}"]`).count() >= 1, true, role);
+  }
+  const claims = detail.locator('[data-evidence-claim]');
+  await assert.equal(await claims.count() >= 8, true);
+  const allowedTypes = new Set(['Actual', 'Guidance', 'Consensus', 'Implied', 'House', 'Assumption']);
+  for (let index = 0; index < await claims.count(); index += 1) {
+    const claim = claims.nth(index);
+    assert.equal(allowedTypes.has(await claim.getAttribute('data-evidence-type')), true);
+    assert.ok(await claim.getAttribute('data-verification-state'));
+    await assert.equal(await claim.locator('.claim-boundary').count(), 1);
+  }
+  await page.close();
+});
+
+test('research state axes lead with canonical controlled values and secondary prose', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+  const axes = page.locator('[data-research-state] [data-state-axis]');
+  await assert.equal(await axes.count(), 4);
+  assert.deepEqual(await axes.locator('[data-canonical-state]').allInnerTexts(), [
+    '部分可用', 'AI 提取未核对', '假设草案，未到验证期', '暂定判断，证据冲突',
+  ]);
+  await assert.equal(await axes.locator('small').count(), 4);
+  await page.close();
+});
+
+test('responsive stylesheet solely owns breakpoints without duplicate mobile selector blocks', async () => {
+  const appCss = await readFile(join(root, 'styles/app.css'), 'utf8');
+  const responsiveCss = await readFile(join(root, 'styles/responsive.css'), 'utf8');
+  assert.doesNotMatch(appCss, /@media/u);
+  assert.equal([...responsiveCss.matchAll(/@media \(max-width: 700px\)/gu)].length, 1);
+  const mobileBlock = responsiveCss.match(/@media \(max-width: 700px\) \{([\s\S]*?)\n\}\n(?:\n@media|$)/u)?.[1] ?? '';
+  for (const selector of ['.prototype-options a', '.workbench-screen', '.workbench-context']) {
+    const escaped = selector.replaceAll(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    assert.equal([...mobileBlock.matchAll(new RegExp(`${escaped}\\s*\\{`, 'gu'))].length, 1, selector);
+  }
+  const topLevelSelectors = [];
+  let selectorStart = 0;
+  let depth = 0;
+  for (let index = 0; index < mobileBlock.length; index += 1) {
+    if (mobileBlock[index] === '{') {
+      if (depth === 0) topLevelSelectors.push(mobileBlock.slice(selectorStart, index).trim());
+      depth += 1;
+    } else if (mobileBlock[index] === '}') {
+      depth -= 1;
+      if (depth === 0) selectorStart = index + 1;
+    }
+  }
+  const duplicateSelectors = [...new Set(topLevelSelectors.filter((selector, index) => topLevelSelectors.indexOf(selector) !== index))];
+  assert.deepEqual(duplicateSelectors, []);
+});
+
 test('search announces only a concise dedicated result status', async () => {
   const page = await browser.newPage();
   await page.goto(origin);
