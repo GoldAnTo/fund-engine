@@ -852,16 +852,16 @@ main[data-workbench-variant='A'] {
 }
 
 .model-ledger :is(th, td):first-child {
-  width: 30%;
+  width: 22%;
 }
 
-.model-ledger :is(th, td):nth-child(2),
+.model-ledger :is(th, td):nth-child(2) {
+  width: 20%;
+}
+
+.model-ledger :is(th, td):nth-child(3),
 .model-ledger :is(th, td):nth-child(4) {
-  width: 16%;
-}
-
-.model-ledger :is(th, td):nth-child(3) {
-  width: 38%;
+  width: 29%;
 }
 
 .factor-row > th,
@@ -872,6 +872,50 @@ main[data-workbench-variant='A'] {
 
 .model-consensus .consensus-disclosure {
   color: var(--accent-700);
+}
+
+.model-sensitivity-boundary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 8px 0 12px;
+  color: var(--graphite-650);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.model-sensitivity-boundary strong {
+  color: var(--graphite-900);
+}
+
+.model-boundary {
+  display: block;
+  margin-top: 5px;
+  line-height: 1.35;
+}
+
+.complete-typed-ledgers {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.complete-typed-ledgers summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  color: var(--accent-700);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.complete-typed-ledgers section + section {
+  margin-top: 18px;
+}
+
+.complete-typed-ledgers h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
 }
 
 .validation-draft dt {

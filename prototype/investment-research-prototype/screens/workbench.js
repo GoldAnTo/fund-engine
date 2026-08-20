@@ -452,6 +452,7 @@ function renderVariantB(factors, entity) {
         <div class="model-differences" aria-labelledby="difference-title">
           <p class="section-kicker">情景差异</p>
           <h2 id="difference-title">模型分歧</h2>
+          <p class="model-sensitivity-boundary"><strong>窄范围模型敏感性</strong><span>只比较 House / Consensus / Implied，不是完整五类数据台账。</span></p>
           <table class="model-ledger" data-model-table>
             <thead><tr class="model-ledger-head"><th scope="col">驱动</th><th scope="col">House</th><th scope="col">Consensus</th><th scope="col">Implied</th></tr></thead>
             <tbody>${factors.map((factor) => {
@@ -465,6 +466,10 @@ function renderVariantB(factors, entity) {
             <span>主要差异</span>
             <p>${entity.modelReading}</p>
           </div>
+          <details class="complete-typed-ledgers" data-complete-typed-ledgers>
+            <summary>查看完整五类数据台账</summary>
+            <div>${factors.map((factor) => `<section><h3>${factor.name}</h3>${renderMetrics(factor.metrics)}</section>`).join('')}</div>
+          </details>
         </div>
       </section>
 
@@ -595,7 +600,13 @@ function metricChip(metric) {
 }
 
 function metricValue(metric) {
-  return `<span class="model-${metric.kind.toLowerCase()}"><b>${metric.value}${metric.unit}</b><small>${metric.period}</small>${metric.kind === 'Consensus' ? `<small class="consensus-disclosure">${disclosureText(metric.disclosure)}</small>` : ''}</span>`;
+  const compactBoundary = metric.kind === 'Implied'
+    ? '反推方法：固定其他 House 假设，求解等价单一变量'
+    : metric.sourceBoundary;
+  const boundary = ['House', 'Implied'].includes(metric.kind)
+    ? `<small class="model-boundary">${compactBoundary} · 截至 ${metric.asOf}</small>`
+    : '';
+  return `<span class="model-${metric.kind.toLowerCase()}"><b>${metric.value}${metric.unit}</b><small>${metric.period}</small>${metric.kind === 'Consensus' ? `<small class="consensus-disclosure">${disclosureText(metric.disclosure)}</small>` : ''}${boundary}</span>`;
 }
 
 function renderFactorDetail(factor) {
@@ -704,7 +715,7 @@ function entityFor(securityCode) {
   if (securityCode === '300750.SZ') return {
     company: '宁德时代', securityLabel: '300750.SZ', mark: '宁', exchange: '深圳证券交易所', currency: 'CNY', price: '¥260（模拟）',
     narrative: '多头叙事强调储能与海外扩张，空头叙事强调价格下降和产能回报；两者都需要用出货、单位利润与现金流核对。',
-    consensusSummary: '覆盖 24 位分析师（模拟） · 预测区间 12.4–15.8 CNY/股（模拟） · 近 30 天下修 0.7%（模拟）',
+    consensusSummary: 'FY2027E adjusted EPS · 预测区间 12.4–15.8 CNY/股（模拟） · 覆盖 18 位分析师（18 estimates） · 截至 2026-08-18 · 近 30 天下修 0.7%（模拟）',
     judgment: '动力电池规模仍有韧性，但价格要求储能增长与海外产能回报共同兑现。',
     judgmentDetail: '现有证据只支持暂定判断。动力电池提供底盘，储能提供增量，海外产能利用率与技术迭代决定增长能否转为每股现金流。',
     counter: '电池价格持续下降，且海外产能利用率不足以覆盖新增折旧。',
@@ -725,7 +736,7 @@ function entityFor(securityCode) {
   return {
     company: 'Alphabet', securityLabel: isClassC ? 'GOOG Class C' : 'GOOGL Class A', mark: 'A', exchange: 'NASDAQ', currency: 'USD', price: '$201（模拟）',
     narrative: '多头叙事强调 AI 分发与 Cloud 利润扩张，空头叙事强调搜索变现稀释和资本强度；目前只把它们作为待核对的市场语境。',
-    consensusSummary: '覆盖 31 位分析师（模拟） · 预测区间 2.18–2.54 USD/股（模拟） · 近 30 天上修 1.2%（模拟）',
+    consensusSummary: 'FY2027E adjusted EPS · 预测区间 2.18–2.54 USD/股（模拟） · 覆盖 12 位分析师（12 estimates） · 截至 2026-08-18 · 近 30 天上修 1.2%（模拟）',
     judgment: '核心现金流仍有韧性，但当前价格要求 Cloud 利润扩张与 AI 投入回收同时成立。',
     judgmentDetail: '现有证据只支持把判断维持在暂定状态。搜索广告提供底盘，Cloud 提供增量，AI 资本效率与监管结果决定上行是否真正转化为每股现金流。',
     counter: '资本开支持续快于收入增长，且搜索变现同时被新交互稀释。',

@@ -70,7 +70,7 @@ export function renderSetup(root, { navigate, params }) {
               </summary>
               <div class="ideas-fields">
                 <label for="hypothesis">你的假设</label>
-                <textarea id="hypothesis" name="hypothesis" rows="3" placeholder="例如：云业务的规模效应会抵消 AI 基础设施投入。">${escapeHtml(hypothesis)}</textarea>
+                <textarea id="hypothesis" name="hypothesis" rows="3" placeholder="${escapeHtml(entity.hypothesisPlaceholder)}">${escapeHtml(hypothesis)}</textarea>
                 <label for="concern">你最担心什么？</label>
                 <textarea id="concern" name="concern" rows="2" placeholder="例如：资本开支增长快于可持续现金回报。">${escapeHtml(concern)}</textarea>
               </div>
@@ -142,6 +142,7 @@ function entityFor(securityCode) {
     business: '动力电池、储能电池与电池材料构成主要收入与资本投入方向。',
     context: '市场正在判断储能增长、海外产能利用率与电池价格下降如何共同影响资本回报。',
     defaultQuestion: '动力电池需求增长能否抵消单位价格下降，并转化为可持续自由现金流？',
+    hypothesisPlaceholder: '例如：储能业务增长与制造效率改善可以抵消动力电池单位价格下降。',
     previewQuestions: [
       '动力电池需求增长能否抵消单位价格下降，并转化为可持续自由现金流？',
       '储能业务的增长与利润贡献如何验证？',
@@ -156,6 +157,7 @@ function entityFor(securityCode) {
     business: '搜索与广告构成现金流基础，Google Cloud 与 AI 基础设施扩展长期增长边界。',
     context: '市场正在重新判断资本开支、AI 分发优势与云业务利润率之间的关系。',
     defaultQuestion,
+    hypothesisPlaceholder: '例如：云业务的规模效应会抵消 AI 基础设施投入。',
     previewQuestions: [
       '核心业务如何获得用户注意力，并把它转化为可持续收入？',
       '搜索分发、数据与计算基础设施形成了怎样的竞争优势？',
@@ -170,6 +172,7 @@ function entityFor(securityCode) {
     business: '搜索与广告构成现金流基础，Google Cloud 与 AI 基础设施扩展长期增长边界。',
     context: '市场正在重新判断资本开支、AI 分发优势与云业务利润率之间的关系。',
     defaultQuestion,
+    hypothesisPlaceholder: '例如：云业务的规模效应会抵消 AI 基础设施投入。',
     previewQuestions: [
       '核心业务如何获得用户注意力，并把它转化为可持续收入？',
       '搜索分发、数据与计算基础设施形成了怎样的竞争优势？',

@@ -132,6 +132,10 @@ test('the CATL example preserves the company-to-security mapping through setup a
   ]);
   const catlSetup = await page.locator('main').innerText();
   for (const alphabetOnly of ['用户注意力', '搜索分发', '云服务与 AI']) assert.equal(catlSetup.includes(alphabetOnly), false);
+  await page.locator('details summary').click();
+  const catlHypothesisPlaceholder = await page.getByLabel('你的假设').getAttribute('placeholder');
+  assert.match(catlHypothesisPlaceholder, /动力电池|储能/u);
+  for (const alphabetOnly of ['Cloud', 'AI 基础设施', '云业务']) assert.equal(catlHypothesisPlaceholder.includes(alphabetOnly), false);
   await page.getByRole('button', { name: '建立研究' }).click();
   await assertPageText(page, ['研究工作台', '宁德时代', '300750.SZ', '动力电池与储能系统', '上游材料议价与海外本地化']);
   const catlWorkbench = await page.locator('main').innerText();
@@ -215,6 +219,7 @@ test('selecting the Class A security opens setup with intentional defaults', asy
   await assert.equal(await page.locator('details').getAttribute('open'), null);
   await page.locator('details summary').click();
   await assert.equal(await page.getByLabel('你的假设').count(), 1);
+  await assert.equal(await page.getByLabel('你的假设').getAttribute('placeholder'), '例如：云业务的规模效应会抵消 AI 基础设施投入。');
 
   await page.getByRole('button', { name: '建立研究' }).click();
   await page.waitForURL((url) => url.searchParams.get('screen') === 'workbench' && url.searchParams.get('security') === 'GOOGL');
@@ -723,6 +728,41 @@ test('every displayed consensus includes numeric coverage, range, and revision d
 
   await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=B`);
   await assertDisclosure(page.locator('.model-consensus'), 'model table');
+  await page.close();
+});
+
+test('Variant B labels its compact sensitivity and pairs it with complete typed ledgers', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=B`);
+  await assertPageText(page, ['窄范围模型敏感性', '不是完整五类数据台账', '查看完整五类数据台账']);
+
+  const firstHouse = page.locator('.model-house').first();
+  const firstImplied = page.locator('.model-implied').first();
+  for (const expected of ['内部暂定假设', '截至 2026-08-19']) assert.ok((await firstHouse.innerText()).includes(expected));
+  for (const expected of ['反推方法', '截至 2026-08-19']) assert.ok((await firstImplied.innerText()).includes(expected));
+
+  await page.getByText('查看完整五类数据台账', { exact: true }).click();
+  const ledgers = page.locator('[data-complete-typed-ledgers] [data-metric-table]');
+  await assert.equal(await ledgers.count(), 4);
+  for (let index = 0; index < 4; index += 1) {
+    assert.deepEqual(await ledgers.nth(index).locator('[data-metric-kind]').evaluateAll((rows) => rows.map((row) => row.dataset.metricKind)), [
+      'Actual', 'Guidance', 'Consensus', 'Implied', 'House',
+    ]);
+  }
+  await page.close();
+});
+
+test('top-level consensus summaries define metric, forecast period, range, coverage, and cutoff', async () => {
+  const page = await browser.newPage();
+  const cases = [
+    ['GOOGL', ['FY2027E adjusted EPS', '2.18–2.54 USD/股', '12 estimates', '截至 2026-08-18']],
+    ['300750.SZ', ['FY2027E adjusted EPS', '12.4–15.8 CNY/股', '18 estimates', '截至 2026-08-18']],
+  ];
+  for (const [security, expected] of cases) {
+    await page.goto(`${origin}/?screen=workbench&security=${security}&variant=A`);
+    const summary = await page.locator('[data-market-narrative] dd').first().innerText();
+    for (const text of expected) assert.ok(summary.includes(text), `${security} missing ${text}`);
+  }
   await page.close();
 });
 
