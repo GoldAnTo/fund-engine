@@ -197,6 +197,25 @@ test('default workbench leads with the current judgment and exactly four decisio
   await page.close();
 });
 
+test('workbench variants never create page-level horizontal overflow at supported desktop widths', async () => {
+  const page = await browser.newPage();
+
+  for (const width of [1000, 1100, 1600]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const variant of ['A', 'B', 'C']) {
+      await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=${variant}`);
+      if (variant === 'A') await page.getByRole('button', { name: /搜索广告经济性/ }).click();
+      assert.equal(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        true,
+        `${variant} overflows at ${width}px`,
+      );
+    }
+  }
+
+  await page.close();
+});
+
 test('factor reasoning expands inline in a fixed order with typed metric boundaries', async () => {
   const page = await browser.newPage();
   await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
@@ -207,10 +226,11 @@ test('factor reasoning expands inline in a fixed order with typed metric boundar
   await page.keyboard.press('Enter');
   await assert.equal(await factorButton.getAttribute('aria-expanded'), 'true');
 
-  const detail = page.getByTestId('factor-detail');
+  const detail = page.locator('[data-testid="factor-detail"]:not([hidden])');
+  await assert.equal(await page.getByTestId('factor-detail').count(), 4);
   await assert.equal(await detail.count(), 1);
   await assert.equal(
-    await detail.evaluate((element) => element.previousElementSibling?.getAttribute('data-testid')),
+    await detail.evaluate((element) => element.closest('tr')?.previousElementSibling?.getAttribute('data-testid')),
     'factor-row',
   );
   const detailText = await detail.innerText();
@@ -232,6 +252,73 @@ test('factor reasoning expands inline in a fixed order with typed metric boundar
   await factorButton.click();
   await assert.equal(await factorButton.getAttribute('aria-expanded'), 'false');
   await assert.equal(await detail.count(), 0);
+
+  await page.close();
+});
+
+test('factor controls always resolve to persistent panels and only the selection is visible', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+  const controls = page.locator('[aria-controls^="factor-detail-"]');
+
+  await assert.equal(await controls.count(), 4);
+  assert.equal(
+    await controls.evaluateAll((buttons) => buttons.every((button) => document.getElementById(button.getAttribute('aria-controls')) !== null)),
+    true,
+  );
+  await assert.equal(await page.locator('[data-testid="factor-detail"]:not([hidden])').count(), 0);
+
+  await page.getByRole('button', { name: /搜索广告经济性/ }).click();
+  await assert.equal(await page.locator('[data-testid="factor-detail"]:not([hidden])').count(), 1);
+  await assert.equal(await page.locator('#factor-detail-search-ads').getAttribute('hidden'), null);
+
+  await page.getByRole('button', { name: /Cloud 单位经济性/ }).click();
+  await assert.equal(await page.locator('[data-testid="factor-detail"]:not([hidden])').count(), 1);
+  await assert.equal(await page.locator('#factor-detail-search-ads').getAttribute('hidden'), '');
+  await assert.equal(await page.locator('#factor-detail-cloud').getAttribute('hidden'), null);
+  assert.deepEqual(await controls.evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-expanded'))), [
+    'false',
+    'true',
+    'false',
+    'false',
+  ]);
+
+  await page.close();
+});
+
+test('factor, model, and metric comparisons use native tables with associated headers', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+
+  const factorTable = page.locator('table[data-factor-table]');
+  await assert.equal(await factorTable.count(), 1);
+  for (const name of ['关键因素 / 为什么关键', '当前状态', 'House / Consensus / Implied', '财务影响 / 下一验证']) {
+    await assert.equal(await factorTable.getByRole('columnheader', { name, exact: true }).count(), 1);
+  }
+  await assert.equal(await factorTable.locator('tbody > tr[data-key-factor]').count(), 4);
+  await assert.equal(await factorTable.locator('tbody > tr[data-key-factor] > th[scope="row"]').count(), 4);
+  await assert.equal(await factorTable.locator('tbody > tr[data-key-factor] > td').count(), 12);
+  await assert.equal(await factorTable.locator('tbody > tr.factor-detail-row > td[colspan="4"]').count(), 4);
+
+  await page.getByRole('button', { name: /搜索广告经济性/ }).click();
+  const metricTable = page.locator('#factor-detail-search-ads table[data-metric-table]');
+  await assert.equal(await metricTable.count(), 1);
+  for (const name of ['类型', '指标', '数值', '期间', '单位', '截至', '来源边界']) {
+    await assert.equal(await metricTable.getByRole('columnheader', { name, exact: true }).count(), 1);
+  }
+  await assert.equal(await metricTable.locator('tbody > tr').count(), 5);
+  await assert.equal(await metricTable.locator('tbody > tr > th[scope="row"]').count(), 5);
+  await assert.equal(await metricTable.locator('tbody > tr > td').count(), 30);
+
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=B`);
+  const modelTable = page.locator('table[data-model-table]');
+  await assert.equal(await modelTable.count(), 1);
+  for (const name of ['驱动', 'House', 'Consensus', 'Implied']) {
+    await assert.equal(await modelTable.getByRole('columnheader', { name, exact: true }).count(), 1);
+  }
+  await assert.equal(await modelTable.locator('tbody > tr').count(), 4);
+  await assert.equal(await modelTable.locator('tbody > tr > th[scope="row"]').count(), 4);
+  await assert.equal(await modelTable.locator('tbody > tr > td').count(), 12);
 
   await page.close();
 });
@@ -287,6 +374,7 @@ test('floating prototype switcher wraps, survives unrelated keys, and preserves 
     })),
     true,
   );
+  await switcher.locator('a[aria-current="page"]').focus();
   await page.keyboard.press('KeyX');
   await page.keyboard.press('ArrowRight');
   await page.waitForURL(/screen=workbench&security=GOOG&variant=B$/);
@@ -300,7 +388,7 @@ test('floating prototype switcher wraps, survives unrelated keys, and preserves 
 
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowRight');
-  await page.waitForURL(/variant=C$/);
+  await page.waitForURL(/variant=C$/, { timeout: 1000 });
   await page.getByRole('button', { name: '下一个原型方案' }).click();
   await page.waitForURL(/variant=A$/);
   await page.getByRole('button', { name: '上一个原型方案' }).click();
@@ -335,6 +423,26 @@ test('floating prototype switcher wraps, survives unrelated keys, and preserves 
   });
   await page.keyboard.press('ArrowLeft');
   await assert.match(page.url(), /variant=C$/);
+
+  await page.close();
+});
+
+test('variant arrow shortcuts are scoped to the prototype switcher, not workbench controls', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/?screen=workbench&security=GOOGL&variant=A`);
+
+  await page.getByRole('button', { name: /搜索广告经济性/ }).focus();
+  await page.keyboard.press('ArrowRight');
+  await assert.match(page.url(), /variant=A$/);
+  await assert.equal(await page.getByRole('button', { name: /搜索广告经济性/ }).getAttribute('aria-expanded'), 'false');
+
+  await page.getByRole('link', { name: '返回研究设置' }).focus();
+  await page.keyboard.press('ArrowRight');
+  await assert.match(page.url(), /variant=A$/);
+
+  await page.locator('[data-prototype-switcher] a[aria-current="page"]').focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForURL(/variant=B$/);
 
   await page.close();
 });

@@ -100,12 +100,17 @@ export function renderWorkbench(root, { navigate, params }) {
       control.setAttribute('aria-expanded', 'false');
       control.querySelector('.factor-toggle').textContent = '＋';
     });
-    root.querySelector('[data-testid="factor-detail"]')?.remove();
+    root.querySelectorAll('[data-testid="factor-detail"]').forEach((panel) => {
+      panel.hidden = true;
+      panel.closest('.factor-detail-row').hidden = true;
+    });
 
     if (shouldOpen) {
       button.setAttribute('aria-expanded', 'true');
       button.querySelector('.factor-toggle').textContent = '−';
-      button.closest('[data-testid="factor-row"]').insertAdjacentHTML('afterend', renderFactorDetail(factor));
+      const panel = root.querySelector(`#factor-detail-${factor.id}`);
+      panel.hidden = false;
+      panel.closest('.factor-detail-row').hidden = false;
     }
   }
 
@@ -123,15 +128,19 @@ export function renderWorkbench(root, { navigate, params }) {
       || event.metaKey
       || event.shiftKey
       || isTextEntry(event.target)
+      || !hasVariantKeyboardScope(event.target)
     ) return;
     event.preventDefault();
-    cycleVariant(event.key === 'ArrowRight' ? 1 : -1);
+    cycleVariant(event.key === 'ArrowRight' ? 1 : -1, { restoreSwitcherFocus: true });
   }
 
-  function cycleVariant(direction) {
+  function cycleVariant(direction, { restoreSwitcherFocus = false } = {}) {
     const variants = ['A', 'B', 'C'];
     const nextIndex = (variants.indexOf(variant) + direction + variants.length) % variants.length;
     navigate({ screen: 'workbench', security: securityCode, variant: variants[nextIndex] });
+    if (restoreSwitcherFocus) {
+      root.querySelector('[data-prototype-switcher] a[aria-current="page"]')?.focus({ preventScroll: true });
+    }
   }
 }
 
@@ -154,6 +163,11 @@ function isTextEntry(target) {
   if (target.matches('input, textarea, select')) return true;
   const editable = target.closest('[contenteditable]');
   return editable !== null && editable.getAttribute('contenteditable') !== 'false';
+}
+
+function hasVariantKeyboardScope(target) {
+  if (!(target instanceof Element)) return false;
+  return target === document.body || target.closest('[data-prototype-switcher]') !== null;
 }
 
 function sharedContext(securityCode, security) {
@@ -215,11 +229,16 @@ function renderVariantA() {
           <div><p class="section-kicker">判断骨架</p><h2 id="factor-title">四个关键因素</h2></div>
           <p>逐项维护机制、分歧和下一次可观察验证。</p>
         </div>
-        <div class="factor-table">
-          <div class="factor-table-head" aria-hidden="true">
-            <span>关键因素 / 为什么关键</span><span>当前状态</span><span>House / Consensus / Implied</span><span>财务影响 / 下一验证</span>
-          </div>
-          ${factors.map(renderFactorRow).join('')}
+        <div class="factor-table-scroll">
+          <table class="factor-table" data-factor-table>
+            <colgroup><col class="factor-col-name" /><col class="factor-col-state" /><col class="factor-col-comparison" /><col class="factor-col-impact" /></colgroup>
+            <thead>
+              <tr class="factor-table-head">
+                <th scope="col">关键因素 / 为什么关键</th><th scope="col">当前状态</th><th scope="col">House / Consensus / Implied</th><th scope="col">财务影响 / 下一验证</th>
+              </tr>
+            </thead>
+            <tbody>${factors.map(renderFactorRow).join('')}</tbody>
+          </table>
         </div>
       </section>
 
@@ -278,15 +297,15 @@ function renderVariantB() {
         <div class="model-differences" aria-labelledby="difference-title">
           <p class="section-kicker">情景差异</p>
           <h2 id="difference-title">模型分歧</h2>
-          <div class="model-ledger">
-            <div class="model-ledger-head" aria-hidden="true"><span>驱动</span><span>House</span><span>Consensus</span><span>Implied</span></div>
-            ${factors.map((factor) => {
+          <table class="model-ledger" data-model-table>
+            <thead><tr class="model-ledger-head"><th scope="col">驱动</th><th scope="col">House</th><th scope="col">Consensus</th><th scope="col">Implied</th></tr></thead>
+            <tbody>${factors.map((factor) => {
               const house = factor.metrics.find((metric) => metric.kind === 'House');
               const consensus = factor.metrics.find((metric) => metric.kind === 'Consensus');
               const implied = factor.metrics.find((metric) => metric.kind === 'Implied');
-              return `<div class="model-ledger-row"><strong>${factor.name}</strong>${metricValue(house)}${metricValue(consensus)}${metricValue(implied)}</div>`;
-            }).join('')}
-          </div>
+              return `<tr class="model-ledger-row"><th scope="row">${factor.name}</th><td>${metricValue(house)}</td><td>${metricValue(consensus)}</td><td>${metricValue(implied)}</td></tr>`;
+            }).join('')}</tbody>
+          </table>
           <div class="model-reading">
             <span>主要差异</span>
             <p>市场隐含更高的 Cloud 稳态利润率和更高资本强度，内部暂定假设对搜索韧性更积极，但对 AI 回收期更谨慎。</p>
@@ -351,20 +370,21 @@ function renderFactorRow(factor, index) {
   const consensus = factor.metrics.find((metric) => metric.kind === 'Consensus');
   const implied = factor.metrics.find((metric) => metric.kind === 'Implied');
   return `
-    <article class="factor-row" data-testid="factor-row" data-key-factor="${factor.id}">
-      <div class="factor-name">
+    <tr class="factor-row" data-testid="factor-row" data-key-factor="${factor.id}">
+      <th class="factor-name" scope="row">
         <button type="button" aria-expanded="false" aria-controls="factor-detail-${factor.id}">
           <span class="factor-index">0${index + 1}</span>
           <span><strong>${factor.name}</strong><small>${factor.whyKey}</small></span>
           <span class="factor-toggle" aria-hidden="true">＋</span>
         </button>
-      </div>
-      <p class="factor-state">${factor.state}</p>
-      <div class="factor-comparison">
+      </th>
+      <td><p class="factor-state">${factor.state}</p></td>
+      <td><div class="factor-comparison">
         ${metricChip(house)}${metricChip(consensus)}${metricChip(implied)}
-      </div>
-      <div class="factor-impact"><p>${factor.financialImpact}</p><small>${factor.nextValidation}</small></div>
-    </article>
+      </div></td>
+      <td><div class="factor-impact"><p>${factor.financialImpact}</p><small>${factor.nextValidation}</small></div></td>
+    </tr>
+    <tr class="factor-detail-row" hidden><td colspan="4">${renderFactorDetail(factor)}</td></tr>
   `;
 }
 
@@ -378,7 +398,7 @@ function metricValue(metric) {
 
 function renderFactorDetail(factor) {
   return `
-    <section class="factor-detail" id="factor-detail-${factor.id}" data-testid="factor-detail" aria-label="${factor.name} 推理详情">
+    <section class="factor-detail" id="factor-detail-${factor.id}" data-testid="factor-detail" aria-label="${factor.name} 推理详情" hidden>
       <div class="reasoning-step reasoning-mechanism">
         <span>01</span><div><h3>机制假设</h3><p>${factor.mechanism}</p></div>
       </div>
@@ -409,13 +429,15 @@ function renderFactorDetail(factor) {
 
 function renderMetrics(metrics) {
   return `
-    <div class="metric-table">
-      <div class="metric-table-head" aria-hidden="true"><span>类型</span><span>指标</span><span>数值</span><span>期间</span><span>单位</span><span>截至</span><span>来源边界</span></div>
-      ${metrics.map((item) => `
-        <div class="metric-row metric-${item.kind.toLowerCase()}" data-as-of="${item.asOf}">
-          <strong>${item.kind}</strong><span>${item.name}</span><b>${item.value}</b><span>${item.period}</span><span>${item.unit}</span><span>${item.asOf}</span><span>${item.sourceBoundary}</span>
-        </div>
-      `).join('')}
+    <div class="metric-table-scroll">
+      <table class="metric-table" data-metric-table>
+        <thead><tr class="metric-table-head"><th scope="col">类型</th><th scope="col">指标</th><th scope="col">数值</th><th scope="col">期间</th><th scope="col">单位</th><th scope="col">截至</th><th scope="col">来源边界</th></tr></thead>
+        <tbody>${metrics.map((item) => `
+          <tr class="metric-row metric-${item.kind.toLowerCase()}" data-as-of="${item.asOf}">
+            <th scope="row">${item.kind}</th><td>${item.name}</td><td><b>${item.value}</b></td><td>${item.period}</td><td>${item.unit}</td><td>${item.asOf}</td><td>${item.sourceBoundary}</td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
     </div>
   `;
 }
