@@ -4,8 +4,6 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
-
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -95,7 +93,7 @@ class UnderwritingMandateVersion(Base):
     permanent_loss_limit: Mapped[Decimal] = mapped_column(
         Numeric(12, 8), nullable=False
     )
-    comparison_set: Mapped[Any] = mapped_column(JSON, nullable=False)
+    comparison_set: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("uw_mandate_versions.id"), nullable=True
     )
@@ -147,7 +145,7 @@ class UnderwritingLedgerEntry(Base):
     family_key: Mapped[str] = mapped_column(String(160), nullable=False)
     entry_type: Mapped[str] = mapped_column(String(80), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
-    payload: Mapped[Any] = mapped_column(JSON, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     effective_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -189,7 +187,7 @@ class UnderwritingResearchVersion(Base):
     version_kind: Mapped[str] = mapped_column(String(64), nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    parent_ids: Mapped[Any] = mapped_column(JSON, nullable=False)
+    parent_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("uw_research_versions.id"), nullable=True
     )
@@ -231,11 +229,11 @@ class UnderwritingAnswerabilityEvaluation(Base):
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False)
-    blockers: Mapped[Any] = mapped_column(JSON, nullable=False)
-    research_debt_keys: Mapped[Any] = mapped_column(JSON, nullable=False)
+    blockers: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    research_debt_keys: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     resolvable_within_mandate: Mapped[bool] = mapped_column(Boolean, nullable=False)
     allowed_action: Mapped[str] = mapped_column(String(48), nullable=False)
-    resolution_requirements: Mapped[Any] = mapped_column(JSON, nullable=False)
+    resolution_requirements: Mapped[dict] = mapped_column(JSON, nullable=False)
     supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("uw_answerability_evaluations.id"), nullable=True
     )
