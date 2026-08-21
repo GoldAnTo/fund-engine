@@ -80,7 +80,7 @@ def _verify_industry_dependency(
         raise ValidationError("compiled industry mechanisms are required")
     validate_industry_state_integrity(industry_state, mechanisms=mechanisms)
     if scenario.parent_industry_state_id != industry_state.id:
-        raise ValidationError("scenario must belong to verified industry state")
+        raise ValidationError("scenario must belong to industry state")
     try:
         expected = compile_industry_scenario(
             parent=industry_state,
@@ -197,7 +197,6 @@ def build_company_engine(
     reported_operating_cash_flow: Decimal | None = None,
     reported_cash_capex: Decimal | None = None,
     diluted_shares: Decimal | None = None,
-    industry_state_id: UUID | None = None,
     industry_state: IndustryState | None = None,
     mechanisms: CompiledMechanisms | None = None,
     scenario: IndustryScenario | None = None,
@@ -218,26 +217,19 @@ def build_company_engine(
         raise ValidationError("company segment keys must be unique")
     if not isinstance(exposures, tuple) or not all(type(item) is CompanyExposure for item in exposures):
         raise ValidationError("company exposures are invalid")
-    if (industry_state_id is None) != (scenario is None):
-        raise ValidationError("industry scenario and exposures must be provided together")
-    if industry_state_id is None and exposures:
-        raise ValidationError("industry scenario and exposures must be provided together")
-    if industry_state_id is not None and type(industry_state_id) is not UUID:
-        raise ValidationError("industry_state_id must be a UUID")
-    if scenario is not None and type(scenario) is not IndustryScenario:
-        raise ValidationError("industry scenario and exposures are invalid")
-    if scenario is not None and scenario.parent_industry_state_id != industry_state_id:
-        raise ValidationError("scenario must belong to industry state")
-    if industry_state is not None or mechanisms is not None:
-        if industry_state is None or mechanisms is None or scenario is None:
+    if scenario is None:
+        if industry_state is not None or mechanisms is not None or exposures:
+            raise ValidationError("industry scenario and exposures must be provided together")
+        industry_state_id = None
+    else:
+        if industry_state is None or mechanisms is None:
             raise ValidationError("verified industry state, scenario, and mechanisms are required")
         _verify_industry_dependency(
             industry_state=industry_state,
             scenario=scenario,
             mechanisms=mechanisms,
         )
-        if industry_state_id != industry_state.id:
-            raise ValidationError("industry_state_id must match verified industry state")
+        industry_state_id = industry_state.id
     bridge_values = (
         company_total,
         tolerance,

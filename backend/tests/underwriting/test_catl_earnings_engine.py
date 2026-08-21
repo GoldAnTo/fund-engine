@@ -18,7 +18,12 @@ from app.underwriting.domain.earnings import (
     SegmentEconomics,
     SegmentInputs,
 )
-from app.underwriting.domain.industry import IndustryRange, IndustryScenario, ScenarioKind
+from app.underwriting.domain.industry import (
+    IndustryRange,
+    IndustryScenario,
+    ScenarioKind,
+    ScenarioSpec,
+)
 from app.underwriting.services.earnings_engine import (
     build_company_engine,
     build_segment,
@@ -82,6 +87,17 @@ def _scenario(parent_id):
         industry_profit_pool_range_cny=IndustryRange(Decimal("1"), Decimal("1")),
         falsifier_keys=("falsifier",),
     )
+
+
+def _verified_scenario_context():
+    mechanisms = formal_industry_mechanisms()
+    state = compile_industry_state(inputs=complete_inputs(), mechanisms=mechanisms)
+    scenario = compile_industry_scenario(
+        parent=state,
+        spec=ScenarioSpec(ScenarioKind.BASE, tuple(), state.falsifier_keys),
+        mechanisms=mechanisms,
+    )
+    return state, mechanisms, scenario
 
 
 def test_segment_volume_price_cost_bridge() -> None:
@@ -227,17 +243,17 @@ def test_largest_revenue_segment_need_not_be_largest_cash_or_value_core() -> Non
             normalized_cash_earning_power="99",
         )
     )
-    state_id = uuid4()
-    scenario = _scenario(state_id)
+    state, mechanisms, scenario = _verified_scenario_context()
     result = build_company_engine(
         company_total=revenue_leader.revenue + cash_leader.revenue,
         company_total_cost=revenue_leader.cost + cash_leader.cost,
         segments=(revenue_leader, cash_leader),
-        industry_state_id=state_id,
+        industry_state=state,
+        mechanisms=mechanisms,
         scenario=scenario,
         exposures=(
-            CompanyExposure("power_battery", state_id, Decimal("1")),
-            CompanyExposure("energy_storage", state_id, Decimal("1")),
+            CompanyExposure("power_battery", state.id, Decimal("1")),
+            CompanyExposure("energy_storage", state.id, Decimal("1")),
         ),
     )
 
@@ -250,7 +266,7 @@ def test_largest_revenue_segment_need_not_be_largest_cash_or_value_core() -> Non
 
 def test_value_core_requires_explicit_bound_industry_scenario_and_exposure() -> None:
     segment = build_segment(_segment("power_battery", normalized_cash_earning_power="10"))
-    state_id = uuid4()
+    state, mechanisms, _ = _verified_scenario_context()
     with pytest.raises(ValidationError, match="industry scenario and exposures"):
         build_company_engine(
             company_total=segment.revenue,
@@ -262,22 +278,23 @@ def test_value_core_requires_explicit_bound_industry_scenario_and_exposure() -> 
             company_total=segment.revenue,
             company_total_cost=segment.cost,
             segments=(segment,),
-            industry_state_id=state_id,
+            industry_state=state,
+            mechanisms=mechanisms,
             scenario=_scenario(uuid4()),
-            exposures=(CompanyExposure("power_battery", state_id, Decimal("1")),),
+            exposures=(CompanyExposure("power_battery", state.id, Decimal("1")),),
         )
 
 
 def test_exposure_must_match_each_scenario_valued_segment_once() -> None:
     segment = build_segment(_segment("power_battery", normalized_cash_earning_power="10"))
-    state_id = uuid4()
-    scenario = _scenario(state_id)
+    state, mechanisms, scenario = _verified_scenario_context()
     with pytest.raises(ValidationError, match="exactly one company exposure"):
         build_company_engine(
             company_total=segment.revenue,
             company_total_cost=segment.cost,
             segments=(segment,),
-            industry_state_id=state_id,
+            industry_state=state,
+            mechanisms=mechanisms,
             scenario=scenario,
             exposures=tuple(),
         )
@@ -362,15 +379,16 @@ def test_decimal_results_do_not_depend_on_ambient_worker_precision() -> None:
 def test_partial_normalized_value_core_is_rejected_instead_of_dropping_a_segment() -> None:
     with_value = build_segment(_segment("power_battery", normalized_cash_earning_power="10"))
     without_value = build_segment(_segment("energy_storage"))
-    state_id = uuid4()
+    state, mechanisms, scenario = _verified_scenario_context()
     with pytest.raises(ValidationError, match="normalized cash earning power is required"):
         build_company_engine(
             company_total=with_value.revenue + without_value.revenue,
             company_total_cost=with_value.cost + without_value.cost,
             segments=(with_value, without_value),
-            industry_state_id=state_id,
-            scenario=_scenario(state_id),
-            exposures=(CompanyExposure("power_battery", state_id, Decimal("1")),),
+            industry_state=state,
+            mechanisms=mechanisms,
+            scenario=scenario,
+            exposures=(CompanyExposure("power_battery", state.id, Decimal("1")),),
         )
 
 
@@ -511,9 +529,21 @@ def test_engine_rejects_scenario_that_does_not_replay_from_verified_industry_inp
             company_total=segment.revenue,
             company_total_cost=segment.cost,
             segments=(segment,),
-            industry_state_id=state.id,
             industry_state=state,
             mechanisms=mechanisms,
             scenario=scenario,
             exposures=(CompanyExposure("power_battery", state.id, Decimal("1")),),
+        )
+
+
+def test_legacy_scenario_without_verified_state_and_mechanisms_is_rejected() -> None:
+    segment = build_segment(_segment("power_battery", normalized_cash_earning_power="10"))
+    state_id = uuid4()
+    with pytest.raises(ValidationError, match="verified industry state, scenario, and mechanisms"):
+        build_company_engine(
+            company_total=segment.revenue,
+            company_total_cost=segment.cost,
+            segments=(segment,),
+            scenario=_scenario(state_id),
+            exposures=(CompanyExposure("power_battery", state_id, Decimal("1")),),
         )
