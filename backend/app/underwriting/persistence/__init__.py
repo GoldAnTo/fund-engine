@@ -9,6 +9,10 @@ from app.underwriting.persistence.models import (
     UnderwritingResearchObject,
     UnderwritingResearchVersion,
 )
+from app.underwriting.persistence.repository import (
+    StaleParentError,
+    UnderwritingRepository,
+)
 
 __all__ = [
     "UnderwritingAnswerabilityEvaluation",
@@ -18,4 +22,6 @@ __all__ = [
     "UnderwritingObjectRelation",
     "UnderwritingResearchObject",
     "UnderwritingResearchVersion",
+    "StaleParentError",
+    "UnderwritingRepository",
 ]
