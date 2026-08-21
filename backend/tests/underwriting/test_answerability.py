@@ -72,6 +72,20 @@ def test_partial_answerability_blocks_entry_actions(requested):
     assert enforce_action_boundary(result, requested) is EligibleAction.WAIT_FOR_VALIDATION
 
 
+@pytest.mark.parametrize(
+    "requested",
+    (
+        EligibleAction.OBSERVE,
+        EligibleAction.WAIT_FOR_VALIDATION,
+        EligibleAction.DO_NOT_ENTER,
+    ),
+)
+def test_partial_answerability_preserves_non_entry_actions(requested):
+    result = evaluate_answerability(AnswerabilityInput((), ("debt",), True))
+
+    assert enforce_action_boundary(result, requested) is requested
+
+
 def test_answerable_preserves_requested_action_and_entry_actions_are_exact():
     assert ENTRY_ACTIONS == frozenset(
         {
