@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 import re
 import uuid
@@ -242,6 +242,59 @@ def test_append_ledger_entry_normalizes_fields_and_hashes_content(
             "source_boundary": "public",
         }
     )
+
+
+def test_append_ledger_entry_rejects_future_time_after_non_utc_cutoff(
+    kernel: UnderwritingKernelService,
+) -> None:
+    cutoff = datetime(2026, 1, 1, tzinfo=timezone(timedelta(hours=8)))
+    object_row = kernel.add_object(ResearchObjectKind.COMPANY, "company:1", "Company")
+    basis_row = kernel.add_basis(HistoricalBasisInput(cutoff, cutoff, "a" * 64))
+    entry = LedgerEntryInput(
+        LedgerKind.REALITY,
+        "revenue",
+        "reported",
+        {},
+        datetime(2025, 12, 31, 17, tzinfo=UTC),
+        datetime(2025, 12, 31, 17, tzinfo=UTC),
+        "public",
+    )
+
+    with pytest.raises(
+        ValidationError, match="^available_at must not be after basis cutoff$"
+    ):
+        kernel.append_ledger_entry(object_row.id, basis_row.id, entry, None)
+
+
+def test_append_ledger_entry_hashes_equivalent_offset_timestamps_identically(
+    kernel: UnderwritingKernelService,
+) -> None:
+    cutoff = datetime(2026, 1, 1, tzinfo=UTC)
+    object_row = kernel.add_object(ResearchObjectKind.COMPANY, "company:1", "Company")
+    basis_row = kernel.add_basis(HistoricalBasisInput(cutoff, cutoff, "a" * 64))
+    utc_entry = LedgerEntryInput(
+        LedgerKind.REALITY,
+        "revenue",
+        "reported",
+        {"value": 1},
+        cutoff,
+        cutoff,
+        "public",
+    )
+    offset_entry = LedgerEntryInput(
+        LedgerKind.REALITY,
+        "revenue",
+        "reported",
+        {"value": 1},
+        cutoff.astimezone(timezone(timedelta(hours=8))),
+        cutoff.astimezone(timezone(timedelta(hours=8))),
+        "public",
+    )
+
+    first = kernel.append_ledger_entry(object_row.id, basis_row.id, utc_entry, None)
+    second = kernel.append_ledger_entry(object_row.id, basis_row.id, offset_entry, first.id)
+
+    assert first.content_hash == second.content_hash
 
 
 @pytest.mark.parametrize(

@@ -67,7 +67,14 @@ class UnderwritingKernelService:
     @staticmethod
     def _stored_datetime(value: datetime) -> datetime:
         """Restore SQLite's timezone-less storage representation as UTC."""
-        return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    @classmethod
+    def _normalize_datetime(cls, value: datetime, field: str) -> datetime:
+        cls._require_timezone(value, field)
+        return value.astimezone(UTC)
 
     def add_object(
         self,
@@ -110,16 +117,23 @@ class UnderwritingKernelService:
         )
 
     def add_basis(self, value: HistoricalBasisInput):
-        self._require_timezone(value.cutoff, "cutoff")
-        if value.price_as_of is not None:
-            self._require_timezone(value.price_as_of, "price_as_of")
-            if value.price_as_of > value.cutoff:
+        cutoff = self._normalize_datetime(value.cutoff, "cutoff")
+        price_as_of = (
+            self._normalize_datetime(value.price_as_of, "price_as_of")
+            if value.price_as_of is not None
+            else None
+        )
+        if price_as_of is not None:
+            if price_as_of > cutoff:
                 raise ValidationError("price_as_of must not be after cutoff")
         if not isinstance(value.source_manifest_hash, str) or not _SHA256_HEX.fullmatch(
             value.source_manifest_hash
         ):
             raise ValidationError("source_manifest_hash must be a sha256 hex digest")
-        return self._repository.add_basis(value, created_at=self._now())
+        return self._repository.add_basis(
+            HistoricalBasisInput(cutoff, price_as_of, value.source_manifest_hash),
+            created_at=self._now(),
+        )
 
     def append_ledger_entry(
         self,
@@ -135,9 +149,9 @@ class UnderwritingKernelService:
         if basis is None:
             raise ValidationError("historical basis not found")
 
-        self._require_timezone(value.effective_at, "effective_at")
-        self._require_timezone(value.available_at, "available_at")
-        if value.available_at > self._stored_datetime(basis.cutoff):
+        effective_at = self._normalize_datetime(value.effective_at, "effective_at")
+        available_at = self._normalize_datetime(value.available_at, "available_at")
+        if available_at > self._stored_datetime(basis.cutoff):
             raise ValidationError("available_at must not be after basis cutoff")
 
         family_key = self._require_text(value.family_key, "family_key")
@@ -150,8 +164,8 @@ class UnderwritingKernelService:
                 "family_key": family_key,
                 "entry_type": entry_type,
                 "payload": value.payload,
-                "effective_at": value.effective_at,
-                "available_at": value.available_at,
+                "effective_at": effective_at,
+                "available_at": available_at,
                 "source_boundary": source_boundary,
             }
         )
@@ -162,8 +176,8 @@ class UnderwritingKernelService:
             family_key=family_key,
             entry_type=entry_type,
             payload=value.payload,
-            effective_at=value.effective_at,
-            available_at=value.available_at,
+            effective_at=effective_at,
+            available_at=available_at,
             source_boundary=source_boundary,
             content_hash=content_hash,
             expected_parent_id=expected_parent_id,
