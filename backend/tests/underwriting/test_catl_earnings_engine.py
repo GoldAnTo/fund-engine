@@ -97,6 +97,8 @@ def _lineage(key: str, numerator: str) -> MetricLineageDependency:
             source_id="industry-source-2025",
             source_manifest_hash=context.source_manifest_hash,
             available_at=numerator_record.available_at,
+            value=numerator_record.value, unit=numerator_record.unit, source_locator=numerator_record.source_locator,
+            observed_start=numerator_record.observed_start, observed_end=numerator_record.observed_end, effective_at=numerator_record.effective_at, dimensions=numerator_record.dimensions, content_hash=numerator_record.content_hash,
         ),
         denominator=ResolvedMetricObservation(
             observation_id=denominator_record.observation_id,
@@ -107,6 +109,8 @@ def _lineage(key: str, numerator: str) -> MetricLineageDependency:
             source_id="industry-source-2025",
             source_manifest_hash=context.source_manifest_hash,
             available_at=denominator_record.available_at,
+            value=denominator_record.value, unit=denominator_record.unit, source_locator=denominator_record.source_locator,
+            observed_start=denominator_record.observed_start, observed_end=denominator_record.observed_end, effective_at=denominator_record.effective_at, dimensions=denominator_record.dimensions, content_hash=denominator_record.content_hash,
         ),
         cutoff=cutoff,
     )

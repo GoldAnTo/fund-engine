@@ -84,6 +84,14 @@ class ResolvedMetricObservation:
     source_id: str
     source_manifest_hash: str
     available_at: datetime
+    value: Decimal
+    unit: str
+    source_locator: str
+    observed_start: datetime
+    observed_end: datetime
+    effective_at: datetime
+    dimensions: tuple[tuple[str, str], ...]
+    content_hash: str
 
     def __post_init__(self) -> None:
         if type(self.observation_id) is not UUID:
@@ -99,6 +107,16 @@ class ResolvedMetricObservation:
         object.__setattr__(self, "source_id", _text(self.source_id, "lineage source_id"))
         object.__setattr__(self, "source_manifest_hash", _sha256(self.source_manifest_hash, "lineage source_manifest_hash"))
         object.__setattr__(self, "available_at", _utc(self.available_at, "lineage available_at"))
+        _decimal(self.value, "lineage value")
+        object.__setattr__(self, "unit", _text(self.unit, "lineage unit"))
+        object.__setattr__(self, "source_locator", _text(self.source_locator, "lineage source_locator"))
+        for name in ("observed_start", "observed_end", "effective_at"):
+            object.__setattr__(self, name, _utc(getattr(self, name), f"lineage {name}"))
+        if self.observed_start > self.observed_end:
+            raise ValidationError("lineage observed period is invalid")
+        if not isinstance(self.dimensions, tuple):
+            raise ValidationError("lineage dimensions must be a tuple")
+        object.__setattr__(self, "content_hash", _sha256(self.content_hash, "lineage content_hash"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +155,7 @@ class MetricLineageDependency:
             record = records.get(expected_key)
             if record is None or observation.source_id not in context.source_ids:
                 raise ValidationError("lineage metric is unavailable in frozen context")
-            if (observation.observation_id, observation.metric_key, str(observation.definition_id), observation.definition_version, observation.definition_content_hash, observation.source_id, observation.source_manifest_hash, observation.available_at) != (record.observation_id, record.metric_key, str(record.definition_id), record.definition_version, record.definition_content_hash, record.source_id, record.source_manifest_hash, record.available_at):
+            if (observation.observation_id, observation.metric_key, str(observation.definition_id), observation.definition_version, observation.definition_content_hash, observation.source_id, observation.source_manifest_hash, observation.available_at, observation.value, observation.unit, observation.source_locator, observation.observed_start, observation.observed_end, observation.effective_at, observation.dimensions, observation.content_hash) != (record.observation_id, record.metric_key, str(record.definition_id), record.definition_version, record.definition_content_hash, record.source_id, record.source_manifest_hash, record.available_at, record.value, record.unit, record.source_locator, record.observed_start, record.observed_end, record.effective_at, record.dimensions, record.content_hash):
                 raise ValidationError("lineage does not match frozen metric definition")
 
 
