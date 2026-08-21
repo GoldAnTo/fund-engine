@@ -36,6 +36,8 @@ from .mechanisms import (
 from .industry import (
     AnswerabilityBlocked,
     IndustryInputs,
+    IndustryMetric,
+    IndustryMetricCollection,
     IndustryRange,
     IndustryScenario,
     IndustryState,
@@ -70,6 +72,8 @@ __all__ = [
     "MechanismPack",
     "MechanismStatus",
     "IndustryInputs",
+    "IndustryMetric",
+    "IndustryMetricCollection",
     "IndustryRange",
     "IndustryScenario",
     "IndustryState",

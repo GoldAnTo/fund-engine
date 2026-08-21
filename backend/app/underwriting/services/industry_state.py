@@ -3,12 +3,16 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal, ROUND_HALF_EVEN
+from datetime import datetime
+import re
 from typing import Iterable
 
 from app.models.ledger import ValidationError
 from app.underwriting.domain.industry import (
     AnswerabilityBlocked,
     IndustryInputs,
+    IndustryMetric,
+    IndustryMetricCollection,
     IndustryRange,
     IndustryScenario,
     IndustryState,
@@ -32,6 +36,7 @@ _UNIT_ECONOMICS_QUANTUM = Decimal("0.0001")
 # in the plan while avoiding an implicit, ambient precision decision.
 _RATIO_QUANTUM = Decimal("0.0000000000000000000000000001")
 _GWH_TO_KWH = Decimal("1000000")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 _INPUT_FIELD_BY_DRIVER = {
     "industry.ev_sales_millions": "ev_sales_millions",
@@ -70,14 +75,21 @@ def _quantize(value: Decimal, quantum: Decimal) -> Decimal:
 
 
 def _formal_mechanisms(
-    mechanisms: tuple[MechanismPack, ...] | CompiledMechanisms,
+    mechanisms: CompiledMechanisms,
 ) -> tuple[MechanismPack, ...]:
-    if type(mechanisms) is CompiledMechanisms:
-        packs = mechanisms.mechanisms
-    elif isinstance(mechanisms, tuple):
-        packs = mechanisms
-    else:
+    if type(mechanisms) is not CompiledMechanisms:
         _block(BlockerCode.MECHANISM_UNIDENTIFIED, "formal industry mechanisms are required")
+    packs = mechanisms.mechanisms
+    if (
+        not isinstance(mechanisms.cutoff, datetime)
+        or mechanisms.cutoff.tzinfo is None
+        or mechanisms.cutoff.utcoffset() is None
+        or not isinstance(mechanisms.content_hash, str)
+        or _SHA256.fullmatch(mechanisms.content_hash) is None
+        or not isinstance(mechanisms.source_manifest_hash, str)
+        or _SHA256.fullmatch(mechanisms.source_manifest_hash) is None
+    ):
+        _block(BlockerCode.MECHANISM_UNIDENTIFIED, "compiled mechanisms are not cutoff-bound")
     if not packs:
         _block(BlockerCode.MECHANISM_UNIDENTIFIED, "formal industry mechanisms are required")
     for pack in packs:
@@ -90,6 +102,8 @@ def _formal_mechanisms(
     keys = tuple(pack.key for pack in packs)
     if len(keys) != len(set(keys)):
         _block(BlockerCode.MECHANISM_UNIDENTIFIED, "formal mechanism keys must be unique")
+    if len({pack.scope_object_id for pack in packs}) != 1:
+        _block(BlockerCode.MECHANISM_UNIDENTIFIED, "industry state requires exactly one mechanism scope")
     return tuple(packs)
 
 
@@ -176,7 +190,7 @@ def _compile_values(inputs: IndustryInputs) -> tuple[
 def compile_industry_state(
     *,
     inputs: IndustryInputs,
-    mechanisms: tuple[MechanismPack, ...] | CompiledMechanisms,
+    mechanisms: CompiledMechanisms,
 ) -> IndustryState:
     """Compile a single power-battery state from formal mechanisms only."""
     formal_mechanisms = _formal_mechanisms(mechanisms)
@@ -203,6 +217,16 @@ def compile_industry_state(
         price_range_cny_per_kwh=values[6],
         unit_cost_range_cny_per_kwh=values[7],
         industry_profit_pool_range_cny=values[8],
+        metrics=IndustryMetricCollection(
+            (
+                IndustryMetric("industry.battery_demand_gwh", values[0]),
+                IndustryMetric("industry.nominal_capacity_gwh", values[1]),
+                IndustryMetric("industry.effective_capacity_gwh", values[2]),
+                IndustryMetric("industry.utilization", values[3]),
+                IndustryMetric("industry.inventory_change_gwh", values[4]),
+                IndustryMetric("industry.unit_margin_cny_per_kwh", values[5]),
+            )
+        ),
         mechanism_lineage=lineage,
         falsifier_keys=_falsifier_keys(formal_mechanisms),
     )
@@ -225,7 +249,7 @@ def compile_industry_scenario(
     *,
     parent: IndustryState,
     spec: ScenarioSpec,
-    mechanisms: tuple[MechanismPack, ...] | CompiledMechanisms,
+    mechanisms: CompiledMechanisms,
 ) -> IndustryScenario:
     """Apply declared driver overrides while retaining the exact state parent."""
     if type(parent) is not IndustryState:
@@ -270,7 +294,7 @@ def compile_industry_scenarios(
     *,
     parent: IndustryState,
     specs: tuple[ScenarioSpec, ...],
-    mechanisms: tuple[MechanismPack, ...] | CompiledMechanisms,
+    mechanisms: CompiledMechanisms,
 ) -> tuple[IndustryScenario, ...]:
     """Compile one base, one upside and one downside branch without weights."""
     if not isinstance(specs, tuple):

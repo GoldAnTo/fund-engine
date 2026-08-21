@@ -1,6 +1,7 @@
 """Contracts for the power-battery industry-state model."""
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -23,10 +24,20 @@ from app.underwriting.services.industry_state import (
     compile_industry_scenario,
     compile_industry_state,
 )
-from app.underwriting.services.mechanism_compiler import transition_mechanism
+from app.underwriting.services.mechanism_compiler import (
+    CompiledMechanisms,
+    MechanismDependencyContext,
+    MetricDefinitionDependency,
+    compile_mechanisms,
+    transition_mechanism,
+)
+from app.underwriting.services.source_freeze import freeze_manifest
 
 
-def formal_industry_mechanisms() -> tuple[MechanismPack, ...]:
+CUTOFF = datetime(2025, 5, 15, 15, 59, 59, tzinfo=UTC)
+
+
+def formal_industry_packs() -> tuple[MechanismPack, ...]:
     drivers = (
         "industry.ev_sales_millions",
         "industry.average_battery_kwh",
@@ -85,6 +96,50 @@ def formal_industry_mechanisms() -> tuple[MechanismPack, ...]:
     return (transition_mechanism(confirmed, MechanismStatus.FORMAL),)
 
 
+def formal_industry_mechanisms() -> CompiledMechanisms:
+    packs = formal_industry_packs()
+    source_manifest = freeze_manifest(
+        {
+            "schema_version": "underwriting.source-manifest.v1",
+            "sources": [
+                {
+                    "source_id": "industry-source-2025",
+                    "title": "Industry source",
+                    "locator": "https://example.test/industry-source",
+                    "published_at": "2025-05-14T00:00:00+00:00",
+                    "first_available_at": "2025-05-14T00:00:00+00:00",
+                    "retrieved_at": "2025-05-14T00:00:00+00:00",
+                    "content_sha256": "a" * 64,
+                    "authority": "official_industry",
+                    "authorization": "authorized",
+                    "display_policy": "derived_only",
+                    "provider_capability": "public_http",
+                    "retention": "hash_locator_and_derived_observations",
+                }
+            ],
+        },
+        cutoff=CUTOFF,
+    )
+    metric_keys = set(packs[0].driver_keys)
+    metric_keys.add("industry.utilization")
+    dependencies = MechanismDependencyContext(
+        cutoff=CUTOFF,
+        metric_definitions=tuple(
+            MetricDefinitionDependency(
+                metric_key=key,
+                definition_id=f"definition:{key}",
+                definition_version=1,
+                content_hash="b" * 64,
+                source_manifest_hash=source_manifest.manifest_hash,
+                available_at=datetime(2025, 5, 14, tzinfo=UTC),
+            )
+            for key in sorted(metric_keys)
+        ),
+        source_manifest=source_manifest,
+    )
+    return compile_mechanisms(packs, dependencies=dependencies)
+
+
 def complete_inputs() -> IndustryInputs:
     return IndustryInputs(
         ev_sales_millions=Decimal("30"),
@@ -111,6 +166,9 @@ def test_nominal_capacity_is_never_used_as_effective_capacity() -> None:
     assert result.effective_capacity_gwh == Decimal("1710.0000")
     assert result.utilization == Decimal("1500") / Decimal("1710")
     assert result.effective_capacity_gwh != result.nominal_capacity_gwh
+    assert result.metrics["industry.nominal_capacity_gwh"] == Decimal("3000.0000")
+    assert result.metrics["industry.effective_capacity_gwh"] == Decimal("1710.0000")
+    assert result.metrics["industry.utilization"] == Decimal("1500") / Decimal("1710")
     assert result.inventory_change_gwh == Decimal("100.0000")
     assert result.unit_margin_cny_per_kwh == Decimal("0.1500")
 
@@ -139,12 +197,35 @@ def test_physical_and_share_baselines_are_formally_validated(inputs: IndustryInp
 
 
 def test_nonformal_mechanism_blocks_instead_of_becoming_an_industry_signal() -> None:
-    nonformal = replace(formal_industry_mechanisms()[0], status=MechanismStatus.CALIBRATED)
+    nonformal = replace(formal_industry_packs()[0], status=MechanismStatus.CALIBRATED)
 
     with pytest.raises(AnswerabilityBlocked, match="mechanism_unidentified") as raised:
         compile_industry_state(inputs=complete_inputs(), mechanisms=(nonformal,))
 
     assert raised.value.blocker_code.value == "mechanism_unidentified"
+
+
+def test_raw_formal_packs_are_not_a_trusted_cutoff_bound_mechanism_dependency() -> None:
+    with pytest.raises(AnswerabilityBlocked, match="mechanism_unidentified"):
+        compile_industry_state(inputs=complete_inputs(), mechanisms=formal_industry_packs())
+
+
+@pytest.mark.parametrize(
+    "mechanisms",
+    ((formal_industry_mechanisms(), formal_industry_packs()[0]), object()),
+)
+def test_mixed_or_invalid_mechanism_dependency_fails_closed(mechanisms: object) -> None:
+    with pytest.raises(AnswerabilityBlocked, match="mechanism_unidentified"):
+        compile_industry_state(inputs=complete_inputs(), mechanisms=mechanisms)  # type: ignore[arg-type]
+
+
+def test_compiled_mechanisms_with_multiple_scopes_cannot_produce_one_industry_state() -> None:
+    compiled = formal_industry_mechanisms()
+    other_scope = replace(compiled.mechanisms[0], scope_object_id=uuid4())
+    mixed_scope = replace(compiled, mechanisms=(compiled.mechanisms[0], other_scope))
+
+    with pytest.raises(AnswerabilityBlocked, match="mechanism_unidentified"):
+        compile_industry_state(inputs=complete_inputs(), mechanisms=mixed_scope)
 
 
 def test_scenario_retains_parent_and_overrides_only_declared_driver() -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
+from collections.abc import Iterator, Mapping
 from uuid import UUID, uuid4
 
 from app.models.ledger import ValidationError
@@ -69,6 +70,46 @@ class IndustryRange:
         _require_finite_decimal(self.high, "range high")
         if self.low > self.high:
             raise ValidationError("range low must not exceed range high")
+
+
+@dataclass(frozen=True, slots=True)
+class IndustryMetric:
+    """One immutable, metric-keyed industry output."""
+
+    key: str
+    value: Decimal
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "key", _require_text(self.key, "industry metric key"))
+        _require_finite_decimal(self.value, "industry metric value")
+
+
+@dataclass(frozen=True, slots=True)
+class IndustryMetricCollection(Mapping[str, Decimal]):
+    """Read-only keyed output collection retained alongside named fields."""
+
+    values: tuple[IndustryMetric, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.values, tuple) or not self.values:
+            raise ValidationError("industry metrics must be a non-empty tuple")
+        if not all(type(value) is IndustryMetric for value in self.values):
+            raise ValidationError("industry metrics must contain IndustryMetric values")
+        keys = tuple(value.key for value in self.values)
+        if len(keys) != len(set(keys)):
+            raise ValidationError("industry metric keys must be unique")
+
+    def __getitem__(self, key: str) -> Decimal:
+        for value in self.values:
+            if value.key == key:
+                return value.value
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return (value.key for value in self.values)
+
+    def __len__(self) -> int:
+        return len(self.values)
 
 
 class ScenarioKind(StrEnum):
@@ -134,6 +175,7 @@ class IndustryState:
     price_range_cny_per_kwh: IndustryRange
     unit_cost_range_cny_per_kwh: IndustryRange
     industry_profit_pool_range_cny: IndustryRange
+    metrics: IndustryMetricCollection
     mechanism_lineage: tuple[tuple[str, UUID, int], ...]
     falsifier_keys: tuple[str, ...]
 
@@ -160,6 +202,16 @@ class IndustryState:
             )
         ):
             raise ValidationError("industry state ranges are invalid")
+        if type(self.metrics) is not IndustryMetricCollection:
+            raise ValidationError("industry state metric collection is invalid")
+        required_metrics = {
+            "industry.nominal_capacity_gwh": self.nominal_capacity_gwh,
+            "industry.effective_capacity_gwh": self.effective_capacity_gwh,
+            "industry.utilization": self.utilization,
+        }
+        for key, expected_value in required_metrics.items():
+            if self.metrics.get(key) != expected_value:
+                raise ValidationError(f"industry state metric collection must retain {key}")
         if not isinstance(self.mechanism_lineage, tuple) or not self.mechanism_lineage:
             raise ValidationError("industry state mechanism lineage is required")
         if not all(
