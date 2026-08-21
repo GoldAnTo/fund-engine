@@ -25,6 +25,7 @@ from app.underwriting.persistence.repository import (
     StaleParentError,
     UnderwritingRepository,
 )
+from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
 
 __all__ = [
     "UnderwritingAnswerabilityEvaluation",
@@ -46,4 +47,5 @@ __all__ = [
     "UnderwritingFalsifierVersion",
     "StaleParentError",
     "UnderwritingRepository",
+    "UnderwritingResearchRepository",
 ]
