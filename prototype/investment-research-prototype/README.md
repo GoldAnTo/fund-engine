@@ -2,6 +2,19 @@
 
 这是一个独立、一次性的交互前端原型，只使用模拟示例数据。它用于验证“搜索主体 → 设置研究问题 → 维护研究判断”这三个屏幕的产品结构，不连接真实数据源；页面中的 Actual、Guidance 等词仅表示原型 fixture 的口径类型，不代表已核验外部披露，也不构成投资建议。
 
+## Production implementation status
+
+The static prototype remains an interaction reference. The production-shaped
+implementation begins at `/api/underwriting/v1`. Wave 1 contains identity,
+mandate, historical basis, four-ledger, version, replay, and answerability
+contracts only. It contains no CATL conclusion, valuation, recommendation,
+position, or live-data claim.
+
+`underwriting.v1` aligns its ledger write boundary with the persisted schema:
+`family_key` is at most 160 characters and `entry_type` is at most 80
+characters. These limits are an explicit compatibility decision for v1, so
+valid persisted values remain representable without a schema-version change.
+
 ## 本地运行
 
 ```bash

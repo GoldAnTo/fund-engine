@@ -28,6 +28,7 @@ from app.underwriting.api.schemas import (
     ResearchObjectCreate,
     ResearchObjectResponse,
     SnapshotResponse,
+    UnderwritingErrorEnvelope,
 )
 from app.underwriting.domain.types import (
     BlockerCode,
@@ -44,6 +45,11 @@ from app.underwriting.services.kernel import UnderwritingKernelService
 
 router = APIRouter(prefix="/api/underwriting/v1", tags=["underwriting-v1"])
 T = TypeVar("T")
+WRITE_ERROR_RESPONSES = {
+    409: {"model": UnderwritingErrorEnvelope},
+    422: {"model": UnderwritingErrorEnvelope},
+}
+READ_ERROR_RESPONSES = {422: {"model": UnderwritingErrorEnvelope}}
 
 
 def _service(db: Session) -> UnderwritingKernelService:
@@ -151,43 +157,77 @@ def _answerability_response(value) -> AnswerabilityResponse:
     )
 
 
-@router.post("/objects", response_model=ResearchObjectResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/objects",
+    response_model=ResearchObjectResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=WRITE_ERROR_RESPONSES,
+)
 def create_object(payload: ResearchObjectCreate, db: Session = Depends(get_db)) -> ResearchObjectResponse:
     value = _write(db, lambda: _service(db).add_object(ResearchObjectKind(payload.kind), payload.external_key, payload.canonical_name))
     return _object_response(value)
 
 
-@router.post("/object-relations", response_model=ObjectRelationResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/object-relations",
+    response_model=ObjectRelationResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=WRITE_ERROR_RESPONSES,
+)
 def create_object_relation(payload: ObjectRelationCreate, db: Session = Depends(get_db)) -> ObjectRelationResponse:
     value = _write(db, lambda: _service(db).link_objects(payload.parent_id, payload.child_id, payload.relation_type))
     return _relation_response(value)
 
 
-@router.post("/historical-bases", response_model=BasisResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/historical-bases",
+    response_model=BasisResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=WRITE_ERROR_RESPONSES,
+)
 def create_basis(payload: BasisCreate, db: Session = Depends(get_db)) -> BasisResponse:
     value = _write(db, lambda: _service(db).add_basis(HistoricalBasisInput(payload.cutoff, payload.price_as_of, payload.source_manifest_hash)))
     return _basis_response(value)
 
 
-@router.post("/mandates", response_model=MandateResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/mandates",
+    response_model=MandateResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=WRITE_ERROR_RESPONSES,
+)
 def create_mandate(payload: MandateCreate, db: Session = Depends(get_db)) -> MandateResponse:
     value = _write(db, lambda: _service(db).append_mandate(InvestmentMandateInput(payload.mandate_key, payload.horizon_years, payload.base_currency, payload.required_return, payload.permanent_loss_limit, tuple(payload.comparison_set)), payload.expected_parent_id))
     return _mandate_response(value)
 
 
-@router.post("/objects/{object_id}/ledger-entries", response_model=LedgerEntryResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/objects/{object_id}/ledger-entries",
+    response_model=LedgerEntryResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=WRITE_ERROR_RESPONSES,
+)
 def create_ledger_entry(object_id: UUID, payload: LedgerEntryCreate, db: Session = Depends(get_db)) -> LedgerEntryResponse:
     value = _write(db, lambda: _service(db).append_ledger_entry(object_id, payload.basis_id, LedgerEntryInput(LedgerKind(payload.ledger_kind), payload.family_key, payload.entry_type, payload.payload, payload.effective_at, payload.available_at, payload.source_boundary), payload.expected_parent_id))
     return _ledger_response(value)
 
 
-@router.post("/objects/{object_id}/answerability", response_model=AnswerabilityResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/objects/{object_id}/answerability",
+    response_model=AnswerabilityResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=WRITE_ERROR_RESPONSES,
+)
 def create_answerability(object_id: UUID, payload: AnswerabilityCreate, db: Session = Depends(get_db)) -> AnswerabilityResponse:
     value = _write(db, lambda: _service(db).record_answerability(object_id, payload.basis_id, tuple(BlockerCode(value) for value in payload.hard_blockers), tuple(payload.research_debt_keys), payload.resolvable_within_mandate, EligibleAction(payload.requested_action), tuple(payload.resolution_requirements), payload.expected_parent_id))
     return _answerability_response(value)
 
 
-@router.get("/objects/{object_id}/snapshots/{basis_id}", response_model=SnapshotResponse)
+@router.get(
+    "/objects/{object_id}/snapshots/{basis_id}",
+    response_model=SnapshotResponse,
+    responses=READ_ERROR_RESPONSES,
+)
 def get_snapshot(object_id: UUID, basis_id: UUID, db: Session = Depends(get_db)) -> SnapshotResponse:
     try:
         snapshot = _service(db).snapshot(object_id, basis_id)

@@ -9,6 +9,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+# The shared virtual environment may have a different worktree installed as
+# ``app``.  Prefer the repository containing this script so generated contracts
+# always describe the code being committed.
+sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.main import app
 

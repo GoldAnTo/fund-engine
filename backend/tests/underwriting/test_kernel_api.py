@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from app.main import app
+
 BASE = "/api/underwriting/v1"
 TIME = datetime(2026, 8, 20, 9, 30, tzinfo=UTC).isoformat()
 
@@ -256,3 +258,30 @@ def test_underwriting_api_conflicts_use_error_envelope(api_client):
     )
     assert stale.status_code == 409
     assert _error_code(stale) == "conflict"
+
+
+def test_openapi_documents_underwriting_error_envelope_for_kernel_routes() -> None:
+    schema = app.openapi()
+    assert "UnderwritingErrorEnvelope" in schema["components"]["schemas"]
+
+    write_paths = (
+        "/api/underwriting/v1/objects",
+        "/api/underwriting/v1/object-relations",
+        "/api/underwriting/v1/historical-bases",
+        "/api/underwriting/v1/mandates",
+        "/api/underwriting/v1/objects/{object_id}/ledger-entries",
+        "/api/underwriting/v1/objects/{object_id}/answerability",
+    )
+    for path in write_paths:
+        responses = schema["paths"][path]["post"]["responses"]
+        for status_code in ("409", "422"):
+            assert status_code in responses
+            reference = responses[status_code]["content"]["application/json"]["schema"]["$ref"]
+            assert reference.endswith("/UnderwritingErrorEnvelope")
+
+    snapshot_responses = schema["paths"][
+        "/api/underwriting/v1/objects/{object_id}/snapshots/{basis_id}"
+    ]["get"]["responses"]
+    assert "422" in snapshot_responses
+    reference = snapshot_responses["422"]["content"]["application/json"]["schema"]["$ref"]
+    assert reference.endswith("/UnderwritingErrorEnvelope")
