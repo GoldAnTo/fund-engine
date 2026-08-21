@@ -5,10 +5,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+import math
 
 from app.models.ledger import ValidationError
-from app.underwriting.domain.metrics import MetricObservation
+from app.underwriting.domain.metrics import MetricObservation, SourceRole
+from app.underwriting.domain.types import ResearchObjectKind
 from app.underwriting.services.kernel import canonical_hash
 from app.underwriting.services.source_policy import (
     AuthorizationState,
@@ -48,32 +49,53 @@ def _timestamp(value: object, field: str) -> datetime:
     return _utc(parsed, field)
 
 
-def _canonical_value(value: object) -> object:
+def _canonical_json_value(value: object) -> object:
+    """Copy JSON-compatible manifest content and reject unstable Python values."""
     if isinstance(value, Mapping):
-        return {str(key): _canonical_value(item) for key, item in value.items()}
+        normalized: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValidationError("source manifest object keys must be strings")
+            normalized[key] = _canonical_json_value(item)
+        return normalized
     if isinstance(value, list):
-        return [_canonical_value(item) for item in value]
-    if isinstance(value, tuple):
-        return [_canonical_value(item) for item in value]
-    return value
+        return [_canonical_json_value(item) for item in value]
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValidationError("source manifest Decimal must be finite")
+        raise ValidationError("source manifest must be JSON-compatible")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValidationError("source manifest float must be finite")
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    raise ValidationError("source manifest must be JSON-compatible")
 
 
 def normalize_source_record(raw: Mapping[str, object], *, cutoff: datetime) -> dict[str, object]:
     """Validate and UTC-normalize one manifest source without losing identity."""
     if not isinstance(raw, Mapping):
         raise ValidationError("source must be an object")
+    canonical_raw = _canonical_json_value(raw)
+    if not isinstance(canonical_raw, dict):  # Defensive: mappings normalize to dictionaries.
+        raise ValidationError("source must be an object")
     normalized_cutoff = _utc(cutoff, "cutoff")
-    decision = evaluate_source_policy(raw)
-    first_available_at = _timestamp(raw.get("first_available_at"), "first_available_at")
+    decision = evaluate_source_policy(canonical_raw)
+    first_available_at = _timestamp(
+        canonical_raw.get("first_available_at"), "first_available_at"
+    )
     if first_available_at > normalized_cutoff:
         raise ValidationError("source is unavailable at cutoff")
 
-    normalized = dict(_canonical_value(raw))
+    normalized = canonical_raw
     normalized["source_id"] = decision.source_id
-    normalized["locator"] = _require_text(raw.get("locator"), "locator")
-    normalized["published_at"] = _timestamp(raw.get("published_at"), "published_at").isoformat()
+    normalized["locator"] = _require_text(canonical_raw.get("locator"), "locator")
+    normalized["published_at"] = _timestamp(
+        canonical_raw.get("published_at"), "published_at"
+    ).isoformat()
     normalized["first_available_at"] = first_available_at.isoformat()
-    normalized["retrieved_at"] = _timestamp(raw.get("retrieved_at"), "retrieved_at").isoformat()
+    normalized["retrieved_at"] = _timestamp(
+        canonical_raw.get("retrieved_at"), "retrieved_at"
+    ).isoformat()
     normalized["authorization"] = decision.authorization.value
     normalized["display_policy"] = decision.display_policy.value
     return normalized
@@ -83,9 +105,12 @@ def freeze_manifest(payload: Mapping[str, object], cutoff: datetime) -> FrozenSo
     """Create an order-independent, historically valid source-manifest hash."""
     if not isinstance(payload, Mapping):
         raise ValidationError("source manifest must be an object")
-    schema_version = _require_text(payload.get("schema_version"), "schema_version")
-    raw_sources = payload.get("sources")
-    if not isinstance(raw_sources, (list, tuple)):
+    canonical_payload = _canonical_json_value(payload)
+    if not isinstance(canonical_payload, dict):  # Defensive: mappings normalize to dictionaries.
+        raise ValidationError("source manifest must be an object")
+    schema_version = _require_text(canonical_payload.get("schema_version"), "schema_version")
+    raw_sources = canonical_payload.get("sources")
+    if not isinstance(raw_sources, list):
         raise ValidationError("sources must be a list")
     normalized_cutoff = _utc(cutoff, "cutoff")
     normalized = tuple(
@@ -162,26 +187,32 @@ def observation_sort_key(value: MetricObservation) -> tuple[object, ...]:
     )
 
 
-def _reported_company_identity(
-    raw: Mapping[str, object], value: MetricObservation,
-) -> tuple[object, ...] | None:
-    if raw.get("source_role") != "reported":
-        return None
-    if raw.get("research_object_kind", raw.get("entity_kind")) != "company":
-        return None
+def _observation_classification(
+    raw: Mapping[str, object],
+) -> tuple[SourceRole, ResearchObjectKind]:
+    source_role = raw.get("source_role")
+    if source_role is None:
+        raise ValidationError("source_role is required")
+    research_object_kind = raw.get("research_object_kind")
+    if research_object_kind is None:
+        raise ValidationError("research_object_kind is required")
+    try:
+        return SourceRole(source_role), ResearchObjectKind(research_object_kind)
+    except ValueError as exc:
+        raise ValidationError("observation evidence classification is invalid") from exc
+
+
+def _reported_company_evidence_key(value: MetricObservation) -> tuple[object, ...]:
     return (
         value.definition_key,
         value.definition_version,
+        value.unit,
+        value.value,
+        value.observed_start,
         value.observed_end,
+        value.effective_at,
         value.dimensions,
     )
-
-
-def _supporting_source_ids(raw: Mapping[str, object], source_id: str) -> tuple[str, ...]:
-    support = raw.get("supporting_source_ids", ())
-    if isinstance(support, str) or not isinstance(support, (list, tuple, set, frozenset)):
-        raise ValidationError("supporting_source_ids must be a list")
-    return (source_id,) + tuple(_require_text(value, "supporting_source_id") for value in support)
 
 
 def freeze_observations(
@@ -210,6 +241,7 @@ def freeze_observations(
         if raw.get("conflict_group") and raw.get("resolution") != "resolved":
             raise ValidationError("unresolved source conflict")
         value = observation_from_record(raw, cutoff=source_manifest.cutoff)
+        source_role, research_object_kind = _observation_classification(raw)
         identity = (
             value.definition_key,
             value.definition_version,
@@ -220,12 +252,13 @@ def freeze_observations(
         if identity in seen:
             raise ValidationError("observation identity must be unique")
         seen.add(identity)
-        reported_identity = _reported_company_identity(raw, value)
-        if reported_identity is not None:
-            support_ids = _supporting_source_ids(raw, value.source_id)
-            if unknown := set(support_ids) - known_sources:
-                raise ValidationError("observation references unknown source")
-            reported_company_sources.setdefault(reported_identity, set()).update(support_ids)
+        if (
+            source_role is SourceRole.REPORTED
+            and research_object_kind is ResearchObjectKind.COMPANY
+        ):
+            reported_company_sources.setdefault(
+                _reported_company_evidence_key(value), set()
+            ).add(value.source_id)
         result.append(value)
 
     for source_ids in reported_company_sources.values():

@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime
+from decimal import Decimal
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -152,6 +158,79 @@ def test_reference_only_source_cannot_be_the_only_reported_company_source() -> N
         freeze_observations(
             [observation_fixture(source_id="iea-outlook")], source_manifest=manifest
         )
+
+
+@pytest.mark.parametrize("missing", ["source_role", "research_object_kind"])
+def test_observation_freeze_requires_controlled_evidence_classification(missing: str) -> None:
+    manifest = freeze_manifest(manifest_fixture(), cutoff=CUTOFF)
+    observation = observation_fixture()
+    observation.pop(missing)
+    with pytest.raises(ValidationError, match=f"{missing} is required"):
+        freeze_observations([observation], source_manifest=manifest)
+
+
+def test_reference_only_source_needs_matching_authorized_primary_evidence() -> None:
+    manifest = freeze_manifest(manifest_fixture(), cutoff=CUTOFF)
+    reference_only = observation_fixture(source_id="iea-outlook")
+    reference_only["supporting_source_ids"] = ["catl-annual-report"]
+    with pytest.raises(
+        ValidationError,
+        match="reference_only source cannot be the sole source of a reported company observation",
+    ):
+        freeze_observations([reference_only], source_manifest=manifest)
+
+    authorized_primary = observation_fixture()
+    assert len(
+        freeze_observations(
+            [reference_only, authorized_primary], source_manifest=manifest
+        )
+    ) == 2
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ({"unstable", "set"}, "source manifest must be JSON-compatible"),
+        (Decimal("NaN"), "source manifest Decimal must be finite"),
+    ],
+)
+def test_manifest_rejects_noncanonical_non_json_values(value: object, message: str) -> None:
+    manifest = manifest_fixture()
+    manifest["sources"][0]["metadata"] = value  # type: ignore[index]
+    with pytest.raises(ValidationError, match=message):
+        freeze_manifest(manifest, cutoff=CUTOFF)
+
+
+def test_manifest_hash_is_cross_process_deterministic_for_json_inputs() -> None:
+    manifest = manifest_fixture()
+    manifest["sources"][0]["metadata"] = {  # type: ignore[index]
+        "z": [3, {"b": 2, "a": 1}],
+        "a": {"second": True, "first": None},
+    }
+    script = """
+import json
+import sys
+from datetime import UTC, datetime
+from app.underwriting.services.source_freeze import freeze_manifest
+
+payload = json.loads(sys.stdin.read())
+cutoff = datetime(2025, 5, 15, 15, 59, 59, tzinfo=UTC)
+print(freeze_manifest(payload, cutoff=cutoff).manifest_hash)
+"""
+    backend_root = Path(__file__).resolve().parents[2]
+    outputs = []
+    for seed in ("1", "999"):
+        environment = {**os.environ, "PYTHONHASHSEED": seed, "PYTHONPATH": str(backend_root)}
+        outputs.append(
+            subprocess.check_output(
+                [sys.executable, "-c", script],
+                cwd=backend_root,
+                env=environment,
+                input=json.dumps(manifest),
+                text=True,
+            ).strip()
+        )
+    assert outputs[0] == outputs[1] == freeze_manifest(manifest, cutoff=CUTOFF).manifest_hash
 
 
 def test_observation_freeze_normalizes_and_stably_orders_observations() -> None:
