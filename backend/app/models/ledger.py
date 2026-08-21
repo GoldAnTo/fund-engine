@@ -135,6 +135,16 @@ IMMUTABLE_TABLES = frozenset(
         "uw_ledger_entries",
         "uw_research_versions",
         "uw_answerability_evaluations",
+        "uw_source_manifest_versions",
+        "uw_metric_definition_versions",
+        "uw_metric_observations",
+        "uw_mechanism_pack_versions",
+        "uw_industry_state_versions",
+        "uw_industry_scenario_versions",
+        "uw_company_exposure_versions",
+        "uw_earnings_engine_versions",
+        "uw_forecast_input_versions",
+        "uw_falsifier_versions",
     }
 )
 

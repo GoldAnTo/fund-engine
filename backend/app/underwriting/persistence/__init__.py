@@ -9,6 +9,18 @@ from app.underwriting.persistence.models import (
     UnderwritingResearchObject,
     UnderwritingResearchVersion,
 )
+from app.underwriting.persistence.research_models import (
+    UnderwritingCompanyExposureVersion,
+    UnderwritingEarningsEngineVersion,
+    UnderwritingFalsifierVersion,
+    UnderwritingForecastInputVersion,
+    UnderwritingIndustryScenarioVersion,
+    UnderwritingIndustryStateVersion,
+    UnderwritingMechanismPackVersion,
+    UnderwritingMetricDefinitionVersion,
+    UnderwritingMetricObservation,
+    UnderwritingSourceManifestVersion,
+)
 from app.underwriting.persistence.repository import (
     StaleParentError,
     UnderwritingRepository,
@@ -22,6 +34,16 @@ __all__ = [
     "UnderwritingObjectRelation",
     "UnderwritingResearchObject",
     "UnderwritingResearchVersion",
+    "UnderwritingSourceManifestVersion",
+    "UnderwritingMetricDefinitionVersion",
+    "UnderwritingMetricObservation",
+    "UnderwritingMechanismPackVersion",
+    "UnderwritingIndustryStateVersion",
+    "UnderwritingIndustryScenarioVersion",
+    "UnderwritingCompanyExposureVersion",
+    "UnderwritingEarningsEngineVersion",
+    "UnderwritingForecastInputVersion",
+    "UnderwritingFalsifierVersion",
     "StaleParentError",
     "UnderwritingRepository",
 ]
