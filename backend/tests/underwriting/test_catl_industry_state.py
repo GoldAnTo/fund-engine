@@ -317,6 +317,25 @@ def test_scenario_rejects_state_rebound_to_a_different_compiled_mechanism_scope(
         )
 
 
+def test_scenario_rejects_a_parent_with_a_replaced_state_identity() -> None:
+    mechanisms = formal_industry_mechanisms()
+    parent = replace(
+        compile_industry_state(inputs=complete_inputs(), mechanisms=mechanisms),
+        id=uuid4(),
+    )
+
+    with pytest.raises(AnswerabilityBlocked, match="mechanism_unidentified"):
+        compile_industry_scenario(
+            parent=parent,
+            spec=ScenarioSpec(
+                kind=ScenarioKind.UPSIDE,
+                overrides=(ScenarioDriverOverride("industry.cell_asp_cny_per_kwh", Decimal("0.70")),),
+                falsifiers=("utilization_outside_range",),
+            ),
+            mechanisms=mechanisms,
+        )
+
+
 def test_industry_calculation_is_deterministic_under_low_ambient_decimal_precision() -> None:
     mechanisms = formal_industry_mechanisms()
     expected = compile_industry_state(inputs=complete_inputs(), mechanisms=mechanisms)

@@ -273,6 +273,7 @@ def _range_payload(value: IndustryRange) -> dict[str, str]:
 
 def _state_content_hash(
     *,
+    state_id: UUID,
     inputs: IndustryInputs,
     values: tuple[
         Decimal,
@@ -293,6 +294,7 @@ def _state_content_hash(
     """Hash every replay-relevant state field, including its mechanism binding."""
     return canonical_hash(
         {
+            "state_id": str(state_id),
             "inputs": {
                 field_name: (
                     str(getattr(inputs, field_name))
@@ -343,6 +345,7 @@ def validate_industry_state_integrity(
         expected_falsifiers = _falsifier_keys(formal_mechanisms)
         expected_metrics = _metric_collection(values)
         expected_content_hash = _state_content_hash(
+            state_id=value.id,
             inputs=value.inputs,
             values=values,
             metrics=expected_metrics,
@@ -401,7 +404,9 @@ def compile_industry_state(
     lineage = _mechanism_lineage(formal_mechanisms)
     falsifier_keys = _falsifier_keys(formal_mechanisms)
     metrics = _metric_collection(values)
+    state_id = new_industry_state_id()
     state_content_hash = _state_content_hash(
+        state_id=state_id,
         inputs=inputs,
         values=values,
         metrics=metrics,
@@ -410,7 +415,7 @@ def compile_industry_state(
         compiled_mechanism_hash=mechanisms.content_hash,
     )
     return IndustryState(
-        id=new_industry_state_id(),
+        id=state_id,
         inputs=inputs,
         battery_demand_gwh=values[0],
         nominal_capacity_gwh=values[1],
