@@ -233,7 +233,7 @@ class UnderwritingAnswerabilityEvaluation(Base):
     research_debt_keys: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     resolvable_within_mandate: Mapped[bool] = mapped_column(Boolean, nullable=False)
     allowed_action: Mapped[str] = mapped_column(String(48), nullable=False)
-    resolution_requirements: Mapped[dict] = mapped_column(JSON, nullable=False)
+    resolution_requirements: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("uw_answerability_evaluations.id"), nullable=True
     )
