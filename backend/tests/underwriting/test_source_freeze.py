@@ -12,7 +12,11 @@ import sys
 import pytest
 
 from app.models.ledger import ValidationError
-from app.underwriting.services.source_freeze import freeze_manifest, freeze_observations
+from app.underwriting.services.source_freeze import (
+    FrozenSourceManifest,
+    freeze_manifest,
+    freeze_observations,
+)
 from app.underwriting.services.source_policy import (
     AuthorizationState,
     DisplayPolicy,
@@ -150,14 +154,14 @@ def test_observation_freeze_rejects_unknown_and_duplicate_identities() -> None:
 
 
 def test_reference_only_source_cannot_be_the_only_reported_company_source() -> None:
-    manifest = freeze_manifest(manifest_fixture(), cutoff=CUTOFF)
+    payload = manifest_fixture()
+    payload["sources"][0]["authorization"] = "reference_only"  # type: ignore[index]
+    manifest = freeze_manifest(payload, cutoff=CUTOFF)
     with pytest.raises(
         ValidationError,
         match="reference_only source cannot be the sole source of a reported company observation",
     ):
-        freeze_observations(
-            [observation_fixture(source_id="iea-outlook")], source_manifest=manifest
-        )
+        freeze_observations([observation_fixture()], source_manifest=manifest)
 
 
 @pytest.mark.parametrize("missing", ["source_role", "research_object_kind"])
@@ -170,8 +174,12 @@ def test_observation_freeze_requires_controlled_evidence_classification(missing:
 
 
 def test_reference_only_source_needs_matching_authorized_primary_evidence() -> None:
-    manifest = freeze_manifest(manifest_fixture(), cutoff=CUTOFF)
-    reference_only = observation_fixture(source_id="iea-outlook")
+    payload = manifest_fixture()
+    payload["sources"][1]["source_id"] = "catl-annual-report-reference"  # type: ignore[index]
+    payload["sources"][1]["authority"] = "issuer_filing"  # type: ignore[index]
+    payload["sources"][1]["authorization"] = "reference_only"  # type: ignore[index]
+    manifest = freeze_manifest(payload, cutoff=CUTOFF)
+    reference_only = observation_fixture(source_id="catl-annual-report-reference")
     reference_only["supporting_source_ids"] = ["catl-annual-report"]
     with pytest.raises(
         ValidationError,
@@ -231,6 +239,29 @@ print(freeze_manifest(payload, cutoff=cutoff).manifest_hash)
             ).strip()
         )
     assert outputs[0] == outputs[1] == freeze_manifest(manifest, cutoff=CUTOFF).manifest_hash
+
+
+def test_frozen_manifest_is_deeply_immutable_and_cannot_be_directly_forged() -> None:
+    payload = manifest_fixture()
+    payload["sources"][0]["metadata"] = {"nested": ["immutable"]}  # type: ignore[index]
+    manifest = freeze_manifest(payload, cutoff=CUTOFF)
+    with pytest.raises(TypeError):
+        manifest.sources[0]["authorization"] = "reference_only"
+    with pytest.raises(TypeError):
+        manifest.sources[0]["metadata"]["nested"] = ()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        FrozenSourceManifest()
+    with pytest.raises(TypeError):
+        FrozenSourceManifest(CUTOFF, (), "a" * 64, ())
+
+
+def test_company_metric_cannot_relabel_itself_as_industry_evidence() -> None:
+    manifest = freeze_manifest(manifest_fixture(), cutoff=CUTOFF)
+    relabeled = observation_fixture()
+    relabeled["source_role"] = "official_industry"
+    relabeled["research_object_kind"] = "industry"
+    with pytest.raises(ValidationError, match="source_role does not match source authority"):
+        freeze_observations([relabeled], source_manifest=manifest)
 
 
 def test_observation_freeze_normalizes_and_stably_orders_observations() -> None:

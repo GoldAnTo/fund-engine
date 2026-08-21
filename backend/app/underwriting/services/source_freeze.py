@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 import math
+from types import MappingProxyType
 
 from app.models.ledger import ValidationError
 from app.underwriting.domain.metrics import MetricObservation, SourceRole
@@ -17,12 +18,61 @@ from app.underwriting.services.source_policy import (
 )
 
 
-@dataclass(frozen=True, slots=True)
+_AUTHORITY_SOURCE_ROLES = {
+    "issuer_filing": SourceRole.REPORTED,
+    "issuer_publication": SourceRole.REPORTED,
+    "issuer_website": SourceRole.REPORTED,
+    "exchange_filing": SourceRole.REPORTED,
+    "official_industry": SourceRole.OFFICIAL_INDUSTRY,
+    "intergovernmental_agency": SourceRole.OFFICIAL_INDUSTRY,
+    "government_archive": SourceRole.OFFICIAL_INDUSTRY,
+    "government_preserved": SourceRole.OFFICIAL_INDUSTRY,
+    "government_statistic": SourceRole.OFFICIAL_INDUSTRY,
+    "derived": SourceRole.DERIVED,
+    "assumption": SourceRole.ASSUMPTION,
+}
+_COMPANY_METRIC_ROLES = frozenset({SourceRole.REPORTED, SourceRole.DERIVED})
+_INDUSTRY_METRIC_ROLES = frozenset(
+    {SourceRole.OFFICIAL_INDUSTRY, SourceRole.DERIVED, SourceRole.ASSUMPTION}
+)
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class FrozenSourceManifest:
     cutoff: datetime
     source_ids: tuple[str, ...]
     manifest_hash: str
-    sources: tuple[dict[str, object], ...]
+    sources: tuple[Mapping[str, object], ...]
+
+    def __init__(self) -> None:
+        raise TypeError("FrozenSourceManifest must be created by freeze_manifest")
+
+
+def _freeze_json_value(value: object) -> object:
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze_json_value(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_json_value(item) for item in value)
+    return value
+
+
+def _frozen_manifest(
+    *,
+    cutoff: datetime,
+    source_ids: tuple[str, ...],
+    manifest_hash: str,
+    sources: tuple[dict[str, object], ...],
+) -> FrozenSourceManifest:
+    """Build the immutable result only after policy and hash validation."""
+    frozen_sources = tuple(_freeze_json_value(source) for source in sources)
+    if not all(isinstance(source, Mapping) for source in frozen_sources):
+        raise AssertionError("validated sources must be mappings")
+    value = object.__new__(FrozenSourceManifest)
+    object.__setattr__(value, "cutoff", cutoff)
+    object.__setattr__(value, "source_ids", source_ids)
+    object.__setattr__(value, "manifest_hash", manifest_hash)
+    object.__setattr__(value, "sources", frozen_sources)
+    return value
 
 
 def _require_text(value: object, field: str) -> str:
@@ -127,7 +177,7 @@ def freeze_manifest(payload: Mapping[str, object], cutoff: datetime) -> FrozenSo
         "cutoff": normalized_cutoff.isoformat(),
         "sources": normalized,
     }
-    return FrozenSourceManifest(
+    return _frozen_manifest(
         cutoff=normalized_cutoff,
         source_ids=source_ids,
         manifest_hash=canonical_hash(serialized),
@@ -187,7 +237,7 @@ def observation_sort_key(value: MetricObservation) -> tuple[object, ...]:
     )
 
 
-def _observation_classification(
+def _submitted_observation_classification(
     raw: Mapping[str, object],
 ) -> tuple[SourceRole, ResearchObjectKind]:
     source_role = raw.get("source_role")
@@ -200,6 +250,24 @@ def _observation_classification(
         return SourceRole(source_role), ResearchObjectKind(research_object_kind)
     except ValueError as exc:
         raise ValidationError("observation evidence classification is invalid") from exc
+
+
+def _trusted_source_role(source: Mapping[str, object]) -> SourceRole:
+    authority = _require_text(source.get("authority"), "authority")
+    try:
+        return _AUTHORITY_SOURCE_ROLES[authority]
+    except KeyError as exc:
+        raise ValidationError("source authority cannot classify observations") from exc
+
+
+def _trusted_metric_context(
+    definition_key: str,
+) -> tuple[ResearchObjectKind, frozenset[SourceRole]]:
+    if definition_key.startswith(("company.", "segment.")):
+        return ResearchObjectKind.COMPANY, _COMPANY_METRIC_ROLES
+    if definition_key.startswith("industry."):
+        return ResearchObjectKind.INDUSTRY, _INDUSTRY_METRIC_ROLES
+    raise ValidationError("metric context is unknown")
 
 
 def _reported_company_evidence_key(value: MetricObservation) -> tuple[object, ...]:
@@ -229,6 +297,10 @@ def freeze_observations(
         str(source["source_id"]): evaluate_source_policy(source).authorization
         for source in source_manifest.sources
     }
+    source_role_by_source = {
+        str(source["source_id"]): _trusted_source_role(source)
+        for source in source_manifest.sources
+    }
     seen: set[tuple[object, ...]] = set()
     result: list[MetricObservation] = []
     reported_company_sources: dict[tuple[object, ...], set[str]] = {}
@@ -241,7 +313,19 @@ def freeze_observations(
         if raw.get("conflict_group") and raw.get("resolution") != "resolved":
             raise ValidationError("unresolved source conflict")
         value = observation_from_record(raw, cutoff=source_manifest.cutoff)
-        source_role, research_object_kind = _observation_classification(raw)
+        submitted_source_role, submitted_research_object_kind = (
+            _submitted_observation_classification(raw)
+        )
+        trusted_source_role = source_role_by_source[source_id]
+        trusted_research_object_kind, allowed_source_roles = _trusted_metric_context(
+            value.definition_key
+        )
+        if submitted_source_role is not trusted_source_role:
+            raise ValidationError("source_role does not match source authority")
+        if submitted_research_object_kind is not trusted_research_object_kind:
+            raise ValidationError("research_object_kind does not match metric context")
+        if trusted_source_role not in allowed_source_roles:
+            raise ValidationError("source authority is not allowed for metric context")
         identity = (
             value.definition_key,
             value.definition_version,
@@ -253,8 +337,8 @@ def freeze_observations(
             raise ValidationError("observation identity must be unique")
         seen.add(identity)
         if (
-            source_role is SourceRole.REPORTED
-            and research_object_kind is ResearchObjectKind.COMPANY
+            trusted_source_role is SourceRole.REPORTED
+            and trusted_research_object_kind is ResearchObjectKind.COMPANY
         ):
             reported_company_sources.setdefault(
                 _reported_company_evidence_key(value), set()
