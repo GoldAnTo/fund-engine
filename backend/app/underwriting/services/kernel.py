@@ -1,0 +1,208 @@
+"""Validated write operations for the underwriting research kernel."""
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import UTC, datetime
+from decimal import Decimal
+import hashlib
+import json
+import re
+import uuid
+
+from sqlalchemy.orm import Session
+
+from app.models.ledger import ValidationError
+from app.underwriting.domain.types import (
+    HistoricalBasisInput,
+    InvestmentMandateInput,
+    LedgerEntryInput,
+    ResearchObjectKind,
+)
+from app.underwriting.persistence.repository import UnderwritingRepository
+
+
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+_RELATION_KINDS = {
+    "industry_exposes_company": (
+        ResearchObjectKind.INDUSTRY.value,
+        ResearchObjectKind.COMPANY.value,
+    ),
+    "company_has_security": (
+        ResearchObjectKind.COMPANY.value,
+        ResearchObjectKind.SECURITY.value,
+    ),
+}
+
+
+def canonical_hash(value: object) -> str:
+    """Return the stable SHA-256 digest for a JSON-compatible value."""
+    serialized = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+class UnderwritingKernelService:
+    """Validate and append immutable underwriting kernel records."""
+
+    def __init__(self, session: Session, now: Callable[[], datetime]) -> None:
+        self._repository = UnderwritingRepository(session)
+        self._now = now
+
+    @staticmethod
+    def _require_text(value: str, field: str) -> str:
+        if not isinstance(value, str) or not (normalized := value.strip()):
+            raise ValidationError(f"{field} must not be empty")
+        return normalized
+
+    @staticmethod
+    def _require_timezone(value: datetime, field: str) -> None:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValidationError(f"{field} must be timezone-aware")
+
+    @staticmethod
+    def _stored_datetime(value: datetime) -> datetime:
+        """Restore SQLite's timezone-less storage representation as UTC."""
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+    def add_object(
+        self,
+        kind: ResearchObjectKind,
+        external_key: str,
+        canonical_name: str,
+    ):
+        return self._repository.add_object(
+            kind=kind.value,
+            external_key=self._require_text(external_key, "external_key"),
+            canonical_name=self._require_text(canonical_name, "canonical_name"),
+            created_at=self._now(),
+        )
+
+    def link_objects(
+        self,
+        parent_id: uuid.UUID,
+        child_id: uuid.UUID,
+        relation_type: str,
+    ):
+        try:
+            expected_parent_kind, expected_child_kind = _RELATION_KINDS[relation_type]
+        except KeyError as exc:
+            raise ValidationError("relation_type is invalid") from exc
+
+        parent = self._repository.object(parent_id)
+        child = self._repository.object(child_id)
+        if parent is None or child is None:
+            raise ValidationError("research object not found")
+        if parent.kind != expected_parent_kind or child.kind != expected_child_kind:
+            raise ValidationError(
+                f"{relation_type} requires {expected_parent_kind} parent and "
+                f"{expected_child_kind} child"
+            )
+        return self._repository.add_relation(
+            parent_id=parent_id,
+            child_id=child_id,
+            relation_type=relation_type,
+            created_at=self._now(),
+        )
+
+    def add_basis(self, value: HistoricalBasisInput):
+        self._require_timezone(value.cutoff, "cutoff")
+        if value.price_as_of is not None:
+            self._require_timezone(value.price_as_of, "price_as_of")
+            if value.price_as_of > value.cutoff:
+                raise ValidationError("price_as_of must not be after cutoff")
+        if not isinstance(value.source_manifest_hash, str) or not _SHA256_HEX.fullmatch(
+            value.source_manifest_hash
+        ):
+            raise ValidationError("source_manifest_hash must be a sha256 hex digest")
+        return self._repository.add_basis(value, created_at=self._now())
+
+    def append_ledger_entry(
+        self,
+        object_id: uuid.UUID,
+        basis_id: uuid.UUID,
+        value: LedgerEntryInput,
+        expected_parent_id: uuid.UUID | None,
+    ):
+        research_object = self._repository.object(object_id)
+        if research_object is None:
+            raise ValidationError("research object not found")
+        basis = self._repository.basis(basis_id)
+        if basis is None:
+            raise ValidationError("historical basis not found")
+
+        self._require_timezone(value.effective_at, "effective_at")
+        self._require_timezone(value.available_at, "available_at")
+        if value.available_at > self._stored_datetime(basis.cutoff):
+            raise ValidationError("available_at must not be after basis cutoff")
+
+        family_key = self._require_text(value.family_key, "family_key")
+        entry_type = self._require_text(value.entry_type, "entry_type")
+        source_boundary = self._require_text(value.source_boundary, "source_boundary")
+        ledger_kind = value.ledger_kind.value
+        content_hash = canonical_hash(
+            {
+                "ledger_kind": ledger_kind,
+                "family_key": family_key,
+                "entry_type": entry_type,
+                "payload": value.payload,
+                "effective_at": value.effective_at,
+                "available_at": value.available_at,
+                "source_boundary": source_boundary,
+            }
+        )
+        return self._repository.append_ledger_entry(
+            object_id=object_id,
+            basis_id=basis_id,
+            ledger_kind=ledger_kind,
+            family_key=family_key,
+            entry_type=entry_type,
+            payload=value.payload,
+            effective_at=value.effective_at,
+            available_at=value.available_at,
+            source_boundary=source_boundary,
+            content_hash=content_hash,
+            expected_parent_id=expected_parent_id,
+            created_at=self._now(),
+        )
+
+    def _validate_mandate(self, value: InvestmentMandateInput) -> dict[str, object]:
+        mandate_key = self._require_text(value.mandate_key, "mandate_key")
+        if value.horizon_years not in (3, 4, 5):
+            raise ValidationError("horizon_years must be one of 3, 4, 5")
+        base_currency = self._require_text(value.base_currency, "base_currency")
+        if not re.fullmatch(r"[A-Z]{3}", base_currency):
+            raise ValidationError("base_currency must be a three-letter uppercase code")
+        if not Decimal("0") <= value.required_return < Decimal("1"):
+            raise ValidationError("required_return must be in [0, 1)")
+        if not Decimal("0") <= value.permanent_loss_limit <= Decimal("1"):
+            raise ValidationError("permanent_loss_limit must be in [0, 1]")
+        if not value.comparison_set:
+            raise ValidationError("comparison_set must not be empty")
+        return {
+            "mandate_key": mandate_key,
+            "horizon_years": value.horizon_years,
+            "base_currency": base_currency,
+            "required_return": value.required_return,
+            "permanent_loss_limit": value.permanent_loss_limit,
+            "comparison_set": [
+                self._require_text(item, "comparison_set")
+                for item in value.comparison_set
+            ],
+        }
+
+    def append_mandate(
+        self,
+        value: InvestmentMandateInput,
+        expected_parent_id: uuid.UUID | None,
+    ):
+        normalized = self._validate_mandate(value)
+        return self._repository.append_mandate_version(
+            **normalized,
+            expected_parent_id=expected_parent_id,
+            created_at=self._now(),
+        )
