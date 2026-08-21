@@ -336,6 +336,7 @@ def test_dependency_context_rejects_metric_unavailable_at_cutoff() -> None:
                 ),
             ),
             source_manifest=dependency_context().source_manifest,
+            metric_observations=dependency_context().metric_observations,
         )
 
 
@@ -385,6 +386,7 @@ def test_dependency_context_rejects_definition_from_foreign_manifest() -> None:
                 ),
             ),
             source_manifest=frozen,
+            metric_observations=dependency_context().metric_observations,
         )
 
 
@@ -426,6 +428,7 @@ def test_compiled_hash_changes_when_manifest_content_changes_under_same_source_i
             for dependency in dependency_context().metric_definitions
         ),
         source_manifest=changed_manifest,
+        metric_observations=dependency_context().metric_observations,
     )
     second = compile_mechanisms((formal_mechanism(),), dependencies=changed_context)
     assert first.source_ids == second.source_ids == ("iea-2025",)
@@ -443,6 +446,7 @@ def test_compiled_hash_keeps_definition_version_and_content_provenance() -> None
         cutoff=baseline.cutoff,
         metric_definitions=(changed_definition,) + baseline.metric_definitions[1:],
         source_manifest=baseline.source_manifest,
+        metric_observations=(replace(baseline.metric_observations[0], definition_version=2),) + baseline.metric_observations[1:],
     )
     second = compile_mechanisms((formal_mechanism(),), dependencies=changed)
     assert first.metric_definition_bindings == second.metric_definition_bindings

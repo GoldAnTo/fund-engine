@@ -109,8 +109,8 @@ class MechanismDependencyContext:
             raise ValidationError("source manifest cutoff must match dependency cutoff")
         if not isinstance(self.metric_definitions, tuple) or not self.metric_definitions:
             raise ValidationError("metric_definitions must be a non-empty tuple")
-        if not isinstance(self.metric_observations, tuple):
-            raise ValidationError("metric_observations must be a tuple")
+        if not isinstance(self.metric_observations, tuple) or not self.metric_observations:
+            raise ValidationError("metric_observations must be a non-empty tuple")
         if not all(type(item) is MetricObservation for item in self.metric_observations):
             raise ValidationError("metric_observations must contain frozen MetricObservation values")
         observations = {item.definition_key: item for item in self.metric_observations}
@@ -128,7 +128,7 @@ class MechanismDependencyContext:
             if item.source_manifest_hash != self.source_manifest.manifest_hash:
                 raise ValidationError("definition source manifest hash does not match dependency manifest")
             observation = observations.get(item.metric_key)
-            if self.metric_observations and (observation is None or observation.definition_version != item.definition_version):
+            if observation is None or observation.definition_version != item.definition_version:
                 raise ValidationError("metric definition must bind an actual frozen observation")
             if observation is not None and (observation.source_id not in self.source_manifest.source_ids or observation.available_at > cutoff):
                 raise ValidationError("frozen observation is unavailable at cutoff")
