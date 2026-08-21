@@ -143,5 +143,5 @@ def reconcile(total: Decimal, parts: tuple[Decimal, ...], tolerance: Decimal) ->
     if tolerance < 0:
         raise ValidationError("tolerance must not be negative")
     parts_total = sum(parts, Decimal("0"))
-    delta = abs(total - parts_total)
+    delta = total - parts_total
     return ReconciliationResult(total, parts_total, delta, tolerance, abs(delta) <= tolerance)

@@ -97,11 +97,24 @@ def test_observation_canonicalizes_dimensions_and_rejects_duplicates():
 
 def test_reconcile_reports_delta_and_balanced_status():
     result = reconcile(
-        Decimal("363012554000"),
-        (Decimal("253041337000"), Decimal("109971216000")),
+        Decimal("362012554000"),
+        (
+            Decimal("253041337000"),
+            Decimal("57290460000"),
+            Decimal("28699935000"),
+            Decimal("5493003000"),
+            Decimal("17487818000"),
+        ),
         Decimal("1000"),
     )
     assert result == ReconciliationResult(
-        Decimal("363012554000"), Decimal("363012553000"), Decimal("1000"), Decimal("1000"), True
+        Decimal("362012554000"), Decimal("362012553000"), Decimal("1000"), Decimal("1000"), True
     )
     assert not reconcile(Decimal("362012554000"), (Decimal("1"),), Decimal("1000")).balanced
+
+
+def test_reconcile_preserves_negative_delta_when_parts_exceed_total():
+    result = reconcile(Decimal("100"), (Decimal("101"),), Decimal("1"))
+    assert result.delta == Decimal("-1")
+    assert result.balanced
+    assert not reconcile(Decimal("100"), (Decimal("102"),), Decimal("1")).balanced
