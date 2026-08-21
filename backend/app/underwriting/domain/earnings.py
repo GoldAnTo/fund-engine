@@ -132,12 +132,12 @@ class MetricLineageDependency:
         validate_compiled_mechanism_integrity(context)
         if self.cutoff != context.cutoff or self.numerator.source_manifest_hash != context.source_manifest_hash or self.denominator.source_manifest_hash != context.source_manifest_hash:
             raise ValidationError("lineage does not match frozen metric context")
-        records = {record.metric_key: record for record in context.frozen_metric_definition_provenance}
+        records = {record.metric_key: record for record in context.frozen_metric_observations}
         for observation, expected_key in ((self.numerator, numerator_key), (self.denominator, denominator_key)):
             record = records.get(expected_key)
             if record is None or observation.source_id not in context.source_ids:
                 raise ValidationError("lineage metric is unavailable in frozen context")
-            if (observation.metric_key, str(observation.definition_id), observation.definition_version, observation.definition_content_hash, observation.available_at) != (record.metric_key, str(record.definition_id), record.definition_version, record.content_hash, record.available_at):
+            if (observation.observation_id, observation.metric_key, str(observation.definition_id), observation.definition_version, observation.definition_content_hash, observation.source_id, observation.source_manifest_hash, observation.available_at) != (record.observation_id, record.metric_key, str(record.definition_id), record.definition_version, record.definition_content_hash, record.source_id, record.source_manifest_hash, record.available_at):
                 raise ValidationError("lineage does not match frozen metric definition")
 
 
@@ -461,6 +461,19 @@ class VerifiedIndustryDependency:
         expected_scenario_hash = _canonical_hash(asdict(self.scenario))
         if self.scenario_content_hash != expected_scenario_hash:
             raise ValidationError("verified industry dependency scenario content hash does not reconcile")
+        self.validate()
+
+    def validate(self) -> None:
+        from app.underwriting.services.industry_state import compile_industry_scenario, validate_industry_state_integrity
+        from app.underwriting.services.mechanism_compiler import CompiledMechanisms
+        from app.underwriting.domain.industry import ScenarioSpec
+        if type(self.compiled_mechanisms) is not CompiledMechanisms:
+            raise ValidationError("verified industry dependency requires compiled mechanisms")
+        validate_industry_state_integrity(self.industry_state, mechanisms=self.compiled_mechanisms)
+        expected = compile_industry_scenario(parent=self.industry_state, spec=ScenarioSpec(self.scenario.kind, self.scenario.overrides, self.scenario.falsifier_keys), mechanisms=self.compiled_mechanisms)
+        replay_fields = tuple(field for field in self.scenario.__dataclass_fields__ if field != "id")
+        if any(getattr(self.scenario, field) != getattr(expected, field) for field in replay_fields):
+            raise ValidationError("verified industry dependency scenario does not replay")
 
 
 @dataclass(frozen=True, slots=True)
@@ -698,6 +711,7 @@ class EarningsEngine:
         else:
             if type(self.industry_dependency) is not VerifiedIndustryDependency:
                 raise ValidationError("verified industry dependency is required for scenario")
+            self.industry_dependency.validate()
             if (
                 self.industry_dependency.industry_state.id != self.industry_state_id
                 or self.industry_dependency.scenario != self.scenario

@@ -84,26 +84,26 @@ def _metric_context():
 def _lineage(key: str, numerator: str) -> MetricLineageDependency:
     context = _metric_context()
     cutoff = context.cutoff
-    records = {item.metric_key: item for item in context.frozen_metric_definition_provenance}
+    records = {item.metric_key: item for item in context.frozen_metric_observations}
     numerator_record = records[f"segment.{key}.{numerator}"]
     denominator_record = records[f"segment.{key}.volume_gwh"]
     return MetricLineageDependency(
         numerator=ResolvedMetricObservation(
-            observation_id=uuid4(),
+            observation_id=numerator_record.observation_id,
             metric_key=f"segment.{key}.{numerator}",
             definition_id=numerator_record.definition_id,
             definition_version=numerator_record.definition_version,
-            definition_content_hash=numerator_record.content_hash,
+            definition_content_hash=numerator_record.definition_content_hash,
             source_id="industry-source-2025",
             source_manifest_hash=context.source_manifest_hash,
             available_at=numerator_record.available_at,
         ),
         denominator=ResolvedMetricObservation(
-            observation_id=uuid4(),
+            observation_id=denominator_record.observation_id,
             metric_key=f"segment.{key}.volume_gwh",
             definition_id=denominator_record.definition_id,
             definition_version=denominator_record.definition_version,
-            definition_content_hash=denominator_record.content_hash,
+            definition_content_hash=denominator_record.definition_content_hash,
             source_id="industry-source-2025",
             source_manifest_hash=context.source_manifest_hash,
             available_at=denominator_record.available_at,

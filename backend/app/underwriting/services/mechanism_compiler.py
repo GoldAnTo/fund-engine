@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import DecimalException
 import re
-from uuid import UUID
+from uuid import UUID, NAMESPACE_URL, uuid5
 
 from app.models.ledger import ValidationError
 from app.underwriting.domain.mechanisms import (
@@ -76,6 +76,18 @@ class MetricDefinitionDependency:
         ):
             raise ValidationError("definition source_manifest_hash must be a lowercase SHA-256")
         object.__setattr__(self, "available_at", _utc(self.available_at, "available_at"))
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenResolvedObservation:
+    observation_id: UUID
+    metric_key: str
+    definition_id: UUID | str
+    definition_version: int
+    definition_content_hash: str
+    source_id: str
+    source_manifest_hash: str
+    available_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +166,7 @@ class CompiledMechanisms:
     metric_definition_bindings: tuple[tuple[str, str], ...]
     metric_definition_provenance: tuple[MetricDefinitionDependency, ...]
     frozen_metric_definition_provenance: tuple[MetricDefinitionDependency, ...]
+    frozen_metric_observations: tuple[FrozenResolvedObservation, ...]
     source_manifest_hash: str
     source_ids: tuple[str, ...]
 
@@ -334,6 +347,7 @@ def _compiled_payload(
     metric_definition_bindings: tuple[tuple[str, str], ...],
     metric_definition_provenance: tuple[MetricDefinitionDependency, ...],
     frozen_metric_definition_provenance: tuple[MetricDefinitionDependency, ...],
+    frozen_metric_observations: tuple[FrozenResolvedObservation, ...],
     source_ids: tuple[str, ...],
 ) -> dict[str, object]:
     """The complete integrity-covered representation of compiled mechanisms."""
@@ -363,6 +377,10 @@ def _compiled_payload(
                 "available_at": dependency.available_at.isoformat(),
             }
             for dependency in frozen_metric_definition_provenance
+        ),
+        "frozen_metric_observations": tuple(
+            {"observation_id": str(item.observation_id), "metric_key": item.metric_key, "definition_id": str(item.definition_id), "definition_version": item.definition_version, "definition_content_hash": item.definition_content_hash, "source_id": item.source_id, "source_manifest_hash": item.source_manifest_hash, "available_at": item.available_at.isoformat()}
+            for item in frozen_metric_observations
         ),
         "source_ids": source_ids,
     }
@@ -470,6 +488,7 @@ def validate_compiled_mechanism_integrity(value: CompiledMechanisms) -> None:
             metric_definition_bindings=bindings,
             metric_definition_provenance=value.metric_definition_provenance,
             frozen_metric_definition_provenance=value.frozen_metric_definition_provenance,
+            frozen_metric_observations=value.frozen_metric_observations,
             source_ids=value.source_ids,
         )
     )
@@ -551,6 +570,7 @@ def compile_mechanisms(
                 metric_definition_bindings=ordered_bindings,
                 metric_definition_provenance=ordered_provenance,
                 frozen_metric_definition_provenance=tuple(sorted(dependencies.metric_definitions, key=lambda item: item.metric_key)),
+                frozen_metric_observations=tuple(FrozenResolvedObservation(uuid5(NAMESPACE_URL, f"{item.metric_key}|{item.definition_id}|{item.source_manifest_hash}"), item.metric_key, item.definition_id, item.definition_version, item.content_hash, dependencies.source_manifest.source_ids[0], item.source_manifest_hash, item.available_at) for item in sorted(dependencies.metric_definitions, key=lambda item: item.metric_key)),
                 source_ids=ordered_sources,
             )
         ),
@@ -558,6 +578,7 @@ def compile_mechanisms(
         metric_definition_bindings=ordered_bindings,
         metric_definition_provenance=ordered_provenance,
         frozen_metric_definition_provenance=tuple(sorted(dependencies.metric_definitions, key=lambda item: item.metric_key)),
+        frozen_metric_observations=tuple(FrozenResolvedObservation(uuid5(NAMESPACE_URL, f"{item.metric_key}|{item.definition_id}|{item.source_manifest_hash}"), item.metric_key, item.definition_id, item.definition_version, item.content_hash, dependencies.source_manifest.source_ids[0], item.source_manifest_hash, item.available_at) for item in sorted(dependencies.metric_definitions, key=lambda item: item.metric_key)),
         source_manifest_hash=dependencies.source_manifest.manifest_hash,
         source_ids=ordered_sources,
     )
