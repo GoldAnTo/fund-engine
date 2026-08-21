@@ -95,6 +95,41 @@ def test_observation_canonicalizes_dimensions_and_rejects_duplicates():
         )
 
 
+@pytest.mark.parametrize("bad", [Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")])
+def test_metric_definition_rejects_non_finite_tolerance(bad):
+    with pytest.raises(ValidationError):
+        definition(reconciliation_tolerance=bad)
+
+
+@pytest.mark.parametrize("bad", [Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")])
+def test_observation_rejects_non_finite_values(bad):
+    with pytest.raises(ValidationError):
+        MetricObservation.create(
+            definition(), bad, UTC_NOW, UTC_NOW, UTC_NOW, UTC_NOW, UTC_NOW,
+            "source", "locator", "CNY", (),
+        )
+
+
+def test_direct_observation_construction_cannot_bypass_validation():
+    with pytest.raises(ValidationError):
+        MetricObservation(
+            "revenue", 0, Decimal("1"), "CNY", UTC_NOW.replace(tzinfo=None), UTC_NOW,
+            UTC_NOW, UTC_NOW, "source", "locator", (),
+        )
+    with pytest.raises(ValidationError):
+        MetricObservation(
+            "revenue", 1, Decimal("1"), "CNY", UTC_NOW, UTC_NOW - timedelta(days=1),
+            UTC_NOW, UTC_NOW, "", "locator", (),
+        )
+
+
+def test_reconcile_rejects_non_decimal_or_non_finite_operands():
+    with pytest.raises(ValidationError):
+        reconcile(1, (Decimal("1"),), Decimal("0"))
+    with pytest.raises(ValidationError):
+        reconcile(Decimal("1"), (Decimal("NaN"),), Decimal("0"))
+
+
 def test_reconcile_reports_delta_and_balanced_status():
     result = reconcile(
         Decimal("362012554000"),

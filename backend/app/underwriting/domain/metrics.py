@@ -34,6 +34,12 @@ def _require_text(value: str, name: str) -> None:
         raise ValidationError(f"{name} must not be empty")
 
 
+def _require_decimal(value: object, name: str) -> Decimal:
+    if not isinstance(value, Decimal) or not value.is_finite():
+        raise ValidationError(f"{name} must be a finite Decimal")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class MetricDefinition:
     key: str
@@ -50,6 +56,7 @@ class MetricDefinition:
             _require_text(value, name)
         if self.version < 1:
             raise ValidationError("version must be at least 1")
+        _require_decimal(self.reconciliation_tolerance, "reconciliation_tolerance")
         if self.reconciliation_tolerance < 0:
             raise ValidationError("reconciliation_tolerance must not be negative")
 
@@ -73,6 +80,21 @@ class MetricObservation:
     source_id: str
     source_locator: str
     dimensions: tuple[tuple[str, str], ...]
+
+    def __post_init__(self) -> None:
+        _require_text(self.definition_key, "definition_key")
+        if self.definition_version < 1:
+            raise ValidationError("definition_version must be at least 1")
+        _require_decimal(self.value, "value")
+        _require_text(self.unit, "unit")
+        for name in ("observed_start", "observed_end", "effective_at", "available_at"):
+            normalized = _utc(getattr(self, name), name)
+            object.__setattr__(self, name, normalized)
+        if self.observed_start > self.observed_end:
+            raise ValidationError("observed_start must not exceed observed_end")
+        _require_text(self.source_id, "source_id")
+        _require_text(self.source_locator, "source_locator")
+        object.__setattr__(self, "dimensions", _canonical_dimensions(self.dimensions))
 
     @classmethod
     def create(
@@ -105,16 +127,6 @@ class MetricObservation:
             raise ValidationError("available_at must not exceed cutoff")
         if normalized_start > normalized_end:
             raise ValidationError("observed_start must not exceed observed_end")
-        items = tuple(dimensions.items()) if isinstance(dimensions, dict) else tuple(dimensions)
-        canonical: list[tuple[str, str]] = []
-        keys: set[str] = set()
-        for key, dimension_value in items:
-            _require_text(key, "dimension key")
-            _require_text(dimension_value, "dimension value")
-            if key in keys:
-                raise ValidationError("dimension keys must be unique")
-            keys.add(key)
-            canonical.append((key, dimension_value))
         return cls(
             definition.key,
             definition.version,
@@ -126,8 +138,28 @@ class MetricObservation:
             normalized_available,
             source_id,
             source_locator,
-            tuple(sorted(canonical)),
+            dimensions,
         )
+
+
+def _canonical_dimensions(
+    dimensions: Iterable[tuple[str, str]] | dict[str, str],
+) -> tuple[tuple[str, str], ...]:
+    items = tuple(dimensions.items()) if isinstance(dimensions, dict) else tuple(dimensions)
+    canonical: list[tuple[str, str]] = []
+    keys: set[str] = set()
+    for item in items:
+        try:
+            key, dimension_value = item
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("dimensions must contain key/value pairs") from exc
+        _require_text(key, "dimension key")
+        _require_text(dimension_value, "dimension value")
+        if key in keys:
+            raise ValidationError("dimension keys must be unique")
+        keys.add(key)
+        canonical.append((key, dimension_value))
+    return tuple(sorted(canonical))
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +172,10 @@ class ReconciliationResult:
 
 
 def reconcile(total: Decimal, parts: tuple[Decimal, ...], tolerance: Decimal) -> ReconciliationResult:
+    _require_decimal(total, "total")
+    _require_decimal(tolerance, "tolerance")
+    for part in parts:
+        _require_decimal(part, "part")
     if tolerance < 0:
         raise ValidationError("tolerance must not be negative")
     parts_total = sum(parts, Decimal("0"))
