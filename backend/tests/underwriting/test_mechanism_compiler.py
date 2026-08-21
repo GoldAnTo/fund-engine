@@ -1,6 +1,7 @@
 """Contracts for governed economic mechanism compilation."""
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -14,10 +15,60 @@ from app.underwriting.domain.mechanisms import (
     MechanismStatus,
 )
 from app.underwriting.services.mechanism_compiler import (
+    MechanismDependencyContext,
+    MetricDefinitionDependency,
     compile_mechanisms,
     transition_mechanism,
     validate_formal_mechanism,
 )
+from app.underwriting.services.source_freeze import freeze_manifest
+
+
+CUTOFF = datetime(2025, 5, 15, 15, 59, 59, tzinfo=UTC)
+
+
+def dependency_context(
+    bindings: dict[str, str] | None = None,
+) -> MechanismDependencyContext:
+    metric_bindings = bindings or {
+        "industry.ev_demand_gwh": "metric-demand",
+        "company.battery_shipments_gwh": "metric-shipment",
+        "company.battery_shipments_growth": "metric-growth",
+    }
+    source_manifest = freeze_manifest(
+        {
+            "schema_version": "underwriting.source-manifest.v1",
+            "sources": [
+                {
+                    "source_id": "iea-2025",
+                    "title": "Global EV Outlook 2025",
+                    "locator": "https://example.test/iea-2025",
+                    "published_at": "2025-05-14T00:00:00+00:00",
+                    "first_available_at": "2025-05-14T00:00:00+00:00",
+                    "retrieved_at": "2025-05-14T00:00:00+00:00",
+                    "content_sha256": "a" * 64,
+                    "authority": "official_industry",
+                    "authorization": "authorized",
+                    "display_policy": "derived_only",
+                    "provider_capability": "public_http",
+                    "retention": "hash_locator_and_derived_observations",
+                }
+            ],
+        },
+        cutoff=CUTOFF,
+    )
+    return MechanismDependencyContext(
+        cutoff=CUTOFF,
+        metric_definitions=tuple(
+            MetricDefinitionDependency(
+                metric_key=key,
+                definition_id=definition_id,
+                available_at=datetime(2025, 5, 14, tzinfo=UTC),
+            )
+            for key, definition_id in metric_bindings.items()
+        ),
+        source_manifest=source_manifest,
+    )
 
 
 def formal_mechanism(**overrides: object) -> MechanismPack:
@@ -65,12 +116,7 @@ def test_only_formal_mechanisms_can_compile() -> None:
     with pytest.raises(ValidationError, match="mechanism must be formal"):
         compile_mechanisms(
             (candidate,),
-            metric_definition_ids={
-                "industry.ev_demand_gwh": "metric-demand",
-                "company.battery_shipments_gwh": "metric-shipment",
-                "company.battery_shipments_growth": "metric-growth",
-            },
-            source_ids={"iea-2025"},
+            dependencies=dependency_context(),
         )
 
 
@@ -144,8 +190,7 @@ def test_compiler_requires_known_canonical_inputs_outputs_and_sources() -> None:
     with pytest.raises(ValidationError, match="target metric definition"):
         compile_mechanisms(
             (value,),
-            metric_definition_ids={"industry.ev_demand_gwh": "metric-demand"},
-            source_ids={"iea-2025"},
+            dependencies=dependency_context({"industry.ev_demand_gwh": "metric-demand"}),
         )
 
 
@@ -157,10 +202,10 @@ def test_compiler_returns_deterministic_hash_and_dependency_ids() -> None:
         "company.battery_shipments_growth": "metric-growth",
     }
     first = compile_mechanisms(
-        (value,), metric_definition_ids=metric_definition_ids, source_ids={"iea-2025"}
+        (value,), dependencies=dependency_context(metric_definition_ids)
     )
     second = compile_mechanisms(
-        (value,), metric_definition_ids=dict(reversed(tuple(metric_definition_ids.items()))), source_ids={"iea-2025"}
+        (value,), dependencies=dependency_context(dict(reversed(tuple(metric_definition_ids.items()))))
     )
     assert first.content_hash == second.content_hash
     assert first.metric_definition_ids == (
@@ -169,6 +214,72 @@ def test_compiler_returns_deterministic_hash_and_dependency_ids() -> None:
         "metric-shipment",
     )
     assert first.source_ids == ("iea-2025",)
+    assert first.cutoff == CUTOFF
+
+
+def test_compiler_rejects_causal_cycle_across_formal_pack_union() -> None:
+    forward = formal_mechanism(key="demand_to_shipments")
+    reverse = formal_mechanism(
+        key="shipments_to_demand",
+        driver_keys=("company.battery_shipments_gwh",),
+        financial_mappings=(
+            FinancialMapping(
+                "company.battery_shipments_gwh",
+                "industry.ev_demand_gwh",
+                "positive",
+                0,
+                Decimal("0.1"),
+                Decimal("0.9"),
+            ),
+        ),
+    )
+    with pytest.raises(ValidationError, match="causal chain must be acyclic"):
+        compile_mechanisms((forward, reverse), dependencies=dependency_context())
+
+
+def test_dependency_context_rejects_metric_unavailable_at_cutoff() -> None:
+    with pytest.raises(ValidationError, match="metric definition is unavailable at cutoff"):
+        MechanismDependencyContext(
+            cutoff=CUTOFF,
+            metric_definitions=(
+                MetricDefinitionDependency(
+                    metric_key="industry.ev_demand_gwh",
+                    definition_id="metric-demand",
+                    available_at=datetime(2025, 5, 16, tzinfo=UTC),
+                ),
+            ),
+            source_manifest=dependency_context().source_manifest,
+        )
+
+
+def test_compiled_hash_keeps_metric_key_to_definition_id_binding() -> None:
+    value = formal_mechanism()
+    first = compile_mechanisms(
+        (value,),
+        dependencies=dependency_context(
+            {
+                "industry.ev_demand_gwh": "metric-demand",
+                "company.battery_shipments_gwh": "metric-shipment",
+                "company.battery_shipments_growth": "metric-growth",
+            }
+        ),
+    )
+    second = compile_mechanisms(
+        (value,),
+        dependencies=dependency_context(
+            {
+                "industry.ev_demand_gwh": "metric-shipment",
+                "company.battery_shipments_gwh": "metric-demand",
+                "company.battery_shipments_growth": "metric-growth",
+            }
+        ),
+    )
+    assert first.content_hash != second.content_hash
+    assert first.metric_definition_bindings == (
+        ("company.battery_shipments_growth", "metric-growth"),
+        ("company.battery_shipments_gwh", "metric-shipment"),
+        ("industry.ev_demand_gwh", "metric-demand"),
+    )
 
 
 def test_falsifier_requires_complete_operator_bounds() -> None:

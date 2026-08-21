@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Iterable, Mapping
+from datetime import UTC, datetime
 from uuid import UUID
 
 from app.models.ledger import ValidationError
@@ -12,6 +12,8 @@ from app.underwriting.domain.mechanisms import (
     MechanismStatus,
 )
 from app.underwriting.services.kernel import canonical_hash
+from app.underwriting.services.source_freeze import FrozenSourceManifest
+from app.underwriting.services.source_policy import AuthorizationState
 
 
 _NEXT_STATUS = {
@@ -24,48 +26,108 @@ _NEXT_STATUS = {
 }
 
 
-@dataclass(frozen=True, slots=True)
-class CompiledMechanisms:
-    mechanisms: tuple[MechanismPack, ...]
-    content_hash: str
-    metric_definition_ids: tuple[str, ...]
-    source_ids: tuple[str, ...]
-
-    @property
-    def dependency_ids(self) -> tuple[str, ...]:
-        """Stable complete lineage, with metric definitions before sources."""
-        return self.metric_definition_ids + self.source_ids
-
-
 def _require_text(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValidationError(f"{field} must not be empty")
     return value.strip()
 
 
-def _as_dependency_map(
-    values: Mapping[str, UUID | str], field: str
-) -> dict[str, str]:
-    if not isinstance(values, Mapping):
-        raise ValidationError(f"{field} must be a mapping")
-    normalized: dict[str, str] = {}
-    for key, value in values.items():
-        canonical_key = _require_text(key, f"{field} key")
-        dependency_id = str(value)
-        _require_text(dependency_id, f"{field} dependency id")
-        if canonical_key in normalized:
-            raise ValidationError(f"{field} keys must be unique")
-        normalized[canonical_key] = dependency_id
-    return normalized
+def _utc(value: object, field: str) -> datetime:
+    if not isinstance(value, datetime):
+        raise ValidationError(f"{field} must be a datetime")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValidationError(f"{field} must be timezone-aware")
+    return value.astimezone(UTC)
 
 
-def _as_source_ids(values: Iterable[str]) -> set[str]:
-    if isinstance(values, (str, bytes)):
-        raise ValidationError("source_ids must be an iterable of source IDs")
-    try:
-        return {_require_text(value, "source_id") for value in values}
-    except TypeError as exc:
-        raise ValidationError("source_ids must be an iterable of source IDs") from exc
+@dataclass(frozen=True, slots=True)
+class MetricDefinitionDependency:
+    """A metric-definition identity known at a particular historical cutoff."""
+
+    metric_key: str
+    definition_id: UUID | str
+    available_at: datetime
+
+    def __post_init__(self) -> None:
+        _require_text(self.metric_key, "metric_key")
+        _require_text(str(self.definition_id), "definition_id")
+        object.__setattr__(self, "available_at", _utc(self.available_at, "available_at"))
+
+
+@dataclass(frozen=True, slots=True)
+class MechanismDependencyContext:
+    """Frozen, cutoff-bound dependencies permitted for mechanism compilation."""
+
+    cutoff: datetime
+    metric_definitions: tuple[MetricDefinitionDependency, ...]
+    source_manifest: FrozenSourceManifest
+
+    def __post_init__(self) -> None:
+        cutoff = _utc(self.cutoff, "cutoff")
+        object.__setattr__(self, "cutoff", cutoff)
+        if not isinstance(self.source_manifest, FrozenSourceManifest):
+            raise ValidationError("source_manifest must be a FrozenSourceManifest")
+        if self.source_manifest.cutoff != cutoff:
+            raise ValidationError("source manifest cutoff must match dependency cutoff")
+        if not isinstance(self.metric_definitions, tuple) or not self.metric_definitions:
+            raise ValidationError("metric_definitions must be a non-empty tuple")
+        if not all(isinstance(item, MetricDefinitionDependency) for item in self.metric_definitions):
+            raise ValidationError("metric_definitions must contain MetricDefinitionDependency values")
+        keys = tuple(item.metric_key for item in self.metric_definitions)
+        ids = tuple(str(item.definition_id) for item in self.metric_definitions)
+        if len(keys) != len(set(keys)):
+            raise ValidationError("metric definition keys must be unique")
+        if len(ids) != len(set(ids)):
+            raise ValidationError("metric definition IDs must be unique")
+        for item in self.metric_definitions:
+            if item.available_at > cutoff:
+                raise ValidationError("metric definition is unavailable at cutoff")
+        for source in self.source_manifest.sources:
+            _require_text(source.get("source_id"), "source_id")
+            first_available_at = source.get("first_available_at")
+            if not isinstance(first_available_at, str):
+                raise ValidationError("source first_available_at is required")
+            try:
+                available_at = datetime.fromisoformat(first_available_at)
+            except ValueError as exc:
+                raise ValidationError(
+                    "source first_available_at must be an ISO-8601 timestamp"
+                ) from exc
+            if _utc(available_at, "source first_available_at") > cutoff:
+                raise ValidationError("source is unavailable at cutoff")
+            try:
+                authorization = AuthorizationState(source.get("authorization"))
+            except ValueError as exc:
+                raise ValidationError("source authorization is invalid") from exc
+            if authorization is AuthorizationState.FORBIDDEN:
+                raise ValidationError("source authorization is forbidden")
+
+    @property
+    def metric_definition_bindings(self) -> tuple[tuple[str, str], ...]:
+        return tuple(sorted((item.metric_key, str(item.definition_id)) for item in self.metric_definitions))
+
+    @property
+    def metric_definition_map(self) -> dict[str, str]:
+        return dict(self.metric_definition_bindings)
+
+    @property
+    def source_ids(self) -> tuple[str, ...]:
+        return self.source_manifest.source_ids
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledMechanisms:
+    mechanisms: tuple[MechanismPack, ...]
+    cutoff: datetime
+    content_hash: str
+    metric_definition_ids: tuple[str, ...]
+    metric_definition_bindings: tuple[tuple[str, str], ...]
+    source_ids: tuple[str, ...]
+
+    @property
+    def dependency_ids(self) -> tuple[str, ...]:
+        """Stable complete lineage, with metric definitions before sources."""
+        return self.metric_definition_ids + self.source_ids
 
 
 def _causal_chain_is_acyclic(mappings: tuple[FinancialMapping, ...]) -> bool:
@@ -198,20 +260,20 @@ def _mechanism_payload(value: MechanismPack) -> dict[str, object]:
 def compile_mechanisms(
     mechanisms: tuple[MechanismPack, ...],
     *,
-    metric_definition_ids: Mapping[str, UUID | str],
-    source_ids: Iterable[str],
+    dependencies: MechanismDependencyContext,
 ) -> CompiledMechanisms:
     """Compile source-available formal packs into deterministic dependencies.
 
-    The caller supplies dependencies already resolved *at the selected
-    historical basis cutoff*.  This pure compiler verifies that every causal
-    input, output and falsifier metric, and every source reference, is among
-    those cutoff-safe dependencies.
+    The caller supplies one already-frozen, cutoff-bound dependency context.
+    This pure compiler verifies that every causal input, output and falsifier
+    metric, and every source reference, is among those cutoff-safe bindings.
     """
     if not isinstance(mechanisms, tuple) or not mechanisms:
         raise ValidationError("mechanisms must be a non-empty tuple")
-    definitions = _as_dependency_map(metric_definition_ids, "metric_definition_ids")
-    available_sources = _as_source_ids(source_ids)
+    if not isinstance(dependencies, MechanismDependencyContext):
+        raise ValidationError("dependencies must be a MechanismDependencyContext")
+    definitions = dependencies.metric_definition_map
+    available_sources = set(dependencies.source_ids)
     mechanism_keys: set[str] = set()
     dependency_metrics: set[str] = set()
     dependency_sources: set[str] = set()
@@ -238,18 +300,27 @@ def compile_mechanisms(
                 raise ValidationError("mechanism source is unavailable at basis cutoff")
             dependency_sources.add(source_id)
 
-    ordered_metrics = tuple(sorted(definitions[key] for key in dependency_metrics))
+    all_mappings = tuple(
+        mapping for value in mechanisms for mapping in value.financial_mappings
+    )
+    if not _causal_chain_is_acyclic(all_mappings):
+        raise ValidationError("formal mechanism causal chain must be acyclic")
+    ordered_bindings = tuple(sorted((key, definitions[key]) for key in dependency_metrics))
+    ordered_metrics = tuple(sorted(definition_id for _, definition_id in ordered_bindings))
     ordered_sources = tuple(sorted(dependency_sources))
     ordered_mechanisms = tuple(sorted(mechanisms, key=lambda value: (value.key, value.version)))
     return CompiledMechanisms(
         mechanisms=ordered_mechanisms,
+        cutoff=dependencies.cutoff,
         content_hash=canonical_hash(
             {
+                "cutoff": dependencies.cutoff.isoformat(),
                 "mechanisms": tuple(_mechanism_payload(value) for value in ordered_mechanisms),
-                "metric_definition_ids": ordered_metrics,
+                "metric_definition_bindings": ordered_bindings,
                 "source_ids": ordered_sources,
             }
         ),
         metric_definition_ids=ordered_metrics,
+        metric_definition_bindings=ordered_bindings,
         source_ids=ordered_sources,
     )
