@@ -288,8 +288,8 @@ def freeze_observations(
     source_manifest: FrozenSourceManifest,
 ) -> tuple[MetricObservation, ...]:
     """Freeze only known, resolved, source-authorized metric observations."""
-    if not isinstance(source_manifest, FrozenSourceManifest):
-        raise ValidationError("source_manifest is required")
+    if type(source_manifest) is not FrozenSourceManifest:
+        raise ValidationError("source_manifest must be frozen by freeze_manifest")
     if not isinstance(payload, list):
         raise ValidationError("observations must be a list")
     known_sources = set(source_manifest.source_ids)

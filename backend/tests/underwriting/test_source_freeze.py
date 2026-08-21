@@ -255,6 +255,19 @@ def test_frozen_manifest_is_deeply_immutable_and_cannot_be_directly_forged() -> 
         FrozenSourceManifest(CUTOFF, (), "a" * 64, ())
 
 
+def test_observation_freeze_rejects_a_forged_frozen_manifest_subclass() -> None:
+    class ForgedManifest(FrozenSourceManifest):
+        def __init__(self) -> None:
+            source = deepcopy(manifest_fixture()["sources"][0])  # type: ignore[index]
+            object.__setattr__(self, "cutoff", datetime(2030, 1, 1, tzinfo=UTC))
+            object.__setattr__(self, "source_ids", ("catl-annual-report",))
+            object.__setattr__(self, "manifest_hash", "f" * 64)
+            object.__setattr__(self, "sources", (source,))
+
+    with pytest.raises(ValidationError, match="source_manifest must be frozen by freeze_manifest"):
+        freeze_observations([observation_fixture()], source_manifest=ForgedManifest())
+
+
 def test_company_metric_cannot_relabel_itself_as_industry_evidence() -> None:
     manifest = freeze_manifest(manifest_fixture(), cutoff=CUTOFF)
     relabeled = observation_fixture()
