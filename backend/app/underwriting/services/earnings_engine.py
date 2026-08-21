@@ -185,24 +185,8 @@ def build_segment(value: SegmentInputs) -> SegmentEconomics:
         volume_gwh=value.volume_gwh,
         asp_cny_per_kwh=value.asp_cny_per_kwh,
         unit_cash_cost_cny_per_kwh=value.unit_cash_cost_cny_per_kwh,
-        asp_derivation_metric_ids=(
-            value.asp_derivation_metric_ids
-            if value.asp_derivation_metric_ids is not None
-            else (
-                (f"segment.{value.key}.revenue", f"segment.{value.key}.volume_gwh")
-                if physical
-                else None
-            )
-        ),
-        unit_cost_derivation_metric_ids=(
-            value.unit_cost_derivation_metric_ids
-            if value.unit_cost_derivation_metric_ids is not None
-            else (
-                (f"segment.{value.key}.cost", f"segment.{value.key}.volume_gwh")
-                if physical
-                else None
-            )
-        ),
+        asp_derivation_metric_ids=value.asp_derivation_metric_ids,
+        unit_cost_derivation_metric_ids=value.unit_cost_derivation_metric_ids,
         normalized_cash_earning_power=value.normalized_cash_earning_power,
     )
 
@@ -217,6 +201,7 @@ def build_company_engine(
     diluted_shares: Decimal | None = None,
     industry_state: IndustryState | None = None,
     mechanisms: CompiledMechanisms | None = None,
+    metric_context: CompiledMechanisms | None = None,
     scenario: IndustryScenario | None = None,
     exposures: tuple[CompanyExposure, ...] = tuple(),
     tolerance: Decimal = _DEFAULT_TOLERANCE,
@@ -350,4 +335,5 @@ def build_company_engine(
         scenario=scenario,
         exposures=exposures,
         industry_dependency=industry_dependency,
+        metric_context=metric_context,
     )

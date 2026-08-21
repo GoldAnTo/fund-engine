@@ -6,7 +6,9 @@ itself must be useful for any company whose authorized observations conform to
 the same metric contract.
 """
 from dataclasses import replace
+from datetime import UTC, datetime
 from decimal import Context, Decimal, localcontext
+from functools import lru_cache
 from uuid import uuid4
 
 import pytest
@@ -15,6 +17,8 @@ from app.models.ledger import ValidationError
 from app.underwriting.domain.earnings import (
     CompanyExposure,
     CoreContribution,
+    MetricLineageDependency,
+    ResolvedMetricObservation,
     SegmentEconomics,
     SegmentInputs,
 )
@@ -25,7 +29,7 @@ from app.underwriting.domain.industry import (
     ScenarioSpec,
 )
 from app.underwriting.services.earnings_engine import (
-    build_company_engine,
+    build_company_engine as _build_company_engine,
     build_segment,
     validate_earnings_engine_integrity,
 )
@@ -62,13 +66,57 @@ def _segment(
         cash_capex=Decimal(cash_capex),
         working_capital_change=Decimal(working_capital_change),
         cash_tax=Decimal(cash_tax),
-        asp_derivation_metric_ids=(f"segment.{key}.revenue", f"segment.{key}.volume_gwh"),
-        unit_cost_derivation_metric_ids=(f"segment.{key}.cost", f"segment.{key}.volume_gwh"),
+        asp_derivation_metric_ids=_lineage(key, "revenue"),
+        unit_cost_derivation_metric_ids=_lineage(key, "cost"),
         normalized_cash_earning_power=(
             Decimal(normalized_cash_earning_power)
             if normalized_cash_earning_power is not None
             else None
         ),
+    )
+
+
+@lru_cache(maxsize=1)
+def _metric_context():
+    return formal_industry_mechanisms()
+
+
+def _lineage(key: str, numerator: str) -> MetricLineageDependency:
+    context = _metric_context()
+    cutoff = context.cutoff
+    records = {item.metric_key: item for item in context.frozen_metric_definition_provenance}
+    numerator_record = records[f"segment.{key}.{numerator}"]
+    denominator_record = records[f"segment.{key}.volume_gwh"]
+    return MetricLineageDependency(
+        numerator=ResolvedMetricObservation(
+            observation_id=uuid4(),
+            metric_key=f"segment.{key}.{numerator}",
+            definition_id=numerator_record.definition_id,
+            definition_version=numerator_record.definition_version,
+            definition_content_hash=numerator_record.content_hash,
+            source_id="industry-source-2025",
+            source_manifest_hash=context.source_manifest_hash,
+            available_at=numerator_record.available_at,
+        ),
+        denominator=ResolvedMetricObservation(
+            observation_id=uuid4(),
+            metric_key=f"segment.{key}.volume_gwh",
+            definition_id=denominator_record.definition_id,
+            definition_version=denominator_record.definition_version,
+            definition_content_hash=denominator_record.content_hash,
+            source_id="industry-source-2025",
+            source_manifest_hash=context.source_manifest_hash,
+            available_at=denominator_record.available_at,
+        ),
+        cutoff=cutoff,
+    )
+
+
+def build_company_engine(**kwargs):
+    """All physical models must use one frozen metric/source context."""
+    return _build_company_engine(
+        metric_context=kwargs.get("mechanisms") or _metric_context(),
+        **kwargs,
     )
 
 
@@ -100,6 +148,23 @@ def _verified_scenario_context():
     return state, mechanisms, scenario
 
 
+def test_physical_inputs_reject_legacy_string_lineage() -> None:
+    with pytest.raises(ValidationError, match="MetricLineageDependency"):
+        SegmentInputs(
+            key="power_battery",
+            volume_gwh=Decimal("1"),
+            asp_cny_per_kwh=Decimal("100"),
+            unit_cash_cost_cny_per_kwh=Decimal("60"),
+            operating_expense=Decimal("0"),
+            depreciation=Decimal("0"),
+            cash_capex=Decimal("0"),
+            working_capital_change=Decimal("0"),
+            cash_tax=Decimal("0"),
+            asp_derivation_metric_ids=("segment.power_battery.revenue", "segment.power_battery.volume_gwh"),
+            unit_cost_derivation_metric_ids=("segment.power_battery.cost", "segment.power_battery.volume_gwh"),
+        )
+
+
 def test_segment_volume_price_cost_bridge() -> None:
     result = build_segment(
         SegmentInputs(
@@ -112,8 +177,8 @@ def test_segment_volume_price_cost_bridge() -> None:
             cash_capex=Decimal("0"),
             working_capital_change=Decimal("0"),
             cash_tax=Decimal("0"),
-            asp_derivation_metric_ids=("segment.power_battery.revenue", "segment.power_battery.volume_gwh"),
-            unit_cost_derivation_metric_ids=("segment.power_battery.cost", "segment.power_battery.volume_gwh"),
+            asp_derivation_metric_ids=_lineage("power_battery", "revenue"),
+            unit_cost_derivation_metric_ids=_lineage("power_battery", "cost"),
         )
     )
 
@@ -213,21 +278,15 @@ def test_reported_rows_stay_reported_and_derived_unit_economics_keep_parent_metr
     derived = _segment("power_battery", volume_gwh="2", asp="100", cost="60")
     derived = replace(
         derived,
-        asp_derivation_metric_ids=("segment.power_battery.revenue", "segment.power_battery.volume_gwh"),
-        unit_cost_derivation_metric_ids=("segment.power_battery.cost", "segment.power_battery.volume_gwh"),
+        asp_derivation_metric_ids=_lineage("power_battery", "revenue"),
+        unit_cost_derivation_metric_ids=_lineage("power_battery", "cost"),
     )
     derived_result = build_segment(derived)
 
     assert result.revenue_basis == "reported"
     assert result.cost_basis == "reported"
-    assert derived_result.asp_derivation_metric_ids == (
-        "segment.power_battery.revenue",
-        "segment.power_battery.volume_gwh",
-    )
-    assert derived_result.unit_cost_derivation_metric_ids == (
-        "segment.power_battery.cost",
-        "segment.power_battery.volume_gwh",
-    )
+    assert derived_result.asp_derivation_metric_ids is derived.asp_derivation_metric_ids
+    assert derived_result.unit_cost_derivation_metric_ids is derived.unit_cost_derivation_metric_ids
 
 
 def test_largest_revenue_segment_need_not_be_largest_cash_or_value_core() -> None:
@@ -300,17 +359,15 @@ def test_exposure_must_match_each_scenario_valued_segment_once() -> None:
         )
 
 
-def test_derived_bridge_defaults_to_stable_numerator_and_denominator_metric_ids() -> None:
+def test_derived_bridge_retains_typed_numerator_and_denominator_lineage() -> None:
     result = build_segment(_segment("power_battery"))
 
-    assert result.asp_derivation_metric_ids == (
-        "segment.power_battery.revenue",
-        "segment.power_battery.volume_gwh",
-    )
-    assert result.unit_cost_derivation_metric_ids == (
-        "segment.power_battery.cost",
-        "segment.power_battery.volume_gwh",
-    )
+    assert result.asp_derivation_metric_ids is not None
+    assert result.asp_derivation_metric_ids.numerator.metric_key == "segment.power_battery.revenue"
+    assert result.asp_derivation_metric_ids.denominator.metric_key == "segment.power_battery.volume_gwh"
+    assert result.unit_cost_derivation_metric_ids is not None
+    assert result.unit_cost_derivation_metric_ids.numerator.metric_key == "segment.power_battery.cost"
+    assert result.unit_cost_derivation_metric_ids.denominator.metric_key == "segment.power_battery.volume_gwh"
 
 
 def test_segment_economics_cannot_be_directly_constructed_with_broken_financial_identity() -> None:
@@ -504,6 +561,28 @@ def test_physical_inputs_require_metric_parent_ids() -> None:
             asp_derivation_metric_ids=None,
             unit_cost_derivation_metric_ids=None,
         )
+
+
+@pytest.mark.parametrize("mutation", ("swapped", "future", "foreign"))
+def test_engine_rejects_non_replayable_physical_lineage(mutation: str) -> None:
+    segment = build_segment(_segment("power_battery"))
+    engine = build_company_engine(
+        company_total=segment.revenue,
+        company_total_cost=segment.cost,
+        segments=(segment,),
+    )
+    assert segment.asp_derivation_metric_ids is not None
+    lineage = segment.asp_derivation_metric_ids
+    if mutation == "swapped":
+        replacement = segment.unit_cost_derivation_metric_ids
+    elif mutation == "future":
+        replacement = replace(lineage, cutoff=datetime(2026, 1, 1, tzinfo=UTC))
+    else:
+        replacement = replace(lineage, numerator=replace(lineage.numerator, source_id="foreign-source"))
+    assert replacement is not None
+    corrupted = replace(segment, asp_derivation_metric_ids=replacement)
+    with pytest.raises(ValidationError, match="lineage"):
+        replace(engine, segments=(corrupted,))
 
 
 def test_public_integrity_validator_detects_post_construction_tampering() -> None:

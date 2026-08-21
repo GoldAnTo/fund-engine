@@ -122,6 +122,16 @@ def formal_industry_mechanisms(scope_object_id=None) -> CompiledMechanisms:
     )
     metric_keys = set(packs[0].driver_keys)
     metric_keys.add("industry.utilization")
+    metric_keys.update(
+        {
+            "segment.power_battery.revenue",
+            "segment.power_battery.cost",
+            "segment.power_battery.volume_gwh",
+            "segment.energy_storage.revenue",
+            "segment.energy_storage.cost",
+            "segment.energy_storage.volume_gwh",
+        }
+    )
     dependencies = MechanismDependencyContext(
         cutoff=CUTOFF,
         metric_definitions=tuple(

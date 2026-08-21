@@ -7,6 +7,7 @@ a price, a multiple, a discount rate or a target price.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from decimal import Context, Decimal, DecimalException, ROUND_HALF_EVEN, localcontext
 import hashlib
 import json
@@ -58,15 +59,86 @@ def _decimal(value: object, name: str, *, nonnegative: bool = False) -> Decimal:
     return value
 
 
-def _metric_ids(value: object, name: str) -> tuple[str, str] | None:
-    if value is None:
-        return None
-    if not isinstance(value, tuple) or len(value) != 2:
-        raise ValidationError(f"{name} must contain numerator and denominator metric IDs")
-    numerator, denominator = (_text(item, name) for item in value)
-    if numerator == denominator:
-        raise ValidationError(f"{name} numerator and denominator must differ")
-    return numerator, denominator
+def _utc(value: object, name: str) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ValidationError(f"{name} must be a timezone-aware datetime")
+    return value.astimezone(UTC)
+
+
+def _sha256(value: object, name: str) -> str:
+    text = _text(value, name)
+    if len(text) != 64 or any(character not in "0123456789abcdef" for character in text):
+        raise ValidationError(f"{name} must be a lowercase SHA-256")
+    return text
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedMetricObservation:
+    """One immutable, cutoff-safe observation used in a derived financial input."""
+
+    observation_id: UUID
+    metric_key: str
+    definition_id: UUID | str
+    definition_version: int
+    definition_content_hash: str
+    source_id: str
+    source_manifest_hash: str
+    available_at: datetime
+
+    def __post_init__(self) -> None:
+        if type(self.observation_id) is not UUID:
+            raise ValidationError("lineage observation_id must be a UUID")
+        object.__setattr__(self, "metric_key", _text(self.metric_key, "lineage metric_key"))
+        if type(self.definition_id) is str:
+            object.__setattr__(self, "definition_id", _text(self.definition_id, "lineage definition_id"))
+        elif type(self.definition_id) is not UUID:
+            raise ValidationError("lineage definition_id must be a UUID or non-empty string")
+        if isinstance(self.definition_version, bool) or not isinstance(self.definition_version, int) or self.definition_version < 1:
+            raise ValidationError("lineage definition_version must be at least 1")
+        object.__setattr__(self, "definition_content_hash", _sha256(self.definition_content_hash, "lineage definition_content_hash"))
+        object.__setattr__(self, "source_id", _text(self.source_id, "lineage source_id"))
+        object.__setattr__(self, "source_manifest_hash", _sha256(self.source_manifest_hash, "lineage source_manifest_hash"))
+        object.__setattr__(self, "available_at", _utc(self.available_at, "lineage available_at"))
+
+
+@dataclass(frozen=True, slots=True)
+class MetricLineageDependency:
+    """A complete numerator/denominator lineage, fixed at one research cutoff."""
+
+    numerator: ResolvedMetricObservation
+    denominator: ResolvedMetricObservation
+    cutoff: datetime
+
+    def __post_init__(self) -> None:
+        if type(self.numerator) is not ResolvedMetricObservation or type(self.denominator) is not ResolvedMetricObservation:
+            raise ValidationError("MetricLineageDependency must contain resolved observations")
+        if self.numerator.observation_id == self.denominator.observation_id:
+            raise ValidationError("lineage numerator and denominator observations must differ")
+        if self.numerator.metric_key == self.denominator.metric_key:
+            raise ValidationError("lineage numerator and denominator metrics must differ")
+        if self.numerator.source_manifest_hash != self.denominator.source_manifest_hash:
+            raise ValidationError("lineage observations must share a source manifest")
+        cutoff = _utc(self.cutoff, "lineage cutoff")
+        object.__setattr__(self, "cutoff", cutoff)
+        if self.numerator.available_at > cutoff or self.denominator.available_at > cutoff:
+            raise ValidationError("lineage observation is unavailable at cutoff")
+
+    def validate_against(self, *, context: object, numerator_key: str, denominator_key: str) -> None:
+        """Bind this derived ratio to exact frozen definitions and source manifest."""
+        from app.underwriting.services.mechanism_compiler import CompiledMechanisms, validate_compiled_mechanism_integrity
+
+        if type(context) is not CompiledMechanisms:
+            raise ValidationError("compiled metric context is required")
+        validate_compiled_mechanism_integrity(context)
+        if self.cutoff != context.cutoff or self.numerator.source_manifest_hash != context.source_manifest_hash or self.denominator.source_manifest_hash != context.source_manifest_hash:
+            raise ValidationError("lineage does not match frozen metric context")
+        records = {record.metric_key: record for record in context.frozen_metric_definition_provenance}
+        for observation, expected_key in ((self.numerator, numerator_key), (self.denominator, denominator_key)):
+            record = records.get(expected_key)
+            if record is None or observation.source_id not in context.source_ids:
+                raise ValidationError("lineage metric is unavailable in frozen context")
+            if (observation.metric_key, str(observation.definition_id), observation.definition_version, observation.definition_content_hash, observation.available_at) != (record.metric_key, str(record.definition_id), record.definition_version, record.content_hash, record.available_at):
+                raise ValidationError("lineage does not match frozen metric definition")
 
 
 def _calculation_context(values: tuple[Decimal, ...]) -> Context:
@@ -101,8 +173,8 @@ class SegmentInputs:
     cash_tax: Decimal
     reported_revenue: Decimal | None = None
     reported_cost: Decimal | None = None
-    asp_derivation_metric_ids: tuple[str, str] | None = None
-    unit_cost_derivation_metric_ids: tuple[str, str] | None = None
+    asp_derivation_metric_ids: MetricLineageDependency | None = None
+    unit_cost_derivation_metric_ids: MetricLineageDependency | None = None
     normalized_cash_earning_power: Decimal | None = None
 
     def __post_init__(self) -> None:
@@ -138,8 +210,10 @@ class SegmentInputs:
             "cash_tax",
         ):
             _decimal(getattr(self, name), name, nonnegative=True)
-        _metric_ids(self.asp_derivation_metric_ids, "asp_derivation_metric_ids")
-        _metric_ids(self.unit_cost_derivation_metric_ids, "unit_cost_derivation_metric_ids")
+        for name in ("asp_derivation_metric_ids", "unit_cost_derivation_metric_ids"):
+            value = getattr(self, name)
+            if value is not None and type(value) is not MetricLineageDependency:
+                raise ValidationError(f"{name} must be a MetricLineageDependency")
         if self.normalized_cash_earning_power is not None:
             _decimal(self.normalized_cash_earning_power, "normalized_cash_earning_power")
         if self.key == _UNALLOCATED_COMPANY_KEY and any(value is not None for value in physical):
@@ -192,8 +266,8 @@ class SegmentEconomics:
     volume_gwh: Decimal | None
     asp_cny_per_kwh: Decimal | None
     unit_cash_cost_cny_per_kwh: Decimal | None
-    asp_derivation_metric_ids: tuple[str, str] | None
-    unit_cost_derivation_metric_ids: tuple[str, str] | None
+    asp_derivation_metric_ids: MetricLineageDependency | None
+    unit_cost_derivation_metric_ids: MetricLineageDependency | None
     normalized_cash_earning_power: Decimal | None
 
     def __post_init__(self) -> None:
@@ -229,8 +303,10 @@ class SegmentEconomics:
                 or self.unit_cost_derivation_metric_ids is None
             ):
                 raise ValidationError("derived physical inputs require parent metric IDs")
-        _metric_ids(self.asp_derivation_metric_ids, "asp_derivation_metric_ids")
-        _metric_ids(self.unit_cost_derivation_metric_ids, "unit_cost_derivation_metric_ids")
+        for name in ("asp_derivation_metric_ids", "unit_cost_derivation_metric_ids"):
+            value = getattr(self, name)
+            if value is not None and type(value) is not MetricLineageDependency:
+                raise ValidationError(f"{name} must be a MetricLineageDependency")
         if self.normalized_cash_earning_power is not None:
             _decimal(self.normalized_cash_earning_power, "normalized_cash_earning_power")
         try:
@@ -408,6 +484,7 @@ class EarningsEngine:
     scenario: IndustryScenario | None
     exposures: tuple[CompanyExposure, ...]
     industry_dependency: VerifiedIndustryDependency | None
+    metric_context: object | None
     content_hash: str | None = None
 
     def __post_init__(self) -> None:
@@ -418,6 +495,29 @@ class EarningsEngine:
         keys = tuple(segment.key for segment in self.segments)
         if len(keys) != len(set(keys)):
             raise ValidationError("earnings engine segment keys must be unique")
+        physical_segments = tuple(segment for segment in self.segments if segment.volume_gwh is not None)
+        if physical_segments:
+            from app.underwriting.services.mechanism_compiler import CompiledMechanisms
+            if type(self.metric_context) is not CompiledMechanisms:
+                raise ValidationError("frozen compiled metric context is required for physical segments")
+            for segment in physical_segments:
+                assert segment.asp_derivation_metric_ids is not None
+                assert segment.unit_cost_derivation_metric_ids is not None
+                segment.asp_derivation_metric_ids.validate_against(
+                    context=self.metric_context,
+                    numerator_key=f"segment.{segment.key}.revenue",
+                    denominator_key=f"segment.{segment.key}.volume_gwh",
+                )
+                segment.unit_cost_derivation_metric_ids.validate_against(
+                    context=self.metric_context,
+                    numerator_key=f"segment.{segment.key}.cost",
+                    denominator_key=f"segment.{segment.key}.volume_gwh",
+                )
+        elif self.metric_context is not None:
+            from app.underwriting.services.mechanism_compiler import CompiledMechanisms, validate_compiled_mechanism_integrity
+            if type(self.metric_context) is not CompiledMechanisms:
+                raise ValidationError("metric context is invalid")
+            validate_compiled_mechanism_integrity(self.metric_context)
         _decimal(self.company_revenue, "company_revenue", nonnegative=True)
         if self.company_cost is not None:
             _decimal(self.company_cost, "company_cost", nonnegative=True)
@@ -603,6 +703,8 @@ class EarningsEngine:
                 or self.industry_dependency.scenario != self.scenario
             ):
                 raise ValidationError("scenario does not match verified industry dependency")
+            if self.metric_context is not self.industry_dependency.compiled_mechanisms:
+                raise ValidationError("metric context must be the verified scenario dependency")
         if self.four_core_views != derive_four_core_views(
             self.segments,
             industry_state_id=self.industry_state_id,
@@ -776,6 +878,7 @@ def earnings_engine_content_hash(value: EarningsEngine) -> str:
                 if value.industry_dependency is not None
                 else None
             ),
+            "metric_context_hash": getattr(value.metric_context, "content_hash", None),
         }
     )
 
@@ -805,5 +908,6 @@ def validate_earnings_engine_integrity(value: EarningsEngine) -> None:
         scenario=value.scenario,
         exposures=value.exposures,
         industry_dependency=value.industry_dependency,
+        metric_context=value.metric_context,
         content_hash=value.content_hash,
     )

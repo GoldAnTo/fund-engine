@@ -153,6 +153,7 @@ class CompiledMechanisms:
     metric_definition_ids: tuple[str, ...]
     metric_definition_bindings: tuple[tuple[str, str], ...]
     metric_definition_provenance: tuple[MetricDefinitionDependency, ...]
+    frozen_metric_definition_provenance: tuple[MetricDefinitionDependency, ...]
     source_manifest_hash: str
     source_ids: tuple[str, ...]
 
@@ -332,6 +333,7 @@ def _compiled_payload(
     source_manifest_hash: str,
     metric_definition_bindings: tuple[tuple[str, str], ...],
     metric_definition_provenance: tuple[MetricDefinitionDependency, ...],
+    frozen_metric_definition_provenance: tuple[MetricDefinitionDependency, ...],
     source_ids: tuple[str, ...],
 ) -> dict[str, object]:
     """The complete integrity-covered representation of compiled mechanisms."""
@@ -350,6 +352,17 @@ def _compiled_payload(
                 "available_at": dependency.available_at.isoformat(),
             }
             for dependency in metric_definition_provenance
+        ),
+        "frozen_metric_definition_provenance": tuple(
+            {
+                "metric_key": dependency.metric_key,
+                "definition_id": str(dependency.definition_id),
+                "definition_version": dependency.definition_version,
+                "content_hash": dependency.content_hash,
+                "source_manifest_hash": dependency.source_manifest_hash,
+                "available_at": dependency.available_at.isoformat(),
+            }
+            for dependency in frozen_metric_definition_provenance
         ),
         "source_ids": source_ids,
     }
@@ -428,6 +441,17 @@ def validate_compiled_mechanism_integrity(value: CompiledMechanisms) -> None:
             raise ValidationError("metric definition is unavailable at compiled cutoff")
         if dependency.source_manifest_hash != value.source_manifest_hash:
             raise ValidationError("metric definition provenance has the wrong source manifest")
+    if not isinstance(value.frozen_metric_definition_provenance, tuple) or not all(
+        type(dependency) is MetricDefinitionDependency
+        for dependency in value.frozen_metric_definition_provenance
+    ):
+        raise ValidationError("frozen metric definition provenance is invalid")
+    frozen_keys = tuple(item.metric_key for item in value.frozen_metric_definition_provenance)
+    if frozen_keys != tuple(sorted(frozen_keys)) or len(frozen_keys) != len(set(frozen_keys)):
+        raise ValidationError("frozen metric definition provenance must be canonically ordered")
+    for dependency in value.frozen_metric_definition_provenance:
+        if dependency.available_at > cutoff or dependency.source_manifest_hash != value.source_manifest_hash:
+            raise ValidationError("frozen metric definition provenance is unavailable or foreign")
 
     expected_source_ids = tuple(
         sorted({source_id for mechanism in ordered_mechanisms for source_id in mechanism.source_ids})
@@ -445,6 +469,7 @@ def validate_compiled_mechanism_integrity(value: CompiledMechanisms) -> None:
             source_manifest_hash=value.source_manifest_hash,
             metric_definition_bindings=bindings,
             metric_definition_provenance=value.metric_definition_provenance,
+            frozen_metric_definition_provenance=value.frozen_metric_definition_provenance,
             source_ids=value.source_ids,
         )
     )
@@ -525,12 +550,14 @@ def compile_mechanisms(
                 source_manifest_hash=dependencies.source_manifest.manifest_hash,
                 metric_definition_bindings=ordered_bindings,
                 metric_definition_provenance=ordered_provenance,
+                frozen_metric_definition_provenance=tuple(sorted(dependencies.metric_definitions, key=lambda item: item.metric_key)),
                 source_ids=ordered_sources,
             )
         ),
         metric_definition_ids=ordered_metrics,
         metric_definition_bindings=ordered_bindings,
         metric_definition_provenance=ordered_provenance,
+        frozen_metric_definition_provenance=tuple(sorted(dependencies.metric_definitions, key=lambda item: item.metric_key)),
         source_manifest_hash=dependencies.source_manifest.manifest_hash,
         source_ids=ordered_sources,
     )
