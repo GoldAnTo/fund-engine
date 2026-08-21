@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from app.api.legacy import router as cases_router
 from app.api.v1.router import router as v1_router
 from app.underwriting.api import router as underwriting_router
+from app.underwriting.api.schemas import UnderwritingErrorEnvelope
 from app.env import load_local_env
 from app.errors import (
     AuthenticationRequiredError,
@@ -74,6 +75,44 @@ def _v1_error_response(
     )
 
 
+def _underwriting_error_response(
+    code: str,
+    message: str,
+    request_id: str,
+    details: dict[str, Any] | None = None,
+    status_code: int = 500,
+) -> JSONResponse:
+    """Build the independent underwriting-v1 error envelope."""
+    envelope = UnderwritingErrorEnvelope(
+        error={
+            "code": code,
+            "message": message,
+            "request_id": request_id,
+            "details": details or {},
+        }
+    ).model_dump(mode="json")
+    return JSONResponse(
+        status_code=status_code,
+        content=envelope,
+        headers={"x-request-id": request_id},
+    )
+
+
+def _error_response_for_request(
+    request: Request,
+    code: str,
+    message: str,
+    request_id: str,
+    details: dict[str, Any] | None = None,
+    status_code: int = 500,
+) -> JSONResponse:
+    if request.url.path.startswith("/api/underwriting/v1"):
+        return _underwriting_error_response(
+            code, message, request_id, details, status_code
+        )
+    return _v1_error_response(code, message, request_id, details, status_code)
+
+
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
@@ -86,7 +125,8 @@ async def request_id_middleware(request: Request, call_next):
         # carrying the request-id, so no 500 ever lacks the correlation header.
         # Internal text/stack must not leak to the client (design 7.3).
         logger.exception("Unhandled exception (request_id=%s)", request_id)
-        response = _v1_error_response(
+        response = _error_response_for_request(
+            request,
             "internal_error",
             "internal error",
             request_id,
@@ -99,7 +139,8 @@ async def request_id_middleware(request: Request, call_next):
 @app.exception_handler(NotFoundError)
 async def not_found_error_handler(request: Request, exc: NotFoundError):
     request_id = getattr(request.state, "request_id", "")
-    return _v1_error_response(
+    return _error_response_for_request(
+        request,
         "not_found",
         str(exc) or "not found",
         request_id,
@@ -112,7 +153,8 @@ async def authentication_required_error_handler(
     request: Request, exc: AuthenticationRequiredError
 ):
     request_id = getattr(request.state, "request_id", "")
-    return _v1_error_response(
+    return _error_response_for_request(
+        request,
         "authentication_required",
         str(exc) or "authentication required",
         request_id,
@@ -123,7 +165,8 @@ async def authentication_required_error_handler(
 @app.exception_handler(PermissionDeniedError)
 async def permission_denied_error_handler(request: Request, exc: PermissionDeniedError):
     request_id = getattr(request.state, "request_id", "")
-    return _v1_error_response(
+    return _error_response_for_request(
+        request,
         "permission_denied",
         str(exc) or "permission denied",
         request_id,
@@ -134,7 +177,8 @@ async def permission_denied_error_handler(request: Request, exc: PermissionDenie
 @app.exception_handler(ValidationFailedError)
 async def validation_failed_error_handler(request: Request, exc: ValidationFailedError):
     request_id = getattr(request.state, "request_id", "")
-    return _v1_error_response(
+    return _error_response_for_request(
+        request,
         "validation_failed",
         str(exc) or "validation failed",
         request_id,
@@ -145,7 +189,8 @@ async def validation_failed_error_handler(request: Request, exc: ValidationFaile
 @app.exception_handler(ConflictError)
 async def conflict_error_handler(request: Request, exc: ConflictError):
     request_id = getattr(request.state, "request_id", "")
-    return _v1_error_response(
+    return _error_response_for_request(
+        request,
         "conflict",
         str(exc) or "resource already exists",
         request_id,
@@ -158,7 +203,8 @@ async def upstream_unavailable_error_handler(
     request: Request, exc: UpstreamUnavailableError
 ):
     request_id = getattr(request.state, "request_id", "")
-    return _v1_error_response(
+    return _error_response_for_request(
+        request,
         "upstream_unavailable",
         str(exc) or "upstream datasource unavailable",
         request_id,
@@ -171,14 +217,18 @@ async def request_validation_error_handler(
     request: Request, exc: RequestValidationError
 ):
     request_id = getattr(request.state, "request_id", "")
-    # The v1 error envelope applies only to /api/v1; legacy routes keep
-    # FastAPI's default {"detail": [...]} 422 format for compatibility.
-    if not request.url.path.startswith("/api/v1"):
+    # The versioned API error envelopes apply only to their versioned paths;
+    # legacy routes keep FastAPI's default {"detail": [...]} format.
+    if not (
+        request.url.path.startswith("/api/v1")
+        or request.url.path.startswith("/api/underwriting/v1")
+    ):
         return JSONResponse(
             status_code=422,
             content={"detail": jsonable_encoder(exc.errors())},
         )
-    return _v1_error_response(
+    return _error_response_for_request(
+        request,
         "validation_failed",
         "request validation failed",
         request_id,

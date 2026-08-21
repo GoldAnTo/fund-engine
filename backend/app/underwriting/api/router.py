@@ -6,6 +6,7 @@ from typing import Callable, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -58,6 +59,9 @@ def _write(db: Session, operation: Callable[[], T]) -> T:
     except ValidationError as exc:
         db.rollback()
         raise ValidationFailedError(str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise HttpConflictError("underwriting write conflicts") from exc
     except (DomainConflictError, StaleParentError) as exc:
         db.rollback()
         raise HttpConflictError(str(exc)) from exc

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+from sqlalchemy.exc import IntegrityError
 
 BASE = "/api/underwriting/v1"
 TIME = datetime(2026, 8, 20, 9, 30, tzinfo=UTC).isoformat()
@@ -174,6 +176,61 @@ def test_underwriting_api_rejects_unknown_fields_with_422(api_client):
         },
     )
     assert response.status_code == 422
+    assert response.json()["schema_version"] == "underwriting.v1"
+    assert _error_code(response) == "validation_failed"
+
+
+def test_underwriting_api_type_errors_use_underwriting_envelope(api_client):
+    response = api_client.post(
+        f"{BASE}/objects",
+        json={"kind": 1, "external_key": "company:acme", "canonical_name": "Acme"},
+    )
+    assert response.status_code == 422
+    assert response.json()["schema_version"] == "underwriting.v1"
+    assert _error_code(response) == "validation_failed"
+
+
+def test_existing_v1_validation_envelope_is_unchanged(api_client):
+    response = api_client.get("/api/v1/companies?limit=not-an-integer")
+    assert response.status_code == 422
+    assert response.json()["schema_version"] == "v1"
+    assert _error_code(response) == "validation_failed"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("family_key", "f" * 161), ("entry_type", "e" * 81)],
+)
+def test_underwriting_api_rejects_overlong_ledger_fields(api_client, field, value):
+    company = _create_object(
+        api_client, kind="company", external_key="company:acme", name="Acme"
+    )
+    basis = _create_basis(api_client)
+    payload = _entry_payload(basis["id"], "reality", "revenue")
+    payload[field] = value
+
+    response = api_client.post(
+        f"{BASE}/objects/{company['id']}/ledger-entries", json=payload
+    )
+    assert response.status_code == 422
+    assert response.json()["schema_version"] == "underwriting.v1"
+    assert _error_code(response) == "validation_failed"
+
+
+def test_underwriting_api_commit_integrity_conflict_returns_envelope(
+    api_client, session, monkeypatch
+):
+    def _raise_integrity_error():
+        raise IntegrityError("COMMIT", {}, RuntimeError("forced conflict"))
+
+    monkeypatch.setattr(session, "commit", _raise_integrity_error)
+    response = api_client.post(
+        f"{BASE}/objects",
+        json={"kind": "company", "external_key": "company:acme", "canonical_name": "Acme"},
+    )
+    assert response.status_code == 409
+    assert response.json()["schema_version"] == "underwriting.v1"
+    assert _error_code(response) == "conflict"
 
 
 def test_underwriting_api_conflicts_use_error_envelope(api_client):

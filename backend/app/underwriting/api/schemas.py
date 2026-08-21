@@ -16,6 +16,20 @@ class UnderwritingModel(BaseModel):
     schema_version: Literal["underwriting.v1"] = "underwriting.v1"
 
 
+class UnderwritingErrorBody(BaseModel):
+    """The error payload nested inside an underwriting response envelope."""
+
+    model_config = ConfigDict(extra="forbid")
+    code: str
+    message: str
+    request_id: str
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class UnderwritingErrorEnvelope(UnderwritingModel):
+    error: UnderwritingErrorBody
+
+
 ResearchObjectKind = Literal["industry", "company", "security"]
 RelationType = Literal["industry_exposes_company", "company_has_security"]
 LedgerKind = Literal["reality", "belief", "decision", "calibration"]
@@ -106,8 +120,8 @@ class MandateResponse(UnderwritingModel):
 class LedgerEntryCreate(UnderwritingModel):
     basis_id: UUID
     ledger_kind: LedgerKind
-    family_key: str = Field(min_length=1)
-    entry_type: str = Field(min_length=1)
+    family_key: str = Field(min_length=1, max_length=160)
+    entry_type: str = Field(min_length=1, max_length=80)
     payload: dict[str, Any]
     effective_at: datetime
     available_at: datetime
