@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal, ROUND_HALF_EVEN
-from datetime import datetime
-import re
 from typing import Iterable
 
 from app.models.ledger import ValidationError
@@ -27,6 +25,7 @@ from app.underwriting.domain.types import BlockerCode
 from app.underwriting.services.mechanism_compiler import (
     CompiledMechanisms,
     validate_formal_mechanism,
+    validate_compiled_mechanism_integrity,
 )
 
 
@@ -36,7 +35,6 @@ _UNIT_ECONOMICS_QUANTUM = Decimal("0.0001")
 # in the plan while avoiding an implicit, ambient precision decision.
 _RATIO_QUANTUM = Decimal("0.0000000000000000000000000001")
 _GWH_TO_KWH = Decimal("1000000")
-_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 _INPUT_FIELD_BY_DRIVER = {
     "industry.ev_sales_millions": "ev_sales_millions",
@@ -79,17 +77,11 @@ def _formal_mechanisms(
 ) -> tuple[MechanismPack, ...]:
     if type(mechanisms) is not CompiledMechanisms:
         _block(BlockerCode.MECHANISM_UNIDENTIFIED, "formal industry mechanisms are required")
+    try:
+        validate_compiled_mechanism_integrity(mechanisms)
+    except ValidationError as exc:
+        _block(BlockerCode.MECHANISM_UNIDENTIFIED, str(exc))
     packs = mechanisms.mechanisms
-    if (
-        not isinstance(mechanisms.cutoff, datetime)
-        or mechanisms.cutoff.tzinfo is None
-        or mechanisms.cutoff.utcoffset() is None
-        or not isinstance(mechanisms.content_hash, str)
-        or _SHA256.fullmatch(mechanisms.content_hash) is None
-        or not isinstance(mechanisms.source_manifest_hash, str)
-        or _SHA256.fullmatch(mechanisms.source_manifest_hash) is None
-    ):
-        _block(BlockerCode.MECHANISM_UNIDENTIFIED, "compiled mechanisms are not cutoff-bound")
     if not packs:
         _block(BlockerCode.MECHANISM_UNIDENTIFIED, "formal industry mechanisms are required")
     for pack in packs:

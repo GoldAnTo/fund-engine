@@ -211,6 +211,26 @@ def test_raw_formal_packs_are_not_a_trusted_cutoff_bound_mechanism_dependency() 
 
 
 @pytest.mark.parametrize(
+    "tamper",
+    (
+        lambda value: replace(value, content_hash="c" * 64),
+        lambda value: replace(
+            value,
+            metric_definition_provenance=(
+                replace(value.metric_definition_provenance[0], definition_version=99),
+                *value.metric_definition_provenance[1:],
+            ),
+        ),
+    ),
+)
+def test_compiled_mechanism_integrity_tampering_blocks_industry_state(tamper) -> None:
+    with pytest.raises(AnswerabilityBlocked, match="mechanism_unidentified"):
+        compile_industry_state(
+            inputs=complete_inputs(), mechanisms=tamper(formal_industry_mechanisms())
+        )
+
+
+@pytest.mark.parametrize(
     "mechanisms",
     ((formal_industry_mechanisms(), formal_industry_packs()[0]), object()),
 )

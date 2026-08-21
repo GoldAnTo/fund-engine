@@ -311,6 +311,133 @@ def _mechanism_payload(value: MechanismPack) -> dict[str, object]:
     }
 
 
+def _compiled_payload(
+    *,
+    mechanisms: tuple[MechanismPack, ...],
+    cutoff: datetime,
+    source_manifest_hash: str,
+    metric_definition_bindings: tuple[tuple[str, str], ...],
+    metric_definition_provenance: tuple[MetricDefinitionDependency, ...],
+    source_ids: tuple[str, ...],
+) -> dict[str, object]:
+    """The complete integrity-covered representation of compiled mechanisms."""
+    return {
+        "cutoff": cutoff.isoformat(),
+        "source_manifest_hash": source_manifest_hash,
+        "mechanisms": tuple(_mechanism_payload(value) for value in mechanisms),
+        "metric_definition_bindings": metric_definition_bindings,
+        "metric_definition_provenance": tuple(
+            {
+                "metric_key": dependency.metric_key,
+                "definition_id": str(dependency.definition_id),
+                "definition_version": dependency.definition_version,
+                "content_hash": dependency.content_hash,
+                "source_manifest_hash": dependency.source_manifest_hash,
+                "available_at": dependency.available_at.isoformat(),
+            }
+            for dependency in metric_definition_provenance
+        ),
+        "source_ids": source_ids,
+    }
+
+
+def validate_compiled_mechanism_integrity(value: CompiledMechanisms) -> None:
+    """Verify that a compiled mechanism still matches its frozen dependency hash.
+
+    ``CompiledMechanisms`` is a frozen dataclass, but ``dataclasses.replace``
+    is intentionally available for ordinary version construction.  Every
+    public consumer must therefore re-establish this integrity boundary before
+    trusting a supplied compiled object.
+    """
+    if type(value) is not CompiledMechanisms:
+        raise ValidationError("compiled mechanisms are required")
+    cutoff = _utc(value.cutoff, "compiled mechanism cutoff")
+    if not isinstance(value.mechanisms, tuple) or not value.mechanisms:
+        raise ValidationError("compiled mechanisms must be a non-empty tuple")
+    if not all(type(mechanism) is MechanismPack for mechanism in value.mechanisms):
+        raise ValidationError("compiled mechanisms must contain MechanismPack values")
+    for mechanism in value.mechanisms:
+        validate_formal_mechanism(mechanism)
+    if len({mechanism.key for mechanism in value.mechanisms}) != len(value.mechanisms):
+        raise ValidationError("compiled mechanism keys must be unique")
+    if len({mechanism.scope_object_id for mechanism in value.mechanisms}) != 1:
+        raise ValidationError("compiled mechanisms must share one scope_object_id")
+    ordered_mechanisms = tuple(
+        sorted(value.mechanisms, key=lambda mechanism: (mechanism.key, mechanism.version))
+    )
+    if value.mechanisms != ordered_mechanisms:
+        raise ValidationError("compiled mechanisms must be canonically ordered")
+
+    expected_metric_keys = {
+        key
+        for mechanism in ordered_mechanisms
+        for key in (
+            *mechanism.driver_keys,
+            *(mapping.target_metric_key for mapping in mechanism.financial_mappings),
+            *(falsifier.metric_key for falsifier in mechanism.falsifiers),
+        )
+    }
+    if not isinstance(value.metric_definition_bindings, tuple):
+        raise ValidationError("metric definition bindings must be a tuple")
+    if not all(
+        isinstance(binding, tuple)
+        and len(binding) == 2
+        and isinstance(binding[0], str)
+        and binding[0].strip()
+        and isinstance(binding[1], str)
+        and binding[1].strip()
+        for binding in value.metric_definition_bindings
+    ):
+        raise ValidationError("metric definition bindings are invalid")
+    bindings = value.metric_definition_bindings
+    if tuple(sorted(bindings)) != bindings or {key for key, _ in bindings} != expected_metric_keys:
+        raise ValidationError("metric definition bindings do not match compiled mechanisms")
+    if len({key for key, _ in bindings}) != len(bindings):
+        raise ValidationError("metric definition bindings must be unique")
+    expected_metric_ids = tuple(sorted(definition_id for _, definition_id in bindings))
+    if value.metric_definition_ids != expected_metric_ids:
+        raise ValidationError("metric definition IDs do not match compiled bindings")
+
+    if not isinstance(value.metric_definition_provenance, tuple) or not all(
+        type(dependency) is MetricDefinitionDependency
+        for dependency in value.metric_definition_provenance
+    ):
+        raise ValidationError("metric definition provenance is invalid")
+    provenance_bindings = tuple(
+        (dependency.metric_key, str(dependency.definition_id))
+        for dependency in value.metric_definition_provenance
+    )
+    if provenance_bindings != bindings:
+        raise ValidationError("metric definition provenance does not match compiled bindings")
+    for dependency in value.metric_definition_provenance:
+        if dependency.available_at > cutoff:
+            raise ValidationError("metric definition is unavailable at compiled cutoff")
+        if dependency.source_manifest_hash != value.source_manifest_hash:
+            raise ValidationError("metric definition provenance has the wrong source manifest")
+
+    expected_source_ids = tuple(
+        sorted({source_id for mechanism in ordered_mechanisms for source_id in mechanism.source_ids})
+    )
+    if value.source_ids != expected_source_ids:
+        raise ValidationError("compiled source IDs do not match mechanisms")
+    if not isinstance(value.source_manifest_hash, str) or _SHA256.fullmatch(value.source_manifest_hash) is None:
+        raise ValidationError("compiled source manifest hash must be a lowercase SHA-256")
+    if not isinstance(value.content_hash, str) or _SHA256.fullmatch(value.content_hash) is None:
+        raise ValidationError("compiled content hash must be a lowercase SHA-256")
+    expected_hash = canonical_hash(
+        _compiled_payload(
+            mechanisms=ordered_mechanisms,
+            cutoff=cutoff,
+            source_manifest_hash=value.source_manifest_hash,
+            metric_definition_bindings=bindings,
+            metric_definition_provenance=value.metric_definition_provenance,
+            source_ids=value.source_ids,
+        )
+    )
+    if value.content_hash != expected_hash:
+        raise ValidationError("compiled mechanism content hash does not match dependencies")
+
+
 def compile_mechanisms(
     mechanisms: tuple[MechanismPack, ...],
     *,
@@ -378,24 +505,14 @@ def compile_mechanisms(
         mechanisms=ordered_mechanisms,
         cutoff=dependencies.cutoff,
         content_hash=canonical_hash(
-            {
-                "cutoff": dependencies.cutoff.isoformat(),
-                "source_manifest_hash": dependencies.source_manifest.manifest_hash,
-                "mechanisms": tuple(_mechanism_payload(value) for value in ordered_mechanisms),
-                "metric_definition_bindings": ordered_bindings,
-                "metric_definition_provenance": tuple(
-                    {
-                        "metric_key": dependency.metric_key,
-                        "definition_id": str(dependency.definition_id),
-                        "definition_version": dependency.definition_version,
-                        "content_hash": dependency.content_hash,
-                        "source_manifest_hash": dependency.source_manifest_hash,
-                        "available_at": dependency.available_at.isoformat(),
-                    }
-                    for dependency in ordered_provenance
-                ),
-                "source_ids": ordered_sources,
-            }
+            _compiled_payload(
+                mechanisms=ordered_mechanisms,
+                cutoff=dependencies.cutoff,
+                source_manifest_hash=dependencies.source_manifest.manifest_hash,
+                metric_definition_bindings=ordered_bindings,
+                metric_definition_provenance=ordered_provenance,
+                source_ids=ordered_sources,
+            )
         ),
         metric_definition_ids=ordered_metrics,
         metric_definition_bindings=ordered_bindings,
