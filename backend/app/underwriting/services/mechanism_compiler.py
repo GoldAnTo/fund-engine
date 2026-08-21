@@ -565,6 +565,21 @@ def compile_mechanisms(
     if not _causal_chain_is_acyclic(all_mappings):
         raise ValidationError("formal mechanism causal chain must be acyclic")
     ordered_bindings = tuple(sorted((key, definitions[key]) for key in dependency_metrics))
+    def resolve_observation(dependency: MetricDefinitionDependency) -> FrozenResolvedObservation:
+        matches = tuple(
+            observation for observation in dependencies.metric_observations
+            if observation.definition_key == dependency.metric_key
+            and observation.definition_version == dependency.definition_version
+        )
+        if len(matches) != 1:
+            raise ValidationError("metric definition must resolve exactly one frozen observation")
+        observation = matches[0]
+        return FrozenResolvedObservation(
+            observation.observation_id, observation.definition_key, dependency.definition_id,
+            dependency.definition_version, dependency.content_hash, observation.source_id,
+            dependency.source_manifest_hash, observation.available_at,
+        )
+    resolved_observations = tuple(resolve_observation(item) for item in sorted(dependencies.metric_definitions, key=lambda item: item.metric_key))
     ordered_provenance = tuple(
         definition_records[key] for key, _ in ordered_bindings
     )
@@ -582,7 +597,7 @@ def compile_mechanisms(
                 metric_definition_bindings=ordered_bindings,
                 metric_definition_provenance=ordered_provenance,
                 frozen_metric_definition_provenance=tuple(sorted(dependencies.metric_definitions, key=lambda item: item.metric_key)),
-                frozen_metric_observations=tuple(FrozenResolvedObservation(uuid5(NAMESPACE_URL, f"{item.metric_key}|{item.definition_id}|{item.source_manifest_hash}"), item.metric_key, item.definition_id, item.definition_version, item.content_hash, dependencies.source_manifest.source_ids[0], item.source_manifest_hash, item.available_at) for item in sorted(dependencies.metric_definitions, key=lambda item: item.metric_key)),
+                frozen_metric_observations=resolved_observations,
                 source_ids=ordered_sources,
             )
         ),
@@ -590,7 +605,7 @@ def compile_mechanisms(
         metric_definition_bindings=ordered_bindings,
         metric_definition_provenance=ordered_provenance,
         frozen_metric_definition_provenance=tuple(sorted(dependencies.metric_definitions, key=lambda item: item.metric_key)),
-        frozen_metric_observations=tuple(FrozenResolvedObservation(uuid5(NAMESPACE_URL, f"{item.metric_key}|{item.definition_id}|{item.source_manifest_hash}"), item.metric_key, item.definition_id, item.definition_version, item.content_hash, dependencies.source_manifest.source_ids[0], item.source_manifest_hash, item.available_at) for item in sorted(dependencies.metric_definitions, key=lambda item: item.metric_key)),
+        frozen_metric_observations=resolved_observations,
         source_manifest_hash=dependencies.source_manifest.manifest_hash,
         source_ids=ordered_sources,
     )
