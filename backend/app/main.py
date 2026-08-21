@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.legacy import router as cases_router
 from app.api.v1.router import router as v1_router
+from app.underwriting.api import router as underwriting_router
 from app.env import load_local_env
 from app.errors import (
     AuthenticationRequiredError,
@@ -48,6 +49,7 @@ app.add_middleware(
 )
 app.include_router(cases_router)
 app.include_router(v1_router)
+app.include_router(underwriting_router)
 
 
 def _v1_error_response(
