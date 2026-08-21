@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Context, Decimal, DecimalException, ROUND_HALF_EVEN, localcontext
 from typing import Iterable
-from uuid import UUID
+from uuid import UUID, NAMESPACE_URL, uuid5
 
 from app.models.ledger import ValidationError
 from app.underwriting.services.kernel import canonical_hash
@@ -479,7 +479,10 @@ def compile_industry_scenario(
     scenario_inputs = _apply_overrides(parent.inputs, spec.overrides)
     values = _compile_values(scenario_inputs)
     return IndustryScenario(
-        id=new_industry_scenario_id(),
+        id=uuid5(
+            NAMESPACE_URL,
+            canonical_hash({"parent_industry_state_id": str(parent.id), "kind": spec.kind.value, "overrides": spec.overrides, "falsifiers": spec.falsifiers}),
+        ),
         kind=spec.kind,
         parent_industry_state_id=parent.id,
         overrides=spec.overrides,

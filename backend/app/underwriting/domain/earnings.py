@@ -471,7 +471,7 @@ class VerifiedIndustryDependency:
             raise ValidationError("verified industry dependency requires compiled mechanisms")
         validate_industry_state_integrity(self.industry_state, mechanisms=self.compiled_mechanisms)
         expected = compile_industry_scenario(parent=self.industry_state, spec=ScenarioSpec(self.scenario.kind, self.scenario.overrides, self.scenario.falsifier_keys), mechanisms=self.compiled_mechanisms)
-        replay_fields = tuple(field for field in self.scenario.__dataclass_fields__ if field != "id")
+        replay_fields = tuple(self.scenario.__dataclass_fields__)
         if any(getattr(self.scenario, field) != getattr(expected, field) for field in replay_fields):
             raise ValidationError("verified industry dependency scenario does not replay")
 
