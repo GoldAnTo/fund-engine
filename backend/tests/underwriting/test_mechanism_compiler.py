@@ -14,6 +14,7 @@ from app.underwriting.domain.mechanisms import (
     MechanismPack,
     MechanismStatus,
 )
+from app.underwriting.domain.metrics import MetricObservation
 from app.underwriting.services.mechanism_compiler import (
     MechanismDependencyContext,
     MetricDefinitionDependency,
@@ -71,6 +72,7 @@ def dependency_context(
             for key, definition_id in metric_bindings.items()
         ),
         source_manifest=source_manifest,
+        metric_observations=tuple(MetricObservation(key, 1, Decimal("1"), "unit", datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 5, 14, tzinfo=UTC), datetime(2025, 5, 14, tzinfo=UTC), "iea-2025", "https://example.test/iea-2025", tuple()) for key in metric_bindings),
     )
 
 

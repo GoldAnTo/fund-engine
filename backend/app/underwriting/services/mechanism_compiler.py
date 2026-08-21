@@ -13,6 +13,7 @@ from app.underwriting.domain.mechanisms import (
     MechanismPack,
     MechanismStatus,
 )
+from app.underwriting.domain.metrics import MetricObservation
 from app.underwriting.services.kernel import canonical_hash
 from app.underwriting.services.source_freeze import FrozenSourceManifest
 from app.underwriting.services.source_policy import AuthorizationState
@@ -97,6 +98,7 @@ class MechanismDependencyContext:
     cutoff: datetime
     metric_definitions: tuple[MetricDefinitionDependency, ...]
     source_manifest: FrozenSourceManifest
+    metric_observations: tuple[MetricObservation, ...] = tuple()
 
     def __post_init__(self) -> None:
         cutoff = _utc(self.cutoff, "cutoff")
@@ -107,6 +109,11 @@ class MechanismDependencyContext:
             raise ValidationError("source manifest cutoff must match dependency cutoff")
         if not isinstance(self.metric_definitions, tuple) or not self.metric_definitions:
             raise ValidationError("metric_definitions must be a non-empty tuple")
+        if not isinstance(self.metric_observations, tuple):
+            raise ValidationError("metric_observations must be a tuple")
+        if not all(type(item) is MetricObservation for item in self.metric_observations):
+            raise ValidationError("metric_observations must contain frozen MetricObservation values")
+        observations = {item.definition_key: item for item in self.metric_observations}
         if not all(type(item) is MetricDefinitionDependency for item in self.metric_definitions):
             raise ValidationError("metric_definitions must contain MetricDefinitionDependency values")
         keys = tuple(item.metric_key for item in self.metric_definitions)
@@ -120,6 +127,11 @@ class MechanismDependencyContext:
                 raise ValidationError("metric definition is unavailable at cutoff")
             if item.source_manifest_hash != self.source_manifest.manifest_hash:
                 raise ValidationError("definition source manifest hash does not match dependency manifest")
+            observation = observations.get(item.metric_key)
+            if self.metric_observations and (observation is None or observation.definition_version != item.definition_version):
+                raise ValidationError("metric definition must bind an actual frozen observation")
+            if observation is not None and (observation.source_id not in self.source_manifest.source_ids or observation.available_at > cutoff):
+                raise ValidationError("frozen observation is unavailable at cutoff")
         for source in self.source_manifest.sources:
             _require_text(source.get("source_id"), "source_id")
             first_available_at = source.get("first_available_at")

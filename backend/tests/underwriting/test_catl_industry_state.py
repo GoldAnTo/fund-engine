@@ -13,6 +13,7 @@ from app.underwriting.domain.industry import (
     ScenarioKind,
     ScenarioSpec,
 )
+from app.underwriting.domain.metrics import MetricObservation
 from app.underwriting.domain.mechanisms import (
     Falsifier,
     FinancialMapping,
@@ -146,6 +147,7 @@ def formal_industry_mechanisms(scope_object_id=None) -> CompiledMechanisms:
             for key in sorted(metric_keys)
         ),
         source_manifest=source_manifest,
+        metric_observations=tuple(MetricObservation(key, 1, Decimal("1"), "unit", datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 5, 14, tzinfo=UTC), datetime(2025, 5, 14, tzinfo=UTC), "industry-source-2025", "https://example.test/industry-source", tuple()) for key in sorted(metric_keys)),
     )
     return compile_mechanisms(packs, dependencies=dependencies)
 
