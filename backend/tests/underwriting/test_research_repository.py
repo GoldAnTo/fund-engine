@@ -43,7 +43,12 @@ def basis(kernel: UnderwritingRepository):
     return kernel.add_basis(HistoricalBasisInput(NOW, NOW, "a" * 64), NOW)
 
 
-def _manifest(repository: UnderwritingResearchRepository, basis_id: uuid.UUID):
+def _manifest(
+    repository: UnderwritingResearchRepository,
+    basis_id: uuid.UUID,
+    *,
+    expected_parent_id: uuid.UUID | None = None,
+):
     return repository.add_source_manifest(
         manifest_key="catl-baseline",
         basis_id=basis_id,
@@ -57,7 +62,7 @@ def _manifest(repository: UnderwritingResearchRepository, basis_id: uuid.UUID):
         },
         manifest_hash="a" * 64,
         content_hash="a" * 64,
-        expected_parent_id=None,
+        expected_parent_id=expected_parent_id,
         created_at=NOW,
     )
 
@@ -269,6 +274,37 @@ def test_mechanism_successor_requires_current_parent(
         )
 
     assert (second.version, second.supersedes_id) == (2, first.id)
+
+
+def test_mechanism_successor_cannot_cross_object_or_historical_basis(
+    repository: UnderwritingResearchRepository, company, other_company, basis, kernel
+) -> None:
+    manifest = _manifest(repository, basis.id)
+    candidate = repository.append_mechanism(
+        mechanism_key="demand_to_shipments", object_id=company.id, basis_id=basis.id,
+        source_manifest_id=manifest.id, status="candidate",
+        payload=_mechanism_payload("demand_to_shipments"), content_hash="a" * 64,
+        expected_parent_id=None, created_at=NOW,
+    )
+    with pytest.raises(ValidationError, match="mechanism successor must share object and basis"):
+        repository.append_mechanism(
+            mechanism_key="demand_to_shipments", object_id=other_company.id, basis_id=basis.id,
+            source_manifest_id=manifest.id, status="adapted",
+            payload=_mechanism_payload("demand_to_shipments"), content_hash="b" * 64,
+            expected_parent_id=candidate.id, created_at=NOW,
+        )
+    later_basis = kernel.add_basis(
+        HistoricalBasisInput(NOW + timedelta(days=1), NOW + timedelta(days=1), "b" * 64),
+        NOW + timedelta(days=1),
+    )
+    later_manifest = _manifest(repository, later_basis.id, expected_parent_id=manifest.id)
+    with pytest.raises(ValidationError, match="mechanism successor must share object and basis"):
+        repository.append_mechanism(
+            mechanism_key="demand_to_shipments", object_id=company.id, basis_id=later_basis.id,
+            source_manifest_id=later_manifest.id, status="adapted",
+            payload=_mechanism_payload("demand_to_shipments"), content_hash="c" * 64,
+            expected_parent_id=candidate.id, created_at=NOW + timedelta(days=1),
+        )
 
 
 def test_first_successor_rejects_parent_from_a_different_family(

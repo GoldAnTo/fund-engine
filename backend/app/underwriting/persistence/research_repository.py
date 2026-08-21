@@ -457,6 +457,10 @@ class UnderwritingResearchRepository:
                 UnderwritingMechanismPackVersion.id.desc(),
             )
         )
+        if current is not None and (
+            current.object_id != object_id or current.basis_id != basis_id
+        ):
+            raise ValidationError("mechanism successor must share object and basis")
         self._require_expected_parent(current.id if current else None, expected_parent_id)
         if status == "formal" and (current is None or current.status != "human_confirmed"):
             raise ValidationError("formal mechanism requires a human_confirmed predecessor")
