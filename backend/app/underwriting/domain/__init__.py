@@ -18,6 +18,15 @@ from .types import (
     LedgerKind,
     ResearchObjectKind,
 )
+from .metrics import (
+    AggregationRule,
+    MetricDefinition,
+    MetricObservation,
+    PeriodSemantics,
+    ReconciliationResult,
+    SourceRole,
+    reconcile,
+)
 
 __all__ = [
     "ENTRY_ACTIONS",
@@ -33,4 +42,11 @@ __all__ = [
     "ResearchObjectKind",
     "enforce_action_boundary",
     "evaluate_answerability",
+    "AggregationRule",
+    "MetricDefinition",
+    "MetricObservation",
+    "PeriodSemantics",
+    "ReconciliationResult",
+    "SourceRole",
+    "reconcile",
 ]
