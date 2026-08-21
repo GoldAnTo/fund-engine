@@ -7,6 +7,7 @@ from typing import Iterable
 from uuid import UUID
 
 from app.models.ledger import ValidationError
+from app.underwriting.services.kernel import canonical_hash
 from app.underwriting.domain.industry import (
     AnswerabilityBlocked,
     IndustryInputs,
@@ -63,6 +64,19 @@ _PHYSICAL_INPUT_FIELDS = frozenset(
     }
 )
 _SHARE_INPUT_FIELDS = frozenset({"commissioned_share", "certified_share", "yield_rate"})
+_INPUT_FIELDS = (
+    "ev_sales_millions",
+    "average_battery_kwh",
+    "storage_demand_gwh",
+    "nominal_capacity_gwh",
+    "commissioned_share",
+    "certified_share",
+    "yield_rate",
+    "shipments_gwh",
+    "production_gwh",
+    "cell_asp_cny_per_kwh",
+    "unit_cash_cost_cny_per_kwh",
+)
 
 
 def _block(code: BlockerCode, detail: str) -> None:
@@ -253,6 +267,64 @@ def _metric_collection(
     )
 
 
+def _range_payload(value: IndustryRange) -> dict[str, str]:
+    return {"low": str(value.low), "high": str(value.high)}
+
+
+def _state_content_hash(
+    *,
+    inputs: IndustryInputs,
+    values: tuple[
+        Decimal,
+        Decimal,
+        Decimal,
+        Decimal,
+        Decimal,
+        Decimal,
+        IndustryRange,
+        IndustryRange,
+        IndustryRange,
+    ],
+    metrics: IndustryMetricCollection,
+    mechanism_lineage: tuple[tuple[str, UUID, int], ...],
+    falsifier_keys: tuple[str, ...],
+    compiled_mechanism_hash: str,
+) -> str:
+    """Hash every replay-relevant state field, including its mechanism binding."""
+    return canonical_hash(
+        {
+            "inputs": {
+                field_name: (
+                    str(getattr(inputs, field_name))
+                    if getattr(inputs, field_name) is not None
+                    else None
+                )
+                for field_name in _INPUT_FIELDS
+            },
+            "outputs": {
+                "battery_demand_gwh": str(values[0]),
+                "nominal_capacity_gwh": str(values[1]),
+                "effective_capacity_gwh": str(values[2]),
+                "utilization": str(values[3]),
+                "inventory_change_gwh": str(values[4]),
+                "unit_margin_cny_per_kwh": str(values[5]),
+                "price_range_cny_per_kwh": _range_payload(values[6]),
+                "unit_cost_range_cny_per_kwh": _range_payload(values[7]),
+                "industry_profit_pool_range_cny": _range_payload(values[8]),
+            },
+            "metrics": tuple(
+                {"key": metric.key, "value": str(metric.value)} for metric in metrics.values
+            ),
+            "mechanism_lineage": tuple(
+                {"key": key, "scope_object_id": str(scope_id), "version": version}
+                for key, scope_id, version in mechanism_lineage
+            ),
+            "falsifier_keys": falsifier_keys,
+            "compiled_mechanism_hash": compiled_mechanism_hash,
+        }
+    )
+
+
 def validate_industry_state_integrity(
     value: IndustryState,
     *,
@@ -270,12 +342,24 @@ def validate_industry_state_integrity(
         expected_lineage = _mechanism_lineage(formal_mechanisms)
         expected_falsifiers = _falsifier_keys(formal_mechanisms)
         expected_metrics = _metric_collection(values)
+        expected_content_hash = _state_content_hash(
+            inputs=value.inputs,
+            values=values,
+            metrics=expected_metrics,
+            mechanism_lineage=expected_lineage,
+            falsifier_keys=expected_falsifiers,
+            compiled_mechanism_hash=mechanisms.content_hash,
+        )
     except AnswerabilityBlocked as exc:
         raise ValidationError("industry state inputs are not answerable") from exc
     except (AttributeError, TypeError, ValueError, DecimalException) as exc:
         raise ValidationError("industry state integrity is invalid") from exc
     if value.mechanism_lineage != expected_lineage:
         raise ValidationError("industry state mechanism lineage does not match compiled mechanisms")
+    if value.compiled_mechanism_hash != mechanisms.content_hash:
+        raise ValidationError("industry state is bound to a different compiled mechanism")
+    if value.content_hash != expected_content_hash:
+        raise ValidationError("industry state content hash does not match its replay inputs")
     if (
         not isinstance(value.falsifier_keys, tuple)
         or not all(isinstance(key, str) and key.strip() for key in value.falsifier_keys)
@@ -315,6 +399,16 @@ def compile_industry_state(
         )
     values = _compile_values(inputs)
     lineage = _mechanism_lineage(formal_mechanisms)
+    falsifier_keys = _falsifier_keys(formal_mechanisms)
+    metrics = _metric_collection(values)
+    state_content_hash = _state_content_hash(
+        inputs=inputs,
+        values=values,
+        metrics=metrics,
+        mechanism_lineage=lineage,
+        falsifier_keys=falsifier_keys,
+        compiled_mechanism_hash=mechanisms.content_hash,
+    )
     return IndustryState(
         id=new_industry_state_id(),
         inputs=inputs,
@@ -327,9 +421,11 @@ def compile_industry_state(
         price_range_cny_per_kwh=values[6],
         unit_cost_range_cny_per_kwh=values[7],
         industry_profit_pool_range_cny=values[8],
-        metrics=_metric_collection(values),
+        metrics=metrics,
         mechanism_lineage=lineage,
-        falsifier_keys=_falsifier_keys(formal_mechanisms),
+        falsifier_keys=falsifier_keys,
+        compiled_mechanism_hash=mechanisms.content_hash,
+        content_hash=state_content_hash,
     )
 
 

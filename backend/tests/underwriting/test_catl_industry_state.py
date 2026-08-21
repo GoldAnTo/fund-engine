@@ -37,7 +37,7 @@ from app.underwriting.services.source_freeze import freeze_manifest
 CUTOFF = datetime(2025, 5, 15, 15, 59, 59, tzinfo=UTC)
 
 
-def formal_industry_packs() -> tuple[MechanismPack, ...]:
+def formal_industry_packs(scope_object_id=None) -> tuple[MechanismPack, ...]:
     drivers = (
         "industry.ev_sales_millions",
         "industry.average_battery_kwh",
@@ -55,7 +55,7 @@ def formal_industry_packs() -> tuple[MechanismPack, ...]:
         key="effective_capacity_to_utilization_and_price",
         version=1,
         status=MechanismStatus.CANDIDATE,
-        scope_object_id=uuid4(),
+        scope_object_id=scope_object_id or uuid4(),
         driver_keys=drivers,
         formula="effective capacity determines the industry utilization regime",
         applicability=("power-battery industry",),
@@ -96,8 +96,8 @@ def formal_industry_packs() -> tuple[MechanismPack, ...]:
     return (transition_mechanism(confirmed, MechanismStatus.FORMAL),)
 
 
-def formal_industry_mechanisms() -> CompiledMechanisms:
-    packs = formal_industry_packs()
+def formal_industry_mechanisms(scope_object_id=None) -> CompiledMechanisms:
+    packs = formal_industry_packs(scope_object_id)
     source_manifest = freeze_manifest(
         {
             "schema_version": "underwriting.source-manifest.v1",
@@ -289,6 +289,31 @@ def test_scenario_refuses_a_tampered_industry_state_parent(tamper) -> None:
                 falsifiers=("utilization_outside_range",),
             ),
             mechanisms=mechanisms,
+        )
+
+
+def test_scenario_rejects_state_rebound_to_a_different_compiled_mechanism_scope() -> None:
+    first = formal_industry_mechanisms()
+    parent = compile_industry_state(inputs=complete_inputs(), mechanisms=first)
+    other = formal_industry_mechanisms(scope_object_id=uuid4())
+    rebound = replace(
+        parent,
+        compiled_mechanism_hash=other.content_hash,
+        mechanism_lineage=tuple(
+            (mechanism.key, mechanism.scope_object_id, mechanism.version)
+            for mechanism in other.mechanisms
+        ),
+    )
+
+    with pytest.raises(AnswerabilityBlocked, match="mechanism_unidentified"):
+        compile_industry_scenario(
+            parent=rebound,
+            spec=ScenarioSpec(
+                kind=ScenarioKind.UPSIDE,
+                overrides=(ScenarioDriverOverride("industry.cell_asp_cny_per_kwh", Decimal("0.70")),),
+                falsifiers=("utilization_outside_range",),
+            ),
+            mechanisms=other,
         )
 
 

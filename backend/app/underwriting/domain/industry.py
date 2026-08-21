@@ -10,10 +10,14 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 from collections.abc import Iterator, Mapping
+import re
 from uuid import UUID, uuid4
 
 from app.models.ledger import ValidationError
 from app.underwriting.domain.types import BlockerCode
+
+
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 def _require_text(value: object, field_name: str) -> str:
@@ -178,6 +182,8 @@ class IndustryState:
     metrics: IndustryMetricCollection
     mechanism_lineage: tuple[tuple[str, UUID, int], ...]
     falsifier_keys: tuple[str, ...]
+    compiled_mechanism_hash: str
+    content_hash: str
 
     def __post_init__(self) -> None:
         if type(self.id) is not UUID:
@@ -225,6 +231,12 @@ class IndustryState:
             raise ValidationError("industry state mechanism lineage is invalid")
         if not isinstance(self.falsifier_keys, tuple) or not self.falsifier_keys:
             raise ValidationError("industry state falsifier keys are required")
+        if not isinstance(self.compiled_mechanism_hash, str) or _SHA256.fullmatch(
+            self.compiled_mechanism_hash
+        ) is None:
+            raise ValidationError("industry state compiled_mechanism_hash must be a lowercase SHA-256")
+        if not isinstance(self.content_hash, str) or _SHA256.fullmatch(self.content_hash) is None:
+            raise ValidationError("industry state content_hash must be a lowercase SHA-256")
 
 
 @dataclass(frozen=True, slots=True)
