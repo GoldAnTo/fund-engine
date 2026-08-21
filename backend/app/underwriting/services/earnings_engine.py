@@ -16,7 +16,13 @@ from app.underwriting.domain.earnings import (
     validate_earnings_engine_integrity,
 )
 from app.underwriting.domain.industry import IndustryScenario
+from app.underwriting.domain.industry import IndustryState, ScenarioSpec
 from app.underwriting.domain.metrics import ReconciliationResult, reconcile
+from app.underwriting.services.industry_state import (
+    compile_industry_scenario,
+    validate_industry_state_integrity,
+)
+from app.underwriting.services.mechanism_compiler import CompiledMechanisms
 
 
 _GWH_TO_KWH = Decimal("1000000")
@@ -59,6 +65,46 @@ def _physical_bridge(
     with localcontext(_context((segment.volume_gwh, unit_value, total, tolerance))):
         expected = segment.volume_gwh * _GWH_TO_KWH * unit_value
         return _bridge(total, expected, tolerance, segment.key)
+
+
+def _verify_industry_dependency(
+    *,
+    industry_state: IndustryState,
+    scenario: IndustryScenario,
+    mechanisms: CompiledMechanisms,
+) -> None:
+    """Reject state/scenario pairs that are not replayable from compiled mechanisms."""
+    if type(industry_state) is not IndustryState or type(scenario) is not IndustryScenario:
+        raise ValidationError("verified industry state and scenario are required")
+    if type(mechanisms) is not CompiledMechanisms:
+        raise ValidationError("compiled industry mechanisms are required")
+    validate_industry_state_integrity(industry_state, mechanisms=mechanisms)
+    if scenario.parent_industry_state_id != industry_state.id:
+        raise ValidationError("scenario must belong to verified industry state")
+    try:
+        expected = compile_industry_scenario(
+            parent=industry_state,
+            spec=ScenarioSpec(scenario.kind, scenario.overrides, scenario.falsifier_keys),
+            mechanisms=mechanisms,
+        )
+    except ValidationError as exc:
+        raise ValidationError("scenario does not match verified industry state and mechanisms") from exc
+    expected_fields = (
+        "kind",
+        "parent_industry_state_id",
+        "overrides",
+        "battery_demand_gwh",
+        "effective_capacity_gwh",
+        "utilization",
+        "inventory_change_gwh",
+        "price_range_cny_per_kwh",
+        "unit_cost_range_cny_per_kwh",
+        "industry_profit_pool_range_cny",
+        "falsifier_keys",
+        "probability",
+    )
+    if any(getattr(scenario, field) != getattr(expected, field) for field in expected_fields):
+        raise ValidationError("scenario does not match verified industry state and mechanisms")
 
 
 def build_segment(value: SegmentInputs) -> SegmentEconomics:
@@ -152,6 +198,8 @@ def build_company_engine(
     reported_cash_capex: Decimal | None = None,
     diluted_shares: Decimal | None = None,
     industry_state_id: UUID | None = None,
+    industry_state: IndustryState | None = None,
+    mechanisms: CompiledMechanisms | None = None,
     scenario: IndustryScenario | None = None,
     exposures: tuple[CompanyExposure, ...] = tuple(),
     tolerance: Decimal = _DEFAULT_TOLERANCE,
@@ -180,6 +228,16 @@ def build_company_engine(
         raise ValidationError("industry scenario and exposures are invalid")
     if scenario is not None and scenario.parent_industry_state_id != industry_state_id:
         raise ValidationError("scenario must belong to industry state")
+    if industry_state is not None or mechanisms is not None:
+        if industry_state is None or mechanisms is None or scenario is None:
+            raise ValidationError("verified industry state, scenario, and mechanisms are required")
+        _verify_industry_dependency(
+            industry_state=industry_state,
+            scenario=scenario,
+            mechanisms=mechanisms,
+        )
+        if industry_state_id != industry_state.id:
+            raise ValidationError("industry_state_id must match verified industry state")
     bridge_values = (
         company_total,
         tolerance,

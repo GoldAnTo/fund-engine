@@ -24,6 +24,14 @@ from app.underwriting.services.earnings_engine import (
     build_segment,
     validate_earnings_engine_integrity,
 )
+from app.underwriting.services.industry_state import (
+    compile_industry_scenario,
+    compile_industry_state,
+)
+from tests.underwriting.test_catl_industry_state import (
+    complete_inputs,
+    formal_industry_mechanisms,
+)
 
 
 def _segment(
@@ -491,3 +499,21 @@ def test_public_integrity_validator_detects_post_construction_tampering() -> Non
 
     with pytest.raises(ValidationError, match="content hash"):
         validate_earnings_engine_integrity(engine)
+
+
+def test_engine_rejects_scenario_that_does_not_replay_from_verified_industry_inputs() -> None:
+    mechanisms = formal_industry_mechanisms()
+    state = compile_industry_state(inputs=complete_inputs(), mechanisms=mechanisms)
+    scenario = _scenario(state.id)
+    segment = build_segment(_segment("power_battery", normalized_cash_earning_power="10"))
+    with pytest.raises(ValidationError, match="scenario does not match verified"):
+        build_company_engine(
+            company_total=segment.revenue,
+            company_total_cost=segment.cost,
+            segments=(segment,),
+            industry_state_id=state.id,
+            industry_state=state,
+            mechanisms=mechanisms,
+            scenario=scenario,
+            exposures=(CompanyExposure("power_battery", state.id, Decimal("1")),),
+        )
