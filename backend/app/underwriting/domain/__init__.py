@@ -54,6 +54,8 @@ from .earnings import (
     SegmentBridgeReconciliation,
     SegmentEconomics,
     SegmentInputs,
+    earnings_engine_content_hash,
+    validate_earnings_engine_integrity,
 )
 
 __all__ = [
@@ -99,4 +101,6 @@ __all__ = [
     "SegmentBridgeReconciliation",
     "SegmentEconomics",
     "SegmentInputs",
+    "earnings_engine_content_hash",
+    "validate_earnings_engine_integrity",
 ]

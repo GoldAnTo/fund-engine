@@ -22,6 +22,7 @@ from app.underwriting.domain.industry import IndustryRange, IndustryScenario, Sc
 from app.underwriting.services.earnings_engine import (
     build_company_engine,
     build_segment,
+    validate_earnings_engine_integrity,
 )
 
 
@@ -48,6 +49,8 @@ def _segment(
         cash_capex=Decimal(cash_capex),
         working_capital_change=Decimal(working_capital_change),
         cash_tax=Decimal(cash_tax),
+        asp_derivation_metric_ids=(f"segment.{key}.revenue", f"segment.{key}.volume_gwh"),
+        unit_cost_derivation_metric_ids=(f"segment.{key}.cost", f"segment.{key}.volume_gwh"),
         normalized_cash_earning_power=(
             Decimal(normalized_cash_earning_power)
             if normalized_cash_earning_power is not None
@@ -85,6 +88,8 @@ def test_segment_volume_price_cost_bridge() -> None:
             cash_capex=Decimal("0"),
             working_capital_change=Decimal("0"),
             cash_tax=Decimal("0"),
+            asp_derivation_metric_ids=("segment.power_battery.revenue", "segment.power_battery.volume_gwh"),
+            unit_cost_derivation_metric_ids=("segment.power_battery.cost", "segment.power_battery.volume_gwh"),
         )
     )
 
@@ -294,7 +299,7 @@ def test_segment_economics_cannot_be_directly_constructed_with_broken_financial_
         )
 
 
-def test_diluted_eps_is_modeled_nopat_per_share_and_uses_stable_decimal_math() -> None:
+def test_modeled_nopat_per_share_uses_stable_decimal_math() -> None:
     segment = build_segment(_segment("power_battery", asp="101", cost="100"))
     result = build_company_engine(
         company_total=segment.revenue,
@@ -304,7 +309,7 @@ def test_diluted_eps_is_modeled_nopat_per_share_and_uses_stable_decimal_math() -
     )
 
     with localcontext(Context(prec=128)):
-        assert result.diluted_eps == segment.nopat / Decimal("3")
+        assert result.modeled_nopat_per_share == segment.nopat / Decimal("3")
 
 
 def test_earnings_engine_direct_construction_cannot_bypass_company_reconciliation() -> None:
@@ -409,7 +414,13 @@ def test_core_contribution_rejects_valuation_language() -> None:
         CoreContribution("power_battery", Decimal("1"), Decimal("1"), "target price")
 
 
-def test_direct_engine_rejects_eps_without_diluted_shares() -> None:
+@pytest.mark.parametrize("basis", ("DCF", "fair value", "enterprise value"))
+def test_core_contribution_rejects_additional_valuation_language(basis: str) -> None:
+    with pytest.raises(ValidationError, match="valuation terms"):
+        CoreContribution("power_battery", Decimal("1"), Decimal("1"), basis)
+
+
+def test_direct_engine_rejects_modeled_nopat_per_share_without_diluted_shares() -> None:
     segment = build_segment(_segment("power_battery"))
     good = build_company_engine(
         company_total=segment.revenue,
@@ -417,8 +428,8 @@ def test_direct_engine_rejects_eps_without_diluted_shares() -> None:
         segments=(segment,),
     )
 
-    with pytest.raises(ValidationError, match="diluted shares and EPS must be provided together"):
-        replace(good, diluted_eps=Decimal("777"))
+    with pytest.raises(ValidationError, match="diluted shares and modeled NOPAT per share"):
+        replace(good, modeled_nopat_per_share=Decimal("777"))
 
 
 def test_direct_engine_requires_eps_when_diluted_shares_are_present() -> None:
@@ -429,11 +440,11 @@ def test_direct_engine_requires_eps_when_diluted_shares_are_present() -> None:
         segments=(segment,),
     )
 
-    with pytest.raises(ValidationError, match="diluted shares and EPS must be provided together"):
+    with pytest.raises(ValidationError, match="diluted shares and modeled NOPAT per share"):
         replace(good, diluted_shares=Decimal("3"))
 
 
-def test_direct_engine_rejects_mismatched_diluted_eps() -> None:
+def test_direct_engine_rejects_mismatched_modeled_nopat_per_share() -> None:
     segment = build_segment(_segment("power_battery"))
     good = build_company_engine(
         company_total=segment.revenue,
@@ -442,5 +453,41 @@ def test_direct_engine_rejects_mismatched_diluted_eps() -> None:
         diluted_shares=Decimal("3"),
     )
 
-    with pytest.raises(ValidationError, match="diluted EPS does not reconcile"):
-        replace(good, diluted_eps=Decimal("777"))
+    with pytest.raises(ValidationError, match="modeled NOPAT per share does not reconcile"):
+        replace(good, modeled_nopat_per_share=Decimal("777"))
+
+
+def test_physical_segment_economics_revalidates_volume_price_and_cost_bridge() -> None:
+    good = build_segment(_segment("power_battery"))
+    with pytest.raises(ValidationError, match="physical revenue does not reconcile"):
+        replace(
+            good,
+            revenue=good.revenue + Decimal("1"),
+            gross_profit=good.gross_profit + Decimal("1"),
+            operating_profit=good.operating_profit + Decimal("1"),
+            nopat=good.nopat + Decimal("1"),
+            free_cash_flow=good.free_cash_flow + Decimal("1"),
+        )
+
+
+def test_physical_inputs_require_metric_parent_ids() -> None:
+    value = _segment("power_battery")
+    with pytest.raises(ValidationError, match="derived physical inputs require parent metric IDs"):
+        replace(
+            value,
+            asp_derivation_metric_ids=None,
+            unit_cost_derivation_metric_ids=None,
+        )
+
+
+def test_public_integrity_validator_detects_post_construction_tampering() -> None:
+    segment = build_segment(_segment("power_battery"))
+    engine = build_company_engine(
+        company_total=segment.revenue,
+        company_total_cost=segment.cost,
+        segments=(segment,),
+    )
+    object.__setattr__(engine, "modeled_free_cash_flow", Decimal("777"))
+
+    with pytest.raises(ValidationError, match="content hash"):
+        validate_earnings_engine_integrity(engine)

@@ -6,8 +6,10 @@ a price, a multiple, a discount rate or a target price.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from decimal import Context, Decimal, DecimalException, ROUND_HALF_EVEN, localcontext
+import hashlib
+import json
 from typing import Iterable
 from uuid import UUID
 
@@ -18,7 +20,28 @@ from app.underwriting.domain.metrics import ReconciliationResult, reconcile
 
 _UNALLOCATED_COMPANY_KEY = "unallocated_company"
 _COMPANY_RECONCILIATION_TOLERANCE = Decimal("1000")
-_VALUATION_TERMS = ("price", "multiple", "discount", "target")
+_VALUATION_TERMS = (
+    "price",
+    "multiple",
+    "discount",
+    "target",
+    "dcf",
+    "fair value",
+    "enterprise value",
+    "valuation",
+)
+
+
+def _canonical_hash(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _text(value: object, name: str) -> str:
@@ -98,6 +121,11 @@ class SegmentInputs:
             _decimal(self.volume_gwh, "volume_gwh", nonnegative=True)
             _decimal(self.asp_cny_per_kwh, "asp_cny_per_kwh", nonnegative=True)
             _decimal(self.unit_cash_cost_cny_per_kwh, "unit_cash_cost_cny_per_kwh", nonnegative=True)
+            if (
+                self.asp_derivation_metric_ids is None
+                or self.unit_cost_derivation_metric_ids is None
+            ):
+                raise ValidationError("derived physical inputs require parent metric IDs")
         if self.reported_revenue is not None:
             _decimal(self.reported_revenue, "reported_revenue", nonnegative=True)
         if self.reported_cost is not None:
@@ -196,6 +224,11 @@ class SegmentEconomics:
             _decimal(self.volume_gwh, "volume_gwh", nonnegative=True)
             _decimal(self.asp_cny_per_kwh, "asp_cny_per_kwh", nonnegative=True)
             _decimal(self.unit_cash_cost_cny_per_kwh, "unit_cash_cost_cny_per_kwh", nonnegative=True)
+            if (
+                self.asp_derivation_metric_ids is None
+                or self.unit_cost_derivation_metric_ids is None
+            ):
+                raise ValidationError("derived physical inputs require parent metric IDs")
         _metric_ids(self.asp_derivation_metric_ids, "asp_derivation_metric_ids")
         _metric_ids(self.unit_cost_derivation_metric_ids, "unit_cost_derivation_metric_ids")
         if self.normalized_cash_earning_power is not None:
@@ -227,6 +260,15 @@ class SegmentEconomics:
                     - self.working_capital_change
                 ):
                     raise ValidationError("free cash flow does not reconcile")
+                if self.volume_gwh is not None:
+                    expected_revenue = self.volume_gwh * Decimal("1000000") * self.asp_cny_per_kwh
+                    expected_cost = (
+                        self.volume_gwh * Decimal("1000000") * self.unit_cash_cost_cny_per_kwh
+                    )
+                    if self.revenue != expected_revenue:
+                        raise ValidationError("physical revenue does not reconcile")
+                    if self.cost != expected_cost:
+                        raise ValidationError("physical cost does not reconcile")
         except DecimalException as exc:
             raise ValidationError(f"segment decimal arithmetic is invalid: {exc}") from exc
 
@@ -338,12 +380,13 @@ class EarningsEngine:
     reported_cash_capex: Decimal | None
     reported_fcf_proxy: Decimal | None
     diluted_shares: Decimal | None
-    diluted_eps: Decimal | None
+    modeled_nopat_per_share: Decimal | None
     four_core_views: FourCoreView
     reconciliations: EarningsReconciliations
     industry_state_id: UUID | None
     scenario: IndustryScenario | None
     exposures: tuple[CompanyExposure, ...]
+    content_hash: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.segments, tuple) or not self.segments:
@@ -358,14 +401,20 @@ class EarningsEngine:
             _decimal(self.company_cost, "company_cost", nonnegative=True)
         for name in ("modeled_operating_profit", "modeled_nopat", "modeled_free_cash_flow"):
             _decimal(getattr(self, name), name)
-        for name in ("reported_operating_cash_flow", "reported_cash_capex", "reported_fcf_proxy", "diluted_shares", "diluted_eps"):
+        for name in (
+            "reported_operating_cash_flow",
+            "reported_cash_capex",
+            "reported_fcf_proxy",
+            "diluted_shares",
+            "modeled_nopat_per_share",
+        ):
             value = getattr(self, name)
             if value is not None:
                 _decimal(value, name, nonnegative=name in {"reported_cash_capex", "diluted_shares"})
         if self.diluted_shares is not None and self.diluted_shares <= 0:
             raise ValidationError("diluted_shares must be greater than zero")
-        if (self.diluted_shares is None) != (self.diluted_eps is None):
-            raise ValidationError("diluted shares and EPS must be provided together")
+        if (self.diluted_shares is None) != (self.modeled_nopat_per_share is None):
+            raise ValidationError("diluted shares and modeled NOPAT per share must be provided together")
         if (self.reported_operating_cash_flow is None) != (self.reported_cash_capex is None):
             raise ValidationError("reported OCF and cash capex must be provided together")
         if self.reported_operating_cash_flow is None and self.reported_fcf_proxy is not None:
@@ -458,13 +507,56 @@ class EarningsEngine:
                     ):
                         raise ValidationError("reported FCF proxy does not reconcile")
                 if self.diluted_shares is not None:
-                    if self.diluted_eps is None:
-                        raise ValidationError("diluted shares and EPS must be provided together")
+                    if self.modeled_nopat_per_share is None:
+                        raise ValidationError(
+                            "diluted shares and modeled NOPAT per share must be provided together"
+                        )
                     with localcontext(
                         _calculation_context((self.modeled_nopat, self.diluted_shares))
                     ):
-                        if self.diluted_eps != self.modeled_nopat / self.diluted_shares:
-                            raise ValidationError("diluted EPS does not reconcile")
+                        if self.modeled_nopat_per_share != self.modeled_nopat / self.diluted_shares:
+                            raise ValidationError("modeled NOPAT per share does not reconcile")
+                expected_segment_revenue = tuple(
+                    SegmentBridgeReconciliation(
+                        segment.key,
+                        reconcile(
+                            segment.revenue,
+                            (
+                                segment.volume_gwh
+                                * Decimal("1000000")
+                                * segment.asp_cny_per_kwh,
+                            ),
+                            _COMPANY_RECONCILIATION_TOLERANCE,
+                        ),
+                    )
+                    for segment in self.segments
+                    if segment.volume_gwh is not None
+                )
+                expected_segment_cost = tuple(
+                    SegmentBridgeReconciliation(
+                        segment.key,
+                        reconcile(
+                            segment.cost,
+                            (
+                                segment.volume_gwh
+                                * Decimal("1000000")
+                                * segment.unit_cash_cost_cny_per_kwh,
+                            ),
+                            _COMPANY_RECONCILIATION_TOLERANCE,
+                        ),
+                    )
+                    for segment in self.segments
+                    if segment.volume_gwh is not None
+                )
+                if (
+                    self.reconciliations.segment_revenue != expected_segment_revenue
+                    or self.reconciliations.segment_cost != expected_segment_cost
+                    or not all(
+                        row.balanced
+                        for row in (*expected_segment_revenue, *expected_segment_cost)
+                    )
+                ):
+                    raise ValidationError("physical segment bridge rows do not reconcile")
         except DecimalException as exc:
             raise ValidationError(f"company decimal arithmetic is invalid: {exc}") from exc
         if (self.industry_state_id is None) != (self.scenario is None):
@@ -485,6 +577,11 @@ class EarningsEngine:
             exposures=self.exposures,
         ):
             raise ValidationError("four core views do not reconcile")
+        expected_hash = earnings_engine_content_hash(self)
+        if self.content_hash is None:
+            object.__setattr__(self, "content_hash", expected_hash)
+        elif self.content_hash != expected_hash:
+            raise ValidationError("earnings engine content hash does not reconcile")
 
     def segment(self, key: str) -> SegmentEconomics:
         for item in self.segments:
@@ -547,23 +644,34 @@ def derive_four_core_views(
     scenario_segments = tuple(
         segment for segment in operating_segments if segment.normalized_cash_earning_power is not None
     )
+    if scenario_segments and len(scenario_segments) != len(operating_segments):
+        raise ValidationError("normalized cash earning power is required for every operating segment")
+    if industry_state_id is None:
+        if scenario is not None or exposures:
+            raise ValidationError("industry scenario and exposures must be provided together")
+    else:
+        if type(industry_state_id) is not UUID or type(scenario) is not IndustryScenario:
+            raise ValidationError("industry scenario and exposures are invalid")
+        if scenario.parent_industry_state_id != industry_state_id:
+            raise ValidationError("scenario must belong to industry state")
+        if not isinstance(exposures, tuple) or not all(type(item) is CompanyExposure for item in exposures):
+            raise ValidationError("company exposures are invalid")
+        matching_scope = {item.segment_key: item for item in exposures}
+        if (
+            len(matching_scope) != len(exposures)
+            or set(matching_scope) != {segment.key for segment in operating_segments}
+            or any(item.industry_state_id != industry_state_id for item in exposures)
+        ):
+            raise ValidationError(
+                "exactly one company exposure is required to cover every operating segment in industry scope"
+            )
     if not scenario_segments:
         return FourCoreView(revenue_core, profit_core, cash_core, tuple())
-    if len(scenario_segments) != len(operating_segments):
-        raise ValidationError("normalized cash earning power is required for every operating segment")
     if industry_state_id is None or scenario is None:
         raise ValidationError("industry scenario and exposures are required for value core")
     if scenario.parent_industry_state_id != industry_state_id:
         raise ValidationError("scenario must belong to industry state")
-    matching: dict[str, CompanyExposure] = {}
-    for exposure in exposures:
-        if exposure.industry_state_id != industry_state_id:
-            raise ValidationError("company exposure must belong to industry state")
-        if exposure.segment_key in matching:
-            raise ValidationError("exactly one company exposure is required per scenario-valued segment")
-        matching[exposure.segment_key] = exposure
-    if set(matching) != {segment.key for segment in scenario_segments}:
-        raise ValidationError("exactly one company exposure is required per scenario-valued segment")
+    matching = {exposure.segment_key: exposure for exposure in exposures}
     with localcontext(
         _calculation_context(
             tuple(
@@ -595,3 +703,61 @@ def derive_four_core_views(
         for segment, amount in normalized
     )
     return FourCoreView(revenue_core, profit_core, cash_core, value_core)
+
+
+def earnings_engine_content_hash(value: EarningsEngine) -> str:
+    """Hash every replay-relevant earnings field, excluding only the hash itself."""
+    if type(value) is not EarningsEngine:
+        raise ValidationError("earnings engine is required")
+    return _canonical_hash(
+        {
+            "segments": tuple(asdict(segment) for segment in value.segments),
+            "company_revenue": str(value.company_revenue),
+            "company_cost": str(value.company_cost) if value.company_cost is not None else None,
+            "modeled_operating_profit": str(value.modeled_operating_profit),
+            "modeled_nopat": str(value.modeled_nopat),
+            "modeled_free_cash_flow": str(value.modeled_free_cash_flow),
+            "reported_operating_cash_flow": str(value.reported_operating_cash_flow) if value.reported_operating_cash_flow is not None else None,
+            "reported_cash_capex": str(value.reported_cash_capex) if value.reported_cash_capex is not None else None,
+            "reported_fcf_proxy": str(value.reported_fcf_proxy) if value.reported_fcf_proxy is not None else None,
+            "diluted_shares": str(value.diluted_shares) if value.diluted_shares is not None else None,
+            "modeled_nopat_per_share": (
+                str(value.modeled_nopat_per_share)
+                if value.modeled_nopat_per_share is not None
+                else None
+            ),
+            "four_core_views": asdict(value.four_core_views),
+            "reconciliations": asdict(value.reconciliations),
+            "industry_state_id": str(value.industry_state_id) if value.industry_state_id else None,
+            "scenario": asdict(value.scenario) if value.scenario is not None else None,
+            "exposures": tuple(asdict(item) for item in value.exposures),
+        }
+    )
+
+
+def validate_earnings_engine_integrity(value: EarningsEngine) -> None:
+    """Fail closed before a persisted or downstream engine is consumed."""
+    if type(value) is not EarningsEngine or value.content_hash is None:
+        raise ValidationError("earnings engine content hash is required")
+    if value.content_hash != earnings_engine_content_hash(value):
+        raise ValidationError("earnings engine content hash does not reconcile")
+    # Reconstructing executes all financial, bridge, core-view and hash checks.
+    EarningsEngine(
+        segments=value.segments,
+        company_revenue=value.company_revenue,
+        company_cost=value.company_cost,
+        modeled_operating_profit=value.modeled_operating_profit,
+        modeled_nopat=value.modeled_nopat,
+        modeled_free_cash_flow=value.modeled_free_cash_flow,
+        reported_operating_cash_flow=value.reported_operating_cash_flow,
+        reported_cash_capex=value.reported_cash_capex,
+        reported_fcf_proxy=value.reported_fcf_proxy,
+        diluted_shares=value.diluted_shares,
+        modeled_nopat_per_share=value.modeled_nopat_per_share,
+        four_core_views=value.four_core_views,
+        reconciliations=value.reconciliations,
+        industry_state_id=value.industry_state_id,
+        scenario=value.scenario,
+        exposures=value.exposures,
+        content_hash=value.content_hash,
+    )

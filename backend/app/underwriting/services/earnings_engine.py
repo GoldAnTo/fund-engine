@@ -13,6 +13,7 @@ from app.underwriting.domain.earnings import (
     SegmentEconomics,
     SegmentInputs,
     derive_four_core_views,
+    validate_earnings_engine_integrity,
 )
 from app.underwriting.domain.industry import IndustryScenario
 from app.underwriting.domain.metrics import ReconciliationResult, reconcile
@@ -251,9 +252,9 @@ def build_company_engine(
     )
     if diluted_shares is not None:
         with localcontext(_context((modeled_nopat, diluted_shares))):
-            diluted_eps = modeled_nopat / diluted_shares
+            modeled_nopat_per_share = modeled_nopat / diluted_shares
     else:
-        diluted_eps = None
+        modeled_nopat_per_share = None
     return EarningsEngine(
         segments=segments,
         company_revenue=company_total,
@@ -265,7 +266,7 @@ def build_company_engine(
         reported_cash_capex=reported_cash_capex,
         reported_fcf_proxy=reported_fcf_proxy,
         diluted_shares=diluted_shares,
-        diluted_eps=diluted_eps,
+        modeled_nopat_per_share=modeled_nopat_per_share,
         four_core_views=core_views,
         reconciliations=EarningsReconciliations(
             revenue= revenue_reconciliation,
