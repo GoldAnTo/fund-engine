@@ -8,7 +8,7 @@ import uuid
 import pytest
 from sqlalchemy.orm import Session
 
-from app.models.ledger import ValidationError
+from app.models.ledger import ConflictError, ValidationError
 from app.underwriting.domain import (
     HistoricalBasisInput,
     InvestmentMandateInput,
@@ -73,6 +73,43 @@ def test_adds_distinct_company_and_security_then_allows_their_relation(
     )
 
 
+def test_adds_industry_to_company_relation(kernel: UnderwritingKernelService) -> None:
+    industry = kernel.add_object(ResearchObjectKind.INDUSTRY, "industry:ev", "EV")
+    company = kernel.add_object(ResearchObjectKind.COMPANY, "company:1", "Company")
+
+    relation = kernel.link_objects(
+        industry.id, company.id, "industry_exposes_company"
+    )
+
+    assert (relation.parent_id, relation.child_id, relation.relation_type) == (
+        industry.id,
+        company.id,
+        "industry_exposes_company",
+    )
+
+
+def test_add_object_converts_duplicates_to_conflicts(
+    kernel: UnderwritingKernelService,
+) -> None:
+    kernel.add_object(ResearchObjectKind.COMPANY, "company:1", "Company")
+
+    with pytest.raises(ConflictError, match="^research object already exists$"):
+        kernel.add_object(ResearchObjectKind.COMPANY, "company:1", "Company")
+
+
+def test_link_objects_converts_duplicates_to_conflicts(
+    kernel: UnderwritingKernelService,
+) -> None:
+    industry = kernel.add_object(ResearchObjectKind.INDUSTRY, "industry:ev", "EV")
+    company = kernel.add_object(ResearchObjectKind.COMPANY, "company:1", "Company")
+    kernel.link_objects(industry.id, company.id, "industry_exposes_company")
+
+    with pytest.raises(
+        ConflictError, match="^research object relation already exists$"
+    ):
+        kernel.link_objects(industry.id, company.id, "industry_exposes_company")
+
+
 @pytest.mark.parametrize(
     ("parent_kind", "child_kind", "relation_type", "message"),
     [
@@ -122,6 +159,10 @@ def test_link_objects_rejects_a_missing_object(kernel: UnderwritingKernelService
         (
             HistoricalBasisInput(NOW.replace(tzinfo=None), None, "a" * 64),
             "cutoff must be timezone-aware",
+        ),
+        (
+            HistoricalBasisInput(NOW, NOW.replace(tzinfo=None), "a" * 64),
+            "price_as_of must be timezone-aware",
         ),
     ],
 )
@@ -222,7 +263,6 @@ def test_append_ledger_entry_normalizes_fields_and_hashes_content(
         NOW,
         " public ",
     )
-
     row = kernel.append_ledger_entry(object_row.id, basis_row.id, entry, None)
 
     assert (row.family_key, row.entry_type, row.source_boundary, row.created_at) == (
@@ -242,6 +282,52 @@ def test_append_ledger_entry_normalizes_fields_and_hashes_content(
             "source_boundary": "public",
         }
     )
+
+
+def test_append_ledger_entry_copies_payload_before_hashing_and_persisting(
+    kernel: UnderwritingKernelService,
+    basis_input: HistoricalBasisInput,
+) -> None:
+    object_row = kernel.add_object(ResearchObjectKind.COMPANY, "company:1", "Company")
+    basis_row = kernel.add_basis(basis_input)
+    payload = {"nested": {"values": [1]}}
+    row = kernel.append_ledger_entry(
+        object_row.id,
+        basis_row.id,
+        LedgerEntryInput(
+            LedgerKind.REALITY,
+            "revenue",
+            "reported",
+            payload,
+            NOW,
+            NOW,
+            "public",
+        ),
+        None,
+    )
+    content_hash = row.content_hash
+
+    payload["nested"]["values"].append(2)
+
+    assert row.payload == {"nested": {"values": [1]}}
+    assert row.content_hash == content_hash
+
+
+def test_append_ledger_entry_converts_stale_parent_to_conflict(
+    kernel: UnderwritingKernelService,
+    basis_input: HistoricalBasisInput,
+) -> None:
+    object_row = kernel.add_object(ResearchObjectKind.COMPANY, "company:1", "Company")
+    basis_row = kernel.add_basis(basis_input)
+    entry = LedgerEntryInput(
+        LedgerKind.REALITY, "revenue", "reported", {}, NOW, NOW, "public"
+    )
+    kernel.append_ledger_entry(object_row.id, basis_row.id, entry, None)
+
+    with pytest.raises(
+        ConflictError, match="^expected parent is not the effective family version$"
+    ):
+        kernel.append_ledger_entry(object_row.id, basis_row.id, entry, None)
 
 
 def test_append_ledger_entry_rejects_future_time_after_non_utc_cutoff(
@@ -297,6 +383,28 @@ def test_append_ledger_entry_hashes_equivalent_offset_timestamps_identically(
     assert first.content_hash == second.content_hash
 
 
+def test_add_basis_normalizes_non_utc_times_before_sqlite_reload(
+    kernel: UnderwritingKernelService,
+    session: Session,
+) -> None:
+    offset = timezone(timedelta(hours=8))
+    basis = kernel.add_basis(
+        HistoricalBasisInput(
+            datetime(2026, 1, 1, 0, tzinfo=offset),
+            datetime(2025, 12, 31, 23, tzinfo=offset),
+            "a" * 64,
+        )
+    )
+    session.expire(basis)
+
+    # Migration 0060 predates underwriting rows. New service writes are UTC;
+    # SQLite reloads them without tzinfo but retains their UTC wall-clock values.
+    assert (basis.cutoff, basis.price_as_of) == (
+        datetime(2025, 12, 31, 16),
+        datetime(2025, 12, 31, 15),
+    )
+
+
 @pytest.mark.parametrize(
     "mandate,message",
     [
@@ -350,3 +458,17 @@ def test_append_mandate_normalizes_values(kernel: UnderwritingKernelService) -> 
         ["CSI300", "SSE50"],
         NOW,
     )
+
+
+def test_append_mandate_converts_stale_parent_to_conflict(
+    kernel: UnderwritingKernelService,
+) -> None:
+    mandate = InvestmentMandateInput(
+        "long-term", 5, "CNY", Decimal("0.12"), Decimal("0.25"), ("CSI300",)
+    )
+    kernel.append_mandate(mandate, expected_parent_id=None)
+
+    with pytest.raises(
+        ConflictError, match="^expected parent is not the effective family version$"
+    ):
+        kernel.append_mandate(mandate, expected_parent_id=None)

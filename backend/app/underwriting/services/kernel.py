@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import copy
 from datetime import UTC, datetime
 from decimal import Decimal
 import hashlib
@@ -10,15 +11,16 @@ import re
 import uuid
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
-from app.models.ledger import ValidationError
+from app.models.ledger import ConflictError, ValidationError
 from app.underwriting.domain.types import (
     HistoricalBasisInput,
     InvestmentMandateInput,
     LedgerEntryInput,
     ResearchObjectKind,
 )
-from app.underwriting.persistence.repository import UnderwritingRepository
+from app.underwriting.persistence.repository import StaleParentError, UnderwritingRepository
 
 
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
@@ -50,6 +52,7 @@ class UnderwritingKernelService:
     """Validate and append immutable underwriting kernel records."""
 
     def __init__(self, session: Session, now: Callable[[], datetime]) -> None:
+        self._session = session
         self._repository = UnderwritingRepository(session)
         self._now = now
 
@@ -66,7 +69,11 @@ class UnderwritingKernelService:
 
     @staticmethod
     def _stored_datetime(value: datetime) -> datetime:
-        """Restore SQLite's timezone-less storage representation as UTC."""
+        """Restore SQLite's UTC wall-clock representation after a reload.
+
+        New underwriting rows did not exist before migration 0060 and are
+        normalized to UTC by this service before they are written.
+        """
         if value.tzinfo is None:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
@@ -76,17 +83,27 @@ class UnderwritingKernelService:
         cls._require_timezone(value, field)
         return value.astimezone(UTC)
 
+    def _write(self, conflict_message: str, operation: Callable[[], object]):
+        try:
+            return operation()
+        except IntegrityError as exc:
+            self._session.rollback()
+            raise ConflictError(conflict_message) from exc
+
     def add_object(
         self,
         kind: ResearchObjectKind,
         external_key: str,
         canonical_name: str,
     ):
-        return self._repository.add_object(
-            kind=kind.value,
-            external_key=self._require_text(external_key, "external_key"),
-            canonical_name=self._require_text(canonical_name, "canonical_name"),
-            created_at=self._now(),
+        return self._write(
+            "research object already exists",
+            lambda: self._repository.add_object(
+                kind=kind.value,
+                external_key=self._require_text(external_key, "external_key"),
+                canonical_name=self._require_text(canonical_name, "canonical_name"),
+                created_at=self._now(),
+            ),
         )
 
     def link_objects(
@@ -109,11 +126,14 @@ class UnderwritingKernelService:
                 f"{relation_type} requires {expected_parent_kind} parent and "
                 f"{expected_child_kind} child"
             )
-        return self._repository.add_relation(
-            parent_id=parent_id,
-            child_id=child_id,
-            relation_type=relation_type,
-            created_at=self._now(),
+        return self._write(
+            "research object relation already exists",
+            lambda: self._repository.add_relation(
+                parent_id=parent_id,
+                child_id=child_id,
+                relation_type=relation_type,
+                created_at=self._now(),
+            ),
         )
 
     def add_basis(self, value: HistoricalBasisInput):
@@ -130,9 +150,12 @@ class UnderwritingKernelService:
             value.source_manifest_hash
         ):
             raise ValidationError("source_manifest_hash must be a sha256 hex digest")
-        return self._repository.add_basis(
-            HistoricalBasisInput(cutoff, price_as_of, value.source_manifest_hash),
-            created_at=self._now(),
+        return self._write(
+            "historical basis write conflicts",
+            lambda: self._repository.add_basis(
+                HistoricalBasisInput(cutoff, price_as_of, value.source_manifest_hash),
+                created_at=self._now(),
+            ),
         )
 
     def append_ledger_entry(
@@ -158,31 +181,38 @@ class UnderwritingKernelService:
         entry_type = self._require_text(value.entry_type, "entry_type")
         source_boundary = self._require_text(value.source_boundary, "source_boundary")
         ledger_kind = value.ledger_kind.value
+        payload = copy.deepcopy(value.payload)
         content_hash = canonical_hash(
             {
                 "ledger_kind": ledger_kind,
                 "family_key": family_key,
                 "entry_type": entry_type,
-                "payload": value.payload,
+                "payload": payload,
                 "effective_at": effective_at,
                 "available_at": available_at,
                 "source_boundary": source_boundary,
             }
         )
-        return self._repository.append_ledger_entry(
-            object_id=object_id,
-            basis_id=basis_id,
-            ledger_kind=ledger_kind,
-            family_key=family_key,
-            entry_type=entry_type,
-            payload=value.payload,
-            effective_at=effective_at,
-            available_at=available_at,
-            source_boundary=source_boundary,
-            content_hash=content_hash,
-            expected_parent_id=expected_parent_id,
-            created_at=self._now(),
-        )
+        try:
+            return self._write(
+                "ledger entry write conflicts",
+                lambda: self._repository.append_ledger_entry(
+                    object_id=object_id,
+                    basis_id=basis_id,
+                    ledger_kind=ledger_kind,
+                    family_key=family_key,
+                    entry_type=entry_type,
+                    payload=payload,
+                    effective_at=effective_at,
+                    available_at=available_at,
+                    source_boundary=source_boundary,
+                    content_hash=content_hash,
+                    expected_parent_id=expected_parent_id,
+                    created_at=self._now(),
+                ),
+            )
+        except StaleParentError as exc:
+            raise ConflictError(str(exc)) from exc
 
     def _validate_mandate(self, value: InvestmentMandateInput) -> dict[str, object]:
         mandate_key = self._require_text(value.mandate_key, "mandate_key")
@@ -215,8 +245,14 @@ class UnderwritingKernelService:
         expected_parent_id: uuid.UUID | None,
     ):
         normalized = self._validate_mandate(value)
-        return self._repository.append_mandate_version(
-            **normalized,
-            expected_parent_id=expected_parent_id,
-            created_at=self._now(),
-        )
+        try:
+            return self._write(
+                "mandate write conflicts",
+                lambda: self._repository.append_mandate_version(
+                    **normalized,
+                    expected_parent_id=expected_parent_id,
+                    created_at=self._now(),
+                ),
+            )
+        except StaleParentError as exc:
+            raise ConflictError(str(exc)) from exc
