@@ -54,8 +54,13 @@ class MetricDefinitionDependency:
     available_at: datetime
 
     def __post_init__(self) -> None:
-        _require_text(self.metric_key, "metric_key")
-        _require_text(str(self.definition_id), "definition_id")
+        object.__setattr__(self, "metric_key", _require_text(self.metric_key, "metric_key"))
+        if type(self.definition_id) is str:
+            object.__setattr__(
+                self, "definition_id", _require_text(self.definition_id, "definition_id")
+            )
+        elif type(self.definition_id) is not UUID:
+            raise ValidationError("definition_id must be a UUID or non-empty string")
         if (
             isinstance(self.definition_version, bool)
             or not isinstance(self.definition_version, int)
@@ -83,13 +88,13 @@ class MechanismDependencyContext:
     def __post_init__(self) -> None:
         cutoff = _utc(self.cutoff, "cutoff")
         object.__setattr__(self, "cutoff", cutoff)
-        if not isinstance(self.source_manifest, FrozenSourceManifest):
+        if type(self.source_manifest) is not FrozenSourceManifest:
             raise ValidationError("source_manifest must be a FrozenSourceManifest")
         if self.source_manifest.cutoff != cutoff:
             raise ValidationError("source manifest cutoff must match dependency cutoff")
         if not isinstance(self.metric_definitions, tuple) or not self.metric_definitions:
             raise ValidationError("metric_definitions must be a non-empty tuple")
-        if not all(isinstance(item, MetricDefinitionDependency) for item in self.metric_definitions):
+        if not all(type(item) is MetricDefinitionDependency for item in self.metric_definitions):
             raise ValidationError("metric_definitions must contain MetricDefinitionDependency values")
         keys = tuple(item.metric_key for item in self.metric_definitions)
         ids = tuple(str(item.definition_id) for item in self.metric_definitions)
@@ -183,7 +188,7 @@ def _causal_chain_is_acyclic(mappings: tuple[FinancialMapping, ...]) -> bool:
 
 def validate_formal_mechanism(value: MechanismPack) -> None:
     """Fail closed unless a formal pack has a complete causal evidence shape."""
-    if not isinstance(value, MechanismPack):
+    if type(value) is not MechanismPack:
         raise ValidationError("mechanism is required")
     if value.status is not MechanismStatus.FORMAL:
         raise ValidationError("mechanism must be formal")
@@ -198,6 +203,13 @@ def validate_formal_mechanism(value: MechanismPack) -> None:
         raise ValidationError("formal mechanism is incomplete")
     if value.human_confirmation_identity is None:
         raise ValidationError("formal mechanism requires human_confirmation_identity")
+    if value.review_evidence_id is None:
+        raise ValidationError("formal mechanism requires review_evidence_id")
+    if (
+        value.predecessor_status is not MechanismStatus.HUMAN_CONFIRMED
+        or value.predecessor_version != value.version - 1
+    ):
+        raise ValidationError("formal mechanism requires a reviewed predecessor")
     mapped_drivers = {mapping.driver_key for mapping in value.financial_mappings}
     if mapped_drivers != set(value.driver_keys):
         raise ValidationError("formal mechanism mappings must cover every driver_key")
@@ -210,24 +222,33 @@ def transition_mechanism(
     next_status: MechanismStatus,
     *,
     human_confirmation_identity: str | None = None,
+    review_evidence_id: UUID | None = None,
     revision_reason: str | None = None,
 ) -> MechanismPack:
     """Append a successor-shaped domain version through exactly one transition."""
-    if not isinstance(value, MechanismPack):
+    if type(value) is not MechanismPack:
         raise ValidationError("mechanism is required")
-    if not isinstance(next_status, MechanismStatus):
+    if type(next_status) is not MechanismStatus:
         raise ValidationError("next mechanism status is invalid")
     if _NEXT_STATUS.get(value.status) is not next_status:
         raise ValidationError("mechanism lifecycle transition is not allowed")
 
     confirmation = human_confirmation_identity or value.human_confirmation_identity
-    if next_status is MechanismStatus.HUMAN_CONFIRMED and confirmation is None:
-        raise ValidationError("human_confirmation_identity is required before formal")
+    evidence = review_evidence_id or value.review_evidence_id
+    if next_status is MechanismStatus.HUMAN_CONFIRMED and (
+        confirmation is None or evidence is None
+    ):
+        raise ValidationError(
+            "human_confirmation_identity and review_evidence_id are required before formal"
+        )
     successor = replace(
         value,
         version=value.version + 1,
         status=next_status,
         human_confirmation_identity=confirmation,
+        review_evidence_id=evidence,
+        predecessor_status=value.status,
+        predecessor_version=value.version,
         revision_reason=revision_reason or value.revision_reason,
     )
     if next_status is MechanismStatus.FORMAL:
@@ -279,6 +300,13 @@ def _mechanism_payload(value: MechanismPack) -> dict[str, object]:
         ),
         "source_ids": value.source_ids,
         "human_confirmation_identity": value.human_confirmation_identity,
+        "review_evidence_id": (
+            str(value.review_evidence_id) if value.review_evidence_id is not None else None
+        ),
+        "predecessor_status": (
+            value.predecessor_status.value if value.predecessor_status is not None else None
+        ),
+        "predecessor_version": value.predecessor_version,
         "revision_reason": value.revision_reason,
     }
 
@@ -296,20 +324,24 @@ def compile_mechanisms(
     """
     if not isinstance(mechanisms, tuple) or not mechanisms:
         raise ValidationError("mechanisms must be a non-empty tuple")
-    if not isinstance(dependencies, MechanismDependencyContext):
+    if type(dependencies) is not MechanismDependencyContext:
         raise ValidationError("dependencies must be a MechanismDependencyContext")
     definitions = dependencies.metric_definition_map
     definition_records = dependencies.metric_definition_by_key
     available_sources = set(dependencies.source_ids)
     mechanism_keys: set[str] = set()
+    scope_object_ids: set[UUID] = set()
     dependency_metrics: set[str] = set()
     dependency_sources: set[str] = set()
 
     for value in mechanisms:
+        if type(value) is not MechanismPack:
+            raise ValidationError("mechanisms must contain MechanismPack values")
         validate_formal_mechanism(value)
         if value.key in mechanism_keys:
             raise ValidationError("mechanism keys must be unique")
         mechanism_keys.add(value.key)
+        scope_object_ids.add(value.scope_object_id)
         for driver_key in value.driver_keys:
             if driver_key not in definitions:
                 raise ValidationError("driver metric definition is unavailable at basis cutoff")
@@ -326,6 +358,9 @@ def compile_mechanisms(
             if source_id not in available_sources:
                 raise ValidationError("mechanism source is unavailable at basis cutoff")
             dependency_sources.add(source_id)
+
+    if len(scope_object_ids) != 1:
+        raise ValidationError("compiled mechanisms must share one scope_object_id")
 
     all_mappings = tuple(
         mapping for value in mechanisms for mapping in value.financial_mappings

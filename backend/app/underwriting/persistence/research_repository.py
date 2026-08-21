@@ -62,6 +62,15 @@ _SUCCESSOR_CONSTRAINTS = frozenset(
         "uq_uw_falsifier_version",
     }
 )
+_MECHANISM_NEXT_STATUS = {
+    None: "candidate",
+    "candidate": "adapted",
+    "adapted": "calibrated",
+    "calibrated": "human_confirmed",
+    "human_confirmed": "formal",
+    "formal": "challenged",
+    "challenged": "retired_or_replaced",
+}
 
 
 class UnderwritingResearchRepository:
@@ -118,6 +127,23 @@ class UnderwritingResearchRepository:
     def _json(value: Mapping[str, object]) -> dict[str, object]:
         """Detach persisted JSON from the caller's mutable input."""
         return deepcopy(dict(value))
+
+    @staticmethod
+    def _mechanism_review_proof(payload: Mapping[str, object]) -> tuple[str, str]:
+        """Extract the immutable human-confirmation evidence in a payload."""
+        identity = payload.get("human_confirmation_identity")
+        evidence_id = payload.get("review_evidence_id")
+        if not isinstance(identity, str) or not identity.strip():
+            raise ValidationError("mechanism review identity is required")
+        if not isinstance(evidence_id, str):
+            raise ValidationError("mechanism review evidence is required")
+        try:
+            canonical_evidence_id = str(UUID(evidence_id))
+        except ValueError as exc:
+            raise ValidationError("mechanism review evidence must be a UUID") from exc
+        if evidence_id != canonical_evidence_id:
+            raise ValidationError("mechanism review evidence must be a canonical UUID")
+        return identity.strip(), canonical_evidence_id
 
     def _latest(self, statement) -> RowT | None:
         with self._session.no_autoflush:
@@ -432,6 +458,25 @@ class UnderwritingResearchRepository:
             )
         )
         self._require_expected_parent(current.id if current else None, expected_parent_id)
+        if status == "formal" and (current is None or current.status != "human_confirmed"):
+            raise ValidationError("formal mechanism requires a human_confirmed predecessor")
+        if _MECHANISM_NEXT_STATUS.get(current.status if current else None) != status:
+            raise ValidationError("mechanism lifecycle transition is not allowed")
+        if status == "human_confirmed":
+            self._mechanism_review_proof(payload)
+        if status == "formal":
+            if current is None:
+                raise AssertionError("formal predecessor was validated above")
+            if current.object_id != object_id or current.basis_id != basis_id:
+                raise ValidationError("formal mechanism predecessor must share object and basis")
+            current_identity, current_evidence_id = self._mechanism_review_proof(current.payload)
+            identity, evidence_id = self._mechanism_review_proof(payload)
+            if (identity, evidence_id) != (current_identity, current_evidence_id):
+                raise ValidationError("formal mechanism review proof must match human_confirmed predecessor")
+            if payload.get("predecessor_status") != "human_confirmed":
+                raise ValidationError("formal mechanism payload must name human_confirmed predecessor")
+            if payload.get("predecessor_version") != current.version:
+                raise ValidationError("formal mechanism predecessor version does not match")
         row = UnderwritingMechanismPackVersion(
             mechanism_key=mechanism_key,
             version=(current.version + 1) if current else 1,

@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.ledger import ValidationError
 from app.underwriting.domain.types import HistoricalBasisInput
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
 from app.underwriting.persistence.repository import StaleParentError, UnderwritingRepository
@@ -90,6 +91,141 @@ def _definition(
 
 def _mechanism_payload(key: str) -> dict[str, object]:
     return {"key": key, "financial_mappings": [{"target": "company.revenue"}]}
+
+
+def _append_formal_mechanism(
+    repository: UnderwritingResearchRepository,
+    *,
+    mechanism_key: str,
+    object_id: uuid.UUID,
+    basis_id: uuid.UUID,
+    source_manifest_id: uuid.UUID,
+    definition_ids: list[str] | None = None,
+):
+    candidate = repository.append_mechanism(
+        mechanism_key=mechanism_key, object_id=object_id, basis_id=basis_id,
+        source_manifest_id=source_manifest_id, status="candidate",
+        payload=_mechanism_payload(mechanism_key), content_hash="a" * 64,
+        expected_parent_id=None, created_at=NOW,
+    )
+    adapted = repository.append_mechanism(
+        mechanism_key=mechanism_key, object_id=object_id, basis_id=basis_id,
+        source_manifest_id=source_manifest_id, status="adapted",
+        payload=_mechanism_payload(mechanism_key), content_hash="b" * 64,
+        expected_parent_id=candidate.id, created_at=NOW,
+    )
+    calibrated = repository.append_mechanism(
+        mechanism_key=mechanism_key, object_id=object_id, basis_id=basis_id,
+        source_manifest_id=source_manifest_id, status="calibrated",
+        payload=_mechanism_payload(mechanism_key), content_hash="c" * 64,
+        expected_parent_id=adapted.id, created_at=NOW,
+    )
+    review_evidence_id = str(uuid.uuid4())
+    confirmed_payload = _mechanism_payload(mechanism_key) | {
+        "human_confirmation_identity": "reviewer-001",
+        "review_evidence_id": review_evidence_id,
+    }
+    confirmed = repository.append_mechanism(
+        mechanism_key=mechanism_key, object_id=object_id, basis_id=basis_id,
+        source_manifest_id=source_manifest_id, status="human_confirmed",
+        payload=confirmed_payload, content_hash="d" * 64,
+        expected_parent_id=calibrated.id, created_at=NOW,
+    )
+    return repository.append_mechanism(
+        mechanism_key=mechanism_key, object_id=object_id, basis_id=basis_id,
+        source_manifest_id=source_manifest_id, status="formal",
+        payload=confirmed_payload | {
+            "predecessor_status": "human_confirmed",
+            "predecessor_version": confirmed.version,
+        },
+        content_hash="e" * 64, expected_parent_id=confirmed.id, created_at=NOW,
+        definition_ids=definition_ids,
+    )
+
+
+def test_repository_rejects_direct_formal_mechanism_without_confirmed_predecessor(
+    repository: UnderwritingResearchRepository, company, basis
+) -> None:
+    manifest = _manifest(repository, basis.id)
+    with pytest.raises(ValidationError, match="human_confirmed predecessor"):
+        repository.append_mechanism(
+            mechanism_key="demand_to_shipments",
+            object_id=company.id,
+            basis_id=basis.id,
+            source_manifest_id=manifest.id,
+            status="formal",
+            payload=_mechanism_payload("demand_to_shipments"),
+            content_hash="a" * 64,
+            expected_parent_id=None,
+            created_at=NOW,
+        )
+
+
+def test_repository_rejects_skipped_mechanism_lifecycle_stage(
+    repository: UnderwritingResearchRepository, company, basis
+) -> None:
+    manifest = _manifest(repository, basis.id)
+    with pytest.raises(ValidationError, match="mechanism lifecycle transition is not allowed"):
+        repository.append_mechanism(
+            mechanism_key="demand_to_shipments",
+            object_id=company.id,
+            basis_id=basis.id,
+            source_manifest_id=manifest.id,
+            status="human_confirmed",
+            payload={
+                **_mechanism_payload("demand_to_shipments"),
+                "human_confirmation_identity": "reviewer-001",
+                "review_evidence_id": str(uuid.uuid4()),
+            },
+            content_hash="a" * 64,
+            expected_parent_id=None,
+            created_at=NOW,
+        )
+
+
+def test_repository_formal_promotion_requires_matching_review_proof(
+    repository: UnderwritingResearchRepository, company, basis
+) -> None:
+    manifest = _manifest(repository, basis.id)
+    candidate = repository.append_mechanism(
+        mechanism_key="demand_to_shipments", object_id=company.id, basis_id=basis.id,
+        source_manifest_id=manifest.id, status="candidate",
+        payload=_mechanism_payload("demand_to_shipments"), content_hash="a" * 64,
+        expected_parent_id=None, created_at=NOW,
+    )
+    adapted = repository.append_mechanism(
+        mechanism_key="demand_to_shipments", object_id=company.id, basis_id=basis.id,
+        source_manifest_id=manifest.id, status="adapted",
+        payload=_mechanism_payload("demand_to_shipments"), content_hash="b" * 64,
+        expected_parent_id=candidate.id, created_at=NOW,
+    )
+    calibrated = repository.append_mechanism(
+        mechanism_key="demand_to_shipments", object_id=company.id, basis_id=basis.id,
+        source_manifest_id=manifest.id, status="calibrated",
+        payload=_mechanism_payload("demand_to_shipments"), content_hash="c" * 64,
+        expected_parent_id=adapted.id, created_at=NOW,
+    )
+    confirmed = repository.append_mechanism(
+        mechanism_key="demand_to_shipments", object_id=company.id, basis_id=basis.id,
+        source_manifest_id=manifest.id, status="human_confirmed",
+        payload=_mechanism_payload("demand_to_shipments") | {
+            "human_confirmation_identity": "reviewer-001",
+            "review_evidence_id": str(uuid.uuid4()),
+        },
+        content_hash="d" * 64, expected_parent_id=calibrated.id, created_at=NOW,
+    )
+    with pytest.raises(ValidationError, match="review proof must match"):
+        repository.append_mechanism(
+            mechanism_key="demand_to_shipments", object_id=company.id, basis_id=basis.id,
+            source_manifest_id=manifest.id, status="formal",
+            payload=_mechanism_payload("demand_to_shipments") | {
+                "human_confirmation_identity": "reviewer-002",
+                "review_evidence_id": str(uuid.uuid4()),
+                "predecessor_status": "human_confirmed",
+                "predecessor_version": confirmed.version,
+            },
+            content_hash="e" * 64, expected_parent_id=confirmed.id, created_at=NOW,
+        )
 
 
 def test_mechanism_successor_requires_current_parent(
@@ -275,17 +411,13 @@ def test_formal_and_latest_reads_are_scoped_to_object_and_basis(
     repository: UnderwritingResearchRepository, company, other_company, basis, kernel
 ) -> None:
     manifest = _manifest(repository, basis.id)
-    formal = repository.append_mechanism(
-        mechanism_key="demand_to_shipments",
-        object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
-        status="formal", payload=_mechanism_payload("demand_to_shipments"),
-        content_hash="a" * 64, expected_parent_id=None, created_at=NOW,
+    formal = _append_formal_mechanism(
+        repository, mechanism_key="demand_to_shipments", object_id=company.id,
+        basis_id=basis.id, source_manifest_id=manifest.id,
     )
-    repository.append_mechanism(
-        mechanism_key="other_mechanism",
-        object_id=other_company.id, basis_id=basis.id, source_manifest_id=manifest.id,
-        status="formal", payload=_mechanism_payload("other_mechanism"),
-        content_hash="b" * 64, expected_parent_id=None, created_at=NOW,
+    _append_formal_mechanism(
+        repository, mechanism_key="other_mechanism", object_id=other_company.id,
+        basis_id=basis.id, source_manifest_id=manifest.id,
     )
     state = repository.append_industry_state(
         object_id=company.id, basis_id=basis.id, mechanism_id=formal.id,
@@ -346,11 +478,9 @@ def test_writes_reject_cross_scope_and_future_source_dependencies(
     )
     manifest = _manifest(repository, basis.id)
     definition = _definition(repository, basis.id, manifest.id)
-    mechanism = repository.append_mechanism(
-        mechanism_key="demand_to_shipments",
-        object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
-        status="formal", payload=_mechanism_payload("demand_to_shipments"),
-        content_hash="c" * 64, expected_parent_id=None, created_at=NOW,
+    mechanism = _append_formal_mechanism(
+        repository, mechanism_key="demand_to_shipments", object_id=company.id,
+        basis_id=basis.id, source_manifest_id=manifest.id,
         definition_ids=[str(definition.id)],
     )
 

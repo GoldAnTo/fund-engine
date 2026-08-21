@@ -75,10 +75,10 @@ def dependency_context(
 
 
 def formal_mechanism(**overrides: object) -> MechanismPack:
-    value = MechanismPack(
+    candidate = MechanismPack(
         key="ev_storage_demand_to_shipments",
         version=1,
-        status=MechanismStatus.FORMAL,
+        status=MechanismStatus.CANDIDATE,
         scope_object_id=uuid4(),
         driver_keys=("industry.ev_demand_gwh",),
         formula="battery_shipments = end_demand * battery_intensity",
@@ -107,9 +107,17 @@ def formal_mechanism(**overrides: object) -> MechanismPack:
             ),
         ),
         source_ids=("iea-2025",),
-        human_confirmation_identity="researcher-001",
     )
-    return replace(value, **overrides)
+    adapted = transition_mechanism(candidate, MechanismStatus.ADAPTED)
+    calibrated = transition_mechanism(adapted, MechanismStatus.CALIBRATED)
+    confirmed = transition_mechanism(
+        calibrated,
+        MechanismStatus.HUMAN_CONFIRMED,
+        human_confirmation_identity="researcher-001",
+        review_evidence_id=uuid4(),
+    )
+    formal = transition_mechanism(confirmed, MechanismStatus.FORMAL)
+    return replace(formal, **overrides)
 
 
 def test_only_formal_mechanisms_can_compile() -> None:
@@ -152,10 +160,32 @@ def test_formal_transition_creates_successor_and_retains_named_reviewer() -> Non
         calibrated,
         MechanismStatus.HUMAN_CONFIRMED,
         human_confirmation_identity="reviewer-001",
+        review_evidence_id=uuid4(),
     )
     formal = transition_mechanism(confirmed, MechanismStatus.FORMAL)
-    assert formal.version == 5
+    assert formal.version == candidate.version + 4
     assert formal.human_confirmation_identity == "reviewer-001"
+
+
+def test_direct_v1_formal_mechanism_is_rejected() -> None:
+    candidate = formal_mechanism()
+    with pytest.raises(ValidationError, match="formal mechanism requires a reviewed predecessor"):
+        MechanismPack(
+            key=candidate.key,
+            version=1,
+            status=MechanismStatus.FORMAL,
+            scope_object_id=candidate.scope_object_id,
+            driver_keys=candidate.driver_keys,
+            formula=candidate.formula,
+            applicability=candidate.applicability,
+            invalidation_conditions=candidate.invalidation_conditions,
+            financial_mappings=candidate.financial_mappings,
+            alternative_explanations=candidate.alternative_explanations,
+            falsifiers=candidate.falsifiers,
+            source_ids=candidate.source_ids,
+            human_confirmation_identity="reviewer-001",
+            review_evidence_id=uuid4(),
+        )
 
 
 def test_formal_mechanism_rejects_unmapped_driver_and_circular_chain() -> None:
@@ -221,9 +251,11 @@ def test_compiler_returns_deterministic_hash_and_dependency_ids() -> None:
 
 
 def test_compiler_rejects_causal_cycle_across_formal_pack_union() -> None:
-    forward = formal_mechanism(key="demand_to_shipments")
+    scope_object_id = uuid4()
+    forward = formal_mechanism(key="demand_to_shipments", scope_object_id=scope_object_id)
     reverse = formal_mechanism(
         key="shipments_to_demand",
+        scope_object_id=scope_object_id,
         driver_keys=("company.battery_shipments_gwh",),
         financial_mappings=(
             FinancialMapping(
@@ -238,6 +270,53 @@ def test_compiler_rejects_causal_cycle_across_formal_pack_union() -> None:
     )
     with pytest.raises(ValidationError, match="causal chain must be acyclic"):
         compile_mechanisms((forward, reverse), dependencies=dependency_context())
+
+
+def test_compiler_rejects_formal_packs_from_multiple_scopes() -> None:
+    with pytest.raises(ValidationError, match="one scope_object_id"):
+        compile_mechanisms(
+            (formal_mechanism(), formal_mechanism(key="other", scope_object_id=uuid4())),
+            dependencies=dependency_context(),
+        )
+
+
+def test_dependency_id_rejects_non_string_non_uuid_object() -> None:
+    with pytest.raises(ValidationError, match="definition_id must be a UUID or non-empty string"):
+        MetricDefinitionDependency(
+            metric_key="industry.ev_demand_gwh",
+            definition_id=object(),
+            definition_version=1,
+            content_hash="b" * 64,
+            source_manifest_hash=dependency_context().source_manifest.manifest_hash,
+            available_at=datetime(2025, 5, 14, tzinfo=UTC),
+        )
+
+
+def test_compiler_rejects_mechanism_pack_subclasses_at_boundary() -> None:
+    class DerivedMechanismPack(MechanismPack):
+        pass
+
+    base = formal_mechanism()
+    derived = DerivedMechanismPack(
+        key=base.key,
+        version=base.version,
+        status=base.status,
+        scope_object_id=base.scope_object_id,
+        driver_keys=base.driver_keys,
+        formula=base.formula,
+        applicability=base.applicability,
+        invalidation_conditions=base.invalidation_conditions,
+        financial_mappings=base.financial_mappings,
+        alternative_explanations=base.alternative_explanations,
+        falsifiers=base.falsifiers,
+        source_ids=base.source_ids,
+        human_confirmation_identity=base.human_confirmation_identity,
+        review_evidence_id=base.review_evidence_id,
+        predecessor_status=base.predecessor_status,
+        predecessor_version=base.predecessor_version,
+    )
+    with pytest.raises(ValidationError, match="MechanismPack values"):
+        compile_mechanisms((derived,), dependencies=dependency_context())
 
 
 def test_dependency_context_rejects_metric_unavailable_at_cutoff() -> None:

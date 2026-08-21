@@ -140,15 +140,18 @@ class MechanismPack:
     falsifiers: tuple[Falsifier, ...]
     source_ids: tuple[str, ...]
     human_confirmation_identity: str | None = None
+    review_evidence_id: UUID | None = None
+    predecessor_status: MechanismStatus | None = None
+    predecessor_version: int | None = None
     revision_reason: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.key, "mechanism key")
         if isinstance(self.version, bool) or not isinstance(self.version, int) or self.version < 1:
             raise ValidationError("mechanism version must be at least 1")
-        if not isinstance(self.status, MechanismStatus):
+        if type(self.status) is not MechanismStatus:
             raise ValidationError("mechanism status is invalid")
-        if not isinstance(self.scope_object_id, UUID):
+        if type(self.scope_object_id) is not UUID:
             raise ValidationError("scope_object_id must be a UUID")
         _require_text_tuple(self.driver_keys, "driver_keys", required=True)
         _require_text(self.formula, "formula")
@@ -157,11 +160,11 @@ class MechanismPack:
         _require_text_tuple(self.alternative_explanations, "alternative_explanations")
         _require_text_tuple(self.source_ids, "source_ids")
         if not isinstance(self.financial_mappings, tuple) or not all(
-            isinstance(mapping, FinancialMapping) for mapping in self.financial_mappings
+            type(mapping) is FinancialMapping for mapping in self.financial_mappings
         ):
             raise ValidationError("financial_mappings must contain FinancialMapping values")
         if not isinstance(self.falsifiers, tuple) or not all(
-            isinstance(falsifier, Falsifier) for falsifier in self.falsifiers
+            type(falsifier) is Falsifier for falsifier in self.falsifiers
         ):
             raise ValidationError("falsifiers must contain Falsifier values")
         mapping_identities = tuple(
@@ -174,6 +177,17 @@ class MechanismPack:
             raise ValidationError("falsifiers must not contain duplicate keys")
         if self.human_confirmation_identity is not None:
             _require_text(self.human_confirmation_identity, "human_confirmation_identity")
+        if self.review_evidence_id is not None and type(self.review_evidence_id) is not UUID:
+            raise ValidationError("review_evidence_id must be a UUID")
+        if self.predecessor_status is not None and type(self.predecessor_status) is not MechanismStatus:
+            raise ValidationError("predecessor_status is invalid")
+        if self.predecessor_version is not None and (
+            isinstance(self.predecessor_version, bool)
+            or not isinstance(self.predecessor_version, int)
+            or self.predecessor_version < 1
+        ):
+            raise ValidationError("predecessor_version must be at least 1")
+        if self.status is MechanismStatus.FORMAL and self.version == 1:
+            raise ValidationError("formal mechanism requires a reviewed predecessor")
         if self.revision_reason is not None:
             _require_text(self.revision_reason, "revision_reason")
-
