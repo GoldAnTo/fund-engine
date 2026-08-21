@@ -19,6 +19,7 @@ from app.underwriting.services.source_freeze import (
     FrozenObservationSet,
     FrozenSourceManifest,
     validate_frozen_observation_set,
+    validate_frozen_source_manifest,
 )
 from app.underwriting.services.source_policy import AuthorizationState
 
@@ -117,6 +118,7 @@ class MechanismDependencyContext:
         object.__setattr__(self, "cutoff", cutoff)
         if type(self.source_manifest) is not FrozenSourceManifest:
             raise ValidationError("source_manifest must be a FrozenSourceManifest")
+        validate_frozen_source_manifest(self.source_manifest, cutoff=cutoff)
         if self.source_manifest.cutoff != cutoff:
             raise ValidationError("source manifest cutoff must match dependency cutoff")
         if not isinstance(self.metric_definitions, tuple) or not self.metric_definitions:

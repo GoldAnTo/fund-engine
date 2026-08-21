@@ -38,7 +38,7 @@ _INDUSTRY_METRIC_ROLES = frozenset(
 )
 
 
-@dataclass(frozen=True, slots=True, init=False)
+@dataclass(frozen=True, slots=True, init=False, weakref_slot=True)
 class FrozenSourceManifest:
     cutoff: datetime
     source_ids: tuple[str, ...]
@@ -47,6 +47,67 @@ class FrozenSourceManifest:
 
     def __init__(self) -> None:
         raise TypeError("FrozenSourceManifest must be created by freeze_manifest")
+
+
+# A manifest is an authority boundary as well as a convenient immutable value.
+# ``object.__new__`` can otherwise manufacture an exact-class lookalike that
+# carries a copied manifest hash.  Keep both identity and a deep source-record
+# snapshot for the manifests emitted by ``freeze_manifest``.
+_TRUSTED_SOURCE_MANIFESTS: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[FrozenSourceManifest],
+        datetime,
+        tuple[str, ...],
+        str,
+        tuple[int, ...],
+        str,
+    ],
+] = {}
+
+
+def _thaw_json_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_thaw_json_value(item) for item in value)
+    return value
+
+
+def _manifest_sources_hash(sources: tuple[Mapping[str, object], ...]) -> str:
+    return canonical_hash(tuple(_thaw_json_value(source) for source in sources))
+
+
+def _is_deeply_immutable_json(value: object) -> bool:
+    if type(value) is MappingProxyType:
+        return all(_is_deeply_immutable_json(item) for item in value.values())
+    if isinstance(value, Mapping):
+        return False
+    if isinstance(value, tuple):
+        return all(_is_deeply_immutable_json(item) for item in value)
+    return not isinstance(value, list)
+
+
+def _register_source_manifest(value: FrozenSourceManifest) -> FrozenSourceManifest:
+    identity = id(value)
+
+    def _discard(_: weakref.ReferenceType[FrozenSourceManifest]) -> None:
+        _TRUSTED_SOURCE_MANIFESTS.pop(identity, None)
+
+    _TRUSTED_SOURCE_MANIFESTS[identity] = (
+        weakref.ref(value, _discard),
+        value.cutoff,
+        value.source_ids,
+        value.manifest_hash,
+        tuple(id(source) for source in value.sources),
+        _manifest_sources_hash(value.sources),
+    )
+    return value
+
+
+def _is_trusted_source_manifest(value: FrozenSourceManifest) -> bool:
+    trusted = _TRUSTED_SOURCE_MANIFESTS.get(id(value))
+    return trusted is not None and trusted[0]() is value
 
 
 @dataclass(frozen=True, slots=True, init=False, weakref_slot=True)
@@ -239,12 +300,57 @@ def freeze_manifest(payload: Mapping[str, object], cutoff: datetime) -> FrozenSo
         "cutoff": normalized_cutoff.isoformat(),
         "sources": normalized,
     }
-    return _frozen_manifest(
-        cutoff=normalized_cutoff,
-        source_ids=source_ids,
-        manifest_hash=canonical_hash(serialized),
-        sources=normalized,
+    return _register_source_manifest(
+        _frozen_manifest(
+            cutoff=normalized_cutoff,
+            source_ids=source_ids,
+            manifest_hash=canonical_hash(serialized),
+            sources=normalized,
+        )
     )
+
+
+def validate_frozen_source_manifest(
+    value: object,
+    *,
+    cutoff: datetime | None = None,
+) -> FrozenSourceManifest:
+    """Validate the exact authenticated manifest and its frozen source records."""
+    if type(value) is not FrozenSourceManifest or not _is_trusted_source_manifest(value):
+        raise ValidationError("frozen source manifest must be created by freeze_manifest")
+    trusted = _TRUSTED_SOURCE_MANIFESTS[id(value)]
+    normalized_cutoff = _utc(value.cutoff, "source manifest cutoff")
+    if cutoff is not None and normalized_cutoff != _utc(cutoff, "cutoff"):
+        raise ValidationError("source manifest cutoff does not match dependency cutoff")
+    if not isinstance(value.source_ids, tuple) or not value.source_ids:
+        raise ValidationError("frozen source manifest source_ids are invalid")
+    if not all(isinstance(source_id, str) and source_id.strip() for source_id in value.source_ids):
+        raise ValidationError("frozen source manifest source_ids are invalid")
+    if tuple(sorted(value.source_ids)) != value.source_ids or len(set(value.source_ids)) != len(value.source_ids):
+        raise ValidationError("frozen source manifest source_ids must be canonical")
+    if not isinstance(value.sources, tuple) or not value.sources:
+        raise ValidationError("frozen source manifest sources are invalid")
+    if not all(_is_deeply_immutable_json(source) for source in value.sources):
+        raise ValidationError("frozen source manifest sources must be immutable")
+    source_ids = tuple(str(source.get("source_id", "")) for source in value.sources)
+    if source_ids != value.source_ids:
+        raise ValidationError("frozen source manifest sources do not match source_ids")
+    normalized_sources = tuple(
+        sorted(
+            (normalize_source_record(source, cutoff=normalized_cutoff) for source in value.sources),
+            key=lambda item: str(item["source_id"]),
+        )
+    )
+    if _manifest_sources_hash(value.sources) != canonical_hash(normalized_sources):
+        raise ValidationError("frozen source manifest source contents are invalid")
+    if (
+        (normalized_cutoff, value.source_ids, value.manifest_hash)
+        != trusted[1:4]
+        or tuple(id(source) for source in value.sources) != trusted[4]
+        or _manifest_sources_hash(value.sources) != trusted[5]
+    ):
+        raise ValidationError("frozen source manifest no longer matches authenticated batch")
+    return value
 
 
 def _decimal(value: object, field: str) -> Decimal:
@@ -361,8 +467,7 @@ def validate_frozen_observation_set(
     if type(value) is not FrozenObservationSet or not _is_trusted_observation_set(value):
         raise ValidationError("frozen observation set must be created by freeze_observations")
     trusted = _TRUSTED_OBSERVATION_SETS[id(value)]
-    if type(source_manifest) is not FrozenSourceManifest:
-        raise ValidationError("source_manifest must be a FrozenSourceManifest")
+    validate_frozen_source_manifest(source_manifest, cutoff=cutoff)
     normalized_cutoff = _utc(cutoff, "cutoff")
     if value.cutoff != normalized_cutoff or source_manifest.cutoff != normalized_cutoff:
         raise ValidationError("frozen observation set cutoff must match dependency cutoff")
@@ -405,8 +510,7 @@ def freeze_observations(
     source_manifest: FrozenSourceManifest,
 ) -> FrozenObservationSet:
     """Freeze only known, resolved, source-authorized metric observations."""
-    if type(source_manifest) is not FrozenSourceManifest:
-        raise ValidationError("source_manifest must be frozen by freeze_manifest")
+    validate_frozen_source_manifest(source_manifest)
     if not isinstance(payload, list):
         raise ValidationError("observations must be a list")
     known_sources = set(source_manifest.source_ids)

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import MappingProxyType
 
 import pytest
 
@@ -264,8 +265,39 @@ def test_observation_freeze_rejects_a_forged_frozen_manifest_subclass() -> None:
             object.__setattr__(self, "manifest_hash", "f" * 64)
             object.__setattr__(self, "sources", (source,))
 
-    with pytest.raises(ValidationError, match="source_manifest must be frozen by freeze_manifest"):
+    with pytest.raises(ValidationError, match="frozen source manifest"):
         freeze_observations([observation_fixture()], source_manifest=ForgedManifest())
+
+
+def test_observation_freeze_rejects_an_exact_class_forged_manifest() -> None:
+    authentic = freeze_manifest(manifest_fixture(), cutoff=CUTOFF)
+    forged = object.__new__(FrozenSourceManifest)
+    for field in ("cutoff", "source_ids", "manifest_hash", "sources"):
+        object.__setattr__(forged, field, getattr(authentic, field))
+
+    with pytest.raises(ValidationError, match="frozen source manifest"):
+        freeze_observations([observation_fixture()], source_manifest=forged)
+
+
+@pytest.mark.parametrize("mutation", ("locator", "content", "authorization", "source_list"))
+def test_observation_freeze_rejects_a_tampered_authenticated_manifest(
+    mutation: str,
+) -> None:
+    manifest = freeze_manifest(manifest_fixture(), cutoff=CUTOFF)
+    sources = [dict(source) for source in manifest.sources]
+    if mutation == "locator":
+        sources[0]["locator"] = "https://example.test/altered"
+    elif mutation == "content":
+        sources[0]["content_sha256"] = "f" * 64
+    elif mutation == "authorization":
+        sources[0]["authorization"] = "reference_only"
+    else:
+        sources = sources[:1]
+        object.__setattr__(manifest, "source_ids", ("catl-annual-report",))
+    object.__setattr__(manifest, "sources", tuple(MappingProxyType(source) for source in sources))
+
+    with pytest.raises(ValidationError, match="frozen source manifest"):
+        freeze_observations([observation_fixture()], source_manifest=manifest)
 
 
 def test_company_metric_cannot_relabel_itself_as_industry_evidence() -> None:

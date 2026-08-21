@@ -453,6 +453,26 @@ def test_compiled_mechanism_integrity_revalidates_its_authenticated_batch() -> N
         )
 
 
+def test_context_and_compiled_integrity_reject_a_forged_source_manifest() -> None:
+    baseline = dependency_context()
+    forged = object.__new__(type(baseline.source_manifest))
+    for field in ("cutoff", "source_ids", "manifest_hash", "sources"):
+        object.__setattr__(forged, field, getattr(baseline.source_manifest, field))
+    with pytest.raises(ValidationError, match="frozen source manifest"):
+        MechanismDependencyContext(
+            cutoff=baseline.cutoff,
+            metric_definitions=baseline.metric_definitions,
+            source_manifest=forged,
+            frozen_observations=baseline.frozen_observations,
+        )
+
+    compiled = compile_mechanisms((formal_mechanism(),), dependencies=baseline)
+    with pytest.raises(ValidationError, match="frozen source manifest"):
+        validate_compiled_mechanism_integrity(
+            replace(compiled, source_manifest=forged)
+        )
+
+
 def test_compiled_hash_keeps_metric_key_to_definition_id_binding() -> None:
     value = formal_mechanism()
     first = compile_mechanisms(
