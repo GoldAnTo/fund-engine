@@ -48,6 +48,27 @@ class FrozenSourceManifest:
         raise TypeError("FrozenSourceManifest must be created by freeze_manifest")
 
 
+@dataclass(frozen=True, slots=True, init=False)
+class FrozenObservationSet:
+    """Authenticated, cutoff-bound immutable observation batch."""
+    cutoff: datetime
+    source_manifest_hash: str
+    observation_set_hash: str
+    observations: tuple[MetricObservation, ...]
+
+    def __init__(self) -> None:
+        raise TypeError("FrozenObservationSet must be created by freeze_observations")
+
+    def __iter__(self):
+        return iter(self.observations)
+
+    def __len__(self) -> int:
+        return len(self.observations)
+
+    def __getitem__(self, index: int) -> MetricObservation:
+        return self.observations[index]
+
+
 def _freeze_json_value(value: object) -> object:
     if isinstance(value, dict):
         return MappingProxyType({key: _freeze_json_value(item) for key, item in value.items()})
@@ -286,7 +307,7 @@ def _reported_company_evidence_key(value: MetricObservation) -> tuple[object, ..
 def freeze_observations(
     payload: list[dict[str, object]],
     source_manifest: FrozenSourceManifest,
-) -> tuple[MetricObservation, ...]:
+) -> FrozenObservationSet:
     """Freeze only known, resolved, source-authorized metric observations."""
     if type(source_manifest) is not FrozenSourceManifest:
         raise ValidationError("source_manifest must be frozen by freeze_manifest")
@@ -353,4 +374,10 @@ def freeze_observations(
             raise ValidationError(
                 "reference_only source cannot be the sole source of a reported company observation"
             )
-    return tuple(sorted(result, key=observation_sort_key))
+    observations = tuple(sorted(result, key=observation_sort_key))
+    value = object.__new__(FrozenObservationSet)
+    object.__setattr__(value, "cutoff", source_manifest.cutoff)
+    object.__setattr__(value, "source_manifest_hash", source_manifest.manifest_hash)
+    object.__setattr__(value, "observations", observations)
+    object.__setattr__(value, "observation_set_hash", canonical_hash(tuple(item.content_hash for item in observations)))
+    return value
