@@ -128,6 +128,13 @@ IMMUTABLE_TABLES = frozenset(
         "case_theme_tag_events",
         "ai_runs",
         "audit_logs",
+        "uw_research_objects",
+        "uw_object_relations",
+        "uw_mandate_versions",
+        "uw_historical_bases",
+        "uw_ledger_entries",
+        "uw_research_versions",
+        "uw_answerability_evaluations",
     }
 )
 
