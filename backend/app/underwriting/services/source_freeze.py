@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 import math
 from types import MappingProxyType
+import weakref
 
 from app.models.ledger import ValidationError
 from app.underwriting.domain.metrics import MetricObservation, SourceRole
@@ -48,7 +49,7 @@ class FrozenSourceManifest:
         raise TypeError("FrozenSourceManifest must be created by freeze_manifest")
 
 
-@dataclass(frozen=True, slots=True, init=False)
+@dataclass(frozen=True, slots=True, init=False, weakref_slot=True)
 class FrozenObservationSet:
     """Authenticated, cutoff-bound immutable observation batch."""
     cutoff: datetime
@@ -67,6 +68,46 @@ class FrozenObservationSet:
 
     def __getitem__(self, index: int) -> MetricObservation:
         return self.observations[index]
+
+
+# A frozen dataclass alone is not an authorization boundary: Python callers can
+# still allocate one through ``object.__new__``.  Keep a process-local identity
+# registry for batches created only after the source-policy freeze succeeded.
+# The registry deliberately compares object identity rather than value equality,
+# so a forged lookalike with a valid-looking hash is not trusted.
+_TRUSTED_OBSERVATION_SETS: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[FrozenObservationSet],
+        datetime,
+        str,
+        str,
+        tuple[int, ...],
+        tuple[str, ...],
+    ],
+] = {}
+
+
+def _register_observation_set(value: FrozenObservationSet) -> FrozenObservationSet:
+    identity = id(value)
+
+    def _discard(_: weakref.ReferenceType[FrozenObservationSet]) -> None:
+        _TRUSTED_OBSERVATION_SETS.pop(identity, None)
+
+    _TRUSTED_OBSERVATION_SETS[identity] = (
+        weakref.ref(value, _discard),
+        value.cutoff,
+        value.source_manifest_hash,
+        value.observation_set_hash,
+        tuple(id(item) for item in value.observations),
+        tuple(item.content_hash for item in value.observations),
+    )
+    return value
+
+
+def _is_trusted_observation_set(value: FrozenObservationSet) -> bool:
+    trusted = _TRUSTED_OBSERVATION_SETS.get(id(value))
+    return trusted is not None and trusted[0]() is value
 
 
 def _freeze_json_value(value: object) -> object:
@@ -304,6 +345,61 @@ def _reported_company_evidence_key(value: MetricObservation) -> tuple[object, ..
     )
 
 
+def validate_frozen_observation_set(
+    value: object,
+    *,
+    source_manifest: FrozenSourceManifest,
+    cutoff: datetime,
+) -> FrozenObservationSet:
+    """Re-establish the authenticated batch boundary before it is consumed.
+
+    Mechanism compilation is intentionally stricter than merely accepting a
+    tuple of immutable observations.  It must receive the exact batch emitted
+    by :func:`freeze_observations`, tied to the same source-manifest hash and
+    historical cutoff, with a recomputed canonical observation-set hash.
+    """
+    if type(value) is not FrozenObservationSet or not _is_trusted_observation_set(value):
+        raise ValidationError("frozen observation set must be created by freeze_observations")
+    trusted = _TRUSTED_OBSERVATION_SETS[id(value)]
+    if type(source_manifest) is not FrozenSourceManifest:
+        raise ValidationError("source_manifest must be a FrozenSourceManifest")
+    normalized_cutoff = _utc(cutoff, "cutoff")
+    if value.cutoff != normalized_cutoff or source_manifest.cutoff != normalized_cutoff:
+        raise ValidationError("frozen observation set cutoff must match dependency cutoff")
+    if value.source_manifest_hash != source_manifest.manifest_hash:
+        raise ValidationError("frozen observation set manifest hash does not match dependency manifest")
+    if not isinstance(value.observations, tuple) or not value.observations:
+        raise ValidationError("frozen observation set must contain observations")
+    if not all(type(item) is MetricObservation for item in value.observations):
+        raise ValidationError("frozen observation set observations are invalid")
+    if tuple(sorted(value.observations, key=observation_sort_key)) != value.observations:
+        raise ValidationError("frozen observation set observations must be canonically ordered")
+    known_sources = set(source_manifest.source_ids)
+    content_hashes: list[str] = []
+    observation_ids: set[object] = set()
+    for observation in value.observations:
+        # Re-run the domain contract so direct object mutation cannot slip into
+        # a previously authenticated batch.
+        observation.__post_init__()
+        if observation.source_id not in known_sources or observation.available_at > normalized_cutoff:
+            raise ValidationError("frozen observation is unavailable at dependency cutoff")
+        if observation.observation_id in observation_ids:
+            raise ValidationError("frozen observation set observation IDs must be unique")
+        observation_ids.add(observation.observation_id)
+        content_hashes.append(observation.content_hash)
+    expected_hash = canonical_hash(tuple(content_hashes))
+    if value.observation_set_hash != expected_hash:
+        raise ValidationError("frozen observation set hash does not match observations")
+    if (
+        (value.cutoff, value.source_manifest_hash, value.observation_set_hash)
+        != trusted[1:4]
+        or tuple(id(item) for item in value.observations) != trusted[4]
+        or tuple(content_hashes) != trusted[5]
+    ):
+        raise ValidationError("frozen observation set no longer matches authenticated batch")
+    return value
+
+
 def freeze_observations(
     payload: list[dict[str, object]],
     source_manifest: FrozenSourceManifest,
@@ -380,4 +476,4 @@ def freeze_observations(
     object.__setattr__(value, "source_manifest_hash", source_manifest.manifest_hash)
     object.__setattr__(value, "observations", observations)
     object.__setattr__(value, "observation_set_hash", canonical_hash(tuple(item.content_hash for item in observations)))
-    return value
+    return _register_observation_set(value)

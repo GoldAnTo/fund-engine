@@ -152,6 +152,11 @@ class ScenarioSpec:
         driver_keys = tuple(item.driver_key for item in self.overrides)
         if len(driver_keys) != len(set(driver_keys)):
             raise ValidationError("scenario overrides must not contain duplicate driver keys")
+        object.__setattr__(
+            self,
+            "overrides",
+            tuple(sorted(self.overrides, key=lambda item: item.driver_key)),
+        )
         if not isinstance(self.falsifiers, tuple):
             raise ValidationError("scenario falsifiers must be a tuple")
         normalized_falsifiers = tuple(
@@ -161,7 +166,7 @@ class ScenarioSpec:
             raise ValidationError("scenario falsifiers must not be empty")
         if len(normalized_falsifiers) != len(set(normalized_falsifiers)):
             raise ValidationError("scenario falsifiers must not contain duplicates")
-        object.__setattr__(self, "falsifiers", normalized_falsifiers)
+        object.__setattr__(self, "falsifiers", tuple(sorted(normalized_falsifiers)))
 
 
 @dataclass(frozen=True, slots=True)

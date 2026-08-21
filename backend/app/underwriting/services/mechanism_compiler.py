@@ -15,7 +15,11 @@ from app.underwriting.domain.mechanisms import (
 )
 from app.underwriting.domain.metrics import MetricObservation
 from app.underwriting.services.kernel import canonical_hash
-from app.underwriting.services.source_freeze import FrozenSourceManifest
+from app.underwriting.services.source_freeze import (
+    FrozenObservationSet,
+    FrozenSourceManifest,
+    validate_frozen_observation_set,
+)
 from app.underwriting.services.source_policy import AuthorizationState
 
 
@@ -106,7 +110,7 @@ class MechanismDependencyContext:
     cutoff: datetime
     metric_definitions: tuple[MetricDefinitionDependency, ...]
     source_manifest: FrozenSourceManifest
-    metric_observations: tuple[MetricObservation, ...] = tuple()
+    frozen_observations: FrozenObservationSet
 
     def __post_init__(self) -> None:
         cutoff = _utc(self.cutoff, "cutoff")
@@ -117,11 +121,12 @@ class MechanismDependencyContext:
             raise ValidationError("source manifest cutoff must match dependency cutoff")
         if not isinstance(self.metric_definitions, tuple) or not self.metric_definitions:
             raise ValidationError("metric_definitions must be a non-empty tuple")
-        if not isinstance(self.metric_observations, tuple) or not self.metric_observations:
-            raise ValidationError("metric_observations must be a non-empty tuple")
-        if not all(type(item) is MetricObservation for item in self.metric_observations):
-            raise ValidationError("metric_observations must contain frozen MetricObservation values")
-        observations = {item.definition_key: item for item in self.metric_observations}
+        frozen_observations = validate_frozen_observation_set(
+            self.frozen_observations,
+            source_manifest=self.source_manifest,
+            cutoff=cutoff,
+        )
+        observations = {item.definition_key: item for item in frozen_observations.observations}
         if not all(type(item) is MetricDefinitionDependency for item in self.metric_definitions):
             raise ValidationError("metric_definitions must contain MetricDefinitionDependency values")
         keys = tuple(item.metric_key for item in self.metric_definitions)
@@ -140,6 +145,9 @@ class MechanismDependencyContext:
                 raise ValidationError("metric definition must bind an actual frozen observation")
             if observation is not None and (observation.source_id not in self.source_manifest.source_ids or observation.available_at > cutoff):
                 raise ValidationError("frozen observation is unavailable at cutoff")
+        observation_keys = tuple(item.definition_key for item in frozen_observations.observations)
+        if len(observation_keys) != len(set(observation_keys)) or set(observation_keys) != set(keys):
+            raise ValidationError("frozen observation set must match metric definitions exactly")
         for source in self.source_manifest.sources:
             _require_text(source.get("source_id"), "source_id")
             first_available_at = source.get("first_available_at")
@@ -176,6 +184,11 @@ class MechanismDependencyContext:
     def source_ids(self) -> tuple[str, ...]:
         return self.source_manifest.source_ids
 
+    @property
+    def metric_observations(self) -> tuple[MetricObservation, ...]:
+        """Read-only compatibility view; construction must use the batch."""
+        return self.frozen_observations.observations
+
 
 @dataclass(frozen=True, slots=True)
 class CompiledMechanisms:
@@ -187,6 +200,9 @@ class CompiledMechanisms:
     metric_definition_provenance: tuple[MetricDefinitionDependency, ...]
     frozen_metric_definition_provenance: tuple[MetricDefinitionDependency, ...]
     frozen_metric_observations: tuple[FrozenResolvedObservation, ...]
+    source_manifest: FrozenSourceManifest
+    frozen_observations: FrozenObservationSet
+    frozen_observation_set_hash: str
     source_manifest_hash: str
     source_ids: tuple[str, ...]
 
@@ -368,6 +384,7 @@ def _compiled_payload(
     metric_definition_provenance: tuple[MetricDefinitionDependency, ...],
     frozen_metric_definition_provenance: tuple[MetricDefinitionDependency, ...],
     frozen_metric_observations: tuple[FrozenResolvedObservation, ...],
+    frozen_observation_set_hash: str,
     source_ids: tuple[str, ...],
 ) -> dict[str, object]:
     """The complete integrity-covered representation of compiled mechanisms."""
@@ -402,6 +419,7 @@ def _compiled_payload(
             {"observation_id": str(item.observation_id), "metric_key": item.metric_key, "definition_id": str(item.definition_id), "definition_version": item.definition_version, "definition_content_hash": item.definition_content_hash, "source_id": item.source_id, "source_manifest_hash": item.source_manifest_hash, "available_at": item.available_at.isoformat(), "value": str(item.value), "unit": item.unit, "source_locator": item.source_locator, "observed_start": item.observed_start.isoformat(), "observed_end": item.observed_end.isoformat(), "effective_at": item.effective_at.isoformat(), "dimensions": item.dimensions, "content_hash": item.content_hash}
             for item in frozen_metric_observations
         ),
+        "frozen_observation_set_hash": frozen_observation_set_hash,
         "source_ids": source_ids,
     }
 
@@ -417,6 +435,13 @@ def validate_compiled_mechanism_integrity(value: CompiledMechanisms) -> None:
     if type(value) is not CompiledMechanisms:
         raise ValidationError("compiled mechanisms are required")
     cutoff = _utc(value.cutoff, "compiled mechanism cutoff")
+    authenticated_observations = validate_frozen_observation_set(
+        value.frozen_observations,
+        source_manifest=value.source_manifest,
+        cutoff=cutoff,
+    )
+    if value.source_manifest_hash != value.source_manifest.manifest_hash:
+        raise ValidationError("compiled source manifest does not match its hash")
     if not isinstance(value.mechanisms, tuple) or not value.mechanisms:
         raise ValidationError("compiled mechanisms must be a non-empty tuple")
     if not all(type(mechanism) is MechanismPack for mechanism in value.mechanisms):
@@ -490,9 +515,81 @@ def validate_compiled_mechanism_integrity(value: CompiledMechanisms) -> None:
     for dependency in value.frozen_metric_definition_provenance:
         if dependency.available_at > cutoff or dependency.source_manifest_hash != value.source_manifest_hash:
             raise ValidationError("frozen metric definition provenance is unavailable or foreign")
+    if not isinstance(value.frozen_metric_observations, tuple) or not all(
+        type(observation) is FrozenResolvedObservation
+        for observation in value.frozen_metric_observations
+    ):
+        raise ValidationError("frozen metric observations are invalid")
+    if tuple(item.metric_key for item in value.frozen_metric_observations) != frozen_keys:
+        raise ValidationError("frozen metric observations do not match frozen definition provenance")
+    if any(
+        observation.definition_version != definition.definition_version
+        or observation.definition_id != definition.definition_id
+        or observation.definition_content_hash != definition.content_hash
+        or observation.source_manifest_hash != value.source_manifest_hash
+        or observation.available_at > cutoff
+        for observation, definition in zip(
+            value.frozen_metric_observations,
+            value.frozen_metric_definition_provenance,
+            strict=True,
+        )
+    ):
+        raise ValidationError("frozen metric observations do not reconcile to provenance")
+    expected_observation_set_hash = canonical_hash(
+        tuple(observation.content_hash for observation in value.frozen_metric_observations)
+    )
+    if (
+        not isinstance(value.frozen_observation_set_hash, str)
+        or _SHA256.fullmatch(value.frozen_observation_set_hash) is None
+        or value.frozen_observation_set_hash != expected_observation_set_hash
+    ):
+        raise ValidationError("compiled frozen observation set hash does not reconcile")
+    if value.frozen_observation_set_hash != authenticated_observations.observation_set_hash:
+        raise ValidationError("compiled frozen observation set does not match authenticated batch")
+    expected_frozen_records = tuple(
+        (
+            observation.observation_id,
+            observation.definition_key,
+            observation.definition_version,
+            observation.source_id,
+            observation.available_at,
+            observation.value,
+            observation.unit,
+            observation.source_locator,
+            observation.observed_start,
+            observation.observed_end,
+            observation.effective_at,
+            observation.dimensions,
+            observation.content_hash,
+        )
+        for observation in authenticated_observations.observations
+    )
+    actual_frozen_records = tuple(
+        (
+            observation.observation_id,
+            observation.metric_key,
+            observation.definition_version,
+            observation.source_id,
+            observation.available_at,
+            observation.value,
+            observation.unit,
+            observation.source_locator,
+            observation.observed_start,
+            observation.observed_end,
+            observation.effective_at,
+            observation.dimensions,
+            observation.content_hash,
+        )
+        for observation in value.frozen_metric_observations
+    )
+    if actual_frozen_records != expected_frozen_records:
+        raise ValidationError("compiled frozen observations do not match authenticated batch")
 
     expected_source_ids = tuple(
-        sorted({source_id for mechanism in ordered_mechanisms for source_id in mechanism.source_ids})
+        sorted(
+            {source_id for mechanism in ordered_mechanisms for source_id in mechanism.source_ids}
+            | {observation.source_id for observation in value.frozen_metric_observations}
+        )
     )
     if value.source_ids != expected_source_ids:
         raise ValidationError("compiled source IDs do not match mechanisms")
@@ -509,6 +606,7 @@ def validate_compiled_mechanism_integrity(value: CompiledMechanisms) -> None:
             metric_definition_provenance=value.metric_definition_provenance,
             frozen_metric_definition_provenance=value.frozen_metric_definition_provenance,
             frozen_metric_observations=value.frozen_metric_observations,
+            frozen_observation_set_hash=value.frozen_observation_set_hash,
             source_ids=value.source_ids,
         )
     )
@@ -595,7 +693,9 @@ def compile_mechanisms(
         definition_records[key] for key, _ in ordered_bindings
     )
     ordered_metrics = tuple(sorted(definition_id for _, definition_id in ordered_bindings))
-    ordered_sources = tuple(sorted(dependency_sources))
+    ordered_sources = tuple(
+        sorted(dependency_sources | {observation.source_id for observation in resolved_observations})
+    )
     ordered_mechanisms = tuple(sorted(mechanisms, key=lambda value: (value.key, value.version)))
     return CompiledMechanisms(
         mechanisms=ordered_mechanisms,
@@ -609,6 +709,7 @@ def compile_mechanisms(
                 metric_definition_provenance=ordered_provenance,
                 frozen_metric_definition_provenance=tuple(sorted(dependencies.metric_definitions, key=lambda item: item.metric_key)),
                 frozen_metric_observations=resolved_observations,
+                frozen_observation_set_hash=dependencies.frozen_observations.observation_set_hash,
                 source_ids=ordered_sources,
             )
         ),
@@ -617,6 +718,9 @@ def compile_mechanisms(
         metric_definition_provenance=ordered_provenance,
         frozen_metric_definition_provenance=tuple(sorted(dependencies.metric_definitions, key=lambda item: item.metric_key)),
         frozen_metric_observations=resolved_observations,
+        source_manifest=dependencies.source_manifest,
+        frozen_observations=dependencies.frozen_observations,
+        frozen_observation_set_hash=dependencies.frozen_observations.observation_set_hash,
         source_manifest_hash=dependencies.source_manifest.manifest_hash,
         source_ids=ordered_sources,
     )

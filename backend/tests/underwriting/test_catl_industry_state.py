@@ -32,10 +32,34 @@ from app.underwriting.services.mechanism_compiler import (
     compile_mechanisms,
     transition_mechanism,
 )
-from app.underwriting.services.source_freeze import freeze_manifest
+from app.underwriting.services.source_freeze import freeze_manifest, freeze_observations
 
 
 CUTOFF = datetime(2025, 5, 15, 15, 59, 59, tzinfo=UTC)
+
+
+def _frozen_metric_observations(metric_keys: set[str], source_manifest):
+    return freeze_observations(
+        [
+            {
+                "definition_key": key,
+                "definition_version": 1,
+                "value": "1",
+                "unit": "unit",
+                "observed_start": "2025-01-01T00:00:00+00:00",
+                "observed_end": "2025-01-01T00:00:00+00:00",
+                "effective_at": "2025-05-14T00:00:00+00:00",
+                "available_at": "2025-05-14T00:00:00+00:00",
+                "source_id": "industry-source-2025" if key.startswith("industry.") else "catl-annual-report-2025",
+                "source_locator": "p1",
+                "dimensions": {},
+                "source_role": "official_industry" if key.startswith("industry.") else "reported",
+                "research_object_kind": "industry" if key.startswith("industry.") else "company",
+            }
+            for key in sorted(metric_keys)
+        ],
+        source_manifest=source_manifest,
+    )
 
 
 def formal_industry_packs(scope_object_id=None) -> tuple[MechanismPack, ...]:
@@ -116,7 +140,21 @@ def formal_industry_mechanisms(scope_object_id=None) -> CompiledMechanisms:
                     "display_policy": "derived_only",
                     "provider_capability": "public_http",
                     "retention": "hash_locator_and_derived_observations",
-                }
+                },
+                {
+                    "source_id": "catl-annual-report-2025",
+                    "title": "CATL annual report",
+                    "locator": "https://example.test/catl-annual-report",
+                    "published_at": "2025-03-15T00:00:00+00:00",
+                    "first_available_at": "2025-03-15T00:00:00+00:00",
+                    "retrieved_at": "2025-03-15T00:00:00+00:00",
+                    "content_sha256": "c" * 64,
+                    "authority": "issuer_filing",
+                    "authorization": "authorized",
+                    "display_policy": "derived_only",
+                    "provider_capability": "public_http",
+                    "retention": "hash_locator_and_derived_observations",
+                },
             ],
         },
         cutoff=CUTOFF,
@@ -147,7 +185,7 @@ def formal_industry_mechanisms(scope_object_id=None) -> CompiledMechanisms:
             for key in sorted(metric_keys)
         ),
         source_manifest=source_manifest,
-        metric_observations=tuple(MetricObservation(key, 1, Decimal("1"), "unit", datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 5, 14, tzinfo=UTC), datetime(2025, 5, 14, tzinfo=UTC), "industry-source-2025", "https://example.test/industry-source", tuple()) for key in sorted(metric_keys)),
+        frozen_observations=_frozen_metric_observations(metric_keys, source_manifest),
     )
     return compile_mechanisms(packs, dependencies=dependencies)
 
@@ -393,6 +431,27 @@ def test_scenario_retains_parent_and_overrides_only_declared_driver() -> None:
     assert scenario.price_range_cny_per_kwh.high == Decimal("0.7000")
     assert scenario.probability is None
     assert scenario.falsifier_keys == ("utilization_outside_range",)
+
+
+def test_scenario_spec_canonicalizes_semantically_reordered_overrides_and_falsifiers() -> None:
+    """The same economic assumptions must not acquire a second scenario identity."""
+    forward = ScenarioSpec(
+        ScenarioKind.UPSIDE,
+        (
+            ScenarioDriverOverride("industry.cell_asp_cny_per_kwh", Decimal("0.70")),
+            ScenarioDriverOverride("industry.storage_demand_gwh", Decimal("350")),
+        ),
+        ("z_falsifier", "a_falsifier"),
+    )
+    reverse = ScenarioSpec(
+        ScenarioKind.UPSIDE,
+        tuple(reversed(forward.overrides)),
+        tuple(reversed(forward.falsifiers)),
+    )
+
+    assert forward == reverse
+    assert forward.overrides == reverse.overrides
+    assert forward.falsifiers == reverse.falsifiers
 
 
 def test_scenario_rejects_override_outside_declared_mechanism_drivers() -> None:

@@ -20,12 +20,47 @@ from app.underwriting.services.mechanism_compiler import (
     MetricDefinitionDependency,
     compile_mechanisms,
     transition_mechanism,
+    validate_compiled_mechanism_integrity,
     validate_formal_mechanism,
 )
-from app.underwriting.services.source_freeze import freeze_manifest
+from app.underwriting.services.source_freeze import (
+    FrozenObservationSet,
+    freeze_manifest,
+    freeze_observations,
+)
 
 
 CUTOFF = datetime(2025, 5, 15, 15, 59, 59, tzinfo=UTC)
+
+
+def frozen_observations(
+    metric_bindings: dict[str, str],
+    source_manifest,
+    *,
+    definition_versions: dict[str, int] | None = None,
+):
+    versions = definition_versions or {}
+    records = []
+    for key in metric_bindings:
+        is_industry = key.startswith("industry.")
+        records.append(
+            {
+                "definition_key": key,
+                "definition_version": versions.get(key, 1),
+                "value": "1",
+                "unit": "unit",
+                "observed_start": "2025-01-01T00:00:00+00:00",
+                "observed_end": "2025-01-01T00:00:00+00:00",
+                "effective_at": "2025-05-14T00:00:00+00:00",
+                "available_at": "2025-05-14T00:00:00+00:00",
+                "source_id": "iea-2025" if is_industry else "catl-2025",
+                "source_locator": "p1",
+                "dimensions": {},
+                "source_role": "official_industry" if is_industry else "reported",
+                "research_object_kind": "industry" if is_industry else "company",
+            }
+        )
+    return freeze_observations(records, source_manifest=source_manifest)
 
 
 def dependency_context(
@@ -54,6 +89,21 @@ def dependency_context(
                     "provider_capability": "public_http",
                     "retention": "hash_locator_and_derived_observations",
                 }
+                ,
+                {
+                    "source_id": "catl-2025",
+                    "title": "CATL annual report 2024",
+                    "locator": "https://example.test/catl-2025",
+                    "published_at": "2025-03-15T00:00:00+00:00",
+                    "first_available_at": "2025-03-15T00:00:00+00:00",
+                    "retrieved_at": "2025-03-15T00:00:00+00:00",
+                    "content_sha256": "c" * 64,
+                    "authority": "issuer_filing",
+                    "authorization": "authorized",
+                    "display_policy": "derived_only",
+                    "provider_capability": "public_http",
+                    "retention": "hash_locator_and_derived_observations",
+                },
             ],
         },
         cutoff=CUTOFF,
@@ -72,7 +122,7 @@ def dependency_context(
             for key, definition_id in metric_bindings.items()
         ),
         source_manifest=source_manifest,
-        metric_observations=tuple(MetricObservation(key, 1, Decimal("1"), "unit", datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 5, 14, tzinfo=UTC), datetime(2025, 5, 14, tzinfo=UTC), "iea-2025", "https://example.test/iea-2025", tuple()) for key in metric_bindings),
+        frozen_observations=frozen_observations(metric_bindings, source_manifest),
     )
 
 
@@ -248,7 +298,7 @@ def test_compiler_returns_deterministic_hash_and_dependency_ids() -> None:
         "metric-growth",
         "metric-shipment",
     )
-    assert first.source_ids == ("iea-2025",)
+    assert first.source_ids == ("catl-2025", "iea-2025")
     assert first.cutoff == CUTOFF
 
 
@@ -336,7 +386,70 @@ def test_dependency_context_rejects_metric_unavailable_at_cutoff() -> None:
                 ),
             ),
             source_manifest=dependency_context().source_manifest,
-            metric_observations=dependency_context().metric_observations,
+            frozen_observations=dependency_context().frozen_observations,
+        )
+
+
+def test_dependency_context_rejects_raw_observation_tuple() -> None:
+    """A tuple of valid-looking observations is not an authenticated freeze batch."""
+    baseline = dependency_context()
+    with pytest.raises(ValidationError, match="frozen observation set"):
+        MechanismDependencyContext(
+            cutoff=baseline.cutoff,
+            metric_definitions=baseline.metric_definitions,
+            source_manifest=baseline.source_manifest,
+            frozen_observations=baseline.metric_observations,
+        )
+
+
+def test_dependency_context_rejects_forged_and_tampered_observation_batches() -> None:
+    baseline = dependency_context()
+    forged = object.__new__(FrozenObservationSet)
+    for field in (
+        "cutoff",
+        "source_manifest_hash",
+        "observation_set_hash",
+        "observations",
+    ):
+        object.__setattr__(forged, field, getattr(baseline.frozen_observations, field))
+    with pytest.raises(ValidationError, match="created by freeze_observations"):
+        MechanismDependencyContext(
+            cutoff=baseline.cutoff,
+            metric_definitions=baseline.metric_definitions,
+            source_manifest=baseline.source_manifest,
+            frozen_observations=forged,
+        )
+
+    tampered = dependency_context()
+    object.__setattr__(
+        tampered.frozen_observations,
+        "observations",
+        (replace(tampered.frozen_observations.observations[0], value=Decimal("2")),)
+        + tampered.frozen_observations.observations[1:],
+    )
+    with pytest.raises(ValidationError, match="set hash|authenticated batch"):
+        MechanismDependencyContext(
+            cutoff=tampered.cutoff,
+            metric_definitions=tampered.metric_definitions,
+            source_manifest=tampered.source_manifest,
+            frozen_observations=tampered.frozen_observations,
+        )
+
+
+def test_compiled_mechanism_integrity_revalidates_its_authenticated_batch() -> None:
+    compiled = compile_mechanisms((formal_mechanism(),), dependencies=dependency_context())
+    forged = object.__new__(FrozenObservationSet)
+    for field in (
+        "cutoff",
+        "source_manifest_hash",
+        "observation_set_hash",
+        "observations",
+    ):
+        object.__setattr__(forged, field, getattr(compiled.frozen_observations, field))
+
+    with pytest.raises(ValidationError, match="created by freeze_observations"):
+        validate_compiled_mechanism_integrity(
+            replace(compiled, frozen_observations=forged)
         )
 
 
@@ -386,7 +499,7 @@ def test_dependency_context_rejects_definition_from_foreign_manifest() -> None:
                 ),
             ),
             source_manifest=frozen,
-            metric_observations=dependency_context().metric_observations,
+            frozen_observations=dependency_context().frozen_observations,
         )
 
 
@@ -409,7 +522,21 @@ def test_compiled_hash_changes_when_manifest_content_changes_under_same_source_i
                     "display_policy": "derived_only",
                     "provider_capability": "public_http",
                     "retention": "hash_locator_and_derived_observations",
-                }
+                },
+                {
+                    "source_id": "catl-2025",
+                    "title": "CATL annual report 2024",
+                    "locator": "https://example.test/catl-2025",
+                    "published_at": "2025-03-15T00:00:00+00:00",
+                    "first_available_at": "2025-03-15T00:00:00+00:00",
+                    "retrieved_at": "2025-03-15T00:00:00+00:00",
+                    "content_sha256": "c" * 64,
+                    "authority": "issuer_filing",
+                    "authorization": "authorized",
+                    "display_policy": "derived_only",
+                    "provider_capability": "public_http",
+                    "retention": "hash_locator_and_derived_observations",
+                },
             ],
         },
         cutoff=CUTOFF,
@@ -428,10 +555,13 @@ def test_compiled_hash_changes_when_manifest_content_changes_under_same_source_i
             for dependency in dependency_context().metric_definitions
         ),
         source_manifest=changed_manifest,
-        metric_observations=dependency_context().metric_observations,
+        frozen_observations=frozen_observations(
+            {item.metric_key: str(item.definition_id) for item in dependency_context().metric_definitions},
+            changed_manifest,
+        ),
     )
     second = compile_mechanisms((formal_mechanism(),), dependencies=changed_context)
-    assert first.source_ids == second.source_ids == ("iea-2025",)
+    assert first.source_ids == second.source_ids == ("catl-2025", "iea-2025")
     assert first.source_manifest_hash != second.source_manifest_hash
     assert first.content_hash != second.content_hash
 
@@ -446,7 +576,11 @@ def test_compiled_hash_keeps_definition_version_and_content_provenance() -> None
         cutoff=baseline.cutoff,
         metric_definitions=(changed_definition,) + baseline.metric_definitions[1:],
         source_manifest=baseline.source_manifest,
-        metric_observations=(replace(baseline.metric_observations[0], definition_version=2),) + baseline.metric_observations[1:],
+        frozen_observations=frozen_observations(
+            {item.metric_key: str(item.definition_id) for item in baseline.metric_definitions},
+            baseline.source_manifest,
+            definition_versions={changed_definition.metric_key: 2},
+        ),
     )
     second = compile_mechanisms((formal_mechanism(),), dependencies=changed)
     assert first.metric_definition_bindings == second.metric_definition_bindings
