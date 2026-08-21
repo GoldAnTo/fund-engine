@@ -456,7 +456,7 @@ def test_compiled_mechanism_integrity_revalidates_its_authenticated_batch() -> N
 def test_context_and_compiled_integrity_reject_a_forged_source_manifest() -> None:
     baseline = dependency_context()
     forged = object.__new__(type(baseline.source_manifest))
-    for field in ("cutoff", "source_ids", "manifest_hash", "sources"):
+    for field in ("schema_version", "cutoff", "source_ids", "manifest_hash", "sources"):
         object.__setattr__(forged, field, getattr(baseline.source_manifest, field))
     with pytest.raises(ValidationError, match="frozen source manifest"):
         MechanismDependencyContext(

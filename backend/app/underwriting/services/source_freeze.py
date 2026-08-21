@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 import math
+import re
 from types import MappingProxyType
 import weakref
 
@@ -36,10 +37,12 @@ _COMPANY_METRIC_ROLES = frozenset({SourceRole.REPORTED, SourceRole.DERIVED})
 _INDUSTRY_METRIC_ROLES = frozenset(
     {SourceRole.OFFICIAL_INDUSTRY, SourceRole.DERIVED, SourceRole.ASSUMPTION}
 )
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass(frozen=True, slots=True, init=False, weakref_slot=True)
 class FrozenSourceManifest:
+    schema_version: str
     cutoff: datetime
     source_ids: tuple[str, ...]
     manifest_hash: str
@@ -53,10 +56,15 @@ class FrozenSourceManifest:
 # ``object.__new__`` can otherwise manufacture an exact-class lookalike that
 # carries a copied manifest hash.  Keep both identity and a deep source-record
 # snapshot for the manifests emitted by ``freeze_manifest``.
+_MANIFEST_REGISTRATION_CAPABILITY = object()
+_OBSERVATION_SET_REGISTRATION_CAPABILITY = object()
+
+
 _TRUSTED_SOURCE_MANIFESTS: dict[
     int,
     tuple[
         weakref.ReferenceType[FrozenSourceManifest],
+        str,
         datetime,
         tuple[str, ...],
         str,
@@ -70,7 +78,7 @@ def _thaw_json_value(value: object) -> object:
     if isinstance(value, Mapping):
         return {str(key): _thaw_json_value(item) for key, item in value.items()}
     if isinstance(value, tuple):
-        return tuple(_thaw_json_value(item) for item in value)
+        return [_thaw_json_value(item) for item in value]
     return value
 
 
@@ -88,7 +96,14 @@ def _is_deeply_immutable_json(value: object) -> bool:
     return not isinstance(value, list)
 
 
-def _register_source_manifest(value: FrozenSourceManifest) -> FrozenSourceManifest:
+def _register_source_manifest(
+    value: FrozenSourceManifest,
+    *,
+    _capability: object | None = None,
+) -> FrozenSourceManifest:
+    if _capability is not _MANIFEST_REGISTRATION_CAPABILITY:
+        raise ValidationError("frozen source manifest registration requires internal construction capability")
+    _validate_source_manifest_payload(value)
     identity = id(value)
 
     def _discard(_: weakref.ReferenceType[FrozenSourceManifest]) -> None:
@@ -96,6 +111,7 @@ def _register_source_manifest(value: FrozenSourceManifest) -> FrozenSourceManife
 
     _TRUSTED_SOURCE_MANIFESTS[identity] = (
         weakref.ref(value, _discard),
+        value.schema_version,
         value.cutoff,
         value.source_ids,
         value.manifest_hash,
@@ -149,7 +165,14 @@ _TRUSTED_OBSERVATION_SETS: dict[
 ] = {}
 
 
-def _register_observation_set(value: FrozenObservationSet) -> FrozenObservationSet:
+def _register_observation_set(
+    value: FrozenObservationSet,
+    *,
+    _capability: object | None = None,
+) -> FrozenObservationSet:
+    if _capability is not _OBSERVATION_SET_REGISTRATION_CAPABILITY:
+        raise ValidationError("frozen observation set registration requires internal construction capability")
+    _validate_observation_set_payload(value)
     identity = id(value)
 
     def _discard(_: weakref.ReferenceType[FrozenObservationSet]) -> None:
@@ -181,6 +204,7 @@ def _freeze_json_value(value: object) -> object:
 
 def _frozen_manifest(
     *,
+    schema_version: str,
     cutoff: datetime,
     source_ids: tuple[str, ...],
     manifest_hash: str,
@@ -191,6 +215,7 @@ def _frozen_manifest(
     if not all(isinstance(source, Mapping) for source in frozen_sources):
         raise AssertionError("validated sources must be mappings")
     value = object.__new__(FrozenSourceManifest)
+    object.__setattr__(value, "schema_version", schema_version)
     object.__setattr__(value, "cutoff", cutoff)
     object.__setattr__(value, "source_ids", source_ids)
     object.__setattr__(value, "manifest_hash", manifest_hash)
@@ -302,12 +327,59 @@ def freeze_manifest(payload: Mapping[str, object], cutoff: datetime) -> FrozenSo
     }
     return _register_source_manifest(
         _frozen_manifest(
+            schema_version=schema_version,
             cutoff=normalized_cutoff,
             source_ids=source_ids,
             manifest_hash=canonical_hash(serialized),
             sources=normalized,
+        ),
+        _capability=_MANIFEST_REGISTRATION_CAPABILITY,
+    )
+
+
+def _validate_source_manifest_payload(value: object) -> FrozenSourceManifest:
+    """Strictly recompute a frozen manifest from its actual source records."""
+    if type(value) is not FrozenSourceManifest:
+        raise ValidationError("frozen source manifest type is invalid")
+    schema_version = _require_text(getattr(value, "schema_version", None), "schema_version")
+    cutoff = _utc(getattr(value, "cutoff", None), "source manifest cutoff")
+    if cutoff != getattr(value, "cutoff", None):
+        raise ValidationError("frozen source manifest cutoff must be canonical UTC")
+    source_ids_value = getattr(value, "source_ids", None)
+    if not isinstance(source_ids_value, tuple) or not source_ids_value:
+        raise ValidationError("frozen source manifest source_ids are invalid")
+    if not all(isinstance(source_id, str) and source_id.strip() for source_id in source_ids_value):
+        raise ValidationError("frozen source manifest source_ids are invalid")
+    if tuple(sorted(source_ids_value)) != source_ids_value or len(set(source_ids_value)) != len(source_ids_value):
+        raise ValidationError("frozen source manifest source_ids must be canonical")
+    sources_value = getattr(value, "sources", None)
+    if not isinstance(sources_value, tuple) or not sources_value:
+        raise ValidationError("frozen source manifest sources are invalid")
+    if not all(_is_deeply_immutable_json(source) for source in sources_value):
+        raise ValidationError("frozen source manifest sources must be immutable")
+    raw_sources = tuple(_thaw_json_value(source) for source in sources_value)
+    normalized_sources = tuple(
+        sorted(
+            (normalize_source_record(source, cutoff=cutoff) for source in raw_sources),
+            key=lambda item: str(item["source_id"]),
         )
     )
+    source_ids = tuple(str(source["source_id"]) for source in normalized_sources)
+    if source_ids != source_ids_value:
+        raise ValidationError("frozen source manifest sources do not match source_ids")
+    expected_hash = canonical_hash(
+        {
+            "schema_version": schema_version,
+            "cutoff": cutoff.isoformat(),
+            "sources": normalized_sources,
+        }
+    )
+    manifest_hash = getattr(value, "manifest_hash", None)
+    if not isinstance(manifest_hash, str) or _SHA256.fullmatch(manifest_hash) is None:
+        raise ValidationError("frozen source manifest hash is invalid")
+    if manifest_hash != expected_hash:
+        raise ValidationError("frozen source manifest hash does not match sources")
+    return value
 
 
 def validate_frozen_source_manifest(
@@ -316,38 +388,18 @@ def validate_frozen_source_manifest(
     cutoff: datetime | None = None,
 ) -> FrozenSourceManifest:
     """Validate the exact authenticated manifest and its frozen source records."""
+    _validate_source_manifest_payload(value)
     if type(value) is not FrozenSourceManifest or not _is_trusted_source_manifest(value):
         raise ValidationError("frozen source manifest must be created by freeze_manifest")
     trusted = _TRUSTED_SOURCE_MANIFESTS[id(value)]
     normalized_cutoff = _utc(value.cutoff, "source manifest cutoff")
     if cutoff is not None and normalized_cutoff != _utc(cutoff, "cutoff"):
         raise ValidationError("source manifest cutoff does not match dependency cutoff")
-    if not isinstance(value.source_ids, tuple) or not value.source_ids:
-        raise ValidationError("frozen source manifest source_ids are invalid")
-    if not all(isinstance(source_id, str) and source_id.strip() for source_id in value.source_ids):
-        raise ValidationError("frozen source manifest source_ids are invalid")
-    if tuple(sorted(value.source_ids)) != value.source_ids or len(set(value.source_ids)) != len(value.source_ids):
-        raise ValidationError("frozen source manifest source_ids must be canonical")
-    if not isinstance(value.sources, tuple) or not value.sources:
-        raise ValidationError("frozen source manifest sources are invalid")
-    if not all(_is_deeply_immutable_json(source) for source in value.sources):
-        raise ValidationError("frozen source manifest sources must be immutable")
-    source_ids = tuple(str(source.get("source_id", "")) for source in value.sources)
-    if source_ids != value.source_ids:
-        raise ValidationError("frozen source manifest sources do not match source_ids")
-    normalized_sources = tuple(
-        sorted(
-            (normalize_source_record(source, cutoff=normalized_cutoff) for source in value.sources),
-            key=lambda item: str(item["source_id"]),
-        )
-    )
-    if _manifest_sources_hash(value.sources) != canonical_hash(normalized_sources):
-        raise ValidationError("frozen source manifest source contents are invalid")
     if (
-        (normalized_cutoff, value.source_ids, value.manifest_hash)
-        != trusted[1:4]
-        or tuple(id(source) for source in value.sources) != trusted[4]
-        or _manifest_sources_hash(value.sources) != trusted[5]
+        (value.schema_version, normalized_cutoff, value.source_ids, value.manifest_hash)
+        != trusted[1:5]
+        or tuple(id(source) for source in value.sources) != trusted[5]
+        or _manifest_sources_hash(value.sources) != trusted[6]
     ):
         raise ValidationError("frozen source manifest no longer matches authenticated batch")
     return value
@@ -451,6 +503,41 @@ def _reported_company_evidence_key(value: MetricObservation) -> tuple[object, ..
     )
 
 
+def _validate_observation_set_payload(value: object) -> FrozenObservationSet:
+    """Strictly recompute a batch hash before it is allowed into the registry."""
+    if type(value) is not FrozenObservationSet:
+        raise ValidationError("frozen observation set type is invalid")
+    cutoff = _utc(value.cutoff, "frozen observation set cutoff")
+    if cutoff != value.cutoff:
+        raise ValidationError("frozen observation set cutoff must be canonical UTC")
+    if not isinstance(value.source_manifest_hash, str) or _SHA256.fullmatch(value.source_manifest_hash) is None:
+        raise ValidationError("frozen observation set manifest hash is invalid")
+    if not isinstance(value.observations, tuple) or not value.observations:
+        raise ValidationError("frozen observation set must contain observations")
+    if not all(type(item) is MetricObservation for item in value.observations):
+        raise ValidationError("frozen observation set observations are invalid")
+    if tuple(sorted(value.observations, key=observation_sort_key)) != value.observations:
+        raise ValidationError("frozen observation set observations must be canonically ordered")
+    observation_ids: set[object] = set()
+    content_hashes: list[str] = []
+    for observation in value.observations:
+        observation.__post_init__()
+        if observation.available_at > cutoff:
+            raise ValidationError("frozen observation is unavailable at set cutoff")
+        if observation.observation_id in observation_ids:
+            raise ValidationError("frozen observation set observation IDs must be unique")
+        observation_ids.add(observation.observation_id)
+        content_hashes.append(observation.content_hash)
+    expected_hash = canonical_hash(tuple(content_hashes))
+    if (
+        not isinstance(value.observation_set_hash, str)
+        or _SHA256.fullmatch(value.observation_set_hash) is None
+        or value.observation_set_hash != expected_hash
+    ):
+        raise ValidationError("frozen observation set hash does not match observations")
+    return value
+
+
 def validate_frozen_observation_set(
     value: object,
     *,
@@ -467,18 +554,13 @@ def validate_frozen_observation_set(
     if type(value) is not FrozenObservationSet or not _is_trusted_observation_set(value):
         raise ValidationError("frozen observation set must be created by freeze_observations")
     trusted = _TRUSTED_OBSERVATION_SETS[id(value)]
+    _validate_observation_set_payload(value)
     validate_frozen_source_manifest(source_manifest, cutoff=cutoff)
     normalized_cutoff = _utc(cutoff, "cutoff")
     if value.cutoff != normalized_cutoff or source_manifest.cutoff != normalized_cutoff:
         raise ValidationError("frozen observation set cutoff must match dependency cutoff")
     if value.source_manifest_hash != source_manifest.manifest_hash:
         raise ValidationError("frozen observation set manifest hash does not match dependency manifest")
-    if not isinstance(value.observations, tuple) or not value.observations:
-        raise ValidationError("frozen observation set must contain observations")
-    if not all(type(item) is MetricObservation for item in value.observations):
-        raise ValidationError("frozen observation set observations are invalid")
-    if tuple(sorted(value.observations, key=observation_sort_key)) != value.observations:
-        raise ValidationError("frozen observation set observations must be canonically ordered")
     known_sources = set(source_manifest.source_ids)
     content_hashes: list[str] = []
     observation_ids: set[object] = set()
@@ -492,9 +574,6 @@ def validate_frozen_observation_set(
             raise ValidationError("frozen observation set observation IDs must be unique")
         observation_ids.add(observation.observation_id)
         content_hashes.append(observation.content_hash)
-    expected_hash = canonical_hash(tuple(content_hashes))
-    if value.observation_set_hash != expected_hash:
-        raise ValidationError("frozen observation set hash does not match observations")
     if (
         (value.cutoff, value.source_manifest_hash, value.observation_set_hash)
         != trusted[1:4]
@@ -580,4 +659,7 @@ def freeze_observations(
     object.__setattr__(value, "source_manifest_hash", source_manifest.manifest_hash)
     object.__setattr__(value, "observations", observations)
     object.__setattr__(value, "observation_set_hash", canonical_hash(tuple(item.content_hash for item in observations)))
-    return _register_observation_set(value)
+    return _register_observation_set(
+        value,
+        _capability=_OBSERVATION_SET_REGISTRATION_CAPABILITY,
+    )

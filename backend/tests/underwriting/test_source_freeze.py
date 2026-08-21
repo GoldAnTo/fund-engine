@@ -15,6 +15,8 @@ import pytest
 from app.models.ledger import ValidationError
 from app.underwriting.services.source_freeze import (
     FrozenSourceManifest,
+    _register_observation_set,
+    _register_source_manifest,
     freeze_manifest,
     freeze_observations,
 )
@@ -272,11 +274,27 @@ def test_observation_freeze_rejects_a_forged_frozen_manifest_subclass() -> None:
 def test_observation_freeze_rejects_an_exact_class_forged_manifest() -> None:
     authentic = freeze_manifest(manifest_fixture(), cutoff=CUTOFF)
     forged = object.__new__(FrozenSourceManifest)
-    for field in ("cutoff", "source_ids", "manifest_hash", "sources"):
+    for field in ("schema_version", "cutoff", "source_ids", "manifest_hash", "sources"):
         object.__setattr__(forged, field, getattr(authentic, field))
 
     with pytest.raises(ValidationError, match="frozen source manifest"):
         freeze_observations([observation_fixture()], source_manifest=forged)
+
+
+def test_private_registration_rejects_untrusted_forged_values() -> None:
+    manifest = freeze_manifest(manifest_fixture(), cutoff=CUTOFF)
+    forged_manifest = object.__new__(FrozenSourceManifest)
+    for field in ("schema_version", "cutoff", "source_ids", "manifest_hash", "sources"):
+        object.__setattr__(forged_manifest, field, getattr(manifest, field))
+    with pytest.raises(ValidationError, match="construction"):
+        _register_source_manifest(forged_manifest)
+
+    frozen = freeze_observations([observation_fixture()], source_manifest=manifest)
+    forged_observations = object.__new__(type(frozen))
+    for field in ("cutoff", "source_manifest_hash", "observation_set_hash", "observations"):
+        object.__setattr__(forged_observations, field, getattr(frozen, field))
+    with pytest.raises(ValidationError, match="construction"):
+        _register_observation_set(forged_observations)
 
 
 @pytest.mark.parametrize("mutation", ("locator", "content", "authorization", "source_list"))
