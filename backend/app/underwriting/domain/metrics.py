@@ -1,10 +1,13 @@
 """Typed economic metric vocabulary and reconciliation semantics."""
 
 from dataclasses import dataclass
+import hashlib
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Iterable
+from uuid import UUID, NAMESPACE_URL, uuid5
 
 from app.models.ledger import ValidationError
 
@@ -95,6 +98,23 @@ class MetricObservation:
         _require_text(self.source_id, "source_id")
         _require_text(self.source_locator, "source_locator")
         object.__setattr__(self, "dimensions", _canonical_dimensions(self.dimensions))
+
+    @property
+    def content_hash(self) -> str:
+        """Canonical immutable identity of the actual frozen observation payload."""
+        payload = {
+            "definition_key": self.definition_key, "definition_version": self.definition_version,
+            "value": str(self.value), "unit": self.unit,
+            "observed_start": self.observed_start.isoformat(), "observed_end": self.observed_end.isoformat(),
+            "effective_at": self.effective_at.isoformat(), "available_at": self.available_at.isoformat(),
+            "source_id": self.source_id, "source_locator": self.source_locator,
+            "dimensions": self.dimensions,
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+    @property
+    def observation_id(self) -> UUID:
+        return uuid5(NAMESPACE_URL, self.content_hash)
 
     @classmethod
     def create(
