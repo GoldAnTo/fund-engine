@@ -89,6 +89,14 @@ class FrozenResolvedObservation:
     source_id: str
     source_manifest_hash: str
     available_at: datetime
+    value: object
+    unit: str
+    source_locator: str
+    observed_start: datetime
+    observed_end: datetime
+    effective_at: datetime
+    dimensions: tuple[tuple[str, str], ...]
+    content_hash: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -391,7 +399,7 @@ def _compiled_payload(
             for dependency in frozen_metric_definition_provenance
         ),
         "frozen_metric_observations": tuple(
-            {"observation_id": str(item.observation_id), "metric_key": item.metric_key, "definition_id": str(item.definition_id), "definition_version": item.definition_version, "definition_content_hash": item.definition_content_hash, "source_id": item.source_id, "source_manifest_hash": item.source_manifest_hash, "available_at": item.available_at.isoformat()}
+            {"observation_id": str(item.observation_id), "metric_key": item.metric_key, "definition_id": str(item.definition_id), "definition_version": item.definition_version, "definition_content_hash": item.definition_content_hash, "source_id": item.source_id, "source_manifest_hash": item.source_manifest_hash, "available_at": item.available_at.isoformat(), "value": str(item.value), "unit": item.unit, "source_locator": item.source_locator, "observed_start": item.observed_start.isoformat(), "observed_end": item.observed_end.isoformat(), "effective_at": item.effective_at.isoformat(), "dimensions": item.dimensions, "content_hash": item.content_hash}
             for item in frozen_metric_observations
         ),
         "source_ids": source_ids,
@@ -577,7 +585,10 @@ def compile_mechanisms(
         return FrozenResolvedObservation(
             observation.observation_id, observation.definition_key, dependency.definition_id,
             dependency.definition_version, dependency.content_hash, observation.source_id,
-            dependency.source_manifest_hash, observation.available_at,
+            dependency.source_manifest_hash, observation.available_at, observation.value,
+            observation.unit, observation.source_locator, observation.observed_start,
+            observation.observed_end, observation.effective_at, observation.dimensions,
+            observation.content_hash,
         )
     resolved_observations = tuple(resolve_observation(item) for item in sorted(dependencies.metric_definitions, key=lambda item: item.metric_key))
     ordered_provenance = tuple(
