@@ -63,6 +63,9 @@ def dependency_context(
             MetricDefinitionDependency(
                 metric_key=key,
                 definition_id=definition_id,
+                definition_version=1,
+                content_hash="b" * 64,
+                source_manifest_hash=source_manifest.manifest_hash,
                 available_at=datetime(2025, 5, 14, tzinfo=UTC),
             )
             for key, definition_id in metric_bindings.items()
@@ -245,6 +248,9 @@ def test_dependency_context_rejects_metric_unavailable_at_cutoff() -> None:
                 MetricDefinitionDependency(
                     metric_key="industry.ev_demand_gwh",
                     definition_id="metric-demand",
+                    definition_version=1,
+                    content_hash="b" * 64,
+                    source_manifest_hash=dependency_context().source_manifest.manifest_hash,
                     available_at=datetime(2025, 5, 16, tzinfo=UTC),
                 ),
             ),
@@ -280,6 +286,86 @@ def test_compiled_hash_keeps_metric_key_to_definition_id_binding() -> None:
         ("company.battery_shipments_gwh", "metric-shipment"),
         ("industry.ev_demand_gwh", "metric-demand"),
     )
+
+
+def test_dependency_context_rejects_definition_from_foreign_manifest() -> None:
+    frozen = dependency_context().source_manifest
+    with pytest.raises(ValidationError, match="definition source manifest hash"):
+        MechanismDependencyContext(
+            cutoff=CUTOFF,
+            metric_definitions=(
+                MetricDefinitionDependency(
+                    metric_key="industry.ev_demand_gwh",
+                    definition_id="metric-demand",
+                    definition_version=1,
+                    content_hash="b" * 64,
+                    source_manifest_hash="c" * 64,
+                    available_at=datetime(2025, 5, 14, tzinfo=UTC),
+                ),
+            ),
+            source_manifest=frozen,
+        )
+
+
+def test_compiled_hash_changes_when_manifest_content_changes_under_same_source_id() -> None:
+    first = compile_mechanisms((formal_mechanism(),), dependencies=dependency_context())
+    changed_manifest = freeze_manifest(
+        {
+            "schema_version": "underwriting.source-manifest.v1",
+            "sources": [
+                {
+                    "source_id": "iea-2025",
+                    "title": "Global EV Outlook 2025 revised retrieval",
+                    "locator": "https://example.test/iea-2025",
+                    "published_at": "2025-05-14T00:00:00+00:00",
+                    "first_available_at": "2025-05-14T00:00:00+00:00",
+                    "retrieved_at": "2025-05-14T00:00:00+00:00",
+                    "content_sha256": "d" * 64,
+                    "authority": "official_industry",
+                    "authorization": "authorized",
+                    "display_policy": "derived_only",
+                    "provider_capability": "public_http",
+                    "retention": "hash_locator_and_derived_observations",
+                }
+            ],
+        },
+        cutoff=CUTOFF,
+    )
+    changed_context = MechanismDependencyContext(
+        cutoff=CUTOFF,
+        metric_definitions=tuple(
+            MetricDefinitionDependency(
+                metric_key=dependency.metric_key,
+                definition_id=dependency.definition_id,
+                definition_version=dependency.definition_version,
+                content_hash=dependency.content_hash,
+                source_manifest_hash=changed_manifest.manifest_hash,
+                available_at=dependency.available_at,
+            )
+            for dependency in dependency_context().metric_definitions
+        ),
+        source_manifest=changed_manifest,
+    )
+    second = compile_mechanisms((formal_mechanism(),), dependencies=changed_context)
+    assert first.source_ids == second.source_ids == ("iea-2025",)
+    assert first.source_manifest_hash != second.source_manifest_hash
+    assert first.content_hash != second.content_hash
+
+
+def test_compiled_hash_keeps_definition_version_and_content_provenance() -> None:
+    baseline = dependency_context()
+    first = compile_mechanisms((formal_mechanism(),), dependencies=baseline)
+    changed_definition = replace(
+        baseline.metric_definitions[0], definition_version=2, content_hash="e" * 64
+    )
+    changed = MechanismDependencyContext(
+        cutoff=baseline.cutoff,
+        metric_definitions=(changed_definition,) + baseline.metric_definitions[1:],
+        source_manifest=baseline.source_manifest,
+    )
+    second = compile_mechanisms((formal_mechanism(),), dependencies=changed)
+    assert first.metric_definition_bindings == second.metric_definition_bindings
+    assert first.content_hash != second.content_hash
 
 
 def test_falsifier_requires_complete_operator_bounds() -> None:

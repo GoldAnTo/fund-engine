@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+import re
 from uuid import UUID
 
 from app.models.ledger import ValidationError
@@ -24,6 +25,7 @@ _NEXT_STATUS = {
     MechanismStatus.FORMAL: MechanismStatus.CHALLENGED,
     MechanismStatus.CHALLENGED: MechanismStatus.RETIRED_OR_REPLACED,
 }
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 def _require_text(value: object, field: str) -> str:
@@ -46,11 +48,27 @@ class MetricDefinitionDependency:
 
     metric_key: str
     definition_id: UUID | str
+    definition_version: int
+    content_hash: str
+    source_manifest_hash: str
     available_at: datetime
 
     def __post_init__(self) -> None:
         _require_text(self.metric_key, "metric_key")
         _require_text(str(self.definition_id), "definition_id")
+        if (
+            isinstance(self.definition_version, bool)
+            or not isinstance(self.definition_version, int)
+            or self.definition_version < 1
+        ):
+            raise ValidationError("definition_version must be at least 1")
+        if not isinstance(self.content_hash, str) or _SHA256.fullmatch(self.content_hash) is None:
+            raise ValidationError("definition content_hash must be a lowercase SHA-256")
+        if (
+            not isinstance(self.source_manifest_hash, str)
+            or _SHA256.fullmatch(self.source_manifest_hash) is None
+        ):
+            raise ValidationError("definition source_manifest_hash must be a lowercase SHA-256")
         object.__setattr__(self, "available_at", _utc(self.available_at, "available_at"))
 
 
@@ -82,6 +100,8 @@ class MechanismDependencyContext:
         for item in self.metric_definitions:
             if item.available_at > cutoff:
                 raise ValidationError("metric definition is unavailable at cutoff")
+            if item.source_manifest_hash != self.source_manifest.manifest_hash:
+                raise ValidationError("definition source manifest hash does not match dependency manifest")
         for source in self.source_manifest.sources:
             _require_text(source.get("source_id"), "source_id")
             first_available_at = source.get("first_available_at")
@@ -111,6 +131,10 @@ class MechanismDependencyContext:
         return dict(self.metric_definition_bindings)
 
     @property
+    def metric_definition_by_key(self) -> dict[str, MetricDefinitionDependency]:
+        return {item.metric_key: item for item in self.metric_definitions}
+
+    @property
     def source_ids(self) -> tuple[str, ...]:
         return self.source_manifest.source_ids
 
@@ -122,6 +146,8 @@ class CompiledMechanisms:
     content_hash: str
     metric_definition_ids: tuple[str, ...]
     metric_definition_bindings: tuple[tuple[str, str], ...]
+    metric_definition_provenance: tuple[MetricDefinitionDependency, ...]
+    source_manifest_hash: str
     source_ids: tuple[str, ...]
 
     @property
@@ -273,6 +299,7 @@ def compile_mechanisms(
     if not isinstance(dependencies, MechanismDependencyContext):
         raise ValidationError("dependencies must be a MechanismDependencyContext")
     definitions = dependencies.metric_definition_map
+    definition_records = dependencies.metric_definition_by_key
     available_sources = set(dependencies.source_ids)
     mechanism_keys: set[str] = set()
     dependency_metrics: set[str] = set()
@@ -306,6 +333,9 @@ def compile_mechanisms(
     if not _causal_chain_is_acyclic(all_mappings):
         raise ValidationError("formal mechanism causal chain must be acyclic")
     ordered_bindings = tuple(sorted((key, definitions[key]) for key in dependency_metrics))
+    ordered_provenance = tuple(
+        definition_records[key] for key, _ in ordered_bindings
+    )
     ordered_metrics = tuple(sorted(definition_id for _, definition_id in ordered_bindings))
     ordered_sources = tuple(sorted(dependency_sources))
     ordered_mechanisms = tuple(sorted(mechanisms, key=lambda value: (value.key, value.version)))
@@ -315,12 +345,26 @@ def compile_mechanisms(
         content_hash=canonical_hash(
             {
                 "cutoff": dependencies.cutoff.isoformat(),
+                "source_manifest_hash": dependencies.source_manifest.manifest_hash,
                 "mechanisms": tuple(_mechanism_payload(value) for value in ordered_mechanisms),
                 "metric_definition_bindings": ordered_bindings,
+                "metric_definition_provenance": tuple(
+                    {
+                        "metric_key": dependency.metric_key,
+                        "definition_id": str(dependency.definition_id),
+                        "definition_version": dependency.definition_version,
+                        "content_hash": dependency.content_hash,
+                        "source_manifest_hash": dependency.source_manifest_hash,
+                        "available_at": dependency.available_at.isoformat(),
+                    }
+                    for dependency in ordered_provenance
+                ),
                 "source_ids": ordered_sources,
             }
         ),
         metric_definition_ids=ordered_metrics,
         metric_definition_bindings=ordered_bindings,
+        metric_definition_provenance=ordered_provenance,
+        source_manifest_hash=dependencies.source_manifest.manifest_hash,
         source_ids=ordered_sources,
     )
