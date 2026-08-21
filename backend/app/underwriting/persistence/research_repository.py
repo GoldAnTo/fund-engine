@@ -36,6 +36,32 @@ from app.underwriting.persistence.research_models import (
 
 RowT = TypeVar("RowT")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_SUCCESSOR_TABLES = frozenset(
+    {
+        "uw_source_manifest_versions",
+        "uw_metric_definition_versions",
+        "uw_mechanism_pack_versions",
+        "uw_industry_state_versions",
+        "uw_industry_scenario_versions",
+        "uw_company_exposure_versions",
+        "uw_earnings_engine_versions",
+        "uw_forecast_input_versions",
+        "uw_falsifier_versions",
+    }
+)
+_SUCCESSOR_CONSTRAINTS = frozenset(
+    {
+        "uq_uw_source_manifest_version",
+        "uq_uw_metric_definition_version",
+        "uq_uw_mechanism_pack_version",
+        "uq_uw_industry_state_version",
+        "uq_uw_industry_scenario_version",
+        "uq_uw_company_exposure_version",
+        "uq_uw_earnings_engine_version",
+        "uq_uw_forecast_input_version",
+        "uq_uw_falsifier_version",
+    }
+)
 
 
 class UnderwritingResearchRepository:
@@ -70,6 +96,18 @@ class UnderwritingResearchRepository:
         return value
 
     @staticmethod
+    def _decimal(value: Decimal, field: str) -> Decimal:
+        if not isinstance(value, Decimal) or not value.is_finite():
+            raise ValidationError(f"{field} must be a finite Decimal")
+        return value
+
+    def _created_at_at_basis(self, value: datetime, cutoff: datetime) -> datetime:
+        created_at = self._utc(value, "created_at")
+        if created_at > cutoff:
+            raise ValidationError("created_at must not exceed basis cutoff")
+        return created_at
+
+    @staticmethod
     def _require_expected_parent(
         current_id: UUID | None, expected_parent_id: UUID | None
     ) -> None:
@@ -99,9 +137,21 @@ class UnderwritingResearchRepository:
                 self._session.add(row)
                 self._session.flush()
         except IntegrityError as exc:
-            raise StaleParentError(
-                "expected parent is not the effective family version"
-            ) from exc
+            table_name = getattr(row, "__tablename__", "")
+            detail = str(exc).lower()
+            is_version_conflict = (
+                any(constraint in detail for constraint in _SUCCESSOR_CONSTRAINTS)
+                or (
+                    table_name in _SUCCESSOR_TABLES
+                    and table_name in detail
+                    and "unique constraint" in detail
+                )
+            )
+            if is_version_conflict:
+                raise StaleParentError(
+                    "expected parent is not the effective family version"
+                ) from exc
+            raise
         return row
 
     def _source_ids_in_manifest(
@@ -205,9 +255,7 @@ class UnderwritingResearchRepository:
         created_at: datetime,
     ) -> UnderwritingSourceManifestVersion:
         cutoff = self._basis_cutoff(basis_id)
-        created_at = self._utc(created_at, "created_at")
-        if created_at > cutoff:
-            raise ValidationError("source manifest is unavailable at basis cutoff")
+        created_at = self._created_at_at_basis(created_at, cutoff)
         self._hash(manifest_hash, "manifest_hash")
         self._hash(content_hash)
         self._source_ids_in_manifest(manifest, cutoff)
@@ -249,9 +297,10 @@ class UnderwritingResearchRepository:
         created_at: datetime,
     ) -> UnderwritingMetricDefinitionVersion:
         cutoff = self._basis_cutoff(basis_id)
-        created_at = self._utc(created_at, "created_at")
-        if created_at > cutoff:
-            raise ValidationError("metric definition is unavailable at basis cutoff")
+        created_at = self._created_at_at_basis(created_at, cutoff)
+        reconciliation_tolerance = self._decimal(
+            reconciliation_tolerance, "reconciliation_tolerance"
+        )
         self._hash(content_hash)
         self._manifest_for_basis(source_manifest_id, basis_id, cutoff)
         current = self._latest(
@@ -302,7 +351,7 @@ class UnderwritingResearchRepository:
         created_at: datetime,
     ) -> UnderwritingMetricObservation:
         cutoff = self._basis_cutoff(basis_id)
-        created_at = self._utc(created_at, "created_at")
+        created_at = self._created_at_at_basis(created_at, cutoff)
         observed_start = self._utc(observed_start, "observed_start")
         observed_end = self._utc(observed_end, "observed_end")
         effective_at = self._utc(effective_at, "effective_at")
@@ -311,6 +360,7 @@ class UnderwritingResearchRepository:
             raise ValidationError("observed_start must not exceed observed_end")
         if available_at > cutoff:
             raise ValidationError("available_at must not exceed basis cutoff")
+        value = self._decimal(value, "value")
         self._hash(dimension_hash, "dimension_hash")
         self._hash(content_hash)
         manifest = self._manifest_for_basis(source_manifest_id, basis_id, cutoff)
@@ -363,7 +413,7 @@ class UnderwritingResearchRepository:
         definition_ids: list[str] | None = None,
     ) -> UnderwritingMechanismPackVersion:
         cutoff = self._basis_cutoff(basis_id)
-        created_at = self._utc(created_at, "created_at")
+        created_at = self._created_at_at_basis(created_at, cutoff)
         self._hash(content_hash)
         manifest = self._manifest_for_basis(source_manifest_id, basis_id, cutoff)
         for definition_id in definition_ids or []:
@@ -410,7 +460,7 @@ class UnderwritingResearchRepository:
         created_at: datetime,
     ) -> UnderwritingIndustryStateVersion:
         cutoff = self._basis_cutoff(basis_id)
-        created_at = self._utc(created_at, "created_at")
+        created_at = self._created_at_at_basis(created_at, cutoff)
         self._hash(content_hash)
         self._mechanism_for_scope(mechanism_id, object_id, basis_id, cutoff)
         current = self._latest(
@@ -449,7 +499,7 @@ class UnderwritingResearchRepository:
         created_at: datetime,
     ) -> UnderwritingIndustryScenarioVersion:
         cutoff = self._basis_cutoff(basis_id)
-        created_at = self._utc(created_at, "created_at")
+        created_at = self._created_at_at_basis(created_at, cutoff)
         self._hash(content_hash)
         self._industry_state_for_basis(industry_state_id, basis_id, cutoff)
         current = self._latest(
@@ -489,7 +539,7 @@ class UnderwritingResearchRepository:
         created_at: datetime,
     ) -> UnderwritingCompanyExposureVersion:
         cutoff = self._basis_cutoff(basis_id)
-        created_at = self._utc(created_at, "created_at")
+        created_at = self._created_at_at_basis(created_at, cutoff)
         self._hash(content_hash)
         self._industry_state_for_basis(industry_state_id, basis_id, cutoff)
         current = self._latest(
@@ -530,7 +580,7 @@ class UnderwritingResearchRepository:
         created_at: datetime,
     ) -> UnderwritingEarningsEngineVersion:
         cutoff = self._basis_cutoff(basis_id)
-        created_at = self._utc(created_at, "created_at")
+        created_at = self._created_at_at_basis(created_at, cutoff)
         self._hash(content_hash)
         if industry_state_id is not None:
             self._industry_state_for_basis(industry_state_id, basis_id, cutoff)
@@ -571,7 +621,7 @@ class UnderwritingResearchRepository:
         created_at: datetime,
     ) -> UnderwritingForecastInputVersion:
         cutoff = self._basis_cutoff(basis_id)
-        created_at = self._utc(created_at, "created_at")
+        created_at = self._created_at_at_basis(created_at, cutoff)
         self._hash(content_hash)
         if earnings_engine_id is not None:
             engine = self._session.get(UnderwritingEarningsEngineVersion, earnings_engine_id)
@@ -619,7 +669,7 @@ class UnderwritingResearchRepository:
         created_at: datetime,
     ) -> UnderwritingFalsifierVersion:
         cutoff = self._basis_cutoff(basis_id)
-        created_at = self._utc(created_at, "created_at")
+        created_at = self._created_at_at_basis(created_at, cutoff)
         self._hash(content_hash)
         mechanism = self._session.get(UnderwritingMechanismPackVersion, mechanism_id)
         if mechanism is None:

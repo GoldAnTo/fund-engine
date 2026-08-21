@@ -70,6 +70,7 @@ def _definition(
     expected_parent_id: uuid.UUID | None = None,
     content_hash: str = "b" * 64,
     created_at: datetime = NOW,
+    reconciliation_tolerance: Decimal = Decimal("1000"),
 ):
     return repository.append_metric_definition(
         metric_key=metric_key,
@@ -80,7 +81,7 @@ def _definition(
         period_semantics="flow",
         source_role="reported",
         aggregation="sum",
-        reconciliation_tolerance=Decimal("1000"),
+        reconciliation_tolerance=reconciliation_tolerance,
         content_hash=content_hash,
         expected_parent_id=expected_parent_id,
         created_at=created_at,
@@ -402,6 +403,64 @@ def test_unique_race_is_reported_as_stale_parent(
 
     monkeypatch.setattr(repository._session, "flush", lose_race)
     with pytest.raises(StaleParentError):
+        repository.add_source_manifest(
+            manifest_key="catl-baseline", basis_id=basis.id, manifest={"sources": []},
+            manifest_hash="a" * 64, content_hash="a" * 64,
+            expected_parent_id=None, created_at=NOW,
+        )
+
+
+def test_first_version_cannot_be_created_after_its_historical_cutoff(
+    repository: UnderwritingResearchRepository, company, basis
+) -> None:
+    from app.models.ledger import ValidationError
+
+    manifest = _manifest(repository, basis.id)
+    with pytest.raises(ValidationError, match="created_at must not exceed basis cutoff"):
+        repository.append_mechanism(
+            mechanism_key="demand_to_shipments", object_id=company.id,
+            basis_id=basis.id, source_manifest_id=manifest.id, status="candidate",
+            payload=_mechanism_payload("demand_to_shipments"), content_hash="a" * 64,
+            expected_parent_id=None, created_at=NOW + timedelta(seconds=1),
+        )
+
+
+@pytest.mark.parametrize("value", [Decimal("NaN"), Decimal("Infinity")])
+def test_repository_rejects_nonfinite_decimal_inputs(
+    repository: UnderwritingResearchRepository, basis, value: Decimal
+) -> None:
+    from app.models.ledger import ValidationError
+
+    manifest = _manifest(repository, basis.id)
+    with pytest.raises(ValidationError, match="reconciliation_tolerance must be a finite Decimal"):
+        _definition(
+            repository, basis.id, manifest.id,
+            metric_key="company.nonfinite", content_hash="c" * 64,
+            reconciliation_tolerance=value,
+        )
+    definition = _definition(
+        repository, basis.id, manifest.id,
+        metric_key="company.finite", content_hash="d" * 64,
+    )
+    with pytest.raises(ValidationError, match="value must be a finite Decimal"):
+        repository.add_metric_observation(
+            metric_key=definition.metric_key, definition_version=definition.version,
+            basis_id=basis.id, definition_id=definition.id,
+            source_manifest_id=manifest.id, source_id="catl-2024-ar",
+            value=value, unit="CNY", observed_start=NOW, observed_end=NOW,
+            effective_at=NOW, available_at=NOW, source_locator="p1", dimensions={},
+            dimension_hash="e" * 64, content_hash="e" * 64, created_at=NOW,
+        )
+
+
+def test_non_successor_integrity_failure_is_not_misreported_as_stale_parent(
+    repository: UnderwritingResearchRepository, basis, monkeypatch
+) -> None:
+    def foreign_key_failure(*args, **kwargs):
+        raise IntegrityError("insert", {}, Exception("FOREIGN KEY constraint failed"))
+
+    monkeypatch.setattr(repository._session, "flush", foreign_key_failure)
+    with pytest.raises(IntegrityError):
         repository.add_source_manifest(
             manifest_key="catl-baseline", basis_id=basis.id, manifest={"sources": []},
             manifest_hash="a" * 64, content_hash="a" * 64,
