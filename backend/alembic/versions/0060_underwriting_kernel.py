@@ -38,10 +38,10 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "kind IN ('industry', 'company', 'security')",
-            name="ck_uw_research_objects_kind",
+            name="ck_uw_object_kind",
         ),
         sa.UniqueConstraint(
-            "kind", "external_key", name="uq_uw_research_objects_kind_external_key"
+            "kind", "external_key", name="uq_uw_object_external_key"
         ),
     )
     op.create_table(
@@ -65,7 +65,7 @@ def upgrade() -> None:
             "parent_id",
             "child_id",
             "relation_type",
-            name="uq_uw_object_relations_parent_child_type",
+            name="uq_uw_object_relation",
         ),
     )
     op.create_table(
@@ -89,18 +89,18 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "horizon_years BETWEEN 3 AND 5",
-            name="ck_uw_mandate_versions_horizon_years",
+            name="ck_uw_mandate_horizon",
         ),
         sa.CheckConstraint(
             "required_return >= 0 AND required_return < 1",
-            name="ck_uw_mandate_versions_required_return",
+            name="ck_uw_required_return",
         ),
         sa.CheckConstraint(
             "permanent_loss_limit >= 0 AND permanent_loss_limit <= 1",
-            name="ck_uw_mandate_versions_permanent_loss_limit",
+            name="ck_uw_loss_limit",
         ),
         sa.UniqueConstraint(
-            "mandate_key", "version", name="uq_uw_mandate_versions_key_version"
+            "mandate_key", "version", name="uq_uw_mandate_version"
         ),
     )
     op.create_table(
@@ -144,14 +144,14 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "ledger_kind IN ('reality', 'belief', 'decision', 'calibration')",
-            name="ck_uw_ledger_entries_ledger_kind",
+            name="ck_uw_ledger_kind",
         ),
         sa.UniqueConstraint(
             "object_id",
             "ledger_kind",
             "family_key",
             "version",
-            name="uq_uw_ledger_entries_object_kind_family_version",
+            name="uq_uw_ledger_family_version",
         ),
     )
     op.create_index(
@@ -189,7 +189,7 @@ def upgrade() -> None:
             "object_id",
             "version_kind",
             "sequence",
-            name="uq_uw_research_versions_object_kind_sequence",
+            name="uq_uw_research_version_sequence",
         ),
     )
     op.create_index(
@@ -228,18 +228,18 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "state IN ('answerable', 'partially_answerable', 'not_answerable')",
-            name="ck_uw_answerability_evaluations_state",
+            name="ck_uw_answerability_state",
         ),
         sa.CheckConstraint(
             "allowed_action IN ('observe', 'wait_for_validation', "
             "'eligible_for_probe_entry', 'eligible_for_staged_entry', 'do_not_enter')",
-            name="ck_uw_answerability_evaluations_allowed_action",
+            name="ck_uw_answerability_action",
         ),
         sa.UniqueConstraint(
             "object_id",
             "basis_id",
             "version",
-            name="uq_uw_answerability_evaluations_object_basis_version",
+            name="uq_uw_answerability_version",
         ),
     )
     op.create_index(
