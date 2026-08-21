@@ -15,7 +15,15 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.models.ledger import ConflictError, ValidationError
+from app.underwriting.domain.answerability import (
+    AnswerabilityInput,
+    enforce_action_boundary,
+    evaluate_answerability,
+)
 from app.underwriting.domain.types import (
+    AnswerabilityState,
+    BlockerCode,
+    EligibleAction,
     HistoricalBasisInput,
     InvestmentMandateInput,
     LedgerEntryInput,
@@ -218,6 +226,57 @@ class UnderwritingKernelService:
                     available_at=available_at,
                     source_boundary=source_boundary,
                     content_hash=content_hash,
+                    expected_parent_id=expected_parent_id,
+                    created_at=self._now(),
+                ),
+            )
+        except StaleParentError as exc:
+            raise ConflictError(str(exc)) from exc
+
+    def record_answerability(
+        self,
+        object_id: uuid.UUID,
+        basis_id: uuid.UUID,
+        hard_blockers: tuple[BlockerCode, ...],
+        research_debt_keys: tuple[str, ...],
+        resolvable_within_mandate: bool,
+        requested_action: EligibleAction,
+        resolution_requirements: tuple[str, ...],
+        expected_parent_id: uuid.UUID | None,
+    ):
+        if self._repository.object(object_id) is None:
+            raise ValidationError("research object not found")
+        if self._repository.basis(basis_id) is None:
+            raise ValidationError("historical basis not found")
+
+        result = evaluate_answerability(
+            AnswerabilityInput(
+                hard_blockers=hard_blockers,
+                research_debt_keys=research_debt_keys,
+                resolvable_within_mandate=resolvable_within_mandate,
+            )
+        )
+        if (
+            result.state is AnswerabilityState.NOT_ANSWERABLE
+            and not resolution_requirements
+        ):
+            raise ValidationError(
+                "resolution_requirements must not be empty for not_answerable"
+            )
+        allowed_action = enforce_action_boundary(result, requested_action)
+
+        try:
+            return self._write(
+                "answerability evaluation write conflicts",
+                lambda: self._repository.append_answerability_evaluation(
+                    object_id=object_id,
+                    basis_id=basis_id,
+                    state=result.state.value,
+                    blockers=[blocker.value for blocker in result.blockers],
+                    research_debt_keys=list(research_debt_keys),
+                    resolvable_within_mandate=result.resolvable_within_mandate,
+                    allowed_action=allowed_action.value,
+                    resolution_requirements=list(resolution_requirements),
                     expected_parent_id=expected_parent_id,
                     created_at=self._now(),
                 ),
