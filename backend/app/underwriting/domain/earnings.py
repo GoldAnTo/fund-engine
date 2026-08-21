@@ -14,7 +14,7 @@ from typing import Iterable
 from uuid import UUID
 
 from app.models.ledger import ValidationError
-from app.underwriting.domain.industry import IndustryScenario
+from app.underwriting.domain.industry import IndustryScenario, IndustryState
 from app.underwriting.domain.metrics import ReconciliationResult, reconcile
 
 
@@ -367,6 +367,27 @@ class EarningsReconciliations:
 
 
 @dataclass(frozen=True, slots=True)
+class VerifiedIndustryDependency:
+    """The exact replay-verified industry inputs consumed by an earnings model."""
+
+    industry_state: IndustryState
+    scenario: IndustryScenario
+    compiled_mechanisms: object
+    scenario_content_hash: str
+
+    def __post_init__(self) -> None:
+        if type(self.industry_state) is not IndustryState or type(self.scenario) is not IndustryScenario:
+            raise ValidationError("verified industry dependency requires state and scenario")
+        if self.scenario.parent_industry_state_id != self.industry_state.id:
+            raise ValidationError("verified industry dependency scenario must belong to state")
+        if not isinstance(self.scenario_content_hash, str) or len(self.scenario_content_hash) != 64:
+            raise ValidationError("verified industry dependency scenario content hash is invalid")
+        expected_scenario_hash = _canonical_hash(asdict(self.scenario))
+        if self.scenario_content_hash != expected_scenario_hash:
+            raise ValidationError("verified industry dependency scenario content hash does not reconcile")
+
+
+@dataclass(frozen=True, slots=True)
 class EarningsEngine:
     """A closed company financial model with no valuation conclusion."""
 
@@ -386,6 +407,7 @@ class EarningsEngine:
     industry_state_id: UUID | None
     scenario: IndustryScenario | None
     exposures: tuple[CompanyExposure, ...]
+    industry_dependency: VerifiedIndustryDependency | None
     content_hash: str | None = None
 
     def __post_init__(self) -> None:
@@ -570,6 +592,17 @@ class EarningsEngine:
             raise ValidationError("company exposures are invalid")
         if self.industry_state_id is None and self.exposures:
             raise ValidationError("industry scenario and exposures must be provided together")
+        if self.scenario is None:
+            if self.industry_dependency is not None:
+                raise ValidationError("industry dependency requires scenario")
+        else:
+            if type(self.industry_dependency) is not VerifiedIndustryDependency:
+                raise ValidationError("verified industry dependency is required for scenario")
+            if (
+                self.industry_dependency.industry_state.id != self.industry_state_id
+                or self.industry_dependency.scenario != self.scenario
+            ):
+                raise ValidationError("scenario does not match verified industry dependency")
         if self.four_core_views != derive_four_core_views(
             self.segments,
             industry_state_id=self.industry_state_id,
@@ -731,6 +764,18 @@ def earnings_engine_content_hash(value: EarningsEngine) -> str:
             "industry_state_id": str(value.industry_state_id) if value.industry_state_id else None,
             "scenario": asdict(value.scenario) if value.scenario is not None else None,
             "exposures": tuple(asdict(item) for item in value.exposures),
+            "industry_dependency": (
+                {
+                    "industry_state": asdict(value.industry_dependency.industry_state),
+                    "scenario": asdict(value.industry_dependency.scenario),
+                    "compiled_mechanism_hash": getattr(
+                        value.industry_dependency.compiled_mechanisms, "content_hash", None
+                    ),
+                    "scenario_content_hash": value.industry_dependency.scenario_content_hash,
+                }
+                if value.industry_dependency is not None
+                else None
+            ),
         }
     )
 
@@ -759,5 +804,6 @@ def validate_earnings_engine_integrity(value: EarningsEngine) -> None:
         industry_state_id=value.industry_state_id,
         scenario=value.scenario,
         exposures=value.exposures,
+        industry_dependency=value.industry_dependency,
         content_hash=value.content_hash,
     )

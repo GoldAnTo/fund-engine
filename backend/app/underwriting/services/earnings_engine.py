@@ -1,7 +1,10 @@
 """Fail-closed company segment earnings compiler."""
 from __future__ import annotations
 
+from dataclasses import asdict
 from decimal import Context, Decimal, DecimalException, ROUND_HALF_EVEN, localcontext
+import hashlib
+import json
 from uuid import UUID
 
 from app.models.ledger import ValidationError
@@ -12,6 +15,7 @@ from app.underwriting.domain.earnings import (
     SegmentBridgeReconciliation,
     SegmentEconomics,
     SegmentInputs,
+    VerifiedIndustryDependency,
     derive_four_core_views,
     validate_earnings_engine_integrity,
 )
@@ -72,7 +76,7 @@ def _verify_industry_dependency(
     industry_state: IndustryState,
     scenario: IndustryScenario,
     mechanisms: CompiledMechanisms,
-) -> None:
+) -> VerifiedIndustryDependency:
     """Reject state/scenario pairs that are not replayable from compiled mechanisms."""
     if type(industry_state) is not IndustryState or type(scenario) is not IndustryScenario:
         raise ValidationError("verified industry state and scenario are required")
@@ -105,6 +109,20 @@ def _verify_industry_dependency(
     )
     if any(getattr(scenario, field) != getattr(expected, field) for field in expected_fields):
         raise ValidationError("scenario does not match verified industry state and mechanisms")
+    return VerifiedIndustryDependency(
+        industry_state=industry_state,
+        scenario=scenario,
+        compiled_mechanisms=mechanisms,
+        scenario_content_hash=hashlib.sha256(
+            json.dumps(
+                asdict(scenario),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest(),
+    )
 
 
 def build_segment(value: SegmentInputs) -> SegmentEconomics:
@@ -224,12 +242,14 @@ def build_company_engine(
     else:
         if industry_state is None or mechanisms is None:
             raise ValidationError("verified industry state, scenario, and mechanisms are required")
-        _verify_industry_dependency(
+        industry_dependency = _verify_industry_dependency(
             industry_state=industry_state,
             scenario=scenario,
             mechanisms=mechanisms,
         )
         industry_state_id = industry_state.id
+    if scenario is None:
+        industry_dependency = None
     bridge_values = (
         company_total,
         tolerance,
@@ -329,4 +349,5 @@ def build_company_engine(
         industry_state_id=industry_state_id,
         scenario=scenario,
         exposures=exposures,
+        industry_dependency=industry_dependency,
     )

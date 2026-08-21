@@ -547,3 +547,19 @@ def test_legacy_scenario_without_verified_state_and_mechanisms_is_rejected() -> 
             scenario=_scenario(state_id),
             exposures=(CompanyExposure("power_battery", state_id, Decimal("1")),),
         )
+
+
+def test_direct_engine_rejects_scenario_identity_replacement_without_matching_dependency() -> None:
+    state, mechanisms, scenario = _verified_scenario_context()
+    segment = build_segment(_segment("power_battery", normalized_cash_earning_power="10"))
+    engine = build_company_engine(
+        company_total=segment.revenue,
+        company_total_cost=segment.cost,
+        segments=(segment,),
+        industry_state=state,
+        mechanisms=mechanisms,
+        scenario=scenario,
+        exposures=(CompanyExposure("power_battery", state.id, Decimal("1")),),
+    )
+    with pytest.raises(ValidationError, match="scenario does not match verified industry dependency"):
+        replace(engine, scenario=replace(scenario, id=uuid4()))
