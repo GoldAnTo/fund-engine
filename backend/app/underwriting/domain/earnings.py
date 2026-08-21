@@ -17,6 +17,8 @@ from app.underwriting.domain.metrics import ReconciliationResult, reconcile
 
 
 _UNALLOCATED_COMPANY_KEY = "unallocated_company"
+_COMPANY_RECONCILIATION_TOLERANCE = Decimal("1000")
+_VALUATION_TERMS = ("price", "multiple", "discount", "target")
 
 
 def _text(value: object, name: str) -> str:
@@ -266,7 +268,10 @@ class CoreContribution:
         _decimal(self.amount, "core amount")
         if self.share is not None:
             _decimal(self.share, "core share")
-        object.__setattr__(self, "basis", _text(self.basis, "core basis"))
+        basis = _text(self.basis, "core basis")
+        if any(term in basis.lower() for term in _VALUATION_TERMS):
+            raise ValidationError("core basis must not contain valuation terms")
+        object.__setattr__(self, "basis", basis)
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,6 +374,13 @@ class EarningsEngine:
             raise ValidationError("four core views are invalid")
         if type(self.reconciliations) is not EarningsReconciliations:
             raise ValidationError("earnings reconciliations are invalid")
+        if self.reconciliations.revenue.tolerance != _COMPANY_RECONCILIATION_TOLERANCE:
+            raise ValidationError("company reconciliation tolerance must be exactly CNY 1000")
+        if (
+            self.reconciliations.cost is not None
+            and self.reconciliations.cost.tolerance != _COMPANY_RECONCILIATION_TOLERANCE
+        ):
+            raise ValidationError("company reconciliation tolerance must be exactly CNY 1000")
         values = (
             self.company_revenue,
             *tuple(segment.revenue for segment in self.segments),
@@ -463,6 +475,13 @@ class EarningsEngine:
             raise ValidationError("company exposures are invalid")
         if self.industry_state_id is None and self.exposures:
             raise ValidationError("industry scenario and exposures must be provided together")
+        if self.four_core_views != derive_four_core_views(
+            self.segments,
+            industry_state_id=self.industry_state_id,
+            scenario=self.scenario,
+            exposures=self.exposures,
+        ):
+            raise ValidationError("four core views do not reconcile")
 
     def segment(self, key: str) -> SegmentEconomics:
         for item in self.segments:
@@ -474,3 +493,102 @@ class EarningsEngine:
 def ordered_core(values: Iterable[CoreContribution]) -> tuple[CoreContribution, ...]:
     """Sort contributions deterministically, never selecting a single narrative core."""
     return tuple(sorted(values, key=lambda value: (-value.amount, value.segment_key)))
+
+
+def _sum(values: tuple[Decimal, ...]) -> Decimal:
+    with localcontext(_calculation_context(values or (Decimal("0"),))):
+        return sum(values, Decimal("0"))
+
+
+def _share(amount: Decimal, total: Decimal) -> Decimal | None:
+    if total == 0:
+        return None
+    with localcontext(_calculation_context((amount, total))):
+        return amount / total
+
+
+def derive_four_core_views(
+    segments: tuple[SegmentEconomics, ...],
+    *,
+    industry_state_id: UUID | None,
+    scenario: IndustryScenario | None,
+    exposures: tuple[CompanyExposure, ...],
+) -> FourCoreView:
+    """Derive all four views from economics; never trust a supplied summary."""
+    operating_segments = tuple(segment for segment in segments if segment.key != _UNALLOCATED_COMPANY_KEY)
+    revenue_total = _sum(tuple(segment.revenue for segment in operating_segments))
+    profit_total = _sum(tuple(segment.operating_profit for segment in operating_segments))
+    cash_total = _sum(tuple(segment.free_cash_flow for segment in operating_segments))
+    revenue_core = ordered_core(
+        CoreContribution(segment.key, segment.revenue, _share(segment.revenue, revenue_total), "revenue")
+        for segment in operating_segments
+    )
+    profit_core = ordered_core(
+        CoreContribution(
+            segment.key,
+            segment.operating_profit,
+            _share(segment.operating_profit, profit_total),
+            "operating_profit",
+        )
+        for segment in operating_segments
+    )
+    cash_core = ordered_core(
+        CoreContribution(
+            segment.key,
+            segment.free_cash_flow,
+            _share(segment.free_cash_flow, cash_total),
+            "free_cash_flow",
+        )
+        for segment in operating_segments
+    )
+    scenario_segments = tuple(
+        segment for segment in operating_segments if segment.normalized_cash_earning_power is not None
+    )
+    if not scenario_segments:
+        return FourCoreView(revenue_core, profit_core, cash_core, tuple())
+    if len(scenario_segments) != len(operating_segments):
+        raise ValidationError("normalized cash earning power is required for every operating segment")
+    if industry_state_id is None or scenario is None:
+        raise ValidationError("industry scenario and exposures are required for value core")
+    if scenario.parent_industry_state_id != industry_state_id:
+        raise ValidationError("scenario must belong to industry state")
+    matching: dict[str, CompanyExposure] = {}
+    for exposure in exposures:
+        if exposure.industry_state_id != industry_state_id:
+            raise ValidationError("company exposure must belong to industry state")
+        if exposure.segment_key in matching:
+            raise ValidationError("exactly one company exposure is required per scenario-valued segment")
+        matching[exposure.segment_key] = exposure
+    if set(matching) != {segment.key for segment in scenario_segments}:
+        raise ValidationError("exactly one company exposure is required per scenario-valued segment")
+    with localcontext(
+        _calculation_context(
+            tuple(
+                item
+                for segment in scenario_segments
+                for item in (
+                    segment.normalized_cash_earning_power,
+                    matching[segment.key].normalized_cash_earning_power_multiplier,
+                )
+            )
+        )
+    ):
+        normalized = tuple(
+            (
+                segment,
+                segment.normalized_cash_earning_power
+                * matching[segment.key].normalized_cash_earning_power_multiplier,
+            )
+            for segment in scenario_segments
+        )
+    value_total = _sum(tuple(amount for _, amount in normalized))
+    value_core = ordered_core(
+        CoreContribution(
+            segment.key,
+            amount,
+            _share(amount, value_total),
+            f"normalized_cash_earning_power:{scenario.kind.value}",
+        )
+        for segment, amount in normalized
+    )
+    return FourCoreView(revenue_core, profit_core, cash_core, value_core)

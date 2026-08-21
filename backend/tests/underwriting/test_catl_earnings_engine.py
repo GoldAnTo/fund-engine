@@ -14,6 +14,7 @@ import pytest
 from app.models.ledger import ValidationError
 from app.underwriting.domain.earnings import (
     CompanyExposure,
+    CoreContribution,
     SegmentEconomics,
     SegmentInputs,
 )
@@ -358,3 +359,51 @@ def test_partial_normalized_value_core_is_rejected_instead_of_dropping_a_segment
             scenario=_scenario(state_id),
             exposures=(CompanyExposure("power_battery", state_id, Decimal("1")),),
         )
+
+
+def test_company_reconciliation_tolerance_is_fixed_at_cny_1000() -> None:
+    segment = build_segment(_segment("power_battery"))
+    with pytest.raises(ValidationError, match="exactly CNY 1000"):
+        build_company_engine(
+            company_total=segment.revenue,
+            company_total_cost=segment.cost,
+            segments=(segment,),
+            tolerance=Decimal("1001"),
+        )
+
+
+def test_direct_engine_cannot_raise_the_company_reconciliation_tolerance() -> None:
+    segment = build_segment(_segment("power_battery"))
+    good = build_company_engine(
+        company_total=segment.revenue,
+        company_total_cost=segment.cost,
+        segments=(segment,),
+    )
+    widened = replace(
+        good.reconciliations,
+        revenue=replace(good.reconciliations.revenue, tolerance=Decimal("1001")),
+    )
+
+    with pytest.raises(ValidationError, match="exactly CNY 1000"):
+        replace(good, reconciliations=widened)
+
+
+def test_direct_engine_cannot_accept_a_forged_four_core_view() -> None:
+    segment = build_segment(_segment("power_battery"))
+    good = build_company_engine(
+        company_total=segment.revenue,
+        company_total_cost=segment.cost,
+        segments=(segment,),
+    )
+    forged = replace(
+        good.four_core_views,
+        revenue_core=(CoreContribution("invented_segment", Decimal("1"), Decimal("1"), "revenue"),),
+    )
+
+    with pytest.raises(ValidationError, match="four core views do not reconcile"):
+        replace(good, four_core_views=forged)
+
+
+def test_core_contribution_rejects_valuation_language() -> None:
+    with pytest.raises(ValidationError, match="valuation terms"):
+        CoreContribution("power_battery", Decimal("1"), Decimal("1"), "target price")

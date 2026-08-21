@@ -7,14 +7,12 @@ from uuid import UUID
 from app.models.ledger import ValidationError
 from app.underwriting.domain.earnings import (
     CompanyExposure,
-    CoreContribution,
     EarningsEngine,
     EarningsReconciliations,
-    FourCoreView,
     SegmentBridgeReconciliation,
     SegmentEconomics,
     SegmentInputs,
-    ordered_core,
+    derive_four_core_views,
 )
 from app.underwriting.domain.industry import IndustryScenario
 from app.underwriting.domain.metrics import ReconciliationResult, reconcile
@@ -144,73 +142,6 @@ def build_segment(value: SegmentInputs) -> SegmentEconomics:
     )
 
 
-def _share(amount: Decimal, total: Decimal) -> Decimal | None:
-    if total == 0:
-        return None
-    with localcontext(_context((amount, total))):
-        return amount / total
-
-
-def _core_views(
-    segments: tuple[SegmentEconomics, ...],
-    *,
-    industry_state_id: UUID | None,
-    scenario: IndustryScenario | None,
-    exposures: tuple[CompanyExposure, ...],
-) -> FourCoreView:
-    operating_segments = tuple(segment for segment in segments if segment.key != "unallocated_company")
-    revenue_total = _sum(tuple(segment.revenue for segment in operating_segments))
-    profit_total = _sum(tuple(segment.operating_profit for segment in operating_segments))
-    cash_total = _sum(tuple(segment.free_cash_flow for segment in operating_segments))
-    revenue_core = ordered_core(
-        CoreContribution(segment.key, segment.revenue, _share(segment.revenue, revenue_total), "revenue")
-        for segment in operating_segments
-    )
-    profit_core = ordered_core(
-        CoreContribution(segment.key, segment.operating_profit, _share(segment.operating_profit, profit_total), "operating_profit")
-        for segment in operating_segments
-    )
-    cash_core = ordered_core(
-        CoreContribution(segment.key, segment.free_cash_flow, _share(segment.free_cash_flow, cash_total), "free_cash_flow")
-        for segment in operating_segments
-    )
-    scenario_segments = tuple(
-        segment for segment in operating_segments if segment.normalized_cash_earning_power is not None
-    )
-    if not scenario_segments:
-        return FourCoreView(revenue_core, profit_core, cash_core, tuple())
-    if len(scenario_segments) != len(operating_segments):
-        raise ValidationError("normalized cash earning power is required for every operating segment")
-    if industry_state_id is None or scenario is None:
-        raise ValidationError("industry scenario and exposures are required for value core")
-    if scenario.parent_industry_state_id != industry_state_id:
-        raise ValidationError("scenario must belong to industry state")
-    matching: dict[str, CompanyExposure] = {}
-    for exposure in exposures:
-        if exposure.industry_state_id != industry_state_id:
-            raise ValidationError("company exposure must belong to industry state")
-        if exposure.segment_key in matching:
-            raise ValidationError("exactly one company exposure is required per scenario-valued segment")
-        matching[exposure.segment_key] = exposure
-    if set(matching) != {segment.key for segment in scenario_segments}:
-        raise ValidationError("exactly one company exposure is required per scenario-valued segment")
-    normalized = tuple(
-        (segment, segment.normalized_cash_earning_power * matching[segment.key].normalized_cash_earning_power_multiplier)
-        for segment in scenario_segments
-    )
-    value_total = _sum(tuple(amount for _, amount in normalized))
-    value_core = ordered_core(
-        CoreContribution(
-            segment.key,
-            amount,
-            _share(amount, value_total),
-            f"normalized_cash_earning_power:{scenario.kind.value}",
-        )
-        for segment, amount in normalized
-    )
-    return FourCoreView(revenue_core, profit_core, cash_core, value_core)
-
-
 def build_company_engine(
     *,
     company_total: Decimal,
@@ -227,6 +158,8 @@ def build_company_engine(
     """Close the company bridge, failing rather than masking a broken total."""
     _finite(company_total, "company_total", nonnegative=True)
     _finite(tolerance, "tolerance", nonnegative=True)
+    if tolerance != _DEFAULT_TOLERANCE:
+        raise ValidationError("company reconciliation tolerance must be exactly CNY 1000")
     if company_total_cost is not None:
         _finite(company_total_cost, "company_total_cost", nonnegative=True)
     if not isinstance(segments, tuple) or not segments or not all(type(item) is SegmentEconomics for item in segments):
@@ -310,12 +243,17 @@ def build_company_engine(
     )
     if not all(item.balanced for item in (*segment_revenue, *segment_cost)):
         raise ValidationError("segment volume-price-cost bridge does not reconcile")
-    core_views = _core_views(
+    core_views = derive_four_core_views(
         segments,
         industry_state_id=industry_state_id,
         scenario=scenario,
         exposures=exposures,
     )
+    if diluted_shares is not None:
+        with localcontext(_context((modeled_nopat, diluted_shares))):
+            diluted_eps = modeled_nopat / diluted_shares
+    else:
+        diluted_eps = None
     return EarningsEngine(
         segments=segments,
         company_revenue=company_total,
@@ -327,7 +265,7 @@ def build_company_engine(
         reported_cash_capex=reported_cash_capex,
         reported_fcf_proxy=reported_fcf_proxy,
         diluted_shares=diluted_shares,
-        diluted_eps=(_share(modeled_nopat, diluted_shares) if diluted_shares is not None else None),
+        diluted_eps=diluted_eps,
         four_core_views=core_views,
         reconciliations=EarningsReconciliations(
             revenue= revenue_reconciliation,
