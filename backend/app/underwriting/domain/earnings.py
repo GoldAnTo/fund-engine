@@ -364,6 +364,8 @@ class EarningsEngine:
                 _decimal(value, name, nonnegative=name in {"reported_cash_capex", "diluted_shares"})
         if self.diluted_shares is not None and self.diluted_shares <= 0:
             raise ValidationError("diluted_shares must be greater than zero")
+        if (self.diluted_shares is None) != (self.diluted_eps is None):
+            raise ValidationError("diluted shares and EPS must be provided together")
         if (self.reported_operating_cash_flow is None) != (self.reported_cash_capex is None):
             raise ValidationError("reported OCF and cash capex must be provided together")
         if self.reported_operating_cash_flow is None and self.reported_fcf_proxy is not None:
@@ -456,7 +458,8 @@ class EarningsEngine:
                     ):
                         raise ValidationError("reported FCF proxy does not reconcile")
                 if self.diluted_shares is not None:
-                    assert self.diluted_eps is not None
+                    if self.diluted_eps is None:
+                        raise ValidationError("diluted shares and EPS must be provided together")
                     with localcontext(
                         _calculation_context((self.modeled_nopat, self.diluted_shares))
                     ):

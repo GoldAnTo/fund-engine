@@ -407,3 +407,40 @@ def test_direct_engine_cannot_accept_a_forged_four_core_view() -> None:
 def test_core_contribution_rejects_valuation_language() -> None:
     with pytest.raises(ValidationError, match="valuation terms"):
         CoreContribution("power_battery", Decimal("1"), Decimal("1"), "target price")
+
+
+def test_direct_engine_rejects_eps_without_diluted_shares() -> None:
+    segment = build_segment(_segment("power_battery"))
+    good = build_company_engine(
+        company_total=segment.revenue,
+        company_total_cost=segment.cost,
+        segments=(segment,),
+    )
+
+    with pytest.raises(ValidationError, match="diluted shares and EPS must be provided together"):
+        replace(good, diluted_eps=Decimal("777"))
+
+
+def test_direct_engine_requires_eps_when_diluted_shares_are_present() -> None:
+    segment = build_segment(_segment("power_battery"))
+    good = build_company_engine(
+        company_total=segment.revenue,
+        company_total_cost=segment.cost,
+        segments=(segment,),
+    )
+
+    with pytest.raises(ValidationError, match="diluted shares and EPS must be provided together"):
+        replace(good, diluted_shares=Decimal("3"))
+
+
+def test_direct_engine_rejects_mismatched_diluted_eps() -> None:
+    segment = build_segment(_segment("power_battery"))
+    good = build_company_engine(
+        company_total=segment.revenue,
+        company_total_cost=segment.cost,
+        segments=(segment,),
+        diluted_shares=Decimal("3"),
+    )
+
+    with pytest.raises(ValidationError, match="diluted EPS does not reconcile"):
+        replace(good, diluted_eps=Decimal("777"))
