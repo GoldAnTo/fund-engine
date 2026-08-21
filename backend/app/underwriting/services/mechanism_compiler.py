@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from decimal import DecimalException
 import re
 from uuid import UUID
 
@@ -190,31 +191,44 @@ def validate_formal_mechanism(value: MechanismPack) -> None:
     """Fail closed unless a formal pack has a complete causal evidence shape."""
     if type(value) is not MechanismPack:
         raise ValidationError("mechanism is required")
-    if value.status is not MechanismStatus.FORMAL:
-        raise ValidationError("mechanism must be formal")
-    if (
-        not value.applicability
-        or not value.invalidation_conditions
-        or not value.financial_mappings
-        or not value.alternative_explanations
-        or not value.falsifiers
-        or not value.source_ids
-    ):
-        raise ValidationError("formal mechanism is incomplete")
-    if value.human_confirmation_identity is None:
-        raise ValidationError("formal mechanism requires human_confirmation_identity")
-    if value.review_evidence_id is None:
-        raise ValidationError("formal mechanism requires review_evidence_id")
-    if (
-        value.predecessor_status is not MechanismStatus.HUMAN_CONFIRMED
-        or value.predecessor_version != value.version - 1
-    ):
-        raise ValidationError("formal mechanism requires a reviewed predecessor")
-    mapped_drivers = {mapping.driver_key for mapping in value.financial_mappings}
-    if mapped_drivers != set(value.driver_keys):
-        raise ValidationError("formal mechanism mappings must cover every driver_key")
-    if not _causal_chain_is_acyclic(value.financial_mappings):
-        raise ValidationError("formal mechanism causal chain must be acyclic")
+    try:
+        # Frozen dataclasses can still be altered with object.__setattr__ in a
+        # malicious caller. Re-run every nested domain contract before using
+        # attributes in set construction, sorting, or hash serialization.
+        value.__post_init__()
+        for mapping in value.financial_mappings:
+            mapping.__post_init__()
+        for falsifier in value.falsifiers:
+            falsifier.__post_init__()
+        if value.status is not MechanismStatus.FORMAL:
+            raise ValidationError("mechanism must be formal")
+        if (
+            not value.applicability
+            or not value.invalidation_conditions
+            or not value.financial_mappings
+            or not value.alternative_explanations
+            or not value.falsifiers
+            or not value.source_ids
+        ):
+            raise ValidationError("formal mechanism is incomplete")
+        if value.human_confirmation_identity is None:
+            raise ValidationError("formal mechanism requires human_confirmation_identity")
+        if value.review_evidence_id is None:
+            raise ValidationError("formal mechanism requires review_evidence_id")
+        if (
+            value.predecessor_status is not MechanismStatus.HUMAN_CONFIRMED
+            or value.predecessor_version != value.version - 1
+        ):
+            raise ValidationError("formal mechanism requires a reviewed predecessor")
+        mapped_drivers = {mapping.driver_key for mapping in value.financial_mappings}
+        if mapped_drivers != set(value.driver_keys):
+            raise ValidationError("formal mechanism mappings must cover every driver_key")
+        if not _causal_chain_is_acyclic(value.financial_mappings):
+            raise ValidationError("formal mechanism causal chain must be acyclic")
+    except ValidationError:
+        raise
+    except (AttributeError, TypeError, ValueError, DecimalException) as exc:
+        raise ValidationError("formal mechanism structure is invalid") from exc
 
 
 def transition_mechanism(

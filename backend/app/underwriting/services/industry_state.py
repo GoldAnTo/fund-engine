@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import Decimal, ROUND_HALF_EVEN
+from decimal import Context, Decimal, DecimalException, ROUND_HALF_EVEN, localcontext
 from typing import Iterable
+from uuid import UUID
 
 from app.models.ledger import ValidationError
 from app.underwriting.domain.industry import (
@@ -70,6 +71,21 @@ def _block(code: BlockerCode, detail: str) -> None:
 
 def _quantize(value: Decimal, quantum: Decimal) -> Decimal:
     return value.quantize(quantum, rounding=ROUND_HALF_EVEN)
+
+
+def _calculation_context(values: tuple[Decimal, ...]) -> Context:
+    """Use enough precision for inputs and every explicit output quantum.
+
+    This isolates calculation semantics from a request worker's ambient
+    Decimal context, which may be intentionally low for unrelated work.
+    """
+    input_digits = sum(len(value.as_tuple().digits) for value in values)
+    return Context(
+        prec=max(64, input_digits + 40),
+        rounding=ROUND_HALF_EVEN,
+        Emin=-999999999,
+        Emax=999999999,
+    )
 
 
 def _formal_mechanisms(
@@ -148,27 +164,51 @@ def _compile_values(inputs: IndustryInputs) -> tuple[
         )
     )
 
-    demand = _quantize(ev_sales * average_battery + storage, _QUANTITY_QUANTUM)
-    effective_capacity = _quantize(
-        nominal * commissioned * certified * yield_rate, _QUANTITY_QUANTUM
+    decimal_inputs = (
+        ev_sales,
+        average_battery,
+        storage,
+        nominal,
+        commissioned,
+        certified,
+        yield_rate,
+        shipments,
+        production,
+        asp,
+        cash_cost,
     )
-    if effective_capacity <= 0:
-        _block(BlockerCode.MISSING_KEY_BASELINE, "effective_capacity_gwh must be greater than zero")
-    utilization = _quantize(shipments / effective_capacity, _RATIO_QUANTUM)
-    inventory_change = _quantize(production - shipments, _QUANTITY_QUANTUM)
-    unit_margin = _quantize(asp - cash_cost, _UNIT_ECONOMICS_QUANTUM)
-    price_range = IndustryRange(
-        _quantize(asp, _UNIT_ECONOMICS_QUANTUM), _quantize(asp, _UNIT_ECONOMICS_QUANTUM)
-    )
-    unit_cost_range = IndustryRange(
-        _quantize(cash_cost, _UNIT_ECONOMICS_QUANTUM),
-        _quantize(cash_cost, _UNIT_ECONOMICS_QUANTUM),
-    )
-    profit_pool = _quantize(shipments * _GWH_TO_KWH * unit_margin, Decimal("0.0001"))
-    profit_pool_range = IndustryRange(profit_pool, profit_pool)
+    try:
+        with localcontext(_calculation_context(decimal_inputs)):
+            demand = _quantize(ev_sales * average_battery + storage, _QUANTITY_QUANTUM)
+            nominal_output = _quantize(nominal, _QUANTITY_QUANTUM)
+            effective_capacity = _quantize(
+                nominal * commissioned * certified * yield_rate, _QUANTITY_QUANTUM
+            )
+            if effective_capacity <= 0:
+                _block(
+                    BlockerCode.MISSING_KEY_BASELINE,
+                    "effective_capacity_gwh must be greater than zero",
+                )
+            utilization = _quantize(shipments / effective_capacity, _RATIO_QUANTUM)
+            inventory_change = _quantize(production - shipments, _QUANTITY_QUANTUM)
+            unit_margin = _quantize(asp - cash_cost, _UNIT_ECONOMICS_QUANTUM)
+            price_range = IndustryRange(
+                _quantize(asp, _UNIT_ECONOMICS_QUANTUM),
+                _quantize(asp, _UNIT_ECONOMICS_QUANTUM),
+            )
+            unit_cost_range = IndustryRange(
+                _quantize(cash_cost, _UNIT_ECONOMICS_QUANTUM),
+                _quantize(cash_cost, _UNIT_ECONOMICS_QUANTUM),
+            )
+            profit_pool = _quantize(
+                shipments * _GWH_TO_KWH * unit_margin, _UNIT_ECONOMICS_QUANTUM
+            )
+            profit_pool_range = IndustryRange(profit_pool, profit_pool)
+    except DecimalException as exc:
+        _block(BlockerCode.MISSING_KEY_BASELINE, f"industry decimal arithmetic is invalid: {exc}")
     return (
         demand,
-        _quantize(nominal, _QUANTITY_QUANTUM),
+        nominal_output,
         effective_capacity,
         utilization,
         inventory_change,
@@ -177,6 +217,86 @@ def _compile_values(inputs: IndustryInputs) -> tuple[
         unit_cost_range,
         profit_pool_range,
     )
+
+
+def _mechanism_lineage(mechanisms: Iterable[MechanismPack]) -> tuple[tuple[str, UUID, int], ...]:
+    return tuple(
+        sorted(
+            (mechanism.key, mechanism.scope_object_id, mechanism.version)
+            for mechanism in mechanisms
+        )
+    )
+
+
+def _metric_collection(
+    values: tuple[
+        Decimal,
+        Decimal,
+        Decimal,
+        Decimal,
+        Decimal,
+        Decimal,
+        IndustryRange,
+        IndustryRange,
+        IndustryRange,
+    ],
+) -> IndustryMetricCollection:
+    return IndustryMetricCollection(
+        (
+            IndustryMetric("industry.battery_demand_gwh", values[0]),
+            IndustryMetric("industry.nominal_capacity_gwh", values[1]),
+            IndustryMetric("industry.effective_capacity_gwh", values[2]),
+            IndustryMetric("industry.utilization", values[3]),
+            IndustryMetric("industry.inventory_change_gwh", values[4]),
+            IndustryMetric("industry.unit_margin_cny_per_kwh", values[5]),
+        )
+    )
+
+
+def validate_industry_state_integrity(
+    value: IndustryState,
+    *,
+    mechanisms: CompiledMechanisms,
+) -> None:
+    """Recompute an industry state before permitting it to parent a scenario."""
+    if type(value) is not IndustryState:
+        raise ValidationError("industry state is required")
+    if type(mechanisms) is not CompiledMechanisms:
+        raise ValidationError("compiled mechanisms are required")
+    try:
+        validate_compiled_mechanism_integrity(mechanisms)
+        formal_mechanisms = tuple(mechanisms.mechanisms)
+        values = _compile_values(value.inputs)
+        expected_lineage = _mechanism_lineage(formal_mechanisms)
+        expected_falsifiers = _falsifier_keys(formal_mechanisms)
+        expected_metrics = _metric_collection(values)
+    except AnswerabilityBlocked as exc:
+        raise ValidationError("industry state inputs are not answerable") from exc
+    except (AttributeError, TypeError, ValueError, DecimalException) as exc:
+        raise ValidationError("industry state integrity is invalid") from exc
+    if value.mechanism_lineage != expected_lineage:
+        raise ValidationError("industry state mechanism lineage does not match compiled mechanisms")
+    if (
+        not isinstance(value.falsifier_keys, tuple)
+        or not all(isinstance(key, str) and key.strip() for key in value.falsifier_keys)
+        or value.falsifier_keys != expected_falsifiers
+        or len(value.falsifier_keys) != len(set(value.falsifier_keys))
+    ):
+        raise ValidationError("industry state falsifiers do not match compiled mechanisms")
+    expected_outputs = (
+        ("battery_demand_gwh", values[0]),
+        ("nominal_capacity_gwh", values[1]),
+        ("effective_capacity_gwh", values[2]),
+        ("utilization", values[3]),
+        ("inventory_change_gwh", values[4]),
+        ("unit_margin_cny_per_kwh", values[5]),
+        ("price_range_cny_per_kwh", values[6]),
+        ("unit_cost_range_cny_per_kwh", values[7]),
+        ("industry_profit_pool_range_cny", values[8]),
+        ("metrics", expected_metrics),
+    )
+    if any(getattr(value, field_name) != expected for field_name, expected in expected_outputs):
+        raise ValidationError("industry state outputs do not match its inputs")
 
 
 def compile_industry_state(
@@ -194,9 +314,7 @@ def compile_industry_state(
             f"formal mechanism references unsupported industry driver {sorted(unknown)[0]}",
         )
     values = _compile_values(inputs)
-    lineage = tuple(
-        sorted((mechanism.key, mechanism.scope_object_id, mechanism.version) for mechanism in formal_mechanisms)
-    )
+    lineage = _mechanism_lineage(formal_mechanisms)
     return IndustryState(
         id=new_industry_state_id(),
         inputs=inputs,
@@ -209,16 +327,7 @@ def compile_industry_state(
         price_range_cny_per_kwh=values[6],
         unit_cost_range_cny_per_kwh=values[7],
         industry_profit_pool_range_cny=values[8],
-        metrics=IndustryMetricCollection(
-            (
-                IndustryMetric("industry.battery_demand_gwh", values[0]),
-                IndustryMetric("industry.nominal_capacity_gwh", values[1]),
-                IndustryMetric("industry.effective_capacity_gwh", values[2]),
-                IndustryMetric("industry.utilization", values[3]),
-                IndustryMetric("industry.inventory_change_gwh", values[4]),
-                IndustryMetric("industry.unit_margin_cny_per_kwh", values[5]),
-            )
-        ),
+        metrics=_metric_collection(values),
         mechanism_lineage=lineage,
         falsifier_keys=_falsifier_keys(formal_mechanisms),
     )
@@ -249,9 +358,11 @@ def compile_industry_scenario(
     if type(spec) is not ScenarioSpec:
         _block(BlockerCode.MISSING_KEY_BASELINE, "scenario specification is required")
     formal_mechanisms = _formal_mechanisms(mechanisms)
-    lineage = tuple(
-        sorted((mechanism.key, mechanism.scope_object_id, mechanism.version) for mechanism in formal_mechanisms)
-    )
+    try:
+        validate_industry_state_integrity(parent, mechanisms=mechanisms)
+    except ValidationError as exc:
+        _block(BlockerCode.MECHANISM_UNIDENTIFIED, str(exc))
+    lineage = _mechanism_lineage(formal_mechanisms)
     if lineage != parent.mechanism_lineage:
         _block(BlockerCode.MECHANISM_UNIDENTIFIED, "scenario mechanisms must match the parent state")
     declared_drivers = _driver_keys(formal_mechanisms)

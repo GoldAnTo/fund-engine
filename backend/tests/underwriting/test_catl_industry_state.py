@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Context, Decimal, localcontext
 from uuid import uuid4
 
 import pytest
@@ -246,6 +246,72 @@ def test_compiled_mechanisms_with_multiple_scopes_cannot_produce_one_industry_st
 
     with pytest.raises(AnswerabilityBlocked, match="mechanism_unidentified"):
         compile_industry_state(inputs=complete_inputs(), mechanisms=mixed_scope)
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        lambda state: replace(
+            state,
+            utilization=Decimal("0.01"),
+            metrics=replace(
+                state.metrics,
+                values=(
+                    *state.metrics.values[:3],
+                    replace(state.metrics.values[3], value=Decimal("0.01")),
+                    *state.metrics.values[4:],
+                ),
+            ),
+        ),
+        lambda state: replace(state, inputs=replace(state.inputs, shipments_gwh=Decimal("1400"))),
+        lambda state: replace(
+            state,
+            metrics=replace(
+                state.metrics,
+                values=(
+                    replace(state.metrics.values[0], value=Decimal("1")),
+                    *state.metrics.values[1:],
+                ),
+            ),
+        ),
+    ),
+)
+def test_scenario_refuses_a_tampered_industry_state_parent(tamper) -> None:
+    mechanisms = formal_industry_mechanisms()
+    parent = tamper(compile_industry_state(inputs=complete_inputs(), mechanisms=mechanisms))
+
+    with pytest.raises(AnswerabilityBlocked, match="mechanism_unidentified"):
+        compile_industry_scenario(
+            parent=parent,
+            spec=ScenarioSpec(
+                kind=ScenarioKind.UPSIDE,
+                overrides=(ScenarioDriverOverride("industry.cell_asp_cny_per_kwh", Decimal("0.70")),),
+                falsifiers=("utilization_outside_range",),
+            ),
+            mechanisms=mechanisms,
+        )
+
+
+def test_industry_calculation_is_deterministic_under_low_ambient_decimal_precision() -> None:
+    mechanisms = formal_industry_mechanisms()
+    expected = compile_industry_state(inputs=complete_inputs(), mechanisms=mechanisms)
+
+    with localcontext(Context(prec=4)):
+        actual = compile_industry_state(inputs=complete_inputs(), mechanisms=mechanisms)
+
+    assert actual.battery_demand_gwh == expected.battery_demand_gwh
+    assert actual.effective_capacity_gwh == expected.effective_capacity_gwh
+    assert actual.utilization == expected.utilization
+    assert actual.metrics == expected.metrics
+
+
+def test_malformed_nested_mechanism_is_mapped_to_answerability_not_attribute_error() -> None:
+    malformed = replace(formal_industry_packs()[0])
+    object.__setattr__(malformed, "financial_mappings", [object()])
+    compiled = replace(formal_industry_mechanisms(), mechanisms=(malformed,))
+
+    with pytest.raises(AnswerabilityBlocked, match="mechanism_unidentified"):
+        compile_industry_state(inputs=complete_inputs(), mechanisms=compiled)
 
 
 def test_scenario_retains_parent_and_overrides_only_declared_driver() -> None:
