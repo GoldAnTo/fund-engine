@@ -1,1 +1,1 @@
-"""Dynamic investment underwriting bounded context."""
+"""Independent dynamic investment-underwriting bounded context."""
