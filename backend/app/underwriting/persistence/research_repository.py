@@ -8,8 +8,9 @@ updates, deletes, or commits.
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
+import re
 from typing import Mapping, TypeVar
 from uuid import UUID
 
@@ -34,6 +35,7 @@ from app.underwriting.persistence.research_models import (
 
 
 RowT = TypeVar("RowT")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class UnderwritingResearchRepository:
@@ -43,14 +45,29 @@ class UnderwritingResearchRepository:
         self._session = session
 
     def _basis_cutoff(self, basis_id: UUID) -> datetime:
-        basis = self._session.scalar(
-            select(UnderwritingHistoricalBasis).where(
-                UnderwritingHistoricalBasis.id == basis_id
+        with self._session.no_autoflush:
+            basis = self._session.scalar(
+                select(UnderwritingHistoricalBasis).where(
+                    UnderwritingHistoricalBasis.id == basis_id
+                )
             )
-        )
         if basis is None:
             raise ValidationError("historical basis does not exist")
-        return basis.cutoff
+        return self._utc(basis.cutoff, "basis cutoff")
+
+    @staticmethod
+    def _utc(value: datetime, field: str) -> datetime:
+        if not isinstance(value, datetime):
+            raise ValidationError(f"{field} must be a datetime")
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValidationError(f"{field} must be timezone-aware")
+        return value.astimezone(UTC)
+
+    @staticmethod
+    def _hash(value: str, field: str = "content_hash") -> str:
+        if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+            raise ValidationError(f"{field} must be a lowercase SHA-256")
+        return value
 
     @staticmethod
     def _require_expected_parent(
@@ -65,7 +82,116 @@ class UnderwritingResearchRepository:
         return deepcopy(dict(value))
 
     def _latest(self, statement) -> RowT | None:
-        return self._session.scalar(statement.limit(1))
+        with self._session.no_autoflush:
+            return self._session.scalar(statement.limit(1))
+
+    def _append(self, row: RowT) -> RowT:
+        """Flush an append in a savepoint and map CAS-race conflicts.
+
+        A unique-version collision after the predecessor check means another
+        writer won the successor race.  The caller must reread and retry with
+        the new effective parent rather than seeing a raw database error.
+        """
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            with self._session.begin_nested():
+                self._session.add(row)
+                self._session.flush()
+        except IntegrityError as exc:
+            raise StaleParentError(
+                "expected parent is not the effective family version"
+            ) from exc
+        return row
+
+    def _source_ids_in_manifest(
+        self, manifest: Mapping[str, object], cutoff: datetime
+    ) -> set[str]:
+        sources = manifest.get("sources", [])
+        if not isinstance(sources, list):
+            raise ValidationError("source manifest sources must be a list")
+        source_ids: set[str] = set()
+        for source in sources:
+            if not isinstance(source, Mapping):
+                raise ValidationError("source manifest source must be an object")
+            source_id = source.get("source_id")
+            if not isinstance(source_id, str) or not source_id.strip():
+                raise ValidationError("source_id must not be empty")
+            first_available_at = source.get("first_available_at")
+            if not isinstance(first_available_at, str):
+                raise ValidationError("source first_available_at is required")
+            try:
+                available_at = datetime.fromisoformat(first_available_at)
+            except ValueError as exc:
+                raise ValidationError(
+                    "source first_available_at must be an ISO-8601 timestamp"
+                ) from exc
+            if self._utc(available_at, "source first_available_at") > cutoff:
+                raise ValidationError("source is unavailable at basis cutoff")
+            if source_id in source_ids:
+                raise ValidationError("source_id must be unique")
+            source_ids.add(source_id)
+        return source_ids
+
+    def _manifest_for_basis(
+        self, manifest_id: UUID, basis_id: UUID, cutoff: datetime
+    ) -> UnderwritingSourceManifestVersion:
+        row = self._session.get(UnderwritingSourceManifestVersion, manifest_id)
+        if row is None:
+            raise ValidationError("source manifest does not exist")
+        if row.basis_id != basis_id:
+            raise ValidationError("source manifest must belong to the target basis")
+        if self._utc(row.created_at, "source manifest created_at") > cutoff:
+            raise ValidationError("source manifest is unavailable at basis cutoff")
+        self._source_ids_in_manifest(row.manifest, cutoff)
+        return row
+
+    def _definition_for_basis(
+        self,
+        definition_id: UUID,
+        basis_id: UUID,
+        cutoff: datetime,
+        *,
+        metric_key: str | None = None,
+        version: int | None = None,
+    ) -> UnderwritingMetricDefinitionVersion:
+        row = self._session.get(UnderwritingMetricDefinitionVersion, definition_id)
+        if row is None:
+            raise ValidationError("metric definition does not exist")
+        if row.basis_id != basis_id:
+            raise ValidationError("metric definition must belong to the target basis")
+        if metric_key is not None and row.metric_key != metric_key:
+            raise ValidationError("metric definition does not match metric key")
+        if version is not None and row.version != version:
+            raise ValidationError("metric definition does not match definition version")
+        if self._utc(row.created_at, "metric definition created_at") > cutoff:
+            raise ValidationError("metric definition is unavailable at basis cutoff")
+        self._manifest_for_basis(row.source_manifest_id, basis_id, cutoff)
+        return row
+
+    def _mechanism_for_scope(
+        self, mechanism_id: UUID, object_id: UUID, basis_id: UUID, cutoff: datetime
+    ) -> UnderwritingMechanismPackVersion:
+        row = self._session.get(UnderwritingMechanismPackVersion, mechanism_id)
+        if row is None:
+            raise ValidationError("mechanism does not exist")
+        if row.object_id != object_id or row.basis_id != basis_id:
+            raise ValidationError("mechanism must belong to the target object and basis")
+        if self._utc(row.created_at, "mechanism created_at") > cutoff:
+            raise ValidationError("mechanism is unavailable at basis cutoff")
+        return row
+
+    def _industry_state_for_basis(
+        self, industry_state_id: UUID, basis_id: UUID, cutoff: datetime
+    ) -> UnderwritingIndustryStateVersion:
+        row = self._session.get(UnderwritingIndustryStateVersion, industry_state_id)
+        if row is None:
+            raise ValidationError("industry state does not exist")
+        if row.basis_id != basis_id:
+            raise ValidationError("industry state must belong to the target basis")
+        if self._utc(row.created_at, "industry state created_at") > cutoff:
+            raise ValidationError("industry state is unavailable at basis cutoff")
+        return row
 
     def add_source_manifest(
         self,
@@ -78,6 +204,13 @@ class UnderwritingResearchRepository:
         expected_parent_id: UUID | None,
         created_at: datetime,
     ) -> UnderwritingSourceManifestVersion:
+        cutoff = self._basis_cutoff(basis_id)
+        created_at = self._utc(created_at, "created_at")
+        if created_at > cutoff:
+            raise ValidationError("source manifest is unavailable at basis cutoff")
+        self._hash(manifest_hash, "manifest_hash")
+        self._hash(content_hash)
+        self._source_ids_in_manifest(manifest, cutoff)
         current = self._latest(
             select(UnderwritingSourceManifestVersion)
             .where(UnderwritingSourceManifestVersion.manifest_key == manifest_key)
@@ -97,9 +230,7 @@ class UnderwritingResearchRepository:
             supersedes_id=current.id if current else None,
             created_at=created_at,
         )
-        self._session.add(row)
-        self._session.flush()
-        return row
+        return self._append(row)
 
     def append_metric_definition(
         self,
@@ -117,6 +248,12 @@ class UnderwritingResearchRepository:
         expected_parent_id: UUID | None,
         created_at: datetime,
     ) -> UnderwritingMetricDefinitionVersion:
+        cutoff = self._basis_cutoff(basis_id)
+        created_at = self._utc(created_at, "created_at")
+        if created_at > cutoff:
+            raise ValidationError("metric definition is unavailable at basis cutoff")
+        self._hash(content_hash)
+        self._manifest_for_basis(source_manifest_id, basis_id, cutoff)
         current = self._latest(
             select(UnderwritingMetricDefinitionVersion)
             .where(UnderwritingMetricDefinitionVersion.metric_key == metric_key)
@@ -141,9 +278,7 @@ class UnderwritingResearchRepository:
             supersedes_id=current.id if current else None,
             created_at=created_at,
         )
-        self._session.add(row)
-        self._session.flush()
-        return row
+        return self._append(row)
 
     def add_metric_observation(
         self,
@@ -166,6 +301,27 @@ class UnderwritingResearchRepository:
         content_hash: str,
         created_at: datetime,
     ) -> UnderwritingMetricObservation:
+        cutoff = self._basis_cutoff(basis_id)
+        created_at = self._utc(created_at, "created_at")
+        observed_start = self._utc(observed_start, "observed_start")
+        observed_end = self._utc(observed_end, "observed_end")
+        effective_at = self._utc(effective_at, "effective_at")
+        available_at = self._utc(available_at, "available_at")
+        if observed_start > observed_end:
+            raise ValidationError("observed_start must not exceed observed_end")
+        if available_at > cutoff:
+            raise ValidationError("available_at must not exceed basis cutoff")
+        self._hash(dimension_hash, "dimension_hash")
+        self._hash(content_hash)
+        manifest = self._manifest_for_basis(source_manifest_id, basis_id, cutoff)
+        definition = self._definition_for_basis(
+            definition_id, basis_id, cutoff,
+            metric_key=metric_key, version=definition_version,
+        )
+        if definition.source_manifest_id != source_manifest_id:
+            raise ValidationError("metric definition must reference the target source manifest")
+        if source_id not in self._source_ids_in_manifest(manifest.manifest, cutoff):
+            raise ValidationError("observation references unknown source")
         row = UnderwritingMetricObservation(
             metric_key=metric_key,
             definition_version=definition_version,
@@ -206,6 +362,17 @@ class UnderwritingResearchRepository:
         source_ids: list[str] | None = None,
         definition_ids: list[str] | None = None,
     ) -> UnderwritingMechanismPackVersion:
+        cutoff = self._basis_cutoff(basis_id)
+        created_at = self._utc(created_at, "created_at")
+        self._hash(content_hash)
+        manifest = self._manifest_for_basis(source_manifest_id, basis_id, cutoff)
+        for definition_id in definition_ids or []:
+            definition = self._definition_for_basis(UUID(definition_id), basis_id, cutoff)
+            if definition.source_manifest_id != source_manifest_id:
+                raise ValidationError("metric definition must reference the target source manifest")
+        known_source_ids = self._source_ids_in_manifest(manifest.manifest, cutoff)
+        if not set(source_ids or []).issubset(known_source_ids):
+            raise ValidationError("mechanism references unknown source")
         current = self._latest(
             select(UnderwritingMechanismPackVersion)
             .where(UnderwritingMechanismPackVersion.mechanism_key == mechanism_key)
@@ -229,9 +396,7 @@ class UnderwritingResearchRepository:
             supersedes_id=current.id if current else None,
             created_at=created_at,
         )
-        self._session.add(row)
-        self._session.flush()
-        return row
+        return self._append(row)
 
     def append_industry_state(
         self,
@@ -244,6 +409,10 @@ class UnderwritingResearchRepository:
         expected_parent_id: UUID | None,
         created_at: datetime,
     ) -> UnderwritingIndustryStateVersion:
+        cutoff = self._basis_cutoff(basis_id)
+        created_at = self._utc(created_at, "created_at")
+        self._hash(content_hash)
+        self._mechanism_for_scope(mechanism_id, object_id, basis_id, cutoff)
         current = self._latest(
             select(UnderwritingIndustryStateVersion)
             .where(
@@ -266,9 +435,7 @@ class UnderwritingResearchRepository:
             supersedes_id=current.id if current else None,
             created_at=created_at,
         )
-        self._session.add(row)
-        self._session.flush()
-        return row
+        return self._append(row)
 
     def append_industry_scenario(
         self,
@@ -281,6 +448,10 @@ class UnderwritingResearchRepository:
         expected_parent_id: UUID | None,
         created_at: datetime,
     ) -> UnderwritingIndustryScenarioVersion:
+        cutoff = self._basis_cutoff(basis_id)
+        created_at = self._utc(created_at, "created_at")
+        self._hash(content_hash)
+        self._industry_state_for_basis(industry_state_id, basis_id, cutoff)
         current = self._latest(
             select(UnderwritingIndustryScenarioVersion)
             .where(
@@ -303,9 +474,7 @@ class UnderwritingResearchRepository:
             supersedes_id=current.id if current else None,
             created_at=created_at,
         )
-        self._session.add(row)
-        self._session.flush()
-        return row
+        return self._append(row)
 
     def append_company_exposure(
         self,
@@ -319,6 +488,10 @@ class UnderwritingResearchRepository:
         expected_parent_id: UUID | None,
         created_at: datetime,
     ) -> UnderwritingCompanyExposureVersion:
+        cutoff = self._basis_cutoff(basis_id)
+        created_at = self._utc(created_at, "created_at")
+        self._hash(content_hash)
+        self._industry_state_for_basis(industry_state_id, basis_id, cutoff)
         current = self._latest(
             select(UnderwritingCompanyExposureVersion)
             .where(
@@ -343,9 +516,7 @@ class UnderwritingResearchRepository:
             supersedes_id=current.id if current else None,
             created_at=created_at,
         )
-        self._session.add(row)
-        self._session.flush()
-        return row
+        return self._append(row)
 
     def append_earnings_engine(
         self,
@@ -358,6 +529,11 @@ class UnderwritingResearchRepository:
         expected_parent_id: UUID | None,
         created_at: datetime,
     ) -> UnderwritingEarningsEngineVersion:
+        cutoff = self._basis_cutoff(basis_id)
+        created_at = self._utc(created_at, "created_at")
+        self._hash(content_hash)
+        if industry_state_id is not None:
+            self._industry_state_for_basis(industry_state_id, basis_id, cutoff)
         current = self._latest(
             select(UnderwritingEarningsEngineVersion)
             .where(
@@ -380,9 +556,7 @@ class UnderwritingResearchRepository:
             supersedes_id=current.id if current else None,
             created_at=created_at,
         )
-        self._session.add(row)
-        self._session.flush()
-        return row
+        return self._append(row)
 
     def append_forecast_input(
         self,
@@ -396,6 +570,17 @@ class UnderwritingResearchRepository:
         expected_parent_id: UUID | None,
         created_at: datetime,
     ) -> UnderwritingForecastInputVersion:
+        cutoff = self._basis_cutoff(basis_id)
+        created_at = self._utc(created_at, "created_at")
+        self._hash(content_hash)
+        if earnings_engine_id is not None:
+            engine = self._session.get(UnderwritingEarningsEngineVersion, earnings_engine_id)
+            if engine is None:
+                raise ValidationError("earnings engine does not exist")
+            if engine.company_id != company_id or engine.basis_id != basis_id:
+                raise ValidationError("earnings engine must belong to the target company and basis")
+            if self._utc(engine.created_at, "earnings engine created_at") > cutoff:
+                raise ValidationError("earnings engine is unavailable at basis cutoff")
         current = self._latest(
             select(UnderwritingForecastInputVersion)
             .where(
@@ -420,9 +605,7 @@ class UnderwritingResearchRepository:
             supersedes_id=current.id if current else None,
             created_at=created_at,
         )
-        self._session.add(row)
-        self._session.flush()
-        return row
+        return self._append(row)
 
     def append_falsifier(
         self,
@@ -435,6 +618,16 @@ class UnderwritingResearchRepository:
         expected_parent_id: UUID | None,
         created_at: datetime,
     ) -> UnderwritingFalsifierVersion:
+        cutoff = self._basis_cutoff(basis_id)
+        created_at = self._utc(created_at, "created_at")
+        self._hash(content_hash)
+        mechanism = self._session.get(UnderwritingMechanismPackVersion, mechanism_id)
+        if mechanism is None:
+            raise ValidationError("mechanism does not exist")
+        if mechanism.basis_id != basis_id:
+            raise ValidationError("mechanism must belong to the target basis")
+        if self._utc(mechanism.created_at, "mechanism created_at") > cutoff:
+            raise ValidationError("mechanism is unavailable at basis cutoff")
         current = self._latest(
             select(UnderwritingFalsifierVersion)
             .where(
@@ -457,9 +650,7 @@ class UnderwritingResearchRepository:
             supersedes_id=current.id if current else None,
             created_at=created_at,
         )
-        self._session.add(row)
-        self._session.flush()
-        return row
+        return self._append(row)
 
     def effective_metric_definitions_at(
         self, basis_id: UUID

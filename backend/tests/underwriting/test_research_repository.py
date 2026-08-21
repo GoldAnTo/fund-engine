@@ -46,7 +46,14 @@ def _manifest(repository: UnderwritingResearchRepository, basis_id: uuid.UUID):
     return repository.add_source_manifest(
         manifest_key="catl-baseline",
         basis_id=basis_id,
-        manifest={"sources": []},
+        manifest={
+            "sources": [
+                {
+                    "source_id": "catl-2024-ar",
+                    "first_available_at": NOW.isoformat(),
+                }
+            ]
+        },
         manifest_hash="a" * 64,
         content_hash="a" * 64,
         expected_parent_id=None,
@@ -215,11 +222,27 @@ def test_effective_cutoff_reads_fold_families_and_sort_stably(
         NOW + timedelta(days=2),
     )
     manifest = _manifest(repository, basis.id)
+    later_manifest = repository.add_source_manifest(
+        manifest_key="catl-baseline",
+        basis_id=later_basis.id,
+        manifest={
+            "sources": [
+                {
+                    "source_id": "catl-2024-ar",
+                    "first_available_at": NOW.isoformat(),
+                }
+            ]
+        },
+        manifest_hash="b" * 64,
+        content_hash="b" * 64,
+        expected_parent_id=manifest.id,
+        created_at=NOW + timedelta(days=1),
+    )
     revenue = _definition(repository, basis.id, manifest.id, metric_key="company.revenue")
     later_revenue = _definition(
         repository,
-        basis.id,
-        manifest.id,
+        later_basis.id,
+        later_manifest.id,
         metric_key="company.revenue",
         expected_parent_id=revenue.id,
         content_hash="c" * 64,
@@ -231,16 +254,16 @@ def test_effective_cutoff_reads_fold_families_and_sort_stably(
 
     repository.add_metric_observation(
         metric_key="company.revenue",
-        definition_version=revenue.version,
-        basis_id=basis.id,
-        definition_id=revenue.id,
-        source_manifest_id=manifest.id,
+        definition_version=later_revenue.version,
+        basis_id=later_basis.id,
+        definition_id=later_revenue.id,
+        source_manifest_id=later_manifest.id,
         source_id="catl-2024-ar",
         value=Decimal("1"), unit="CNY",
         observed_start=NOW, observed_end=NOW, effective_at=NOW,
         available_at=NOW + timedelta(days=1), source_locator="p1",
         dimensions={}, dimension_hash="e" * 64, content_hash="e" * 64,
-        created_at=NOW,
+        created_at=NOW + timedelta(days=1),
     )
     assert repository.effective_observations_at(company.id, basis.id) == []
     observations = repository.effective_observations_at(company.id, later_basis.id)
@@ -287,3 +310,100 @@ def test_formal_and_latest_reads_are_scoped_to_object_and_basis(
     assert repository.latest_industry_state(company.id, later_basis.id) is None
     assert repository.latest_earnings_engine(company.id, basis.id) == earnings
 
+
+def test_writes_reject_noncanonical_hashes_and_naive_timestamps(
+    repository: UnderwritingResearchRepository, basis
+) -> None:
+    from app.models.ledger import ValidationError
+
+    with pytest.raises(ValidationError, match="content_hash must be a lowercase SHA-256"):
+        repository.add_source_manifest(
+            manifest_key="catl-baseline",
+            basis_id=basis.id,
+            manifest={"sources": []},
+            manifest_hash="a" * 64,
+            content_hash="A" * 64,
+            expected_parent_id=None,
+            created_at=NOW,
+        )
+    with pytest.raises(ValidationError, match="created_at must be timezone-aware"):
+        repository.add_source_manifest(
+            manifest_key="catl-baseline", basis_id=basis.id, manifest={"sources": []},
+            manifest_hash="a" * 64, content_hash="a" * 64,
+            expected_parent_id=None, created_at=NOW.replace(tzinfo=None),
+        )
+
+
+def test_writes_reject_cross_scope_and_future_source_dependencies(
+    repository: UnderwritingResearchRepository, company, other_company, basis, kernel
+) -> None:
+    from app.models.ledger import ValidationError
+
+    later_basis = kernel.add_basis(
+        HistoricalBasisInput(NOW + timedelta(days=1), NOW + timedelta(days=1), "b" * 64),
+        NOW + timedelta(days=1),
+    )
+    manifest = _manifest(repository, basis.id)
+    definition = _definition(repository, basis.id, manifest.id)
+    mechanism = repository.append_mechanism(
+        mechanism_key="demand_to_shipments",
+        object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
+        status="formal", payload=_mechanism_payload("demand_to_shipments"),
+        content_hash="c" * 64, expected_parent_id=None, created_at=NOW,
+        definition_ids=[str(definition.id)],
+    )
+
+    with pytest.raises(ValidationError, match="source manifest must belong to the target basis"):
+        repository.append_metric_definition(
+            metric_key="company.assets", basis_id=later_basis.id,
+            source_manifest_id=manifest.id, definition={"label": "Assets"},
+            unit="CNY", period_semantics="point_in_time", source_role="reported",
+            aggregation="last", reconciliation_tolerance=Decimal("0"),
+            content_hash="d" * 64, expected_parent_id=None, created_at=NOW,
+        )
+    with pytest.raises(ValidationError, match="available_at must not exceed basis cutoff"):
+        repository.add_metric_observation(
+            metric_key=definition.metric_key, definition_version=definition.version,
+            basis_id=basis.id, definition_id=definition.id,
+            source_manifest_id=manifest.id, source_id="catl-2024-ar",
+            value=Decimal("1"), unit="CNY", observed_start=NOW, observed_end=NOW,
+            effective_at=NOW, available_at=NOW + timedelta(seconds=1),
+            source_locator="p1", dimensions={}, dimension_hash="e" * 64,
+            content_hash="e" * 64, created_at=NOW,
+        )
+    with pytest.raises(ValidationError, match="mechanism must belong to the target object and basis"):
+        repository.append_industry_state(
+            object_id=other_company.id, basis_id=basis.id, mechanism_id=mechanism.id,
+            payload={"utilization": "0.8"}, content_hash="f" * 64,
+            expected_parent_id=None, created_at=NOW,
+        )
+    with pytest.raises(ValidationError, match="source is unavailable at basis cutoff"):
+        repository.add_source_manifest(
+            manifest_key="future-source", basis_id=basis.id,
+            manifest={
+                "sources": [
+                    {
+                        "source_id": "later-disclosure",
+                        "first_available_at": (NOW + timedelta(seconds=1)).isoformat(),
+                    }
+                ]
+            },
+            manifest_hash="f" * 64, content_hash="f" * 64,
+            expected_parent_id=None, created_at=NOW,
+        )
+
+
+def test_unique_race_is_reported_as_stale_parent(
+    repository: UnderwritingResearchRepository, basis, monkeypatch
+) -> None:
+    """A duplicate successor found at flush time is a compare-and-swap loss."""
+    def lose_race(*args, **kwargs):
+        raise IntegrityError("insert", {}, Exception("uq_uw_source_manifest_version"))
+
+    monkeypatch.setattr(repository._session, "flush", lose_race)
+    with pytest.raises(StaleParentError):
+        repository.add_source_manifest(
+            manifest_key="catl-baseline", basis_id=basis.id, manifest={"sources": []},
+            manifest_hash="a" * 64, content_hash="a" * 64,
+            expected_parent_id=None, created_at=NOW,
+        )
