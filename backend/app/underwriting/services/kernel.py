@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import copy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 import hashlib
@@ -20,6 +21,7 @@ from app.underwriting.domain.types import (
     LedgerEntryInput,
     ResearchObjectKind,
 )
+from app.underwriting.persistence.models import UnderwritingLedgerEntry
 from app.underwriting.persistence.repository import StaleParentError, UnderwritingRepository
 
 
@@ -34,6 +36,15 @@ _RELATION_KINDS = {
         ResearchObjectKind.SECURITY.value,
     ),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class KernelSnapshot:
+    object_id: uuid.UUID
+    basis_id: uuid.UUID
+    cutoff: datetime
+    entries: tuple[UnderwritingLedgerEntry, ...]
+    snapshot_hash: str
 
 
 def canonical_hash(value: object) -> str:
@@ -207,6 +218,89 @@ class UnderwritingKernelService:
                     available_at=available_at,
                     source_boundary=source_boundary,
                     content_hash=content_hash,
+                    expected_parent_id=expected_parent_id,
+                    created_at=self._now(),
+                ),
+            )
+        except StaleParentError as exc:
+            raise ConflictError(str(exc)) from exc
+
+    def snapshot(self, object_id: uuid.UUID, basis_id: uuid.UUID) -> KernelSnapshot:
+        if self._repository.object(object_id) is None:
+            raise ValidationError("research object not found")
+        basis = self._repository.basis(basis_id)
+        if basis is None:
+            raise ValidationError("historical basis not found")
+
+        cutoff = self._stored_datetime(basis.cutoff)
+        entries = tuple(self._repository.effective_entries_at(object_id, cutoff))
+        snapshot_hash = canonical_hash(
+            {
+                "object_id": object_id,
+                "basis_cutoff": cutoff,
+                "source_manifest_hash": basis.source_manifest_hash,
+                "entries": [
+                    {"id": entry.id, "content_hash": entry.content_hash}
+                    for entry in entries
+                ],
+            }
+        )
+        return KernelSnapshot(object_id, basis_id, cutoff, entries, snapshot_hash)
+
+    def _research_version_content_hash(
+        self,
+        snapshot: KernelSnapshot,
+        version_kind: str,
+        parent_ids: list[str],
+    ) -> tuple[str, str, list[str]]:
+        normalized_kind = self._require_text(version_kind, "version_kind")
+        normalized_parent_ids = sorted(set(parent_ids))
+        return (
+            canonical_hash(
+                {
+                    "snapshot_hash": snapshot.snapshot_hash,
+                    "version_kind": normalized_kind,
+                    "parent_ids": normalized_parent_ids,
+                }
+            ),
+            normalized_kind,
+            normalized_parent_ids,
+        )
+
+    def preview_research_version_hash(
+        self,
+        object_id: uuid.UUID,
+        basis_id: uuid.UUID,
+        version_kind: str,
+        parent_ids: list[str],
+    ) -> str:
+        snapshot = self.snapshot(object_id, basis_id)
+        content_hash, _, _ = self._research_version_content_hash(
+            snapshot, version_kind, parent_ids
+        )
+        return content_hash
+
+    def publish_research_version(
+        self,
+        object_id: uuid.UUID,
+        basis_id: uuid.UUID,
+        version_kind: str,
+        parent_ids: list[str],
+        expected_parent_id: uuid.UUID | None,
+    ):
+        snapshot = self.snapshot(object_id, basis_id)
+        content_hash, normalized_kind, normalized_parent_ids = (
+            self._research_version_content_hash(snapshot, version_kind, parent_ids)
+        )
+        try:
+            return self._write(
+                "research version write conflicts",
+                lambda: self._repository.append_research_version(
+                    object_id=object_id,
+                    basis_id=basis_id,
+                    version_kind=normalized_kind,
+                    content_hash=content_hash,
+                    parent_ids=normalized_parent_ids,
                     expected_parent_id=expected_parent_id,
                     created_at=self._now(),
                 ),
