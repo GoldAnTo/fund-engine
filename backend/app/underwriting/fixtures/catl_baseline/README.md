@@ -1,0 +1,36 @@
+# CATL 2024 frozen economic-model basis
+
+This fixture is a historical research basis, frozen at `2025-05-15T15:59:59Z`
+(`2025-05-15 23:59:59+08:00`). It is **not** current CATL research, an
+investment recommendation, a valuation, or a price forecast.
+
+## Evidence boundary
+
+The manifest records four public, high-authority sources. The CNINFO 2024
+annual-report PDF was retrieved once and verified against SHA-256
+`b4f1713d7b821eb076c102711d177fe942ccc2bc8dd171ae5d7a95799a65b0ad`.
+Copyrighted documents are not committed: the fixture retains locator, hash,
+policy metadata, and derived observations only. The issuer filing is
+authorized for derived observations; public IEA and government-preserved pages
+are retained under their recorded display/reference policies.
+
+`reported` observations are direct annual-report values, converted from CNY
+thousands to CNY where stated. No unverified industry, capacity, utilization,
+price, cost-index, or overseas-share value is invented. Those unresolved
+baselines appear as `unknown`, with a source locator and reason, and are never
+passed to the authenticated numerical observation batch.
+
+## Reconciliation and limits
+
+Segment revenue may differ from reported company revenue by CNY 1,000 because
+the published CNY-thousand table rounds displayed rows. That tolerance is
+intentional and must be surfaced, never silently rounded away. Operating
+expenses, depreciation, working capital allocation, utilization, comparable
+capacity, price, and material cost series remain unresolved gaps. The six
+mechanisms are candidates only: their mappings, alternatives, falsifiers, and
+source references make the missing proof explicit; they are not formal causal
+claims until sequential independent review promotes them.
+
+Later disclosures (including the 2025 half-year report) and any source first
+available after the cutoff are excluded. To refresh research, make a new
+historical basis rather than altering this fixture.
