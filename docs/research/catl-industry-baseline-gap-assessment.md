@@ -48,7 +48,7 @@
 
 ## 放行决定与下一步
 
-**当前决定：维持 `not_answerable` 和 `wait_for_validation`。** 可安全做的是创建一个新的历史基线候选，明确记录 CATL 公司级 `reported` 产能、产量、利用率和销量事实，并修正/复核 548.4 GWh 观察值的网页 `available_at` 证据。它不会自动完成 IndustryState，也不会提升任何候选 MechanismPack。
+**当前决定：维持 `not_answerable` 和 `wait_for_validation`。** 已将 548.4 GWh 政府保存页及其派生观察值的 `published_at`/`first_available_at`/`available_at` 保守更正为 2025-01-20；内容中所称的联盟 2025-01-13 发布仍只是待独立原始来源验证的叙述。可安全做的是创建一个新的历史基线候选，明确记录 CATL 公司级 `reported` 产能、产量、利用率和销量事实。它不会自动完成 IndustryState，也不会提升任何候选 MechanismPack。
 
 **推进 IndustryState 的最低新增证据：**
 

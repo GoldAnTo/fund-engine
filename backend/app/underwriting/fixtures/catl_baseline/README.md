@@ -17,8 +17,11 @@ are retained under their recorded display/reference policies.
 `reported` observations are direct annual-report values, converted from CNY
 thousands to CNY where stated. The published China 2024 power-battery
 installation statistic is recorded as official-industry evidence: 548.4 GWh,
-available on 2025-01-13. `segment.other.cost` is deliberately not labelled as
-reported: it is the explicit residual `company.cost_of_revenue -
+available on 2025-01-20, the actual post date of the government-preserved
+page. Its body attributes the underlying alliance release to 2025-01-13, but
+that claim is not used as this source's availability time.
+`segment.other.cost` is deliberately not labelled as reported: it is the
+explicit residual `company.cost_of_revenue -
 sum(named_segment_costs)`, with every parent observation preserved. No
 unverified capacity, utilization,
 price, cost-index, or overseas-share value is invented. Those unresolved

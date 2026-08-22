@@ -70,10 +70,14 @@ def test_authenticated_numeric_batch_excludes_documented_unknowns() -> None:
 def test_china_2024_installations_are_a_published_observation_not_an_unknown() -> None:
     frozen = load_catl_fixture()
 
+    source = frozen.source("china-battery-alliance-2024-installations")
     observation = frozen.observation("industry.china_power_battery_installations_gwh")
+    assert source is not None
+    assert source["published_at"] == "2025-01-19T16:00:00+00:00"
+    assert source["first_available_at"] == "2025-01-19T16:00:00+00:00"
     assert observation.value == Decimal("548.4")
     assert observation.observation_status == "official_industry"
-    assert observation.available_at.isoformat() == "2025-01-12T16:00:00+00:00"
+    assert observation.available_at.isoformat() == "2025-01-19T16:00:00+00:00"
     assert "548.4GWh" in observation.source_locator
 
 
