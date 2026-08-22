@@ -29,6 +29,15 @@ def test_evidence_only_snapshot_returns_frozen_evidence_without_false_model_clai
         "industry.nominal_capacity_gwh", "industry.effective_capacity_gwh", "company.revenue"
     }
     assert any(item["value"] is None for item in body["observations"])
+    assert [item["source_id"] for item in body["sources"]] == sorted(
+        item["source_id"] for item in body["sources"]
+    )
+    assert [item["metric_key"] for item in body["observations"]] == sorted(
+        item["metric_key"] for item in body["observations"]
+    )
+    assert [item["key"] for item in body["candidate_mechanisms"]] == sorted(
+        item["key"] for item in body["candidate_mechanisms"]
+    )
 
 
 def test_evidence_only_snapshot_is_not_found_when_not_published(api_client, session) -> None:

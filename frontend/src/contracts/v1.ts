@@ -4566,7 +4566,7 @@ export interface components {
             source_role: string;
             /** Dimensions */
             dimensions: {
-                [key: string]: unknown;
+                [key: string]: string;
             };
         };
         /** EconomicSourceResponse */
@@ -4966,6 +4966,22 @@ export interface components {
          * @enum {string}
          */
         EvidenceObjective: "support" | "contradict" | "alternative_explanation" | "verify_rule";
+        /** EvidenceOnlyEarningsResponse */
+        EvidenceOnlyEarningsResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Status
+             * @constant
+             */
+            status: "not_compiled";
+            /** Reason */
+            reason: string;
+        };
         /** EvidenceOnlyEconomicModelResponse */
         EvidenceOnlyEconomicModelResponse: {
             /**
@@ -5003,15 +5019,12 @@ export interface components {
             /** Candidate Mechanisms */
             candidate_mechanisms: components["schemas"]["CandidateMechanismResponse"][];
             /** Formal Mechanisms */
-            formal_mechanisms: components["schemas"]["CandidateMechanismResponse"][];
-            /** Industry State */
-            industry_state?: null;
+            formal_mechanisms: components["schemas"]["FormalMechanismResponse"][];
+            industry_state?: components["schemas"]["EvidenceOnlyIndustryStateResponse"] | null;
             /** Scenarios */
-            scenarios?: unknown[];
-            /** Company Exposure */
-            company_exposure?: null;
-            /** Earnings Engine */
-            earnings_engine?: null;
+            scenarios?: components["schemas"]["EvidenceOnlyScenarioResponse"][];
+            company_exposure?: components["schemas"]["EvidenceOnlyExposureResponse"] | null;
+            earnings_engine?: components["schemas"]["EvidenceOnlyEarningsResponse"] | null;
             answerability: components["schemas"]["AnswerabilityResponse"];
             /**
              * Eligible Action
@@ -5020,6 +5033,54 @@ export interface components {
             eligible_action: "wait_for_validation";
             /** Valuation */
             valuation?: null;
+        };
+        /** EvidenceOnlyExposureResponse */
+        EvidenceOnlyExposureResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Status
+             * @constant
+             */
+            status: "not_compiled";
+            /** Reason */
+            reason: string;
+        };
+        /** EvidenceOnlyIndustryStateResponse */
+        EvidenceOnlyIndustryStateResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Status
+             * @constant
+             */
+            status: "not_compiled";
+            /** Reason */
+            reason: string;
+        };
+        /** EvidenceOnlyScenarioResponse */
+        EvidenceOnlyScenarioResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Key */
+            key: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "not_compiled";
         };
         /** EvidenceRecordDTO */
         EvidenceRecordDTO: {
@@ -5322,6 +5383,26 @@ export interface components {
             cutoff: string;
             /** Items */
             items: components["schemas"]["ForecastVerdictDTO"][];
+        };
+        /** FormalMechanismResponse */
+        FormalMechanismResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Key */
+            key: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "formal";
+            /** Source Ids */
+            source_ids: string[];
+            /** Formula */
+            formula: string;
         };
         /**
          * FrozenRunScopeDTO

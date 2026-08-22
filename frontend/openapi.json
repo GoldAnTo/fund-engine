@@ -15419,7 +15419,9 @@
             "title": "Source Role"
           },
           "dimensions": {
-            "additionalProperties": true,
+            "additionalProperties": {
+              "type": "string"
+            },
             "type": "object",
             "title": "Dimensions"
           }
@@ -16670,6 +16672,32 @@
         ],
         "title": "EvidenceObjective"
       },
+      "EvidenceOnlyEarningsResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "status": {
+            "type": "string",
+            "const": "not_compiled",
+            "title": "Status"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "EvidenceOnlyEarningsResponse"
+      },
       "EvidenceOnlyEconomicModelResponse": {
         "properties": {
           "schema_version": {
@@ -16725,27 +16753,47 @@
           },
           "formal_mechanisms": {
             "items": {
-              "$ref": "#/components/schemas/CandidateMechanismResponse"
+              "$ref": "#/components/schemas/FormalMechanismResponse"
             },
             "type": "array",
             "title": "Formal Mechanisms"
           },
           "industry_state": {
-            "type": "null",
-            "title": "Industry State"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvidenceOnlyIndustryStateResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "scenarios": {
-            "items": {},
+            "items": {
+              "$ref": "#/components/schemas/EvidenceOnlyScenarioResponse"
+            },
             "type": "array",
             "title": "Scenarios"
           },
           "company_exposure": {
-            "type": "null",
-            "title": "Company Exposure"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvidenceOnlyExposureResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "earnings_engine": {
-            "type": "null",
-            "title": "Earnings Engine"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvidenceOnlyEarningsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "answerability": {
             "$ref": "#/components/schemas/AnswerabilityResponse"
@@ -16776,6 +16824,84 @@
           "eligible_action"
         ],
         "title": "EvidenceOnlyEconomicModelResponse"
+      },
+      "EvidenceOnlyExposureResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "status": {
+            "type": "string",
+            "const": "not_compiled",
+            "title": "Status"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "EvidenceOnlyExposureResponse"
+      },
+      "EvidenceOnlyIndustryStateResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "status": {
+            "type": "string",
+            "const": "not_compiled",
+            "title": "Status"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "EvidenceOnlyIndustryStateResponse"
+      },
+      "EvidenceOnlyScenarioResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "status": {
+            "type": "string",
+            "const": "not_compiled",
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "status"
+        ],
+        "title": "EvidenceOnlyScenarioResponse"
       },
       "EvidenceRecordDTO": {
         "properties": {
@@ -17642,6 +17768,45 @@
           "items"
         ],
         "title": "ForecastVerdictHistoryResponse"
+      },
+      "FormalMechanismResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "status": {
+            "type": "string",
+            "const": "formal",
+            "title": "Status"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Ids"
+          },
+          "formula": {
+            "type": "string",
+            "title": "Formula"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "status",
+          "source_ids",
+          "formula"
+        ],
+        "title": "FormalMechanismResponse"
       },
       "FrozenRunScopeDTO": {
         "properties": {

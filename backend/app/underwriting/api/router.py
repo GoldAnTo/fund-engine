@@ -294,12 +294,13 @@ def get_evidence_only_economic_model(object_id: UUID, basis_id: UUID, db: Sessio
         source_locator=str(item["source_locator"]), available_at=datetime.fromisoformat(str(item["available_at"])),
         observation_status=str(item["observation_status"]), source_role=str(item["source_role"]), dimensions=dict(item["dimensions"]),
     ) for item in gap_payloads)
+    response_observations.sort(key=lambda item: (item.metric_key, item.source_id, item.available_at))
     mechanisms = list(db.scalars(select(UnderwritingMechanismPackVersion).where(
         UnderwritingMechanismPackVersion.object_id == object_id,
         UnderwritingMechanismPackVersion.basis_id == basis_id,
         UnderwritingMechanismPackVersion.status == "candidate",
     )))
-    candidates = [CandidateMechanismResponse(key=row.mechanism_key, status="candidate", source_ids=list(row.source_ids), formula=str(row.payload["formula"])) for row in mechanisms]
+    candidates = sorted((CandidateMechanismResponse(key=row.mechanism_key, status="candidate", source_ids=list(row.source_ids), formula=str(row.payload["formula"])) for row in mechanisms), key=lambda item: item.key)
     return EvidenceOnlyEconomicModelResponse(
         object_id=object_id, basis_id=basis_id, cutoff=basis.cutoff, research_version_id=research.id,
         snapshot_hash=next((item.removeprefix("semantic_snapshot:") for item in research.parent_ids if item.startswith("semantic_snapshot:")), research.content_hash), sources=[EconomicSourceResponse(source_id=str(item["source_id"]), title=str(item["title"]), locator=str(item["locator"]), authority=str(item["authority"])) for item in sorted(manifest.manifest["sources"], key=lambda item: str(item["source_id"]))],
