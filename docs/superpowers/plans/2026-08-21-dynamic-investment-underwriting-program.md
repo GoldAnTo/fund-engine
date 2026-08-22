@@ -101,7 +101,18 @@ Parallel work is allowed only within a wave when tasks do not share schema or co
 
 ## 5. Wave 2 — CATL economic model
 
-**Outcome:** A frozen real-data basis explains the power-battery industry and how CATL earns revenue, profit, free cash flow, and value before any price judgment appears.
+**Planned outcome:** A frozen real-data basis explains the power-battery industry and how CATL earns revenue, profit, free cash flow, and value before any price judgment appears.
+
+**Actual Wave 2 record (evidence-only boundary):** The implemented CATL 2024
+basis freezes authentic accessible source metadata and known annual-report
+anchors, records explicit `Unknown` industry/capacity gaps, and persists six
+candidate mechanisms with provenance. It publishes a replayable historical
+research version as `not_answerable`, with `missing_key_baseline` and
+`mechanism_unidentified` blockers and the only allowed action
+`wait_for_validation`. This is intentionally not a completed industry state,
+scenario set, company exposure model, earnings engine, formal mechanism set,
+valuation, price judgment, or recommendation. The boundary prevents an
+apparently deep but unsupported model from becoming an investment claim.
 
 **Primary files:**
 
@@ -140,6 +151,14 @@ Every MechanismPack moves through the controlled lifecycle `candidate → adapte
 - [ ] Each formal mechanism has direction, lag, range, applicability, alternative explanation, and falsifier.
 - [ ] Missing a key baseline shortens the result and returns `not_answerable`.
 - [ ] Source authorization, provider capability, metric-definition changes, and unresolved source conflicts are visible and fail closed.
+
+**Wave 2 completion evidence (limited scope):** migrations `0060`/`0061`
+persist append-only research/economic artifacts; the CATL snapshot API exposes
+the persisted evidence, gaps, candidate mechanisms, and blockers without
+loading fixture data at read time. Source and observation freezing reject
+future-available inputs and unauthenticated/altered fixture artifacts. The
+remaining unchecked items above are deliberately deferred, not implicitly
+satisfied by the evidence-only release.
 
 ## 6. Wave 3 — Valuation and decision workbench
 
@@ -243,6 +262,18 @@ At the end of each wave, publish one evidence-backed checkpoint containing:
 - schema/API changes;
 - screenshots for user-facing changes;
 - explicit list of design requirements not yet activated.
+
+### Wave 2 checkpoint — evidence-only CATL baseline
+
+- **Scope completed:** source/observation/mechanism freezing, derived-metric
+  lineage, immutable persistence, replayable evidence-only CATL API, and
+  answerability blockers.
+- **Deliberate limitations:** no formal industry state or scenarios, exposure,
+  earnings reconciliation, valuation, price/return projection, action other
+  than `wait_for_validation`, or Alphabet reuse.
+- **Next-wave boundary:** obtain and authenticate the missing capacity/industry
+  baselines, independently review mechanisms to `formal`, then build balanced
+  industry/earnings models before enabling any valuation or decision policy.
 
 No checkpoint may use “complete research” while any key mechanism or baseline is `not_answerable`.
 

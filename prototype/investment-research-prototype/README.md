@@ -10,6 +10,18 @@ mandate, historical basis, four-ledger, version, replay, and answerability
 contracts only. It contains no CATL conclusion, valuation, recommendation,
 position, or live-data claim.
 
+Wave 2 currently publishes one **evidence-only** CATL 2024 snapshot at
+`GET /api/underwriting/v1/objects/{object_id}/economic-models/{basis_id}`.
+It preserves source-governed observations (including explicit `Unknown` gaps),
+candidate mechanisms, provenance, and answerability. It deliberately does not
+claim a completed industry state, scenarios, company exposures, earnings
+engine, formal mechanisms, valuation, current price, fair value, expected
+return, recommendation, or position. Its only eligible action is
+`wait_for_validation`: missing baseline inputs and unreviewed mechanisms must
+be resolved before this evidence can inform an investment decision. The API is
+read-only and replayable from persisted research versions; it never fetches
+live data.
+
 `underwriting.v1` aligns its ledger write boundary with the persisted schema:
 `family_key` is at most 160 characters and `entry_type` is at most 80
 characters. These limits are an explicit compatibility decision for v1, so
