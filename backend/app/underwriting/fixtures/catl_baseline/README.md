@@ -39,3 +39,16 @@ claims until sequential independent review promotes them.
 Later disclosures (including the 2025 half-year report) and any source first
 available after the cutoff are excluded. To refresh research, make a new
 historical basis rather than altering this fixture.
+
+## Evidence-only publication boundary
+
+`CatlBaselineService` deliberately publishes this fixture as
+`catl_economic_model_evidence_only`. It persists the frozen observations and
+candidate mechanisms, but does **not** invent the missing capacity,
+utilization, price, cost, or review-confirmation inputs merely to create an
+industry state, formal mechanism, scenario, or earnings engine. The resulting
+answerability record names `missing_key_baseline` and
+`mechanism_unidentified`; it is a research observation boundary, never an
+entry signal. This is a deliberate variance from the original full-model happy
+path, and prevents the fixture from claiming a completed causal model it does
+not evidence.
