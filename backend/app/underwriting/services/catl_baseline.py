@@ -411,6 +411,7 @@ class CatlBaselineService:
             )
             parent_ids.append(str(answerability.id))
             snapshot_hash, preview_hash = self._semantic_preview_hash(fixture)
+            parent_ids.append(f"semantic_snapshot:{snapshot_hash}")
             research_version = self._repository.append_research_version(
                 object_id=company.id, basis_id=basis.id,
                 version_kind="catl_economic_model_evidence_only", content_hash=preview_hash,

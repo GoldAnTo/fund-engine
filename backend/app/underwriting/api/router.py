@@ -37,7 +37,7 @@ from app.underwriting.api.schemas import (
 )
 from app.errors import NotFoundError
 from app.underwriting.persistence.models import UnderwritingAnswerabilityEvaluation, UnderwritingHistoricalBasis, UnderwritingResearchVersion, UnderwritingLedgerEntry, UnderwritingObjectRelation
-from app.underwriting.persistence.research_models import UnderwritingMechanismPackVersion, UnderwritingMetricObservation, UnderwritingSourceManifestVersion
+from app.underwriting.persistence.research_models import UnderwritingMechanismPackVersion, UnderwritingMetricDefinitionVersion, UnderwritingMetricObservation, UnderwritingSourceManifestVersion
 from app.underwriting.domain.types import (
     BlockerCode,
     HistoricalBasisInput,
@@ -49,8 +49,6 @@ from app.underwriting.domain.types import (
 )
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.services.kernel import UnderwritingKernelService
-from app.underwriting.services.catl_baseline import CatlBaselineService
-from app.underwriting.fixtures.catl_baseline import load_catl_fixture
 
 
 router = APIRouter(prefix="/api/underwriting/v1", tags=["underwriting-v1"])
@@ -273,7 +271,8 @@ def get_evidence_only_economic_model(object_id: UUID, basis_id: UUID, db: Sessio
     ))
     if manifest is None or answerability is None:
         raise NotFoundError("economic model not found")
-    observations = list(db.scalars(select(UnderwritingMetricObservation).where(UnderwritingMetricObservation.basis_id == basis_id)))
+    observations = list(db.scalars(select(UnderwritingMetricObservation).where(UnderwritingMetricObservation.basis_id == basis_id).order_by(UnderwritingMetricObservation.metric_key, UnderwritingMetricObservation.id)))
+    definitions = {row.id: row for row in db.scalars(select(UnderwritingMetricDefinitionVersion).where(UnderwritingMetricDefinitionVersion.basis_id == basis_id))}
     industry_id = db.scalar(select(UnderwritingObjectRelation.parent_id).where(
         UnderwritingObjectRelation.child_id == object_id,
         UnderwritingObjectRelation.relation_type == "industry_exposes_company",
@@ -287,8 +286,8 @@ def get_evidence_only_economic_model(object_id: UUID, basis_id: UUID, db: Sessio
     response_observations = [EconomicObservationResponse(
         metric_key=row.metric_key, value=row.value, unit=row.unit, source_id=row.source_id,
         source_locator=row.source_locator, available_at=row.available_at,
-        observation_status="derived" if dict(row.dimensions).get("disclosure_status") == "derived" else "reported",
-        source_role=str(dict(row.dimensions).get("source_role", "reported")), dimensions=dict(row.dimensions),
+        observation_status=str(dict(row.dimensions).get("disclosure_status", "reported")),
+        source_role=definitions[row.definition_id].source_role, dimensions=dict(row.dimensions),
     ) for row in observations]
     response_observations.extend(EconomicObservationResponse(
         metric_key=str(item["metric_key"]), value=None, unit=str(item["unit"]), source_id=str(item["source_id"]),
@@ -303,7 +302,7 @@ def get_evidence_only_economic_model(object_id: UUID, basis_id: UUID, db: Sessio
     candidates = [CandidateMechanismResponse(key=row.mechanism_key, status="candidate", source_ids=list(row.source_ids), formula=str(row.payload["formula"])) for row in mechanisms]
     return EvidenceOnlyEconomicModelResponse(
         object_id=object_id, basis_id=basis_id, cutoff=basis.cutoff, research_version_id=research.id,
-        snapshot_hash=CatlBaselineService._semantic_snapshot_hash(load_catl_fixture()), sources=[EconomicSourceResponse(source_id=str(item["source_id"]), title=str(item["title"]), locator=str(item["locator"]), authority=str(item["authority"])) for item in manifest.manifest["sources"]],
+        snapshot_hash=next((item.removeprefix("semantic_snapshot:") for item in research.parent_ids if item.startswith("semantic_snapshot:")), research.content_hash), sources=[EconomicSourceResponse(source_id=str(item["source_id"]), title=str(item["title"]), locator=str(item["locator"]), authority=str(item["authority"])) for item in sorted(manifest.manifest["sources"], key=lambda item: str(item["source_id"]))],
         observations=response_observations, candidate_mechanisms=candidates, formal_mechanisms=[],
         answerability=_answerability_response(answerability), eligible_action="wait_for_validation", valuation=None,
     )
