@@ -32,6 +32,7 @@ from app.underwriting.persistence.repository import UnderwritingRepository
 from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
     UnderwritingHistoricalBasis,
+    UnderwritingLedgerEntry,
     UnderwritingResearchObject,
     UnderwritingResearchVersion,
 )
@@ -57,6 +58,9 @@ _MECHANISM_KEYS = frozenset(
         "counter_model_customer_bargaining_and_oversupply",
     }
 )
+_REQUIRED_GAP_KEYS = frozenset({
+    "industry.nominal_capacity_gwh", "industry.effective_capacity_gwh",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +71,7 @@ class CatlBaselineImport:
     basis: object
     source_manifest: object
     metric_observations: tuple[object, ...]
+    evidence_gaps: tuple[object, ...]
     candidate_mechanisms: tuple[object, ...]
     formal_mechanisms: tuple[object, ...]
     industry_state: None
@@ -146,6 +151,16 @@ class CatlBaselineService:
         return canonical_hash({
             "source_manifest_hash": fixture.source_manifest.manifest_hash,
             "observation_content_hashes": sorted(item.content_hash for item in fixture.frozen_observations),
+            "evidence_gaps": sorted(
+                canonical_hash({
+                    "metric_key": item.definition_key, "unit": item.unit,
+                    "observed_start": item.observed_start, "observed_end": item.observed_end,
+                    "effective_at": item.effective_at, "available_at": item.available_at,
+                    "source_id": item.source_id, "source_locator": item.source_locator,
+                    "source_role": item.source_role, "status": item.observation_status,
+                    "dimensions": dict(item.dimensions),
+                }) for item in fixture.observations if item.value is None
+            ),
             "candidate_mechanism_hashes": sorted(canonical_hash(item) for item in fixture.mechanisms),
             "answerability": {
                 "state": "not_answerable",
@@ -164,8 +179,33 @@ class CatlBaselineService:
                 [fixture.source_manifest.manifest_hash]
                 + [item.content_hash for item in fixture.frozen_observations]
                 + [canonical_hash(item) for item in fixture.mechanisms]
+                + [canonical_hash({"key": item.definition_key, "source": item.source_id, "locator": item.source_locator, "available_at": item.available_at, "status": item.observation_status}) for item in fixture.observations if item.value is None]
             ),
         })
+
+    @staticmethod
+    def _required_gaps(fixture: CatlBaselineFixture) -> tuple[object, ...]:
+        gaps = tuple(item for item in fixture.observations if item.value is None)
+        gap_keys = {item.definition_key for item in gaps}
+        if not _REQUIRED_GAP_KEYS.issubset(gap_keys):
+            raise ValidationError("required evidence gaps are missing from CATL fixture")
+        if any(item.observation_status != "unknown" for item in gaps):
+            raise ValidationError("evidence gaps must have unknown status")
+        return gaps
+
+    def _append_evidence_gap(self, *, industry_id: UUID, basis_id: UUID, gap) -> object:
+        return self._kernel.append_ledger_entry(
+            industry_id, basis_id,
+            LedgerEntryInput(
+                LedgerKind.REALITY, f"evidence_gap:{gap.definition_key}", "unknown_evidence_gap",
+                {"metric_key": gap.definition_key, "unit": gap.unit, "source_id": gap.source_id,
+                 "source_locator": gap.source_locator, "observed_start": gap.observed_start.isoformat(),
+                 "observed_end": gap.observed_end.isoformat(), "effective_at": gap.effective_at.isoformat(),
+                 "available_at": gap.available_at.isoformat(), "source_role": gap.source_role,
+                 "observation_status": gap.observation_status, "dimensions": dict(gap.dimensions)},
+                gap.effective_at, gap.available_at, "frozen_source_manifest",
+            ), None,
+        )
 
     def _existing_import(self, fixture: CatlBaselineFixture) -> CatlBaselineImport | None:
         company = self._session.scalar(select(UnderwritingResearchObject).where(
@@ -202,6 +242,11 @@ class CatlBaselineService:
         return CatlBaselineImport(
             industry=industry, company=company, security=security, basis=basis, source_manifest=manifest,
             metric_observations=tuple(self._session.scalars(select(UnderwritingMetricObservation).where(UnderwritingMetricObservation.basis_id == basis.id))),
+            evidence_gaps=tuple(self._session.scalars(select(UnderwritingLedgerEntry).where(
+                UnderwritingLedgerEntry.object_id == industry.id,
+                UnderwritingLedgerEntry.basis_id == basis.id,
+                UnderwritingLedgerEntry.entry_type == "unknown_evidence_gap",
+            ))),
             candidate_mechanisms=tuple(self._session.scalars(select(UnderwritingMechanismPackVersion).where(UnderwritingMechanismPackVersion.object_id == company.id, UnderwritingMechanismPackVersion.basis_id == basis.id))),
             formal_mechanisms=tuple(), industry_state=None, earnings_engine=None, answerability=answerability,
             research_version=research_version, snapshot_hash=snapshot_hash, preview_hash=preview_hash,
@@ -239,6 +284,7 @@ class CatlBaselineService:
             source_manifest=fixture.source_manifest,
             cutoff=fixture.cutoff,
         )
+        required_gaps = self._required_gaps(fixture)
         if self._now() > fixture.cutoff:
             raise ValidationError("CATL import created_at must not exceed fixture cutoff")
         existing = self._existing_import(fixture)
@@ -274,6 +320,7 @@ class CatlBaselineService:
             fixture_by_key = {item.definition_key: item for item in fixture.observations}
             definition_ids: dict[str, UUID] = {}
             persisted_observations: list[object] = []
+            persisted_gaps: list[object] = []
             parent_ids: list[str] = [str(manifest.id)]
             for observation in fixture.frozen_observations:
                 evidence = fixture_by_key.get(observation.definition_key)
@@ -318,6 +365,8 @@ class CatlBaselineService:
                 parent_ids.extend((str(definition.id), str(row.id)))
                 target_object = industry.id if observation.definition_key.startswith("industry.") else company.id
                 self._append_reality(object_id=target_object, basis_id=basis.id, observation=observation, evidence=evidence)
+            for gap in required_gaps:
+                persisted_gaps.append(self._append_evidence_gap(industry_id=industry.id, basis_id=basis.id, gap=gap))
 
             mechanism_keys = {str(item.get("key")) for item in fixture.mechanisms}
             if mechanism_keys != _MECHANISM_KEYS or len(fixture.mechanisms) != len(_MECHANISM_KEYS):
@@ -347,7 +396,7 @@ class CatlBaselineService:
             answerability = self._kernel.record_answerability(
                 company.id,
                 basis.id,
-                (BlockerCode.MISSING_KEY_BASELINE, BlockerCode.MECHANISM_UNIDENTIFIED),
+                tuple([BlockerCode.MISSING_KEY_BASELINE] if required_gaps else []) + (BlockerCode.MECHANISM_UNIDENTIFIED,),
                 ("industry.capacity_utilization_price_cost_baseline", "formal_mechanism_review"),
                 True,
                 EligibleAction.OBSERVE,
@@ -371,6 +420,7 @@ class CatlBaselineService:
                 basis=basis,
                 source_manifest=manifest,
                 metric_observations=tuple(persisted_observations),
+                evidence_gaps=tuple(persisted_gaps),
                 candidate_mechanisms=tuple(candidates),
                 formal_mechanisms=tuple(),
                 industry_state=None,
