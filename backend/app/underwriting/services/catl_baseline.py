@@ -26,7 +26,7 @@ from app.underwriting.domain.types import (
     LedgerKind,
     ResearchObjectKind,
 )
-from app.underwriting.fixtures.catl_baseline import CatlBaselineFixture, validate_full_observation_fixture
+from app.underwriting.fixtures.catl_baseline import CatlBaselineFixture, thaw_fixture_json, validate_full_observation_fixture
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
 from app.underwriting.persistence.repository import UnderwritingRepository
 from app.underwriting.persistence.models import (
@@ -376,23 +376,25 @@ class CatlBaselineService:
             for mechanism in sorted(fixture.mechanisms, key=lambda item: str(item["key"])):
                 if mechanism.get("status") != "candidate":
                     raise ValidationError("evidence-only CATL import accepts candidate mechanisms only")
-                source_ids = list(mechanism.get("source_references", []))
+                persisted_mechanism = thaw_fixture_json(mechanism)
+                assert isinstance(persisted_mechanism, dict)
+                source_ids = list(persisted_mechanism.get("source_references", []))
                 row = self._research.append_mechanism(
-                    mechanism_key=str(mechanism["key"]),
+                    mechanism_key=str(persisted_mechanism["key"]),
                     object_id=company.id,
                     basis_id=basis.id,
                     source_manifest_id=manifest.id,
                     status="candidate",
-                    payload=mechanism,
+                    payload=persisted_mechanism,
                     source_ids=source_ids,
                     definition_ids=[],
-                    content_hash=canonical_hash(mechanism),
+                    content_hash=canonical_hash(persisted_mechanism),
                     expected_parent_id=None,
                     created_at=self._now(),
                 )
                 candidates.append(row)
                 parent_ids.append(str(row.id))
-                self._append_candidate_belief(company_id=company.id, basis_id=basis.id, mechanism=mechanism)
+                self._append_candidate_belief(company_id=company.id, basis_id=basis.id, mechanism=persisted_mechanism)
 
             answerability = self._kernel.record_answerability(
                 company.id,

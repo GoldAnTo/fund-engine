@@ -55,6 +55,27 @@ _REQUIRED_MECHANISMS = frozenset(
 )
 
 
+def _deep_freeze_json(value: object) -> object:
+    if isinstance(value, dict):
+        return MappingProxyType({str(key): _deep_freeze_json(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_deep_freeze_json(item) for item in value)
+    return value
+
+
+def _thaw_json(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json(item) for item in value]
+    return value
+
+
+def thaw_fixture_json(value: object) -> object:
+    """Return a detached JSON-shaped copy for persistence boundaries."""
+    return _thaw_json(value)
+
+
 def _read_json(name: str) -> dict[str, Any]:
     try:
         value = json.loads((_ROOT / name).read_text(encoding="utf-8"))
@@ -132,7 +153,7 @@ _TRUSTED_FULL_FIXTURES: dict[int, tuple[weakref.ReferenceType[CatlBaselineFixtur
 
 
 def _full_observation_hash(value: CatlBaselineFixture) -> str:
-    return canonical_hash(tuple({
+    return canonical_hash({"observations": tuple({
         "definition_key": item.definition_key, "definition_version": item.definition_version,
         "value": str(item.value) if item.value is not None else None, "unit": item.unit,
         "observed_start": item.observed_start, "observed_end": item.observed_end,
@@ -142,7 +163,7 @@ def _full_observation_hash(value: CatlBaselineFixture) -> str:
         "research_object_kind": item.research_object_kind,
         "derivation_parents": item.derivation_parents,
         "derivation_formula": item.derivation_formula, "observation_status": item.observation_status,
-    } for item in value.observations))
+    } for item in value.observations), "mechanisms": tuple(_thaw_json(item) for item in value.mechanisms)})
 
 
 def _register_full_fixture(value: CatlBaselineFixture) -> CatlBaselineFixture:
@@ -268,7 +289,7 @@ def _validate_mechanisms(raw: dict[str, Any]) -> tuple[Mapping[str, object], ...
             raise ValidationError("CATL fixture mechanism review_record is incomplete")
     if set(keys) != _REQUIRED_MECHANISMS or len(keys) != len(set(keys)):
         raise ValidationError("CATL fixture must contain the six governed mechanism keys")
-    return tuple(MappingProxyType(item) for item in mechanisms)
+    return tuple(_deep_freeze_json(item) for item in mechanisms)  # type: ignore[return-value]
 
 
 def load_catl_fixture() -> CatlBaselineFixture:

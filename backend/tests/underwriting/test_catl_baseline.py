@@ -125,6 +125,24 @@ def test_import_rejects_replaced_unknown_evidence_gap_forgery(session, field) ->
         CatlBaselineService(session, now=lambda: NOW).import_fixture(forged)
 
 
+@pytest.mark.parametrize("field", ["source_references", "falsifiers", "review_record"])
+def test_import_rejects_replaced_nested_mechanism_forgery(session, field) -> None:
+    fixture = load_catl_fixture()
+    mechanism = dict(fixture.mechanisms[0])
+    mechanism[field] = ["forged"] if field == "source_references" else {"forged": True}
+    forged = replace(fixture, mechanisms=(mechanism, *fixture.mechanisms[1:]))
+
+    with pytest.raises(ValidationError, match="authenticated full observation fixture"):
+        CatlBaselineService(session, now=lambda: NOW).import_fixture(forged)
+
+
+def test_loaded_mechanism_artifacts_are_deeply_immutable() -> None:
+    fixture = load_catl_fixture()
+
+    with pytest.raises(TypeError):
+        fixture.mechanisms[0]["review_record"]["current_stage"] = "forged"
+
+
 def test_import_rolls_back_every_wave_two_write_when_fixture_cannot_publish(session) -> None:
     bad_fixture = replace(load_catl_fixture(), mechanisms=tuple())
     service = CatlBaselineService(session, now=lambda: NOW)
