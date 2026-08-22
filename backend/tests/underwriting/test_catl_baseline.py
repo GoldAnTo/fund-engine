@@ -5,9 +5,11 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-from app.models.ledger import ValidationError
+from app.models.ledger import Base, ValidationError
 from app.underwriting.fixtures.catl_baseline import load_catl_fixture
 from app.underwriting.persistence.research_models import (
     UnderwritingEarningsEngineVersion,
@@ -16,6 +18,7 @@ from app.underwriting.persistence.research_models import (
     UnderwritingMetricObservation,
     UnderwritingSourceManifestVersion,
 )
+from app.underwriting.persistence.models import UnderwritingLedgerEntry, UnderwritingObjectRelation
 from app.underwriting.services.catl_baseline import CatlBaselineService
 
 
@@ -35,15 +38,56 @@ def test_import_publishes_replayable_evidence_only_version_without_false_complet
     assert set(result.answerability.blockers) == {
         "missing_key_baseline", "mechanism_unidentified"
     }
+    assert result.answerability.allowed_action == "wait_for_validation"
     assert result.research_version.content_hash == result.preview_hash
     assert result.research_version.version_kind == "catl_economic_model_evidence_only"
 
 
-def test_import_is_deterministic_for_the_same_frozen_fixture(session) -> None:
-    result = CatlBaselineService(session, now=lambda: NOW).import_fixture(load_catl_fixture())
+def _fresh_import_hashes() -> tuple[str, str]:
+    engine = create_engine("sqlite://", future=True, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, future=True)()
+    try:
+        result = CatlBaselineService(db, now=lambda: NOW).import_fixture(load_catl_fixture())
+        return result.snapshot_hash, result.preview_hash
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
 
-    assert result.preview_hash == result.research_version.content_hash
-    assert result.snapshot_hash
+
+def test_import_is_deterministic_across_independent_databases() -> None:
+    first = _fresh_import_hashes()
+    second = _fresh_import_hashes()
+
+    assert first == second
+
+
+def test_repeat_import_reuses_identities_and_does_not_duplicate_relations(session) -> None:
+    service = CatlBaselineService(session, now=lambda: NOW)
+    first = service.import_fixture(load_catl_fixture())
+    second = service.import_fixture(load_catl_fixture())
+
+    assert second.company.id == first.company.id
+    assert second.industry.id == first.industry.id
+    assert second.security.id == first.security.id
+    assert second.research_version.id == first.research_version.id
+    assert second.preview_hash == first.preview_hash
+    assert session.scalar(select(func.count()).select_from(UnderwritingObjectRelation)) == 2
+
+
+def test_derived_reality_entry_retains_source_status_and_bound_lineage(session) -> None:
+    result = CatlBaselineService(session, now=lambda: NOW).import_fixture(load_catl_fixture())
+    entry = session.scalar(
+        select(UnderwritingLedgerEntry).where(
+            UnderwritingLedgerEntry.object_id == result.company.id,
+            UnderwritingLedgerEntry.family_key == "metric:segment.other.cost",
+        )
+    )
+    assert entry is not None
+    assert entry.entry_type == "derived"
+    assert entry.payload["source_role"] == "derived"
+    assert entry.payload["derivation"]["formula"]
+    assert entry.payload["derivation"]["parent_content_hashes"]
 
 
 def test_import_rolls_back_every_wave_two_write_when_fixture_cannot_publish(session) -> None:

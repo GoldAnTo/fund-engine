@@ -14,6 +14,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
@@ -27,6 +28,18 @@ from app.underwriting.domain.types import (
 )
 from app.underwriting.fixtures.catl_baseline import CatlBaselineFixture
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
+from app.underwriting.persistence.repository import UnderwritingRepository
+from app.underwriting.persistence.models import (
+    UnderwritingAnswerabilityEvaluation,
+    UnderwritingHistoricalBasis,
+    UnderwritingResearchObject,
+    UnderwritingResearchVersion,
+)
+from app.underwriting.persistence.research_models import (
+    UnderwritingMechanismPackVersion,
+    UnderwritingMetricObservation,
+    UnderwritingSourceManifestVersion,
+)
 from app.underwriting.services.kernel import UnderwritingKernelService, canonical_hash
 from app.underwriting.services.source_freeze import (
     validate_frozen_observation_set,
@@ -72,6 +85,7 @@ class CatlBaselineService:
         self._now = now
         self._kernel = UnderwritingKernelService(session, now=now)
         self._research = UnderwritingResearchRepository(session)
+        self._repository = UnderwritingRepository(session)
 
     @staticmethod
     def _manifest_payload(fixture: CatlBaselineFixture) -> dict[str, object]:
@@ -92,26 +106,105 @@ class CatlBaselineService:
             "reconciliation_tolerance": "1000" if observation.definition_key.endswith(("revenue", "cost")) else "0",
         }
 
-    def _append_reality(self, *, object_id: UUID, basis_id: UUID, observation) -> object:
+    def _append_reality(self, *, object_id: UUID, basis_id: UUID, observation, evidence) -> object:
+        dimensions = dict(observation.dimensions)
+        derivation = (
+            {
+                "formula": dimensions["_derivation_formula"],
+                "parent_observation_ids": dimensions["_derivation_parent_observation_ids"].split(","),
+                "parent_content_hashes": dimensions["_derivation_parent_content_hashes"].split(","),
+            }
+            if evidence.observation_status == "derived"
+            else None
+        )
         return self._kernel.append_ledger_entry(
             object_id,
             basis_id,
             LedgerEntryInput(
                 LedgerKind.REALITY,
                 f"metric:{observation.definition_key}",
-                "reported_observation",
+                evidence.observation_status,
                 {
                     "metric_key": observation.definition_key,
                     "observation_id": str(observation.observation_id),
                     "content_hash": observation.content_hash,
                     "source_id": observation.source_id,
+                    "source_role": evidence.source_role,
+                    "observation_status": evidence.observation_status,
                     "value": str(observation.value),
+                    "derivation": derivation,
                 },
                 observation.effective_at,
                 observation.available_at,
                 "frozen_source_manifest",
             ),
             None,
+        )
+
+    @staticmethod
+    def _semantic_snapshot_hash(fixture: CatlBaselineFixture) -> str:
+        return canonical_hash({
+            "source_manifest_hash": fixture.source_manifest.manifest_hash,
+            "observation_content_hashes": sorted(item.content_hash for item in fixture.frozen_observations),
+            "candidate_mechanism_hashes": sorted(canonical_hash(item) for item in fixture.mechanisms),
+            "answerability": {
+                "state": "not_answerable",
+                "blockers": ["missing_key_baseline", "mechanism_unidentified"],
+                "allowed_action": "wait_for_validation",
+            },
+        })
+
+    @classmethod
+    def _semantic_preview_hash(cls, fixture: CatlBaselineFixture) -> tuple[str, str]:
+        snapshot_hash = cls._semantic_snapshot_hash(fixture)
+        return snapshot_hash, canonical_hash({
+            "snapshot_hash": snapshot_hash,
+            "version_kind": "catl_economic_model_evidence_only",
+            "semantic_parent_hashes": sorted(
+                [fixture.source_manifest.manifest_hash]
+                + [item.content_hash for item in fixture.frozen_observations]
+                + [canonical_hash(item) for item in fixture.mechanisms]
+            ),
+        })
+
+    def _existing_import(self, fixture: CatlBaselineFixture) -> CatlBaselineImport | None:
+        company = self._session.scalar(select(UnderwritingResearchObject).where(
+            UnderwritingResearchObject.kind == ResearchObjectKind.COMPANY.value,
+            UnderwritingResearchObject.external_key == "CN:300750:COMPANY",
+        ))
+        if company is None:
+            return None
+        basis = self._session.scalar(select(UnderwritingHistoricalBasis).where(
+            UnderwritingHistoricalBasis.cutoff == fixture.cutoff,
+            UnderwritingHistoricalBasis.source_manifest_hash == fixture.source_manifest.manifest_hash,
+        ))
+        if basis is None:
+            return None
+        research_version = self._session.scalar(select(UnderwritingResearchVersion).where(
+            UnderwritingResearchVersion.object_id == company.id,
+            UnderwritingResearchVersion.basis_id == basis.id,
+            UnderwritingResearchVersion.version_kind == "catl_economic_model_evidence_only",
+        ))
+        if research_version is None:
+            return None
+        industry = self._session.scalar(select(UnderwritingResearchObject).where(UnderwritingResearchObject.external_key == "POWER_BATTERY:GLOBAL"))
+        security = self._session.scalar(select(UnderwritingResearchObject).where(UnderwritingResearchObject.external_key == "SZSE:300750"))
+        manifest = self._session.scalar(select(UnderwritingSourceManifestVersion).where(UnderwritingSourceManifestVersion.basis_id == basis.id))
+        answerability = self._session.scalar(select(UnderwritingAnswerabilityEvaluation).where(
+            UnderwritingAnswerabilityEvaluation.object_id == company.id,
+            UnderwritingAnswerabilityEvaluation.basis_id == basis.id,
+        ))
+        if None in (industry, security, manifest, answerability):
+            raise ValidationError("existing CATL evidence-only import is incomplete")
+        snapshot_hash, preview_hash = self._semantic_preview_hash(fixture)
+        if research_version.content_hash != preview_hash:
+            raise ValidationError("existing CATL evidence-only import does not match fixture semantics")
+        return CatlBaselineImport(
+            industry=industry, company=company, security=security, basis=basis, source_manifest=manifest,
+            metric_observations=tuple(self._session.scalars(select(UnderwritingMetricObservation).where(UnderwritingMetricObservation.basis_id == basis.id))),
+            candidate_mechanisms=tuple(self._session.scalars(select(UnderwritingMechanismPackVersion).where(UnderwritingMechanismPackVersion.object_id == company.id, UnderwritingMechanismPackVersion.basis_id == basis.id))),
+            formal_mechanisms=tuple(), industry_state=None, earnings_engine=None, answerability=answerability,
+            research_version=research_version, snapshot_hash=snapshot_hash, preview_hash=preview_hash,
         )
 
     def _append_candidate_belief(self, *, company_id: UUID, basis_id: UUID, mechanism: Mapping[str, object]) -> object:
@@ -148,6 +241,9 @@ class CatlBaselineService:
         )
         if self._now() > fixture.cutoff:
             raise ValidationError("CATL import created_at must not exceed fixture cutoff")
+        existing = self._existing_import(fixture)
+        if existing is not None:
+            return existing
 
         with self._session.begin_nested():
             industry = self._kernel.add_object(
@@ -221,7 +317,7 @@ class CatlBaselineService:
                 persisted_observations.append(row)
                 parent_ids.extend((str(definition.id), str(row.id)))
                 target_object = industry.id if observation.definition_key.startswith("industry.") else company.id
-                self._append_reality(object_id=target_object, basis_id=basis.id, observation=observation)
+                self._append_reality(object_id=target_object, basis_id=basis.id, observation=observation, evidence=evidence)
 
             mechanism_keys = {str(item.get("key")) for item in fixture.mechanisms}
             if mechanism_keys != _MECHANISM_KEYS or len(fixture.mechanisms) != len(_MECHANISM_KEYS):
@@ -262,16 +358,11 @@ class CatlBaselineService:
                 None,
             )
             parent_ids.append(str(answerability.id))
-            snapshot = self._kernel.snapshot(company.id, basis.id)
-            preview_hash = self._kernel.preview_research_version_hash(
-                company.id, basis.id, "catl_economic_model_evidence_only", parent_ids
-            )
-            research_version = self._kernel.publish_research_version(
-                company.id,
-                basis.id,
-                "catl_economic_model_evidence_only",
-                parent_ids,
-                expected_parent_id=None,
+            snapshot_hash, preview_hash = self._semantic_preview_hash(fixture)
+            research_version = self._repository.append_research_version(
+                object_id=company.id, basis_id=basis.id,
+                version_kind="catl_economic_model_evidence_only", content_hash=preview_hash,
+                parent_ids=parent_ids, expected_parent_id=None, created_at=self._now(),
             )
             return CatlBaselineImport(
                 industry=industry,
@@ -286,6 +377,6 @@ class CatlBaselineService:
                 earnings_engine=None,
                 answerability=answerability,
                 research_version=research_version,
-                snapshot_hash=snapshot.snapshot_hash,
+                snapshot_hash=snapshot_hash,
                 preview_hash=preview_hash,
             )

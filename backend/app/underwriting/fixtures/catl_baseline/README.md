@@ -48,7 +48,8 @@ candidate mechanisms, but does **not** invent the missing capacity,
 utilization, price, cost, or review-confirmation inputs merely to create an
 industry state, formal mechanism, scenario, or earnings engine. The resulting
 answerability record names `missing_key_baseline` and
-`mechanism_unidentified`; it is a research observation boundary, never an
-entry signal. This is a deliberate variance from the original full-model happy
+`mechanism_unidentified`, and its actual eligible action is
+`wait_for_validation`; it is a research observation boundary, never an entry
+signal. This is a deliberate variance from the original full-model happy
 path, and prevents the fixture from claiming a completed causal model it does
 not evidence.
