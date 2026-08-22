@@ -177,3 +177,48 @@ class SnapshotResponse(UnderwritingModel):
     cutoff: datetime
     entries: list[LedgerEntryResponse]
     snapshot_hash: str
+
+
+class EconomicSourceResponse(UnderwritingModel):
+    source_id: str
+    title: str
+    locator: str
+    authority: str
+
+
+class EconomicObservationResponse(UnderwritingModel):
+    metric_key: str
+    value: Decimal | None
+    unit: str
+    source_id: str
+    source_locator: str
+    available_at: datetime
+    observation_status: str
+    source_role: str
+    dimensions: dict[str, Any]
+
+
+class CandidateMechanismResponse(UnderwritingModel):
+    key: str
+    status: Literal["candidate"]
+    source_ids: list[str]
+    formula: str
+
+
+class EvidenceOnlyEconomicModelResponse(UnderwritingModel):
+    object_id: UUID
+    basis_id: UUID
+    cutoff: datetime
+    research_version_id: UUID
+    snapshot_hash: str
+    sources: list[EconomicSourceResponse]
+    observations: list[EconomicObservationResponse]
+    candidate_mechanisms: list[CandidateMechanismResponse]
+    formal_mechanisms: list[CandidateMechanismResponse]
+    industry_state: None = None
+    scenarios: list[Any] = Field(default_factory=list)
+    company_exposure: None = None
+    earnings_engine: None = None
+    answerability: AnswerabilityResponse
+    eligible_action: Literal["wait_for_validation"]
+    valuation: None = None

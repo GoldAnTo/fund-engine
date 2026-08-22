@@ -9372,6 +9372,79 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/objects/{object_id}/economic-models/{basis_id}": {
+      "get": {
+        "tags": [
+          "underwriting-v1"
+        ],
+        "summary": "Get Evidence Only Economic Model",
+        "operationId": "get_evidence_only_economic_model_api_underwriting_v1_objects__object_id__economic_models__basis_id__get",
+        "parameters": [
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          },
+          {
+            "name": "basis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Basis Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceOnlyEconomicModelResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -11802,6 +11875,45 @@
           "next_action"
         ],
         "title": "CancelRunResponse"
+      },
+      "CandidateMechanismResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "status": {
+            "type": "string",
+            "const": "candidate",
+            "title": "Status"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Ids"
+          },
+          "formula": {
+            "type": "string",
+            "title": "Formula"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "status",
+          "source_ids",
+          "formula"
+        ],
+        "title": "CandidateMechanismResponse"
       },
       "CaseCompareResponse": {
         "properties": {
@@ -15257,6 +15369,111 @@
         ],
         "title": "DossierResponse"
       },
+      "EconomicObservationResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "metric_key": {
+            "type": "string",
+            "title": "Metric Key"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "source_locator": {
+            "type": "string",
+            "title": "Source Locator"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "observation_status": {
+            "type": "string",
+            "title": "Observation Status"
+          },
+          "source_role": {
+            "type": "string",
+            "title": "Source Role"
+          },
+          "dimensions": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Dimensions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "metric_key",
+          "value",
+          "unit",
+          "source_id",
+          "source_locator",
+          "available_at",
+          "observation_status",
+          "source_role",
+          "dimensions"
+        ],
+        "title": "EconomicObservationResponse"
+      },
+      "EconomicSourceResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "locator": {
+            "type": "string",
+            "title": "Locator"
+          },
+          "authority": {
+            "type": "string",
+            "title": "Authority"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_id",
+          "title",
+          "locator",
+          "authority"
+        ],
+        "title": "EconomicSourceResponse"
+      },
       "ErrorBody": {
         "properties": {
           "code": {
@@ -16452,6 +16669,113 @@
           "verify_rule"
         ],
         "title": "EvidenceObjective"
+      },
+      "EvidenceOnlyEconomicModelResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "basis_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Basis Id"
+          },
+          "cutoff": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff"
+          },
+          "research_version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Research Version Id"
+          },
+          "snapshot_hash": {
+            "type": "string",
+            "title": "Snapshot Hash"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/EconomicSourceResponse"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/EconomicObservationResponse"
+            },
+            "type": "array",
+            "title": "Observations"
+          },
+          "candidate_mechanisms": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateMechanismResponse"
+            },
+            "type": "array",
+            "title": "Candidate Mechanisms"
+          },
+          "formal_mechanisms": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateMechanismResponse"
+            },
+            "type": "array",
+            "title": "Formal Mechanisms"
+          },
+          "industry_state": {
+            "type": "null",
+            "title": "Industry State"
+          },
+          "scenarios": {
+            "items": {},
+            "type": "array",
+            "title": "Scenarios"
+          },
+          "company_exposure": {
+            "type": "null",
+            "title": "Company Exposure"
+          },
+          "earnings_engine": {
+            "type": "null",
+            "title": "Earnings Engine"
+          },
+          "answerability": {
+            "$ref": "#/components/schemas/AnswerabilityResponse"
+          },
+          "eligible_action": {
+            "type": "string",
+            "const": "wait_for_validation",
+            "title": "Eligible Action"
+          },
+          "valuation": {
+            "type": "null",
+            "title": "Valuation"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "object_id",
+          "basis_id",
+          "cutoff",
+          "research_version_id",
+          "snapshot_hash",
+          "sources",
+          "observations",
+          "candidate_mechanisms",
+          "formal_mechanisms",
+          "answerability",
+          "eligible_action"
+        ],
+        "title": "EvidenceOnlyEconomicModelResponse"
       },
       "EvidenceRecordDTO": {
         "properties": {

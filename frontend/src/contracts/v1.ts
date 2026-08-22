@@ -2392,6 +2392,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/underwriting/v1/objects/{object_id}/economic-models/{basis_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Evidence Only Economic Model */
+        get: operations["get_evidence_only_economic_model_api_underwriting_v1_objects__object_id__economic_models__basis_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -3281,6 +3298,26 @@ export interface components {
             updated_at: string;
             /** Next Action */
             next_action: string;
+        };
+        /** CandidateMechanismResponse */
+        CandidateMechanismResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Key */
+            key: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "candidate";
+            /** Source Ids */
+            source_ids: string[];
+            /** Formula */
+            formula: string;
         };
         /**
          * CaseCompareResponse
@@ -4500,6 +4537,55 @@ export interface components {
              */
             counter_research: components["schemas"]["CounterResearchTaskDTO"][];
         };
+        /** EconomicObservationResponse */
+        EconomicObservationResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Metric Key */
+            metric_key: string;
+            /** Value */
+            value: string | null;
+            /** Unit */
+            unit: string;
+            /** Source Id */
+            source_id: string;
+            /** Source Locator */
+            source_locator: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /** Observation Status */
+            observation_status: string;
+            /** Source Role */
+            source_role: string;
+            /** Dimensions */
+            dimensions: {
+                [key: string]: unknown;
+            };
+        };
+        /** EconomicSourceResponse */
+        EconomicSourceResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Source Id */
+            source_id: string;
+            /** Title */
+            title: string;
+            /** Locator */
+            locator: string;
+            /** Authority */
+            authority: string;
+        };
         /** ErrorBody */
         ErrorBody: {
             /** Code */
@@ -4880,6 +4966,61 @@ export interface components {
          * @enum {string}
          */
         EvidenceObjective: "support" | "contradict" | "alternative_explanation" | "verify_rule";
+        /** EvidenceOnlyEconomicModelResponse */
+        EvidenceOnlyEconomicModelResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /**
+             * Basis Id
+             * Format: uuid
+             */
+            basis_id: string;
+            /**
+             * Cutoff
+             * Format: date-time
+             */
+            cutoff: string;
+            /**
+             * Research Version Id
+             * Format: uuid
+             */
+            research_version_id: string;
+            /** Snapshot Hash */
+            snapshot_hash: string;
+            /** Sources */
+            sources: components["schemas"]["EconomicSourceResponse"][];
+            /** Observations */
+            observations: components["schemas"]["EconomicObservationResponse"][];
+            /** Candidate Mechanisms */
+            candidate_mechanisms: components["schemas"]["CandidateMechanismResponse"][];
+            /** Formal Mechanisms */
+            formal_mechanisms: components["schemas"]["CandidateMechanismResponse"][];
+            /** Industry State */
+            industry_state?: null;
+            /** Scenarios */
+            scenarios?: unknown[];
+            /** Company Exposure */
+            company_exposure?: null;
+            /** Earnings Engine */
+            earnings_engine?: null;
+            answerability: components["schemas"]["AnswerabilityResponse"];
+            /**
+             * Eligible Action
+             * @constant
+             */
+            eligible_action: "wait_for_validation";
+            /** Valuation */
+            valuation?: null;
+        };
         /** EvidenceRecordDTO */
         EvidenceRecordDTO: {
             /** Link Id */
@@ -14044,6 +14185,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SnapshotResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_evidence_only_economic_model_api_underwriting_v1_objects__object_id__economic_models__basis_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                object_id: string;
+                basis_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceOnlyEconomicModelResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
             /** @description Unprocessable Entity */

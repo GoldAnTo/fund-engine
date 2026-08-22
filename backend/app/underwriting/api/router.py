@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -29,7 +30,14 @@ from app.underwriting.api.schemas import (
     ResearchObjectResponse,
     SnapshotResponse,
     UnderwritingErrorEnvelope,
+    EvidenceOnlyEconomicModelResponse,
+    EconomicSourceResponse,
+    EconomicObservationResponse,
+    CandidateMechanismResponse,
 )
+from app.errors import NotFoundError
+from app.underwriting.persistence.models import UnderwritingAnswerabilityEvaluation, UnderwritingHistoricalBasis, UnderwritingResearchVersion, UnderwritingLedgerEntry, UnderwritingObjectRelation
+from app.underwriting.persistence.research_models import UnderwritingMechanismPackVersion, UnderwritingMetricObservation, UnderwritingSourceManifestVersion
 from app.underwriting.domain.types import (
     BlockerCode,
     HistoricalBasisInput,
@@ -41,6 +49,8 @@ from app.underwriting.domain.types import (
 )
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.services.kernel import UnderwritingKernelService
+from app.underwriting.services.catl_baseline import CatlBaselineService
+from app.underwriting.fixtures.catl_baseline import load_catl_fixture
 
 
 router = APIRouter(prefix="/api/underwriting/v1", tags=["underwriting-v1"])
@@ -49,7 +59,7 @@ WRITE_ERROR_RESPONSES = {
     409: {"model": UnderwritingErrorEnvelope},
     422: {"model": UnderwritingErrorEnvelope},
 }
-READ_ERROR_RESPONSES = {422: {"model": UnderwritingErrorEnvelope}}
+READ_ERROR_RESPONSES = {404: {"model": UnderwritingErrorEnvelope}, 422: {"model": UnderwritingErrorEnvelope}}
 
 
 def _service(db: Session) -> UnderwritingKernelService:
@@ -239,4 +249,61 @@ def get_snapshot(object_id: UUID, basis_id: UUID, db: Session = Depends(get_db))
         cutoff=snapshot.cutoff,
         entries=[_ledger_response(entry) for entry in snapshot.entries],
         snapshot_hash=snapshot.snapshot_hash,
+    )
+
+
+@router.get(
+    "/objects/{object_id}/economic-models/{basis_id}",
+    response_model=EvidenceOnlyEconomicModelResponse,
+    responses=READ_ERROR_RESPONSES,
+)
+def get_evidence_only_economic_model(object_id: UUID, basis_id: UUID, db: Session = Depends(get_db)) -> EvidenceOnlyEconomicModelResponse:
+    research = db.scalar(select(UnderwritingResearchVersion).where(
+        UnderwritingResearchVersion.object_id == object_id,
+        UnderwritingResearchVersion.basis_id == basis_id,
+        UnderwritingResearchVersion.version_kind == "catl_economic_model_evidence_only",
+    ))
+    basis = db.get(UnderwritingHistoricalBasis, basis_id)
+    if research is None or basis is None:
+        raise NotFoundError("economic model not found")
+    manifest = db.scalar(select(UnderwritingSourceManifestVersion).where(UnderwritingSourceManifestVersion.basis_id == basis_id))
+    answerability = db.scalar(select(UnderwritingAnswerabilityEvaluation).where(
+        UnderwritingAnswerabilityEvaluation.object_id == object_id,
+        UnderwritingAnswerabilityEvaluation.basis_id == basis_id,
+    ))
+    if manifest is None or answerability is None:
+        raise NotFoundError("economic model not found")
+    observations = list(db.scalars(select(UnderwritingMetricObservation).where(UnderwritingMetricObservation.basis_id == basis_id)))
+    industry_id = db.scalar(select(UnderwritingObjectRelation.parent_id).where(
+        UnderwritingObjectRelation.child_id == object_id,
+        UnderwritingObjectRelation.relation_type == "industry_exposes_company",
+    ))
+    gaps = list(db.scalars(select(UnderwritingLedgerEntry).where(
+        UnderwritingLedgerEntry.object_id == industry_id,
+        UnderwritingLedgerEntry.basis_id == basis_id,
+        UnderwritingLedgerEntry.entry_type == "unknown_evidence_gap",
+    ))) if industry_id is not None else []
+    gap_payloads = [entry.payload for entry in gaps]
+    response_observations = [EconomicObservationResponse(
+        metric_key=row.metric_key, value=row.value, unit=row.unit, source_id=row.source_id,
+        source_locator=row.source_locator, available_at=row.available_at,
+        observation_status="derived" if dict(row.dimensions).get("disclosure_status") == "derived" else "reported",
+        source_role=str(dict(row.dimensions).get("source_role", "reported")), dimensions=dict(row.dimensions),
+    ) for row in observations]
+    response_observations.extend(EconomicObservationResponse(
+        metric_key=str(item["metric_key"]), value=None, unit=str(item["unit"]), source_id=str(item["source_id"]),
+        source_locator=str(item["source_locator"]), available_at=datetime.fromisoformat(str(item["available_at"])),
+        observation_status=str(item["observation_status"]), source_role=str(item["source_role"]), dimensions=dict(item["dimensions"]),
+    ) for item in gap_payloads)
+    mechanisms = list(db.scalars(select(UnderwritingMechanismPackVersion).where(
+        UnderwritingMechanismPackVersion.object_id == object_id,
+        UnderwritingMechanismPackVersion.basis_id == basis_id,
+        UnderwritingMechanismPackVersion.status == "candidate",
+    )))
+    candidates = [CandidateMechanismResponse(key=row.mechanism_key, status="candidate", source_ids=list(row.source_ids), formula=str(row.payload["formula"])) for row in mechanisms]
+    return EvidenceOnlyEconomicModelResponse(
+        object_id=object_id, basis_id=basis_id, cutoff=basis.cutoff, research_version_id=research.id,
+        snapshot_hash=CatlBaselineService._semantic_snapshot_hash(load_catl_fixture()), sources=[EconomicSourceResponse(source_id=str(item["source_id"]), title=str(item["title"]), locator=str(item["locator"]), authority=str(item["authority"])) for item in manifest.manifest["sources"]],
+        observations=response_observations, candidate_mechanisms=candidates, formal_mechanisms=[],
+        answerability=_answerability_response(answerability), eligible_action="wait_for_validation", valuation=None,
     )
