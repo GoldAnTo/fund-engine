@@ -620,11 +620,27 @@ def freeze_observations(
         trusted_research_object_kind, allowed_source_roles = _trusted_metric_context(
             value.definition_key
         )
-        if submitted_source_role is not trusted_source_role:
+        if (
+            submitted_source_role is not SourceRole.DERIVED
+            and submitted_source_role is not trusted_source_role
+        ):
             raise ValidationError("source_role does not match source authority")
         if submitted_research_object_kind is not trusted_research_object_kind:
             raise ValidationError("research_object_kind does not match metric context")
-        if trusted_source_role not in allowed_source_roles:
+        if submitted_source_role is SourceRole.DERIVED:
+            parents = raw.get("derivation_parents")
+            formula = raw.get("derivation_formula")
+            if (
+                not isinstance(parents, list)
+                or not parents
+                or not all(isinstance(parent, str) and parent.strip() for parent in parents)
+                or not isinstance(formula, str)
+                or not formula.strip()
+            ):
+                raise ValidationError("derived observation requires formula and derivation parents")
+            if trusted_source_role not in {SourceRole.REPORTED, SourceRole.OFFICIAL_INDUSTRY}:
+                raise ValidationError("source authority cannot support a derived observation")
+        if submitted_source_role not in allowed_source_roles:
             raise ValidationError("source authority is not allowed for metric context")
         identity = (
             value.definition_key,

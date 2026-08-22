@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+import hashlib
 import json
 from pathlib import Path
 from types import MappingProxyType
@@ -100,6 +101,7 @@ class FixtureObservation:
     source_role: str
     research_object_kind: str
     derivation_parents: tuple[str, ...]
+    derivation_formula: str | None
     observation_status: str
 
 
@@ -139,7 +141,7 @@ def _parse_observation(raw: object, *, cutoff: datetime, source_ids: frozenset[s
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         raise ValidationError("CATL fixture observation definition_version must be positive")
     status = raw.get("observation_status")
-    if status not in {"reported", "official_industry", "unknown"}:
+    if status not in {"reported", "official_industry", "derived", "unknown"}:
         raise ValidationError("CATL fixture observation status is invalid")
     raw_value = raw.get("value")
     if raw_value is None:
@@ -168,6 +170,14 @@ def _parse_observation(raw: object, *, cutoff: datetime, source_ids: frozenset[s
         isinstance(item, str) and item for item in derivation_parents
     ):
         raise ValidationError("CATL fixture derivation_parents must be a string list")
+    derivation_formula = raw.get("derivation_formula")
+    if status == "derived":
+        if raw.get("source_role") != "derived" or not derivation_parents:
+            raise ValidationError("CATL fixture derived observation requires source role and parents")
+        if not isinstance(derivation_formula, str) or not derivation_formula.strip():
+            raise ValidationError("CATL fixture derived observation requires derivation_formula")
+    elif derivation_formula is not None:
+        raise ValidationError("CATL fixture only derived observations may have derivation_formula")
     return FixtureObservation(
         definition_key=key.strip(),
         definition_version=version,
@@ -183,8 +193,21 @@ def _parse_observation(raw: object, *, cutoff: datetime, source_ids: frozenset[s
         source_role=str(raw.get("source_role", "")),
         research_object_kind=str(raw.get("research_object_kind", "")),
         derivation_parents=tuple(derivation_parents),
+        derivation_formula=derivation_formula.strip() if isinstance(derivation_formula, str) else None,
         observation_status=status,
     )
+
+
+def verify_source_bytes(payload: bytes, *, expected_sha256: str) -> str:
+    """Verify retained source bytes without storing copyrighted documents."""
+    if not isinstance(payload, bytes) or not payload:
+        raise ValidationError("source bytes must not be empty")
+    if not isinstance(expected_sha256, str) or len(expected_sha256) != 64:
+        raise ValidationError("expected source digest is invalid")
+    actual = hashlib.sha256(payload).hexdigest()
+    if actual != expected_sha256:
+        raise ValidationError("source bytes digest does not match expected sha256")
+    return actual
 
 
 def _validate_mechanisms(raw: dict[str, Any]) -> tuple[Mapping[str, object], ...]:

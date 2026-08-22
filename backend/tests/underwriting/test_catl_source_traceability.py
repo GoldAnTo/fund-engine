@@ -6,8 +6,12 @@ research input from quietly becoming a current-data snapshot.
 from __future__ import annotations
 
 from decimal import Decimal
+import hashlib
 
-from app.underwriting.fixtures.catl_baseline import load_catl_fixture
+import pytest
+
+from app.models.ledger import ValidationError
+from app.underwriting.fixtures.catl_baseline import load_catl_fixture, verify_source_bytes
 
 
 def test_catl_fixture_uses_fixed_cutoff_and_real_source_anchors() -> None:
@@ -61,3 +65,43 @@ def test_authenticated_numeric_batch_excludes_documented_unknowns() -> None:
         [item for item in frozen.observations if item.value is not None]
     )
     assert all(item.value.is_finite() for item in frozen.frozen_observations)
+
+
+def test_china_2024_installations_are_a_published_observation_not_an_unknown() -> None:
+    frozen = load_catl_fixture()
+
+    observation = frozen.observation("industry.china_power_battery_installations_gwh")
+    assert observation.value == Decimal("548.4")
+    assert observation.observation_status == "official_industry"
+    assert observation.available_at.isoformat() == "2025-01-12T16:00:00+00:00"
+    assert "548.4GWh" in observation.source_locator
+
+
+def test_other_business_cost_is_a_replayable_derived_residual() -> None:
+    frozen = load_catl_fixture()
+
+    observation = frozen.observation("segment.other.cost")
+    assert observation.value == Decimal("8436147000")
+    assert observation.source_role == "derived"
+    assert observation.observation_status == "derived"
+    assert observation.derivation_formula == (
+        "company.cost_of_revenue - sum(named_segment_costs)"
+    )
+    assert observation.derivation_parents == (
+        "company.cost_of_revenue",
+        "segment.power_battery.cost",
+        "segment.energy_storage.cost",
+        "segment.materials_recycling.cost",
+        "segment.mineral_resources.cost",
+    )
+
+
+def test_source_digest_verification_accepts_only_matching_nonempty_bytes() -> None:
+    payload = b"controlled source bytes for fixture digest verification"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    assert verify_source_bytes(payload, expected_sha256=digest) == digest
+    with pytest.raises(ValidationError, match="does not match"):
+        verify_source_bytes(payload, expected_sha256="0" * 64)
+    with pytest.raises(ValidationError, match="must not be empty"):
+        verify_source_bytes(b"", expected_sha256=digest)

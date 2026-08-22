@@ -15,7 +15,12 @@ authorized for derived observations; public IEA and government-preserved pages
 are retained under their recorded display/reference policies.
 
 `reported` observations are direct annual-report values, converted from CNY
-thousands to CNY where stated. No unverified industry, capacity, utilization,
+thousands to CNY where stated. The published China 2024 power-battery
+installation statistic is recorded as official-industry evidence: 548.4 GWh,
+available on 2025-01-13. `segment.other.cost` is deliberately not labelled as
+reported: it is the explicit residual `company.cost_of_revenue -
+sum(named_segment_costs)`, with every parent observation preserved. No
+unverified capacity, utilization,
 price, cost-index, or overseas-share value is invented. Those unresolved
 baselines appear as `unknown`, with a source locator and reason, and are never
 passed to the authenticated numerical observation batch.
