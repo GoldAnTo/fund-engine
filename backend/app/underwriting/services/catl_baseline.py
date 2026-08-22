@@ -26,7 +26,7 @@ from app.underwriting.domain.types import (
     LedgerKind,
     ResearchObjectKind,
 )
-from app.underwriting.fixtures.catl_baseline import CatlBaselineFixture
+from app.underwriting.fixtures.catl_baseline import CatlBaselineFixture, validate_full_observation_fixture
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
 from app.underwriting.persistence.repository import UnderwritingRepository
 from app.underwriting.persistence.models import (
@@ -278,6 +278,7 @@ class CatlBaselineService:
         """Append authentic evidence in a savepoint; never commit the caller transaction."""
         if type(fixture) is not CatlBaselineFixture:
             raise ValidationError("CATL fixture is required")
+        validate_full_observation_fixture(fixture)
         validate_frozen_source_manifest(fixture.source_manifest, cutoff=fixture.cutoff)
         validate_frozen_observation_set(
             fixture.frozen_observations,

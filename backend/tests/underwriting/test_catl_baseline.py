@@ -104,15 +104,32 @@ def test_unknown_evidence_gaps_are_persisted_and_required_for_publication(sessio
         fixture,
         observations=tuple(item for item in fixture.observations if item.value is not None),
     )
-    with pytest.raises(ValidationError, match="required evidence gaps"):
+    with pytest.raises(ValidationError, match="authenticated full observation fixture"):
         CatlBaselineService(session, now=lambda: NOW).import_fixture(stripped)
+
+
+@pytest.mark.parametrize("field", ["source_locator", "source_id", "available_at", "dimensions"])
+def test_import_rejects_replaced_unknown_evidence_gap_forgery(session, field) -> None:
+    fixture = load_catl_fixture()
+    target = next(item for item in fixture.observations if item.value is None)
+    replacement = replace(
+        target,
+        **{field: "forged" if field != "dimensions" else {"scope": "forged"}},
+    )
+    forged = replace(
+        fixture,
+        observations=tuple(replacement if item is target else item for item in fixture.observations),
+    )
+
+    with pytest.raises(ValidationError, match="authenticated full observation fixture"):
+        CatlBaselineService(session, now=lambda: NOW).import_fixture(forged)
 
 
 def test_import_rolls_back_every_wave_two_write_when_fixture_cannot_publish(session) -> None:
     bad_fixture = replace(load_catl_fixture(), mechanisms=tuple())
     service = CatlBaselineService(session, now=lambda: NOW)
 
-    with pytest.raises(ValidationError, match="six governed mechanism keys"):
+    with pytest.raises(ValidationError, match="authenticated full observation fixture"):
         service.import_fixture(bad_fixture)
 
     for model in (

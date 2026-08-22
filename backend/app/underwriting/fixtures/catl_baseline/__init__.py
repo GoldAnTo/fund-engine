@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+import weakref
 
 from app.models.ledger import ValidationError
 from app.underwriting.services.source_freeze import (
@@ -26,6 +27,7 @@ from app.underwriting.services.source_freeze import (
     freeze_manifest,
     freeze_observations,
 )
+from app.underwriting.services.kernel import canonical_hash
 
 
 _ROOT = Path(__file__).resolve().parent
@@ -105,7 +107,7 @@ class FixtureObservation:
     observation_status: str
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class CatlBaselineFixture:
     """The fixed, non-current CATL basis and its authenticated evidence batch."""
 
@@ -124,6 +126,40 @@ class CatlBaselineFixture:
         if len(matches) != 1:
             raise KeyError(f"CATL fixture does not contain exactly one {definition_key} observation")
         return matches[0]
+
+
+_TRUSTED_FULL_FIXTURES: dict[int, tuple[weakref.ReferenceType[CatlBaselineFixture], str]] = {}
+
+
+def _full_observation_hash(value: CatlBaselineFixture) -> str:
+    return canonical_hash(tuple({
+        "definition_key": item.definition_key, "definition_version": item.definition_version,
+        "value": str(item.value) if item.value is not None else None, "unit": item.unit,
+        "observed_start": item.observed_start, "observed_end": item.observed_end,
+        "effective_at": item.effective_at, "available_at": item.available_at,
+        "source_id": item.source_id, "source_locator": item.source_locator,
+        "dimensions": dict(item.dimensions), "source_role": item.source_role,
+        "research_object_kind": item.research_object_kind,
+        "derivation_parents": item.derivation_parents,
+        "derivation_formula": item.derivation_formula, "observation_status": item.observation_status,
+    } for item in value.observations))
+
+
+def _register_full_fixture(value: CatlBaselineFixture) -> CatlBaselineFixture:
+    identity = id(value)
+    def discard(_: weakref.ReferenceType[CatlBaselineFixture]) -> None:
+        _TRUSTED_FULL_FIXTURES.pop(identity, None)
+    _TRUSTED_FULL_FIXTURES[identity] = (weakref.ref(value, discard), _full_observation_hash(value))
+    return value
+
+
+def validate_full_observation_fixture(value: object) -> CatlBaselineFixture:
+    if type(value) is not CatlBaselineFixture:
+        raise ValidationError("authenticated full observation fixture is required")
+    trusted = _TRUSTED_FULL_FIXTURES.get(id(value))
+    if trusted is None or trusted[0]() is not value or trusted[1] != _full_observation_hash(value):
+        raise ValidationError("authenticated full observation fixture does not match loaded evidence")
+    return value
 
 
 def _parse_observation(raw: object, *, cutoff: datetime, source_ids: frozenset[str]) -> FixtureObservation:
@@ -264,11 +300,11 @@ def load_catl_fixture() -> CatlBaselineFixture:
         if item.value is not None:
             known_payload.append(dict(raw))
     frozen_observations = freeze_observations(known_payload, source_manifest=source_manifest)
-    return CatlBaselineFixture(
+    return _register_full_fixture(CatlBaselineFixture(
         cutoff=cutoff,
         sources=sources,
         observations=observations,
         mechanisms=_validate_mechanisms(mechanisms_raw),
         source_manifest=source_manifest,
         frozen_observations=frozen_observations,
-    )
+    ))
