@@ -19,6 +19,7 @@ from app.underwriting.services.source_freeze import (
     _register_source_manifest,
     freeze_manifest,
     freeze_observations,
+    validate_frozen_observation_set,
 )
 from app.underwriting.services.source_policy import (
     AuthorizationState,
@@ -82,6 +83,24 @@ def observation_fixture(*, source_id: str = "catl-annual-report") -> dict[str, o
         "source_role": "reported",
         "research_object_kind": "company",
     }
+
+
+def derived_observation_fixture(
+    *, definition_key: str = "segment.other.cost", parents: list[str] | None = None
+) -> dict[str, object]:
+    result = observation_fixture()
+    result.update(
+        {
+            "definition_key": definition_key,
+            "source_locator": "derived from p18",
+            "dimensions": {"entity": "CATL"},
+            "source_role": "derived",
+            "research_object_kind": "company",
+            "derivation_formula": "company.revenue - segment.power_battery.revenue",
+            "derivation_parents": parents or ["company.revenue"],
+        }
+    )
+    return result
 
 
 def observation_fixture_with_conflict() -> list[dict[str, object]]:
@@ -338,3 +357,42 @@ def test_observation_freeze_normalizes_and_stably_orders_observations() -> None:
         "company.revenue",
     ]
     assert frozen[1].available_at.tzinfo is UTC
+
+
+def test_derived_observation_requires_resolved_nonself_parent_and_acyclic_graph() -> None:
+    manifest = freeze_manifest(manifest_fixture(), cutoff=CUTOFF)
+    with pytest.raises(ValidationError, match="parents must resolve"):
+        freeze_observations([derived_observation_fixture(parents=["company.missing"])], manifest)
+    with pytest.raises(ValidationError, match="must not reference itself"):
+        freeze_observations(
+            [derived_observation_fixture(parents=["segment.other.cost"])], manifest
+        )
+    first = derived_observation_fixture(
+        definition_key="segment.first.cost", parents=["segment.second.cost"]
+    )
+    second = derived_observation_fixture(
+        definition_key="segment.second.cost", parents=["segment.first.cost"]
+    )
+    with pytest.raises(ValidationError, match="must be acyclic"):
+        freeze_observations([first, second], manifest)
+
+
+def test_derived_observation_binds_canonical_formula_and_parent_identities_into_hash() -> None:
+    manifest = freeze_manifest(manifest_fixture(), cutoff=CUTOFF)
+    parent = observation_fixture()
+    derived = derived_observation_fixture()
+    derived["derivation_formula"] = "  company.revenue   -   segment.power_battery.revenue  "
+    frozen = freeze_observations([derived, parent], manifest)
+    result = next(item for item in frozen if item.definition_key == "segment.other.cost")
+    dimensions = dict(result.dimensions)
+    assert dimensions["_derivation_formula"] == "company.revenue - segment.power_battery.revenue"
+    assert dimensions["_derivation_parent_content_hashes"]
+    assert dimensions["_derivation_parent_observation_ids"]
+
+    object.__setattr__(result, "dimensions", tuple(sorted({
+        **dimensions, "_derivation_formula": "forged formula"
+    }.items())))
+    with pytest.raises(ValidationError, match="hash does not match observations"):
+        validate_frozen_observation_set(
+            frozen, source_manifest=manifest, cutoff=CUTOFF
+        )

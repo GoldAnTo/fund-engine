@@ -94,6 +94,13 @@ def test_other_business_cost_is_a_replayable_derived_residual() -> None:
         "segment.materials_recycling.cost",
         "segment.mineral_resources.cost",
     )
+    frozen_value = next(
+        item for item in frozen.frozen_observations if item.definition_key == "segment.other.cost"
+    )
+    frozen_dimensions = dict(frozen_value.dimensions)
+    assert frozen_dimensions["_derivation_formula"] == observation.derivation_formula
+    assert frozen_dimensions["_derivation_parent_observation_ids"]
+    assert frozen_dimensions["_derivation_parent_content_hashes"]
 
 
 def test_source_digest_verification_accepts_only_matching_nonempty_bytes() -> None:

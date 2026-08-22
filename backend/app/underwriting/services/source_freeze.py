@@ -604,7 +604,9 @@ def freeze_observations(
     seen: set[tuple[object, ...]] = set()
     result: list[MetricObservation] = []
     reported_company_sources: dict[tuple[object, ...], set[str]] = {}
-    for raw in payload:
+
+    def append_observation(raw: Mapping[str, object]) -> None:
+        """Authenticate one raw record after any derived lineage is bound."""
         if not isinstance(raw, Mapping):
             raise ValidationError("observation must be an object")
         source_id = _require_text(raw.get("source_id"), "source_id")
@@ -660,6 +662,102 @@ def freeze_observations(
                 _reported_company_evidence_key(value), set()
             ).add(value.source_id)
         result.append(value)
+
+    raw_records: list[Mapping[str, object]] = []
+    for raw in payload:
+        if not isinstance(raw, Mapping):
+            raise ValidationError("observation must be an object")
+        raw_records.append(raw)
+
+    pending: list[Mapping[str, object]] = []
+    for raw in raw_records:
+        if raw.get("source_role") is SourceRole.DERIVED or raw.get("source_role") == SourceRole.DERIVED.value:
+            pending.append(raw)
+        else:
+            append_observation(raw)
+
+    def derived_identity(raw: Mapping[str, object]) -> tuple[str, tuple[str, ...], str]:
+        key = _require_text(raw.get("definition_key"), "definition_key")
+        parents = raw.get("derivation_parents")
+        formula = raw.get("derivation_formula")
+        if (
+            not isinstance(parents, list)
+            or not parents
+            or not all(isinstance(parent, str) and parent.strip() for parent in parents)
+            or not isinstance(formula, str)
+            or not formula.strip()
+        ):
+            raise ValidationError("derived observation requires formula and derivation parents")
+        normalized_parents = tuple(parent.strip() for parent in parents)
+        if len(normalized_parents) != len(set(normalized_parents)):
+            raise ValidationError("derived observation parents must be unique")
+        if key in normalized_parents:
+            raise ValidationError("derived observation must not reference itself")
+        return key, normalized_parents, " ".join(formula.split())
+
+    def bind_derived_lineage(
+        raw: Mapping[str, object],
+        *,
+        parents: tuple[tuple[str, MetricObservation], ...],
+        formula: str,
+    ) -> dict[str, object]:
+        raw_dimensions = raw.get("dimensions")
+        if not isinstance(raw_dimensions, Mapping):
+            raise ValidationError("derived observation dimensions must be an object")
+        dimensions = dict(raw_dimensions)
+        reserved = {
+            "_derivation_formula",
+            "_derivation_parent_observation_ids",
+            "_derivation_parent_content_hashes",
+        }
+        if reserved.intersection(dimensions):
+            raise ValidationError("derived observation dimensions may not pre-populate lineage bindings")
+        ordered_parents = tuple(sorted(parents, key=lambda pair: pair[0]))
+        dimensions["_derivation_formula"] = formula
+        dimensions["_derivation_parent_observation_ids"] = ",".join(
+            str(parent.observation_id) for _, parent in ordered_parents
+        )
+        dimensions["_derivation_parent_content_hashes"] = ",".join(
+            parent.content_hash for _, parent in ordered_parents
+        )
+        return dict(raw) | {"dimensions": dimensions, "derivation_formula": formula}
+
+    while pending:
+        progressed = False
+        still_pending: list[Mapping[str, object]] = []
+        pending_keys = {
+            _require_text(raw.get("definition_key"), "definition_key") for raw in pending
+        }
+        for raw in pending:
+            _, parent_keys, formula = derived_identity(raw)
+            parent_matches = tuple(
+                (
+                    parent_key,
+                    tuple(item for item in result if item.definition_key == parent_key),
+                )
+                for parent_key in parent_keys
+            )
+            unresolved = tuple(
+                parent_key for parent_key, matches in parent_matches if not matches
+            )
+            if unresolved:
+                if any(parent_key not in pending_keys for parent_key in unresolved):
+                    raise ValidationError("derived observation parents must resolve in frozen batch")
+                still_pending.append(raw)
+                continue
+            if any(len(matches) != 1 for _, matches in parent_matches):
+                raise ValidationError("derived observation parent must resolve to exactly one observation")
+            append_observation(
+                bind_derived_lineage(
+                    raw,
+                    parents=tuple((key, matches[0]) for key, matches in parent_matches),
+                    formula=formula,
+                )
+            )
+            progressed = True
+        if not progressed:
+            raise ValidationError("derived observation parents must be acyclic")
+        pending = still_pending
 
     for source_ids in reported_company_sources.values():
         if not any(
