@@ -174,6 +174,22 @@ def test_review_rejects_a_whitespace_variant_of_an_existing_reviewer_identity() 
         )
 
 
+@pytest.mark.parametrize("reviewer_identity", (None, 7))
+def test_review_rejects_a_non_string_reviewer_identity_with_validation_error(
+    reviewer_identity: object,
+) -> None:
+    with pytest.raises(ValidationError, match="reviewer_identity must not be empty"):
+        CandidateEvidenceReview(
+            dossier_id=uuid4(),
+            dossier_content_hash="a" * 64,
+            reviewer_identity=reviewer_identity,  # type: ignore[arg-type]
+            reviewer_role="provenance",
+            decision="approve",
+            rationale="source verified",
+            reviewed_at=NOW,
+        )
+
+
 def test_candidate_rows_capture_dossier_and_review_governance_contracts() -> None:
     dossier = Base.metadata.tables["uw_evidence_candidate_dossier_versions"]
     review = Base.metadata.tables["uw_evidence_candidate_review_versions"]

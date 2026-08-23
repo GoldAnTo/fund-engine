@@ -239,9 +239,10 @@ class CandidateEvidenceReview:
         if type(self.dossier_id) is not UUID:
             raise ValidationError("dossier_id must be a UUID")
         _hash(self.dossier_content_hash, "dossier_content_hash")
-        if self.reviewer_identity != self.reviewer_identity.strip():
+        canonical_reviewer_identity = _text(self.reviewer_identity, "reviewer_identity")
+        if self.reviewer_identity != canonical_reviewer_identity:
             raise ValidationError("reviewer_identity must be canonical")
-        object.__setattr__(self, "reviewer_identity", _text(self.reviewer_identity, "reviewer_identity"))
+        object.__setattr__(self, "reviewer_identity", canonical_reviewer_identity)
         if self.reviewer_role not in {role.value for role in CandidateEvidenceReviewRole}:
             raise ValidationError("reviewer_role must be provenance or methodology")
         if self.decision not in {decision.value for decision in CandidateEvidenceReviewDecision}:
