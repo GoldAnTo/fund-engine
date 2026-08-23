@@ -212,6 +212,7 @@ describe("Research OS route inventory", () => {
       revision: vi.fn().mockResolvedValue(revision),
       diff: vi.fn(),
       boundary: vi.fn().mockResolvedValue(boundary),
+      candidateEvidence: vi.fn(),
     } satisfies UnderwritingResearchApi);
 
     render(

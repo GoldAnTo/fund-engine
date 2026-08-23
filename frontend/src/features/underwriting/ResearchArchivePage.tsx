@@ -6,6 +6,7 @@ import {
   underwritingResearchApi,
   type ResearchArchiveItem,
   type ResearchArchiveList,
+  type CandidateEvidence,
   type ResearchRevision,
   type ResearchRevisionBoundary,
   type ResearchRevisionDiff,
@@ -24,7 +25,8 @@ type Artifact = ResearchRevisionDiff["entries"][number]["after"] extends infer V
 type DetailLoad = {
   revision: ResearchRevision;
   diff: ResearchRevisionDiff | null;
-  boundary: ResearchRevisionBoundary;
+  boundary: ResearchRevisionBoundary | null;
+  candidate: CandidateEvidence | null;
 };
 type DiffEntry = ResearchRevisionDiff["entries"][number];
 
@@ -36,11 +38,19 @@ const GROUPS = [
 ] as const;
 
 const INTEGRITY_ERROR = "冻结档案的身份或版本链无法校验，未展示任何资料。";
+const CANDIDATE_INTEGRITY_ERROR = "冻结研究记录不完整或不匹配，未展示候选证据。";
 
 class ArchiveIntegrityError extends Error {
   constructor() {
     super(INTEGRITY_ERROR);
     this.name = "ArchiveIntegrityError";
+  }
+}
+
+class CandidateEvidenceIntegrityError extends Error {
+  constructor() {
+    super(CANDIDATE_INTEGRITY_ERROR);
+    this.name = "CandidateEvidenceIntegrityError";
   }
 }
 
@@ -301,6 +311,95 @@ function checkedBoundary(value: unknown, selected: ResearchRevision): ResearchRe
   return boundary as ResearchRevisionBoundary;
 }
 
+function isCandidateItem(value: unknown): boolean {
+  const item = record(value);
+  if (
+    item === null
+    || !hasOnlyKeys(item, [
+      "schema_version", "metric_key", "status", "value", "unit", "observed_start", "observed_end",
+      "available_at", "source_id", "source_locator", "scope_statement", "exclusions", "methodology",
+      "prohibited_splicing_declaration", "transcription_method", "error_bound", "scenario_use",
+      "not_observed_declared", "unknown_reason",
+    ])
+    || item.schema_version !== "underwriting.v1"
+    || !nonEmptyString(item.metric_key)
+    || !["source_reported", "official_aggregate", "chart_approximation", "assumption_bound", "unknown"].includes(item.status as string)
+    || !(item.value === null || nonEmptyString(item.value))
+    || !(item.unit === null || nonEmptyString(item.unit))
+    || !isUtcTimestamp(item.observed_start)
+    || !isUtcTimestamp(item.observed_end)
+    || !isUtcTimestamp(item.available_at)
+    || !["source_id", "source_locator", "scope_statement", "methodology", "prohibited_splicing_declaration"].every((key) => nonEmptyString(item[key]))
+    || !isStringList(item.exclusions)
+    || !(item.transcription_method === null || nonEmptyString(item.transcription_method))
+    || !(item.error_bound === null || nonEmptyString(item.error_bound))
+    || !(item.scenario_use === null || nonEmptyString(item.scenario_use))
+    || typeof item.not_observed_declared !== "boolean"
+    || !(item.unknown_reason === null || nonEmptyString(item.unknown_reason))
+  ) return false;
+
+  const numeric = item.status !== "unknown" && item.value !== null && item.unit !== null;
+  if (!numeric) return item.status === "unknown"
+    && item.transcription_method === null && item.error_bound === null && item.scenario_use === null
+    && item.not_observed_declared === false && item.unknown_reason !== null;
+  if (item.status === "chart_approximation") {
+    return item.transcription_method !== null && item.error_bound !== null
+      && item.scenario_use === null && item.not_observed_declared === false && item.unknown_reason === null;
+  }
+  if (item.status === "assumption_bound") {
+    return item.transcription_method === null && item.error_bound === null
+      && item.scenario_use !== null && item.not_observed_declared === true && item.unknown_reason === null;
+  }
+  return item.transcription_method === null && item.error_bound === null
+    && item.scenario_use === null && item.not_observed_declared === false && item.unknown_reason === null;
+}
+
+function isCandidateReview(value: unknown): boolean {
+  const review = record(value);
+  return review !== null
+    && hasOnlyKeys(review, ["schema_version", "reference", "content_hash", "reviewer_identity", "reviewer_role", "decision", "rationale", "reviewed_at"])
+    && review.schema_version === "underwriting.v1"
+    && isCanonicalUuid(review.reference)
+    && isContentHash(review.content_hash)
+    && nonEmptyString(review.reviewer_identity)
+    && ["provenance", "methodology"].includes(review.reviewer_role as string)
+    && review.decision === "approve"
+    && nonEmptyString(review.rationale)
+    && isUtcTimestamp(review.reviewed_at);
+}
+
+function checkedCandidateEvidence(value: unknown, selected: ResearchRevision): CandidateEvidence {
+  const candidate = record(value);
+  const dossier = record(candidate?.dossier);
+  const answerability = record(candidate?.answerability);
+  if (
+    candidate === null
+    || !hasOnlyKeys(candidate, ["schema_version", "revision_id", "object_id", "basis_id", "version_kind", "content_hash", "cutoff", "source_manifest_hash", "dossier", "items", "reviews", "answerability"])
+    || candidate.schema_version !== "underwriting.v1"
+    || !isCanonicalUuid(candidate.revision_id) || !isCanonicalUuid(candidate.object_id) || !isCanonicalUuid(candidate.basis_id)
+    || candidate.revision_id !== selected.id || candidate.object_id !== selected.object_id || candidate.basis_id !== selected.basis_id
+    || candidate.version_kind !== "industry_evidence_candidate" || selected.version_kind !== "industry_evidence_candidate"
+    || !isContentHash(candidate.content_hash) || candidate.content_hash !== selected.content_hash
+    || !isUtcTimestamp(candidate.cutoff) || candidate.cutoff !== selected.cutoff
+    || !isContentHash(candidate.source_manifest_hash) || candidate.source_manifest_hash !== selected.source_manifest_hash
+    || dossier === null
+    || !hasOnlyKeys(dossier, ["schema_version", "reference", "content_hash", "dossier_key", "version", "status", "scope_statement"])
+    || dossier.schema_version !== "underwriting.v1" || !isCanonicalUuid(dossier.reference) || !isContentHash(dossier.content_hash)
+    || !nonEmptyString(dossier.dossier_key) || !Number.isSafeInteger(dossier.version) || (dossier.version as number) < 1
+    || dossier.status !== "candidate" || !nonEmptyString(dossier.scope_statement)
+    || !Array.isArray(candidate.items) || candidate.items.length === 0 || !candidate.items.every(isCandidateItem)
+    || !Array.isArray(candidate.reviews) || candidate.reviews.length !== 2 || !candidate.reviews.every(isCandidateReview)
+    || new Set(candidate.reviews.map((review) => record(review)?.reviewer_role)).size !== 2
+    || new Set(candidate.reviews.map((review) => record(review)?.reviewer_identity)).size !== 2
+    || answerability === null
+    || !hasOnlyKeys(answerability, ["schema_version", "reference", "content_hash", "state", "research_debt_keys", "resolution_requirements"])
+    || answerability.schema_version !== "underwriting.v1" || !isCanonicalUuid(answerability.reference)
+    || !isContentHash(answerability.content_hash) || answerability.state !== "not_answerable"
+    || !isStringList(answerability.research_debt_keys) || !isStringList(answerability.resolution_requirements)
+  ) throw new CandidateEvidenceIntegrityError();
+  return candidate as CandidateEvidence;
+}
+
 function isDiff(value: unknown): value is ResearchRevisionDiff {
   const diff = record(value);
   return diff?.schema_version === "underwriting.v1"
@@ -395,6 +494,7 @@ function safeEnvelopeText(value: string | undefined): string | null {
 }
 
 function errorCopy(error: unknown, subject: "directory" | "detail"): string {
+  if (error instanceof CandidateEvidenceIntegrityError) return CANDIDATE_INTEGRITY_ERROR;
   if (error instanceof ArchiveIntegrityError) return INTEGRITY_ERROR;
   if (error instanceof UnderwritingResearchRequestError) {
     if (error.status === 404 && subject === "detail") return "找不到该冻结版本档案。";
@@ -509,6 +609,62 @@ function ResearchBoundaries({ boundary }: { boundary: ResearchRevisionBoundary }
   );
 }
 
+function candidateStatusLabel(status: CandidateEvidence["items"][number]["status"]): string {
+  return {
+    source_reported: "来源报告",
+    official_aggregate: "官方汇总",
+    chart_approximation: "图表近似",
+    assumption_bound: "假设边界",
+    unknown: "Unknown",
+  }[status];
+}
+
+function reviewerRoleLabel(role: CandidateEvidence["reviews"][number]["reviewer_role"]): string {
+  return role === "provenance" ? "来源审阅" : "方法审阅";
+}
+
+function CandidateEvidencePanel({ candidate }: { candidate: CandidateEvidence }) {
+  return (
+    <section className="ura-candidate" aria-label="候选证据（已审阅，未正式化）">
+      <p className="ros-eyebrow">候选证据（已审阅，未正式化）</p>
+      <h2>候选证据</h2>
+      <p>范围：{candidate.dossier.scope_statement}</p>
+      <p>边界声明：不能用于 IndustryState 或估值；不会从当前记录补全、拼接或推导。</p>
+      <p>计算边界：该冻结候选响应未提供可显示的拒绝计算清单；不会推断或补全。</p>
+      <section aria-label="候选条目">
+        <h3>冻结候选条目</h3>
+        {candidate.items.map((item) => <article key={`${item.metric_key}:${item.status}`} className="ura-candidate-item">
+          <h4>{item.metric_key}</h4>
+          <dl className="ura-artifact-details">
+            <div><dt>状态</dt><dd>{candidateStatusLabel(item.status)}</dd></div>
+            <div><dt>来源标识</dt><dd>{item.source_id}</dd></div>
+            <div><dt>来源定位</dt><dd>{item.source_locator}</dd></div>
+            <div><dt>期间</dt><dd>{formatPeriod(item.observed_start, item.observed_end)}</dd></div>
+            <div><dt>可用时间</dt><dd>{item.available_at}</dd></div>
+            <div><dt>范围</dt><dd>{item.scope_statement}</dd></div>
+            <div><dt>排除项</dt><dd>{item.exclusions.length ? item.exclusions.join("；") : "未记录"}</dd></div>
+            <div><dt>方法</dt><dd>{item.methodology}</dd></div>
+            <div><dt>禁止拼接声明</dt><dd>{item.prohibited_splicing_declaration}</dd></div>
+            {item.status === "chart_approximation" && <><div><dt>图表转录</dt><dd>{item.transcription_method}</dd></div><div><dt>误差范围</dt><dd>{item.error_bound}</dd></div></>}
+            {item.status === "assumption_bound" && <><div><dt>假设约束</dt><dd>{item.scenario_use}</dd></div><div><dt>非观测声明</dt><dd>是</dd></div></>}
+            {item.status === "unknown" && <div><dt>Unknown 原因</dt><dd>{item.unknown_reason}</dd></div>}
+          </dl>
+        </article>)}
+      </section>
+      <section aria-label="候选审阅">
+        <h3>冻结审阅</h3>
+        {candidate.reviews.map((review) => <dl className="ura-artifact-details" key={review.reference}>
+          <div><dt>角色</dt><dd>{reviewerRoleLabel(review.reviewer_role)}</dd></div>
+          <div><dt>审阅身份</dt><dd>{review.reviewer_identity}</dd></div>
+          <div><dt>决定</dt><dd>批准</dd></div>
+          <div><dt>理由</dt><dd>{review.rationale}</dd></div>
+          <div><dt>审阅时间</dt><dd>{review.reviewed_at}</dd></div>
+        </dl>)}
+      </section>
+    </section>
+  );
+}
+
 function DirectoryPage() {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<ArchiveKind>("");
@@ -609,17 +765,20 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
     if (!selected) return;
     let live = true;
     setDetailState({ state: "loading" });
+    const candidateSelected = selected.version_kind === "industry_evidence_candidate";
     void Promise.all([
       underwritingResearchApi.revision(selected.id),
       previous ? underwritingResearchApi.diff(previous.id, selected.id) : Promise.resolve(null),
-      underwritingResearchApi.boundary(selected.id),
-    ]).then(([revision, diff, boundary]) => {
+      candidateSelected ? Promise.resolve(null) : underwritingResearchApi.boundary(selected.id),
+      candidateSelected ? underwritingResearchApi.candidateEvidence(selected.id) : Promise.resolve(null),
+    ]).then(([revision, diff, boundary, candidate]) => {
       if (!live) return;
       const checked = checkedRevision(revision, selected);
       setDetailState({ state: "ready", value: {
         revision: checked,
         diff: previous ? checkedDiff(diff, previous, checked) : null,
-        boundary: checkedBoundary(boundary, checked),
+        boundary: candidateSelected ? null : checkedBoundary(boundary, checked),
+        candidate: candidateSelected ? checkedCandidateEvidence(candidate, checked) : null,
       } });
     }).catch((error: unknown) => { if (live) setDetailState({ state: "error", error }); });
     return () => { live = false; };
@@ -634,6 +793,7 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
   const revision = detailState.value.revision;
   const changed = detailState.value.diff?.entries ?? [];
   const artifacts = revision.parent_refs;
+  const candidate = detailState.value.candidate;
 
   return (
     <main className="ros-page ura-page">
@@ -642,14 +802,16 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
         <aside className="ura-timeline" aria-label="研究版本时间线"><p className="ros-eyebrow">不可变版本</p>{revisions.map((revision) => <button key={revision.id} type="button" aria-pressed={revision.id === selected.id} className={revision.id === selected.id ? "ura-version is-selected" : "ura-version"} onClick={() => setSelectedId(revision.id)}><b>版本 {revision.sequence}</b><span>{revision.cutoff}</span></button>)}</aside>
         <section className="ura-detail" aria-label="已选冻结版本">
           <section className="ura-version-summary"><h2>版本 {revision.sequence}</h2><dl><div><dt>截点</dt><dd>{revision.cutoff}</dd></div><div><dt>来源摘要</dt><dd>{revision.source_manifest_hash}</dd></div><div><dt>内容摘要</dt><dd>{revision.content_hash}</dd></div></dl></section>
+          {candidate ? <CandidateEvidencePanel candidate={candidate} /> : <>
           {previous ? <p className="ura-predecessor">仅与紧邻的版本 {previous.sequence} 对照。</p> : <p className="ura-predecessor">这是该档案最早的冻结版本，没有前序版本可对照。</p>}
           {previous && detailState.value.diff && <div className="ura-diff-groups">{GROUPS.map(([group, heading]) => {
             const entries = changed.filter((entry) => entry.group === group);
             return <section className="ura-diff-group" key={group}><h2>{heading}</h2>{entries.length === 0 ? <p>这一版本没有该类冻结变化</p> : entries.map((entry) => <article className="ura-diff-entry" key={`${entry.change_type}:${entry.artifact_type}:${entry.identity}`}><header><b>{entry.change_type}</b><span>{entry.artifact_type}</span></header>{entry.before && <section className="ura-diff-card" aria-label="前一版本证据"><h3>前一版本</h3><ArtifactDetails artifact={entry.before} /></section>}{entry.after && <section className="ura-diff-card" aria-label="当前版本证据"><h3>当前版本</h3><ArtifactDetails artifact={entry.after} /></section>}</article>)}</section>;
           })}</div>}
           <EvidenceTable artifacts={artifacts} />
+          </>}
         </section>
-        <ResearchBoundaries boundary={detailState.value.boundary} />
+        {detailState.value.boundary && <ResearchBoundaries boundary={detailState.value.boundary} />}
       </div>
     </main>
   );

@@ -9,6 +9,7 @@ export type ResearchRevision = Schemas["ResearchRevisionResponse"];
 export type ResearchRevisionHistory = Schemas["ResearchRevisionHistoryResponse"];
 export type ResearchRevisionDiff = Schemas["ResearchRevisionDiffResponse"];
 export type ResearchRevisionBoundary = Schemas["ResearchRevisionBoundaryResponse"];
+export type CandidateEvidence = Schemas["CandidateEvidenceResponse"];
 export type ResearchArchiveItem = Schemas["ResearchArchiveItemResponse"];
 export type ResearchArchiveList = Schemas["ResearchArchiveListResponse"];
 
@@ -112,6 +113,10 @@ function createHttpUnderwritingResearchApi(baseUrl = defaultBaseUrl()) {
       request<ResearchRevisionBoundary>(
         `/research-versions/${encodeURIComponent(revisionId)}/boundary`,
       ),
+    candidateEvidence: (revisionId: string) =>
+      request<CandidateEvidence>(
+        `/research-versions/${encodeURIComponent(revisionId)}/candidate-evidence`,
+      ),
   };
 }
 
@@ -135,4 +140,5 @@ export const underwritingResearchApi: UnderwritingResearchApi = {
   diff: (fromRevisionId, toRevisionId) =>
     selectedUnderwritingResearchApi.diff(fromRevisionId, toRevisionId),
   boundary: (revisionId) => selectedUnderwritingResearchApi.boundary(revisionId),
+  candidateEvidence: (revisionId) => selectedUnderwritingResearchApi.candidateEvidence(revisionId),
 };

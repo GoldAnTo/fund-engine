@@ -118,6 +118,127 @@ const boundaryTwo = {
   unknown_evidence_gaps: [],
 };
 
+const candidateRevision = {
+  schema_version: "underwriting.v1" as const,
+  id: "00000000-0000-4000-8000-000000000101",
+  object_id: "00000000-0000-4000-8000-000000000102",
+  basis_id: "00000000-0000-4000-8000-000000000103",
+  version_kind: "industry_evidence_candidate",
+  sequence: 1,
+  content_hash: "c".repeat(64),
+  cutoff: "2025-05-15T15:59:59Z",
+  source_manifest_hash: "d".repeat(64),
+  parent_refs: [],
+};
+
+const candidateEvidence = {
+  schema_version: "underwriting.v1" as const,
+  revision_id: candidateRevision.id,
+  object_id: candidateRevision.object_id,
+  basis_id: candidateRevision.basis_id,
+  version_kind: "industry_evidence_candidate" as const,
+  content_hash: candidateRevision.content_hash,
+  cutoff: candidateRevision.cutoff,
+  source_manifest_hash: candidateRevision.source_manifest_hash,
+  dossier: {
+    schema_version: "underwriting.v1" as const,
+    reference: "00000000-0000-4000-8000-000000000104",
+    content_hash: "e".repeat(64),
+    dossier_key: "industry-capacity",
+    version: 1,
+    status: "candidate" as const,
+    scope_statement: "仅限已冻结的行业产能候选证据。",
+  },
+  items: [{
+    schema_version: "underwriting.v1" as const,
+    metric_key: "industry.chart_output",
+    status: "chart_approximation" as const,
+    value: "0.9",
+    unit: "TWh",
+    observed_start: "2024-01-01T00:00:00Z",
+    observed_end: "2024-12-31T00:00:00Z",
+    available_at: "2025-05-15T15:59:59Z",
+    source_id: "iea-2024",
+    source_locator: "IEA 图 4.2",
+    scope_statement: "图表转录的全球产出。",
+    exclusions: ["不构成正式模型输入。"],
+    methodology: "手工图表转录。",
+    prohibited_splicing_declaration: "不得与其他来源拼接。",
+    transcription_method: "读取图表刻度。",
+    error_bound: "±0.1 TWh",
+    scenario_use: null,
+    not_observed_declared: false,
+    unknown_reason: null,
+  }, {
+    schema_version: "underwriting.v1" as const,
+    metric_key: "industry.assumption_cap",
+    status: "assumption_bound" as const,
+    value: "0.85",
+    unit: "ratio",
+    observed_start: "2024-01-01T00:00:00Z",
+    observed_end: "2024-12-31T00:00:00Z",
+    available_at: "2025-05-15T15:59:59Z",
+    source_id: "iea-2024",
+    source_locator: "研究假设 A",
+    scope_statement: "仅限情景上限。",
+    exclusions: ["非观测值。"],
+    methodology: "有界情景假设。",
+    prohibited_splicing_declaration: "不得与其他来源拼接。",
+    transcription_method: null,
+    error_bound: null,
+    scenario_use: "仅用于候选情景边界。",
+    not_observed_declared: true,
+    unknown_reason: null,
+  }, {
+    schema_version: "underwriting.v1" as const,
+    metric_key: "industry.effective_capacity",
+    status: "unknown" as const,
+    value: null,
+    unit: null,
+    observed_start: "2024-01-01T00:00:00Z",
+    observed_end: "2024-12-31T00:00:00Z",
+    available_at: "2025-05-15T15:59:59Z",
+    source_id: "iea-2024",
+    source_locator: "缺口记录",
+    scope_statement: "有效产能。",
+    exclusions: ["无可用观测。"],
+    methodology: "缺口记录。",
+    prohibited_splicing_declaration: "不得与其他来源拼接。",
+    transcription_method: null,
+    error_bound: null,
+    scenario_use: null,
+    not_observed_declared: false,
+    unknown_reason: "未找到满足截止日的有效产能观测。",
+  }],
+  reviews: [{
+    schema_version: "underwriting.v1" as const,
+    reference: "00000000-0000-4000-8000-000000000105",
+    content_hash: "f".repeat(64),
+    reviewer_identity: "reviewer:methodology",
+    reviewer_role: "methodology" as const,
+    decision: "approve" as const,
+    rationale: "方法边界可追溯。",
+    reviewed_at: "2025-05-15T15:59:59Z",
+  }, {
+    schema_version: "underwriting.v1" as const,
+    reference: "00000000-0000-4000-8000-000000000106",
+    content_hash: "0".repeat(64),
+    reviewer_identity: "reviewer:provenance",
+    reviewer_role: "provenance" as const,
+    decision: "approve" as const,
+    rationale: "来源边界可追溯。",
+    reviewed_at: "2025-05-15T15:59:59Z",
+  }],
+  answerability: {
+    schema_version: "underwriting.v1" as const,
+    reference: "00000000-0000-4000-8000-000000000107",
+    content_hash: "1".repeat(64),
+    state: "not_answerable" as const,
+    research_debt_keys: ["candidate_evidence:industry-capacity"],
+    resolution_requirements: ["正式化前不得使用。"],
+  },
+};
+
 function unknownGap(overrides: Record<string, unknown> = {}) {
   return {
     schema_version: "underwriting.v1" as const,
@@ -233,6 +354,7 @@ function installApi(overrides: Partial<UnderwritingResearchApi> = {}) {
       cutoff: revisionOne.cutoff,
       source_manifest_hash: revisionOne.source_manifest_hash,
     } : boundaryTwo)),
+    candidateEvidence: vi.fn().mockResolvedValue(candidateEvidence),
     ...overrides,
   } as unknown as UnderwritingResearchApi;
   setUnderwritingResearchApi(api);
@@ -244,6 +366,82 @@ afterEach(() => {
 });
 
 describe("ResearchArchivePage", () => {
+  it("renders only the selected reviewed candidate with chart, assumption, Unknown, and both reviews", async () => {
+    const api = installApi({
+      history: vi.fn().mockResolvedValue({
+        schema_version: "underwriting.v1",
+        object_id: candidateRevision.object_id,
+        version_kind: candidateRevision.version_kind,
+        object_kind: "industry",
+        canonical_name: "电池行业",
+        external_key: "battery-cn",
+        revisions: [candidateRevision],
+      }),
+      revision: vi.fn().mockResolvedValue(candidateRevision),
+    });
+    renderArchive(`/underwriting/research/${candidateRevision.object_id}/${candidateRevision.version_kind}`);
+
+    const candidate = await screen.findByRole("region", { name: "候选证据（已审阅，未正式化）" });
+    expect(candidate).toHaveTextContent("仅限已冻结的行业产能候选证据。");
+    expect(within(candidate).getByText("图表近似")).toBeVisible();
+    expect(within(candidate).getByText("读取图表刻度。")).toBeVisible();
+    expect(within(candidate).getByText("±0.1 TWh")).toBeVisible();
+    expect(within(candidate).getByText("仅用于候选情景边界。")).toBeVisible();
+    expect(within(candidate).getByText("未找到满足截止日的有效产能观测。")).toBeVisible();
+    expect(within(candidate).getByText("reviewer:methodology")).toBeVisible();
+    expect(within(candidate).getByText("reviewer:provenance")).toBeVisible();
+    expect(within(candidate).getByText(/不能用于 IndustryState 或估值/)).toBeVisible();
+    expect(within(candidate).getByText(/未提供可显示的拒绝计算清单/)).toBeVisible();
+    expect(api.candidateEvidence).toHaveBeenCalledWith(candidateRevision.id);
+    expect(screen.queryByRole("region", { name: "冻结证据记录" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["does not bind to the selected revision", { ...candidateEvidence, revision_id: "00000000-0000-4000-8000-000000000199" }],
+    ["adds an unrecognised top-level field", { ...candidateEvidence, unexpected: true }],
+    ["has a malformed nested review", { ...candidateEvidence, reviews: [{ ...candidateEvidence.reviews[0], reviewed_at: "not-a-timestamp" }, candidateEvidence.reviews[1]] }],
+  ])("fails closed when candidate evidence %s", async (_name, response) => {
+    installApi({
+      history: vi.fn().mockResolvedValue({
+        schema_version: "underwriting.v1", object_id: candidateRevision.object_id,
+        version_kind: candidateRevision.version_kind, object_kind: "industry",
+        canonical_name: "电池行业", external_key: "battery-cn", revisions: [candidateRevision],
+      }),
+      revision: vi.fn().mockResolvedValue(candidateRevision),
+      candidateEvidence: vi.fn().mockResolvedValue(response),
+    });
+    renderArchive(`/underwriting/research/${candidateRevision.object_id}/${candidateRevision.version_kind}`);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结研究记录不完整或不匹配");
+    expect(screen.queryByRole("region", { name: "候选证据（已审阅，未正式化）" })).not.toBeInTheDocument();
+  });
+
+  it("does not retain a prior candidate while navigating to another frozen archive", async () => {
+    const otherHistory = new Promise<ResearchRevisionHistory>(() => undefined);
+    installApi({
+      history: vi.fn((objectId: string) => objectId === candidateRevision.object_id ? Promise.resolve({
+        schema_version: "underwriting.v1", object_id: candidateRevision.object_id,
+        version_kind: candidateRevision.version_kind, object_kind: "industry",
+        canonical_name: "电池行业", external_key: "battery-cn", revisions: [candidateRevision],
+      } as ResearchRevisionHistory) : otherHistory),
+      revision: vi.fn().mockResolvedValue(candidateRevision),
+    });
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={[`/underwriting/research/${candidateRevision.object_id}/${candidateRevision.version_kind}`]}>
+        <Link to="/underwriting/research/00000000-0000-4000-8000-000000000108/industry_evidence_candidate">切换候选档案</Link>
+        <Routes><Route path="/underwriting/research/:objectId/:versionKind" element={<ResearchArchivePage />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("region", { name: "候选证据（已审阅，未正式化）" })).toBeVisible();
+    await user.click(screen.getByRole("link", { name: "切换候选档案" }));
+
+    expect(screen.getByRole("status")).toHaveTextContent("正在读取冻结版本档案");
+    expect(screen.queryByRole("region", { name: "候选证据（已审阅，未正式化）" })).not.toBeInTheDocument();
+    expect(screen.queryByText("industry.chart_output")).not.toBeInTheDocument();
+  });
+
   it("filters the archive directory and keeps unreadable metadata withheld", async () => {
     const api = installApi();
     const user = userEvent.setup();
