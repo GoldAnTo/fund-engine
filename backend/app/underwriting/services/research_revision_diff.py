@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 import re
 from uuid import UUID
 
@@ -16,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
+from app.underwriting.domain.metrics import MetricObservation as DomainMetricObservation
 from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
     UnderwritingHistoricalBasis,
@@ -34,7 +36,7 @@ from app.underwriting.persistence.research_models import (
     UnderwritingMetricObservation,
     UnderwritingSourceManifestVersion,
 )
-from app.underwriting.services.kernel import canonical_hash
+from app.underwriting.services.kernel import UnderwritingKernelService, canonical_hash
 
 
 _SNAPSHOT_TOKEN = re.compile(r"semantic_snapshot:[0-9a-f]{64}")
@@ -97,6 +99,16 @@ class ResearchRevisionDiffService:
         return normalized.isoformat()
 
     @staticmethod
+    def _canonical_decimal(value: Decimal) -> Decimal:
+        """Undo database ``NUMERIC`` scale padding before re-sealing an observation."""
+        if not value.is_finite():
+            raise ValidationError("research revision parent has non-finite metric content")
+        text = format(value, "f")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return Decimal(text or "0")
+
+    @staticmethod
     def _parent_error(reason: str) -> ValidationError:
         return ValidationError(f"research revision parent {reason}")
 
@@ -116,11 +128,35 @@ class ResearchRevisionDiffService:
     def _manifest_for_id(self, manifest_id: UUID) -> UnderwritingSourceManifestVersion | None:
         return self._session.get(UnderwritingSourceManifestVersion, manifest_id)
 
+    def _verified_manifest(self, manifest_id: UUID, basis_id: UUID) -> UnderwritingSourceManifestVersion:
+        manifest = self._manifest_for_id(manifest_id)
+        if manifest is None or manifest.basis_id != basis_id:
+            raise self._parent_error("has an invalid source-manifest lineage")
+        if not isinstance(manifest.manifest, Mapping) or manifest.content_hash != canonical_hash(manifest.manifest):
+            raise self._parent_error("has a source-manifest content hash mismatch")
+        return manifest
+
     def _locators_from_manifest(self, manifest_id: UUID) -> tuple[str, ...]:
         manifest = self._manifest_for_id(manifest_id)
         if manifest is None or not isinstance(manifest.manifest, Mapping):
             return ()
         return self._manifest_locators(manifest.manifest)
+
+    @staticmethod
+    def _manifest_source_ids(manifest: UnderwritingSourceManifestVersion) -> frozenset[str]:
+        sources = manifest.manifest.get("sources") if isinstance(manifest.manifest, Mapping) else None
+        if not isinstance(sources, list):
+            raise ValidationError("research revision parent has malformed source-manifest lineage")
+        source_ids = {
+            source_id.strip()
+            for source in sources
+            if isinstance(source, Mapping)
+            and isinstance(source_id := source.get("source_id"), str)
+            and source_id.strip()
+        }
+        if len(source_ids) != len(sources):
+            raise ValidationError("research revision parent has malformed source-manifest lineage")
+        return frozenset(source_ids)
 
     @staticmethod
     def _answerability_hash(row: UnderwritingAnswerabilityEvaluation) -> str:
@@ -159,6 +195,89 @@ class ResearchRevisionDiffService:
             for artifact_type, model in model_types
             if (row := self._session.get(model, reference)) is not None
         ]
+
+    def _verify_artifact_lineage(self, artifact_type: str, row: object, revision: UnderwritingResearchVersion) -> None:
+        """Recompute parent payload seals and verify its persisted dependencies.
+
+        Immutable-table guards stop ordinary writes.  This additional read-time
+        check is for an attacker or migration bug that bypassed those guards:
+        a parent whose source locator, dimensions or content changed without a
+        corresponding historical publication must not be presented as genuine.
+        """
+        if artifact_type == "source_manifest":
+            assert isinstance(row, UnderwritingSourceManifestVersion)
+            self._verified_manifest(row.id, revision.basis_id)
+            return
+        if artifact_type == "metric_definition":
+            assert isinstance(row, UnderwritingMetricDefinitionVersion)
+            if row.content_hash != canonical_hash(row.definition):
+                raise self._parent_error("has a metric-definition content hash mismatch")
+            self._verified_manifest(row.source_manifest_id, revision.basis_id)
+            return
+        if artifact_type == "metric_observation":
+            assert isinstance(row, UnderwritingMetricObservation)
+            if not isinstance(row.dimensions, Mapping) or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in row.dimensions.items()
+            ):
+                raise self._parent_error("has malformed metric-observation dimensions")
+            try:
+                expected_hash = DomainMetricObservation(
+                    row.metric_key, row.definition_version, self._canonical_decimal(row.value), row.unit,
+                    self._stored_datetime(row.observed_start), self._stored_datetime(row.observed_end),
+                    self._stored_datetime(row.effective_at), self._stored_datetime(row.available_at),
+                    row.source_id, row.source_locator, tuple(row.dimensions.items()),
+                ).content_hash
+            except ValidationError as exc:
+                raise self._parent_error("has malformed metric-observation content") from exc
+            if row.dimension_hash != canonical_hash(row.dimensions) or row.content_hash != expected_hash:
+                raise self._parent_error("has a metric-observation content hash mismatch")
+            definition = self._session.get(UnderwritingMetricDefinitionVersion, row.definition_id)
+            if (
+                definition is None
+                or definition.basis_id != revision.basis_id
+                or definition.metric_key != row.metric_key
+                or definition.version != row.definition_version
+                or definition.source_manifest_id != row.source_manifest_id
+                or definition.content_hash != canonical_hash(definition.definition)
+            ):
+                raise self._parent_error("has an invalid metric-definition lineage")
+            manifest = self._verified_manifest(row.source_manifest_id, revision.basis_id)
+            if row.source_id not in self._manifest_source_ids(manifest):
+                raise self._parent_error("has an unknown metric-observation source")
+            return
+        if artifact_type == "mechanism":
+            assert isinstance(row, UnderwritingMechanismPackVersion)
+            if row.content_hash != canonical_hash(row.payload):
+                raise self._parent_error("has a mechanism content hash mismatch")
+            self._verified_manifest(row.source_manifest_id, revision.basis_id)
+            return
+        if artifact_type == "ledger":
+            assert isinstance(row, UnderwritingLedgerEntry)
+            expected_hash = canonical_hash({
+                "ledger_kind": row.ledger_kind, "family_key": row.family_key,
+                "entry_type": row.entry_type, "payload": row.payload,
+                "effective_at": self._stored_datetime(row.effective_at),
+                "available_at": self._stored_datetime(row.available_at),
+                "source_boundary": row.source_boundary,
+            })
+            if row.content_hash != expected_hash:
+                raise self._parent_error("has a ledger content hash mismatch")
+
+    def _parent_object_id(self, artifact_type: str, row: object) -> UUID | None:
+        if artifact_type in {"mechanism", "industry_state", "ledger", "answerability"}:
+            return getattr(row, "object_id")
+        if artifact_type in {"company_exposure", "earnings_engine", "forecast_input"}:
+            return getattr(row, "company_id")
+        if artifact_type == "industry_scenario":
+            assert isinstance(row, UnderwritingIndustryScenarioVersion)
+            state = self._session.get(UnderwritingIndustryStateVersion, row.industry_state_id)
+            return state.object_id if state is not None and state.basis_id == row.basis_id else None
+        if artifact_type == "falsifier":
+            assert isinstance(row, UnderwritingFalsifierVersion)
+            mechanism = self._session.get(UnderwritingMechanismPackVersion, row.mechanism_id)
+            return mechanism.object_id if mechanism is not None and mechanism.basis_id == row.basis_id else None
+        return None
 
     def _descriptor(self, artifact_type: str, row: object, reference: str) -> RevisionArtifactRef:
         if artifact_type == "source_manifest":
@@ -250,6 +369,13 @@ class ResearchRevisionDiffService:
         basis_id = getattr(row, "basis_id", None)
         if basis_id != revision.basis_id:
             raise self._parent_error("belongs to another historical basis")
+        object_id = self._parent_object_id(artifact_type, row)
+        if artifact_type in {
+            "mechanism", "industry_state", "industry_scenario", "company_exposure",
+            "earnings_engine", "forecast_input", "falsifier", "ledger", "answerability",
+        } and object_id != revision.object_id:
+            raise self._parent_error("belongs to another research object")
+        self._verify_artifact_lineage(artifact_type, row, revision)
         return self._descriptor(artifact_type, row, reference)
 
     @staticmethod
@@ -262,20 +388,39 @@ class ResearchRevisionDiffService:
             raise ValidationError("research revision not found")
         return row
 
+    def _validate_revision_content(self, revision: UnderwritingResearchVersion) -> None:
+        if len(set(revision.parent_ids)) != len(revision.parent_ids):
+            raise ValidationError("research revision parent set is duplicated")
+        # Versions written by the generic kernel seal their current historical
+        # snapshot plus a canonical parent set.  A semantic snapshot denotes a
+        # separately governed fixture publication (such as CATL) whose payload
+        # has its own persisted fixture seal, so this generic formula must not
+        # be substituted for it.
+        if any(isinstance(value, str) and _SNAPSHOT_TOKEN.fullmatch(value) for value in revision.parent_ids):
+            return
+        kernel = UnderwritingKernelService(self._session, now=lambda: self._stored_datetime(revision.created_at))
+        expected = kernel.preview_research_version_hash(
+            revision.object_id, revision.basis_id, revision.version_kind, list(revision.parent_ids),
+        )
+        if revision.content_hash != expected:
+            raise ValidationError("research revision content hash does not match frozen parent set")
+
     def revision_summary(self, revision_id: UUID) -> ResearchRevisionSummary:
         """Describe only parents explicitly frozen into ``revision_id``."""
-        revision = self._revision(revision_id)
-        basis = self._session.get(UnderwritingHistoricalBasis, revision.basis_id)
-        if basis is None:
-            raise ValidationError("research revision basis is missing")
-        if not isinstance(revision.parent_ids, list):
-            raise ValidationError("research revision parents are malformed")
-        refs = self._sort_refs(self._resolve_parent(revision, reference) for reference in revision.parent_ids)
-        return ResearchRevisionSummary(
-            revision.id, revision.object_id, revision.basis_id, revision.version_kind,
-            revision.sequence, revision.content_hash, self._stored_datetime(basis.cutoff),
-            basis.source_manifest_hash, refs,
-        )
+        with self._session.no_autoflush:
+            revision = self._revision(revision_id)
+            basis = self._session.get(UnderwritingHistoricalBasis, revision.basis_id)
+            if basis is None:
+                raise ValidationError("research revision basis is missing")
+            if not isinstance(revision.parent_ids, list):
+                raise ValidationError("research revision parents are malformed")
+            self._validate_revision_content(revision)
+            refs = self._sort_refs(self._resolve_parent(revision, reference) for reference in revision.parent_ids)
+            return ResearchRevisionSummary(
+                revision.id, revision.object_id, revision.basis_id, revision.version_kind,
+                revision.sequence, revision.content_hash, self._stored_datetime(basis.cutoff),
+                basis.source_manifest_hash, refs,
+            )
 
     def _family_rows(self, object_id: UUID, version_kind: str) -> tuple[UnderwritingResearchVersion, ...]:
         rows = tuple(self._session.scalars(
@@ -296,9 +441,11 @@ class ResearchRevisionDiffService:
         return rows
 
     def revision_history(self, object_id: UUID, version_kind: str) -> RevisionHistory:
-        rows = self._family_rows(object_id, version_kind)
-        return RevisionHistory(object_id, version_kind, tuple(self.revision_summary(row.id) for row in rows))
+        with self._session.no_autoflush:
+            rows = self._family_rows(object_id, version_kind)
+            return RevisionHistory(object_id, version_kind, tuple(self.revision_summary(row.id) for row in rows))
 
     def effective_revision(self, object_id: UUID, version_kind: str) -> ResearchRevisionSummary:
-        rows = self._family_rows(object_id, version_kind)
-        return self.revision_summary(rows[-1].id)
+        with self._session.no_autoflush:
+            rows = self._family_rows(object_id, version_kind)
+            return self.revision_summary(rows[-1].id)

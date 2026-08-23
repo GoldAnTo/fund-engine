@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+import json
 from uuid import uuid4
 
 import pytest
@@ -11,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
 from app.underwriting.domain.types import HistoricalBasisInput, ResearchObjectKind
+from app.underwriting.domain.metrics import MetricObservation
+from app.underwriting.persistence.models import UnderwritingResearchObject, UnderwritingResearchVersion
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
 from app.underwriting.services.kernel import UnderwritingKernelService, canonical_hash
 
@@ -61,10 +64,24 @@ def _append_observation(
         source_role="reported",
         aggregation="none",
         reconciliation_tolerance=Decimal("0"),
-        content_hash="b" * 64,
+        content_hash=canonical_hash({"metric_key": metric_key}),
         expected_parent_id=None,
         created_at=NOW,
     )
+    dimensions = {"scope": "company"}
+    observation_hash = MetricObservation(
+        metric_key,
+        definition.version,
+        Decimal("362012554000"),
+        "CNY",
+        datetime(2024, 1, 1, tzinfo=UTC),
+        datetime(2024, 12, 31, tzinfo=UTC),
+        NOW,
+        NOW,
+        "annual-report",
+        source_locator,
+        tuple(dimensions.items()),
+    ).content_hash
     observation = repository.add_metric_observation(
         metric_key=metric_key,
         definition_version=definition.version,
@@ -79,9 +96,9 @@ def _append_observation(
         effective_at=NOW,
         available_at=NOW,
         source_locator=source_locator,
-        dimensions={"scope": "company"},
-        dimension_hash=canonical_hash({"scope": "company"}),
-        content_hash="c" * 64,
+        dimensions=dimensions,
+        dimension_hash=canonical_hash(dimensions),
+        content_hash=observation_hash,
         created_at=NOW,
     )
     return manifest, observation
@@ -187,3 +204,84 @@ def test_foundation_history_is_persisted_ordered_and_read_only(
     assert [summary.id for summary in history.revisions] == [seeded_revision.first.id, second.id]
     assert service.effective_revision(seeded_revision.company.id, "economic_model").id == second.id
     assert not any(name.startswith(("add_", "append_", "publish_", "update_", "delete_")) for name in dir(service))
+
+
+def test_foundation_read_does_not_flush_pending_writes(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    pending = UnderwritingResearchObject(
+        kind="company",
+        external_key=seeded_revision.company.external_key,
+        canonical_name="duplicate pending object",
+        created_at=NOW,
+    )
+    session.add(pending)
+
+    assert ResearchRevisionDiffService(session).revision_summary(seeded_revision.first.id).id == seeded_revision.first.id
+    assert pending in session.new
+
+
+def test_foundation_rejects_a_parent_owned_by_another_object(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+    from app.underwriting.domain.types import LedgerEntryInput, LedgerKind
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    other = kernel.add_object(ResearchObjectKind.COMPANY, "US:GOOGL:COMPANY", "Alphabet")
+    foreign_entry = kernel.append_ledger_entry(
+        other.id,
+        seeded_revision.basis.id,
+        LedgerEntryInput(LedgerKind.REALITY, "revenue", "reported", {}, NOW, NOW, "public"),
+        None,
+    )
+    revision = kernel.publish_research_version(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        "cross-object-parent",
+        [str(foreign_entry.id)],
+        None,
+    )
+
+    with pytest.raises(ValidationError, match="research revision parent.*object"):
+        ResearchRevisionDiffService(session).revision_summary(revision.id)
+
+
+def test_foundation_rejects_a_database_tampered_parent_set(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    session.connection().exec_driver_sql(
+        "UPDATE uw_research_versions SET parent_ids = ? WHERE id = ?",
+        (json.dumps([str(seeded_revision.manifest.id)]), seeded_revision.first.id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="research revision content hash"):
+        ResearchRevisionDiffService(session).revision_summary(seeded_revision.first.id)
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("source_locator", "tampered:p99"),
+        ("dimensions", {"scope": "tampered"}),
+    ],
+)
+def test_foundation_rejects_a_database_tampered_observation_payload(
+    session: Session, seeded_revision: SeededRevision, column: str, value: object,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    serialized = json.dumps(value) if column == "dimensions" else value
+    session.connection().exec_driver_sql(
+        f"UPDATE uw_metric_observations SET {column} = ? WHERE id = ?",
+        (serialized, seeded_revision.observation.id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="research revision parent.*content hash"):
+        ResearchRevisionDiffService(session).revision_summary(seeded_revision.first.id)
