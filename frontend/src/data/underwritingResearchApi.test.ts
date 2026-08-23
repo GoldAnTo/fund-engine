@@ -3,7 +3,10 @@ import { render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { MemoryRouter } from "react-router-dom";
 
-import { ResearchOsRoutes } from "../app/routes";
+import {
+  ResearchArchiveLoadErrorBoundary,
+  ResearchOsRoutes,
+} from "../app/routes";
 import {
   UnderwritingResearchRequestError,
   resetUnderwritingResearchApi,
@@ -15,6 +18,7 @@ import {
 
 describe("underwriting research API", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     resetUnderwritingResearchApi();
@@ -161,5 +165,27 @@ describe("underwriting research API", () => {
       expect.stringContaining("/api/underwriting/v1/research-archives"),
       expect.anything(),
     );
+  });
+
+  it("keeps a failed archive module explicit instead of substituting newer research", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    function BrokenArchive(): never {
+      throw new Error("archive module unavailable");
+    }
+
+    render(createElement(
+      ResearchArchiveLoadErrorBoundary,
+      null,
+      createElement(BrokenArchive),
+    ));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("档案暂时无法载入");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "不会以当前或最新研究替代这个版本",
+    );
+    expect(screen.getByRole("link", { name: "返回档案目录" }))
+      .toHaveAttribute("href", "/underwriting/research");
+    expect(consoleError).toHaveBeenCalled();
   });
 });

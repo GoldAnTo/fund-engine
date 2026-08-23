@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { Component, lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "./AppShell";
@@ -28,15 +28,56 @@ import { LegacyAdmissionPage } from "../features/events/LegacyAdmissionPage";
 
 const ResearchArchivePage = lazy(() => import("../features/underwriting/ResearchArchivePage"));
 
+type ResearchArchiveLoadErrorBoundaryProps = {
+  children: ReactNode;
+};
+
+type ResearchArchiveLoadErrorBoundaryState = {
+  hasError: boolean;
+};
+
+export class ResearchArchiveLoadErrorBoundary extends Component<
+  ResearchArchiveLoadErrorBoundaryProps,
+  ResearchArchiveLoadErrorBoundaryState
+> {
+  state: ResearchArchiveLoadErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): ResearchArchiveLoadErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <main className="ros-page" role="alert" aria-live="assertive">
+          <header className="ros-page-head">
+            <div>
+              <p className="ros-eyebrow">研究资产 · Research Archive</p>
+              <h1>档案暂时无法载入</h1>
+              <p>公司／行业档案未能载入。不会以当前或最新研究替代这个版本。</p>
+              <p>请刷新页面后重试，或返回档案目录重新打开。</p>
+              <a href="/underwriting/research">返回档案目录</a>
+            </div>
+          </header>
+        </main>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 function ResearchArchiveRoute() {
   return (
-    <Suspense fallback={(
-      <main className="ros-page" aria-busy="true">
-        <p>正在载入公司／行业档案…</p>
-      </main>
-    )}>
-      <ResearchArchivePage />
-    </Suspense>
+    <ResearchArchiveLoadErrorBoundary>
+      <Suspense fallback={(
+        <main className="ros-page" aria-busy="true">
+          <p>正在载入公司／行业档案…</p>
+        </main>
+      )}>
+        <ResearchArchivePage />
+      </Suspense>
+    </ResearchArchiveLoadErrorBoundary>
   );
 }
 
