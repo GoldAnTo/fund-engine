@@ -226,6 +226,7 @@ class CandidateEvidenceRead:
     """Strict, selected-parent projection for an evidence-candidate revision."""
 
     revision: ResearchRevisionSummary
+    parent_refs: tuple[RevisionArtifactRef, ...]
     dossier: FrozenCandidateDossier
     reviews: tuple[FrozenCandidateReview, ...]
     answerability: FrozenCandidateAnswerability
@@ -1756,6 +1757,13 @@ class ResearchRevisionDiffService:
                 )
                 for artifact_type in ("candidate_dossier", "candidate_review", "answerability")
             }
+            selected_parent_refs = tuple(
+                ref
+                for ref in summary.parent_refs
+                if ref.artifact_type in {
+                    "candidate_dossier", "candidate_review", "source_manifest",
+                }
+            )
             if (
                 len(by_type["candidate_dossier"]) != 1
                 or len(by_type["candidate_review"]) != 2
@@ -1848,6 +1856,7 @@ class ResearchRevisionDiffService:
             ))
             return CandidateEvidenceRead(
                 revision=summary,
+                parent_refs=selected_parent_refs,
                 dossier=FrozenCandidateDossier(
                     reference=dossier_ref.reference,
                     content_hash=dossier.content_hash,

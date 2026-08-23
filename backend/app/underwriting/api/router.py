@@ -48,6 +48,7 @@ from app.underwriting.api.schemas import (
     CandidateEvidenceAnswerabilityResponse,
     CandidateEvidenceDossierResponse,
     CandidateEvidenceItemResponse,
+    CandidateEvidenceParentResponse,
     CandidateEvidenceResponse,
     CandidateEvidenceReviewResponse,
 )
@@ -299,6 +300,15 @@ def _candidate_evidence_response(value: CandidateEvidenceRead) -> CandidateEvide
         content_hash=revision.content_hash,
         cutoff=revision.cutoff,
         source_manifest_hash=revision.source_manifest_hash,
+        parent_refs=[
+            CandidateEvidenceParentResponse(
+                reference=UUID(parent.reference),
+                artifact_type=parent.artifact_type,
+                identity=parent.identity,
+                content_hash=parent.content_hash,
+            )
+            for parent in value.parent_refs
+        ],
         dossier=CandidateEvidenceDossierResponse(
             reference=UUID(dossier.reference),
             content_hash=dossier.content_hash,

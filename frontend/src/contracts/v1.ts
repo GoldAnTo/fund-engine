@@ -3528,6 +3528,32 @@ export interface components {
             unknown_reason: string | null;
         };
         /**
+         * CandidateEvidenceParentResponse
+         * @description One exact descriptor sealed by the selected candidate revision.
+         */
+        CandidateEvidenceParentResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Reference
+             * Format: uuid
+             */
+            reference: string;
+            /**
+             * Artifact Type
+             * @enum {string}
+             */
+            artifact_type: "candidate_dossier" | "candidate_review" | "source_manifest";
+            /** Identity */
+            identity: string;
+            /** Content Hash */
+            content_hash: string;
+        };
+        /**
          * CandidateEvidenceResponse
          * @description Read-only evidence-candidate projection for one selected revision.
          */
@@ -3567,6 +3593,8 @@ export interface components {
             cutoff: string;
             /** Source Manifest Hash */
             source_manifest_hash: string;
+            /** Parent Refs */
+            parent_refs: components["schemas"]["CandidateEvidenceParentResponse"][];
             dossier: components["schemas"]["CandidateEvidenceDossierResponse"];
             /** Items */
             items: components["schemas"]["CandidateEvidenceItemResponse"][];

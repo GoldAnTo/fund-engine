@@ -36,6 +36,7 @@ BOUNDARY_SCHEMAS = {
 CANDIDATE_EVIDENCE_SCHEMAS = {
     "CandidateEvidenceResponse",
     "CandidateEvidenceDossierResponse",
+    "CandidateEvidenceParentResponse",
     "CandidateEvidenceItemResponse",
     "CandidateEvidenceReviewResponse",
     "CandidateEvidenceAnswerabilityResponse",
@@ -184,6 +185,15 @@ def test_candidate_evidence_contract_is_get_only_and_excludes_formal_outputs_rec
         "title": "Rejected Calculations",
     }
     assert "rejected_calculations" in dossier["required"]
+    parent = schemas["CandidateEvidenceParentResponse"]
+    assert set(parent["properties"]) == {
+        "schema_version", "reference", "artifact_type", "identity", "content_hash",
+    }
+    assert schemas["CandidateEvidenceResponse"]["properties"]["parent_refs"] == {
+        "items": {"$ref": "#/components/schemas/CandidateEvidenceParentResponse"},
+        "type": "array",
+        "title": "Parent Refs",
+    }
 
 
 def test_revision_history_identity_contract_includes_research_object_identity() -> None:

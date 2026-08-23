@@ -12526,6 +12526,49 @@
         "title": "CandidateEvidenceItemResponse",
         "description": "One source-bound candidate item; never a formal model input."
       },
+      "CandidateEvidenceParentResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "reference": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reference"
+          },
+          "artifact_type": {
+            "type": "string",
+            "enum": [
+              "candidate_dossier",
+              "candidate_review",
+              "source_manifest"
+            ],
+            "title": "Artifact Type"
+          },
+          "identity": {
+            "type": "string",
+            "title": "Identity"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reference",
+          "artifact_type",
+          "identity",
+          "content_hash"
+        ],
+        "title": "CandidateEvidenceParentResponse",
+        "description": "One exact descriptor sealed by the selected candidate revision."
+      },
       "CandidateEvidenceResponse": {
         "properties": {
           "schema_version": {
@@ -12569,6 +12612,13 @@
             "pattern": "^[0-9a-f]{64}$",
             "title": "Source Manifest Hash"
           },
+          "parent_refs": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateEvidenceParentResponse"
+            },
+            "type": "array",
+            "title": "Parent Refs"
+          },
           "dossier": {
             "$ref": "#/components/schemas/CandidateEvidenceDossierResponse"
           },
@@ -12600,6 +12650,7 @@
           "content_hash",
           "cutoff",
           "source_manifest_hash",
+          "parent_refs",
           "dossier",
           "items",
           "reviews",

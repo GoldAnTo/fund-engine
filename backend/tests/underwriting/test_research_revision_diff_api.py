@@ -6,6 +6,8 @@ from decimal import Decimal
 import json
 from uuid import UUID, uuid4
 
+import pytest
+
 from app.underwriting.domain.types import (
     BlockerCode,
     EligibleAction,
@@ -15,7 +17,9 @@ from app.underwriting.domain.types import (
     ResearchObjectKind,
 )
 from app.underwriting.domain.evidence_candidates import (
+    CandidateEvidenceDossier,
     CandidateEvidenceItem,
+    CandidateEvidenceReview,
     CandidateEvidenceStatus,
 )
 from app.underwriting.fixtures.catl_baseline import load_catl_fixture
@@ -175,6 +179,7 @@ def test_candidate_evidence_is_get_only_parent_sealed_and_deterministic(api_clie
         "content_hash": published.research_version.content_hash,
         "cutoff": NOW.isoformat().replace("+00:00", "Z"),
         "source_manifest_hash": basis.source_manifest_hash,
+        "parent_refs": body["parent_refs"],
         "dossier": {
             "schema_version": "underwriting.v1",
             "reference": str(dossier.id),
@@ -239,6 +244,37 @@ def test_candidate_evidence_is_get_only_parent_sealed_and_deterministic(api_clie
             ],
         },
     }
+    assert body["parent_refs"] == [
+        {
+            "schema_version": "underwriting.v1",
+            "reference": str(dossier.id),
+            "artifact_type": "candidate_dossier",
+            "identity": "industry-capacity|1",
+            "content_hash": body["parent_refs"][0]["content_hash"],
+        },
+        {
+            "schema_version": "underwriting.v1",
+            "reference": str(published.reviews[0].id),
+            "artifact_type": "candidate_review",
+            "identity": f"{dossier.id}|methodology|reviewer:methodology",
+            "content_hash": body["parent_refs"][1]["content_hash"],
+        },
+        {
+            "schema_version": "underwriting.v1",
+            "reference": str(published.reviews[1].id),
+            "artifact_type": "candidate_review",
+            "identity": f"{dossier.id}|provenance|reviewer:provenance",
+            "content_hash": body["parent_refs"][2]["content_hash"],
+        },
+        {
+            "schema_version": "underwriting.v1",
+            "reference": str(manifest.id),
+            "artifact_type": "source_manifest",
+            "identity": "candidate-api|1",
+            "content_hash": body["parent_refs"][3]["content_hash"],
+        },
+    ]
+    assert all(len(parent["content_hash"]) == 64 for parent in body["parent_refs"])
     assert api_client.post(response.request.url.path).status_code == 405
     assert payload["dossier_key"] == "industry-capacity"
     assert manifest.id
@@ -358,6 +394,39 @@ def test_candidate_evidence_uses_underwriting_not_found_and_validation_envelopes
     assert wrong_kind.status_code == 422
     assert wrong_kind.json()["schema_version"] == "underwriting.v1"
     assert wrong_kind.json()["error"]["code"] == "validation_failed"
+
+
+@pytest.mark.parametrize("parent_kind", ["dossier", "review"])
+def test_candidate_evidence_rejects_a_rehashed_selected_parent(
+    api_client, session, parent_kind: str,
+) -> None:
+    _, _, _, dossier, payload, published = _published_candidate_revision(session)
+    cursor = session.connection().connection.cursor()
+    if parent_kind == "dossier":
+        forged_payload = dict(payload) | {"scope_statement": "Forged selected dossier."}
+        forged = CandidateEvidenceDossier.from_canonical_payload(forged_payload)
+        cursor.execute(
+            "UPDATE uw_evidence_candidate_dossier_versions SET payload = ?, content_hash = ? WHERE id = ?",
+            (json.dumps(forged_payload), forged.content_hash, dossier.id.hex),
+        )
+    else:
+        review = published.reviews[0]
+        forged_payload = dict(review.payload) | {"rationale": "Forged selected review."}
+        forged = CandidateEvidenceReview.from_canonical_payload(forged_payload)
+        cursor.execute(
+            "UPDATE uw_evidence_candidate_review_versions SET payload = ?, content_hash = ? WHERE id = ?",
+            (json.dumps(forged_payload), forged.content_hash, review.id.hex),
+        )
+    cursor.close()
+    session.commit()
+    session.expunge_all()
+
+    response = api_client.get(
+        f"{BASE}/research-versions/{published.research_version.id}/candidate-evidence",
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_failed"
 
 
 def test_revision_history_detail_and_diff_are_read_only_and_historical(api_client, session) -> None:

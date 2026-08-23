@@ -306,6 +306,15 @@ class CandidateEvidenceDossierResponse(UnderwritingModel):
     rejected_calculations: list[str] = Field(min_length=1)
 
 
+class CandidateEvidenceParentResponse(UnderwritingModel):
+    """One exact descriptor sealed by the selected candidate revision."""
+
+    reference: UUID
+    artifact_type: Literal["candidate_dossier", "candidate_review", "source_manifest"]
+    identity: str
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class CandidateEvidenceItemResponse(UnderwritingModel):
     """One source-bound candidate item; never a formal model input."""
 
@@ -363,6 +372,7 @@ class CandidateEvidenceResponse(UnderwritingModel):
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     cutoff: datetime
     source_manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    parent_refs: list[CandidateEvidenceParentResponse]
     dossier: CandidateEvidenceDossierResponse
     items: list[CandidateEvidenceItemResponse]
     reviews: list[CandidateEvidenceReviewResponse]
