@@ -306,13 +306,15 @@ describe("ResearchArchivePage", () => {
     expect(await screen.findByText("找不到该冻结版本档案。")).toBeVisible();
   });
 
-  it("makes a validation response explicit without changing the selected version", async () => {
+  it("fails closed when a selected frozen version cannot be validated", async () => {
     installApi({
       history: vi.fn().mockRejectedValue(new UnderwritingResearchRequestError("bad path", 422)),
     });
     renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("查询条件无法读取，请修改后重试。");
+    expect(await screen.findByRole("alert")).toHaveTextContent("所选冻结版本无法安全读取或完成校验，未展示该版本、当前或更新资料。");
+    expect(screen.queryByLabelText("研究版本时间线")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("已选冻结版本")).not.toBeInTheDocument();
   });
 
   it("fails closed when history does not bind to the requested archive", async () => {
@@ -465,7 +467,7 @@ describe("ResearchArchivePage", () => {
     renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("查询条件无法读取，请修改后重试。");
+    expect(alert).toHaveTextContent("所选冻结版本无法安全读取或完成校验，未展示该版本、当前或更新资料。");
     expect(alert).toHaveTextContent("路径中有无法读取的符号 <invalid>");
     expect(alert).toHaveTextContent("request-422");
   });

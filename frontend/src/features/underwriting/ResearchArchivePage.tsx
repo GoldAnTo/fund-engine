@@ -274,7 +274,10 @@ function errorCopy(error: unknown, subject: "directory" | "detail"): string {
     if (error.status === 422) {
       const message = safeEnvelopeText(error.message);
       const requestId = safeEnvelopeText(error.requestId);
-      return ["查询条件无法读取，请修改后重试。", message && `服务说明：${message}`, requestId && `请求编号：${requestId}`]
+      const prefix = subject === "directory"
+        ? "查询条件无法读取，请修改后重试。"
+        : "所选冻结版本无法安全读取或完成校验，未展示该版本、当前或更新资料。";
+      return [prefix, message && `服务说明：${message}`, requestId && `请求编号：${requestId}`]
         .filter((part): part is string => Boolean(part))
         .join(" ");
     }
