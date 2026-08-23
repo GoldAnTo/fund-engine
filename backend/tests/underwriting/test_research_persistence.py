@@ -1,7 +1,7 @@
 """Persistence contract for the append-only Wave 2 economic model."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import hashlib
 import json
@@ -118,6 +118,42 @@ def test_unknown_candidate_cannot_carry_a_numeric_value() -> None:
             error_bound=None,
             unknown_reason="not published",
         )
+
+
+@pytest.mark.parametrize(
+    "metric_key",
+    (
+        "industry.actual_utilization",
+        "industry.actual_utilisation",
+        "industry.effective_capacity",
+        "industry.price",
+        "industry.valuation",
+        "industry.action_recommendation",
+    ),
+)
+def test_candidate_rejects_forbidden_actual_output_semantics(metric_key: str) -> None:
+    with pytest.raises(ValidationError, match="forbidden candidate semantic"):
+        _candidate_item(metric_key=metric_key)
+
+
+def test_candidate_rejects_forbidden_dossier_scope_semantics() -> None:
+    with pytest.raises(ValidationError, match="forbidden candidate semantic"):
+        _candidate_dossier(scope_statement="Candidate valuation conclusion.")
+
+
+def test_candidate_allows_bounded_utilization_assumption_and_prohibition_text() -> None:
+    item = _candidate_item(
+        metric_key="industry.utilization_assumption",
+        status=CandidateEvidenceStatus.ASSUMPTION_BOUND,
+        scenario_use="Downside utilization assumption only.",
+        not_observed_declared=True,
+        transcription_method=None,
+        error_bound=None,
+        prohibited_splicing_declaration="No valuation model or action recommendation.",
+    )
+    dossier = _candidate_dossier(items=(item,), rejected_calculations=("No valuation model.",))
+    assert dossier.items == (item,)
+    assert _candidate_item(metric_key="industry.transaction_count").metric_key == "industry.transaction_count"
 
 
 def test_candidate_item_requires_a_prohibited_splicing_declaration() -> None:
@@ -298,6 +334,17 @@ def test_candidate_database_rejects_formal_status_and_non_independent_reviews() 
             )
             session.add(dossier)
             session.commit()
+
+            mismatched_timestamp = UnderwritingEvidenceCandidateReviewVersion.from_contract(id=uuid4(), contract=CandidateEvidenceReview(
+                dossier_id=dossier.id, dossier_content_hash=dossier.content_hash,
+                reviewer_identity="reviewer:timestamp", reviewer_role="methodology", decision="approve",
+                rationale="method verified", reviewed_at=NOW,
+            ))
+            mismatched_timestamp.created_at = NOW + timedelta(seconds=1)
+            session.add(mismatched_timestamp)
+            with pytest.raises(ValidationError, match="created_at must match reviewed_at"):
+                session.commit()
+            session.rollback()
             first = UnderwritingEvidenceCandidateReviewVersion.from_contract(
                 id=uuid4(), contract=CandidateEvidenceReview(
                     dossier_id=dossier.id, dossier_content_hash=dossier.content_hash,
@@ -358,6 +405,34 @@ def test_candidate_load_rejects_a_raw_rehashed_payload() -> None:
         with Session(engine) as fresh_session:
             with pytest.raises(ValidationError, match="dossier payload is not canonical"):
                 fresh_session.get(UnderwritingEvidenceCandidateDossierVersion, row_id)
+    finally:
+        Base.metadata.drop_all(engine, tables=[table])
+
+
+def test_candidate_review_load_rejects_raw_created_at_mismatch() -> None:
+    engine = create_engine("sqlite://")
+    table = UnderwritingEvidenceCandidateReviewVersion.__table__
+    Base.metadata.create_all(engine, tables=[table])
+    contract = CandidateEvidenceReview(
+        dossier_id=uuid4(), dossier_content_hash="a" * 64,
+        reviewer_identity="reviewer:raw", reviewer_role="provenance", decision="approve",
+        rationale="source verified", reviewed_at=NOW,
+    )
+    row_id = uuid4()
+    try:
+        with engine.begin() as connection:
+            connection.execute(table.insert().values(
+                id=row_id, dossier_id=contract.dossier_id,
+                dossier_content_hash=contract.dossier_content_hash,
+                reviewer_identity=contract.reviewer_identity,
+                reviewer_role=contract.reviewer_role, decision=contract.decision,
+                rationale=contract.rationale, payload=contract.canonical_payload,
+                content_hash=contract.content_hash, reviewed_at=contract.reviewed_at,
+                created_at=contract.reviewed_at + timedelta(seconds=1),
+            ))
+        with Session(engine) as fresh_session:
+            with pytest.raises(ValidationError, match="created_at must match reviewed_at"):
+                fresh_session.get(UnderwritingEvidenceCandidateReviewVersion, row_id)
     finally:
         Base.metadata.drop_all(engine, tables=[table])
 

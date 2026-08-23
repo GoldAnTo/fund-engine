@@ -7,7 +7,9 @@ from decimal import Decimal
 from enum import StrEnum
 import hashlib
 import json
+import re
 from typing import Literal, Mapping
+import unicodedata
 from uuid import UUID
 
 from app.models.ledger import ValidationError
@@ -64,6 +66,40 @@ def _canonical_hash(payload: object) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
     ).hexdigest()
+
+
+_FORBIDDEN_CANDIDATE_TERMS = (
+    "actual_utilization", "actual_utilisation", "effective_capacity",
+    "price", "valuation", "recommendation", "action",
+)
+
+
+def _normalized_semantic_text(value: str) -> str:
+    return re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", unicodedata.normalize("NFKC", value).casefold())).strip("_")
+
+
+def _contains_semantic_term(tokens: tuple[str, ...], term: str) -> bool:
+    term_tokens = tuple(term.split("_"))
+    return any(
+        tokens[index:index + len(term_tokens)] == term_tokens
+        for index in range(len(tokens) - len(term_tokens) + 1)
+    )
+
+
+def _validate_candidate_semantics(*, fields: tuple[str, ...]) -> None:
+    """Reject governed claim tokens, not declarations of their exclusion.
+
+    The caller supplies only candidate claim fields.  Exclusions and rejected
+    calculations deliberately remain outside this boundary so they can record
+    declarations such as ``No valuation model``.  NFKC/casefold tokenization
+    makes spelling and punctuation variants deterministic without treating a
+    substring such as ``transaction`` as the forbidden ``action`` token.
+    """
+    for field in fields:
+        tokens = tuple(token for token in _normalized_semantic_text(field).split("_") if token)
+        for term in _FORBIDDEN_CANDIDATE_TERMS:
+            if _contains_semantic_term(tokens, term):
+                raise ValidationError(f"forbidden candidate semantic: {term}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +178,12 @@ class CandidateEvidenceItem:
             object.__setattr__(self, "unknown_reason", _text(self.unknown_reason, "unknown requires unknown_reason"))
         elif self.unknown_reason is not None:
             raise ValidationError("unknown_reason is only valid for unknown")
+        _validate_candidate_semantics(
+            fields=tuple(
+                value for value in (self.metric_key, self.scope_statement, self.methodology, self.scenario_use)
+                if value is not None
+            )
+        )
 
     @property
     def canonical_payload(self) -> dict[str, object]:
@@ -225,6 +267,7 @@ class CandidateEvidenceDossier:
             raise ValidationError("status must be a CandidateEvidenceDossierStatus")
         if self.purpose != "evidence_candidate":
             raise ValidationError("purpose must be evidence_candidate")
+        _validate_candidate_semantics(fields=(self.dossier_key, self.scope_statement))
         if not isinstance(self.items, tuple) or not self.items:
             raise ValidationError("items must be a non-empty tuple")
         if any(type(item) is not CandidateEvidenceItem for item in self.items):

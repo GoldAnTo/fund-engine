@@ -1141,6 +1141,62 @@ def test_publish_reject_review_blocks_candidate_publication(
         CandidateEvidenceService(session, now=lambda: NOW).publish(dossier.id)
 
 
+def test_dual_reviewed_raw_forbidden_candidate_cannot_publish(
+    session: Session, repository, company, basis, manifest,
+) -> None:
+    """Raw corruption is rejected while materializing the dossier for publish."""
+    contract = CandidateEvidenceDossier.from_canonical_payload(_dossier_payload(
+        object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
+        source_manifest_hash=manifest.manifest_hash,
+    ) | {"dossier_key": "forbidden-capacity"})
+    dossier_id = uuid4()
+    forged_item = dict(contract.canonical_payload["items"][0])
+    forged_item["metric_key"] = "industry.actual_utilization"
+    forged_payload = {**contract.canonical_payload, "items": [forged_item]}
+    reviews = tuple(
+        CandidateEvidenceReview(
+            dossier_id=dossier_id, dossier_content_hash=contract.content_hash,
+            reviewer_identity=identity, reviewer_role=role, decision="approve",
+            rationale="Evidence is bounded and traceable.", reviewed_at=NOW,
+        )
+        for identity, role in (
+            ("reviewer:provenance", "provenance"),
+            ("reviewer:methodology", "methodology"),
+        )
+    )
+    engine = session.get_bind()
+    session.commit()
+
+    with engine.begin() as connection:
+        connection.execute(UnderwritingEvidenceCandidateDossierVersion.__table__.insert().values(
+            id=dossier_id, dossier_key=contract.dossier_key, version=contract.version,
+            object_id=contract.object_id, basis_id=contract.basis_id,
+            source_manifest_id=contract.source_manifest_id,
+            scope_statement=contract.scope_statement, purpose=contract.purpose,
+            status=contract.status.value,
+            rejected_calculations=list(contract.rejected_calculations), payload=forged_payload,
+            source_manifest_hash=contract.source_manifest_hash,
+            content_hash=contract.content_hash, supersedes_id=contract.supersedes_id,
+            created_at=contract.created_at,
+        ))
+        connection.execute(UnderwritingEvidenceCandidateReviewVersion.__table__.insert(), [
+            {
+                "id": uuid4(), "dossier_id": review.dossier_id,
+                "dossier_content_hash": review.dossier_content_hash,
+                "reviewer_identity": review.reviewer_identity,
+                "reviewer_role": review.reviewer_role, "decision": review.decision,
+                "rationale": review.rationale, "payload": review.canonical_payload,
+                "content_hash": review.content_hash, "reviewed_at": review.reviewed_at,
+                "created_at": review.reviewed_at,
+            }
+            for review in reviews
+        ])
+
+    with sessionmaker(bind=engine, future=True)() as fresh:
+        with pytest.raises(ValidationError, match="forbidden candidate semantic"):
+            CandidateEvidenceService(fresh, now=lambda: NOW).publish(dossier_id)
+
+
 def test_candidate_evidence_never_unblocks_industry_state_or_action(
     session: Session, repository, company, basis, manifest,
 ) -> None:

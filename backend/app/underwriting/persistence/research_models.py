@@ -370,10 +370,12 @@ def _validate_dossier_row(row: UnderwritingEvidenceCandidateDossierVersion) -> N
 def _validate_review_row(row: UnderwritingEvidenceCandidateReviewVersion) -> None:
     contract = CandidateEvidenceReview.from_canonical_payload(row.payload)
     contract.validate_persisted_payload(row.payload, row.content_hash)
+    if _stored_utc(row.created_at) != _stored_utc(row.reviewed_at):
+        raise ValidationError("review created_at must match reviewed_at")
     if (row.dossier_id, row.dossier_content_hash, row.reviewer_identity, row.reviewer_role,
-        row.decision, row.rationale, _stored_utc(row.reviewed_at)) != (
+        row.decision, row.rationale, _stored_utc(row.reviewed_at), _stored_utc(row.created_at)) != (
         contract.dossier_id, contract.dossier_content_hash, contract.reviewer_identity, contract.reviewer_role,
-        contract.decision, contract.rationale, contract.reviewed_at):
+        contract.decision, contract.rationale, contract.reviewed_at, contract.reviewed_at):
         raise ValidationError("review row does not match canonical contract")
 
 
