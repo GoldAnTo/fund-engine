@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 import json
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.orm import Session
@@ -15,6 +15,7 @@ from app.underwriting.domain.types import HistoricalBasisInput, ResearchObjectKi
 from app.underwriting.domain.metrics import MetricObservation
 from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
+    UnderwritingLedgerEntry,
     UnderwritingResearchObject,
     UnderwritingResearchVersion,
 )
@@ -27,6 +28,7 @@ from app.underwriting.persistence.research_models import (
     UnderwritingIndustryStateVersion,
     UnderwritingMechanismPackVersion,
     UnderwritingMetricDefinitionVersion,
+    UnderwritingSourceManifestVersion,
 )
 from app.underwriting.fixtures.catl_baseline import load_catl_fixture
 from app.underwriting.services.catl_baseline import CatlBaselineService
@@ -464,3 +466,53 @@ def test_foundation_replays_the_original_catl_revision_after_successor_artifacts
     session.flush()
 
     assert service.revision_summary(catl_revision.research_version.id) == original
+
+
+def test_foundation_rejects_an_equal_content_parent_with_a_different_identity(
+    session: Session, catl_revision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    original_manifest = catl_revision.source_manifest
+    substitute = UnderwritingSourceManifestVersion(
+        manifest_key="substituted-but-equal-manifest", version=1,
+        basis_id=catl_revision.basis.id, manifest=dict(original_manifest.manifest),
+        manifest_hash=original_manifest.manifest_hash, content_hash=original_manifest.content_hash,
+        supersedes_id=None, created_at=NOW,
+    )
+    session.add(substitute)
+    session.flush()
+    seal = next(
+        row for parent in catl_revision.research_version.parent_ids
+        if (row := session.get(UnderwritingLedgerEntry, UUID(parent))) is not None
+        and row.family_key.endswith("parent_set")
+    )
+    changed_payload = dict(seal.payload)
+    changed_refs = [dict(item) for item in changed_payload["parent_refs"]]
+    for item in changed_refs:
+        if item["reference"] == str(original_manifest.id):
+            item["reference"] = str(substitute.id)
+            item["identity"] = f"{substitute.manifest_key}|{substitute.version}"
+    changed_payload["parent_refs"] = changed_refs
+    changed_parent_ids = [
+        str(substitute.id) if parent == str(original_manifest.id) else parent
+        for parent in catl_revision.research_version.parent_ids
+    ]
+    rehashed_seal = canonical_hash({
+        "ledger_kind": seal.ledger_kind, "family_key": seal.family_key,
+        "entry_type": seal.entry_type, "payload": changed_payload,
+        "effective_at": NOW, "available_at": NOW,
+        "source_boundary": seal.source_boundary,
+    })
+    session.connection().exec_driver_sql(
+        "UPDATE uw_ledger_entries SET payload = ?, content_hash = ? WHERE id = ?",
+        (json.dumps(changed_payload), rehashed_seal, seal.id.hex),
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_research_versions SET parent_ids = ? WHERE id = ?",
+        (json.dumps(changed_parent_ids), catl_revision.research_version.id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="CATL semantic snapshot.*stored seal"):
+        ResearchRevisionDiffService(session).revision_summary(catl_revision.research_version.id)

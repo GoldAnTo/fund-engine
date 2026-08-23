@@ -345,6 +345,7 @@ class CatlBaselineService:
             parent_ids: list[str] = [str(manifest.id)]
             parent_refs: list[dict[str, object]] = [{
                 "reference": str(manifest.id), "artifact_type": "source_manifest",
+                "identity": f"{manifest.manifest_key}|{manifest.version}",
                 "content_hash": manifest.content_hash,
             }]
             for observation in fixture.frozen_observations:
@@ -389,8 +390,19 @@ class CatlBaselineService:
                 persisted_observations.append(row)
                 parent_ids.extend((str(definition.id), str(row.id)))
                 parent_refs.extend((
-                    {"reference": str(definition.id), "artifact_type": "metric_definition", "content_hash": definition.content_hash},
-                    {"reference": str(row.id), "artifact_type": "metric_observation", "content_hash": row.content_hash},
+                    {
+                        "reference": str(definition.id), "artifact_type": "metric_definition",
+                        "identity": f"{definition.metric_key}|{definition.version}",
+                        "content_hash": definition.content_hash,
+                    },
+                    {
+                        "reference": str(row.id), "artifact_type": "metric_observation",
+                        "identity": "|".join((
+                            row.metric_key, str(row.definition_version), row.observed_end.isoformat(),
+                            row.dimension_hash, row.source_id,
+                        )),
+                        "content_hash": row.content_hash,
+                    },
                 ))
                 target_object = industry.id if observation.definition_key.startswith("industry.") else company.id
                 self._append_reality(object_id=target_object, basis_id=basis.id, observation=observation, evidence=evidence)
@@ -422,7 +434,10 @@ class CatlBaselineService:
                 )
                 candidates.append(row)
                 parent_ids.append(str(row.id))
-                parent_refs.append({"reference": str(row.id), "artifact_type": "mechanism", "content_hash": row.content_hash})
+                parent_refs.append({
+                    "reference": str(row.id), "artifact_type": "mechanism",
+                    "identity": f"{row.mechanism_key}|{row.version}", "content_hash": row.content_hash,
+                })
                 self._append_candidate_belief(company_id=company.id, basis_id=basis.id, mechanism=persisted_mechanism)
 
             answerability = self._kernel.record_answerability(
@@ -441,6 +456,7 @@ class CatlBaselineService:
             parent_ids.append(str(answerability.id))
             parent_refs.append({
                 "reference": str(answerability.id), "artifact_type": "answerability",
+                "identity": "answerability",
                 "content_hash": answerability_content_hash(
                     object_id=answerability.object_id, basis_id=answerability.basis_id,
                     version=answerability.version, state=answerability.state,

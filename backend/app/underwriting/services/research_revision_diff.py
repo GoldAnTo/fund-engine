@@ -443,6 +443,7 @@ class ResearchRevisionDiffService:
             {
                 "reference": ref.reference,
                 "artifact_type": ref.artifact_type,
+                "identity": ref.identity,
                 "content_hash": ref.content_hash,
             }
             for ref in refs

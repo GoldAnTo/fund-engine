@@ -44,15 +44,17 @@ def canonical_parent_refs(refs: Iterable[Mapping[str, object]]) -> tuple[dict[st
     for ref in refs:
         reference = ref.get("reference")
         artifact_type = ref.get("artifact_type")
+        identity = ref.get("identity")
         content_hash = ref.get("content_hash")
-        if not all(isinstance(value, str) and value for value in (reference, artifact_type, content_hash)):
+        if not all(isinstance(value, str) and value for value in (reference, artifact_type, identity, content_hash)):
             raise ValidationError("revision parent seal reference is malformed")
         values.append({
             "reference": reference,
             "artifact_type": artifact_type,
+            "identity": identity,
             "content_hash": content_hash,
         })
-    values.sort(key=lambda item: (item["artifact_type"], item["reference"], item["content_hash"]))
+    values.sort(key=lambda item: (item["artifact_type"], item["identity"], item["reference"], item["content_hash"]))
     if len({(item["reference"], item["artifact_type"]) for item in values}) != len(values):
         raise ValidationError("revision parent seal references are duplicated")
     return tuple(values)
@@ -89,10 +91,14 @@ def parent_set_semantic_hash(refs: Iterable[Mapping[str, object]]) -> str:
     normalized = canonical_parent_refs(refs)
     semantic = sorted(
         (
-            {"artifact_type": ref["artifact_type"], "content_hash": ref["content_hash"]}
+            {
+                "artifact_type": ref["artifact_type"],
+                "identity": ref["identity"],
+                "content_hash": ref["content_hash"],
+            }
             for ref in normalized
         ),
-        key=lambda value: (value["artifact_type"], value["content_hash"]),
+        key=lambda value: (value["artifact_type"], value["identity"], value["content_hash"]),
     )
     return canonical_hash(tuple(semantic))
 
