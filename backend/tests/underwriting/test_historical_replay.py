@@ -102,30 +102,30 @@ def test_research_version_uses_replay_hash_and_canonical_parent_ids(
     research_object = kernel.add_object(
         ResearchObjectKind.COMPANY, "company:1", "Company"
     )
-    basis = kernel.add_basis(HistoricalBasisInput(T1, T1, "a" * 64))
-    kernel.append_ledger_entry(
+    basis = kernel.add_basis(HistoricalBasisInput(T2, T2, "a" * 64))
+    entry = kernel.append_ledger_entry(
         research_object.id, basis.id, _entry("revenue", T1), None
     )
 
     preview = kernel.preview_research_version_hash(
-        research_object.id, basis.id, "valuation", ["source-z", "source-a", "source-z"]
+        research_object.id, basis.id, "valuation", [str(entry.id), str(entry.id)]
     )
     first = kernel.publish_research_version(
         research_object.id,
         basis.id,
         "valuation",
-        ["source-z", "source-a", "source-z"],
+        [str(entry.id), str(entry.id)],
         expected_parent_id=None,
     )
     second = kernel.publish_research_version(
         research_object.id,
         basis.id,
         "valuation",
-        ["source-a", "source-z"],
+        [str(entry.id)],
         expected_parent_id=first.id,
     )
 
-    assert first.parent_ids == ["source-a", "source-z"]
+    assert first.parent_ids == [str(entry.id)]
     assert first.content_hash == preview == second.content_hash
     assert (first.sequence, second.sequence, second.supersedes_id) == (
         1,

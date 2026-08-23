@@ -73,6 +73,15 @@ class RevisionArtifactRef:
 
 
 @dataclass(frozen=True, slots=True)
+class _ResearchRevisionScope:
+    """The immutable scope needed to authenticate parent candidates pre-publish."""
+
+    object_id: UUID
+    basis_id: UUID
+    version_kind: str
+
+
+@dataclass(frozen=True, slots=True)
 class ResearchRevisionSummary:
     id: UUID
     object_id: UUID
@@ -325,7 +334,7 @@ class ResearchRevisionDiffService:
         self,
         artifact_type: str,
         row: object,
-        revision: UnderwritingResearchVersion,
+        revision: UnderwritingResearchVersion | _ResearchRevisionScope,
         *,
         allow_legacy_unavailable_ledger: bool = False,
     ) -> None:
@@ -513,7 +522,7 @@ class ResearchRevisionDiffService:
 
     def _resolve_parent(
         self,
-        revision: UnderwritingResearchVersion,
+        revision: UnderwritingResearchVersion | _ResearchRevisionScope,
         reference: object,
         *,
         allow_legacy_unavailable_ledger: bool = False,
@@ -554,6 +563,18 @@ class ResearchRevisionDiffService:
     @staticmethod
     def _sort_refs(values: Iterable[RevisionArtifactRef]) -> tuple[RevisionArtifactRef, ...]:
         return tuple(sorted(values, key=lambda item: (item.artifact_type, item.identity, item.reference)))
+
+    @staticmethod
+    def _canonical_ref_descriptors(refs: Iterable[RevisionArtifactRef]) -> tuple[dict[str, str], ...]:
+        return canonical_parent_refs(
+            {
+                "reference": ref.reference,
+                "artifact_type": ref.artifact_type,
+                "identity": ref.identity,
+                "content_hash": ref.content_hash,
+            }
+            for ref in refs
+        )
 
     def _revision(self, revision_id: UUID) -> UnderwritingResearchVersion:
         row = self._session.get(UnderwritingResearchVersion, revision_id)
@@ -700,6 +721,7 @@ class ResearchRevisionDiffService:
                 else None
             ),
             source_manifest_hash=basis.source_manifest_hash,
+            parent_refs=self._canonical_ref_descriptors(refs),
         )
         if revision.content_hash == expected:
             return
@@ -707,11 +729,44 @@ class ResearchRevisionDiffService:
             raise ValidationError("research revision content hash does not match frozen parent set")
 
     @staticmethod
-    def _validate_parent_shape(revision: UnderwritingResearchVersion) -> None:
-        if not isinstance(revision.parent_ids, list) or not all(isinstance(value, str) for value in revision.parent_ids):
+    def _validate_parent_ids(parent_ids: object) -> None:
+        if not isinstance(parent_ids, list) or not all(isinstance(value, str) for value in parent_ids):
             raise ValidationError("research revision parents are malformed")
-        if len(set(revision.parent_ids)) != len(revision.parent_ids):
+        if len(set(parent_ids)) != len(parent_ids):
             raise ValidationError("research revision parent set is duplicated")
+
+    @classmethod
+    def _validate_parent_shape(cls, revision: UnderwritingResearchVersion) -> None:
+        cls._validate_parent_ids(revision.parent_ids)
+
+    def frozen_parent_descriptors(
+        self,
+        object_id: UUID,
+        basis_id: UUID,
+        version_kind: str,
+        parent_ids: list[str],
+    ) -> tuple[dict[str, str], ...]:
+        """Resolve exactly the persisted parents a generic v3 publication seals.
+
+        This is intentionally the same strict resolver used for replay.  It
+        neither creates a research-version row nor consults a current ledger,
+        fixture, or natural-key head, so a caller can preview the exact seal
+        before the immutable publication is appended.
+        """
+        with self._session.no_autoflush:
+            if not isinstance(parent_ids, list) or not all(isinstance(value, str) for value in parent_ids):
+                raise ValidationError("research revision parents are malformed")
+            if self._session.get(UnderwritingResearchObject, object_id) is None:
+                raise ValidationError("research object not found")
+            self._basis_for_id(basis_id)
+            scope = _ResearchRevisionScope(object_id, basis_id, version_kind)
+            refs = self._sort_refs(
+                self._resolve_parent(scope, reference)
+                for reference in sorted(set(parent_ids))
+            )
+            if any(ref.artifact_type == "semantic_snapshot" for ref in refs):
+                raise ValidationError("generic research revision cannot seal a semantic snapshot token")
+            return self._canonical_ref_descriptors(refs)
 
     def revision_summary(self, revision_id: UUID) -> ResearchRevisionSummary:
         """Describe only parents explicitly frozen into ``revision_id``."""
@@ -722,8 +777,25 @@ class ResearchRevisionDiffService:
             snapshot_tokens = tuple(
                 value for value in revision.parent_ids if _SNAPSHOT_TOKEN.fullmatch(value)
             )
-            expected_parent_set_hash: str | None = None
-            if not snapshot_tokens:
+            if snapshot_tokens:
+                refs = self._sort_refs(
+                    self._resolve_parent(revision, reference)
+                    for reference in revision.parent_ids
+                )
+                legacy_snapshot_candidate = False
+            else:
+                # Pre-v2 legacy rows may list a late ledger candidate that
+                # their old snapshot algorithm excluded before hashing.  Read
+                # it only long enough to determine whether the stored legacy
+                # seal is authentic.  A v3 seal is then replayed strictly.
+                provisional_refs = self._sort_refs(
+                    self._resolve_parent(
+                        revision,
+                        reference,
+                        allow_legacy_unavailable_ledger=True,
+                    )
+                    for reference in revision.parent_ids
+                )
                 expected_parent_set_hash, _, _ = frozen_research_version_content_hash(
                     revision.object_id,
                     revision.basis_id,
@@ -736,24 +808,17 @@ class ResearchRevisionDiffService:
                         else None
                     ),
                     source_manifest_hash=basis.source_manifest_hash,
+                    parent_refs=self._canonical_ref_descriptors(provisional_refs),
                 )
-            # Pre-v2 rows are replayed only long enough to prove the old
-            # snapshot formula.  That formula stored every historical ledger
-            # candidate, including candidates unavailable at the cutoff, and
-            # selected availability before hashing.  Do not expose those late
-            # candidates after the legacy seal has been verified.
-            legacy_snapshot_candidate = (
-                expected_parent_set_hash is not None
-                and revision.content_hash != expected_parent_set_hash
-            )
-            refs = self._sort_refs(
-                self._resolve_parent(
-                    revision,
-                    reference,
-                    allow_legacy_unavailable_ledger=legacy_snapshot_candidate,
+                legacy_snapshot_candidate = revision.content_hash != expected_parent_set_hash
+                refs = (
+                    provisional_refs
+                    if legacy_snapshot_candidate
+                    else self._sort_refs(
+                        self._resolve_parent(revision, reference)
+                        for reference in revision.parent_ids
+                    )
                 )
-                for reference in revision.parent_ids
-            )
             self._validate_revision_content(revision, refs)
             if legacy_snapshot_candidate:
                 cutoff = self._stored_datetime(basis.cutoff)

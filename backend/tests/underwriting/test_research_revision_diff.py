@@ -179,6 +179,26 @@ def seeded_revision(session: Session) -> SeededRevision:
     return SeededRevision(company, basis, manifest, observation, first)
 
 
+def _append_unverified_revision(
+    session: Session,
+    *,
+    object_id,
+    basis_id,
+    version_kind: str,
+    parent_ids: list[str],
+):
+    """Persist a malformed legacy-style row solely for read fail-closed tests."""
+    return UnderwritingRepository(session).append_research_version(
+        object_id=object_id,
+        basis_id=basis_id,
+        version_kind=version_kind,
+        content_hash="a" * 64,
+        parent_ids=parent_ids,
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+
+
 def test_foundation_summary_reads_only_the_revision_frozen_parents(
     session: Session, seeded_revision: SeededRevision,
 ) -> None:
@@ -230,12 +250,12 @@ def test_foundation_summary_fails_closed_for_unresolvable_or_cross_basis_parent(
             metric_key="foreign.company.revenue",
         )
         parent = str(foreign_observation.id)
-    revision = UnderwritingKernelService(session, now=lambda: NOW).publish_research_version(
-        seeded_revision.company.id,
-        seeded_revision.basis.id,
-        f"economic-model-{parent_kind}",
-        [parent],
-        None,
+    revision = _append_unverified_revision(
+        session,
+        object_id=seeded_revision.company.id,
+        basis_id=seeded_revision.basis.id,
+        version_kind=f"economic-model-{parent_kind}",
+        parent_ids=[parent],
     )
 
     with pytest.raises(ValidationError, match="research revision parent"):
@@ -294,12 +314,12 @@ def test_foundation_rejects_a_parent_owned_by_another_object(
         LedgerEntryInput(LedgerKind.REALITY, "revenue", "reported", {}, NOW, NOW, "public"),
         None,
     )
-    revision = kernel.publish_research_version(
-        seeded_revision.company.id,
-        seeded_revision.basis.id,
-        "cross-object-parent",
-        [str(foreign_entry.id)],
-        None,
+    revision = _append_unverified_revision(
+        session,
+        object_id=seeded_revision.company.id,
+        basis_id=seeded_revision.basis.id,
+        version_kind="cross-object-parent",
+        parent_ids=[str(foreign_entry.id)],
     )
 
     with pytest.raises(ValidationError, match="research revision parent.*object"):
@@ -448,12 +468,12 @@ def test_foundation_fails_closed_for_an_unsealable_artifact_type(
     parent = rows[artifact_type]
     session.add(parent)
     session.flush()
-    revision = UnderwritingKernelService(session, now=lambda: NOW).publish_research_version(
-        seeded_revision.company.id,
-        seeded_revision.basis.id,
-        f"unsealable-{artifact_type}",
-        [str(parent.id)],
-        None,
+    revision = _append_unverified_revision(
+        session,
+        object_id=seeded_revision.company.id,
+        basis_id=seeded_revision.basis.id,
+        version_kind=f"unsealable-{artifact_type}",
+        parent_ids=[str(parent.id)],
     )
 
     with pytest.raises(ValidationError, match="research revision parent.*unsealable"):
@@ -740,9 +760,12 @@ def test_diff_fails_closed_for_ungoverned_semantic_token_and_corrupt_cycle(
     from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
 
     kernel = UnderwritingKernelService(session, now=lambda: NOW)
-    token_revision = kernel.publish_research_version(
-        seeded_revision.company.id, seeded_revision.basis.id, "economic_model_with_token",
-        ["semantic_snapshot:" + "a" * 64], None,
+    token_revision = _append_unverified_revision(
+        session,
+        object_id=seeded_revision.company.id,
+        basis_id=seeded_revision.basis.id,
+        version_kind="economic_model_with_token",
+        parent_ids=["semantic_snapshot:" + "a" * 64],
     )
     with pytest.raises(ValidationError, match="semantic snapshot"):
         ResearchRevisionDiffService(session).revision_summary(token_revision.id)
@@ -946,8 +969,12 @@ def test_research_archives_list_only_frozen_readable_families_and_degrade_corrup
     industry_version = kernel.publish_research_version(
         industry.id, industry_basis.id, "industry_model", [str(industry_entry.id)], None,
     )
-    corrupt = kernel.publish_research_version(
-        seeded_revision.company.id, seeded_revision.basis.id, "corrupt_model", ["not-a-parent"], None,
+    corrupt = _append_unverified_revision(
+        session,
+        object_id=seeded_revision.company.id,
+        basis_id=seeded_revision.basis.id,
+        version_kind="corrupt_model",
+        parent_ids=["not-a-parent"],
     )
     service = ResearchRevisionDiffService(session)
 
@@ -1135,7 +1162,7 @@ def test_revision_and_archive_reject_parent_evidence_available_after_cutoff(
         version_kind = seeded_revision.first.version_kind
     session.expire_all()
 
-    with pytest.raises(ValidationError, match="unavailable at research basis cutoff"):
+    with pytest.raises(ValidationError, match="research revision parent|research revision content hash"):
         service.revision_summary(revision_id)
 
     archive = service.research_archives(limit=100)
@@ -1178,6 +1205,49 @@ def test_old_generic_parent_set_v1_is_not_treated_as_a_readable_historical_seal(
         service.revision_summary(revision.id)
 
     item = next(item for item in service.research_archives(limit=100).items if item.version_kind == "old_v1")
+    assert item.lineage_state == "unreadable"
+    assert item.latest_revision_id is None
+
+
+def test_old_generic_parent_set_v2_is_not_treated_as_a_readable_historical_seal(
+    session: Session,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    company = kernel.add_object(ResearchObjectKind.COMPANY, "CN:old-v2:COMPANY", "Old v2")
+    basis = kernel.add_basis(HistoricalBasisInput(NOW, None, "b" * 64))
+    entry = kernel.append_ledger_entry(
+        company.id, basis.id,
+        LedgerEntryInput(LedgerKind.REALITY, "reported", "reported", {}, NOW, NOW, "public"), None,
+    )
+    parent_ids = [str(entry.id)]
+    revision = UnderwritingRepository(session).append_research_version(
+        object_id=company.id,
+        basis_id=basis.id,
+        version_kind="old_v2",
+        content_hash=canonical_hash({
+            "schema_version": "underwriting.research-version-parent-set.v2",
+            "object_id": str(company.id),
+            "basis_id": str(basis.id),
+            "basis": {
+                "cutoff": NOW.isoformat(),
+                "price_as_of": None,
+                "source_manifest_hash": "b" * 64,
+            },
+            "version_kind": "old_v2",
+            "parent_ids": parent_ids,
+        }),
+        parent_ids=parent_ids,
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    service = ResearchRevisionDiffService(session)
+
+    with pytest.raises(ValidationError, match="research revision content hash"):
+        service.revision_summary(revision.id)
+
+    item = next(item for item in service.research_archives(limit=100).items if item.version_kind == "old_v2")
     assert item.lineage_state == "unreadable"
     assert item.latest_revision_id is None
 
@@ -1238,6 +1308,111 @@ def test_catl_summary_and_archive_reject_a_correlated_basis_and_manifest_hash_ta
         item for item in service.research_archives(limit=100).items
         if item.object_id == catl_revision.company.id
         and item.version_kind == catl_revision.research_version.version_kind
+    )
+    assert item.lineage_state == "unreadable"
+    assert item.latest_revision_id is None
+
+
+def test_generic_v3_publication_seals_canonical_frozen_parent_descriptors(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.kernel import frozen_research_version_content_hash
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    service = ResearchRevisionDiffService(session)
+    parent_refs = service.frozen_parent_descriptors(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        seeded_revision.first.version_kind,
+        seeded_revision.first.parent_ids,
+    )
+    expected, _, _ = frozen_research_version_content_hash(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        seeded_revision.first.version_kind,
+        seeded_revision.first.parent_ids,
+        cutoff=NOW,
+        price_as_of=None,
+        source_manifest_hash=seeded_revision.basis.source_manifest_hash,
+        parent_refs=parent_refs,
+    )
+
+    assert seeded_revision.first.content_hash == expected
+    assert service.revision_summary(seeded_revision.first.id).id == seeded_revision.first.id
+
+
+@pytest.mark.parametrize("parent_kind", ["ledger", "metric_observation"])
+def test_generic_v3_summary_and_archive_reject_a_rehashed_frozen_parent_tamper(
+    session: Session, seeded_revision: SeededRevision, parent_kind: str,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    if parent_kind == "ledger":
+        kernel = UnderwritingKernelService(session, now=lambda: NOW)
+        entry = kernel.append_ledger_entry(
+            seeded_revision.company.id,
+            seeded_revision.basis.id,
+            LedgerEntryInput(
+                LedgerKind.REALITY,
+                "v3_rehashed_ledger",
+                "reported",
+                {"source_locator": "original:p1"},
+                NOW,
+                NOW,
+                "public",
+            ),
+            None,
+        )
+        revision = kernel.publish_research_version(
+            seeded_revision.company.id,
+            seeded_revision.basis.id,
+            "v3_ledger_model",
+            [str(entry.id)],
+            None,
+        )
+        replacement_payload = {"source_locator": "rehashed:p99"}
+        replacement_hash = canonical_hash({
+            "ledger_kind": "reality",
+            "family_key": "v3_rehashed_ledger",
+            "entry_type": "reported",
+            "payload": replacement_payload,
+            "effective_at": NOW,
+            "available_at": NOW,
+            "source_boundary": "public",
+        })
+        session.connection().exec_driver_sql(
+            "UPDATE uw_ledger_entries SET payload = ?, content_hash = ? WHERE id = ?",
+            (json.dumps(replacement_payload), replacement_hash, entry.id.hex),
+        )
+    else:
+        replacement_locator = "annual-report:rehashed-p99"
+        replacement_hash = MetricObservation(
+            seeded_revision.observation.metric_key,
+            seeded_revision.observation.definition_version,
+            Decimal("362012554000"),
+            "CNY",
+            datetime(2024, 1, 1, tzinfo=UTC),
+            datetime(2024, 12, 31, tzinfo=UTC),
+            NOW,
+            NOW,
+            "annual-report",
+            replacement_locator,
+            tuple({"scope": "company"}.items()),
+        ).content_hash
+        session.connection().exec_driver_sql(
+            "UPDATE uw_metric_observations SET source_locator = ?, content_hash = ? WHERE id = ?",
+            (replacement_locator, replacement_hash, seeded_revision.observation.id.hex),
+        )
+        revision = seeded_revision.first
+    session.expire_all()
+    service = ResearchRevisionDiffService(session)
+
+    with pytest.raises(ValidationError, match="research revision content hash"):
+        service.revision_summary(revision.id)
+
+    item = next(
+        item for item in service.research_archives(limit=100).items
+        if item.version_kind == revision.version_kind
     )
     assert item.lineage_state == "unreadable"
     assert item.latest_revision_id is None

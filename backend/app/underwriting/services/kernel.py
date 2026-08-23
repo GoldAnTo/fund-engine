@@ -1,7 +1,7 @@
 """Validated write operations for the underwriting research kernel."""
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import copy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -34,7 +34,7 @@ from app.underwriting.persistence.repository import StaleParentError, Underwriti
 
 
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
-_RESEARCH_VERSION_PARENT_SET_SCHEMA = "underwriting.research-version-parent-set.v2"
+_RESEARCH_VERSION_PARENT_SET_SCHEMA = "underwriting.research-version-parent-set.v3"
 _RELATION_KINDS = {
     "industry_exposes_company": (
         ResearchObjectKind.INDUSTRY.value,
@@ -77,6 +77,7 @@ def frozen_research_version_content_hash(
     cutoff: datetime,
     price_as_of: datetime | None,
     source_manifest_hash: str,
+    parent_refs: tuple[Mapping[str, object], ...],
 ) -> tuple[str, str, list[str]]:
     """Seal a generic research version from frozen parents and historical basis.
 
@@ -84,7 +85,7 @@ def frozen_research_version_content_hash(
     depend on the currently effective ledger, because unrelated evidence may
     be appended after publication.  Payload authenticity is verified by the
     reader when each frozen parent is resolved; this seal binds that exact
-    parent-id set to its object, basis, version family, and the complete
+    parent-id set and authenticated parent descriptors to its object, basis, version family, and the complete
     historically knowable basis.  ``basis_id`` alone is not an integrity
     boundary: an unsafe database update could otherwise alter its cutoff,
     price timestamp, or source-manifest identity without invalidating history.
@@ -100,6 +101,27 @@ def frozen_research_version_content_hash(
     if not isinstance(source_manifest_hash, str) or _SHA256_HEX.fullmatch(source_manifest_hash) is None:
         raise ValidationError("research revision basis source_manifest_hash must be a sha256 hex digest")
     normalized_parent_ids = sorted(set(parent_ids))
+    required_parent_ref_keys = frozenset({"reference", "artifact_type", "identity", "content_hash"})
+    normalized_parent_refs: list[dict[str, str]] = []
+    for parent_ref in parent_refs:
+        if not isinstance(parent_ref, Mapping) or set(parent_ref) != required_parent_ref_keys:
+            raise ValidationError("research revision parent descriptors are malformed")
+        normalized_ref: dict[str, str] = {}
+        for key in required_parent_ref_keys:
+            value = parent_ref[key]
+            if not isinstance(value, str) or not value:
+                raise ValidationError("research revision parent descriptors are malformed")
+            normalized_ref[key] = value
+        normalized_parent_refs.append(normalized_ref)
+    normalized_parent_refs.sort(
+        key=lambda ref: (ref["artifact_type"], ref["identity"], ref["reference"], ref["content_hash"])
+    )
+    if len(normalized_parent_refs) != len(normalized_parent_ids):
+        raise ValidationError("research revision parent descriptors do not match parent set")
+    if {ref["reference"] for ref in normalized_parent_refs} != set(normalized_parent_ids):
+        raise ValidationError("research revision parent descriptors do not match parent set")
+    if len({(ref["reference"], ref["artifact_type"]) for ref in normalized_parent_refs}) != len(normalized_parent_refs):
+        raise ValidationError("research revision parent descriptors are duplicated")
     return (
         canonical_hash({
             "schema_version": _RESEARCH_VERSION_PARENT_SET_SCHEMA,
@@ -112,6 +134,7 @@ def frozen_research_version_content_hash(
             },
             "version_kind": normalized_kind,
             "parent_ids": normalized_parent_ids,
+            "parent_refs": normalized_parent_refs,
         }),
         normalized_kind,
         normalized_parent_ids,
@@ -369,11 +392,17 @@ class UnderwritingKernelService:
         basis = self._repository.basis(basis_id)
         if basis is None:
             raise ValidationError("historical basis not found")
+        from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+        parent_refs = ResearchRevisionDiffService(self._session).frozen_parent_descriptors(
+            object_id, basis_id, version_kind, parent_ids,
+        )
         content_hash, _, _ = frozen_research_version_content_hash(
             object_id, basis_id, version_kind, parent_ids,
             cutoff=self._stored_datetime(basis.cutoff),
             price_as_of=self._stored_datetime(basis.price_as_of) if basis.price_as_of is not None else None,
             source_manifest_hash=basis.source_manifest_hash,
+            parent_refs=parent_refs,
         )
         return content_hash
 
@@ -390,12 +419,18 @@ class UnderwritingKernelService:
         basis = self._repository.basis(basis_id)
         if basis is None:
             raise ValidationError("historical basis not found")
+        from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+        parent_refs = ResearchRevisionDiffService(self._session).frozen_parent_descriptors(
+            object_id, basis_id, version_kind, parent_ids,
+        )
         content_hash, normalized_kind, normalized_parent_ids = (
             frozen_research_version_content_hash(
                 object_id, basis_id, version_kind, parent_ids,
                 cutoff=self._stored_datetime(basis.cutoff),
                 price_as_of=self._stored_datetime(basis.price_as_of) if basis.price_as_of is not None else None,
                 source_manifest_hash=basis.source_manifest_hash,
+                parent_refs=parent_refs,
             )
         )
         try:
