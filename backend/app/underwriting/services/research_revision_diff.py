@@ -392,7 +392,13 @@ class ResearchRevisionDiffService:
             assert isinstance(row, UnderwritingLedgerEntry)
             locator = row.payload.get("source_locator") if isinstance(row.payload, Mapping) else None
             return RevisionArtifactRef(
-                reference, artifact_type, f"{row.ledger_kind}|{row.family_key}|{row.version}", row.content_hash,
+                # A ledger version is a replacement of the same research
+                # family, not a new economic concept.  Keep the version in
+                # the immutable reference/hash while using the family as the
+                # semantic identity, so a historical diff can express a
+                # revision as ``replaced`` rather than a misleading
+                # remove/add pair.
+                reference, artifact_type, f"{row.ledger_kind}|{row.family_key}", row.content_hash,
                 (locator,) if isinstance(locator, str) and locator else (row.source_boundary,),
                 row.payload.get("unit") if isinstance(row.payload, Mapping) and isinstance(row.payload.get("unit"), str) else None,
                 self._stored_datetime(row.effective_at), self._stored_datetime(row.effective_at),
