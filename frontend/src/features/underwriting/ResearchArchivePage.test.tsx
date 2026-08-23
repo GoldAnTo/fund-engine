@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import pageSource from "./ResearchArchivePage.tsx?raw";
 
-import ResearchArchivePage, { compareCodePointTuple } from "./ResearchArchivePage";
+import ResearchArchivePage, { compareCandidateItemSortFields, compareCodePointTuple } from "./ResearchArchivePage";
 import {
   UnderwritingResearchRequestError,
   resetUnderwritingResearchApi,
@@ -480,6 +480,10 @@ describe("ResearchArchivePage", () => {
     expect(compareCodePointTuple(["a", "source"], ["Z", "source"])).toBeGreaterThan(0);
     expect(compareCodePointTuple(["\uE000"], ["😀"])).toBeLessThan(0);
     expect(compareCodePointTuple(["😀"], ["\uE000"])).toBeGreaterThan(0);
+    expect(compareCandidateItemSortFields(
+      ["a\u0000b", "source", "locator", "start", "end", "hash"],
+      ["a", "b\u0000source", "locator", "start", "end", "hash"],
+    )).toBeGreaterThan(0);
   });
 
   it("renders only the selected reviewed candidate with chart, assumption, Unknown, and both reviews", async () => {

@@ -527,6 +527,10 @@ export function compareCodePointTuple(left: readonly string[], right: readonly s
   return left.length - right.length;
 }
 
+export function compareCandidateItemSortFields(left: readonly string[], right: readonly string[]): number {
+  return compareCodePointTuple(left, right);
+}
+
 async function canonicalCandidateHash(value: object, ensureAscii: boolean): Promise<string | null> {
   if (!globalThis.crypto?.subtle) return null;
   const canonicalPayload = JSON.stringify(value);
@@ -604,9 +608,13 @@ async function verifiedCandidatePayloadHashes(candidate: Record<string, unknown>
   const itemHashes = await Promise.all(canonicalItems.map((item) => canonicalCandidateHash(item, true)));
   if (itemHashes.some((hash) => hash === null)) return false;
   const sortedItems = canonicalItems.map((item, index) => ({ item, hash: itemHashes[index] as string })).sort((left, right) => {
-    const leftKey = `${left.item.metric_key}\u0000${left.item.source_id}\u0000${left.item.source_locator}\u0000${left.item.observed_start}\u0000${left.item.observed_end}\u0000${left.hash}`;
-    const rightKey = `${right.item.metric_key}\u0000${right.item.source_id}\u0000${right.item.source_locator}\u0000${right.item.observed_start}\u0000${right.item.observed_end}\u0000${right.hash}`;
-    return compareCodePointTuple([leftKey], [rightKey]);
+    return compareCandidateItemSortFields([
+      left.item.metric_key as string, left.item.source_id as string, left.item.source_locator as string,
+      left.item.observed_start as string, left.item.observed_end as string, left.hash,
+    ], [
+      right.item.metric_key as string, right.item.source_id as string, right.item.source_locator as string,
+      right.item.observed_start as string, right.item.observed_end as string, right.hash,
+    ]);
   }).map(({ item }) => item);
   const visibleItems = (candidate.items as unknown[]).map(canonicalCandidateItem);
   if (visibleItems.some((item) => item === null) || JSON.stringify(visibleItems) !== JSON.stringify(sortedItems)) return false;
