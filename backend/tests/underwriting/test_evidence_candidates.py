@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.ledger import Base, ValidationError
@@ -1101,3 +1102,89 @@ def test_candidate_parents_cannot_be_promoted_into_another_revision_kind(
         UnderwritingKernelService(session, now=lambda: NOW).publish_research_version(
             company.id, basis.id, "economic_model", [str(dossier.id)], None,
         )
+
+
+def test_generic_paths_cannot_bypass_candidate_governance_with_a_superseded_dossier(
+    session: Session, repository, company, basis, manifest,
+) -> None:
+    dossier = _append_dossier(repository, company, basis, manifest)
+    provenance = _append_review(repository, dossier, reviewer_identity="reviewer:provenance", reviewer_role="provenance")
+    methodology = _append_review(repository, dossier, reviewer_identity="reviewer:methodology", reviewer_role="methodology")
+    session.commit()
+    CandidateEvidenceService(session, now=lambda: NOW).publish(dossier.id)
+    successor_payload = _dossier_payload(
+        object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
+        source_manifest_hash=manifest.manifest_hash, version=2, supersedes_id=dossier.id,
+    )
+    repository.append_candidate_dossier(
+        object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
+        dossier_key="industry-capacity", payload=successor_payload, created_at=NOW,
+        expected_parent_id=dossier.id,
+    )
+    session.commit()
+    parent_ids = [str(dossier.id), str(provenance.id), str(methodology.id), str(manifest.id)]
+
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    with pytest.raises(ValidationError, match="reserved"):
+        ResearchRevisionDiffService(session).frozen_parent_descriptors(
+            company.id, basis.id, "industry_evidence_candidate", parent_ids,
+        )
+    with pytest.raises(ValidationError, match="reserved"):
+        UnderwritingKernelService(session, now=lambda: NOW).preview_research_version_hash(
+            company.id, basis.id, "industry_evidence_candidate", parent_ids,
+        )
+    with pytest.raises(ValidationError, match="reserved"):
+        UnderwritingKernelService(session, now=lambda: NOW).publish_research_version(
+            company.id, basis.id, "industry_evidence_candidate", parent_ids, None,
+        )
+
+
+def test_candidate_publication_locks_family_before_review_reads(
+    session: Session, repository, company, basis, manifest, monkeypatch,
+) -> None:
+    dossier = _append_dossier(repository, company, basis, manifest)
+    service = CandidateEvidenceService(session, now=lambda: NOW)
+    events: list[str] = []
+    original_lock = service._repository._lock_candidate_dossier_family
+    original_reviews = service._repository.effective_candidate_reviews
+
+    def lock(**kwargs):
+        events.append("lock")
+        return original_lock(**kwargs)
+
+    def reviews(dossier_id):
+        events.append("reviews")
+        return original_reviews(dossier_id)
+
+    monkeypatch.setattr(service._repository, "_lock_candidate_dossier_family", lock)
+    monkeypatch.setattr(service._repository, "effective_candidate_reviews", reviews)
+
+    with pytest.raises(ValidationError, match="provenance and methodology approvals"):
+        service.publish(dossier.id)
+
+    assert events[:2] == ["lock", "reviews"]
+
+
+def test_candidate_publication_integrity_failure_preserves_unrelated_caller_work(
+    session: Session, repository, company, basis, manifest, monkeypatch,
+) -> None:
+    dossier = _append_dossier(repository, company, basis, manifest)
+    _append_review(repository, dossier, reviewer_identity="reviewer:provenance", reviewer_role="provenance")
+    _append_review(repository, dossier, reviewer_identity="reviewer:methodology", reviewer_role="methodology")
+    session.commit()
+    with session.begin():
+        def collision(*args, **kwargs):
+            raise IntegrityError("insert", {}, Exception("forced collision"))
+
+        monkeypatch.setattr(UnderwritingRepository, "append_research_version", collision)
+
+        with pytest.raises(IntegrityError, match="forced collision"):
+            CandidateEvidenceService(session, now=lambda: NOW).publish(dossier.id)
+
+        unrelated = UnderwritingRepository(session).add_object(
+            "company", "CN:unrelated:COMPANY", "Unrelated", NOW,
+        )
+        unrelated_id = unrelated.id
+
+    assert UnderwritingRepository(session).object(unrelated_id) is not None

@@ -1336,6 +1336,8 @@ class ResearchRevisionDiffService:
         with self._session.no_autoflush:
             if version_kind == CATL_VERSION_KIND:
                 raise ValidationError("CATL version kind is reserved for the governed semantic snapshot publisher")
+            if version_kind == INDUSTRY_EVIDENCE_CANDIDATE_KIND:
+                raise ValidationError("industry_evidence_candidate is reserved for CandidateEvidenceService")
             if not isinstance(parent_ids, list) or not all(isinstance(value, str) for value in parent_ids):
                 raise ValidationError("research revision parents are malformed")
             if self._session.get(UnderwritingResearchObject, object_id) is None:
@@ -1353,6 +1355,37 @@ class ResearchRevisionDiffService:
             )
             if any(ref.artifact_type == "semantic_snapshot" for ref in refs):
                 raise ValidationError("generic research revision cannot seal a semantic snapshot token")
+            self._validate_candidate_parent_set(scope, refs)
+            return self._canonical_ref_descriptors(refs)
+
+    def frozen_candidate_parent_descriptors(
+        self,
+        object_id: UUID,
+        basis_id: UUID,
+        parent_ids: list[str],
+    ) -> tuple[dict[str, str], ...]:
+        """Resolve the sole governed parent graph for candidate publication.
+
+        This is deliberately separate from the generic descriptor path: a
+        generic caller must never manufacture an ``industry_evidence_candidate``
+        revision from a historical or superseded dossier.
+        """
+        with self._session.no_autoflush:
+            if not isinstance(parent_ids, list) or not all(isinstance(value, str) for value in parent_ids):
+                raise ValidationError("research revision parents are malformed")
+            if self._session.get(UnderwritingResearchObject, object_id) is None:
+                raise ValidationError("research object not found")
+            self._basis_for_id(basis_id)
+            scope = _ResearchRevisionScope(object_id, basis_id, INDUSTRY_EVIDENCE_CANDIDATE_KIND)
+            refs = self._sort_refs(
+                self._resolve_parent(
+                    scope,
+                    reference,
+                    answerability_seal_kind=_ANSWERABILITY_SEAL_GENERIC_TIMESTAMP,
+                    ledger_seal_kind=_LEDGER_SEAL_GENERIC_TIMESTAMP,
+                )
+                for reference in sorted(set(parent_ids))
+            )
             self._validate_candidate_parent_set(scope, refs)
             return self._canonical_ref_descriptors(refs)
 

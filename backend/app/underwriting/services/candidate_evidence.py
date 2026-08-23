@@ -7,6 +7,7 @@ revision, and that revision is deliberately answerability-only.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -15,6 +16,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
+from app.underwriting.domain.answerability import (
+    AnswerabilityInput,
+    enforce_action_boundary,
+    evaluate_answerability,
+)
 from app.underwriting.domain.types import (
     AnswerabilityState,
     BlockerCode,
@@ -24,12 +30,13 @@ from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
     UnderwritingResearchVersion,
 )
+from app.underwriting.persistence.repository import UnderwritingRepository
 from app.underwriting.persistence.research_models import (
     UnderwritingEvidenceCandidateDossierVersion,
     UnderwritingEvidenceCandidateReviewVersion,
 )
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
-from app.underwriting.services.kernel import UnderwritingKernelService
+from app.underwriting.services.kernel import frozen_research_version_content_hash
 
 
 INDUSTRY_EVIDENCE_CANDIDATE_KIND = "industry_evidence_candidate"
@@ -56,17 +63,23 @@ class CandidateEvidenceService:
         self._session = session
         self._now = now
         self._repository = UnderwritingResearchRepository(session)
+        self._kernel_repository = UnderwritingRepository(session)
 
     @staticmethod
     def _stored_utc(value: datetime) -> datetime:
         return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
-    def _current_dossier(
+    def _dossier_for_lock(
         self, dossier_id: UUID,
     ) -> UnderwritingEvidenceCandidateDossierVersion:
         dossier = self._session.get(UnderwritingEvidenceCandidateDossierVersion, dossier_id)
         if dossier is None:
             raise ValidationError("candidate dossier does not exist")
+        return dossier
+
+    def _current_dossier(
+        self, dossier: UnderwritingEvidenceCandidateDossierVersion,
+    ) -> UnderwritingEvidenceCandidateDossierVersion:
         current = self._session.scalars(
             select(UnderwritingEvidenceCandidateDossierVersion)
             .where(
@@ -145,18 +158,28 @@ class CandidateEvidenceService:
     ) -> UnderwritingAnswerabilityEvaluation:
         if reusable := self._reusable_answerability(dossier):
             return reusable
-        timestamp = self._stored_utc(self._now()) if self._now is not None else self._stored_utc(dossier.created_at)
+        timestamp = (
+            self._stored_utc(self._now())
+            if self._now is not None
+            else self._stored_utc(dossier.created_at)
+        )
         latest = self._latest_answerability(dossier)
-        kernel = UnderwritingKernelService(self._session, now=lambda: timestamp)
-        return kernel.record_answerability(
-            dossier.object_id,
-            dossier.basis_id,
-            (_CANDIDATE_BLOCKER,),
-            (self._debt_key(dossier),),
-            True,
-            EligibleAction.WAIT_FOR_VALIDATION,
-            (self._requirement(dossier),),
-            latest.id if latest is not None else None,
+        result = evaluate_answerability(AnswerabilityInput(
+            hard_blockers=(_CANDIDATE_BLOCKER,),
+            research_debt_keys=(self._debt_key(dossier),),
+            resolvable_within_mandate=True,
+        ))
+        allowed_action = enforce_action_boundary(result, EligibleAction.WAIT_FOR_VALIDATION)
+        return self._kernel_repository.append_answerability_evaluation(
+            object_id=dossier.object_id,
+            basis_id=dossier.basis_id,
+            state=result.state.value,
+            blockers=[blocker.value for blocker in result.blockers],
+            research_debt_keys=[self._debt_key(dossier)],
+            resolvable_within_mandate=result.resolvable_within_mandate,
+            allowed_action=allowed_action.value,
+            resolution_requirements=[self._requirement(dossier)],
+            expected_parent_id=latest.id if latest is not None else None,
             created_at=timestamp,
         )
 
@@ -174,26 +197,69 @@ class CandidateEvidenceService:
         ).first()
         return current.id if current is not None else None
 
+    def _publication_write_scope(self):
+        """Use a savepoint where the driver supports a true outer transaction.
+
+        SQLite family locking is already transaction-serialised with ``BEGIN
+        IMMEDIATE``.  pysqlite can make a first nested savepoint the physical
+        outer transaction, so rolling it back would also discard caller rows;
+        keep its governed append on the caller transaction instead.
+        """
+        if self._session.get_bind().dialect.name == "sqlite":
+            return nullcontext()
+        return self._session.begin_nested()
+
     def publish(self, dossier_id: UUID) -> CandidateEvidencePublication:
         """Publish only a sealed, non-answerable candidate revision; never commit."""
-        with self._session.no_autoflush:
-            dossier = self._current_dossier(dossier_id)
-            reviews = self._approved_reviews(dossier)
-        answerability = self._record_not_answerable(dossier)
-        parents = [
-            str(dossier.id),
-            *(str(review.id) for review in reviews),
-            str(dossier.source_manifest_id),
-            str(answerability.id),
-        ]
-        revision = UnderwritingKernelService(
-            self._session,
-            now=lambda: self._stored_utc(dossier.created_at),
-        ).publish_research_version(
-            dossier.object_id,
-            dossier.basis_id,
-            INDUSTRY_EVIDENCE_CANDIDATE_KIND,
-            parents,
-            self._candidate_revision_parent(dossier),
+        target = self._dossier_for_lock(dossier_id)
+        self._repository._lock_candidate_dossier_family(
+            object_id=target.object_id,
+            basis_id=target.basis_id,
+            dossier_key=target.dossier_key,
         )
+        self._session.expire(target)
+        with self._session.no_autoflush:
+            dossier = self._current_dossier(target)
+            reviews = self._approved_reviews(dossier)
+        # PostgreSQL uses a savepoint; SQLite's family writer lock prevents
+        # competing appends without pysqlite's unsafe first-savepoint path.
+        with self._publication_write_scope():
+            answerability = self._record_not_answerable(dossier)
+            parents = [
+                str(dossier.id),
+                *(str(review.id) for review in reviews),
+                str(dossier.source_manifest_id),
+                str(answerability.id),
+            ]
+            from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+            parent_refs = ResearchRevisionDiffService(self._session).frozen_candidate_parent_descriptors(
+                dossier.object_id, dossier.basis_id, parents,
+            )
+            basis = self._kernel_repository.basis(dossier.basis_id)
+            if basis is None:
+                raise ValidationError("historical basis not found")
+            content_hash, version_kind, normalized_parents = frozen_research_version_content_hash(
+                dossier.object_id,
+                dossier.basis_id,
+                INDUSTRY_EVIDENCE_CANDIDATE_KIND,
+                parents,
+                cutoff=self._stored_utc(basis.cutoff),
+                price_as_of=(
+                    self._stored_utc(basis.price_as_of)
+                    if basis.price_as_of is not None
+                    else None
+                ),
+                source_manifest_hash=basis.source_manifest_hash,
+                parent_refs=parent_refs,
+            )
+            revision = self._kernel_repository.append_research_version(
+                object_id=dossier.object_id,
+                basis_id=dossier.basis_id,
+                version_kind=version_kind,
+                content_hash=content_hash,
+                parent_ids=normalized_parents,
+                expected_parent_id=self._candidate_revision_parent(dossier),
+                created_at=self._stored_utc(dossier.created_at),
+            )
         return CandidateEvidencePublication(revision, dossier, reviews, answerability)

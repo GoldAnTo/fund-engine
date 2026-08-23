@@ -400,6 +400,20 @@ def begin_candidate_sqlite_write(
         raise ValidationError("candidate write requires a clean SQLite Session")
     connection = session.connection()
     raw_connection = connection.connection.driver_connection
+    # A caller may already have flushed unrelated work in this exact SQLAlchemy
+    # transaction.  That write owns SQLite's writer lock; issuing a raw
+    # ``BEGIN IMMEDIATE`` again can silently discard its outer transaction.
+    if (
+        session.in_transaction()
+        and session.info.get(_SQLITE_ORM_WRITE_TRANSACTION) is raw_connection
+    ):
+        if not raw_connection.in_transaction:
+            # SQLAlchemy may hold only its logical outer transaction after a
+            # flush.  Materialize it before a publication savepoint so a
+            # rollback to that savepoint cannot consume caller-owned rows.
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            session.info[_CANDIDATE_SQLITE_WRITE_RESERVATION] = raw_connection
+        return
     if session.info.get(_CANDIDATE_SQLITE_WRITE_RESERVATION) is raw_connection:
         if raw_connection.in_transaction:
             return
@@ -739,6 +753,14 @@ def _validate_direct_candidate_writes(session, _flush_context, _instances) -> No
 @event.listens_for(Session, "after_flush_postexec")
 def _mark_sqlite_orm_write_after_any_flush(session, _flush_context) -> None:
     mark_sqlite_orm_write_transaction(session)
+
+
+@event.listens_for(Session, "after_transaction_end")
+def _clear_sqlite_write_transaction_marker(session, transaction) -> None:
+    """Do not reuse a committed transaction's SQLite writer-lock marker."""
+    if transaction.parent is None:
+        session.info.pop(_SQLITE_ORM_WRITE_TRANSACTION, None)
+        session.info.pop(_CANDIDATE_SQLITE_WRITE_RESERVATION, None)
 
 
 @event.listens_for(UnderwritingEvidenceCandidateDossierVersion, "before_insert")
