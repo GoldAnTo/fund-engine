@@ -1036,6 +1036,97 @@ def test_boundary_gap_rejects_hash_or_late_selected_parent_tamper(
         ResearchRevisionDiffService(session).revision_boundary(revision.id)
 
 
+def test_boundary_gap_new_generic_seal_rejects_cutoff_valid_created_at_tamper(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    """A later-written row cannot become historical by backdating before cutoff."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    recorded_at = NOW - timedelta(seconds=5)
+    gap_kernel = UnderwritingKernelService(session, now=lambda: recorded_at)
+    gap = gap_kernel.append_ledger_entry(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        LedgerEntryInput(
+            LedgerKind.REALITY, "evidence_gap:company.revenue", "unknown_evidence_gap",
+            _unknown_evidence_gap_payload(), NOW, NOW, "frozen_source_manifest",
+        ), None,
+    )
+    revision = UnderwritingKernelService(session, now=lambda: NOW).publish_research_version(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        "economic_model_boundary_gap_created_at", [str(seeded_revision.manifest.id), str(gap.id)],
+        None,
+    )
+    service = ResearchRevisionDiffService(session)
+    sealed_parent = next(
+        ref for ref in service.revision_summary(revision.id).parent_refs
+        if ref.reference == str(gap.id)
+    )
+    assert sealed_parent.content_hash == canonical_hash({
+        "ledger_content_hash": gap.content_hash,
+        "created_at": recorded_at.isoformat(),
+    })
+    session.connection().exec_driver_sql(
+        "UPDATE uw_ledger_entries SET created_at = ? WHERE id = ?",
+        ((NOW - timedelta(seconds=1)).isoformat(), gap.id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="research revision content hash"):
+        service.revision_summary(revision.id)
+    with pytest.raises(ValidationError, match="research revision content hash"):
+        service.revision_boundary(revision.id)
+
+
+def test_boundary_gap_rejects_old_generic_parent_descriptor_without_ledger_timestamp_seal(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    """Old generic summaries stay readable but may not make a gap claim."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    gap = kernel.append_ledger_entry(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        LedgerEntryInput(
+            LedgerKind.REALITY, "evidence_gap:company.revenue", "unknown_evidence_gap",
+            _unknown_evidence_gap_payload(), NOW, NOW, "frozen_source_manifest",
+        ), None,
+    )
+    service = ResearchRevisionDiffService(session)
+    manifest_parent = service.frozen_parent_descriptors(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        "legacy_gap_descriptor_source", [str(seeded_revision.manifest.id)],
+    )[0]
+    legacy_gap_parent = {
+        "reference": str(gap.id),
+        "artifact_type": "ledger",
+        "identity": "reality|evidence_gap:company.revenue",
+        "content_hash": gap.content_hash,
+    }
+    content_hash, _, _ = frozen_research_version_content_hash(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        "economic_model_boundary_gap_legacy", [str(seeded_revision.manifest.id), str(gap.id)],
+        cutoff=NOW, price_as_of=None,
+        source_manifest_hash=seeded_revision.basis.source_manifest_hash,
+        parent_refs=canonical_parent_refs((manifest_parent, legacy_gap_parent)),
+    )
+    legacy = UnderwritingRepository(session).append_research_version(
+        object_id=seeded_revision.company.id,
+        basis_id=seeded_revision.basis.id,
+        version_kind="economic_model_boundary_gap_legacy",
+        content_hash=content_hash,
+        parent_ids=[str(seeded_revision.manifest.id), str(gap.id)],
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+
+    assert service.revision_summary(legacy.id).id == legacy.id
+    assert [item.id for item in service.revision_history(
+        seeded_revision.company.id, "economic_model_boundary_gap_legacy",
+    ).revisions] == [legacy.id]
+    with pytest.raises(ValidationError, match="ledger.*timestamp-sealed"):
+        service.revision_boundary(legacy.id)
+
+
 @pytest.mark.parametrize(
     ("column", "value"),
     [

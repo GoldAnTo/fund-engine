@@ -69,6 +69,8 @@ _SNAPSHOT_TOKEN = re.compile(r"semantic_snapshot:[0-9a-f]{64}")
 _ANSWERABILITY_SEAL_LEGACY = "legacy"
 _ANSWERABILITY_SEAL_GENERIC_TIMESTAMP = "generic_timestamp"
 _ANSWERABILITY_SEAL_CATL_TIMESTAMP = "catl_timestamp"
+_LEDGER_SEAL_LEGACY = "legacy"
+_LEDGER_SEAL_GENERIC_TIMESTAMP = "generic_timestamp"
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +113,10 @@ class ResearchRevisionSummary:
     # existing history API.  A boundary reader needs it to distinguish an old
     # generic parent descriptor that never sealed answerability.created_at.
     answerability_timestamp_sealed: bool = False
+    # Generic v4 descriptors also bind ledger.created_at.  Older generic
+    # summaries remain readable, but an Unknown gap cannot be authenticated
+    # from a descriptor that omitted the row creation timestamp.
+    ledger_timestamp_sealed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,6 +436,33 @@ class ResearchRevisionDiffService:
                 created_at=created_at,
             )
         raise AssertionError(f"unrecognised answerability parent seal kind: {seal_kind}")
+
+    def _ledger_descriptor_hash(
+        self,
+        row: UnderwritingLedgerEntry,
+        *,
+        seal_kind: str,
+    ) -> str:
+        """Return a ledger parent descriptor hash under its publication seal.
+
+        Ledger content already binds the event's effective and availability
+        times, but not its database creation time.  Generic v4 publications
+        bind the normalized ``created_at`` as well so a later write cannot be
+        made to look historical merely by giving it an earlier availability
+        timestamp.  CATL's separately governed parent seal remains on the
+        legacy descriptor contract.
+        """
+        if seal_kind == _LEDGER_SEAL_LEGACY:
+            return row.content_hash
+        if seal_kind == _LEDGER_SEAL_GENERIC_TIMESTAMP:
+            created_at = self._stored_datetime(row.created_at)
+            if created_at is None:
+                raise self._parent_error("has malformed ledger created_at")
+            return canonical_hash({
+                "ledger_content_hash": row.content_hash,
+                "created_at": self._iso(created_at),
+            })
+        raise AssertionError(f"unrecognised ledger parent seal kind: {seal_kind}")
 
     @staticmethod
     def _controlled_string_sequence(value: object, field: str) -> tuple[str, ...]:
@@ -783,6 +816,7 @@ class ResearchRevisionDiffService:
         reference: str,
         *,
         answerability_seal_kind: str = _ANSWERABILITY_SEAL_LEGACY,
+        ledger_seal_kind: str = _LEDGER_SEAL_LEGACY,
     ) -> RevisionArtifactRef:
         if artifact_type == "source_manifest":
             assert isinstance(row, UnderwritingSourceManifestVersion)
@@ -848,7 +882,8 @@ class ResearchRevisionDiffService:
                 # semantic identity, so a historical diff can express a
                 # revision as ``replaced`` rather than a misleading
                 # remove/add pair.
-                reference, artifact_type, f"{row.ledger_kind}|{row.family_key}", row.content_hash,
+                reference, artifact_type, f"{row.ledger_kind}|{row.family_key}",
+                self._ledger_descriptor_hash(row, seal_kind=ledger_seal_kind),
                 (locator,) if isinstance(locator, str) and locator else (row.source_boundary,),
                 row.payload.get("unit") if isinstance(row.payload, Mapping) and isinstance(row.payload.get("unit"), str) else None,
                 self._stored_datetime(row.effective_at), self._stored_datetime(row.effective_at),
@@ -874,6 +909,7 @@ class ResearchRevisionDiffService:
         *,
         allow_legacy_unavailable_ledger: bool = False,
         answerability_seal_kind: str = _ANSWERABILITY_SEAL_LEGACY,
+        ledger_seal_kind: str = _LEDGER_SEAL_LEGACY,
     ) -> RevisionArtifactRef:
         if not isinstance(reference, str):
             raise self._parent_error("must be a string")
@@ -911,6 +947,7 @@ class ResearchRevisionDiffService:
             row,
             reference,
             answerability_seal_kind=answerability_seal_kind,
+            ledger_seal_kind=ledger_seal_kind,
         )
 
     @staticmethod
@@ -1118,7 +1155,7 @@ class ResearchRevisionDiffService:
         version_kind: str,
         parent_ids: list[str],
     ) -> tuple[dict[str, str], ...]:
-        """Resolve exactly the persisted parents a generic v3 publication seals.
+        """Resolve exactly the persisted parents a generic v4 publication seals.
 
         This is intentionally the same strict resolver used for replay.  It
         neither creates a research-version row nor consults a current ledger,
@@ -1139,6 +1176,7 @@ class ResearchRevisionDiffService:
                     scope,
                     reference,
                     answerability_seal_kind=_ANSWERABILITY_SEAL_GENERIC_TIMESTAMP,
+                    ledger_seal_kind=_LEDGER_SEAL_GENERIC_TIMESTAMP,
                 )
                 for reference in sorted(set(parent_ids))
             )
@@ -1178,21 +1216,25 @@ class ResearchRevisionDiffService:
                 else:
                     refs = legacy_refs
                     answerability_timestamp_sealed = False
+                ledger_timestamp_sealed = False
             else:
                 # Pre-v2 legacy rows may list a late ledger candidate that
                 # their old snapshot algorithm excluded before hashing.  Read
                 # it only long enough to determine whether the stored legacy
-                # seal is authentic.  A v3 seal is then replayed strictly.
-                timestamp_sealed_provisional_refs = self._sort_refs(
+                # seal is authentic. A generic v4 seal binds both
+                # answerability and ledger creation timestamps; v3 binds only
+                # answerability, and earlier rows bind neither.
+                fully_timestamp_sealed_provisional_refs = self._sort_refs(
                     self._resolve_parent(
                         revision,
                         reference,
                         allow_legacy_unavailable_ledger=True,
                         answerability_seal_kind=_ANSWERABILITY_SEAL_GENERIC_TIMESTAMP,
+                        ledger_seal_kind=_LEDGER_SEAL_GENERIC_TIMESTAMP,
                     )
                     for reference in revision.parent_ids
                 )
-                timestamp_sealed_hash, _, _ = frozen_research_version_content_hash(
+                fully_timestamp_sealed_hash, _, _ = frozen_research_version_content_hash(
                     revision.object_id,
                     revision.basis_id,
                     revision.version_kind,
@@ -1204,33 +1246,32 @@ class ResearchRevisionDiffService:
                         else None
                     ),
                     source_manifest_hash=basis.source_manifest_hash,
-                    parent_refs=self._canonical_ref_descriptors(timestamp_sealed_provisional_refs),
+                    parent_refs=self._canonical_ref_descriptors(fully_timestamp_sealed_provisional_refs),
                 )
-                if revision.content_hash == timestamp_sealed_hash:
+                if revision.content_hash == fully_timestamp_sealed_hash:
                     answerability_timestamp_sealed = True
+                    ledger_timestamp_sealed = True
                     legacy_snapshot_candidate = False
                     refs = self._sort_refs(
                         self._resolve_parent(
                             revision,
                             reference,
                             answerability_seal_kind=_ANSWERABILITY_SEAL_GENERIC_TIMESTAMP,
+                            ledger_seal_kind=_LEDGER_SEAL_GENERIC_TIMESTAMP,
                         )
                         for reference in revision.parent_ids
                     )
                 else:
-                    # Generic versions published before timestamp sealing must
-                    # remain readable as historical summaries.  They cannot,
-                    # however, later answer a boundary because their parent
-                    # descriptor never bound the original created_at value.
-                    legacy_provisional_refs = self._sort_refs(
+                    answerability_timestamp_sealed_provisional_refs = self._sort_refs(
                         self._resolve_parent(
                             revision,
                             reference,
                             allow_legacy_unavailable_ledger=True,
+                            answerability_seal_kind=_ANSWERABILITY_SEAL_GENERIC_TIMESTAMP,
                         )
                         for reference in revision.parent_ids
                     )
-                    legacy_parent_set_hash, _, _ = frozen_research_version_content_hash(
+                    answerability_timestamp_sealed_hash, _, _ = frozen_research_version_content_hash(
                         revision.object_id,
                         revision.basis_id,
                         revision.version_kind,
@@ -1242,18 +1283,60 @@ class ResearchRevisionDiffService:
                             else None
                         ),
                         source_manifest_hash=basis.source_manifest_hash,
-                        parent_refs=self._canonical_ref_descriptors(legacy_provisional_refs),
+                        parent_refs=self._canonical_ref_descriptors(
+                            answerability_timestamp_sealed_provisional_refs,
+                        ),
                     )
-                    answerability_timestamp_sealed = False
-                    legacy_snapshot_candidate = revision.content_hash != legacy_parent_set_hash
-                    refs = (
-                        legacy_provisional_refs
-                        if legacy_snapshot_candidate
-                        else self._sort_refs(
-                            self._resolve_parent(revision, reference)
+                    if revision.content_hash == answerability_timestamp_sealed_hash:
+                        answerability_timestamp_sealed = True
+                        ledger_timestamp_sealed = False
+                        legacy_snapshot_candidate = False
+                        refs = self._sort_refs(
+                            self._resolve_parent(
+                                revision,
+                                reference,
+                                answerability_seal_kind=_ANSWERABILITY_SEAL_GENERIC_TIMESTAMP,
+                            )
                             for reference in revision.parent_ids
                         )
-                    )
+                    else:
+                        # Generic versions published before timestamp sealing
+                        # remain readable as historical summaries. They cannot
+                        # later answer a boundary whose parent descriptor
+                        # omitted the relevant creation time.
+                        legacy_provisional_refs = self._sort_refs(
+                            self._resolve_parent(
+                                revision,
+                                reference,
+                                allow_legacy_unavailable_ledger=True,
+                            )
+                            for reference in revision.parent_ids
+                        )
+                        legacy_parent_set_hash, _, _ = frozen_research_version_content_hash(
+                            revision.object_id,
+                            revision.basis_id,
+                            revision.version_kind,
+                            list(revision.parent_ids),
+                            cutoff=self._stored_datetime(basis.cutoff),
+                            price_as_of=(
+                                self._stored_datetime(basis.price_as_of)
+                                if basis.price_as_of is not None
+                                else None
+                            ),
+                            source_manifest_hash=basis.source_manifest_hash,
+                            parent_refs=self._canonical_ref_descriptors(legacy_provisional_refs),
+                        )
+                        answerability_timestamp_sealed = False
+                        ledger_timestamp_sealed = False
+                        legacy_snapshot_candidate = revision.content_hash != legacy_parent_set_hash
+                        refs = (
+                            legacy_provisional_refs
+                            if legacy_snapshot_candidate
+                            else self._sort_refs(
+                                self._resolve_parent(revision, reference)
+                                for reference in revision.parent_ids
+                            )
+                        )
             self._validate_revision_content(revision, refs)
             if legacy_snapshot_candidate:
                 cutoff = self._stored_datetime(basis.cutoff)
@@ -1269,6 +1352,7 @@ class ResearchRevisionDiffService:
                 revision.id, revision.object_id, revision.basis_id, revision.version_kind,
                 revision.sequence, revision.content_hash, self._stored_datetime(basis.cutoff),
                 basis.source_manifest_hash, refs, answerability_timestamp_sealed,
+                ledger_timestamp_sealed,
             )
 
     def revision_boundary(self, revision_id: UUID) -> ResearchRevisionBoundary:
@@ -1332,6 +1416,14 @@ class ResearchRevisionDiffService:
 
             gaps: list[FrozenUnknownEvidenceGap] = []
             gap_metric_keys: set[str] = set()
+            if (
+                any(
+                    ref.artifact_type == "ledger" and ref.status == "unknown_evidence_gap"
+                    for ref in summary.parent_refs
+                )
+                and not summary.ledger_timestamp_sealed
+            ):
+                raise self._unknown_gap_error("parent is not ledger timestamp-sealed")
             for reference in summary.parent_refs:
                 if (
                     reference.artifact_type != "ledger"
@@ -1345,13 +1437,20 @@ class ResearchRevisionDiffService:
                 row = self._session.get(UnderwritingLedgerEntry, row_id)
                 if row is None:
                     raise self._unknown_gap_error("parent is missing")
-                resolved = self._resolve_parent(revision, reference.reference)
+                resolved = self._resolve_parent(
+                    revision,
+                    reference.reference,
+                    ledger_seal_kind=(
+                        _LEDGER_SEAL_GENERIC_TIMESTAMP
+                        if summary.ledger_timestamp_sealed
+                        else _LEDGER_SEAL_LEGACY
+                    ),
+                )
                 if resolved != reference:
                     raise self._unknown_gap_error("parent changed after validation")
                 gap = self._validated_unknown_evidence_gap(row, revision)
                 if (
                     gap.reference != reference.reference
-                    or gap.content_hash != reference.content_hash
                     or reference.identity != f"reality|evidence_gap:{gap.metric_key}"
                 ):
                     raise self._unknown_gap_error("parent descriptor is not sealed")
@@ -1730,7 +1829,17 @@ class ResearchRevisionDiffService:
                     change_type = "added"
                 elif later is None:
                     change_type = "removed"
-                elif earlier.reference != later.reference or earlier.content_hash != later.content_hash:
+                elif (
+                    earlier.reference != later.reference
+                    # Ledger parent descriptor hashes gained a creation-time
+                    # wrapper in generic v4. The immutable ledger row ID is
+                    # unchanged, so a legacy-to-v4 seal upgrade is not an
+                    # evidence replacement in a historical diff.
+                    or (
+                        artifact_type != "ledger"
+                        and earlier.content_hash != later.content_hash
+                    )
+                ):
                     change_type = "replaced"
                 else:
                     continue
