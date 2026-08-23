@@ -133,6 +133,64 @@ def test_revision_reads_neither_flush_nor_commit_the_caller_session(api_client, 
     assert pending in session.new
 
 
+def test_research_archives_list_sorted_readable_and_unreadable_families(api_client, session) -> None:
+    company, basis, first, second = _two_revision_chain(session)
+    corrupt = UnderwritingRepository(session).append_research_version(
+        object_id=company.id,
+        basis_id=basis.id,
+        version_kind="corrupt_model",
+        content_hash="a" * 64,
+        parent_ids=["not-a-parent"],
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+
+    response = api_client.get(f"{BASE}/research-archives", params={"limit": 100})
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["schema_version"] == "underwriting.v1"
+    assert payload["next_cursor"] is None
+    assert [(item["canonical_name"], item["version_kind"]) for item in payload["items"]] == [
+        ("Revision API", "corrupt_model"),
+        ("Revision API", "economic_model"),
+    ]
+    unreadable, readable = payload["items"]
+    assert unreadable == {
+        "schema_version": "underwriting.v1",
+        "object_id": str(company.id),
+        "object_kind": "company",
+        "canonical_name": "Revision API",
+        "external_key": "company:revision-api",
+        "version_kind": "corrupt_model",
+        "version_count": 1,
+        "lineage_state": "unreadable",
+        "latest_revision_id": None,
+        "latest_sequence": None,
+        "cutoff": None,
+        "source_manifest_hash": None,
+    }
+    assert readable["lineage_state"] == "readable"
+    assert readable["version_count"] == 2
+    assert readable["latest_revision_id"] == str(second.id)
+    assert readable["latest_sequence"] == second.sequence
+    assert readable["cutoff"] == NOW.isoformat().replace("+00:00", "Z")
+    assert readable["source_manifest_hash"] == basis.source_manifest_hash
+    assert corrupt.id != readable["latest_revision_id"]
+    assert first.id
+    assert api_client.post(f"{BASE}/research-archives").status_code == 405
+
+
+def test_research_archives_reject_a_malformed_cursor_with_underwriting_envelope(api_client, session) -> None:
+    _two_revision_chain(session)
+
+    response = api_client.get(f"{BASE}/research-archives", params={"cursor": "not-base64"})
+
+    assert response.status_code == 422
+    assert response.json()["schema_version"] == "underwriting.v1"
+    assert response.json()["error"]["code"] == "validation_failed"
+
+
 def test_catl_original_api_response_replays_byte_for_byte_after_a_test_only_successor(
     api_client, session,
 ) -> None:

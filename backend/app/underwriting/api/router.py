@@ -1,11 +1,12 @@
 """HTTP boundary for the underwriting research kernel."""
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Callable, TypeVar
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -35,6 +36,8 @@ from app.underwriting.api.schemas import (
     EconomicObservationResponse,
     CandidateMechanismResponse,
     ResearchRevisionArtifactResponse,
+    ResearchArchiveItemResponse,
+    ResearchArchiveListResponse,
     ResearchRevisionChangeResponse,
     ResearchRevisionDiffResponse,
     ResearchRevisionHistoryResponse,
@@ -370,6 +373,33 @@ def get_research_revision_diff(
         to_content_hash=result.to_content_hash,
         entries=[_revision_change_response(item) for item in result.entries],
         diff_hash=result.diff_hash,
+    )
+
+
+@router.get(
+    "/research-archives",
+    response_model=ResearchArchiveListResponse,
+    responses={422: {"model": UnderwritingErrorEnvelope}},
+)
+def get_research_archives(
+    query: str | None = None,
+    kind: ResearchObjectKind | None = None,
+    limit: int = Query(30, ge=1, le=100),
+    cursor: str | None = None,
+    db: Session = Depends(get_db),
+) -> ResearchArchiveListResponse:
+    try:
+        page = ResearchRevisionDiffService(db).research_archives(
+            query=query,
+            kind=kind.value if kind is not None else None,
+            limit=limit,
+            cursor=cursor,
+        )
+    except ValidationError as exc:
+        raise ValidationFailedError(str(exc)) from exc
+    return ResearchArchiveListResponse(
+        items=[ResearchArchiveItemResponse(**asdict(item)) for item in page.items],
+        next_cursor=page.next_cursor,
     )
 
 

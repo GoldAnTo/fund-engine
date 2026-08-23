@@ -228,6 +228,25 @@ class ResearchRevisionDiffResponse(UnderwritingModel):
     diff_hash: str
 
 
+class ResearchArchiveItemResponse(UnderwritingModel):
+    object_id: UUID
+    object_kind: str
+    canonical_name: str
+    external_key: str
+    version_kind: str
+    version_count: int
+    lineage_state: Literal["readable", "unreadable"]
+    latest_revision_id: UUID | None
+    latest_sequence: int | None
+    cutoff: datetime | None
+    source_manifest_hash: str | None
+
+
+class ResearchArchiveListResponse(UnderwritingModel):
+    items: list[ResearchArchiveItemResponse]
+    next_cursor: str | None
+
+
 class EconomicSourceResponse(UnderwritingModel):
     source_id: str
     title: str

@@ -14,12 +14,17 @@ REVISION_PATHS = {
     "/api/underwriting/v1/research-versions/{revision_id}",
     "/api/underwriting/v1/research-versions/{from_revision_id}/diff/{to_revision_id}",
 }
+ARCHIVE_PATH = "/api/underwriting/v1/research-archives"
 REVISION_SCHEMAS = {
     "ResearchRevisionArtifactResponse",
     "ResearchRevisionResponse",
     "ResearchRevisionHistoryResponse",
     "ResearchRevisionChangeResponse",
     "ResearchRevisionDiffResponse",
+}
+ARCHIVE_SCHEMAS = {
+    "ResearchArchiveItemResponse",
+    "ResearchArchiveListResponse",
 }
 FORBIDDEN_RESEARCH_FIELDS = {
     "pe", "pb", "dcf", "price", "target", "buy", "sell", "stop", "position",
@@ -42,9 +47,10 @@ def test_dump_openapi_includes_underwriting_routes() -> None:
 def test_revision_read_contract_has_only_get_operations_and_no_decision_fields() -> None:
     openapi = app.openapi()
 
-    assert REVISION_PATHS <= set(openapi["paths"])
+    assert REVISION_PATHS | {ARCHIVE_PATH} <= set(openapi["paths"])
     assert all(set(openapi["paths"][path]) == {"get"} for path in REVISION_PATHS)
+    assert set(openapi["paths"][ARCHIVE_PATH]) == {"get"}
     schemas = openapi["components"]["schemas"]
-    for name in REVISION_SCHEMAS:
+    for name in REVISION_SCHEMAS | ARCHIVE_SCHEMAS:
         properties = schemas[name]["properties"]
         assert not (set(field.lower() for field in properties) & FORBIDDEN_RESEARCH_FIELDS)
