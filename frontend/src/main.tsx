@@ -11,6 +11,7 @@ import { setResearchClient } from "./data/researchClient";
 import "./styles/research-os.css";
 import "./styles/research-os-overrides.css";
 import "./styles/automatic-research.css";
+import "./styles/underwriting-research.css";
 
 async function bootstrap() {
   const mockRequested =

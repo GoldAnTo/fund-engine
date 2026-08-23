@@ -148,7 +148,7 @@ describe("underwriting research API", () => {
     });
   });
 
-  it("reserves the company and industry archive routes without fetching an archive", async () => {
+  it("reads a deep-linked frozen archive without replacing a failed response", async () => {
     const fetchSpy = vi.fn().mockRejectedValue(new Error("offline"));
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -158,12 +158,14 @@ describe("underwriting research API", () => {
       createElement(ResearchOsRoutes),
     ));
 
-    expect(await screen.findByRole("heading", { name: "公司／行业档案" })).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "这个冻结版本暂时无法读取，未展示替代资料。",
+    );
     expect(screen.getAllByRole("link", { name: "公司／行业档案" })[0])
       .toHaveAttribute("href", "/underwriting/research");
-    expect(fetchSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining("/api/underwriting/v1/research-archives"),
-      expect.anything(),
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/underwriting/v1/objects/company-1/research-versions/industry_baseline",
+      expect.objectContaining({ method: "GET" }),
     );
   });
 
