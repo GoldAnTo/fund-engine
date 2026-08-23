@@ -161,7 +161,7 @@ describe("underwriting research API", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "这个冻结版本暂时无法读取，未展示替代资料。",
     );
-    expect(screen.getAllByRole("link", { name: "公司／行业档案" })[0])
+    expect(screen.getByRole("link", { name: "公司／行业档案目录" }))
       .toHaveAttribute("href", "/underwriting/research");
     expect(fetchSpy).toHaveBeenCalledWith(
       "/api/underwriting/v1/objects/company-1/research-versions/industry_baseline",

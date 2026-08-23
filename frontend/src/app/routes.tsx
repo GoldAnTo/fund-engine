@@ -2,6 +2,7 @@ import { Component, lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "./AppShell";
+import { UnderwritingArchiveShell } from "./UnderwritingArchiveShell";
 import {
   CaseConclusionHistoryPage,
   CaseConclusionPage,
@@ -84,16 +85,18 @@ function ResearchArchiveRoute() {
 export function ResearchOsRoutes() {
   return (
     <Routes>
-      <Route element={<AppShell />}>
-        <Route index element={<Navigate to="/events" replace />} />
-        <Route path="events" element={<EventDeskPage />} />
-        <Route path="network" element={<ResearchNetworkPage />} />
-        <Route path="monitoring" element={<GlobalMonitoringPage />} />
+      <Route element={<UnderwritingArchiveShell />}>
         <Route path="underwriting/research" element={<ResearchArchiveRoute />} />
         <Route
           path="underwriting/research/:objectId/:versionKind"
           element={<ResearchArchiveRoute />}
         />
+      </Route>
+      <Route element={<AppShell />}>
+        <Route index element={<Navigate to="/events" replace />} />
+        <Route path="events" element={<EventDeskPage />} />
+        <Route path="network" element={<ResearchNetworkPage />} />
+        <Route path="monitoring" element={<GlobalMonitoringPage />} />
         <Route path="governance/case-admissions" element={<LegacyAdmissionPage />} />
         <Route path="events/new" element={<EventCreatePage />} />
         <Route

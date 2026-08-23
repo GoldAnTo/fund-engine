@@ -7,6 +7,11 @@ import { ResearchOsRoutes } from "../app/routes";
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { MockResearchOsApi } from "../data/mockResearchOsApi";
 import { resetResearchClient, setResearchClient } from "../data/researchClient";
+import {
+  resetUnderwritingResearchApi,
+  setUnderwritingResearchApi,
+  type UnderwritingResearchApi,
+} from "../data/underwritingResearchApi";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -31,6 +36,7 @@ describe("Research OS route inventory", () => {
   beforeEach(() => {
     resetResearchClient();
     resetResearchOsApi();
+    resetUnderwritingResearchApi();
     fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -38,6 +44,7 @@ describe("Research OS route inventory", () => {
   afterEach(() => {
     resetResearchClient();
     resetResearchOsApi();
+    resetUnderwritingResearchApi();
     vi.unstubAllGlobals();
   });
 
@@ -154,5 +161,48 @@ describe("Research OS route inventory", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("backend_unavailable");
     expect(screen.getByRole("heading", { name: "无法读取研究准备" })).toBeVisible();
     expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("isolates a deep-linked archive and identifies it from its checked history", async () => {
+    const revision = {
+      schema_version: "underwriting.v1" as const,
+      id: "revision-identity",
+      object_id: "company-id",
+      basis_id: "basis-id",
+      version_kind: "frozen-company-research",
+      sequence: 1,
+      content_hash: "a".repeat(64),
+      cutoff: "2025-05-15T15:59:59Z",
+      source_manifest_hash: "b".repeat(64),
+      parent_refs: [],
+    };
+    setUnderwritingResearchApi({
+      listArchives: vi.fn(),
+      history: vi.fn().mockResolvedValue({
+        schema_version: "underwriting.v1",
+        object_id: "company-id",
+        version_kind: "frozen-company-research",
+        object_kind: "company",
+        canonical_name: "只从冻结历史返回的公司",
+        external_key: "IMMUTABLE.ONLY",
+        revisions: [revision],
+      }),
+      revision: vi.fn().mockResolvedValue(revision),
+      diff: vi.fn(),
+    } as unknown as UnderwritingResearchApi);
+
+    render(
+      <MemoryRouter initialEntries={["/underwriting/research/company-id/frozen-company-research"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("navigation", { name: "不可变研究档案导航" })).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: "研究工作台导航" })).not.toBeInTheDocument();
+    const identityHeading = await screen.findByRole("heading", { name: "只从冻结历史返回的公司" });
+    expect(identityHeading).toBeVisible();
+    expect(identityHeading.parentElement).toHaveTextContent("IMMUTABLE.ONLY");
+    expect(identityHeading.parentElement).toHaveTextContent("公司");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

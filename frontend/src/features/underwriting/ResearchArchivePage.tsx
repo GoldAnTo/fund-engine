@@ -133,6 +133,9 @@ function checkedHistory(value: unknown, objectId: string, versionKind: string): 
     history?.schema_version !== "underwriting.v1"
     || history.object_id !== objectId
     || history.version_kind !== versionKind
+    || !["company", "industry", "security"].includes(history.object_kind as string)
+    || !nonEmptyString(history.canonical_name)
+    || !nonEmptyString(history.external_key)
     || !Array.isArray(history.revisions)
   ) throw new ArchiveIntegrityError();
 
@@ -152,6 +155,15 @@ function checkedHistory(value: unknown, objectId: string, versionKind: string): 
   const ordered = [...history.revisions].sort((left, right) => left.sequence - right.sequence);
   if (ordered.some((revision, index) => revision.sequence !== index + 1)) throw new ArchiveIntegrityError();
   return { ...history, revisions: ordered } as ResearchRevisionHistory;
+}
+
+function labelForObjectKind(kind: ResearchRevisionHistory["object_kind"]): string {
+  const labels: Record<ResearchRevisionHistory["object_kind"], string> = {
+    company: "公司",
+    industry: "行业",
+    security: "证券",
+  };
+  return labels[kind];
 }
 
 function sameRevisionSummary(expected: ResearchRevision, received: ResearchRevision): boolean {
@@ -490,7 +502,7 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
 
   return (
     <main className="ros-page ura-page">
-      <header className="ros-page-head ura-page-head"><div><p className="ros-eyebrow">冻结研究档案</p><h1>{versionKind}</h1><p>对象 {objectId}</p></div><Link className="ura-back-link" to="/underwriting/research">返回档案目录</Link></header>
+      <header className="ros-page-head ura-page-head"><div><p className="ros-eyebrow">冻结研究档案</p><h1>{historyState.value.canonical_name}</h1><p>{labelForObjectKind(historyState.value.object_kind)} · {historyState.value.external_key}</p></div><Link className="ura-back-link" to="/underwriting/research">返回档案目录</Link></header>
       <div className="ura-layout">
         <aside className="ura-timeline" aria-label="研究版本时间线"><p className="ros-eyebrow">不可变版本</p>{revisions.map((revision) => <button key={revision.id} type="button" aria-pressed={revision.id === selected.id} className={revision.id === selected.id ? "ura-version is-selected" : "ura-version"} onClick={() => setSelectedId(revision.id)}><b>版本 {revision.sequence}</b><span>{revision.cutoff}</span></button>)}</aside>
         <section className="ura-detail" aria-label="已选冻结版本">
