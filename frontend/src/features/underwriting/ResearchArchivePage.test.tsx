@@ -148,6 +148,10 @@ const candidateEvidence = {
     version: 1,
     status: "candidate" as const,
     scope_statement: "仅限已冻结的行业产能候选证据。",
+    rejected_calculations: [
+      "不得将图表转录与其他来源拼接。",
+      "不得将假设边界改写为观测事实。",
+    ],
   },
   items: [{
     schema_version: "underwriting.v1" as const,
@@ -390,8 +394,10 @@ describe("ResearchArchivePage", () => {
     expect(within(candidate).getByText("未找到满足截止日的有效产能观测。")).toBeVisible();
     expect(within(candidate).getByText("reviewer:methodology")).toBeVisible();
     expect(within(candidate).getByText("reviewer:provenance")).toBeVisible();
-    expect(within(candidate).getByText(/不能用于 IndustryState 或估值/)).toBeVisible();
-    expect(within(candidate).getByText(/未提供可显示的拒绝计算清单/)).toBeVisible();
+    expect(within(candidate).getByText(/不得将候选资料正式化为 IndustryState，或形成投资结论/)).toBeVisible();
+    const rejectedCalculations = within(candidate).getByRole("region", { name: "冻结拒绝的计算" });
+    expect(within(rejectedCalculations).getAllByRole("listitem").map((item) => item.textContent))
+      .toEqual(candidateEvidence.dossier.rejected_calculations);
     expect(api.candidateEvidence).toHaveBeenCalledWith(candidateRevision.id);
     expect(screen.queryByRole("region", { name: "冻结证据记录" })).not.toBeInTheDocument();
   });
@@ -400,6 +406,8 @@ describe("ResearchArchivePage", () => {
     ["does not bind to the selected revision", { ...candidateEvidence, revision_id: "00000000-0000-4000-8000-000000000199" }],
     ["adds an unrecognised top-level field", { ...candidateEvidence, unexpected: true }],
     ["has a malformed nested review", { ...candidateEvidence, reviews: [{ ...candidateEvidence.reviews[0], reviewed_at: "not-a-timestamp" }, candidateEvidence.reviews[1]] }],
+    ["omits the frozen rejected calculations", { ...candidateEvidence, dossier: Object.fromEntries(Object.entries(candidateEvidence.dossier).filter(([key]) => key !== "rejected_calculations")) }],
+    ["has malformed frozen rejected calculations", { ...candidateEvidence, dossier: { ...candidateEvidence.dossier, rejected_calculations: [""] } }],
   ])("fails closed when candidate evidence %s", async (_name, response) => {
     installApi({
       history: vi.fn().mockResolvedValue({

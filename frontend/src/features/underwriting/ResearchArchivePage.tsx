@@ -383,10 +383,11 @@ function checkedCandidateEvidence(value: unknown, selected: ResearchRevision): C
     || !isUtcTimestamp(candidate.cutoff) || candidate.cutoff !== selected.cutoff
     || !isContentHash(candidate.source_manifest_hash) || candidate.source_manifest_hash !== selected.source_manifest_hash
     || dossier === null
-    || !hasOnlyKeys(dossier, ["schema_version", "reference", "content_hash", "dossier_key", "version", "status", "scope_statement"])
+    || !hasOnlyKeys(dossier, ["schema_version", "reference", "content_hash", "dossier_key", "version", "status", "scope_statement", "rejected_calculations"])
     || dossier.schema_version !== "underwriting.v1" || !isCanonicalUuid(dossier.reference) || !isContentHash(dossier.content_hash)
     || !nonEmptyString(dossier.dossier_key) || !Number.isSafeInteger(dossier.version) || (dossier.version as number) < 1
     || dossier.status !== "candidate" || !nonEmptyString(dossier.scope_statement)
+    || !isStringList(dossier.rejected_calculations) || dossier.rejected_calculations.length === 0
     || !Array.isArray(candidate.items) || candidate.items.length === 0 || !candidate.items.every(isCandidateItem)
     || !Array.isArray(candidate.reviews) || candidate.reviews.length !== 2 || !candidate.reviews.every(isCandidateReview)
     || new Set(candidate.reviews.map((review) => record(review)?.reviewer_role)).size !== 2
@@ -629,8 +630,8 @@ function CandidateEvidencePanel({ candidate }: { candidate: CandidateEvidence })
       <p className="ros-eyebrow">候选证据（已审阅，未正式化）</p>
       <h2>候选证据</h2>
       <p>范围：{candidate.dossier.scope_statement}</p>
-      <p>边界声明：不能用于 IndustryState 或估值；不会从当前记录补全、拼接或推导。</p>
-      <p>计算边界：该冻结候选响应未提供可显示的拒绝计算清单；不会推断或补全。</p>
+      <p>边界声明：不得将候选资料正式化为 IndustryState，或形成投资结论；不会从当前记录补全、拼接或推导。</p>
+      <section aria-label="冻结拒绝的计算"><h3>冻结拒绝的计算</h3><ol>{candidate.dossier.rejected_calculations.map((calculation) => <li key={calculation}>{calculation}</li>)}</ol></section>
       <section aria-label="候选条目">
         <h3>冻结候选条目</h3>
         {candidate.items.map((item) => <article key={`${item.metric_key}:${item.status}`} className="ura-candidate-item">
