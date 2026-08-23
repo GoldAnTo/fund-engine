@@ -20,7 +20,12 @@ from app.underwriting.domain.evidence_candidates import (
     CandidateEvidenceStatus,
 )
 from app.underwriting.domain.types import HistoricalBasisInput
-from app.underwriting.persistence.models import UnderwritingResearchObject
+from app.underwriting.persistence.models import (
+    UnderwritingAnswerabilityEvaluation,
+    UnderwritingHistoricalBasis,
+    UnderwritingResearchObject,
+    UnderwritingResearchVersion,
+)
 from app.underwriting.persistence.repository import StaleParentError, UnderwritingRepository
 from app.underwriting.persistence.research_models import (
     UnderwritingEvidenceCandidateDossierVersion,
@@ -1147,18 +1152,18 @@ def test_candidate_publication_locks_family_before_review_reads(
     service = CandidateEvidenceService(session, now=lambda: NOW)
     events: list[str] = []
     original_lock = service._repository._lock_candidate_dossier_family
-    original_reviews = service._repository.effective_candidate_reviews
+    original_reviews = UnderwritingResearchRepository.effective_candidate_reviews
 
     def lock(**kwargs):
         events.append("lock")
         return original_lock(**kwargs)
 
-    def reviews(dossier_id):
+    def reviews(self, dossier_id):
         events.append("reviews")
-        return original_reviews(dossier_id)
+        return original_reviews(self, dossier_id)
 
     monkeypatch.setattr(service._repository, "_lock_candidate_dossier_family", lock)
-    monkeypatch.setattr(service._repository, "effective_candidate_reviews", reviews)
+    monkeypatch.setattr(UnderwritingResearchRepository, "effective_candidate_reviews", reviews)
 
     with pytest.raises(ValidationError, match="provenance and methodology approvals"):
         service.publish(dossier.id)
@@ -1188,3 +1193,84 @@ def test_candidate_publication_integrity_failure_preserves_unrelated_caller_work
         unrelated_id = unrelated.id
 
     assert UnderwritingRepository(session).object(unrelated_id) is not None
+
+
+def test_file_sqlite_publication_constraint_failure_preserves_caller_work_and_recovers(tmp_path) -> None:
+    engine, sessions, (company_id, basis_id, manifest_id, _manifest_hash) = _seed_file_candidate_database(
+        tmp_path, "candidate-publication-savepoint.sqlite",
+    )
+    with sessions() as setup:
+        company = setup.get(UnderwritingResearchObject, company_id)
+        assert company is not None
+        basis = setup.get(UnderwritingHistoricalBasis, basis_id)
+        assert basis is not None
+        repository = UnderwritingResearchRepository(setup)
+        manifest = setup.get(UnderwritingSourceManifestVersion, manifest_id)
+        assert manifest is not None
+        dossier = _append_dossier(repository, company, basis, manifest)
+        _append_review(repository, dossier, reviewer_identity="reviewer:provenance", reviewer_role="provenance")
+        _append_review(repository, dossier, reviewer_identity="reviewer:methodology", reviewer_role="methodology")
+        # Seed a pre-existing candidate version directly so a unique index on
+        # version_kind causes the publication insert (after answerability) to
+        # hit a real SQLite constraint.
+        UnderwritingRepository(setup).append_research_version(
+            object_id=company_id, basis_id=basis_id,
+            version_kind="industry_evidence_candidate", content_hash="b" * 64,
+            parent_ids=[], expected_parent_id=None, created_at=NOW,
+        )
+        dossier_id = dossier.id
+        setup.commit()
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE UNIQUE INDEX uq_candidate_publication_failure "
+            "ON uw_research_versions(version_kind)"
+        )
+
+    with sessions() as caller:
+        unrelated = UnderwritingRepository(caller).add_object(
+            "company", "CN:survives:COMPANY", "Survives", NOW,
+        )
+        unrelated_id = unrelated.id
+        with pytest.raises(IntegrityError):
+            CandidateEvidenceService(caller, now=lambda: NOW).publish(dossier_id)
+        caller.commit()
+
+    with sessions() as verifier:
+        assert UnderwritingRepository(verifier).object(unrelated_id) is not None
+        assert verifier.scalar(
+            select(UnderwritingAnswerabilityEvaluation).where(
+                UnderwritingAnswerabilityEvaluation.object_id == company_id
+            )
+        ) is None
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP INDEX uq_candidate_publication_failure")
+    with sessions() as recovered:
+        publication = CandidateEvidenceService(recovered, now=lambda: NOW).publish(dossier_id)
+        recovered.commit()
+        assert publication.research_version.sequence == 2
+
+
+def test_candidate_publication_rejects_post_cutoff_clock_before_any_append(
+    session: Session, repository, company, basis, manifest,
+) -> None:
+    dossier = _append_dossier(repository, company, basis, manifest)
+    _append_review(repository, dossier, reviewer_identity="reviewer:provenance", reviewer_role="provenance")
+    _append_review(repository, dossier, reviewer_identity="reviewer:methodology", reviewer_role="methodology")
+    session.commit()
+    unrelated = UnderwritingRepository(session).add_object("company", "CN:cutoff:COMPANY", "Cutoff", NOW)
+
+    with pytest.raises(ValidationError, match="created_at must not exceed historical basis cutoff"):
+        CandidateEvidenceService(session, now=lambda: NOW + timedelta(seconds=1)).publish(dossier.id)
+
+    assert session.get(UnderwritingResearchObject, unrelated.id) is not None
+    assert session.scalar(
+        select(UnderwritingAnswerabilityEvaluation).where(
+            UnderwritingAnswerabilityEvaluation.object_id == company.id
+        )
+    ) is None
+    assert session.scalar(
+        select(UnderwritingResearchVersion).where(
+            UnderwritingResearchVersion.object_id == company.id,
+            UnderwritingResearchVersion.version_kind == "industry_evidence_candidate",
+        )
+    ) is None

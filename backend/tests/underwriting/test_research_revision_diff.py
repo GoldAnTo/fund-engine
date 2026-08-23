@@ -2275,15 +2275,21 @@ def test_candidate_revision_replays_its_selected_dossier_after_successor_and_rej
     replayed = ResearchRevisionDiffService(session).revision_summary(published.research_version.id)
     assert next(ref for ref in replayed.parent_refs if ref.artifact_type == "candidate_dossier") == dossier_ref
 
-    tampered = dict(payload) | {"scope_statement": "Tampered historical scope."}
+    tampered_items = [dict(item) for item in payload["items"]]
+    tampered_items[0]["methodology"] = "Tampered historical methodology."
+    tampered = dict(payload) | {"items": tampered_items}
     tampered_contract = CandidateEvidenceDossier.from_canonical_payload(tampered)
-    session.connection().exec_driver_sql(
+    cursor = session.connection().connection.cursor()
+    cursor.execute(
         "UPDATE uw_evidence_candidate_dossier_versions "
-        "SET payload = ?, scope_statement = ?, content_hash = ? WHERE id = ?",
-        (json.dumps(tampered), tampered_contract.scope_statement, tampered_contract.content_hash,
-         published.dossier.id.hex),
+        "SET payload = ?, content_hash = ? WHERE id = ?",
+        (json.dumps(tampered), tampered_contract.content_hash, published.dossier.id.hex),
     )
-    session.expire_all()
+    cursor.close()
+    # Replay reads the deliberately persisted corruption through a fresh ORM
+    # identity map rather than inheriting the pre-tamper objects.
+    session.commit()
+    session.expunge_all()
 
     with pytest.raises(ValidationError, match="dossier_content_hash|research revision content hash"):
         ResearchRevisionDiffService(session).revision_summary(published.research_version.id)

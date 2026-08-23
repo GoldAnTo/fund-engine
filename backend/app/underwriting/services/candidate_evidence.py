@@ -153,16 +153,28 @@ class CandidateEvidenceService:
             return current
         return None
 
-    def _record_not_answerable(
+    def _publication_created_at(
         self, dossier: UnderwritingEvidenceCandidateDossierVersion,
-    ) -> UnderwritingAnswerabilityEvaluation:
-        if reusable := self._reusable_answerability(dossier):
-            return reusable
+    ) -> datetime:
         timestamp = (
             self._stored_utc(self._now())
             if self._now is not None
             else self._stored_utc(dossier.created_at)
         )
+        basis = self._kernel_repository.basis(dossier.basis_id)
+        if basis is None:
+            raise ValidationError("historical basis not found")
+        if timestamp > self._stored_utc(basis.cutoff):
+            raise ValidationError("candidate publication created_at must not exceed historical basis cutoff")
+        return timestamp
+
+    def _record_not_answerable(
+        self,
+        dossier: UnderwritingEvidenceCandidateDossierVersion,
+        timestamp: datetime,
+    ) -> UnderwritingAnswerabilityEvaluation:
+        if reusable := self._reusable_answerability(dossier):
+            return reusable
         latest = self._latest_answerability(dossier)
         result = evaluate_answerability(AnswerabilityInput(
             hard_blockers=(_CANDIDATE_BLOCKER,),
@@ -198,33 +210,24 @@ class CandidateEvidenceService:
         return current.id if current is not None else None
 
     def _publication_write_scope(self):
-        """Use a savepoint where the driver supports a true outer transaction.
-
-        SQLite family locking is already transaction-serialised with ``BEGIN
-        IMMEDIATE``.  pysqlite can make a first nested savepoint the physical
-        outer transaction, so rolling it back would also discard caller rows;
-        keep its governed append on the caller transaction instead.
-        """
+        """Make answerability and revision appends one local transaction."""
         if self._session.get_bind().dialect.name == "sqlite":
+            # ``publish`` supplies SQLite a separate Session joined to the
+            # caller connection by a savepoint.  A second pysqlite savepoint
+            # here could become the physical outer transaction.
             return nullcontext()
         return self._session.begin_nested()
 
-    def publish(self, dossier_id: UUID) -> CandidateEvidencePublication:
-        """Publish only a sealed, non-answerable candidate revision; never commit."""
+    def _publish_after_family_lock(self, dossier_id: UUID) -> CandidateEvidencePublication:
+        """Re-read and append after the caller has serialized this family."""
         target = self._dossier_for_lock(dossier_id)
-        self._repository._lock_candidate_dossier_family(
-            object_id=target.object_id,
-            basis_id=target.basis_id,
-            dossier_key=target.dossier_key,
-        )
         self._session.expire(target)
         with self._session.no_autoflush:
             dossier = self._current_dossier(target)
             reviews = self._approved_reviews(dossier)
-        # PostgreSQL uses a savepoint; SQLite's family writer lock prevents
-        # competing appends without pysqlite's unsafe first-savepoint path.
+        publication_created_at = self._publication_created_at(dossier)
         with self._publication_write_scope():
-            answerability = self._record_not_answerable(dossier)
+            answerability = self._record_not_answerable(dossier, publication_created_at)
             parents = [
                 str(dossier.id),
                 *(str(review.id) for review in reviews),
@@ -263,3 +266,29 @@ class CandidateEvidenceService:
                 created_at=self._stored_utc(dossier.created_at),
             )
         return CandidateEvidencePublication(revision, dossier, reviews, answerability)
+
+    def publish(self, dossier_id: UUID) -> CandidateEvidencePublication:
+        """Publish only a sealed, non-answerable candidate revision; never commit."""
+        target = self._dossier_for_lock(dossier_id)
+        self._repository._lock_candidate_dossier_family(
+            object_id=target.object_id,
+            basis_id=target.basis_id,
+            dossier_key=target.dossier_key,
+        )
+        if self._session.get_bind().dialect.name != "sqlite":
+            return self._publish_after_family_lock(dossier_id)
+
+        # Keep actual SQLite constraint failures in a locally owned Session
+        # savepoint.  Its rollback cannot poison or roll back the caller's
+        # Session, while the Task2 family lock remains held on the same DBAPI
+        # connection and serializes successors/reviews/publications.
+        with Session(
+            bind=self._session.connection(),
+            join_transaction_mode="create_savepoint",
+            expire_on_commit=False,
+        ) as publication_session:
+            publication = CandidateEvidenceService(
+                publication_session, now=self._now,
+            )._publish_after_family_lock(dossier_id)
+            publication_session.commit()
+            return publication
