@@ -16,6 +16,7 @@ from typing import Mapping
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid, bindparam, event, func, inspect, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
+from sqlalchemy.orm.util import identity_key
 
 from app.models.ledger import Base, ValidationError, _uuid
 from app.underwriting.domain.evidence_candidates import (
@@ -25,6 +26,7 @@ from app.underwriting.domain.evidence_candidates import (
 
 
 _CANDIDATE_DOSSIER_FAMILY_LOCK_DOMAIN = b"underwriting:candidate-dossier-family:v1\x00"
+_CANDIDATE_SQLITE_WRITE_RESERVATION = "candidate_sqlite_write_reservation"
 
 
 def _candidate_canonical_hash(value: object) -> str:
@@ -384,8 +386,38 @@ def begin_candidate_sqlite_write(session: Session) -> None:
         return
     connection = session.connection()
     raw_connection = connection.connection.driver_connection
-    if not raw_connection.in_transaction:
-        connection.exec_driver_sql("BEGIN IMMEDIATE")
+    if session.info.get(_CANDIDATE_SQLITE_WRITE_RESERVATION):
+        if raw_connection.in_transaction:
+            return
+        session.info.pop(_CANDIDATE_SQLITE_WRITE_RESERVATION, None)
+    if raw_connection.in_transaction:
+        raise ValidationError("candidate write requires a fresh SQLite transaction")
+    connection.exec_driver_sql("BEGIN IMMEDIATE")
+    session.info[_CANDIDATE_SQLITE_WRITE_RESERVATION] = True
+
+
+def release_candidate_sqlite_write(session: Session) -> None:
+    """Release a reservation taken for a rejected repository candidate write."""
+    if session.info.pop(_CANDIDATE_SQLITE_WRITE_RESERVATION, None):
+        session.rollback()
+
+
+def mark_candidate_sqlite_write(session: Session) -> None:
+    """Record a repository-owned SQLite write transaction as already reserved."""
+    if session.get_bind().dialect.name != "sqlite":
+        return
+    raw_connection = session.connection().connection.driver_connection
+    if raw_connection.in_transaction:
+        session.info[_CANDIDATE_SQLITE_WRITE_RESERVATION] = True
+
+
+def require_candidate_write_read_committed(session: Session) -> None:
+    """Reject PostgreSQL snapshots that cannot observe a waited-for family lock."""
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    isolation = session.connection().get_isolation_level().upper().replace("_", " ")
+    if isolation in {"REPEATABLE READ", "SERIALIZABLE"}:
+        raise ValidationError("candidate writes require READ COMMITTED")
 
 
 def _candidate_governance_schema_available(session: Session) -> bool:
@@ -504,26 +536,73 @@ def _candidate_items_match_manifest(
 def _validate_candidate_dossier_lineage(
     session: Session, row: UnderwritingEvidenceCandidateDossierVersion
 ) -> None:
-    """Verify predecessor continuity without rejecting valid historical versions."""
-    if row.version == 1:
-        if row.supersedes_id is not None:
-            raise ValidationError("initial dossier must not have a predecessor")
-        return
-    if row.supersedes_id is None:
-        raise ValidationError("dossier successor requires a predecessor")
-    parent = session.get(UnderwritingEvidenceCandidateDossierVersion, row.supersedes_id)
-    if parent is None:
-        raise ValidationError("dossier predecessor does not exist")
-    if (
-        parent.object_id != row.object_id
-        or parent.basis_id != row.basis_id
-        or parent.dossier_key != row.dossier_key
-        or parent.source_manifest_id != row.source_manifest_id
-        or parent.source_manifest_hash != row.source_manifest_hash
-    ):
-        raise ValidationError("dossier successor must preserve immutable references")
-    if parent.version + 1 != row.version:
-        raise ValidationError("dossier successor version is not contiguous")
+    """Verify predecessor continuity without recursively materializing every parent."""
+    current: Mapping[str, object] = {
+        "id": row.id,
+        "version": row.version,
+        "supersedes_id": row.supersedes_id,
+        "object_id": row.object_id,
+        "basis_id": row.basis_id,
+        "dossier_key": row.dossier_key,
+        "source_manifest_id": row.source_manifest_id,
+        "source_manifest_hash": row.source_manifest_hash,
+    }
+    table = UnderwritingEvidenceCandidateDossierVersion.__table__
+    seen_ids: set[object] = set()
+    while True:
+        if current["id"] in seen_ids:
+            raise ValidationError("dossier predecessor chain contains a cycle")
+        seen_ids.add(current["id"])
+        version = current["version"]
+        supersedes_id = current["supersedes_id"]
+        if version == 1:
+            if supersedes_id is not None:
+                raise ValidationError("initial dossier must not have a predecessor")
+            return
+        if not isinstance(version, int) or version < 1:
+            raise ValidationError("dossier version must be positive")
+        if supersedes_id is None:
+            raise ValidationError("dossier successor requires a predecessor")
+        loaded_parent = session.identity_map.get(
+            identity_key(UnderwritingEvidenceCandidateDossierVersion, supersedes_id)
+        )
+        if loaded_parent is not None:
+            parent: Mapping[str, object] | None = {
+                "id": loaded_parent.id,
+                "version": loaded_parent.version,
+                "supersedes_id": loaded_parent.supersedes_id,
+                "object_id": loaded_parent.object_id,
+                "basis_id": loaded_parent.basis_id,
+                "dossier_key": loaded_parent.dossier_key,
+                "source_manifest_id": loaded_parent.source_manifest_id,
+                "source_manifest_hash": loaded_parent.source_manifest_hash,
+            }
+        else:
+            parent = session.execute(
+                select(
+                    table.c.id,
+                    table.c.version,
+                    table.c.supersedes_id,
+                    table.c.object_id,
+                    table.c.basis_id,
+                    table.c.dossier_key,
+                    table.c.source_manifest_id,
+                    table.c.source_manifest_hash,
+                ).where(table.c.id == supersedes_id)
+            ).mappings().one_or_none()
+        if parent is None:
+            raise ValidationError("dossier predecessor does not exist")
+        if (
+            parent["object_id"] != current["object_id"]
+            or parent["basis_id"] != current["basis_id"]
+            or parent["dossier_key"] != current["dossier_key"]
+            or parent["source_manifest_id"] != current["source_manifest_id"]
+            or parent["source_manifest_hash"] != current["source_manifest_hash"]
+        ):
+            raise ValidationError("dossier successor must preserve immutable references")
+        if parent["version"] + 1 != version:
+            raise ValidationError("dossier successor version is not contiguous")
+        current = parent
 
 
 def validate_candidate_dossier_governance(
@@ -615,6 +694,7 @@ def _validate_direct_candidate_writes(session, _flush_context, _instances) -> No
         return
     if not _candidate_governance_schema_available(session):
         return
+    require_candidate_write_read_committed(session)
     begin_candidate_sqlite_write(session)
     with session.no_autoflush:
         for row in candidates:
@@ -632,6 +712,11 @@ def _validate_direct_candidate_writes(session, _flush_context, _instances) -> No
                         dossier_key=dossier.dossier_key,
                     )
                 validate_candidate_review_governance(session, row, enforce_current=True)
+
+
+@event.listens_for(Session, "after_flush_postexec")
+def _mark_sqlite_candidate_write_after_any_flush(session, _flush_context) -> None:
+    mark_candidate_sqlite_write(session)
 
 
 @event.listens_for(UnderwritingEvidenceCandidateDossierVersion, "before_insert")
@@ -677,4 +762,7 @@ def _validate_loaded_candidate_governance(session, instance) -> None:
             # new successor must be the current family head before persistence.
             validate_candidate_dossier_governance(session, instance, enforce_current=False)
         else:
-            validate_candidate_review_governance(session, instance, enforce_current=True)
+            # A review is immutable historical evidence.  Currentness governs
+            # insertion only; replay still verifies its sealed dossier hash,
+            # basis cutoff, and source closure.
+            validate_candidate_review_governance(session, instance, enforce_current=False)

@@ -53,7 +53,7 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
     assert result.returncode == 0, result.stderr
     engine = sa.create_engine(f"sqlite:///{database_path}")
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0063"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0064"
         assessment_columns = {
             column["name"]
             for column in sa.inspect(connection).get_columns("ai_assessments")
@@ -207,6 +207,58 @@ def test_0063_downgrade_preserves_0062_candidate_evidence_tables(tmp_path) -> No
             table_names = set(sa.inspect(connection).get_table_names())
             assert CANDIDATE_EVIDENCE_TABLES.issubset(table_names)
             assert WAVE2_TABLES.issubset(table_names)
+    finally:
+        engine.dispose()
+
+
+def test_0064_rejects_new_review_for_a_superseded_candidate_but_keeps_prior_review(tmp_path) -> None:
+    database_path = tmp_path / "candidate-evidence-0064.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    for revision in ("0063", "0064"):
+        upgraded = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", revision],
+            cwd=backend, env=environment, text=True, capture_output=True, check=False,
+        )
+        assert upgraded.returncode == 0, upgraded.stderr
+
+    v1, v2, prior_review, stale_review = ("1" * 32, "2" * 32, "3" * 32, "4" * 32)
+    common = {
+        "object_id": "5" * 32, "basis_id": "6" * 32,
+        "source_manifest_id": "7" * 32, "dossier_key": "candidate-family",
+        "created_at": "2025-05-15 15:59:59",
+    }
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    try:
+        with engine.begin() as connection:
+            insert_dossier = sa.text("""
+                INSERT INTO uw_evidence_candidate_dossier_versions (
+                    id, dossier_key, version, object_id, basis_id, source_manifest_id,
+                    scope_statement, purpose, status, rejected_calculations, payload,
+                    source_manifest_hash, content_hash, supersedes_id, created_at
+                ) VALUES (
+                    :id, :dossier_key, :version, :object_id, :basis_id, :source_manifest_id,
+                    'scope', 'evidence_candidate', 'candidate', '[]', '{}',
+                    :digest, :digest, :supersedes_id, :created_at
+                )
+            """)
+            insert_review = sa.text("""
+                INSERT INTO uw_evidence_candidate_review_versions (
+                    id, dossier_id, dossier_content_hash, reviewer_identity, reviewer_role,
+                    decision, rationale, payload, content_hash, reviewed_at, created_at
+                ) VALUES (
+                    :id, :dossier_id, :digest, :reviewer_identity, :reviewer_role,
+                    'approve', 'review', '{}', :digest, :created_at, :created_at
+                )
+            """)
+            connection.execute(insert_dossier, {**common, "id": v1, "version": 1, "digest": "a" * 64, "supersedes_id": None})
+            connection.execute(insert_review, {**common, "id": prior_review, "dossier_id": v1, "digest": "a" * 64, "reviewer_identity": "reviewer:prior", "reviewer_role": "provenance"})
+            connection.execute(insert_dossier, {**common, "id": v2, "version": 2, "digest": "b" * 64, "supersedes_id": v1})
+            assert connection.execute(sa.text(
+                "SELECT id FROM uw_evidence_candidate_review_versions WHERE id = :id"
+            ), {"id": prior_review}).scalar_one() == prior_review
+            with pytest.raises(sa.exc.IntegrityError, match="candidate dossier is no longer current"):
+                connection.execute(insert_review, {**common, "id": stale_review, "dossier_id": v1, "digest": "a" * 64, "reviewer_identity": "reviewer:stale", "reviewer_role": "methodology"})
     finally:
         engine.dispose()
 
@@ -617,7 +669,7 @@ with SessionLocal() as session:
 
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0063"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0064"
         assert {
             "research_preparations",
             "research_preparation_artifacts",
@@ -1381,7 +1433,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0063"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0064"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -1435,7 +1487,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0063"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0064"
 
 
 def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> None:
@@ -1492,7 +1544,7 @@ def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> 
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == "0063"
+        ).scalar_one() == "0064"
         assert connection.execute(
             sa.text(
                 "SELECT research_source_type FROM source_contracts WHERE id = :id"

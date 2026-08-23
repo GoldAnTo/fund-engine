@@ -211,3 +211,39 @@ def test_0063_candidate_tables_install_immutable_triggers() -> None:
         with admin.begin() as connection:
             connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         admin.dispose()
+
+
+@pytest.mark.pg_only
+def test_0064_candidate_review_trigger_rejects_only_new_stale_inserts() -> None:
+    database_url = os.environ["TEST_DATABASE_URL"]
+    schema = f"underwriting_0064_{uuid.uuid4().hex}"
+    migration_url = _schema_url(database_url, schema)
+    admin = sa.create_engine(database_url, future=True)
+    isolated = sa.create_engine(migration_url, future=True)
+    backend = Path(__file__).parents[2]
+    try:
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+        migrated = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "0064"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            text=True, capture_output=True, check=False,
+        )
+        assert migrated.returncode == 0, migrated.stderr
+        with isolated.connect() as connection:
+            trigger_rows = connection.execute(sa.text("""
+                SELECT tgname, pg_get_triggerdef(t.oid)
+                FROM pg_trigger AS t
+                JOIN pg_class AS c ON c.oid = t.tgrelid
+                WHERE NOT t.tgisinternal
+                  AND c.relname = 'uw_evidence_candidate_review_versions'
+            """)).all()
+            trigger_definitions = dict(trigger_rows)
+            assert {"no_update_uw_evidence_candidate_review_versions", "no_delete_uw_evidence_candidate_review_versions", "trg_uw_candidate_review_reject_superseded"}.issubset(trigger_definitions)
+            assert "BEFORE INSERT" in trigger_definitions["trg_uw_candidate_review_reject_superseded"]
+    finally:
+        isolated.dispose()
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin.dispose()

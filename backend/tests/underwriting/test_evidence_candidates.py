@@ -24,6 +24,8 @@ from app.underwriting.persistence.research_models import (
     UnderwritingEvidenceCandidateDossierVersion,
     UnderwritingEvidenceCandidateReviewVersion,
     UnderwritingSourceManifestVersion,
+    begin_candidate_sqlite_write,
+    require_candidate_write_read_committed,
 )
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
 from app.underwriting.services.kernel import canonical_hash
@@ -142,6 +144,30 @@ def _append_review(repository: UnderwritingResearchRepository, dossier, *, revie
     )
 
 
+def _seed_file_candidate_database(tmp_path, filename: str):
+    engine = create_engine(
+        f"sqlite:///{tmp_path / filename}", future=True,
+        connect_args={"check_same_thread": False, "timeout": 1},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    with sessions() as bootstrap:
+        kernel = UnderwritingRepository(bootstrap)
+        repository = UnderwritingResearchRepository(bootstrap)
+        company = kernel.add_object("company", "CN:300750:COMPANY", "CATL", NOW)
+        frozen = freeze_manifest(_manifest_payload(), NOW)
+        basis = kernel.add_basis(HistoricalBasisInput(NOW, NOW, frozen.manifest_hash), NOW)
+        manifest_payload = _manifest_payload()
+        manifest = repository.add_source_manifest(
+            manifest_key=f"{filename}-manifest", basis_id=basis.id,
+            manifest=manifest_payload, manifest_hash=frozen.manifest_hash,
+            content_hash=canonical_hash(manifest_payload), expected_parent_id=None,
+            created_at=NOW,
+        )
+        bootstrap.commit()
+        return engine, sessions, (company.id, basis.id, manifest.id, manifest.manifest_hash)
+
+
 def test_postgresql_candidate_dossier_family_lock_is_stable_and_parameterized() -> None:
     statement, lock_id = UnderwritingResearchRepository.postgresql_candidate_dossier_family_lock(
         object_id=UUID("00000000-0000-0000-0000-000000000001"),
@@ -153,6 +179,44 @@ def test_postgresql_candidate_dossier_family_lock_is_stable_and_parameterized() 
     assert -(2**63) <= lock_id < 2**63
     assert "pg_advisory_xact_lock" in str(compiled)
     assert compiled.params == {"candidate_dossier_family_lock_id": lock_id}
+
+
+@pytest.mark.parametrize("isolation", ["REPEATABLE READ", "SERIALIZABLE"])
+def test_candidate_writes_reject_postgres_snapshot_isolation_before_family_reads(isolation) -> None:
+    class FakeBind:
+        dialect = type("Dialect", (), {"name": "postgresql"})()
+
+    class FakeConnection:
+        def get_isolation_level(self):
+            return isolation
+
+    class FakeSession:
+        def get_bind(self):
+            return FakeBind()
+
+        def connection(self):
+            return FakeConnection()
+
+    with pytest.raises(ValidationError, match="candidate writes require READ COMMITTED"):
+        require_candidate_write_read_committed(FakeSession())
+
+
+def test_candidate_writes_allow_postgres_read_committed_before_family_lock() -> None:
+    class FakeBind:
+        dialect = type("Dialect", (), {"name": "postgresql"})()
+
+    class FakeConnection:
+        def get_isolation_level(self):
+            return "READ COMMITTED"
+
+    class FakeSession:
+        def get_bind(self):
+            return FakeBind()
+
+        def connection(self):
+            return FakeConnection()
+
+    require_candidate_write_read_committed(FakeSession())
 
 
 def test_same_identity_cannot_fill_both_approval_roles(repository, company, basis, manifest) -> None:
@@ -183,6 +247,32 @@ def test_successor_cannot_reuse_prior_dossier_review(repository, company, basis,
     )
 
     assert repository.effective_candidate_reviews(successor.id) == []
+
+
+def test_prior_review_remains_readable_after_successor_in_fresh_session(
+    session, company, basis, manifest
+) -> None:
+    repository = UnderwritingResearchRepository(session)
+    dossier = _append_dossier(repository, company, basis, manifest)
+    review = _append_review(
+        repository, dossier, reviewer_identity="reviewer:historical", reviewer_role="provenance",
+    )
+    _append_dossier(
+        repository, company, basis, manifest,
+        payload=_dossier_payload(
+            object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
+            source_manifest_hash=manifest.manifest_hash, version=2, supersedes_id=dossier.id,
+        ),
+        expected_parent_id=dossier.id,
+    )
+    review_id = review.id
+    engine = session.get_bind()
+    session.commit()
+
+    with sessionmaker(bind=engine, future=True)() as fresh:
+        replayed = fresh.get(UnderwritingEvidenceCandidateReviewVersion, review_id)
+        assert replayed is not None
+        assert replayed.dossier_id == dossier.id
 
 
 def test_review_rejects_dossier_that_has_been_superseded(repository, company, basis, manifest) -> None:
@@ -219,6 +309,89 @@ def test_fresh_sqlite_session_can_append_review_at_persisted_utc_cutoff(
         )
         fresh.commit()
         assert review.dossier_id == dossier.id
+
+
+def test_invalid_repository_candidate_releases_sqlite_write_reservation(tmp_path) -> None:
+    engine, sessions, (company_id, basis_id, manifest_id, manifest_hash) = _seed_file_candidate_database(
+        tmp_path, "candidate-invalid-release.sqlite",
+    )
+    try:
+        with sessions() as invalid_writer:
+            repository = UnderwritingResearchRepository(invalid_writer)
+            with pytest.raises(ValidationError, match="source_locator does not match"):
+                repository.append_candidate_dossier(
+                    object_id=company_id, basis_id=basis_id, source_manifest_id=manifest_id,
+                    dossier_key="industry-capacity",
+                    payload=_dossier_payload(
+                        object_id=company_id, basis_id=basis_id, source_manifest_id=manifest_id,
+                        source_manifest_hash=manifest_hash,
+                        source_locator="https://example.test/forged",
+                    ),
+                    created_at=NOW, expected_parent_id=None,
+                )
+        with sessions() as contender:
+            begin_candidate_sqlite_write(contender)
+            contender.rollback()
+    finally:
+        engine.dispose()
+
+
+def test_repository_rejects_preopened_deferred_sqlite_transaction_before_reads(tmp_path) -> None:
+    engine, sessions, (company_id, basis_id, manifest_id, manifest_hash) = _seed_file_candidate_database(
+        tmp_path, "candidate-deferred-transaction.sqlite",
+    )
+    try:
+        with sessions() as writer:
+            writer.connection().exec_driver_sql("BEGIN")
+            with pytest.raises(ValidationError, match="fresh SQLite transaction"):
+                UnderwritingResearchRepository(writer).append_candidate_dossier(
+                    object_id=company_id, basis_id=basis_id, source_manifest_id=manifest_id,
+                    dossier_key="industry-capacity",
+                    payload=_dossier_payload(
+                        object_id=company_id, basis_id=basis_id, source_manifest_id=manifest_id,
+                        source_manifest_hash=manifest_hash,
+                    ),
+                    created_at=NOW, expected_parent_id=None,
+                )
+            writer.rollback()
+    finally:
+        engine.dispose()
+
+
+def test_fresh_session_reads_a_599_deep_valid_dossier_chain_without_recursion(tmp_path) -> None:
+    engine, sessions, (company_id, basis_id, manifest_id, manifest_hash) = _seed_file_candidate_database(
+        tmp_path, "candidate-deep-history.sqlite",
+    )
+    try:
+        parent_id: UUID | None = None
+        rows: list[dict[str, object]] = []
+        for version in range(1, 600):
+            contract = CandidateEvidenceDossier.from_canonical_payload(_dossier_payload(
+                object_id=company_id, basis_id=basis_id, source_manifest_id=manifest_id,
+                source_manifest_hash=manifest_hash, version=version, supersedes_id=parent_id,
+            ))
+            row_id = uuid4()
+            rows.append({
+                "id": row_id, "dossier_key": contract.dossier_key, "version": contract.version,
+                "object_id": contract.object_id, "basis_id": contract.basis_id,
+                "source_manifest_id": contract.source_manifest_id,
+                "scope_statement": contract.scope_statement, "purpose": contract.purpose,
+                "status": contract.status.value,
+                "rejected_calculations": list(contract.rejected_calculations),
+                "payload": contract.canonical_payload,
+                "source_manifest_hash": contract.source_manifest_hash,
+                "content_hash": contract.content_hash, "supersedes_id": contract.supersedes_id,
+                "created_at": contract.created_at,
+            })
+            parent_id = row_id
+        with engine.begin() as connection:
+            connection.execute(UnderwritingEvidenceCandidateDossierVersion.__table__.insert(), rows)
+        with sessions() as fresh:
+            deepest = fresh.get(UnderwritingEvidenceCandidateDossierVersion, parent_id)
+            assert deepest is not None
+            assert deepest.version == 599
+    finally:
+        engine.dispose()
 
 
 def test_direct_review_after_successor_is_rejected(session, company, basis, manifest) -> None:
@@ -424,10 +597,10 @@ def test_raw_dossier_with_noncanonical_predecessor_fails_closed_on_fresh_load(
             fresh.get(UnderwritingEvidenceCandidateDossierVersion, row_id)
 
 
-def test_raw_review_of_superseded_dossier_fails_closed_on_fresh_load(
+def test_raw_prior_review_of_superseded_dossier_remains_readable_on_fresh_load(
     session, company, basis, manifest
 ) -> None:
-    """A Core/raw review cannot authenticate a dossier that is no longer current."""
+    """Read-time integrity validates closure, not whether a review is still current."""
     repository = UnderwritingResearchRepository(session)
     dossier = _append_dossier(repository, company, basis, manifest)
     _append_dossier(
@@ -464,8 +637,9 @@ def test_raw_review_of_superseded_dossier_fails_closed_on_fresh_load(
         )
 
     with sessionmaker(bind=engine, future=True)() as fresh:
-        with pytest.raises(ValidationError, match="dossier is no longer current"):
-            fresh.get(UnderwritingEvidenceCandidateReviewVersion, row_id)
+        replayed = fresh.get(UnderwritingEvidenceCandidateReviewVersion, row_id)
+        assert replayed is not None
+        assert replayed.dossier_id == dossier.id
 
 
 def test_sqlite_file_backed_review_waits_for_successor_and_rejects_stale_dossier(

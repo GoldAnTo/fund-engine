@@ -10,6 +10,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import wraps
 import re
 from typing import Mapping, TypeVar
 from uuid import UUID, uuid4
@@ -36,6 +37,9 @@ from app.underwriting.persistence.research_models import (
     begin_candidate_sqlite_write,
     candidate_dossier_family_lock,
     candidate_dossier_family_lock_statement,
+    mark_candidate_sqlite_write,
+    release_candidate_sqlite_write,
+    require_candidate_write_read_committed,
     validate_candidate_dossier_governance,
     validate_candidate_review_governance,
 )
@@ -96,6 +100,20 @@ def _freeze_manifest(manifest: Mapping[str, object], cutoff: datetime):
     from app.underwriting.services.source_freeze import freeze_manifest
 
     return freeze_manifest(manifest, cutoff)
+
+
+def _candidate_repository_write(method):
+    """Reserve SQLite's writer slot and always release it after invalid input."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        require_candidate_write_read_committed(self._session)
+        begin_candidate_sqlite_write(self._session)
+        try:
+            return method(self, *args, **kwargs)
+        except ValidationError:
+            release_candidate_sqlite_write(self._session)
+            raise
+    return wrapped
 
 
 class UnderwritingResearchRepository:
@@ -222,6 +240,7 @@ class UnderwritingResearchRepository:
                 try:
                     self._session.add(row)
                     self._session.flush()
+                    mark_candidate_sqlite_write(self._session)
                 finally:
                     self._session.info.pop("candidate_repository_write", None)
         except IntegrityError as exc:
@@ -401,6 +420,7 @@ class UnderwritingResearchRepository:
             raise ValidationError("industry state is unavailable at basis cutoff")
         return row
 
+    @_candidate_repository_write
     def append_candidate_dossier(
         self,
         *,
@@ -418,7 +438,6 @@ class UnderwritingResearchRepository:
         repository derives its version and predecessor from the sealed family,
         rather than trusting an unverified correction chain from the caller.
         """
-        begin_candidate_sqlite_write(self._session)
         cutoff = self._basis_cutoff(basis_id)
         created_at = self._created_at_at_basis(created_at, cutoff)
         contract = self._candidate_contract_payload(payload)
@@ -478,6 +497,7 @@ class UnderwritingResearchRepository:
         validate_candidate_dossier_governance(self._session, row, enforce_current=True)
         return self._append(row)
 
+    @_candidate_repository_write
     def append_candidate_review(
         self,
         *,
@@ -490,7 +510,6 @@ class UnderwritingResearchRepository:
         created_at: datetime,
     ) -> UnderwritingEvidenceCandidateReviewVersion:
         """Append an independently identified review of one exact dossier."""
-        begin_candidate_sqlite_write(self._session)
         dossier = self._session.get(UnderwritingEvidenceCandidateDossierVersion, dossier_id)
         if dossier is None:
             raise ValidationError("candidate dossier does not exist")
