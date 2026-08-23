@@ -862,6 +862,28 @@ class ResearchRevisionDiffService:
             expected_previous = row.id
         return rows
 
+    @staticmethod
+    def _validated_research_object_identity(
+        object_id: object,
+        kind: object,
+        canonical_name: object,
+        external_key: object,
+    ) -> tuple[UUID, ResearchObjectKind, str, str]:
+        if not isinstance(object_id, UUID):
+            raise ValidationError("research revision object identity is malformed")
+        if (
+            not isinstance(canonical_name, str)
+            or not canonical_name.strip()
+            or not isinstance(external_key, str)
+            or not external_key.strip()
+        ):
+            raise ValidationError("research revision object identity is malformed")
+        try:
+            object_kind = ResearchObjectKind(kind)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("research revision object identity is malformed") from exc
+        return object_id, object_kind, canonical_name, external_key
+
     def _history_object(self, object_id: UUID) -> tuple[ResearchObjectKind, str, str]:
         """Load only the immutable object selected by a revision family.
 
@@ -881,21 +903,13 @@ class ResearchRevisionDiffService:
                     UnderwritingResearchObject.external_key,
                 ).where(UnderwritingResearchObject.id == object_id)
             ).mappings().one_or_none()
-        if row is None or row["id"] != object_id:
+        if row is None:
             raise ValidationError("research revision object is missing")
-        canonical_name = row["canonical_name"]
-        external_key = row["external_key"]
-        if (
-            not isinstance(canonical_name, str)
-            or not canonical_name.strip()
-            or not isinstance(external_key, str)
-            or not external_key.strip()
-        ):
-            raise ValidationError("research revision object identity is malformed")
-        try:
-            object_kind = ResearchObjectKind(row["kind"])
-        except (TypeError, ValueError) as exc:
-            raise ValidationError("research revision object identity is malformed") from exc
+        stored_id, object_kind, canonical_name, external_key = self._validated_research_object_identity(
+            row["id"], row["kind"], row["canonical_name"], row["external_key"],
+        )
+        if stored_id != object_id:
+            raise ValidationError("research revision object is missing")
         return object_kind, canonical_name, external_key
 
     def revision_history(self, object_id: UUID, version_kind: str) -> RevisionHistory:
@@ -985,30 +999,48 @@ class ResearchRevisionDiffService:
         needle = query.casefold() if isinstance(query, str) else None
         with self._session.no_autoflush:
             rows = tuple(self._session.execute(
-                select(UnderwritingResearchObject, UnderwritingResearchVersion)
+                select(
+                    UnderwritingResearchObject.id,
+                    UnderwritingResearchObject.kind,
+                    UnderwritingResearchObject.canonical_name,
+                    UnderwritingResearchObject.external_key,
+                    UnderwritingResearchVersion.version_kind,
+                )
                 .join(
                     UnderwritingResearchVersion,
                     UnderwritingResearchVersion.object_id == UnderwritingResearchObject.id,
                 )
-            ))
-            families: dict[tuple[UUID, str], tuple[UnderwritingResearchObject, list[UnderwritingResearchVersion]]] = {}
-            for research_object, revision in rows:
-                if kind is not None and research_object.kind != kind:
+            ).mappings())
+            families: dict[tuple[UUID, str], tuple[ResearchObjectKind, str, str, int]] = {}
+            for row in rows:
+                try:
+                    object_id, object_kind, canonical_name, external_key = self._validated_research_object_identity(
+                        row["id"], row["kind"], row["canonical_name"], row["external_key"],
+                    )
+                except ValidationError:
+                    # A directory item requires a valid controlled identity.
+                    # Without one, no unreadable item can satisfy the API
+                    # contract safely, so omit the corrupt family entirely.
+                    continue
+                version_kind = row["version_kind"]
+                if not isinstance(version_kind, str) or not version_kind:
+                    continue
+                if kind is not None and object_kind.value != kind:
                     continue
                 if needle is not None and (
-                    needle not in research_object.canonical_name.casefold()
-                    and needle not in research_object.external_key.casefold()
+                    needle not in canonical_name.casefold()
+                    and needle not in external_key.casefold()
                 ):
                     continue
-                family_key = (research_object.id, revision.version_kind)
+                family_key = (object_id, version_kind)
                 existing = families.get(family_key)
                 if existing is None:
-                    families[family_key] = (research_object, [revision])
+                    families[family_key] = (object_kind, canonical_name, external_key, 1)
                 else:
-                    existing[1].append(revision)
+                    families[family_key] = (*existing[:3], existing[3] + 1)
 
             archive_items: list[ResearchArchiveItem] = []
-            for (object_id, version_kind), (research_object, revisions) in families.items():
+            for (object_id, version_kind), (object_kind, canonical_name, external_key, version_count) in families.items():
                 try:
                     # These are deliberately the established replay APIs, not
                     # a copy of their logic over a current evidence ledger.
@@ -1017,11 +1049,11 @@ class ResearchRevisionDiffService:
                 except ValidationError:
                     archive_items.append(ResearchArchiveItem(
                         object_id=object_id,
-                        object_kind=research_object.kind,
-                        canonical_name=research_object.canonical_name,
-                        external_key=research_object.external_key,
+                        object_kind=object_kind.value,
+                        canonical_name=canonical_name,
+                        external_key=external_key,
                         version_kind=version_kind,
-                        version_count=len(revisions),
+                        version_count=version_count,
                         lineage_state="unreadable",
                         latest_revision_id=None,
                         latest_sequence=None,
@@ -1031,11 +1063,11 @@ class ResearchRevisionDiffService:
                     continue
                 archive_items.append(ResearchArchiveItem(
                     object_id=object_id,
-                    object_kind=research_object.kind,
-                    canonical_name=research_object.canonical_name,
-                    external_key=research_object.external_key,
+                    object_kind=object_kind.value,
+                    canonical_name=canonical_name,
+                    external_key=external_key,
                     version_kind=version_kind,
-                    version_count=len(revisions),
+                    version_count=version_count,
                     lineage_state="readable",
                     latest_revision_id=latest.id,
                     latest_sequence=latest.sequence,

@@ -1150,6 +1150,41 @@ def test_research_archives_do_not_autoflush_pending_objects(
     assert [item.canonical_name for item in page.items] == ["CATL"]
 
 
+def test_research_archives_ignore_unflushed_object_identity_mutations(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    seeded_revision.company.kind = "security"
+    seeded_revision.company.canonical_name = "unflushed replacement"
+    seeded_revision.company.external_key = "security:unflushed"
+
+    page = ResearchRevisionDiffService(session).research_archives(
+        query="300750", kind="company", limit=100,
+    )
+
+    assert [(item.object_kind, item.canonical_name, item.external_key) for item in page.items] == [
+        ("company", "CATL", "CN:300750:COMPANY"),
+    ]
+    assert session.is_modified(seeded_revision.company)
+
+
+def test_research_archives_safely_omit_malformed_persisted_object_identity(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    session.connection().exec_driver_sql(
+        "UPDATE uw_research_objects SET canonical_name = ? WHERE id = ?",
+        (" ", seeded_revision.company.id.hex),
+    )
+    session.expire_all()
+
+    page = ResearchRevisionDiffService(session).research_archives(limit=100)
+
+    assert page.items == ()
+
+
 @pytest.mark.parametrize(
     ("column", "value"),
     [
