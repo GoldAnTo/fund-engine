@@ -21,6 +21,7 @@ type Artifact = ResearchRevisionDiff["entries"][number]["after"] extends infer V
   ? Exclude<Value, null>
   : never;
 type DetailLoad = { revision: ResearchRevision; diff: ResearchRevisionDiff | null };
+type DiffEntry = ResearchRevisionDiff["entries"][number];
 
 const GROUPS = [
   ["evidence", "证据"],
@@ -68,6 +69,49 @@ function isArtifact(value: unknown): value is Artifact {
     && nullableString(artifact.status);
 }
 
+function sameArtifact(left: Artifact, right: Artifact): boolean {
+  return left.schema_version === right.schema_version
+    && left.reference === right.reference
+    && left.artifact_type === right.artifact_type
+    && left.identity === right.identity
+    && left.content_hash === right.content_hash
+    && left.source_locators.length === right.source_locators.length
+    && left.source_locators.every((locator, index) => locator === right.source_locators[index])
+    && left.unit === right.unit
+    && left.period_start === right.period_start
+    && left.period_end === right.period_end
+    && left.available_at === right.available_at
+    && left.status === right.status;
+}
+
+function artifactIdentity(artifact: Artifact): string {
+  return `${artifact.artifact_type}\u0000${artifact.identity}`;
+}
+
+function artifactOrder(artifact: Artifact): string {
+  return `${artifactIdentity(artifact)}\u0000${artifact.reference}`;
+}
+
+function canonicalArtifacts(value: unknown): value is Artifact[] {
+  if (!Array.isArray(value)) return false;
+  let previousOrder: string | null = null;
+  const identities = new Set<string>();
+  return value.every((artifact) => {
+    if (!isArtifact(artifact)) return false;
+    const order = artifactOrder(artifact);
+    const identity = artifactIdentity(artifact);
+    if ((previousOrder !== null && previousOrder >= order) || identities.has(identity)) return false;
+    previousOrder = order;
+    identities.add(identity);
+    return true;
+  });
+}
+
+function sameArtifactList(expected: Artifact[], received: Artifact[]): boolean {
+  return expected.length === received.length
+    && expected.every((artifact, index) => sameArtifact(artifact, received[index]));
+}
+
 function isRevision(value: unknown): value is ResearchRevision {
   const revision = record(value);
   return revision?.schema_version === "underwriting.v1"
@@ -80,8 +124,7 @@ function isRevision(value: unknown): value is ResearchRevision {
     && nonEmptyString(revision.content_hash)
     && nonEmptyString(revision.cutoff)
     && nonEmptyString(revision.source_manifest_hash)
-    && Array.isArray(revision.parent_refs)
-    && revision.parent_refs.every(isArtifact);
+    && canonicalArtifacts(revision.parent_refs);
 }
 
 function checkedHistory(value: unknown, objectId: string, versionKind: string): ResearchRevisionHistory {
@@ -123,7 +166,11 @@ function sameRevisionSummary(expected: ResearchRevision, received: ResearchRevis
 }
 
 function checkedRevision(value: unknown, expected: ResearchRevision): ResearchRevision {
-  if (!isRevision(value) || !sameRevisionSummary(expected, value)) throw new ArchiveIntegrityError();
+  if (
+    !isRevision(value)
+    || !sameRevisionSummary(expected, value)
+    || !sameArtifactList(expected.parent_refs, value.parent_refs)
+  ) throw new ArchiveIntegrityError();
   return value;
 }
 
@@ -156,7 +203,62 @@ function checkedDiff(value: unknown, previous: ResearchRevision, selected: Resea
     || value.from_content_hash !== previous.content_hash
     || value.to_content_hash !== selected.content_hash
   ) throw new ArchiveIntegrityError();
+
+  const before = new Map(previous.parent_refs.map((artifact) => [artifactIdentity(artifact), artifact]));
+  const after = new Map(selected.parent_refs.map((artifact) => [artifactIdentity(artifact), artifact]));
+  const expected = [...new Set([...before.keys(), ...after.keys()])]
+    .sort()
+    .flatMap((identity): DiffEntry[] => {
+      const earlier = before.get(identity) ?? null;
+      const later = after.get(identity) ?? null;
+      if (earlier !== null && later !== null && sameArtifact(earlier, later)) return [];
+      const artifact = later ?? earlier;
+      if (artifact === null) return [];
+      return [{
+        schema_version: "underwriting.v1",
+        group: groupForArtifact(artifact.artifact_type),
+        change_type: earlier === null ? "added" : later === null ? "removed" : "replaced",
+        artifact_type: artifact.artifact_type,
+        identity: artifact.identity,
+        before: earlier,
+        after: later,
+      } as DiffEntry];
+    })
+    .sort(compareDiffEntries);
+
+  if (
+    value.entries.length !== expected.length
+    || value.entries.some((entry, index) => !sameDiffEntry(entry, expected[index]))
+  ) throw new ArchiveIntegrityError();
   return value;
+}
+
+function groupForArtifact(artifactType: string): DiffEntry["group"] {
+  if (["source_manifest", "metric_definition", "metric_observation", "ledger", "semantic_snapshot", "source_fact"].includes(artifactType)) return "evidence";
+  if (artifactType === "mechanism") return "mechanism";
+  if (["industry_state", "industry_scenario", "company_exposure", "earnings_engine", "forecast_input", "falsifier"].includes(artifactType)) return "industry_model";
+  if (["answerability", "research_boundary"].includes(artifactType)) return "answerability";
+  throw new ArchiveIntegrityError();
+}
+
+function compareDiffEntries(left: DiffEntry, right: DiffEntry): number {
+  const rank: Record<DiffEntry["group"], number> = {
+    evidence: 0, mechanism: 1, industry_model: 2, answerability: 3,
+  };
+  const leftKey = [rank[left.group], left.artifact_type, left.identity, left.change_type, left.before?.reference ?? "", left.after?.reference ?? ""];
+  const rightKey = [rank[right.group], right.artifact_type, right.identity, right.change_type, right.before?.reference ?? "", right.after?.reference ?? ""];
+  return leftKey.join("\u0000").localeCompare(rightKey.join("\u0000"));
+}
+
+function sameDiffEntry(left: DiffEntry, right: DiffEntry | undefined): boolean {
+  return right !== undefined
+    && left.schema_version === right.schema_version
+    && left.group === right.group
+    && left.change_type === right.change_type
+    && left.artifact_type === right.artifact_type
+    && left.identity === right.identity
+    && (left.before === null ? right.before === null : right.before !== null && sameArtifact(left.before, right.before))
+    && (left.after === null ? right.after === null : right.after !== null && sameArtifact(left.after, right.after));
 }
 
 function safeEnvelopeText(value: string | undefined): string | null {

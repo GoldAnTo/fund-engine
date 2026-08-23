@@ -68,18 +68,6 @@ const revisionTwo = {
   source_manifest_hash: "a".repeat(64),
   parent_refs: [{
     schema_version: "underwriting.v1" as const,
-    reference: "IEA Global EV Outlook 2025",
-    artifact_type: "source_fact",
-    identity: "installed_capacity",
-    content_hash: "4".repeat(64),
-    source_locators: ["p.148"],
-    unit: "GWh",
-    period_start: "2024-01-01",
-    period_end: "2024-12-31",
-    available_at: "2025-05-14T00:00:00Z",
-    status: "candidate",
-  }, {
-    schema_version: "underwriting.v1" as const,
     reference: "research boundary",
     artifact_type: "research_boundary",
     identity: "answerability",
@@ -90,6 +78,18 @@ const revisionTwo = {
     period_end: null,
     available_at: null,
     status: "not_answerable",
+  }, {
+    schema_version: "underwriting.v1" as const,
+    reference: "IEA Global EV Outlook 2025",
+    artifact_type: "source_fact",
+    identity: "installed_capacity",
+    content_hash: "4".repeat(64),
+    source_locators: ["p.148"],
+    unit: "GWh",
+    period_start: "2024-01-01",
+    period_end: "2024-12-31",
+    available_at: "2025-05-14T00:00:00Z",
+    status: "candidate",
   }],
 };
 
@@ -144,7 +144,7 @@ function installApi(overrides: Partial<UnderwritingResearchApi> = {}) {
       }, {
         schema_version: "underwriting.v1",
         group: "answerability",
-        change_type: "replaced",
+        change_type: "added",
         artifact_type: "research_boundary",
         identity: "answerability",
         before: null,
@@ -233,17 +233,24 @@ describe("ResearchArchivePage", () => {
     const predecessorArtifact = {
       ...selectedArtifact,
       reference: "Predecessor-only source",
-      identity: "old-only",
       content_hash: "7".repeat(64),
     };
+    const predecessorRevision = { ...revisionOne, parent_refs: [predecessorArtifact] };
+    const selectedRevision = { ...revisionTwo, parent_refs: [selectedArtifact] };
     installApi({
-      revision: vi.fn().mockResolvedValue({ ...revisionTwo, parent_refs: [selectedArtifact] }),
+      history: vi.fn().mockResolvedValue({
+        schema_version: "underwriting.v1",
+        object_id: "company-id",
+        version_kind: "catl_economic_model_evidence_only",
+        revisions: [predecessorRevision, selectedRevision],
+      }),
+      revision: vi.fn().mockResolvedValue(selectedRevision),
       diff: vi.fn().mockResolvedValue({
         schema_version: "underwriting.v1",
         from_revision_id: "revision-1",
         to_revision_id: "revision-2",
-        from_content_hash: revisionOne.content_hash,
-        to_content_hash: revisionTwo.content_hash,
+        from_content_hash: predecessorRevision.content_hash,
+        to_content_hash: selectedRevision.content_hash,
         diff_hash: "8".repeat(64),
         entries: [{
           schema_version: "underwriting.v1",
@@ -335,6 +342,40 @@ describe("ResearchArchivePage", () => {
     expect(screen.queryByText("IEA Global EV Outlook 2025")).not.toBeInTheDocument();
   });
 
+  it("fails closed when a selected detail injects a candidate boundary absent from history", async () => {
+    const injectedBoundary = {
+      ...revisionTwo.parent_refs[1],
+      reference: "injected boundary",
+      identity: "injected-answerability",
+      content_hash: "9".repeat(64),
+      status: "wait_for_validation",
+    };
+    installApi({
+      revision: vi.fn().mockResolvedValue({
+        ...revisionTwo,
+        parent_refs: [...revisionTwo.parent_refs, injectedBoundary],
+      }),
+    });
+    renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结档案的身份或版本链无法校验，未展示任何资料。");
+    expect(screen.queryByText("injected boundary")).not.toBeInTheDocument();
+  });
+
+  it.each(["replaces", "omits"] as const)("fails closed when a selected detail %s a frozen parent reference", async (operation) => {
+    const parent_refs = operation === "replaces"
+      ? [{
+        ...revisionTwo.parent_refs[0],
+        source_locators: ["changed immutable locator"],
+      }, revisionTwo.parent_refs[1]]
+      : [revisionTwo.parent_refs[0]];
+    installApi({ revision: vi.fn().mockResolvedValue({ ...revisionTwo, parent_refs }) });
+    renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结档案的身份或版本链无法校验，未展示任何资料。");
+    expect(screen.queryByText("IEA Global EV Outlook 2025")).not.toBeInTheDocument();
+  });
+
   it("fails closed when a diff is not exactly bound to its adjacent versions", async () => {
     installApi({
       diff: vi.fn().mockResolvedValue({
@@ -352,6 +393,64 @@ describe("ResearchArchivePage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("冻结档案的身份或版本链无法校验，未展示任何资料。");
     expect(screen.queryByText("版本 2")).not.toBeInTheDocument();
     expect(screen.queryByText("仅与紧邻的版本 1 对照。")).not.toBeInTheDocument();
+  });
+
+  it("fails closed when an adjacent diff injects a nonmember artifact", async () => {
+    const injected = {
+      ...revisionTwo.parent_refs[0],
+      reference: "injected evidence",
+      identity: "invented-fact",
+      content_hash: "9".repeat(64),
+    };
+    installApi({
+      diff: vi.fn().mockResolvedValue({
+        schema_version: "underwriting.v1",
+        from_revision_id: "revision-1",
+        to_revision_id: "revision-2",
+        from_content_hash: revisionOne.content_hash,
+        to_content_hash: revisionTwo.content_hash,
+        diff_hash: "3".repeat(64),
+        entries: [{
+          schema_version: "underwriting.v1",
+          group: "evidence",
+          change_type: "added",
+          artifact_type: injected.artifact_type,
+          identity: injected.identity,
+          before: null,
+          after: injected,
+        }],
+      }),
+    });
+    renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结档案的身份或版本链无法校验，未展示任何资料。");
+    expect(screen.queryByText("injected evidence")).not.toBeInTheDocument();
+  });
+
+  it("fails closed when an adjacent diff mislabels or omits a required change", async () => {
+    installApi({
+      diff: vi.fn().mockResolvedValue({
+        schema_version: "underwriting.v1",
+        from_revision_id: "revision-1",
+        to_revision_id: "revision-2",
+        from_content_hash: revisionOne.content_hash,
+        to_content_hash: revisionTwo.content_hash,
+        diff_hash: "3".repeat(64),
+        entries: [{
+          schema_version: "underwriting.v1",
+          group: "mechanism",
+          change_type: "replaced",
+          artifact_type: revisionTwo.parent_refs[0].artifact_type,
+          identity: revisionTwo.parent_refs[0].identity,
+          before: null,
+          after: revisionTwo.parent_refs[0],
+        }],
+      }),
+    });
+    renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结档案的身份或版本链无法校验，未展示任何资料。");
+    expect(screen.queryByText("IEA Global EV Outlook 2025")).not.toBeInTheDocument();
   });
 
   it("shows a safe validation-envelope message and request id", async () => {
