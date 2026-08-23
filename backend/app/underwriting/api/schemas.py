@@ -303,6 +303,7 @@ class CandidateEvidenceDossierResponse(UnderwritingModel):
     version: int
     status: Literal["candidate"]
     scope_statement: str
+    rejected_calculations: list[str] = Field(min_length=1)
 
 
 class CandidateEvidenceItemResponse(UnderwritingModel):

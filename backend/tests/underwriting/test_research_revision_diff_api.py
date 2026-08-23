@@ -183,6 +183,7 @@ def test_candidate_evidence_is_get_only_parent_sealed_and_deterministic(api_clie
             "version": 1,
             "status": "candidate",
             "scope_statement": "Candidate industry evidence only.",
+            "rejected_calculations": ["No valuation model."],
         },
         "items": [{
             "schema_version": "underwriting.v1",
@@ -250,6 +251,10 @@ def test_candidate_evidence_reads_only_selected_parent_graph_and_fails_closed_on
     successor_payload = dict(payload) | {
         "version": 2,
         "scope_statement": "Later candidate correction.",
+        "rejected_calculations": [
+            "No valuation model.",
+            "No price target calculation.",
+        ],
         "supersedes_id": str(dossier.id),
     }
     UnderwritingResearchRepository(session).append_candidate_dossier(
@@ -264,6 +269,7 @@ def test_candidate_evidence_reads_only_selected_parent_graph_and_fails_closed_on
     )
     assert selected.status_code == 200, selected.text
     assert selected.json()["dossier"]["scope_statement"] == "Candidate industry evidence only."
+    assert selected.json()["dossier"]["rejected_calculations"] == ["No valuation model."]
 
     tampered = dict(payload)
     tampered["scope_statement"] = "Tampered selected parent."

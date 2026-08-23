@@ -3464,6 +3464,8 @@ export interface components {
             status: "candidate";
             /** Scope Statement */
             scope_statement: string;
+            /** Rejected Calculations */
+            rejected_calculations: string[];
         };
         /**
          * CandidateEvidenceItemResponse

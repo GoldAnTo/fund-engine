@@ -176,6 +176,14 @@ def test_candidate_evidence_contract_is_get_only_and_excludes_formal_outputs_rec
         "schema_version", "reference", "content_hash", "state", "research_debt_keys",
         "resolution_requirements",
     }
+    dossier = schemas["CandidateEvidenceDossierResponse"]
+    assert dossier["properties"]["rejected_calculations"] == {
+        "items": {"type": "string"},
+        "type": "array",
+        "minItems": 1,
+        "title": "Rejected Calculations",
+    }
+    assert "rejected_calculations" in dossier["required"]
 
 
 def test_revision_history_identity_contract_includes_research_object_identity() -> None:

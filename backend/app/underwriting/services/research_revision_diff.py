@@ -193,6 +193,7 @@ class FrozenCandidateDossier:
     version: int
     status: str
     scope_statement: str
+    rejected_calculations: tuple[str, ...]
     items: tuple[CandidateEvidenceItem, ...]
 
 
@@ -1854,6 +1855,7 @@ class ResearchRevisionDiffService:
                     version=dossier.version,
                     status=dossier.status.value,
                     scope_statement=dossier.scope_statement,
+                    rejected_calculations=dossier.rejected_calculations,
                     items=items,
                 ),
                 reviews=tuple(sorted(

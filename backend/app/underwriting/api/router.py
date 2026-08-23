@@ -306,6 +306,7 @@ def _candidate_evidence_response(value: CandidateEvidenceRead) -> CandidateEvide
             version=dossier.version,
             status=dossier.status,
             scope_statement=dossier.scope_statement,
+            rejected_calculations=list(dossier.rejected_calculations),
         ),
         items=[
             CandidateEvidenceItemResponse(

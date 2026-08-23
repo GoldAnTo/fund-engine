@@ -12339,6 +12339,14 @@
           "scope_statement": {
             "type": "string",
             "title": "Scope Statement"
+          },
+          "rejected_calculations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Rejected Calculations"
           }
         },
         "additionalProperties": false,
@@ -12349,7 +12357,8 @@
           "dossier_key",
           "version",
           "status",
-          "scope_statement"
+          "scope_statement",
+          "rejected_calculations"
         ],
         "title": "CandidateEvidenceDossierResponse",
         "description": "The selected candidate dossier identity and bounded research scope."
