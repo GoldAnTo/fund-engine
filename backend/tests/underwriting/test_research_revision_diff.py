@@ -13,7 +13,22 @@ from sqlalchemy.orm import Session
 from app.models.ledger import ValidationError
 from app.underwriting.domain.types import HistoricalBasisInput, ResearchObjectKind
 from app.underwriting.domain.metrics import MetricObservation
-from app.underwriting.persistence.models import UnderwritingResearchObject, UnderwritingResearchVersion
+from app.underwriting.persistence.models import (
+    UnderwritingAnswerabilityEvaluation,
+    UnderwritingResearchObject,
+    UnderwritingResearchVersion,
+)
+from app.underwriting.persistence.research_models import (
+    UnderwritingCompanyExposureVersion,
+    UnderwritingEarningsEngineVersion,
+    UnderwritingFalsifierVersion,
+    UnderwritingForecastInputVersion,
+    UnderwritingIndustryScenarioVersion,
+    UnderwritingIndustryStateVersion,
+    UnderwritingMechanismPackVersion,
+)
+from app.underwriting.fixtures.catl_baseline import load_catl_fixture
+from app.underwriting.services.catl_baseline import CatlBaselineService
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
 from app.underwriting.services.kernel import UnderwritingKernelService, canonical_hash
 
@@ -28,6 +43,11 @@ class SeededRevision:
     manifest: object
     observation: object
     first: object
+
+
+@pytest.fixture
+def catl_revision(session: Session):
+    return CatlBaselineService(session, now=lambda: NOW).import_fixture(load_catl_fixture())
 
 
 def _append_observation(
@@ -285,3 +305,119 @@ def test_foundation_rejects_a_database_tampered_observation_payload(
 
     with pytest.raises(ValidationError, match="research revision parent.*content hash"):
         ResearchRevisionDiffService(session).revision_summary(seeded_revision.first.id)
+
+
+@pytest.mark.parametrize("mutation", ["remove", "inject"])
+def test_foundation_rejects_a_semantic_snapshot_parent_set_change(
+    session: Session, catl_revision, mutation: str,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+    from app.underwriting.domain.types import LedgerEntryInput, LedgerKind
+
+    parent_ids = list(catl_revision.research_version.parent_ids)
+    if mutation == "remove":
+        parent_ids.remove(str(catl_revision.metric_observations[0].id))
+    else:
+        injected = UnderwritingKernelService(session, now=lambda: NOW).append_ledger_entry(
+            catl_revision.company.id,
+            catl_revision.basis.id,
+            LedgerEntryInput(LedgerKind.REALITY, "injected", "reported", {}, NOW, NOW, "public"),
+            None,
+        )
+        parent_ids.append(str(injected.id))
+    session.connection().exec_driver_sql(
+        "UPDATE uw_research_versions SET parent_ids = ? WHERE id = ?",
+        (json.dumps(parent_ids), catl_revision.research_version.id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="CATL semantic snapshot parent set"):
+        ResearchRevisionDiffService(session).revision_summary(catl_revision.research_version.id)
+
+
+def test_foundation_rejects_nested_parent_ids_before_set_normalization(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    session.connection().exec_driver_sql(
+        "UPDATE uw_research_versions SET parent_ids = ? WHERE id = ?",
+        (json.dumps([["not-a-reference"]]), seeded_revision.first.id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="research revision parents are malformed"):
+        ResearchRevisionDiffService(session).revision_summary(seeded_revision.first.id)
+
+
+@pytest.mark.parametrize(
+    "artifact_type",
+    [
+        "industry_state", "industry_scenario", "company_exposure", "earnings_engine",
+        "forecast_input", "falsifier", "answerability",
+    ],
+)
+def test_foundation_fails_closed_for_an_unsealable_artifact_type(
+    session: Session, seeded_revision: SeededRevision, artifact_type: str,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    state = UnderwritingIndustryStateVersion(
+        object_id=seeded_revision.company.id, version=1, basis_id=seeded_revision.basis.id,
+        mechanism_id=uuid4(), payload={}, content_hash="a" * 64, supersedes_id=None, created_at=NOW,
+    )
+    mechanism = UnderwritingMechanismPackVersion(
+        mechanism_key=f"unsealable-{artifact_type}", version=1,
+        object_id=seeded_revision.company.id, basis_id=seeded_revision.basis.id,
+        source_manifest_id=seeded_revision.manifest.id, status="candidate", payload={},
+        source_ids=[], definition_ids=[], content_hash="a" * 64, supersedes_id=None, created_at=NOW,
+    )
+    session.add_all((state, mechanism))
+    session.flush()
+    rows = {
+        "industry_state": state,
+        "industry_scenario": UnderwritingIndustryScenarioVersion(
+            scenario_key="base", version=1, basis_id=seeded_revision.basis.id,
+            industry_state_id=state.id, payload={}, content_hash="a" * 64,
+            supersedes_id=None, created_at=NOW,
+        ),
+        "company_exposure": UnderwritingCompanyExposureVersion(
+            company_id=seeded_revision.company.id, industry_state_id=state.id,
+            exposure_key="unsealable", version=1, basis_id=seeded_revision.basis.id,
+            payload={}, content_hash="a" * 64, supersedes_id=None, created_at=NOW,
+        ),
+        "earnings_engine": UnderwritingEarningsEngineVersion(
+            company_id=seeded_revision.company.id, version=1, basis_id=seeded_revision.basis.id,
+            industry_state_id=state.id, payload={}, content_hash="a" * 64,
+            supersedes_id=None, created_at=NOW,
+        ),
+        "forecast_input": UnderwritingForecastInputVersion(
+            company_id=seeded_revision.company.id, input_key="unsealable", version=1,
+            basis_id=seeded_revision.basis.id, earnings_engine_id=None, payload={},
+            content_hash="a" * 64, supersedes_id=None, created_at=NOW,
+        ),
+        "falsifier": UnderwritingFalsifierVersion(
+            mechanism_id=mechanism.id, falsifier_key="unsealable", version=1,
+            basis_id=seeded_revision.basis.id, payload={}, content_hash="a" * 64,
+            supersedes_id=None, created_at=NOW,
+        ),
+        "answerability": UnderwritingAnswerabilityEvaluation(
+            object_id=seeded_revision.company.id, basis_id=seeded_revision.basis.id,
+            version=1, state="not_answerable", blockers=[], research_debt_keys=[],
+            resolvable_within_mandate=True, allowed_action="wait_for_validation",
+            resolution_requirements=["unsealable"], supersedes_id=None, created_at=NOW,
+        ),
+    }
+    parent = rows[artifact_type]
+    session.add(parent)
+    session.flush()
+    revision = UnderwritingKernelService(session, now=lambda: NOW).publish_research_version(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        f"unsealable-{artifact_type}",
+        [str(parent.id)],
+        None,
+    )
+
+    with pytest.raises(ValidationError, match="research revision parent.*unsealable"):
+        ResearchRevisionDiffService(session).revision_summary(revision.id)
