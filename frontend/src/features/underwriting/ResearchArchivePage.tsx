@@ -511,6 +511,14 @@ function normalizedUtc(value: string): string {
   return value.endsWith("Z") ? `${value.slice(0, -1)}+00:00` : value;
 }
 
+export function compareCodePointTuple(left: readonly string[], right: readonly string[]): number {
+  for (let index = 0; index < Math.min(left.length, right.length); index += 1) {
+    if (left[index] < right[index]) return -1;
+    if (left[index] > right[index]) return 1;
+  }
+  return left.length - right.length;
+}
+
 async function canonicalCandidateHash(value: object, ensureAscii: boolean): Promise<string | null> {
   if (!globalThis.crypto?.subtle) return null;
   const canonicalPayload = JSON.stringify(value);
@@ -590,7 +598,7 @@ async function verifiedCandidatePayloadHashes(candidate: Record<string, unknown>
   const sortedItems = canonicalItems.map((item, index) => ({ item, hash: itemHashes[index] as string })).sort((left, right) => {
     const leftKey = `${left.item.metric_key}\u0000${left.item.source_id}\u0000${left.item.source_locator}\u0000${left.item.observed_start}\u0000${left.item.observed_end}\u0000${left.hash}`;
     const rightKey = `${right.item.metric_key}\u0000${right.item.source_id}\u0000${right.item.source_locator}\u0000${right.item.observed_start}\u0000${right.item.observed_end}\u0000${right.hash}`;
-    return leftKey.localeCompare(rightKey);
+    return compareCodePointTuple([leftKey], [rightKey]);
   }).map(({ item }) => item);
   const visibleItems = (candidate.items as unknown[]).map(canonicalCandidateItem);
   if (visibleItems.some((item) => item === null) || JSON.stringify(visibleItems) !== JSON.stringify(sortedItems)) return false;
