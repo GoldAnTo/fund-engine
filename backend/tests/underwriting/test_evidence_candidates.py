@@ -4,22 +4,27 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from threading import Event, Thread, get_ident
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models.ledger import ValidationError
+from app.models.ledger import Base, ValidationError
 from app.underwriting.domain.evidence_candidates import (
+    CandidateEvidenceDossier,
     CandidateEvidenceItem,
+    CandidateEvidenceReview,
     CandidateEvidenceStatus,
 )
 from app.underwriting.domain.types import HistoricalBasisInput
 from app.underwriting.persistence.repository import StaleParentError, UnderwritingRepository
-from app.underwriting.persistence.research_models import UnderwritingSourceManifestVersion
-from app.underwriting.persistence.research_models import UnderwritingEvidenceCandidateReviewVersion
+from app.underwriting.persistence.research_models import (
+    UnderwritingEvidenceCandidateDossierVersion,
+    UnderwritingEvidenceCandidateReviewVersion,
+    UnderwritingSourceManifestVersion,
+)
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
 from app.underwriting.services.kernel import canonical_hash
 from app.underwriting.services.source_freeze import freeze_manifest
@@ -193,6 +198,384 @@ def test_review_rejects_dossier_that_has_been_superseded(repository, company, ba
 
     with pytest.raises(ValidationError, match="dossier is no longer current"):
         _append_review(repository, dossier, reviewer_identity="reviewer:a", reviewer_role="provenance")
+
+
+def test_fresh_sqlite_session_can_append_review_at_persisted_utc_cutoff(
+    session, company, basis, manifest
+) -> None:
+    repository = UnderwritingResearchRepository(session)
+    dossier = _append_dossier(repository, company, basis, manifest)
+    engine = session.get_bind()
+    session.commit()
+
+    with sessionmaker(bind=engine, future=True)() as fresh:
+        review = UnderwritingResearchRepository(fresh).append_candidate_review(
+            dossier_id=dossier.id, dossier_content_hash=dossier.content_hash,
+            reviewer_identity="reviewer:fresh", reviewer_role="provenance", decision="approve",
+            payload=_review_payload(
+                dossier_id=dossier.id, dossier_content_hash=dossier.content_hash,
+                reviewer_identity="reviewer:fresh", reviewer_role="provenance",
+            ), created_at=NOW,
+        )
+        fresh.commit()
+        assert review.dossier_id == dossier.id
+
+
+def test_direct_review_after_successor_is_rejected(session, company, basis, manifest) -> None:
+    repository = UnderwritingResearchRepository(session)
+    dossier = _append_dossier(repository, company, basis, manifest)
+    successor = _append_dossier(
+        repository, company, basis, manifest,
+        payload=_dossier_payload(
+            object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
+            source_manifest_hash=manifest.manifest_hash, version=2, supersedes_id=dossier.id,
+        ), expected_parent_id=dossier.id,
+    )
+    assert successor.version == 2
+    review_contract = CandidateEvidenceReview.from_canonical_payload(_review_payload(
+        dossier_id=dossier.id, dossier_content_hash=dossier.content_hash,
+        reviewer_identity="reviewer:direct", reviewer_role="provenance",
+    ))
+    session.add(UnderwritingEvidenceCandidateReviewVersion.from_contract(
+        id=uuid4(), contract=review_contract,
+    ))
+
+    with pytest.raises(ValidationError, match="dossier is no longer current"):
+        session.flush()
+
+
+def test_direct_dossier_rejects_manifest_from_another_basis(session, kernel, company, basis, manifest) -> None:
+    other_basis = kernel.add_basis(
+        HistoricalBasisInput(NOW, NOW, manifest.manifest_hash), NOW,
+    )
+    contract = CandidateEvidenceDossier.from_canonical_payload(_dossier_payload(
+        object_id=company.id, basis_id=other_basis.id, source_manifest_id=manifest.id,
+        source_manifest_hash=manifest.manifest_hash,
+    ))
+    session.add(UnderwritingEvidenceCandidateDossierVersion.from_contract(
+        id=uuid4(), contract=contract,
+    ))
+
+    with pytest.raises(ValidationError, match="source manifest must belong"):
+        session.flush()
+
+
+def test_direct_dossier_rejects_source_locator_absent_from_manifest(session, company, basis, manifest) -> None:
+    contract = CandidateEvidenceDossier.from_canonical_payload(_dossier_payload(
+        object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
+        source_manifest_hash=manifest.manifest_hash,
+        source_locator="https://example.test/catl-2024-ar#forged",
+    ))
+    session.add(UnderwritingEvidenceCandidateDossierVersion.from_contract(
+        id=uuid4(), contract=contract,
+    ))
+
+    with pytest.raises(ValidationError, match="source_locator does not match"):
+        session.flush()
+
+
+def test_honest_direct_dossier_is_accepted(session, company, basis, manifest) -> None:
+    contract = CandidateEvidenceDossier.from_canonical_payload(_dossier_payload(
+        object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
+        source_manifest_hash=manifest.manifest_hash,
+    ))
+    row = UnderwritingEvidenceCandidateDossierVersion.from_contract(id=uuid4(), contract=contract)
+    session.add(row)
+    session.flush()
+
+    assert row.content_hash == contract.content_hash
+
+
+def test_honest_direct_dossier_survives_file_backed_fresh_session(tmp_path) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'candidate-direct-fresh.sqlite'}",
+        future=True,
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    try:
+        with sessions() as bootstrap:
+            kernel = UnderwritingRepository(bootstrap)
+            repository = UnderwritingResearchRepository(bootstrap)
+            company = kernel.add_object("company", "CN:300750:COMPANY", "CATL", NOW)
+            frozen = freeze_manifest(_manifest_payload(), NOW)
+            basis = kernel.add_basis(HistoricalBasisInput(NOW, NOW, frozen.manifest_hash), NOW)
+            manifest_payload = _manifest_payload()
+            manifest = repository.add_source_manifest(
+                manifest_key="candidate-direct-fresh", basis_id=basis.id,
+                manifest=manifest_payload, manifest_hash=frozen.manifest_hash,
+                content_hash=canonical_hash(manifest_payload), expected_parent_id=None,
+                created_at=NOW,
+            )
+            bootstrap.commit()
+            company_id, basis_id, manifest_id, manifest_hash = (
+                company.id, basis.id, manifest.id, manifest.manifest_hash,
+            )
+
+        with sessions() as direct:
+            contract = CandidateEvidenceDossier.from_canonical_payload(_dossier_payload(
+                object_id=company_id, basis_id=basis_id, source_manifest_id=manifest_id,
+                source_manifest_hash=manifest_hash,
+            ))
+            row = UnderwritingEvidenceCandidateDossierVersion.from_contract(
+                id=uuid4(), contract=contract,
+            )
+            direct.add(row)
+            direct.commit()
+            row_id, content_hash = row.id, row.content_hash
+
+        with sessions() as fresh_review:
+            review = UnderwritingResearchRepository(fresh_review).append_candidate_review(
+                dossier_id=row_id, dossier_content_hash=content_hash,
+                reviewer_identity="reviewer:direct-fresh", reviewer_role="provenance",
+                decision="approve",
+                payload=_review_payload(
+                    dossier_id=row_id, dossier_content_hash=content_hash,
+                    reviewer_identity="reviewer:direct-fresh", reviewer_role="provenance",
+                ),
+                created_at=NOW,
+            )
+            fresh_review.commit()
+            assert review.dossier_id == row_id
+
+        with sessions() as fresh:
+            restored = fresh.get(UnderwritingEvidenceCandidateDossierVersion, row_id)
+            assert restored is not None
+            assert restored.content_hash == content_hash
+    finally:
+        engine.dispose()
+
+
+def test_raw_candidate_with_forged_manifest_locator_fails_closed_on_fresh_load(
+    session, company, basis, manifest
+) -> None:
+    """Core/raw writes cannot bypass the source-locator closure on reload."""
+    forged = CandidateEvidenceDossier.from_canonical_payload(_dossier_payload(
+        object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
+        source_manifest_hash=manifest.manifest_hash,
+        source_locator="https://example.test/catl-2024-ar#forged-by-core",
+    ))
+    row_id = uuid4()
+    engine = session.get_bind()
+    session.commit()
+
+    with engine.begin() as connection:
+        connection.execute(
+            UnderwritingEvidenceCandidateDossierVersion.__table__.insert().values(
+                id=row_id,
+                dossier_key=forged.dossier_key,
+                version=forged.version,
+                object_id=forged.object_id,
+                basis_id=forged.basis_id,
+                source_manifest_id=forged.source_manifest_id,
+                scope_statement=forged.scope_statement,
+                purpose=forged.purpose,
+                status=forged.status.value,
+                rejected_calculations=list(forged.rejected_calculations),
+                payload=forged.canonical_payload,
+                source_manifest_hash=forged.source_manifest_hash,
+                content_hash=forged.content_hash,
+                supersedes_id=forged.supersedes_id,
+                created_at=forged.created_at,
+            )
+        )
+
+    with sessionmaker(bind=engine, future=True)() as fresh:
+        with pytest.raises(ValidationError, match="source_locator does not match"):
+            fresh.get(UnderwritingEvidenceCandidateDossierVersion, row_id)
+
+
+def test_raw_dossier_with_noncanonical_predecessor_fails_closed_on_fresh_load(
+    session, company, basis, manifest
+) -> None:
+    """A Core/raw successor must retain the same sealed family lineage."""
+    malformed = CandidateEvidenceDossier.from_canonical_payload(_dossier_payload(
+        object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
+        source_manifest_hash=manifest.manifest_hash, version=2, supersedes_id=uuid4(),
+    ))
+    row_id = uuid4()
+    engine = session.get_bind()
+    session.commit()
+
+    with engine.begin() as connection:
+        connection.execute(
+            UnderwritingEvidenceCandidateDossierVersion.__table__.insert().values(
+                id=row_id,
+                dossier_key=malformed.dossier_key,
+                version=malformed.version,
+                object_id=malformed.object_id,
+                basis_id=malformed.basis_id,
+                source_manifest_id=malformed.source_manifest_id,
+                scope_statement=malformed.scope_statement,
+                purpose=malformed.purpose,
+                status=malformed.status.value,
+                rejected_calculations=list(malformed.rejected_calculations),
+                payload=malformed.canonical_payload,
+                source_manifest_hash=malformed.source_manifest_hash,
+                content_hash=malformed.content_hash,
+                supersedes_id=malformed.supersedes_id,
+                created_at=malformed.created_at,
+            )
+        )
+
+    with sessionmaker(bind=engine, future=True)() as fresh:
+        with pytest.raises(ValidationError, match="dossier predecessor does not exist"):
+            fresh.get(UnderwritingEvidenceCandidateDossierVersion, row_id)
+
+
+def test_raw_review_of_superseded_dossier_fails_closed_on_fresh_load(
+    session, company, basis, manifest
+) -> None:
+    """A Core/raw review cannot authenticate a dossier that is no longer current."""
+    repository = UnderwritingResearchRepository(session)
+    dossier = _append_dossier(repository, company, basis, manifest)
+    _append_dossier(
+        repository, company, basis, manifest,
+        payload=_dossier_payload(
+            object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
+            source_manifest_hash=manifest.manifest_hash, version=2, supersedes_id=dossier.id,
+        ),
+        expected_parent_id=dossier.id,
+    )
+    review = CandidateEvidenceReview.from_canonical_payload(_review_payload(
+        dossier_id=dossier.id, dossier_content_hash=dossier.content_hash,
+        reviewer_identity="reviewer:raw-stale", reviewer_role="provenance",
+    ))
+    row_id = uuid4()
+    engine = session.get_bind()
+    session.commit()
+
+    with engine.begin() as connection:
+        connection.execute(
+            UnderwritingEvidenceCandidateReviewVersion.__table__.insert().values(
+                id=row_id,
+                dossier_id=review.dossier_id,
+                dossier_content_hash=review.dossier_content_hash,
+                reviewer_identity=review.reviewer_identity,
+                reviewer_role=review.reviewer_role,
+                decision=review.decision,
+                rationale=review.rationale,
+                payload=review.canonical_payload,
+                content_hash=review.content_hash,
+                reviewed_at=review.reviewed_at,
+                created_at=review.reviewed_at,
+            )
+        )
+
+    with sessionmaker(bind=engine, future=True)() as fresh:
+        with pytest.raises(ValidationError, match="dossier is no longer current"):
+            fresh.get(UnderwritingEvidenceCandidateReviewVersion, row_id)
+
+
+def test_sqlite_file_backed_review_waits_for_successor_and_rejects_stale_dossier(
+    tmp_path, monkeypatch
+) -> None:
+    """A review cannot read v1 before an in-flight v2 successor commits."""
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'candidate-review-race.sqlite'}",
+        future=True,
+        connect_args={"check_same_thread": False, "timeout": 5},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    successor_has_writer_lock, release_successor = Event(), Event()
+    review_entered, review_finished = Event(), Event()
+    errors: list[BaseException] = []
+    successor_thread: list[int] = []
+    original_latest = UnderwritingResearchRepository._latest
+
+    def hold_successor_after_current_read(repository, statement):
+        current = original_latest(repository, statement)
+        if successor_thread and get_ident() == successor_thread[0]:
+            successor_has_writer_lock.set()
+            assert release_successor.wait(timeout=5)
+        return current
+
+    monkeypatch.setattr(
+        UnderwritingResearchRepository, "_latest", hold_successor_after_current_read,
+    )
+
+    try:
+        with sessions() as bootstrap:
+            kernel = UnderwritingRepository(bootstrap)
+            repository = UnderwritingResearchRepository(bootstrap)
+            company = kernel.add_object("company", "CN:300750:COMPANY", "CATL", NOW)
+            frozen = freeze_manifest(_manifest_payload(), NOW)
+            basis = kernel.add_basis(HistoricalBasisInput(NOW, NOW, frozen.manifest_hash), NOW)
+            manifest_payload = _manifest_payload()
+            manifest = repository.add_source_manifest(
+                manifest_key="candidate-file-race", basis_id=basis.id,
+                manifest=manifest_payload, manifest_hash=frozen.manifest_hash,
+                content_hash=canonical_hash(manifest_payload), expected_parent_id=None,
+                created_at=NOW,
+            )
+            dossier = _append_dossier(repository, company, basis, manifest)
+            bootstrap.commit()
+            company_id, basis_id, manifest_id = company.id, basis.id, manifest.id
+            manifest_hash, dossier_id, dossier_hash = (
+                manifest.manifest_hash, dossier.id, dossier.content_hash,
+            )
+
+        def append_successor() -> None:
+            with sessions() as successor_session:
+                try:
+                    successor_thread.append(get_ident())
+                    UnderwritingResearchRepository(successor_session).append_candidate_dossier(
+                        object_id=company_id, basis_id=basis_id, source_manifest_id=manifest_id,
+                        dossier_key="industry-capacity",
+                        payload=_dossier_payload(
+                            object_id=company_id, basis_id=basis_id,
+                            source_manifest_id=manifest_id,
+                            source_manifest_hash=manifest_hash, version=2,
+                            supersedes_id=dossier_id,
+                        ),
+                        created_at=NOW, expected_parent_id=dossier_id,
+                    )
+                    successor_session.commit()
+                except BaseException as exc:
+                    errors.append(exc)
+                    successor_session.rollback()
+
+        def append_review() -> None:
+            with sessions() as review_session:
+                try:
+                    review_entered.set()
+                    UnderwritingResearchRepository(review_session).append_candidate_review(
+                        dossier_id=dossier_id, dossier_content_hash=dossier_hash,
+                        reviewer_identity="reviewer:file-race", reviewer_role="provenance",
+                        decision="approve",
+                        payload=_review_payload(
+                            dossier_id=dossier_id, dossier_content_hash=dossier_hash,
+                            reviewer_identity="reviewer:file-race", reviewer_role="provenance",
+                        ),
+                        created_at=NOW,
+                    )
+                    review_session.commit()
+                except BaseException as exc:
+                    errors.append(exc)
+                    review_session.rollback()
+                finally:
+                    review_finished.set()
+
+        successor = Thread(target=append_successor)
+        review = Thread(target=append_review)
+        successor.start()
+        assert successor_has_writer_lock.wait(timeout=5)
+        review.start()
+        assert review_entered.wait(timeout=5)
+        assert not review_finished.wait(timeout=0.2)
+        release_successor.set()
+        successor.join(timeout=5)
+        review.join(timeout=5)
+        assert not successor.is_alive()
+        assert not review.is_alive()
+        assert len(errors) == 1
+        assert isinstance(errors[0], ValidationError)
+        assert str(errors[0]) == "candidate dossier is no longer current"
+    finally:
+        release_successor.set()
+        engine.dispose()
 
 
 @pytest.mark.pg_only

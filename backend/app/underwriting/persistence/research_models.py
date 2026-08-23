@@ -10,8 +10,11 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+import hashlib
+import json
+from typing import Mapping
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid, event, select
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid, bindparam, event, func, inspect, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.models.ledger import Base, ValidationError, _uuid
@@ -19,6 +22,17 @@ from app.underwriting.domain.evidence_candidates import (
     CandidateEvidenceDossier,
     CandidateEvidenceReview,
 )
+
+
+_CANDIDATE_DOSSIER_FAMILY_LOCK_DOMAIN = b"underwriting:candidate-dossier-family:v1\x00"
+
+
+def _candidate_canonical_hash(value: object) -> str:
+    """Hash JSON exactly as the kernel does without importing it during model setup."""
+    serialized = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
 
 
 class UnderwritingSourceManifestVersion(Base):
@@ -364,6 +378,262 @@ def _stored_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def begin_candidate_sqlite_write(session: Session) -> None:
+    """Take SQLite's write reservation before any candidate-family read."""
+    if session.get_bind().dialect.name != "sqlite":
+        return
+    connection = session.connection()
+    raw_connection = connection.connection.driver_connection
+    if not raw_connection.in_transaction:
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+
+
+def _candidate_governance_schema_available(session: Session) -> bool:
+    """Keep isolated row-shape tests independent of the full research schema."""
+    return {
+        "uw_historical_bases",
+        "uw_source_manifest_versions",
+        "uw_evidence_candidate_dossier_versions",
+        "uw_evidence_candidate_review_versions",
+    } <= set(inspect(session.get_bind()).get_table_names())
+
+
+def candidate_dossier_family_lock_statement(
+    *, object_id: uuid.UUID, basis_id: uuid.UUID, dossier_key: str
+) -> tuple[object, int]:
+    """Build the stable, namespaced PostgreSQL lock statement for one family."""
+    identity = f"{object_id}:{basis_id}:{dossier_key}".encode("utf-8")
+    lock_id = int.from_bytes(
+        hashlib.sha256(_CANDIDATE_DOSSIER_FAMILY_LOCK_DOMAIN + identity).digest()[:8],
+        byteorder="big", signed=True,
+    )
+    return (
+        select(func.pg_advisory_xact_lock(
+            bindparam("candidate_dossier_family_lock_id", value=lock_id)
+        )),
+        lock_id,
+    )
+
+
+def candidate_dossier_family_lock(
+    session: Session, *, object_id: uuid.UUID, basis_id: uuid.UUID, dossier_key: str
+) -> None:
+    """Acquire one transaction-scoped candidate-family lock on every dialect."""
+    dialect = session.get_bind().dialect.name
+    if dialect == "sqlite":
+        begin_candidate_sqlite_write(session)
+        return
+    if dialect != "postgresql":
+        raise RuntimeError("database dialect cannot serialize candidate dossier family")
+    statement, _ = candidate_dossier_family_lock_statement(
+        object_id=object_id, basis_id=basis_id, dossier_key=dossier_key,
+    )
+    session.execute(statement)
+
+
+def _candidate_basis_cutoff(session: Session, basis_id: uuid.UUID) -> datetime:
+    from app.underwriting.persistence.models import UnderwritingHistoricalBasis
+
+    basis = session.get(UnderwritingHistoricalBasis, basis_id)
+    if basis is None:
+        raise ValidationError("historical basis does not exist")
+    return _stored_utc(basis.cutoff)
+
+
+def _candidate_manifest(
+    session: Session, *, manifest_id: uuid.UUID, basis_id: uuid.UUID, cutoff: datetime
+) -> UnderwritingSourceManifestVersion:
+    from app.underwriting.persistence.models import UnderwritingHistoricalBasis
+
+    manifest = session.get(UnderwritingSourceManifestVersion, manifest_id)
+    if manifest is None:
+        raise ValidationError("source manifest does not exist")
+    if manifest.basis_id != basis_id:
+        raise ValidationError("source manifest must belong to the target basis")
+    if _stored_utc(manifest.created_at) > cutoff:
+        raise ValidationError("source manifest is unavailable at basis cutoff")
+    try:
+        # Application model registration imports this module while the
+        # source-freeze service is still importing the kernel.
+        from app.underwriting.services.source_freeze import freeze_manifest
+
+        frozen = freeze_manifest(manifest.manifest, cutoff)
+    except ValidationError as exc:
+        raise ValidationError("source manifest is not a verified frozen manifest") from exc
+    basis = session.get(UnderwritingHistoricalBasis, basis_id)
+    if basis is None:
+        raise ValidationError("historical basis does not exist")
+    if frozen.manifest_hash != manifest.manifest_hash:
+        raise ValidationError("source manifest frozen hash does not match content")
+    if manifest.manifest_hash != basis.source_manifest_hash:
+        raise ValidationError("source manifest hash does not match historical basis")
+    if manifest.content_hash != _candidate_canonical_hash(manifest.manifest):
+        raise ValidationError("source manifest content hash does not match content")
+    return manifest
+
+
+def _candidate_items_match_manifest(
+    contract: CandidateEvidenceDossier,
+    manifest: UnderwritingSourceManifestVersion,
+    cutoff: datetime,
+) -> None:
+    sources = manifest.manifest.get("sources") if isinstance(manifest.manifest, Mapping) else None
+    if not isinstance(sources, list):
+        raise ValidationError("source manifest sources must be a list")
+    membership: dict[str, str] = {}
+    for source in sources:
+        if not isinstance(source, Mapping):
+            raise ValidationError("source manifest source must be an object")
+        source_id, locator = source.get("source_id"), source.get("locator")
+        if not isinstance(source_id, str) or not source_id.strip():
+            raise ValidationError("source_id must not be empty")
+        if not isinstance(locator, str) or not locator.strip():
+            raise ValidationError("source locator is required")
+        if source_id in membership:
+            raise ValidationError("source_id must be unique")
+        membership[source_id] = locator
+    for item in contract.items:
+        if item.available_at > cutoff:
+            raise ValidationError("candidate item available_at must not exceed basis cutoff")
+        if item.source_id not in membership:
+            raise ValidationError("candidate item references unknown source")
+        if item.source_locator != membership[item.source_id]:
+            raise ValidationError("candidate item source_locator does not match source manifest")
+
+
+def _validate_candidate_dossier_lineage(
+    session: Session, row: UnderwritingEvidenceCandidateDossierVersion
+) -> None:
+    """Verify predecessor continuity without rejecting valid historical versions."""
+    if row.version == 1:
+        if row.supersedes_id is not None:
+            raise ValidationError("initial dossier must not have a predecessor")
+        return
+    if row.supersedes_id is None:
+        raise ValidationError("dossier successor requires a predecessor")
+    parent = session.get(UnderwritingEvidenceCandidateDossierVersion, row.supersedes_id)
+    if parent is None:
+        raise ValidationError("dossier predecessor does not exist")
+    if (
+        parent.object_id != row.object_id
+        or parent.basis_id != row.basis_id
+        or parent.dossier_key != row.dossier_key
+        or parent.source_manifest_id != row.source_manifest_id
+        or parent.source_manifest_hash != row.source_manifest_hash
+    ):
+        raise ValidationError("dossier successor must preserve immutable references")
+    if parent.version + 1 != row.version:
+        raise ValidationError("dossier successor version is not contiguous")
+
+
+def validate_candidate_dossier_governance(
+    session: Session,
+    row: UnderwritingEvidenceCandidateDossierVersion,
+    *,
+    enforce_current: bool,
+) -> None:
+    """Apply the candidate dossier's cross-row invariants for every writer."""
+    _validate_dossier_row(row)
+    contract = CandidateEvidenceDossier.from_canonical_payload(row.payload)
+    cutoff = _candidate_basis_cutoff(session, row.basis_id)
+    if _stored_utc(row.created_at) > cutoff:
+        raise ValidationError("created_at must not exceed basis cutoff")
+    manifest = _candidate_manifest(
+        session, manifest_id=row.source_manifest_id, basis_id=row.basis_id, cutoff=cutoff,
+    )
+    if contract.source_manifest_hash != manifest.manifest_hash:
+        raise ValidationError("dossier source_manifest_hash does not match source manifest")
+    _candidate_items_match_manifest(contract, manifest, cutoff)
+    _validate_candidate_dossier_lineage(session, row)
+    if not enforce_current:
+        return
+    current = session.scalar(
+        select(UnderwritingEvidenceCandidateDossierVersion)
+        .where(
+            UnderwritingEvidenceCandidateDossierVersion.object_id == row.object_id,
+            UnderwritingEvidenceCandidateDossierVersion.basis_id == row.basis_id,
+            UnderwritingEvidenceCandidateDossierVersion.dossier_key == row.dossier_key,
+        )
+        .order_by(
+            UnderwritingEvidenceCandidateDossierVersion.version.desc(),
+            UnderwritingEvidenceCandidateDossierVersion.id.desc(),
+        )
+        .limit(1)
+    )
+    expected_version = (current.version + 1) if current else 1
+    expected_parent = current.id if current else None
+    if row.version != expected_version or row.supersedes_id != expected_parent:
+        raise ValidationError("dossier successor version or predecessor is not canonical")
+
+
+def validate_candidate_review_governance(
+    session: Session,
+    row: UnderwritingEvidenceCandidateReviewVersion,
+    *,
+    enforce_current: bool,
+) -> None:
+    """Apply review-to-current-dossier governance for every writer."""
+    _validate_review_row(row)
+    dossier = session.get(UnderwritingEvidenceCandidateDossierVersion, row.dossier_id)
+    if dossier is None:
+        raise ValidationError("candidate dossier does not exist")
+    if dossier.content_hash != row.dossier_content_hash:
+        raise ValidationError("review dossier_content_hash does not match dossier")
+    cutoff = _candidate_basis_cutoff(session, dossier.basis_id)
+    if _stored_utc(row.reviewed_at) > cutoff:
+        raise ValidationError("reviewed_at must not exceed basis cutoff")
+    if not enforce_current:
+        return
+    current = session.scalar(
+        select(UnderwritingEvidenceCandidateDossierVersion)
+        .where(
+            UnderwritingEvidenceCandidateDossierVersion.object_id == dossier.object_id,
+            UnderwritingEvidenceCandidateDossierVersion.basis_id == dossier.basis_id,
+            UnderwritingEvidenceCandidateDossierVersion.dossier_key == dossier.dossier_key,
+        )
+        .order_by(
+            UnderwritingEvidenceCandidateDossierVersion.version.desc(),
+            UnderwritingEvidenceCandidateDossierVersion.id.desc(),
+        )
+        .limit(1)
+    )
+    if current is None or current.id != dossier.id:
+        raise ValidationError("candidate dossier is no longer current")
+
+
+@event.listens_for(Session, "before_flush")
+def _validate_direct_candidate_writes(session, _flush_context, _instances) -> None:
+    """Close the direct-ORM bypass before SQLAlchemy emits candidate inserts."""
+    rows = tuple(session.new)
+    candidates = tuple(
+        row for row in rows
+        if isinstance(row, (UnderwritingEvidenceCandidateDossierVersion, UnderwritingEvidenceCandidateReviewVersion))
+    )
+    if not candidates:
+        return
+    if session.info.get("candidate_repository_write"):
+        return
+    if not _candidate_governance_schema_available(session):
+        return
+    begin_candidate_sqlite_write(session)
+    with session.no_autoflush:
+        for row in candidates:
+            if isinstance(row, UnderwritingEvidenceCandidateDossierVersion):
+                candidate_dossier_family_lock(
+                    session, object_id=row.object_id, basis_id=row.basis_id,
+                    dossier_key=row.dossier_key,
+                )
+                validate_candidate_dossier_governance(session, row, enforce_current=True)
+            else:
+                dossier = session.get(UnderwritingEvidenceCandidateDossierVersion, row.dossier_id)
+                if dossier is not None:
+                    candidate_dossier_family_lock(
+                        session, object_id=dossier.object_id, basis_id=dossier.basis_id,
+                        dossier_key=dossier.dossier_key,
+                    )
+                validate_candidate_review_governance(session, row, enforce_current=True)
+
+
 @event.listens_for(UnderwritingEvidenceCandidateDossierVersion, "before_insert")
 def _validate_candidate_dossier_insert(_mapper, _connection, target) -> None:
     _validate_dossier_row(target)
@@ -392,9 +662,19 @@ def _validate_candidate_review_load(target, _context) -> None:
 
 
 @event.listens_for(Session, "loaded_as_persistent")
-def _validate_loaded_candidate_review_dossier_hash(session, instance) -> None:
-    if not isinstance(instance, UnderwritingEvidenceCandidateReviewVersion):
+def _validate_loaded_candidate_governance(session, instance) -> None:
+    """Fail closed when Core/raw candidate rows are materialized by a fresh ORM session."""
+    if not isinstance(
+        instance,
+        (UnderwritingEvidenceCandidateDossierVersion, UnderwritingEvidenceCandidateReviewVersion),
+    ):
         return
-    dossier = session.get(UnderwritingEvidenceCandidateDossierVersion, instance.dossier_id)
-    if dossier is None or dossier.content_hash != instance.dossier_content_hash:
-        raise ValidationError("review dossier_content_hash does not match dossier")
+    if not _candidate_governance_schema_available(session):
+        return
+    with session.no_autoflush:
+        if isinstance(instance, UnderwritingEvidenceCandidateDossierVersion):
+            # Older dossier versions remain valid historical evidence; only a
+            # new successor must be the current family head before persistence.
+            validate_candidate_dossier_governance(session, instance, enforce_current=False)
+        else:
+            validate_candidate_review_governance(session, instance, enforce_current=True)

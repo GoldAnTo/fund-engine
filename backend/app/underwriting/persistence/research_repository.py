@@ -10,12 +10,11 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
-import hashlib
 import re
 from typing import Mapping, TypeVar
 from uuid import UUID, uuid4
 
-from sqlalchemy import bindparam, func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
@@ -34,18 +33,18 @@ from app.underwriting.persistence.research_models import (
     UnderwritingMetricDefinitionVersion,
     UnderwritingMetricObservation,
     UnderwritingSourceManifestVersion,
+    begin_candidate_sqlite_write,
+    candidate_dossier_family_lock,
+    candidate_dossier_family_lock_statement,
+    validate_candidate_dossier_governance,
+    validate_candidate_review_governance,
 )
 from app.underwriting.domain.evidence_candidates import (
     CandidateEvidenceDossier,
     CandidateEvidenceReview,
 )
-from app.underwriting.services.kernel import canonical_hash
-from app.underwriting.services.source_freeze import freeze_manifest
-
-
 RowT = TypeVar("RowT")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_CANDIDATE_DOSSIER_FAMILY_LOCK_DOMAIN = b"underwriting:candidate-dossier-family:v1\x00"
 _SUCCESSOR_TABLES = frozenset(
     {
         "uw_source_manifest_versions",
@@ -85,6 +84,20 @@ _MECHANISM_NEXT_STATUS = {
 }
 
 
+def _canonical_hash(value: object) -> str:
+    """Defer the kernel import until application model registration is complete."""
+    from app.underwriting.services.kernel import canonical_hash
+
+    return canonical_hash(value)
+
+
+def _freeze_manifest(manifest: Mapping[str, object], cutoff: datetime):
+    """Defer source-freeze import to avoid the services-to-models import cycle."""
+    from app.underwriting.services.source_freeze import freeze_manifest
+
+    return freeze_manifest(manifest, cutoff)
+
+
 class UnderwritingResearchRepository:
     """Write version chains and replay them as of a historical basis cutoff."""
 
@@ -100,7 +113,7 @@ class UnderwritingResearchRepository:
             )
         if basis is None:
             raise ValidationError("historical basis does not exist")
-        return self._utc(basis.cutoff, "basis cutoff")
+        return self._stored_utc(basis.cutoff, "basis cutoff")
 
     @staticmethod
     def _utc(value: datetime, field: str) -> datetime:
@@ -108,6 +121,14 @@ class UnderwritingResearchRepository:
             raise ValidationError(f"{field} must be a datetime")
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValidationError(f"{field} must be timezone-aware")
+        return value.astimezone(UTC)
+
+    @staticmethod
+    def _stored_utc(value: datetime, field: str) -> datetime:
+        if not isinstance(value, datetime):
+            raise ValidationError(f"{field} must be a datetime")
+        if value.tzinfo is None or value.utcoffset() is None:
+            return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
 
     @staticmethod
@@ -166,19 +187,8 @@ class UnderwritingResearchRepository:
         *, object_id: UUID, basis_id: UUID, dossier_key: str
     ) -> tuple[object, int]:
         """Build the transaction-scoped lock for one candidate dossier family."""
-        identity = f"{object_id}:{basis_id}:{dossier_key}".encode("utf-8")
-        lock_id = int.from_bytes(
-            hashlib.sha256(_CANDIDATE_DOSSIER_FAMILY_LOCK_DOMAIN + identity).digest()[:8],
-            byteorder="big",
-            signed=True,
-        )
-        return (
-            select(
-                func.pg_advisory_xact_lock(
-                    bindparam("candidate_dossier_family_lock_id", value=lock_id)
-                )
-            ),
-            lock_id,
+        return candidate_dossier_family_lock_statement(
+            object_id=object_id, basis_id=basis_id, dossier_key=dossier_key,
         )
 
     def _lock_candidate_dossier_family(
@@ -192,15 +202,10 @@ class UnderwritingResearchRepository:
         SQLite's single-writer transaction model remains safe for its test
         harness, so it deliberately needs no PostgreSQL-specific statement.
         """
-        dialect = self._session.get_bind().dialect.name
-        if dialect == "sqlite":
-            return
-        if dialect != "postgresql":
-            raise RuntimeError("database dialect cannot serialize candidate dossier family")
-        statement, _ = self.postgresql_candidate_dossier_family_lock(
+        candidate_dossier_family_lock(
+            self._session,
             object_id=object_id, basis_id=basis_id, dossier_key=dossier_key,
         )
-        self._session.execute(statement)
 
     def _append(self, row: RowT) -> RowT:
         """Flush an append in a savepoint and map CAS-race conflicts.
@@ -213,8 +218,12 @@ class UnderwritingResearchRepository:
 
         try:
             with self._session.begin_nested():
-                self._session.add(row)
-                self._session.flush()
+                self._session.info["candidate_repository_write"] = True
+                try:
+                    self._session.add(row)
+                    self._session.flush()
+                finally:
+                    self._session.info.pop("candidate_repository_write", None)
         except IntegrityError as exc:
             table_name = getattr(row, "__tablename__", "")
             detail = str(exc).lower()
@@ -270,7 +279,7 @@ class UnderwritingResearchRepository:
             raise ValidationError("source manifest does not exist")
         if row.basis_id != basis_id:
             raise ValidationError("source manifest must belong to the target basis")
-        if self._utc(row.created_at, "source manifest created_at") > cutoff:
+        if self._stored_utc(row.created_at, "source manifest created_at") > cutoff:
             raise ValidationError("source manifest is unavailable at basis cutoff")
         self._source_ids_in_manifest(row.manifest, cutoff)
         return row
@@ -290,14 +299,14 @@ class UnderwritingResearchRepository:
         if basis is None:  # ``_basis_cutoff`` already checks this; stay defensive.
             raise ValidationError("historical basis does not exist")
         try:
-            frozen = freeze_manifest(manifest.manifest, cutoff)
+            frozen = _freeze_manifest(manifest.manifest, cutoff)
         except ValidationError as exc:
             raise ValidationError("source manifest is not a verified frozen manifest") from exc
         if frozen.manifest_hash != manifest.manifest_hash:
             raise ValidationError("source manifest frozen hash does not match content")
         if manifest.manifest_hash != basis.source_manifest_hash:
             raise ValidationError("source manifest hash does not match historical basis")
-        if manifest.content_hash != canonical_hash(manifest.manifest):
+        if manifest.content_hash != _canonical_hash(manifest.manifest):
             raise ValidationError("source manifest content hash does not match content")
         return manifest
 
@@ -409,6 +418,7 @@ class UnderwritingResearchRepository:
         repository derives its version and predecessor from the sealed family,
         rather than trusting an unverified correction chain from the caller.
         """
+        begin_candidate_sqlite_write(self._session)
         cutoff = self._basis_cutoff(basis_id)
         created_at = self._created_at_at_basis(created_at, cutoff)
         contract = self._candidate_contract_payload(payload)
@@ -462,11 +472,11 @@ class UnderwritingResearchRepository:
             or contract.supersedes_id != expected_supersedes_id
         ):
             raise ValidationError("dossier successor version or predecessor is not canonical")
-        return self._append(
-            UnderwritingEvidenceCandidateDossierVersion.from_contract(
-                id=uuid4(), contract=contract
-            )
+        row = UnderwritingEvidenceCandidateDossierVersion.from_contract(
+            id=uuid4(), contract=contract
         )
+        validate_candidate_dossier_governance(self._session, row, enforce_current=True)
+        return self._append(row)
 
     def append_candidate_review(
         self,
@@ -480,6 +490,7 @@ class UnderwritingResearchRepository:
         created_at: datetime,
     ) -> UnderwritingEvidenceCandidateReviewVersion:
         """Append an independently identified review of one exact dossier."""
+        begin_candidate_sqlite_write(self._session)
         dossier = self._session.get(UnderwritingEvidenceCandidateDossierVersion, dossier_id)
         if dossier is None:
             raise ValidationError("candidate dossier does not exist")
@@ -535,11 +546,11 @@ class UnderwritingResearchRepository:
         )
         if same_role is not None:
             raise ValidationError("candidate dossier already has a review for this role")
-        return self._append(
-            UnderwritingEvidenceCandidateReviewVersion.from_contract(
-                id=uuid4(), contract=contract
-            )
+        row = UnderwritingEvidenceCandidateReviewVersion.from_contract(
+            id=uuid4(), contract=contract
         )
+        validate_candidate_review_governance(self._session, row, enforce_current=True)
+        return self._append(row)
 
     def add_source_manifest(
         self,
