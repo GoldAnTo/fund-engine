@@ -201,6 +201,10 @@ function isStringList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(nonEmptyString);
 }
 
+function isTimestamp(value: unknown): value is string {
+  return nonEmptyString(value) && !Number.isNaN(Date.parse(value));
+}
+
 function isFrozenAnswerability(value: unknown): boolean {
   const answerability = record(value);
   return answerability !== null
@@ -235,8 +239,9 @@ function isFrozenUnknownGap(value: unknown): boolean {
     && gap.schema_version === "underwriting.v1"
     && [
       "reference", "content_hash", "metric_key", "unit", "source_id", "source_locator",
-      "observed_start", "observed_end", "effective_at", "available_at", "source_role",
+      "reference", "content_hash", "metric_key", "unit", "source_id", "source_locator", "source_role",
     ].every((key) => nonEmptyString(gap[key]))
+    && ["observed_start", "observed_end", "effective_at", "available_at"].every((key) => isTimestamp(gap[key]))
     && gap.observation_status === "unknown"
     && dimensions !== null
     && Object.values(dimensions).every((dimension) => nonEmptyString(dimension));

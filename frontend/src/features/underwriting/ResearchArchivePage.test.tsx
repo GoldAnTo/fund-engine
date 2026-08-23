@@ -269,6 +269,9 @@ describe("ResearchArchivePage", () => {
     ["returns a malformed unknown gap", { ...boundaryTwo, unknown_evidence_gaps: [{
       schema_version: "underwriting.v1", reference: "gap-id", content_hash: "8".repeat(64), metric_key: "effective_capacity", unit: "GWh", source_id: "source-1", source_locator: "p.1", observed_start: "2024-01-01T00:00:00Z", observed_end: "2024-12-31T00:00:00Z", effective_at: "2025-01-01T00:00:00Z", available_at: "2025-01-01T00:00:00Z", source_role: "primary", observation_status: "unknown",
     }] }],
+    ["returns an invalid Unknown gap timestamp", { ...boundaryTwo, unknown_evidence_gaps: [{
+      schema_version: "underwriting.v1", reference: "gap-id", content_hash: "8".repeat(64), metric_key: "effective_capacity", unit: "GWh", source_id: "source-1", source_locator: "p.1", observed_start: "2024-01-01T00:00:00Z", observed_end: "2024-12-31T00:00:00Z", effective_at: "2025-01-01T00:00:00Z", available_at: "not-a-timestamp", source_role: "primary", observation_status: "unknown", dimensions: {},
+    }] }],
   ])("fails closed when boundary %s", async (_name, boundary) => {
     installApi({ boundary: vi.fn().mockResolvedValue(boundary) });
     renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
