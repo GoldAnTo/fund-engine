@@ -65,6 +65,37 @@ identity, change type and references.
 revision content hashes and the fully ordered typed change payload. There is
 no clock, current head, or unordered query result in the recipe.
 
+## Archive directory and version selection
+
+`GET /api/underwriting/v1/research-archives` is the entry point for a
+researcher who knows a company or industry name/key but not an internal UUID.
+It lists persisted revision families in stable
+`(canonical_name, external_key, object_id, version_kind)` order. `query`
+case-fold matches only the stored name/key; `kind` is an exact research-object
+kind; `limit` is bounded; and `cursor` is an opaque, versioned continuation
+token. A cursor only continues that stable directory ordering. It does not
+select a newer interpretation or recover a missing version.
+
+Each directory family is checked using the same frozen revision reader as
+detail/history. A `readable` row can show its latest persisted revision ID,
+sequence, cutoff and source-manifest hash. An `unreadable` row is deliberately
+limited to the research-object identity, family, version count and state: it
+does **not** expose an unverified cutoff, source, parent or conclusion.
+
+The archive detail fetches the selected family history and defaults to the
+last readable stored revision. A researcher can select any listed sequence;
+the selected detail is resolved against that exact ID, not against a current
+head. When a selected version has a predecessor, the only comparison rendered
+is `predecessor → selected`. The reader never compares it to an arbitrary
+newer revision or turns a directory head into a retrospective restatement.
+
+The displayed locator, unit, period, availability and status are the frozen
+descriptor fields returned for that version. `unknown_evidence_gap` is shown
+as **Unknown evidence gap**, while `candidate` remains a candidate; neither is
+silently upgraded into a fact. `not_answerable` and
+`wait_for_validation` are displayed as unresolved research boundaries rather
+than conclusions.
+
 ## Failure behaviour
 
 The API returns the normal underwriting `422` validation envelope when an
@@ -73,6 +104,13 @@ closed instead of returning a plausible partial history. Missing revisions or
 families use the normal `404` envelope. A `422` means the historical claim is
 not safe to read until the persisted lineage is repaired through a governed
 data correction; it does not mean the reader may infer a substitute fact.
+
+The archive UI presents a `404` as a missing frozen archive/version and a
+`422` as a condition that cannot safely be read. In both cases it withholds
+the detail rather than substituting current data, fixture data, a plausible
+parent, or a generated narrative. Transport failures receive the same
+withhold-not-replace treatment. Directory rows marked `unreadable` are not
+deep links to a partial detail.
 
 ## Current limitation and follow-on work
 
@@ -92,4 +130,7 @@ This component does not calculate or expose:
   automatic entry/exit decision;
 - automatic completion of missing data, unsupported mechanism inference, or
   conversion of an unknown evidence gap into a fact;
-- a revision write endpoint or any mutation through the history/diff API.
+- a revision write endpoint or any mutation through the history/diff API;
+- a valuation or action workspace disguised as an archive, including any
+  recommendation generated from a directory state, version delta, candidate,
+  or unresolved boundary.

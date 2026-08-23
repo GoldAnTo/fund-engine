@@ -194,17 +194,31 @@ def test_research_archives_reject_a_malformed_cursor_with_underwriting_envelope(
 def test_catl_original_api_response_replays_byte_for_byte_after_a_test_only_successor(
     api_client, session,
 ) -> None:
-    """A CATL successor must never retroactively alter the frozen baseline read."""
+    """Archive discovery can advance while the original CATL version stays frozen."""
     imported = CatlBaselineService(session, now=lambda: NOW).import_fixture(load_catl_fixture())
     original_id = imported.research_version.id
     original_path = f"{BASE}/research-versions/{original_id}"
     original = api_client.get(original_path)
+    original_directory = api_client.get(
+        f"{BASE}/research-archives", params={"query": imported.company.canonical_name},
+    )
 
-    assert original.status_code == 200, original.text
+    assert original.status_code == original_directory.status_code == 200, original.text
     original_refs = original.json()["parent_refs"]
+    original_archive_item = next(
+        item for item in original_directory.json()["items"]
+        if item["object_id"] == str(imported.company.id)
+        and item["version_kind"] == imported.research_version.version_kind
+    )
+    assert original_archive_item["version_count"] == 1
+    assert original_archive_item["latest_revision_id"] == str(original_id)
+
     _append_test_only_catl_answerability_successor(session, imported)
 
     replayed = api_client.get(original_path)
+    advanced_directory = api_client.get(
+        f"{BASE}/research-archives", params={"query": imported.company.canonical_name},
+    )
     successor = api_client.get(
         f"{BASE}/objects/{imported.company.id}/research-versions/"
         "catl_economic_model_evidence_only"
@@ -212,9 +226,18 @@ def test_catl_original_api_response_replays_byte_for_byte_after_a_test_only_succ
     successor_id = successor.json()["revisions"][-1]["id"]
     diff = api_client.get(f"{BASE}/research-versions/{original_id}/diff/{successor_id}")
 
-    assert replayed.status_code == successor.status_code == diff.status_code == 200
+    assert replayed.status_code == advanced_directory.status_code == successor.status_code == diff.status_code == 200
     assert replayed.content == original.content
     assert replayed.json()["parent_refs"] == original_refs
+    advanced_archive_item = next(
+        item for item in advanced_directory.json()["items"]
+        if item["object_id"] == str(imported.company.id)
+        and item["version_kind"] == imported.research_version.version_kind
+    )
+    assert advanced_archive_item["version_count"] == 2
+    assert advanced_archive_item["latest_revision_id"] == successor_id
+    assert advanced_archive_item["cutoff"] == original_archive_item["cutoff"]
+    assert advanced_archive_item["source_manifest_hash"] == original_archive_item["source_manifest_hash"]
     assert {ref["reference"] for ref in replayed.json()["parent_refs"]} == {
         ref["reference"] for ref in original_refs
     }

@@ -8,29 +8,8 @@ export type UnderwritingErrorEnvelope = Schemas["UnderwritingErrorEnvelope"];
 export type ResearchRevision = Schemas["ResearchRevisionResponse"];
 export type ResearchRevisionHistory = Schemas["ResearchRevisionHistoryResponse"];
 export type ResearchRevisionDiff = Schemas["ResearchRevisionDiffResponse"];
-
-// Task5 replaces these local wire-exact archive shapes with generated schema
-// aliases once the source contract has been generated into contracts/v1.ts.
-export type ResearchArchiveItem = {
-  schema_version: "underwriting.v1";
-  object_id: string;
-  object_kind: "industry" | "company" | "security";
-  canonical_name: string;
-  external_key: string;
-  version_kind: string;
-  version_count: number;
-  lineage_state: "readable" | "unreadable";
-  latest_revision_id: string | null;
-  latest_sequence: number | null;
-  cutoff: string | null;
-  source_manifest_hash: string | null;
-};
-
-export type ResearchArchiveList = {
-  schema_version: "underwriting.v1";
-  items: ResearchArchiveItem[];
-  next_cursor: string | null;
-};
+export type ResearchArchiveItem = Schemas["ResearchArchiveItemResponse"];
+export type ResearchArchiveList = Schemas["ResearchArchiveListResponse"];
 
 export type ResearchArchiveQuery = {
   query?: string;

@@ -2443,6 +2443,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/underwriting/v1/research-archives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Research Archives */
+        get: operations["get_research_archives_api_underwriting_v1_research_archives_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/underwriting/v1/objects/{object_id}/economic-models/{basis_id}": {
         parameters: {
             query?: never;
@@ -7611,6 +7628,59 @@ export interface components {
             mode: string;
             assessment: components["schemas"]["RerunAssessmentDTO"];
         };
+        /** ResearchArchiveItemResponse */
+        ResearchArchiveItemResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /**
+             * Object Kind
+             * @enum {string}
+             */
+            object_kind: "industry" | "company" | "security";
+            /** Canonical Name */
+            canonical_name: string;
+            /** External Key */
+            external_key: string;
+            /** Version Kind */
+            version_kind: string;
+            /** Version Count */
+            version_count: number;
+            /**
+             * Lineage State
+             * @enum {string}
+             */
+            lineage_state: "readable" | "unreadable";
+            /** Latest Revision Id */
+            latest_revision_id: string | null;
+            /** Latest Sequence */
+            latest_sequence: number | null;
+            /** Cutoff */
+            cutoff: string | null;
+            /** Source Manifest Hash */
+            source_manifest_hash: string | null;
+        };
+        /** ResearchArchiveListResponse */
+        ResearchArchiveListResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Items */
+            items: components["schemas"]["ResearchArchiveItemResponse"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
         /** ResearchNetworkResponse */
         ResearchNetworkResponse: {
             /** Reviewed Relations */
@@ -7638,6 +7708,11 @@ export interface components {
             /** Canonical Name */
             canonical_name: string;
         };
+        /**
+         * ResearchObjectKind
+         * @enum {string}
+         */
+        ResearchObjectKind: "industry" | "company" | "security";
         /** ResearchObjectResponse */
         ResearchObjectResponse: {
             /**
@@ -14586,6 +14661,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_research_archives_api_underwriting_v1_research_archives_get: {
+        parameters: {
+            query?: {
+                query?: string | null;
+                kind?: components["schemas"]["ResearchObjectKind"] | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchArchiveListResponse"];
                 };
             };
             /** @description Unprocessable Entity */

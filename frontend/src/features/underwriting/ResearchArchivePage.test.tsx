@@ -497,6 +497,21 @@ describe("ResearchArchivePage", () => {
     expect(screen.getByText("新查询档案")).toBeVisible();
   });
 
+  it("renders the archive at a 390px viewport without a document overflow when metrics are available", async () => {
+    const viewport = Object.getOwnPropertyDescriptor(window, "innerWidth");
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+    try {
+      installApi();
+      renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+      await screen.findByRole("region", { name: "冻结证据记录" });
+      // jsdom does not calculate CSS layout, but does expose the document metric.
+      // A browser-level visual check remains necessary for physical geometry.
+      expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
+    } finally {
+      if (viewport) Object.defineProperty(window, "innerWidth", viewport);
+    }
+  });
+
   it("does not contain prohibited guidance terminology in its display source", () => {
     const terms = [
       String.fromCharCode(80, 69),

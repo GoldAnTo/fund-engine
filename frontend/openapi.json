@@ -9573,6 +9573,99 @@
         }
       }
     },
+    "/api/underwriting/v1/research-archives": {
+      "get": {
+        "tags": [
+          "underwriting-v1"
+        ],
+        "summary": "Get Research Archives",
+        "operationId": "get_research_archives_api_underwriting_v1_research_archives_get",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ResearchObjectKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 30,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchArchiveListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
     "/api/underwriting/v1/objects/{object_id}/economic-models/{basis_id}": {
       "get": {
         "tags": [
@@ -23616,6 +23709,151 @@
         "title": "RerunResponse",
         "description": "Result of re-running the assess step for one thesis.\n\nA rerun freezes a NEW snapshot and appends a NEW provisional assessment;\nprior snapshots/assessments are never touched, and the difference shows\nup in the snapshot-compare view.  ``mode`` is ``mock`` only when\n``APP_ENV=test`` and no LLM key is configured; every non-test runtime\nrequires a live provider."
       },
+      "ResearchArchiveItemResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "object_kind": {
+            "type": "string",
+            "enum": [
+              "industry",
+              "company",
+              "security"
+            ],
+            "title": "Object Kind"
+          },
+          "canonical_name": {
+            "type": "string",
+            "title": "Canonical Name"
+          },
+          "external_key": {
+            "type": "string",
+            "title": "External Key"
+          },
+          "version_kind": {
+            "type": "string",
+            "title": "Version Kind"
+          },
+          "version_count": {
+            "type": "integer",
+            "title": "Version Count"
+          },
+          "lineage_state": {
+            "type": "string",
+            "enum": [
+              "readable",
+              "unreadable"
+            ],
+            "title": "Lineage State"
+          },
+          "latest_revision_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Revision Id"
+          },
+          "latest_sequence": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Sequence"
+          },
+          "cutoff": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cutoff"
+          },
+          "source_manifest_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Manifest Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "object_id",
+          "object_kind",
+          "canonical_name",
+          "external_key",
+          "version_kind",
+          "version_count",
+          "lineage_state",
+          "latest_revision_id",
+          "latest_sequence",
+          "cutoff",
+          "source_manifest_hash"
+        ],
+        "title": "ResearchArchiveItemResponse"
+      },
+      "ResearchArchiveListResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchArchiveItemResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "ResearchArchiveListResponse"
+      },
       "ResearchNetworkResponse": {
         "properties": {
           "reviewed_relations": {
@@ -23685,6 +23923,15 @@
           "canonical_name"
         ],
         "title": "ResearchObjectCreate"
+      },
+      "ResearchObjectKind": {
+        "type": "string",
+        "enum": [
+          "industry",
+          "company",
+          "security"
+        ],
+        "title": "ResearchObjectKind"
       },
       "ResearchObjectResponse": {
         "properties": {

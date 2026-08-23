@@ -32,6 +32,29 @@ FORBIDDEN_RESEARCH_FIELDS = {
 }
 
 
+def _property_names(schema: object, schemas: dict[str, object], seen: set[str] | None = None) -> set[str]:
+    """Collect response-object field names through archive read-model refs only."""
+    if not isinstance(schema, dict):
+        return set()
+    seen = seen if seen is not None else set()
+    reference = schema.get("$ref")
+    if isinstance(reference, str) and reference.startswith("#/components/schemas/"):
+        name = reference.rsplit("/", 1)[-1]
+        if name in seen:
+            return set()
+        seen.add(name)
+        return _property_names(schemas[name], schemas, seen)
+    names = set(schema.get("properties", {}))
+    for key in ("items", "allOf", "anyOf", "oneOf"):
+        child = schema.get(key)
+        if isinstance(child, list):
+            for item in child:
+                names.update(_property_names(item, schemas, seen))
+        else:
+            names.update(_property_names(child, schemas, seen))
+    return names
+
+
 def test_dump_openapi_includes_underwriting_routes() -> None:
     backend = Path(__file__).parents[2]
     subprocess.run(
@@ -59,3 +82,24 @@ def test_revision_read_contract_has_only_get_operations_and_no_decision_fields()
         "enum": ["industry", "company", "security"],
         "title": "Object Kind",
     }
+
+
+def test_archive_contract_and_ui_sources_do_not_introduce_investment_fields() -> None:
+    """The archive is evidence infrastructure, never an action or valuation surface."""
+    openapi = app.openapi()
+    schemas = openapi["components"]["schemas"]
+    names: set[str] = set()
+    for name in REVISION_SCHEMAS | ARCHIVE_SCHEMAS:
+        names.update(_property_names(schemas[name], schemas))
+    assert not (set(name.lower() for name in names) & FORBIDDEN_RESEARCH_FIELDS)
+
+    frontend = Path(__file__).parents[3] / "frontend" / "src"
+    sources = [
+        frontend / "data" / "underwritingResearchApi.ts",
+        frontend / "features" / "underwriting" / "ResearchArchivePage.tsx",
+    ]
+    ui_source = "\n".join(source.read_text(encoding="utf-8") for source in sources)
+    forbidden_copy = {
+        "市盈率", "市净率", "目标价", "买入", "卖出", "止损", "仓位", "估值", "推荐", "操作",
+    }
+    assert not {term for term in forbidden_copy if term in ui_source}
