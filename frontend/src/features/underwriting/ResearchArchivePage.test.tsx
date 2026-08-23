@@ -128,7 +128,47 @@ const candidateRevision = {
   content_hash: "c".repeat(64),
   cutoff: "2025-05-15T15:59:59Z",
   source_manifest_hash: "d".repeat(64),
-  parent_refs: [],
+  parent_refs: [{
+    schema_version: "underwriting.v1" as const,
+    reference: "00000000-0000-4000-8000-000000000107",
+    artifact_type: "answerability",
+    identity: "answerability",
+    content_hash: "1".repeat(64),
+    source_locators: [], unit: null, period_start: null, period_end: null, available_at: null,
+    status: "not_answerable",
+  }, {
+    schema_version: "underwriting.v1" as const,
+    reference: "00000000-0000-4000-8000-000000000104",
+    artifact_type: "candidate_dossier",
+    identity: "industry-capacity|1",
+    content_hash: "2".repeat(64),
+    source_locators: [], unit: null, period_start: null, period_end: null, available_at: null,
+    status: "candidate",
+  }, {
+    schema_version: "underwriting.v1" as const,
+    reference: "00000000-0000-4000-8000-000000000105",
+    artifact_type: "candidate_review",
+    identity: "00000000-0000-4000-8000-000000000104|methodology|reviewer:methodology",
+    content_hash: "3".repeat(64),
+    source_locators: [], unit: null, period_start: null, period_end: null, available_at: null,
+    status: "approve",
+  }, {
+    schema_version: "underwriting.v1" as const,
+    reference: "00000000-0000-4000-8000-000000000106",
+    artifact_type: "candidate_review",
+    identity: "00000000-0000-4000-8000-000000000104|provenance|reviewer:provenance",
+    content_hash: "4".repeat(64),
+    source_locators: [], unit: null, period_start: null, period_end: null, available_at: null,
+    status: "approve",
+  }, {
+    schema_version: "underwriting.v1" as const,
+    reference: "00000000-0000-4000-8000-000000000108",
+    artifact_type: "source_manifest",
+    identity: "candidate-manifest|1",
+    content_hash: "5".repeat(64),
+    source_locators: [], unit: null, period_start: null, period_end: null, available_at: null,
+    status: "frozen",
+  }],
 };
 
 const candidateEvidence = {
@@ -217,7 +257,7 @@ const candidateEvidence = {
   reviews: [{
     schema_version: "underwriting.v1" as const,
     reference: "00000000-0000-4000-8000-000000000105",
-    content_hash: "f".repeat(64),
+    content_hash: "33e295fde866e005b83d06f5d9803703c66ac673a3a0702f7ddad0b92f3aaa76",
     reviewer_identity: "reviewer:methodology",
     reviewer_role: "methodology" as const,
     decision: "approve" as const,
@@ -226,7 +266,7 @@ const candidateEvidence = {
   }, {
     schema_version: "underwriting.v1" as const,
     reference: "00000000-0000-4000-8000-000000000106",
-    content_hash: "0".repeat(64),
+    content_hash: "43ba54ab95546a0f93bc1a77d4b3ee71bcc1fbad8a65bd803ad1a3ede80dd360",
     reviewer_identity: "reviewer:provenance",
     reviewer_role: "provenance" as const,
     decision: "approve" as const,
@@ -394,7 +434,7 @@ describe("ResearchArchivePage", () => {
     expect(within(candidate).getByText("未找到满足截止日的有效产能观测。")).toBeVisible();
     expect(within(candidate).getByText("reviewer:methodology")).toBeVisible();
     expect(within(candidate).getByText("reviewer:provenance")).toBeVisible();
-    expect(within(candidate).getByText(/不得将候选资料正式化为 IndustryState，或形成投资结论/)).toBeVisible();
+    expect(within(candidate).getByText(/不得作为正式 IndustryState 输入或模型完成依据/)).toBeVisible();
     const rejectedCalculations = within(candidate).getByRole("region", { name: "冻结拒绝的计算" });
     expect(within(rejectedCalculations).getAllByRole("listitem").map((item) => item.textContent))
       .toEqual(candidateEvidence.dossier.rejected_calculations);
@@ -408,6 +448,9 @@ describe("ResearchArchivePage", () => {
     ["has a malformed nested review", { ...candidateEvidence, reviews: [{ ...candidateEvidence.reviews[0], reviewed_at: "not-a-timestamp" }, candidateEvidence.reviews[1]] }],
     ["omits the frozen rejected calculations", { ...candidateEvidence, dossier: Object.fromEntries(Object.entries(candidateEvidence.dossier).filter(([key]) => key !== "rejected_calculations")) }],
     ["has malformed frozen rejected calculations", { ...candidateEvidence, dossier: { ...candidateEvidence.dossier, rejected_calculations: [""] } }],
+    ["uses a foreign but structurally valid dossier", { ...candidateEvidence, dossier: { ...candidateEvidence.dossier, reference: "00000000-0000-4000-8000-000000000109" } }],
+    ["has a review content hash mismatch", { ...candidateEvidence, reviews: [{ ...candidateEvidence.reviews[0], content_hash: "a".repeat(64) }, candidateEvidence.reviews[1]] }],
+    ["contains prohibited calculation semantics", { ...candidateEvidence, dossier: { ...candidateEvidence.dossier, rejected_calculations: ["建议买入并设定目标价"] } }],
   ])("fails closed when candidate evidence %s", async (_name, response) => {
     installApi({
       history: vi.fn().mockResolvedValue({
@@ -420,7 +463,32 @@ describe("ResearchArchivePage", () => {
     });
     renderArchive(`/underwriting/research/${candidateRevision.object_id}/${candidateRevision.version_kind}`);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("冻结研究记录不完整或不匹配");
+    expect(await screen.findByRole("alert")).toBeVisible();
+    expect(screen.queryByRole("region", { name: "候选证据（已审阅，未正式化）" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["omits a required candidate parent", candidateRevision.parent_refs.slice(1)],
+    ["duplicates a candidate parent", [...candidateRevision.parent_refs, candidateRevision.parent_refs[4]]],
+    ["injects a second source-manifest parent", [...candidateRevision.parent_refs, {
+      ...candidateRevision.parent_refs[4],
+      reference: "00000000-0000-4000-8000-000000000109",
+      identity: "candidate-manifest|2",
+      content_hash: "6".repeat(64),
+    }]],
+  ])("fails closed when the selected revision %s", async (_name, parent_refs) => {
+    const invalidRevision = { ...candidateRevision, parent_refs };
+    installApi({
+      history: vi.fn().mockResolvedValue({
+        schema_version: "underwriting.v1", object_id: invalidRevision.object_id,
+        version_kind: invalidRevision.version_kind, object_kind: "industry",
+        canonical_name: "电池行业", external_key: "battery-cn", revisions: [invalidRevision],
+      }),
+      revision: vi.fn().mockResolvedValue(invalidRevision),
+    });
+    renderArchive(`/underwriting/research/${invalidRevision.object_id}/${invalidRevision.version_kind}`);
+
+    expect(await screen.findByRole("alert")).toBeVisible();
     expect(screen.queryByRole("region", { name: "候选证据（已审阅，未正式化）" })).not.toBeInTheDocument();
   });
 

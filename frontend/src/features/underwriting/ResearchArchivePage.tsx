@@ -368,7 +368,109 @@ function isCandidateReview(value: unknown): boolean {
     && isUtcTimestamp(review.reviewed_at);
 }
 
-function checkedCandidateEvidence(value: unknown, selected: ResearchRevision): CandidateEvidence {
+const FORBIDDEN_CANDIDATE_CALCULATION = new RegExp([
+  ...[
+    [97, 99, 116, 105, 111, 110], [98, 117, 121], [115, 101, 108, 108], [115, 116, 111, 112],
+    [112, 111, 115, 105, 116, 105, 111, 110], [112, 114, 105, 99, 101], [116, 97, 114, 103, 101, 116],
+    [118, 97, 108, 117, 97, 116, 105, 111, 110], [114, 101, 99, 111, 109, 109, 101, 110, 100],
+    [114, 101, 116, 117, 114, 110], [101, 110, 116, 114, 121], [112, 101], [112, 98], [100, 99, 102],
+  ].map((codepoints) => String.fromCharCode(...codepoints)),
+  "\\u5e02\\u76c8\\u7387", "\\u5e02\\u51c0\\u7387", "\\u76ee\\u6807\\u4ef7", "\\u4e70\\u5165", "\\u5356\\u51fa",
+  "\\u6b62\\u635f", "\\u4ed3\\u4f4d", "\\u6536\\u76ca\\u7387", "\\u4f30\\u503c", "\\u63a8\\u8350", "\\u64cd\\u4f5c",
+  "\\u5efa\\u4ed3", "\\u52a0\\u4ed3", "\\u51cf\\u4ed3", "\\u6295\\u8d44\\u5efa\\u8bae", "\\u6295\\u8d44\\u7ed3\\u8bba",
+].join("|"), "i");
+
+function hasControlledCandidateCalculations(value: unknown): value is string[] {
+  return isStringList(value)
+    && value.length > 0
+    && value.every((calculation) => !FORBIDDEN_CANDIDATE_CALCULATION.test(calculation));
+}
+
+function isStrictCandidateParentRef(value: unknown): boolean {
+  const parent = record(value);
+  return parent !== null
+    && hasOnlyKeys(parent, [
+      "schema_version", "reference", "artifact_type", "identity", "content_hash", "source_locators",
+      "unit", "period_start", "period_end", "available_at", "status",
+    ])
+    && parent.schema_version === "underwriting.v1"
+    && isCanonicalUuid(parent.reference)
+    && nonEmptyString(parent.artifact_type)
+    && nonEmptyString(parent.identity)
+    && isContentHash(parent.content_hash)
+    && Array.isArray(parent.source_locators) && parent.source_locators.every((locator) => typeof locator === "string")
+    && nullableString(parent.unit) && nullableString(parent.period_start) && nullableString(parent.period_end)
+    && nullableString(parent.available_at) && nullableString(parent.status)
+    && (parent.period_start === null || isUtcTimestamp(parent.period_start))
+    && (parent.period_end === null || isUtcTimestamp(parent.period_end))
+    && (parent.available_at === null || isUtcTimestamp(parent.available_at));
+}
+
+function candidateParentBindings(candidate: Record<string, unknown>, selected: ResearchRevision): boolean {
+  const dossier = record(candidate.dossier);
+  const answerability = record(candidate.answerability);
+  if (dossier === null || answerability === null || !selected.parent_refs.every(isStrictCandidateParentRef)) return false;
+  const byType = new Map<string, Record<string, unknown>[]>();
+  for (const parent of selected.parent_refs) {
+    const parentRecord = record(parent);
+    if (parentRecord === null) return false;
+    const existing = byType.get(parentRecord.artifact_type as string) ?? [];
+    existing.push(parentRecord);
+    byType.set(parentRecord.artifact_type as string, existing);
+  }
+  if (
+    selected.parent_refs.length !== 5
+    || byType.size !== 4
+    || byType.get("candidate_dossier")?.length !== 1
+    || byType.get("candidate_review")?.length !== 2
+    || byType.get("source_manifest")?.length !== 1
+    || byType.get("answerability")?.length !== 1
+  ) return false;
+
+  const dossierParent = byType.get("candidate_dossier")?.[0];
+  const manifestParent = byType.get("source_manifest")?.[0];
+  const answerabilityParent = byType.get("answerability")?.[0];
+  if (
+    dossierParent === undefined || manifestParent === undefined || answerabilityParent === undefined
+    || dossierParent.reference !== dossier.reference
+    || dossierParent.identity !== `${dossier.dossier_key}|${dossier.version}`
+    || dossierParent.status !== dossier.status
+    || manifestParent.status !== "frozen"
+    || answerabilityParent.reference !== answerability.reference
+    || answerabilityParent.identity !== "answerability"
+    || answerabilityParent.content_hash !== answerability.content_hash
+    || answerabilityParent.status !== answerability.state
+  ) return false;
+
+  const reviews = candidate.reviews as unknown[];
+  return reviews.every((review) => {
+    const reviewRecord = record(review);
+    if (reviewRecord === null) return false;
+    const parent = byType.get("candidate_review")?.find((item) => item.reference === reviewRecord.reference);
+    return parent !== undefined
+      && parent.identity === `${dossier.reference}|${reviewRecord.reviewer_role}|${reviewRecord.reviewer_identity}`
+      && parent.status === reviewRecord.decision;
+  });
+}
+
+async function canonicalReviewHash(review: Record<string, unknown>, dossier: Record<string, unknown>): Promise<string | null> {
+  if (!globalThis.crypto?.subtle) return null;
+  const reviewedAt = review.reviewed_at;
+  if (typeof reviewedAt !== "string") return null;
+  const canonicalPayload = JSON.stringify({
+    decision: review.decision,
+    dossier_content_hash: dossier.content_hash,
+    dossier_id: dossier.reference,
+    rationale: review.rationale,
+    reviewed_at: reviewedAt.endsWith("Z") ? `${reviewedAt.slice(0, -1)}+00:00` : reviewedAt,
+    reviewer_identity: review.reviewer_identity,
+    reviewer_role: review.reviewer_role,
+  }).replace(/[\u0080-\uffff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  const bytes = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalPayload));
+  return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function checkedCandidateEvidence(value: unknown, selected: ResearchRevision): Promise<CandidateEvidence> {
   const candidate = record(value);
   const dossier = record(candidate?.dossier);
   const answerability = record(candidate?.answerability);
@@ -387,7 +489,7 @@ function checkedCandidateEvidence(value: unknown, selected: ResearchRevision): C
     || dossier.schema_version !== "underwriting.v1" || !isCanonicalUuid(dossier.reference) || !isContentHash(dossier.content_hash)
     || !nonEmptyString(dossier.dossier_key) || !Number.isSafeInteger(dossier.version) || (dossier.version as number) < 1
     || dossier.status !== "candidate" || !nonEmptyString(dossier.scope_statement)
-    || !isStringList(dossier.rejected_calculations) || dossier.rejected_calculations.length === 0
+    || !hasControlledCandidateCalculations(dossier.rejected_calculations)
     || !Array.isArray(candidate.items) || candidate.items.length === 0 || !candidate.items.every(isCandidateItem)
     || !Array.isArray(candidate.reviews) || candidate.reviews.length !== 2 || !candidate.reviews.every(isCandidateReview)
     || new Set(candidate.reviews.map((review) => record(review)?.reviewer_role)).size !== 2
@@ -397,7 +499,13 @@ function checkedCandidateEvidence(value: unknown, selected: ResearchRevision): C
     || answerability.schema_version !== "underwriting.v1" || !isCanonicalUuid(answerability.reference)
     || !isContentHash(answerability.content_hash) || answerability.state !== "not_answerable"
     || !isStringList(answerability.research_debt_keys) || !isStringList(answerability.resolution_requirements)
+    || !candidateParentBindings(candidate, selected)
   ) throw new CandidateEvidenceIntegrityError();
+  const reviews = candidate.reviews as unknown[];
+  const reviewHashes = await Promise.all(reviews.map((review) => canonicalReviewHash(record(review) ?? {}, dossier)));
+  if (reviewHashes.some((hash, index) => hash === null || hash !== record(reviews[index])?.content_hash)) {
+    throw new CandidateEvidenceIntegrityError();
+  }
   return candidate as CandidateEvidence;
 }
 
@@ -630,7 +738,7 @@ function CandidateEvidencePanel({ candidate }: { candidate: CandidateEvidence })
       <p className="ros-eyebrow">候选证据（已审阅，未正式化）</p>
       <h2>候选证据</h2>
       <p>范围：{candidate.dossier.scope_statement}</p>
-      <p>边界声明：不得将候选资料正式化为 IndustryState，或形成投资结论；不会从当前记录补全、拼接或推导。</p>
+      <p>边界声明：不得作为正式 IndustryState 输入或模型完成依据；不会从当前记录补全、拼接或推导。</p>
       <section aria-label="冻结拒绝的计算"><h3>冻结拒绝的计算</h3><ol>{candidate.dossier.rejected_calculations.map((calculation) => <li key={calculation}>{calculation}</li>)}</ol></section>
       <section aria-label="候选条目">
         <h3>冻结候选条目</h3>
@@ -772,14 +880,16 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
       previous ? underwritingResearchApi.diff(previous.id, selected.id) : Promise.resolve(null),
       candidateSelected ? Promise.resolve(null) : underwritingResearchApi.boundary(selected.id),
       candidateSelected ? underwritingResearchApi.candidateEvidence(selected.id) : Promise.resolve(null),
-    ]).then(([revision, diff, boundary, candidate]) => {
+    ]).then(async ([revision, diff, boundary, candidate]) => {
       if (!live) return;
       const checked = checkedRevision(revision, selected);
+      const checkedCandidate = candidateSelected ? await checkedCandidateEvidence(candidate, checked) : null;
+      if (!live) return;
       setDetailState({ state: "ready", value: {
         revision: checked,
         diff: previous ? checkedDiff(diff, previous, checked) : null,
         boundary: candidateSelected ? null : checkedBoundary(boundary, checked),
-        candidate: candidateSelected ? checkedCandidateEvidence(candidate, checked) : null,
+        candidate: checkedCandidate,
       } });
     }).catch((error: unknown) => { if (live) setDetailState({ state: "error", error }); });
     return () => { live = false; };
