@@ -765,3 +765,54 @@ def test_diff_does_not_recompute_an_old_revision_from_current_effective_ledger(
     after = ResearchRevisionDiffService(session).revision_diff(seeded_revision.first.id, successor.id)
 
     assert after == before
+
+
+def test_legacy_generic_revision_replays_from_its_frozen_ledger_parents(
+    session: Session,
+) -> None:
+    """Pre-parent-set revisions use only their selected ledger snapshot."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    company = kernel.add_object(ResearchObjectKind.COMPANY, "CN:legacy:COMPANY", "Legacy")
+    basis = kernel.add_basis(HistoricalBasisInput(NOW, None, "b" * 64))
+    selected = kernel.append_ledger_entry(
+        company.id, basis.id,
+        LedgerEntryInput(LedgerKind.REALITY, "reported_revenue", "reported", {}, NOW, NOW, "public"),
+        None,
+    )
+    legacy_parent_ids = [str(selected.id)]
+    legacy_snapshot_hash = canonical_hash({
+        "object_id": company.id, "basis_cutoff": NOW, "source_manifest_hash": "b" * 64,
+        "entries": [{"id": selected.id, "content_hash": selected.content_hash}],
+    })
+    legacy = UnderwritingRepository(session).append_research_version(
+        object_id=company.id, basis_id=basis.id, version_kind="legacy_generic",
+        content_hash=canonical_hash({
+            "snapshot_hash": legacy_snapshot_hash,
+            "version_kind": "legacy_generic",
+            "parent_ids": legacy_parent_ids,
+        }),
+        parent_ids=legacy_parent_ids, expected_parent_id=None, created_at=NOW,
+    )
+    successor = kernel.publish_research_version(
+        company.id, basis.id, "legacy_generic", legacy_parent_ids, legacy.id,
+    )
+    kernel.append_ledger_entry(
+        company.id, basis.id,
+        LedgerEntryInput(LedgerKind.REALITY, "later_unreferenced", "reported", {}, NOW, NOW, "public"),
+        None,
+    )
+    session.expire_all()
+    service = ResearchRevisionDiffService(session)
+
+    assert service.revision_summary(legacy.id).id == legacy.id
+    assert service.revision_diff(legacy.id, successor.id).entries == ()
+
+    session.connection().exec_driver_sql(
+        "UPDATE uw_research_versions SET parent_ids = ? WHERE id = ?",
+        (json.dumps([]), legacy.id.hex),
+    )
+    session.expire_all()
+    with pytest.raises(ValidationError, match="research revision content hash"):
+        ResearchRevisionDiffService(session).revision_summary(legacy.id)

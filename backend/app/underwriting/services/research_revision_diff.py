@@ -487,6 +487,57 @@ class ResearchRevisionDiffService:
         if revision.content_hash != expected_hash:
             raise ValidationError("CATL semantic snapshot content hash does not match its stored seal")
 
+    def _legacy_frozen_snapshot_hash(
+        self, revision: UnderwritingResearchVersion, refs: tuple[RevisionArtifactRef, ...],
+    ) -> str:
+        """Reconstruct the pre-parent-set kernel snapshot from frozen parents.
+
+        Legacy generic revisions used the effective-ledger snapshot in their
+        hash.  Reading the currently effective ledger would make later facts
+        rewrite history, so compatibility accepts only the snapshot that can
+        be reconstructed from ledger IDs explicitly frozen on this revision.
+        If a historical row did not freeze the ledger parents needed for its
+        old snapshot, its original hash cannot be proven and the caller must
+        fail closed.
+        """
+        basis = self._session.get(UnderwritingHistoricalBasis, revision.basis_id)
+        if basis is None:
+            raise ValidationError("research revision basis is missing")
+        selected: dict[tuple[str, str], UnderwritingLedgerEntry] = {}
+        for ref in refs:
+            if ref.artifact_type != "ledger":
+                continue
+            try:
+                row_id = UUID(ref.reference)
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise self._parent_error("has malformed frozen ledger identity") from exc
+            row = self._session.get(UnderwritingLedgerEntry, row_id)
+            if row is None or row.basis_id != revision.basis_id or row.object_id != revision.object_id:
+                raise self._parent_error("has invalid frozen ledger lineage")
+            key = (row.ledger_kind, row.family_key)
+            existing = selected.get(key)
+            if existing is None or (row.version, str(row.id)) > (existing.version, str(existing.id)):
+                selected[key] = row
+        entries = tuple(sorted(selected.values(), key=lambda row: (row.ledger_kind, row.family_key)))
+        return canonical_hash({
+            "object_id": revision.object_id,
+            "basis_cutoff": self._stored_datetime(basis.cutoff),
+            "source_manifest_hash": basis.source_manifest_hash,
+            "entries": [
+                {"id": entry.id, "content_hash": entry.content_hash}
+                for entry in entries
+            ],
+        })
+
+    def _legacy_revision_content_hash(
+        self, revision: UnderwritingResearchVersion, refs: tuple[RevisionArtifactRef, ...],
+    ) -> str:
+        return canonical_hash({
+            "snapshot_hash": self._legacy_frozen_snapshot_hash(revision, refs),
+            "version_kind": revision.version_kind,
+            "parent_ids": sorted(set(revision.parent_ids)),
+        })
+
     def _validate_revision_content(
         self, revision: UnderwritingResearchVersion, refs: tuple[RevisionArtifactRef, ...]
     ) -> None:
@@ -508,7 +559,9 @@ class ResearchRevisionDiffService:
         expected, _, _ = frozen_research_version_content_hash(
             revision.object_id, revision.basis_id, revision.version_kind, list(revision.parent_ids),
         )
-        if revision.content_hash != expected:
+        if revision.content_hash == expected:
+            return
+        if revision.content_hash != self._legacy_revision_content_hash(revision, refs):
             raise ValidationError("research revision content hash does not match frozen parent set")
 
     @staticmethod
