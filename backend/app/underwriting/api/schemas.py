@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
 
 class UnderwritingModel(BaseModel):
@@ -294,6 +294,57 @@ class ResearchRevisionBoundaryResponse(UnderwritingModel):
     unknown_evidence_gaps: list[FrozenUnknownEvidenceGapResponse]
 
 
+class CandidateEvidenceDossierCanonicalModel(BaseModel):
+    """Strict raw-canonical fragments; these deliberately omit schema_version."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CandidateEvidenceDossierCanonicalItemResponse(CandidateEvidenceDossierCanonicalModel):
+    """Exact item projection used inside a sealed dossier content hash."""
+
+    metric_key: StrictStr
+    status: Literal[
+        "source_reported", "official_aggregate", "chart_approximation", "assumption_bound", "unknown",
+    ]
+    value: StrictStr | None
+    unit: StrictStr | None
+    observed_start: StrictStr
+    observed_end: StrictStr
+    available_at: StrictStr
+    source_id: StrictStr
+    source_locator: StrictStr
+    scope_statement: StrictStr
+    exclusions: list[StrictStr]
+    methodology: StrictStr
+    prohibited_splicing_declaration: StrictStr
+    transcription_method: StrictStr | None
+    error_bound: StrictStr | None
+    scenario_use: StrictStr | None
+    not_observed_declared: StrictBool
+    unknown_reason: StrictStr | None
+
+
+class CandidateEvidenceDossierCanonicalPayloadResponse(CandidateEvidenceDossierCanonicalModel):
+    """The complete selected dossier payload whose canonical hash is sealed."""
+
+    object_id: UUID
+    basis_id: UUID
+    source_manifest_id: UUID
+    dossier_key: StrictStr
+    version: StrictInt
+    scope_statement: StrictStr
+    status: Literal["candidate"]
+    purpose: Literal["evidence_candidate"]
+    items: list[CandidateEvidenceDossierCanonicalItemResponse] = Field(min_length=1)
+    rejected_calculations: list[StrictStr] = Field(min_length=1)
+    source_manifest_hash: StrictStr = Field(pattern=r"^[0-9a-f]{64}$")
+    # Keep the raw canonical string (rather than a datetime serializer) so a
+    # client can reproduce the selected content hash byte-for-byte.
+    created_at: StrictStr
+    supersedes_id: UUID | None
+
+
 class CandidateEvidenceDossierResponse(UnderwritingModel):
     """The selected candidate dossier identity and bounded research scope."""
 
@@ -304,17 +355,20 @@ class CandidateEvidenceDossierResponse(UnderwritingModel):
     status: Literal["candidate"]
     scope_statement: str
     rejected_calculations: list[str] = Field(min_length=1)
+    supersedes_id: UUID | None
+    canonical_payload: CandidateEvidenceDossierCanonicalPayloadResponse
 
 
 class CandidateEvidenceDossierParentPreimageResponse(UnderwritingModel):
     raw_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    created_at: datetime
+    # Exact normalized string used by the selected descriptor hash.
+    created_at: StrictStr
 
 
 class CandidateEvidenceReviewParentPreimageResponse(UnderwritingModel):
     raw_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    created_at: datetime
-    reviewed_at: datetime
+    created_at: StrictStr
+    reviewed_at: StrictStr
 
 
 class CandidateEvidenceManifestParentPreimageResponse(UnderwritingModel):

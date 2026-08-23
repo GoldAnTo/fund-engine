@@ -194,6 +194,8 @@ class FrozenCandidateDossier:
     status: str
     scope_statement: str
     rejected_calculations: tuple[str, ...]
+    supersedes_id: UUID | None
+    canonical_payload: Mapping[str, object]
     items: tuple[CandidateEvidenceItem, ...]
 
 
@@ -231,8 +233,10 @@ class FrozenCandidateParentRef:
     identity: str
     content_hash: str
     raw_content_hash: str
-    created_at: datetime | None = None
-    reviewed_at: datetime | None = None
+    # These are the canonical ISO strings consumed by descriptor hashing, not
+    # datetime serializer output (which may rewrite ``+00:00`` as ``Z``).
+    created_at: str | None = None
+    reviewed_at: str | None = None
     manifest_hash: str | None = None
 
 
@@ -1900,7 +1904,7 @@ class ResearchRevisionDiffService:
                         identity=dossier_ref.identity,
                         content_hash=dossier_ref.content_hash,
                         raw_content_hash=dossier.content_hash,
-                        created_at=self._stored_datetime(dossier_row.created_at),
+                        created_at=self._iso(dossier_row.created_at),
                     ),
                     *(FrozenCandidateParentRef(
                         reference=review.reference,
@@ -1914,8 +1918,8 @@ class ResearchRevisionDiffService:
                             if ref.reference == review.reference
                         ),
                         raw_content_hash=review.content_hash,
-                        created_at=review.created_at,
-                        reviewed_at=review.reviewed_at,
+                        created_at=self._iso(review.created_at),
+                        reviewed_at=self._iso(review.reviewed_at),
                     ) for review in reviews),
                     FrozenCandidateParentRef(
                         reference=manifest_ref.reference,
@@ -1934,6 +1938,10 @@ class ResearchRevisionDiffService:
                     status=dossier.status.value,
                     scope_statement=dossier.scope_statement,
                     rejected_calculations=dossier.rejected_calculations,
+                    supersedes_id=dossier.supersedes_id,
+                    # This exact normalized projection, including the stored
+                    # item sequence, is the preimage of ``content_hash``.
+                    canonical_payload=dossier.canonical_payload,
                     items=items,
                 ),
                 reviews=tuple(sorted(

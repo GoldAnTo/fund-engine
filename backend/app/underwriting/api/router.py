@@ -47,6 +47,7 @@ from app.underwriting.api.schemas import (
     ResearchRevisionBoundaryResponse,
     CandidateEvidenceAnswerabilityResponse,
     CandidateEvidenceDossierResponse,
+    CandidateEvidenceDossierCanonicalPayloadResponse,
     CandidateEvidenceItemResponse,
     CandidateEvidenceDossierParentPreimageResponse,
     CandidateEvidenceManifestParentPreimageResponse,
@@ -337,6 +338,10 @@ def _candidate_evidence_response(value: CandidateEvidenceRead) -> CandidateEvide
             status=dossier.status,
             scope_statement=dossier.scope_statement,
             rejected_calculations=list(dossier.rejected_calculations),
+            supersedes_id=dossier.supersedes_id,
+            canonical_payload=CandidateEvidenceDossierCanonicalPayloadResponse.model_validate(
+                dossier.canonical_payload,
+            ),
         ),
         items=[
             CandidateEvidenceItemResponse(

@@ -3435,6 +3435,98 @@ export interface components {
             /** Resolution Requirements */
             resolution_requirements: string[];
         };
+        /**
+         * CandidateEvidenceDossierCanonicalItemResponse
+         * @description Exact item projection used inside a sealed dossier content hash.
+         */
+        CandidateEvidenceDossierCanonicalItemResponse: {
+            /** Metric Key */
+            metric_key: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "source_reported" | "official_aggregate" | "chart_approximation" | "assumption_bound" | "unknown";
+            /** Value */
+            value: string | null;
+            /** Unit */
+            unit: string | null;
+            /** Observed Start */
+            observed_start: string;
+            /** Observed End */
+            observed_end: string;
+            /** Available At */
+            available_at: string;
+            /** Source Id */
+            source_id: string;
+            /** Source Locator */
+            source_locator: string;
+            /** Scope Statement */
+            scope_statement: string;
+            /** Exclusions */
+            exclusions: string[];
+            /** Methodology */
+            methodology: string;
+            /** Prohibited Splicing Declaration */
+            prohibited_splicing_declaration: string;
+            /** Transcription Method */
+            transcription_method: string | null;
+            /** Error Bound */
+            error_bound: string | null;
+            /** Scenario Use */
+            scenario_use: string | null;
+            /** Not Observed Declared */
+            not_observed_declared: boolean;
+            /** Unknown Reason */
+            unknown_reason: string | null;
+        };
+        /**
+         * CandidateEvidenceDossierCanonicalPayloadResponse
+         * @description The complete selected dossier payload whose canonical hash is sealed.
+         */
+        CandidateEvidenceDossierCanonicalPayloadResponse: {
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /**
+             * Basis Id
+             * Format: uuid
+             */
+            basis_id: string;
+            /**
+             * Source Manifest Id
+             * Format: uuid
+             */
+            source_manifest_id: string;
+            /** Dossier Key */
+            dossier_key: string;
+            /** Version */
+            version: number;
+            /** Scope Statement */
+            scope_statement: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "candidate";
+            /**
+             * Purpose
+             * @constant
+             */
+            purpose: "evidence_candidate";
+            /** Items */
+            items: components["schemas"]["CandidateEvidenceDossierCanonicalItemResponse"][];
+            /** Rejected Calculations */
+            rejected_calculations: string[];
+            /** Source Manifest Hash */
+            source_manifest_hash: string;
+            /** Created At */
+            created_at: string;
+            /** Supersedes Id */
+            supersedes_id: string | null;
+        };
         /** CandidateEvidenceDossierParentPreimageResponse */
         CandidateEvidenceDossierParentPreimageResponse: {
             /**
@@ -3445,10 +3537,7 @@ export interface components {
             schema_version: "underwriting.v1";
             /** Raw Content Hash */
             raw_content_hash: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
+            /** Created At */
             created_at: string;
         };
         /**
@@ -3482,6 +3571,9 @@ export interface components {
             scope_statement: string;
             /** Rejected Calculations */
             rejected_calculations: string[];
+            /** Supersedes Id */
+            supersedes_id: string | null;
+            canonical_payload: components["schemas"]["CandidateEvidenceDossierCanonicalPayloadResponse"];
         };
         /**
          * CandidateEvidenceItemResponse
@@ -3643,15 +3735,9 @@ export interface components {
             schema_version: "underwriting.v1";
             /** Raw Content Hash */
             raw_content_hash: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
+            /** Created At */
             created_at: string;
-            /**
-             * Reviewed At
-             * Format: date-time
-             */
+            /** Reviewed At */
             reviewed_at: string;
         };
         /**

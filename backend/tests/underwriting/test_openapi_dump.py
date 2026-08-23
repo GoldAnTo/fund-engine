@@ -36,6 +36,8 @@ BOUNDARY_SCHEMAS = {
 CANDIDATE_EVIDENCE_SCHEMAS = {
     "CandidateEvidenceResponse",
     "CandidateEvidenceDossierResponse",
+    "CandidateEvidenceDossierCanonicalPayloadResponse",
+    "CandidateEvidenceDossierCanonicalItemResponse",
     "CandidateEvidenceParentResponse",
     "CandidateEvidenceItemResponse",
     "CandidateEvidenceReviewResponse",
@@ -185,6 +187,24 @@ def test_candidate_evidence_contract_is_get_only_and_excludes_formal_outputs_rec
         "title": "Rejected Calculations",
     }
     assert "rejected_calculations" in dossier["required"]
+    assert dossier["properties"]["supersedes_id"] == {
+        "anyOf": [{"type": "string", "format": "uuid"}, {"type": "null"}],
+        "title": "Supersedes Id",
+    }
+    assert {"supersedes_id", "canonical_payload"} <= set(dossier["required"])
+    canonical_payload = schemas["CandidateEvidenceDossierCanonicalPayloadResponse"]
+    assert canonical_payload["additionalProperties"] is False
+    assert set(canonical_payload["properties"]) == {
+        "object_id", "basis_id", "source_manifest_id", "dossier_key", "version",
+        "scope_statement", "status", "purpose", "items", "rejected_calculations",
+        "source_manifest_hash", "created_at", "supersedes_id",
+    }
+    assert canonical_payload["properties"]["items"] == {
+        "items": {"$ref": "#/components/schemas/CandidateEvidenceDossierCanonicalItemResponse"},
+        "type": "array",
+        "minItems": 1,
+        "title": "Items",
+    }
     parent = schemas["CandidateEvidenceParentResponse"]
     assert set(parent["properties"]) == {
         "schema_version", "reference", "artifact_type", "identity", "content_hash",

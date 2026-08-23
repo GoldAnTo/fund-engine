@@ -12305,6 +12305,255 @@
         "title": "CandidateEvidenceAnswerabilityResponse",
         "description": "Only the candidate's research state, debt, and requirements."
       },
+      "CandidateEvidenceDossierCanonicalItemResponse": {
+        "properties": {
+          "metric_key": {
+            "type": "string",
+            "title": "Metric Key"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "source_reported",
+              "official_aggregate",
+              "chart_approximation",
+              "assumption_bound",
+              "unknown"
+            ],
+            "title": "Status"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "observed_start": {
+            "type": "string",
+            "title": "Observed Start"
+          },
+          "observed_end": {
+            "type": "string",
+            "title": "Observed End"
+          },
+          "available_at": {
+            "type": "string",
+            "title": "Available At"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "source_locator": {
+            "type": "string",
+            "title": "Source Locator"
+          },
+          "scope_statement": {
+            "type": "string",
+            "title": "Scope Statement"
+          },
+          "exclusions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exclusions"
+          },
+          "methodology": {
+            "type": "string",
+            "title": "Methodology"
+          },
+          "prohibited_splicing_declaration": {
+            "type": "string",
+            "title": "Prohibited Splicing Declaration"
+          },
+          "transcription_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcription Method"
+          },
+          "error_bound": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Bound"
+          },
+          "scenario_use": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scenario Use"
+          },
+          "not_observed_declared": {
+            "type": "boolean",
+            "title": "Not Observed Declared"
+          },
+          "unknown_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unknown Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "metric_key",
+          "status",
+          "value",
+          "unit",
+          "observed_start",
+          "observed_end",
+          "available_at",
+          "source_id",
+          "source_locator",
+          "scope_statement",
+          "exclusions",
+          "methodology",
+          "prohibited_splicing_declaration",
+          "transcription_method",
+          "error_bound",
+          "scenario_use",
+          "not_observed_declared",
+          "unknown_reason"
+        ],
+        "title": "CandidateEvidenceDossierCanonicalItemResponse",
+        "description": "Exact item projection used inside a sealed dossier content hash."
+      },
+      "CandidateEvidenceDossierCanonicalPayloadResponse": {
+        "properties": {
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "basis_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Basis Id"
+          },
+          "source_manifest_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Source Manifest Id"
+          },
+          "dossier_key": {
+            "type": "string",
+            "title": "Dossier Key"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "scope_statement": {
+            "type": "string",
+            "title": "Scope Statement"
+          },
+          "status": {
+            "type": "string",
+            "const": "candidate",
+            "title": "Status"
+          },
+          "purpose": {
+            "type": "string",
+            "const": "evidence_candidate",
+            "title": "Purpose"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateEvidenceDossierCanonicalItemResponse"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Items"
+          },
+          "rejected_calculations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Rejected Calculations"
+          },
+          "source_manifest_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Manifest Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "supersedes_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "object_id",
+          "basis_id",
+          "source_manifest_id",
+          "dossier_key",
+          "version",
+          "scope_statement",
+          "status",
+          "purpose",
+          "items",
+          "rejected_calculations",
+          "source_manifest_hash",
+          "created_at",
+          "supersedes_id"
+        ],
+        "title": "CandidateEvidenceDossierCanonicalPayloadResponse",
+        "description": "The complete selected dossier payload whose canonical hash is sealed."
+      },
       "CandidateEvidenceDossierParentPreimageResponse": {
         "properties": {
           "schema_version": {
@@ -12320,7 +12569,6 @@
           },
           "created_at": {
             "type": "string",
-            "format": "date-time",
             "title": "Created At"
           }
         },
@@ -12374,6 +12622,21 @@
             "type": "array",
             "minItems": 1,
             "title": "Rejected Calculations"
+          },
+          "supersedes_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Id"
+          },
+          "canonical_payload": {
+            "$ref": "#/components/schemas/CandidateEvidenceDossierCanonicalPayloadResponse"
           }
         },
         "additionalProperties": false,
@@ -12385,7 +12648,9 @@
           "version",
           "status",
           "scope_statement",
-          "rejected_calculations"
+          "rejected_calculations",
+          "supersedes_id",
+          "canonical_payload"
         ],
         "title": "CandidateEvidenceDossierResponse",
         "description": "The selected candidate dossier identity and bounded research scope."
@@ -12743,12 +13008,10 @@
           },
           "created_at": {
             "type": "string",
-            "format": "date-time",
             "title": "Created At"
           },
           "reviewed_at": {
             "type": "string",
-            "format": "date-time",
             "title": "Reviewed At"
           }
         },

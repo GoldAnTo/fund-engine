@@ -189,6 +189,8 @@ def test_candidate_evidence_is_get_only_parent_sealed_and_deterministic(api_clie
             "status": "candidate",
             "scope_statement": "Candidate industry evidence only.",
             "rejected_calculations": ["No valuation model."],
+            "supersedes_id": None,
+            "canonical_payload": payload,
         },
         "items": [{
             "schema_version": "underwriting.v1",
@@ -254,7 +256,7 @@ def test_candidate_evidence_is_get_only_parent_sealed_and_deterministic(api_clie
             "descriptor_preimage": {
                 "schema_version": "underwriting.v1",
                 "raw_content_hash": dossier.content_hash,
-                "created_at": NOW.isoformat().replace("+00:00", "Z"),
+                "created_at": NOW.isoformat(),
             },
         },
         {
@@ -266,8 +268,8 @@ def test_candidate_evidence_is_get_only_parent_sealed_and_deterministic(api_clie
             "descriptor_preimage": {
                 "schema_version": "underwriting.v1",
                 "raw_content_hash": published.reviews[0].content_hash,
-                "created_at": NOW.isoformat().replace("+00:00", "Z"),
-                "reviewed_at": NOW.isoformat().replace("+00:00", "Z"),
+                "created_at": NOW.isoformat(),
+                "reviewed_at": NOW.isoformat(),
             },
         },
         {
@@ -279,8 +281,8 @@ def test_candidate_evidence_is_get_only_parent_sealed_and_deterministic(api_clie
             "descriptor_preimage": {
                 "schema_version": "underwriting.v1",
                 "raw_content_hash": published.reviews[1].content_hash,
-                "created_at": NOW.isoformat().replace("+00:00", "Z"),
-                "reviewed_at": NOW.isoformat().replace("+00:00", "Z"),
+                "created_at": NOW.isoformat(),
+                "reviewed_at": NOW.isoformat(),
             },
         },
         {
@@ -297,6 +299,18 @@ def test_candidate_evidence_is_get_only_parent_sealed_and_deterministic(api_clie
         },
     ]
     assert all(len(parent["content_hash"]) == 64 for parent in body["parent_refs"])
+    dossier_preimage = body["parent_refs"][0]["descriptor_preimage"]
+    assert canonical_hash({
+        "candidate_dossier_content_hash": dossier_preimage["raw_content_hash"],
+        "created_at": dossier_preimage["created_at"],
+    }) == body["parent_refs"][0]["content_hash"]
+    for parent in body["parent_refs"][1:3]:
+        preimage = parent["descriptor_preimage"]
+        assert canonical_hash({
+            "candidate_review_content_hash": preimage["raw_content_hash"],
+            "reviewed_at": preimage["reviewed_at"],
+            "created_at": preimage["created_at"],
+        }) == parent["content_hash"]
     assert api_client.post(response.request.url.path).status_code == 405
     assert payload["dossier_key"] == "industry-capacity"
     assert manifest.id
@@ -352,10 +366,22 @@ def test_candidate_evidence_selected_successor_does_not_walk_unselected_predeces
     api_client, session,
 ) -> None:
     company, basis, manifest, dossier, payload, _ = _published_candidate_revision(session)
+    later_item = CandidateEvidenceItem(
+        metric_key="industry.zeta", status=CandidateEvidenceStatus.SOURCE_REPORTED,
+        value=Decimal("200"), unit="GWh", observed_start=NOW - timedelta(days=364),
+        observed_end=NOW, available_at=NOW, source_id="candidate-source",
+        source_locator="https://example.test/candidate-source",
+        scope_statement="Later disclosed capacity only.",
+        exclusions=("No formal model input.",), methodology="Direct transcription.",
+        prohibited_splicing_declaration="No source splicing.",
+    )
     successor_payload = dict(payload) | {
         "version": 2,
         "scope_statement": "Selected successor evidence only.",
         "supersedes_id": str(dossier.id),
+        # Deliberately differ from the presentation sort order: this stored
+        # sequence is part of the sealed dossier content hash.
+        "items": [later_item.canonical_payload, payload["items"][0]],
     }
     repository = UnderwritingResearchRepository(session)
     successor = repository.append_candidate_dossier(
@@ -382,6 +408,14 @@ def test_candidate_evidence_selected_successor_does_not_walk_unselected_predeces
         f"{BASE}/research-versions/{selected.research_version.id}/candidate-evidence",
     )
     assert before.status_code == 200, before.text
+    before_body = before.json()
+    predecessor_id = str(dossier.id)
+    assert before_body["dossier"]["supersedes_id"] == predecessor_id
+    assert before_body["dossier"]["canonical_payload"] == successor_payload
+    assert canonical_hash(before_body["dossier"]["canonical_payload"]) == before_body["dossier"]["content_hash"]
+    assert [item["metric_key"] for item in before_body["items"]] == [
+        "industry.capacity", "industry.zeta",
+    ]
 
     cursor = session.connection().connection.cursor()
     cursor.execute(
@@ -398,6 +432,7 @@ def test_candidate_evidence_selected_successor_does_not_walk_unselected_predeces
     assert response.status_code == 200, response.text
     assert response.content == before.content
     assert response.json()["dossier"]["scope_statement"] == "Selected successor evidence only."
+    assert response.json()["dossier"]["supersedes_id"] == predecessor_id
 
 
 def test_candidate_evidence_uses_underwriting_not_found_and_validation_envelopes(
