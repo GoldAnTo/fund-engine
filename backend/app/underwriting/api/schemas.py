@@ -230,7 +230,7 @@ class ResearchRevisionDiffResponse(UnderwritingModel):
 
 class ResearchArchiveItemResponse(UnderwritingModel):
     object_id: UUID
-    object_kind: str
+    object_kind: ResearchObjectKind
     canonical_name: str
     external_key: str
     version_kind: str

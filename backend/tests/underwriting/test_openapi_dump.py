@@ -54,3 +54,8 @@ def test_revision_read_contract_has_only_get_operations_and_no_decision_fields()
     for name in REVISION_SCHEMAS | ARCHIVE_SCHEMAS:
         properties = schemas[name]["properties"]
         assert not (set(field.lower() for field in properties) & FORBIDDEN_RESEARCH_FIELDS)
+    assert schemas["ResearchArchiveItemResponse"]["properties"]["object_kind"] == {
+        "type": "string",
+        "enum": ["industry", "company", "security"],
+        "title": "Object Kind",
+    }
