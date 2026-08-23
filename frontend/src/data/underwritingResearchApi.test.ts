@@ -1,0 +1,138 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { createElement } from "react";
+import { MemoryRouter } from "react-router-dom";
+
+import { ResearchOsRoutes } from "../app/routes";
+import {
+  UnderwritingResearchRequestError,
+  resetUnderwritingResearchApi,
+  setUnderwritingResearchApi,
+  underwritingResearchApi,
+  type UnderwritingResearchApi,
+} from "./underwritingResearchApi";
+
+describe("underwriting research API", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    resetUnderwritingResearchApi();
+  });
+
+  it("uses an injected read client instead of the HTTP transport", async () => {
+    const listArchives = vi.fn().mockResolvedValue({
+      schema_version: "underwriting.v1",
+      items: [],
+      next_cursor: null,
+    });
+    const localApi = { listArchives } as unknown as UnderwritingResearchApi;
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    setUnderwritingResearchApi(localApi);
+
+    await expect(underwritingResearchApi.listArchives()).resolves.toMatchObject({
+      items: [],
+    });
+
+    expect(listArchives).toHaveBeenCalledWith(undefined);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("uses the dedicated underwriting API base when configured", async () => {
+    vi.stubEnv("VITE_UNDERWRITING_API_URL", "https://underwriting.example.test/v1/");
+    resetUnderwritingResearchApi();
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({
+      schema_version: "underwriting.v1",
+      items: [],
+      next_cursor: null,
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await underwritingResearchApi.listArchives();
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://underwriting.example.test/v1/research-archives",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("requests each research archive resource through a GET-only underwriting URL", async () => {
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({
+      schema_version: "underwriting.v1",
+      items: [],
+      next_cursor: null,
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await underwritingResearchApi.listArchives({
+      query: "宁德时代",
+      kind: "company",
+      limit: 10,
+      cursor: "next cursor",
+    });
+    await underwritingResearchApi.history("object id", "industry baseline");
+    await underwritingResearchApi.revision("revision id");
+    await underwritingResearchApi.diff("from id", "to id");
+
+    const calls = fetchSpy.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(calls.map(([url]) => url)).toEqual([
+      "/api/underwriting/v1/research-archives?query=%E5%AE%81%E5%BE%B7%E6%97%B6%E4%BB%A3&kind=company&limit=10&cursor=next+cursor",
+      "/api/underwriting/v1/objects/object%20id/research-versions/industry%20baseline",
+      "/api/underwriting/v1/research-versions/revision%20id",
+      "/api/underwriting/v1/research-versions/from%20id/diff/to%20id",
+    ]);
+    expect(calls.map(([, init]) => init)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ method: "GET", credentials: "include" }),
+      ]),
+    );
+    for (const [, init] of calls) {
+      expect(init).toMatchObject({ method: "GET" });
+      expect(init?.body).toBeUndefined();
+    }
+  });
+
+  it("preserves a typed underwriting 422 envelope", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      schema_version: "underwriting.v1",
+      error: {
+        code: "validation_failed",
+        message: "cursor is malformed",
+        details: { field: "cursor" },
+      },
+    }), {
+      status: 422,
+      headers: { "x-request-id": "req-archive-422" },
+    })));
+
+    const failure = await underwritingResearchApi.listArchives({ cursor: "bad" })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(UnderwritingResearchRequestError);
+    expect(failure).toMatchObject({
+      status: 422,
+      code: "validation_failed",
+      message: "cursor is malformed",
+      requestId: "req-archive-422",
+    });
+  });
+
+  it("reserves the company and industry archive routes without fetching an archive", async () => {
+    const fetchSpy = vi.fn().mockRejectedValue(new Error("offline"));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(createElement(
+      MemoryRouter,
+      { initialEntries: ["/underwriting/research/company-1/industry_baseline"] },
+      createElement(ResearchOsRoutes),
+    ));
+
+    expect(await screen.findByRole("heading", { name: "公司／行业档案" })).toBeVisible();
+    expect(screen.getAllByRole("link", { name: "公司／行业档案" })[0])
+      .toHaveAttribute("href", "/underwriting/research");
+    expect(fetchSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("/api/underwriting/v1/research-archives"),
+      expect.anything(),
+    );
+  });
+});

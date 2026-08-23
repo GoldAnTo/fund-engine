@@ -25,6 +25,20 @@ import { GlobalMonitoringPage } from "../features/events/GlobalMonitoringPage";
 import { ResearchNetworkPage } from "../features/events/ResearchNetworkPage";
 import { LegacyAdmissionPage } from "../features/events/LegacyAdmissionPage";
 
+function ResearchArchivePage() {
+  return (
+    <main className="ros-page">
+      <header className="ros-page-head">
+        <div>
+          <p className="ros-eyebrow">研究资产 · Research Archive</p>
+          <h1>公司／行业档案</h1>
+          <p>档案目录、版本差异与证据缺口将在此展示。</p>
+        </div>
+      </header>
+    </main>
+  );
+}
+
 export function ResearchOsRoutes() {
   return (
     <Routes>
@@ -33,6 +47,11 @@ export function ResearchOsRoutes() {
         <Route path="events" element={<EventDeskPage />} />
         <Route path="network" element={<ResearchNetworkPage />} />
         <Route path="monitoring" element={<GlobalMonitoringPage />} />
+        <Route path="underwriting/research" element={<ResearchArchivePage />} />
+        <Route
+          path="underwriting/research/:objectId/:versionKind"
+          element={<ResearchArchivePage />}
+        />
         <Route path="governance/case-admissions" element={<LegacyAdmissionPage />} />
         <Route path="events/new" element={<EventCreatePage />} />
         <Route

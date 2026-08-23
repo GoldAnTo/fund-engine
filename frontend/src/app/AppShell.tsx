@@ -22,6 +22,7 @@ import {
 } from "./researchOsApi";
 
 function pageLabel(pathname: string) {
+  if (pathname.startsWith("/underwriting/research")) return "公司／行业档案";
   if (pathname === "/network") return "研究网络";
   if (pathname === "/monitoring") return "监控与版本";
   if (pathname.endsWith("/wiki")) return "Case Wiki 图谱";
@@ -405,6 +406,7 @@ export function AppShell() {
         </nav>
         <span className="ros-nav-label">研究资产</span>
         <nav className="ros-nav">
+          <NavLink to="/underwriting/research">公司／行业档案</NavLink>
           <NavLink to="/network">研究网络</NavLink>
           <NavLink to="/monitoring">监控与版本</NavLink>
         </nav>
