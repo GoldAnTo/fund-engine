@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import json
 from uuid import UUID, uuid4
@@ -781,7 +781,24 @@ def test_legacy_generic_revision_replays_from_its_frozen_ledger_parents(
         LedgerEntryInput(LedgerKind.REALITY, "reported_revenue", "reported", {}, NOW, NOW, "public"),
         None,
     )
-    legacy_parent_ids = [str(selected.id)]
+    late_available_at = NOW + timedelta(days=1)
+    late_payload: dict[str, object] = {"excluded_at_legacy_cutoff": True}
+    later_candidate = UnderwritingLedgerEntry(
+        object_id=company.id, basis_id=basis.id, ledger_kind="reality",
+        family_key="later_unavailable_candidate", entry_type="reported", version=1,
+        payload=late_payload, effective_at=NOW, available_at=late_available_at,
+        source_boundary="public",
+        content_hash=canonical_hash({
+            "ledger_kind": "reality", "family_key": "later_unavailable_candidate",
+            "entry_type": "reported", "payload": late_payload,
+            "effective_at": NOW, "available_at": late_available_at,
+            "source_boundary": "public",
+        }),
+        supersedes_id=None, created_at=NOW,
+    )
+    session.add(later_candidate)
+    session.flush()
+    legacy_parent_ids = [str(selected.id), str(later_candidate.id)]
     legacy_snapshot_hash = canonical_hash({
         "object_id": company.id, "basis_cutoff": NOW, "source_manifest_hash": "b" * 64,
         "entries": [{"id": selected.id, "content_hash": selected.content_hash}],
@@ -791,7 +808,7 @@ def test_legacy_generic_revision_replays_from_its_frozen_ledger_parents(
         content_hash=canonical_hash({
             "snapshot_hash": legacy_snapshot_hash,
             "version_kind": "legacy_generic",
-            "parent_ids": legacy_parent_ids,
+            "parent_ids": sorted(legacy_parent_ids),
         }),
         parent_ids=legacy_parent_ids, expected_parent_id=None, created_at=NOW,
     )
@@ -816,3 +833,75 @@ def test_legacy_generic_revision_replays_from_its_frozen_ledger_parents(
     session.expire_all()
     with pytest.raises(ValidationError, match="research revision content hash"):
         ResearchRevisionDiffService(session).revision_summary(legacy.id)
+
+
+def test_legacy_generic_revision_rejects_a_tampered_frozen_ledger_payload(
+    session: Session,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    company = kernel.add_object(ResearchObjectKind.COMPANY, "CN:legacy-tamper:COMPANY", "Legacy Tamper")
+    basis = kernel.add_basis(HistoricalBasisInput(NOW, None, "c" * 64))
+    selected = kernel.append_ledger_entry(
+        company.id, basis.id,
+        LedgerEntryInput(LedgerKind.REALITY, "reported_revenue", "reported", {}, NOW, NOW, "public"),
+        None,
+    )
+    parent_ids = [str(selected.id)]
+    snapshot_hash = canonical_hash({
+        "object_id": company.id, "basis_cutoff": NOW, "source_manifest_hash": "c" * 64,
+        "entries": [{"id": selected.id, "content_hash": selected.content_hash}],
+    })
+    legacy = UnderwritingRepository(session).append_research_version(
+        object_id=company.id, basis_id=basis.id, version_kind="legacy_tamper",
+        content_hash=canonical_hash({
+            "snapshot_hash": snapshot_hash, "version_kind": "legacy_tamper", "parent_ids": parent_ids,
+        }),
+        parent_ids=parent_ids, expected_parent_id=None, created_at=NOW,
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_ledger_entries SET payload = ? WHERE id = ?",
+        (json.dumps({"tampered": True}), selected.id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="ledger content hash"):
+        ResearchRevisionDiffService(session).revision_summary(legacy.id)
+
+
+def test_diff_follows_direct_and_multi_hop_successors_across_historical_bases(
+    session: Session,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    company = kernel.add_object(ResearchObjectKind.COMPANY, "CN:cross-basis:COMPANY", "Cross Basis")
+    bases = tuple(
+        kernel.add_basis(HistoricalBasisInput(NOW + timedelta(days=index), None, chr(100 + index) * 64))
+        for index in range(3)
+    )
+    revisions: list[UnderwritingResearchVersion] = []
+    revision_parent_id = None
+    ledger_parent_id = None
+    for index, basis in enumerate(bases, start=1):
+        entry = kernel.append_ledger_entry(
+            company.id, basis.id,
+            LedgerEntryInput(LedgerKind.REALITY, "reported_revenue", "reported", {"basis": index}, NOW, NOW, "public"),
+            ledger_parent_id,
+        )
+        revisions.append(kernel.publish_research_version(
+            company.id, basis.id, "cross_basis_model", [str(entry.id)], revision_parent_id,
+        ))
+        revision_parent_id = revisions[-1].id
+        ledger_parent_id = entry.id
+    session.expire_all()
+    service = ResearchRevisionDiffService(session)
+
+    direct = service.revision_diff(revisions[0].id, revisions[1].id)
+    multi_hop = service.revision_diff(revisions[0].id, revisions[2].id)
+
+    assert service.revision_summary(revisions[0].id).basis_id == bases[0].id
+    assert service.revision_summary(revisions[2].id).basis_id == bases[2].id
+    assert direct.entries and multi_hop.entries
+    assert {item.group for item in direct.entries} == {"evidence"}

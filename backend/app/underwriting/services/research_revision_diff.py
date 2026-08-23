@@ -504,6 +504,7 @@ class ResearchRevisionDiffService:
         if basis is None:
             raise ValidationError("research revision basis is missing")
         selected: dict[tuple[str, str], UnderwritingLedgerEntry] = {}
+        cutoff = self._stored_datetime(basis.cutoff)
         for ref in refs:
             if ref.artifact_type != "ledger":
                 continue
@@ -514,6 +515,10 @@ class ResearchRevisionDiffService:
             row = self._session.get(UnderwritingLedgerEntry, row_id)
             if row is None or row.basis_id != revision.basis_id or row.object_id != revision.object_id:
                 raise self._parent_error("has invalid frozen ledger lineage")
+            # This is the old repository's first selection step, replayed from
+            # frozen candidates rather than querying its current ledger.
+            if self._stored_datetime(row.available_at) > cutoff:
+                continue
             key = (row.ledger_kind, row.family_key)
             existing = selected.get(key)
             if existing is None or (row.version, str(row.id)) > (existing.version, str(existing.id)):
@@ -667,7 +672,6 @@ class ResearchRevisionDiffService:
             from_revision.id == to_revision.id
             or from_revision.object_id != to_revision.object_id
             or from_revision.version_kind != to_revision.version_kind
-            or from_revision.basis_id != to_revision.basis_id
         ):
             raise ValidationError("research revision diff requires a strict ancestor in one historical family")
         # Validate the persisted family before walking it.  This catches a
@@ -684,7 +688,6 @@ class ResearchRevisionDiffService:
             if (
                 predecessor.object_id != to_revision.object_id
                 or predecessor.version_kind != to_revision.version_kind
-                or predecessor.basis_id != to_revision.basis_id
                 or predecessor.sequence != current.sequence - 1
             ):
                 raise ValidationError("research revision ancestor chain is corrupt")
