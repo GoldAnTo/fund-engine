@@ -147,6 +147,16 @@ def test_0063_downgrade_preserves_0062_candidate_evidence_tables(tmp_path) -> No
     environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
 
     upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0062"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    upgraded = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "0063"],
         cwd=backend,
         env=environment,

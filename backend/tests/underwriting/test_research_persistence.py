@@ -362,6 +362,30 @@ def test_candidate_load_rejects_a_raw_rehashed_payload() -> None:
         Base.metadata.drop_all(engine, tables=[table])
 
 
+def test_candidate_sqlite_round_trip_materializes_a_valid_dossier_and_review() -> None:
+    engine = create_engine("sqlite://")
+    tables = [UnderwritingEvidenceCandidateDossierVersion.__table__, UnderwritingEvidenceCandidateReviewVersion.__table__]
+    Base.metadata.create_all(engine, tables=tables)
+    dossier_contract = _candidate_dossier()
+    dossier_id, review_id = uuid4(), uuid4()
+    try:
+        with Session(engine) as session:
+            dossier = UnderwritingEvidenceCandidateDossierVersion.from_contract(id=dossier_id, contract=dossier_contract)
+            session.add(dossier)
+            session.commit()
+            session.add(UnderwritingEvidenceCandidateReviewVersion.from_contract(id=review_id, contract=CandidateEvidenceReview(
+                dossier_id=dossier_id, dossier_content_hash=dossier_contract.content_hash,
+                reviewer_identity="reviewer:a", reviewer_role="provenance", decision="approve",
+                rationale="source verified", reviewed_at=NOW,
+            )))
+            session.commit()
+        with Session(engine) as fresh_session:
+            assert fresh_session.get(UnderwritingEvidenceCandidateDossierVersion, dossier_id).content_hash == dossier_contract.content_hash
+            assert fresh_session.get(UnderwritingEvidenceCandidateReviewVersion, review_id).dossier_id == dossier_id
+    finally:
+        Base.metadata.drop_all(engine, tables=tables)
+
+
 def test_candidate_rows_capture_dossier_and_review_governance_contracts() -> None:
     dossier = Base.metadata.tables["uw_evidence_candidate_dossier_versions"]
     review = Base.metadata.tables["uw_evidence_candidate_review_versions"]

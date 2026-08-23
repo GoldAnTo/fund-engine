@@ -8,7 +8,7 @@ was knowable at a particular cutoff.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid, event, select
@@ -337,7 +337,7 @@ def _validate_dossier_row(row: UnderwritingEvidenceCandidateDossierVersion) -> N
     contract.validate_persisted_payload(row.payload, row.content_hash)
     if (row.object_id, row.basis_id, row.source_manifest_id, row.dossier_key, row.version,
         row.scope_statement, row.purpose, row.status, tuple(row.rejected_calculations),
-        row.source_manifest_hash, row.supersedes_id, row.created_at) != (
+        row.source_manifest_hash, row.supersedes_id, _stored_utc(row.created_at)) != (
         contract.object_id, contract.basis_id, contract.source_manifest_id, contract.dossier_key, contract.version,
         contract.scope_statement, contract.purpose, contract.status.value, contract.rejected_calculations,
         contract.source_manifest_hash, contract.supersedes_id, contract.created_at):
@@ -348,10 +348,16 @@ def _validate_review_row(row: UnderwritingEvidenceCandidateReviewVersion) -> Non
     contract = CandidateEvidenceReview.from_canonical_payload(row.payload)
     contract.validate_persisted_payload(row.payload, row.content_hash)
     if (row.dossier_id, row.dossier_content_hash, row.reviewer_identity, row.reviewer_role,
-        row.decision, row.rationale, row.reviewed_at) != (
+        row.decision, row.rationale, _stored_utc(row.reviewed_at)) != (
         contract.dossier_id, contract.dossier_content_hash, contract.reviewer_identity, contract.reviewer_role,
         contract.decision, contract.rationale, contract.reviewed_at):
         raise ValidationError("review row does not match canonical contract")
+
+
+def _stored_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 @event.listens_for(UnderwritingEvidenceCandidateDossierVersion, "before_insert")
