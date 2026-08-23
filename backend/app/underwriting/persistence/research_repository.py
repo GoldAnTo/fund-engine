@@ -10,11 +10,12 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
+import hashlib
 import re
 from typing import Mapping, TypeVar
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import bindparam, func, select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
@@ -44,6 +45,7 @@ from app.underwriting.services.source_freeze import freeze_manifest
 
 RowT = TypeVar("RowT")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_CANDIDATE_DOSSIER_FAMILY_LOCK_DOMAIN = b"underwriting:candidate-dossier-family:v1\x00"
 _SUCCESSOR_TABLES = frozenset(
     {
         "uw_source_manifest_versions",
@@ -158,6 +160,47 @@ class UnderwritingResearchRepository:
     def _latest(self, statement) -> RowT | None:
         with self._session.no_autoflush:
             return self._session.scalar(statement.limit(1))
+
+    @staticmethod
+    def postgresql_candidate_dossier_family_lock(
+        *, object_id: UUID, basis_id: UUID, dossier_key: str
+    ) -> tuple[object, int]:
+        """Build the transaction-scoped lock for one candidate dossier family."""
+        identity = f"{object_id}:{basis_id}:{dossier_key}".encode("utf-8")
+        lock_id = int.from_bytes(
+            hashlib.sha256(_CANDIDATE_DOSSIER_FAMILY_LOCK_DOMAIN + identity).digest()[:8],
+            byteorder="big",
+            signed=True,
+        )
+        return (
+            select(
+                func.pg_advisory_xact_lock(
+                    bindparam("candidate_dossier_family_lock_id", value=lock_id)
+                )
+            ),
+            lock_id,
+        )
+
+    def _lock_candidate_dossier_family(
+        self, *, object_id: UUID, basis_id: UUID, dossier_key: str
+    ) -> None:
+        """Serialize review and successor writes before either reads current.
+
+        A row lock alone cannot protect a successor insert from a concurrent
+        current-row read under PostgreSQL READ COMMITTED.  The namespaced
+        advisory lock covers the family even before its first row exists.
+        SQLite's single-writer transaction model remains safe for its test
+        harness, so it deliberately needs no PostgreSQL-specific statement.
+        """
+        dialect = self._session.get_bind().dialect.name
+        if dialect == "sqlite":
+            return
+        if dialect != "postgresql":
+            raise RuntimeError("database dialect cannot serialize candidate dossier family")
+        statement, _ = self.postgresql_candidate_dossier_family_lock(
+            object_id=object_id, basis_id=basis_id, dossier_key=dossier_key,
+        )
+        self._session.execute(statement)
 
     def _append(self, row: RowT) -> RowT:
         """Flush an append in a savepoint and map CAS-race conflicts.
@@ -381,6 +424,9 @@ class UnderwritingResearchRepository:
         if contract.source_manifest_hash != manifest.manifest_hash:
             raise ValidationError("dossier source_manifest_hash does not match source manifest")
         self._validate_candidate_item_sources(contract, manifest, cutoff)
+        self._lock_candidate_dossier_family(
+            object_id=object_id, basis_id=basis_id, dossier_key=dossier_key,
+        )
 
         if expected_parent_id is not None:
             parent = self._session.get(
@@ -437,6 +483,11 @@ class UnderwritingResearchRepository:
         dossier = self._session.get(UnderwritingEvidenceCandidateDossierVersion, dossier_id)
         if dossier is None:
             raise ValidationError("candidate dossier does not exist")
+        self._lock_candidate_dossier_family(
+            object_id=dossier.object_id,
+            basis_id=dossier.basis_id,
+            dossier_key=dossier.dossier_key,
+        )
         current = self._latest(
             select(UnderwritingEvidenceCandidateDossierVersion)
             .where(

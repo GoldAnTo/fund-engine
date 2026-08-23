@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from threading import Event, Thread, get_ident
 from uuid import UUID
 
 import pytest
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.ledger import ValidationError
 from app.underwriting.domain.evidence_candidates import (
@@ -16,6 +19,7 @@ from app.underwriting.domain.evidence_candidates import (
 from app.underwriting.domain.types import HistoricalBasisInput
 from app.underwriting.persistence.repository import StaleParentError, UnderwritingRepository
 from app.underwriting.persistence.research_models import UnderwritingSourceManifestVersion
+from app.underwriting.persistence.research_models import UnderwritingEvidenceCandidateReviewVersion
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
 from app.underwriting.services.kernel import canonical_hash
 from app.underwriting.services.source_freeze import freeze_manifest
@@ -133,6 +137,19 @@ def _append_review(repository: UnderwritingResearchRepository, dossier, *, revie
     )
 
 
+def test_postgresql_candidate_dossier_family_lock_is_stable_and_parameterized() -> None:
+    statement, lock_id = UnderwritingResearchRepository.postgresql_candidate_dossier_family_lock(
+        object_id=UUID("00000000-0000-0000-0000-000000000001"),
+        basis_id=UUID("00000000-0000-0000-0000-000000000002"),
+        dossier_key="industry-capacity",
+    )
+
+    compiled = statement.compile(dialect=postgresql.dialect())
+    assert -(2**63) <= lock_id < 2**63
+    assert "pg_advisory_xact_lock" in str(compiled)
+    assert compiled.params == {"candidate_dossier_family_lock_id": lock_id}
+
+
 def test_same_identity_cannot_fill_both_approval_roles(repository, company, basis, manifest) -> None:
     dossier = _append_dossier(repository, company, basis, manifest)
     _append_review(repository, dossier, reviewer_identity="reviewer:a", reviewer_role="provenance")
@@ -176,6 +193,129 @@ def test_review_rejects_dossier_that_has_been_superseded(repository, company, ba
 
     with pytest.raises(ValidationError, match="dossier is no longer current"):
         _append_review(repository, dossier, reviewer_identity="reviewer:a", reviewer_role="provenance")
+
+
+@pytest.mark.pg_only
+def test_postgres_successor_serializes_candidate_review_family(engine, session, monkeypatch) -> None:
+    """A v1 review cannot append after another session has committed v2."""
+    kernel = UnderwritingRepository(session)
+    repository = UnderwritingResearchRepository(session)
+    company = kernel.add_object("company", "CN:300750:COMPANY", "CATL", NOW)
+    frozen = freeze_manifest(_manifest_payload(), NOW)
+    basis = kernel.add_basis(HistoricalBasisInput(NOW, NOW, frozen.manifest_hash), NOW)
+    manifest_payload = _manifest_payload()
+    manifest = repository.add_source_manifest(
+        manifest_key="candidate-review-race", basis_id=basis.id, manifest=manifest_payload,
+        manifest_hash=frozen.manifest_hash, content_hash=canonical_hash(manifest_payload),
+        expected_parent_id=None, created_at=NOW,
+    )
+    dossier = _append_dossier(repository, company, basis, manifest)
+    dossier_id, dossier_hash = dossier.id, dossier.content_hash
+    company_id, basis_id, manifest_id, manifest_hash = (
+        company.id, basis.id, manifest.id, manifest.manifest_hash,
+    )
+    session.commit()
+
+    sessions = sessionmaker(bind=engine, future=True)
+    review_read, allow_review_lock = Event(), Event()
+    successor_locked, allow_successor_commit = Event(), Event()
+    review_lock_attempted, successor_committed = Event(), Event()
+    errors: list[BaseException] = []
+    review_thread_id: list[int] = []
+    successor_thread_id: list[int] = []
+    original_lock = UnderwritingResearchRepository._lock_candidate_dossier_family
+    original_latest = UnderwritingResearchRepository._latest
+
+    def coordinate_lock(repository, *, object_id, basis_id, dossier_key):
+        if review_thread_id and get_ident() == review_thread_id[0]:
+            review_read.set()
+            assert allow_review_lock.wait(timeout=5)
+            review_lock_attempted.set()
+        if successor_thread_id and get_ident() == successor_thread_id[0]:
+            successor_locked.set()
+        return original_lock(
+            repository, object_id=object_id, basis_id=basis_id, dossier_key=dossier_key,
+        )
+
+    def pause_successor_after_lock(repository, statement):
+        row = original_latest(repository, statement)
+        if successor_thread_id and get_ident() == successor_thread_id[0]:
+            assert allow_successor_commit.wait(timeout=5)
+        return row
+
+    monkeypatch.setattr(UnderwritingResearchRepository, "_lock_candidate_dossier_family", coordinate_lock)
+    monkeypatch.setattr(UnderwritingResearchRepository, "_latest", pause_successor_after_lock)
+
+    def append_review() -> None:
+        review_session = sessions()
+        try:
+            review_thread_id.append(get_ident())
+            UnderwritingResearchRepository(review_session).append_candidate_review(
+                dossier_id=dossier_id, dossier_content_hash=dossier_hash,
+                reviewer_identity="reviewer:race", reviewer_role="provenance", decision="approve",
+                payload=_review_payload(
+                    dossier_id=dossier_id, dossier_content_hash=dossier_hash,
+                    reviewer_identity="reviewer:race", reviewer_role="provenance",
+                ), created_at=NOW,
+            )
+            review_session.commit()
+        except BaseException as exc:
+            errors.append(exc)
+            review_session.rollback()
+        finally:
+            review_session.close()
+
+    def append_successor() -> None:
+        successor_session = sessions()
+        try:
+            successor_thread_id.append(get_ident())
+            payload = _dossier_payload(
+                object_id=company_id, basis_id=basis_id, source_manifest_id=manifest_id,
+                source_manifest_hash=manifest_hash, version=2, supersedes_id=dossier_id,
+            )
+            UnderwritingResearchRepository(successor_session).append_candidate_dossier(
+                object_id=company_id, basis_id=basis_id, source_manifest_id=manifest_id,
+                dossier_key="industry-capacity", payload=payload, created_at=NOW,
+                expected_parent_id=dossier_id,
+            )
+            successor_session.commit()
+            successor_committed.set()
+        except BaseException as exc:
+            errors.append(exc)
+            successor_session.rollback()
+        finally:
+            successor_session.close()
+
+    review = Thread(target=append_review)
+    successor = Thread(target=append_successor)
+    try:
+        review.start()
+        assert review_read.wait(timeout=5)
+        successor.start()
+        assert successor_locked.wait(timeout=5)
+        allow_review_lock.set()
+        assert review_lock_attempted.wait(timeout=5)
+        assert not successor_committed.is_set()
+        allow_successor_commit.set()
+        review.join(timeout=5)
+        successor.join(timeout=5)
+        assert not review.is_alive()
+        assert not successor.is_alive()
+        assert len(errors) == 1
+        assert isinstance(errors[0], ValidationError)
+        assert str(errors[0]) == "candidate dossier is no longer current"
+    finally:
+        allow_review_lock.set()
+        allow_successor_commit.set()
+        review.join(timeout=5)
+        successor.join(timeout=5)
+
+    with sessions() as verifier:
+        assert verifier.scalar(
+            select(UnderwritingEvidenceCandidateReviewVersion).where(
+                UnderwritingEvidenceCandidateReviewVersion.dossier_id == dossier_id
+            )
+        ) is None
 
 
 def test_dossier_rejects_stale_parent(repository, company, basis, manifest) -> None:
