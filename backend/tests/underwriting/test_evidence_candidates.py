@@ -20,7 +20,8 @@ from app.underwriting.domain.evidence_candidates import (
     CandidateEvidenceReview,
     CandidateEvidenceStatus,
 )
-from app.underwriting.domain.types import HistoricalBasisInput
+from app.underwriting.domain.answerability import ENTRY_ACTIONS
+from app.underwriting.domain.types import EligibleAction, HistoricalBasisInput
 from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
     UnderwritingHistoricalBasis,
@@ -29,8 +30,11 @@ from app.underwriting.persistence.models import (
 )
 from app.underwriting.persistence.repository import StaleParentError, UnderwritingRepository
 from app.underwriting.persistence.research_models import (
+    UnderwritingEarningsEngineVersion,
     UnderwritingEvidenceCandidateDossierVersion,
     UnderwritingEvidenceCandidateReviewVersion,
+    UnderwritingIndustryStateVersion,
+    UnderwritingMechanismPackVersion,
     UnderwritingSourceManifestVersion,
     begin_candidate_sqlite_write,
     require_candidate_write_read_committed,
@@ -1133,9 +1137,10 @@ def test_publish_reject_review_blocks_candidate_publication(
         CandidateEvidenceService(session, now=lambda: NOW).publish(dossier.id)
 
 
-def test_publish_seals_candidate_only_with_not_answerable_boundary(
+def test_candidate_evidence_never_unblocks_industry_state_or_action(
     session: Session, repository, company, basis, manifest,
 ) -> None:
+    """Dual-approved evidence stays outside the formal model and action paths."""
     dossier = _append_dossier(repository, company, basis, manifest)
     _append_review(repository, dossier, reviewer_identity="reviewer:provenance", reviewer_role="provenance")
     _append_review(repository, dossier, reviewer_identity="reviewer:methodology", reviewer_role="methodology")
@@ -1144,10 +1149,32 @@ def test_publish_seals_candidate_only_with_not_answerable_boundary(
     published = CandidateEvidenceService(session, now=lambda: NOW).publish(dossier.id)
 
     assert published.answerability.state == "not_answerable"
+    assert published.answerability.allowed_action == EligibleAction.WAIT_FOR_VALIDATION.value
+    assert published.answerability.allowed_action not in {action.value for action in ENTRY_ACTIONS}
     assert published.formal_mechanism_ids == ()
     assert published.industry_state_id is None
     assert published.earnings_engine_id is None
     assert published.research_version.version_kind == "industry_evidence_candidate"
+    assert session.scalars(
+        select(UnderwritingMechanismPackVersion).where(
+            UnderwritingMechanismPackVersion.object_id == company.id,
+            UnderwritingMechanismPackVersion.basis_id == basis.id,
+        )
+    ).all() == []
+    assert session.scalars(
+        select(UnderwritingIndustryStateVersion).where(
+            UnderwritingIndustryStateVersion.basis_id == basis.id,
+        )
+    ).all() == []
+    assert session.scalars(
+        select(UnderwritingEarningsEngineVersion).where(
+            UnderwritingEarningsEngineVersion.company_id == company.id,
+            UnderwritingEarningsEngineVersion.basis_id == basis.id,
+        )
+    ).all() == []
+    assert not {
+        "valuation_id", "action", "recommendation",
+    } & set(type(published).__dataclass_fields__)
     assert set(published.research_version.parent_ids) == {
         str(dossier.id), str(manifest.id), str(published.answerability.id),
         *(str(review.id) for review in published.reviews),

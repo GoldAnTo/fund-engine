@@ -130,6 +130,35 @@ resolved. This is important for the CATL evidence-only version: its returned
 `not_answerable` record and empty selected gap list do not authorise a
 cross-object industry lookup or an inference about later research.
 
+## Reviewed industry evidence candidates
+
+An `industry_evidence_candidate` is a sealed record of bounded evidence, not
+a formal mechanism or a model input. Its dossier binds one object, one
+historical basis and one frozen source manifest. Each selected source and
+locator is checked against that manifest, its availability must be at or before
+the basis cutoff, and the recorded authorization/retention boundary remains
+part of the source freeze. The selected dossier, source manifest and reviews
+are all immutable parents of the candidate revision.
+
+Publication requires two distinct authenticated reviewer identities in
+separate roles. The `provenance` review checks source identity, authorization,
+retention, locator, availability time and byte/version warnings. The
+`methodology` review checks scope, statistical denominator, chart
+transcription uncertainty, assumption/Unknown labels and the
+anti-splicing declaration. A rejection or request for changes blocks
+publication; an amended dossier must receive new reviews.
+
+Approval does not formalize the material. Candidate publication creates only a
+`not_answerable` boundary and research debt; it does not create a formal
+mechanism, IndustryState, scenario, exposure, earnings engine or forecast.
+It therefore makes no statement about actual utilisation, a price mechanism,
+valuation, or an investment action. A future formal IndustryState must be
+created through a separate governed write path with independently frozen and
+reconciled metric definitions/observations, adequate source and denominator
+coverage, and causal review of direction, alternative explanations and
+falsifiers. No candidate dossier, review, source locator, or approval can be
+silently promoted to satisfy those inputs.
+
 ## Failure behaviour
 
 The API returns the normal underwriting `422` validation envelope when an
