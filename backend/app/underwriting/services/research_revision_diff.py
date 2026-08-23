@@ -862,38 +862,51 @@ class ResearchRevisionDiffService:
             expected_previous = row.id
         return rows
 
-    def _history_object(self, object_id: UUID) -> tuple[UnderwritingResearchObject, ResearchObjectKind]:
+    def _history_object(self, object_id: UUID) -> tuple[ResearchObjectKind, str, str]:
         """Load only the immutable object selected by a revision family.
 
         This is deliberately not a current-security lookup or an inferred
         identity from any parent artefact.  A malformed historical foreign key
         must fail closed rather than silently falling back to a related object.
         """
-        research_object = self._session.get(UnderwritingResearchObject, object_id)
-        if research_object is None or research_object.id != object_id:
+        # Select scalar columns rather than materialising an ORM entity.  The
+        # latter can be served from the session identity map and therefore
+        # expose an unflushed caller mutation as though it were frozen history.
+        with self._session.no_autoflush:
+            row = self._session.execute(
+                select(
+                    UnderwritingResearchObject.id,
+                    UnderwritingResearchObject.kind,
+                    UnderwritingResearchObject.canonical_name,
+                    UnderwritingResearchObject.external_key,
+                ).where(UnderwritingResearchObject.id == object_id)
+            ).mappings().one_or_none()
+        if row is None or row["id"] != object_id:
             raise ValidationError("research revision object is missing")
+        canonical_name = row["canonical_name"]
+        external_key = row["external_key"]
         if (
-            not isinstance(research_object.canonical_name, str)
-            or not research_object.canonical_name.strip()
-            or not isinstance(research_object.external_key, str)
-            or not research_object.external_key.strip()
+            not isinstance(canonical_name, str)
+            or not canonical_name.strip()
+            or not isinstance(external_key, str)
+            or not external_key.strip()
         ):
             raise ValidationError("research revision object identity is malformed")
         try:
-            object_kind = ResearchObjectKind(research_object.kind)
+            object_kind = ResearchObjectKind(row["kind"])
         except (TypeError, ValueError) as exc:
             raise ValidationError("research revision object identity is malformed") from exc
-        return research_object, object_kind
+        return object_kind, canonical_name, external_key
 
     def revision_history(self, object_id: UUID, version_kind: str) -> RevisionHistory:
         with self._session.no_autoflush:
             rows = self._family_rows(object_id, version_kind)
-            research_object, object_kind = self._history_object(object_id)
+            object_kind, canonical_name, external_key = self._history_object(object_id)
             return RevisionHistory(
                 object_id,
                 object_kind,
-                research_object.canonical_name,
-                research_object.external_key,
+                canonical_name,
+                external_key,
                 version_kind,
                 tuple(self.revision_summary(row.id) for row in rows),
             )

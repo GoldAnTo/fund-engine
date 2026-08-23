@@ -307,6 +307,27 @@ def test_history_identity_is_read_from_the_addressed_persisted_research_object(
     )
 
 
+def test_history_identity_ignores_unflushed_research_object_mutation(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    seeded_revision.company.kind = "security"
+    seeded_revision.company.canonical_name = "unflushed replacement"
+    seeded_revision.company.external_key = "security:unflushed"
+
+    history = ResearchRevisionDiffService(session).revision_history(
+        seeded_revision.company.id, "economic_model",
+    )
+
+    assert (
+        history.object_kind,
+        history.canonical_name,
+        history.external_key,
+    ) == ("company", "CATL", "CN:300750:COMPANY")
+    assert session.is_modified(seeded_revision.company)
+
+
 def test_history_rejects_a_missing_research_revision_family(
     session: Session, seeded_revision: SeededRevision,
 ) -> None:
