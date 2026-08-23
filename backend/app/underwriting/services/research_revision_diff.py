@@ -88,6 +88,34 @@ class RevisionHistory:
     revisions: tuple[ResearchRevisionSummary, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class RevisionChange:
+    """One typed difference between two sealed revision parent sets."""
+
+    group: str
+    change_type: str
+    artifact_type: str
+    identity: str
+    before: RevisionArtifactRef | None
+    after: RevisionArtifactRef | None
+
+    def refs(self) -> tuple[RevisionArtifactRef, ...]:
+        """Return the selected historical artefacts, in before/after order."""
+        return tuple(ref for ref in (self.before, self.after) if ref is not None)
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchRevisionDiff:
+    """Deterministic, ancestor-only comparison of two historical revisions."""
+
+    from_revision_id: UUID
+    to_revision_id: UUID
+    from_content_hash: str
+    to_content_hash: str
+    entries: tuple[RevisionChange, ...]
+    diff_hash: str
+
+
 class ResearchRevisionDiffService:
     """Read the existing ``uw_research_versions`` successor chain exactly."""
 
@@ -534,3 +562,146 @@ class ResearchRevisionDiffService:
         with self._session.no_autoflush:
             rows = self._family_rows(object_id, version_kind)
             return self.revision_summary(rows[-1].id)
+
+    @staticmethod
+    def _group_for(artifact_type: str) -> str:
+        if artifact_type in {
+            "source_manifest", "metric_definition", "metric_observation", "ledger", "semantic_snapshot",
+        }:
+            return "evidence"
+        if artifact_type == "mechanism":
+            return "mechanism"
+        if artifact_type in {
+            "industry_state", "industry_scenario", "company_exposure", "earnings_engine",
+            "forecast_input", "falsifier",
+        }:
+            return "industry_model"
+        if artifact_type == "answerability":
+            return "answerability"
+        raise ValidationError("research revision parent has an unknown diff group")
+
+    @staticmethod
+    def _ref_payload(ref: RevisionArtifactRef | None) -> dict[str, object] | None:
+        if ref is None:
+            return None
+        return {
+            "reference": ref.reference,
+            "artifact_type": ref.artifact_type,
+            "identity": ref.identity,
+            "content_hash": ref.content_hash,
+            "source_locators": ref.source_locators,
+            "unit": ref.unit,
+            "period_start": ref.period_start,
+            "period_end": ref.period_end,
+            "available_at": ref.available_at,
+            "status": ref.status,
+        }
+
+    @classmethod
+    def _change_payload(cls, change: RevisionChange) -> dict[str, object]:
+        return {
+            "group": change.group,
+            "change_type": change.change_type,
+            "artifact_type": change.artifact_type,
+            "identity": change.identity,
+            "before": cls._ref_payload(change.before),
+            "after": cls._ref_payload(change.after),
+        }
+
+    def _strict_ancestor(
+        self, from_revision: UnderwritingResearchVersion, to_revision: UnderwritingResearchVersion,
+    ) -> None:
+        if (
+            from_revision.id == to_revision.id
+            or from_revision.object_id != to_revision.object_id
+            or from_revision.version_kind != to_revision.version_kind
+            or from_revision.basis_id != to_revision.basis_id
+        ):
+            raise ValidationError("research revision diff requires a strict ancestor in one historical family")
+        # Validate the persisted family before walking it.  This catches a
+        # cycle/skip inserted by an unsafe migration even when neither corrupt
+        # row is one of the requested endpoints.
+        self._family_rows(from_revision.object_id, from_revision.version_kind)
+        seen: set[UUID] = set()
+        current = to_revision
+        while current.supersedes_id is not None:
+            if current.id in seen:
+                raise ValidationError("research revision ancestor chain is cyclic")
+            seen.add(current.id)
+            predecessor = self._revision(current.supersedes_id)
+            if (
+                predecessor.object_id != to_revision.object_id
+                or predecessor.version_kind != to_revision.version_kind
+                or predecessor.basis_id != to_revision.basis_id
+                or predecessor.sequence != current.sequence - 1
+            ):
+                raise ValidationError("research revision ancestor chain is corrupt")
+            if predecessor.id == from_revision.id:
+                return
+            current = predecessor
+        raise ValidationError("research revision diff requires from revision to be an ancestor")
+
+    @staticmethod
+    def _index_refs(refs: tuple[RevisionArtifactRef, ...]) -> dict[tuple[str, str], RevisionArtifactRef]:
+        indexed: dict[tuple[str, str], RevisionArtifactRef] = {}
+        for ref in refs:
+            key = (ref.artifact_type, ref.identity)
+            if key in indexed:
+                raise ValidationError("research revision parent set has duplicate semantic identity")
+            indexed[key] = ref
+        return indexed
+
+    @classmethod
+    def _sorted_changes(cls, changes: Iterable[RevisionChange]) -> tuple[RevisionChange, ...]:
+        rank = {"evidence": 0, "mechanism": 1, "industry_model": 2, "answerability": 3}
+        return tuple(sorted(
+            changes,
+            key=lambda item: (
+                rank[item.group], item.artifact_type, item.identity, item.change_type,
+                item.before.reference if item.before is not None else "",
+                item.after.reference if item.after is not None else "",
+            ),
+        ))
+
+    def revision_diff(self, from_revision_id: UUID, to_revision_id: UUID) -> ResearchRevisionDiff:
+        """Compare sealed parents only when ``from`` is a strict ancestor of ``to``.
+
+        The service deliberately resolves both endpoint summaries before
+        indexing.  Therefore neither a same-basis unreferenced artefact nor a
+        current natural-key head can appear in the result.
+        """
+        with self._session.no_autoflush:
+            from_revision = self._revision(from_revision_id)
+            to_revision = self._revision(to_revision_id)
+            self._strict_ancestor(from_revision, to_revision)
+            before_summary = self.revision_summary(from_revision.id)
+            after_summary = self.revision_summary(to_revision.id)
+            before = self._index_refs(before_summary.parent_refs)
+            after = self._index_refs(after_summary.parent_refs)
+            changes: list[RevisionChange] = []
+            for artifact_type, identity in sorted(set(before) | set(after)):
+                earlier = before.get((artifact_type, identity))
+                later = after.get((artifact_type, identity))
+                if earlier is None:
+                    change_type = "added"
+                elif later is None:
+                    change_type = "removed"
+                elif earlier.reference != later.reference or earlier.content_hash != later.content_hash:
+                    change_type = "replaced"
+                else:
+                    continue
+                changes.append(RevisionChange(
+                    self._group_for(artifact_type), change_type, artifact_type, identity, earlier, later,
+                ))
+            entries = self._sorted_changes(changes)
+            diff_hash = canonical_hash({
+                "from_revision_id": str(from_revision.id),
+                "to_revision_id": str(to_revision.id),
+                "from_content_hash": from_revision.content_hash,
+                "to_content_hash": to_revision.content_hash,
+                "entries": [self._change_payload(entry) for entry in entries],
+            })
+            return ResearchRevisionDiff(
+                from_revision.id, to_revision.id, from_revision.content_hash,
+                to_revision.content_hash, entries, diff_hash,
+            )

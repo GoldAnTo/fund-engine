@@ -11,7 +11,10 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
-from app.underwriting.domain.types import HistoricalBasisInput, ResearchObjectKind
+from app.underwriting.domain.types import (
+    BlockerCode, EligibleAction, HistoricalBasisInput, LedgerEntryInput,
+    LedgerKind, ResearchObjectKind,
+)
 from app.underwriting.domain.metrics import MetricObservation
 from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
@@ -32,8 +35,17 @@ from app.underwriting.persistence.research_models import (
 )
 from app.underwriting.fixtures.catl_baseline import load_catl_fixture
 from app.underwriting.services.catl_baseline import CatlBaselineService
+from app.underwriting.persistence.repository import UnderwritingRepository
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
 from app.underwriting.services.kernel import UnderwritingKernelService, canonical_hash
+from app.underwriting.services.revision_parent_seal import (
+    CATL_PARENT_SET_ENTRY_TYPE,
+    CATL_PARENT_SET_FAMILY,
+    answerability_content_hash,
+    catl_parent_set_seal_payload,
+    catl_revision_content_hash,
+    parent_set_semantic_hash,
+)
 
 
 NOW = datetime(2025, 5, 15, 15, 59, 59, tzinfo=UTC)
@@ -516,3 +528,211 @@ def test_foundation_rejects_an_equal_content_parent_with_a_different_identity(
 
     with pytest.raises(ValidationError, match="CATL semantic snapshot.*stored seal"):
         ResearchRevisionDiffService(session).revision_summary(catl_revision.research_version.id)
+
+
+def test_diff_is_typed_deterministic_and_uses_only_selected_frozen_parents(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    """A successor changes frozen evidence and adds a mechanism, nothing else."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    repository = UnderwritingResearchRepository(session)
+    mechanism_payload = {"key": "price_cost_transmission", "status": "candidate"}
+    mechanism = repository.append_mechanism(
+        mechanism_key="price_cost_transmission", object_id=seeded_revision.company.id,
+        basis_id=seeded_revision.basis.id, source_manifest_id=seeded_revision.manifest.id,
+        status="candidate", payload=mechanism_payload,
+        content_hash=canonical_hash(mechanism_payload), expected_parent_id=None,
+        created_at=NOW, source_ids=[], definition_ids=[],
+    )
+    unrelated_manifest, _ = _append_observation(
+        repository=repository, company=seeded_revision.company, basis=seeded_revision.basis,
+        source_locator="unreferenced-source:p1", metric_key="unreferenced.metric",
+    )
+    successor = UnderwritingKernelService(session, now=lambda: NOW).publish_research_version(
+        seeded_revision.company.id, seeded_revision.basis.id, "economic_model",
+        [str(seeded_revision.manifest.id), str(mechanism.id)],
+        seeded_revision.first.id,
+    )
+
+    service = ResearchRevisionDiffService(session)
+    first = service.revision_diff(seeded_revision.first.id, successor.id)
+    second = service.revision_diff(seeded_revision.first.id, successor.id)
+
+    assert first == second
+    assert [(item.group, item.change_type, item.identity) for item in first.entries] == [
+        ("evidence", "removed", next(ref.identity for ref in service.revision_summary(seeded_revision.first.id).parent_refs if ref.artifact_type == "metric_observation")),
+        ("mechanism", "added", "price_cost_transmission|1"),
+    ]
+    assert all(str(unrelated_manifest.id) not in {ref.reference for ref in entry.refs()} for entry in first.entries)
+    evidence = first.entries[0]
+    assert evidence.before is not None and evidence.after is None
+    assert evidence.before.source_locators == ("annual-report:p18",)
+    assert evidence.before.unit == "CNY"
+    assert evidence.before.period_end == datetime(2024, 12, 31, tzinfo=UTC)
+
+
+def test_diff_represents_a_sealed_answerability_revision_as_a_replacement(
+    session: Session, catl_revision,
+) -> None:
+    """The special CATL seal still permits a strictly historical replacement."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    service = ResearchRevisionDiffService(session)
+    original = service.revision_summary(catl_revision.research_version.id)
+    old_answerability = next(ref for ref in original.parent_refs if ref.artifact_type == "answerability")
+    old_seal = next(
+        session.get(UnderwritingLedgerEntry, UUID(ref.reference))
+        for ref in original.parent_refs
+        if ref.artifact_type == "ledger"
+        and (row := session.get(UnderwritingLedgerEntry, UUID(ref.reference))) is not None
+        and row.family_key == CATL_PARENT_SET_FAMILY
+    )
+    answerability = kernel.record_answerability(
+        catl_revision.company.id, catl_revision.basis.id,
+        (BlockerCode.MISSING_KEY_BASELINE, BlockerCode.MECHANISM_UNIDENTIFIED),
+        ("industry.capacity_utilization_price_cost_baseline", "formal_mechanism_review"),
+        True, EligibleAction.OBSERVE,
+        (
+            "collect comparable capacity, utilization, price, and cost evidence",
+            "complete independent mechanism review before formalization",
+        ),
+        old_answerability.reference and UUID(old_answerability.reference),
+    )
+    replacement_ref = {
+        "reference": str(answerability.id), "artifact_type": "answerability",
+        "identity": "answerability",
+        "content_hash": answerability_content_hash(
+            object_id=answerability.object_id, basis_id=answerability.basis_id,
+            version=answerability.version, state=answerability.state,
+            blockers=answerability.blockers, research_debt_keys=answerability.research_debt_keys,
+            resolvable_within_mandate=answerability.resolvable_within_mandate,
+            allowed_action=answerability.allowed_action,
+            resolution_requirements=answerability.resolution_requirements,
+        ),
+    }
+    refs = [
+        {"reference": ref.reference, "artifact_type": ref.artifact_type,
+         "identity": ref.identity, "content_hash": ref.content_hash}
+        for ref in original.parent_refs
+        if ref.artifact_type != "semantic_snapshot"
+        and ref.reference not in {old_answerability.reference, str(old_seal.id)}
+    ] + [replacement_ref]
+    token = next(ref.reference for ref in original.parent_refs if ref.artifact_type == "semantic_snapshot")
+    seal = kernel.append_ledger_entry(
+        catl_revision.company.id, catl_revision.basis.id,
+        LedgerEntryInput(
+            LedgerKind.CALIBRATION, CATL_PARENT_SET_FAMILY, CATL_PARENT_SET_ENTRY_TYPE,
+            catl_parent_set_seal_payload(semantic_snapshot_token=token, refs=refs),
+            NOW, NOW, "frozen_revision_parent_set",
+        ),
+        old_seal.id,
+    )
+    parent_ids = [
+        parent for parent in catl_revision.research_version.parent_ids
+        if parent not in {old_answerability.reference, str(old_seal.id)}
+    ] + [str(answerability.id), str(seal.id)]
+    successor = UnderwritingRepository(session).append_research_version(
+        object_id=catl_revision.company.id, basis_id=catl_revision.basis.id,
+        version_kind=catl_revision.research_version.version_kind,
+        content_hash=catl_revision_content_hash(
+            semantic_snapshot_token=token, parent_set_semantic_hash=parent_set_semantic_hash(refs),
+        ),
+        parent_ids=parent_ids, expected_parent_id=catl_revision.research_version.id,
+        created_at=NOW,
+    )
+
+    result = service.revision_diff(catl_revision.research_version.id, successor.id)
+
+    answerability_change = next(item for item in result.entries if item.group == "answerability")
+    assert answerability_change.change_type == "replaced"
+    assert answerability_change.identity == "answerability"
+    assert answerability_change.before == old_answerability
+    assert answerability_change.after is not None
+    assert answerability_change.after.reference == str(answerability.id)
+
+
+@pytest.mark.parametrize("pair", ["reverse", "sibling", "cross_family"])
+def test_diff_rejects_non_ancestor_pairs(
+    session: Session, seeded_revision: SeededRevision, pair: str,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    second = kernel.publish_research_version(
+        seeded_revision.company.id, seeded_revision.basis.id, "economic_model",
+        [str(seeded_revision.manifest.id), str(seeded_revision.observation.id)], seeded_revision.first.id,
+    )
+    if pair == "reverse":
+        left, right = second, seeded_revision.first
+    elif pair == "sibling":
+        sibling = kernel.publish_research_version(
+            seeded_revision.company.id, seeded_revision.basis.id, "other_economic_model",
+            [str(seeded_revision.manifest.id)], None,
+        )
+        left, right = seeded_revision.first, sibling
+    else:
+        other = kernel.publish_research_version(
+            seeded_revision.company.id, seeded_revision.basis.id, "another_model",
+            [str(seeded_revision.manifest.id)], None,
+        )
+        left, right = seeded_revision.first, other
+
+    with pytest.raises(ValidationError, match="ancestor"):
+        ResearchRevisionDiffService(session).revision_diff(left.id, right.id)
+
+
+def test_diff_replays_direct_and_multi_hop_ancestors_when_parent_order_changes(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    second = kernel.publish_research_version(
+        seeded_revision.company.id, seeded_revision.basis.id, "economic_model",
+        [str(seeded_revision.observation.id), str(seeded_revision.manifest.id)], seeded_revision.first.id,
+    )
+    third = kernel.publish_research_version(
+        seeded_revision.company.id, seeded_revision.basis.id, "economic_model",
+        [str(seeded_revision.manifest.id), str(seeded_revision.observation.id)], second.id,
+    )
+    service = ResearchRevisionDiffService(session)
+    direct = service.revision_diff(seeded_revision.first.id, second.id)
+    multi_hop = service.revision_diff(seeded_revision.first.id, third.id)
+    session.connection().exec_driver_sql(
+        "UPDATE uw_research_versions SET parent_ids = ? WHERE id = ?",
+        (json.dumps(list(reversed(second.parent_ids))), second.id.hex),
+    )
+    session.expire_all()
+
+    reordered = ResearchRevisionDiffService(session).revision_diff(seeded_revision.first.id, second.id)
+
+    assert direct.entries == multi_hop.entries == reordered.entries == ()
+    assert direct.diff_hash == reordered.diff_hash
+
+
+def test_diff_fails_closed_for_ungoverned_semantic_token_and_corrupt_cycle(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    token_revision = kernel.publish_research_version(
+        seeded_revision.company.id, seeded_revision.basis.id, "economic_model_with_token",
+        ["semantic_snapshot:" + "a" * 64], None,
+    )
+    with pytest.raises(ValidationError, match="semantic snapshot"):
+        ResearchRevisionDiffService(session).revision_summary(token_revision.id)
+
+    successor = kernel.publish_research_version(
+        seeded_revision.company.id, seeded_revision.basis.id, "economic_model",
+        [str(seeded_revision.manifest.id), str(seeded_revision.observation.id)], seeded_revision.first.id,
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_research_versions SET supersedes_id = ? WHERE id = ?",
+        (successor.id.hex, seeded_revision.first.id.hex),
+    )
+    session.expire_all()
+    with pytest.raises(ValidationError, match="history is corrupt|ancestor chain is cyclic"):
+        ResearchRevisionDiffService(session).revision_diff(seeded_revision.first.id, successor.id)
