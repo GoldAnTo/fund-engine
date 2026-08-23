@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from threading import Event, Thread, get_ident
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -226,6 +227,80 @@ def test_candidate_writes_allow_postgres_read_committed_before_family_lock() -> 
             return FakeConnection()
 
     require_candidate_write_read_committed(FakeSession())
+
+
+@pytest.mark.parametrize("isolation", ["REPEATABLE READ", "SERIALIZABLE"])
+def test_candidate_publication_rejects_postgres_snapshot_before_dossier_lookup_or_lock(
+    isolation: str, monkeypatch,
+) -> None:
+    class FakeBind:
+        dialect = type("Dialect", (), {"name": "postgresql"})()
+
+    class FakeConnection:
+        def get_isolation_level(self):
+            return isolation
+
+    class FakeSession:
+        def get_bind(self):
+            return FakeBind()
+
+        def connection(self):
+            return FakeConnection()
+
+    service = CandidateEvidenceService(FakeSession())
+    events: list[str] = []
+    target = SimpleNamespace(object_id=uuid4(), basis_id=uuid4(), dossier_key="industry-capacity")
+    monkeypatch.setattr(service, "_dossier_for_lock", lambda _id: events.append("lookup") or target)
+    monkeypatch.setattr(
+        service._repository,
+        "_lock_candidate_dossier_family",
+        lambda **_kwargs: events.append("lock"),
+    )
+    monkeypatch.setattr(
+        service,
+        "_publish_after_family_lock",
+        lambda _id: events.append("publish") or object(),
+    )
+
+    with pytest.raises(ValidationError, match="candidate writes require READ COMMITTED"):
+        service.publish(uuid4())
+
+    assert events == []
+
+
+def test_candidate_publication_allows_postgres_read_committed_before_family_lock(monkeypatch) -> None:
+    class FakeBind:
+        dialect = type("Dialect", (), {"name": "postgresql"})()
+
+    class FakeConnection:
+        def get_isolation_level(self):
+            return "READ COMMITTED"
+
+    class FakeSession:
+        def get_bind(self):
+            return FakeBind()
+
+        def connection(self):
+            return FakeConnection()
+
+    service = CandidateEvidenceService(FakeSession())
+    events: list[str] = []
+    target = SimpleNamespace(object_id=uuid4(), basis_id=uuid4(), dossier_key="industry-capacity")
+    publication = object()
+    monkeypatch.setattr(service, "_dossier_for_lock", lambda _id: events.append("lookup") or target)
+    monkeypatch.setattr(
+        service._repository,
+        "_lock_candidate_dossier_family",
+        lambda **_kwargs: events.append("lock"),
+    )
+    monkeypatch.setattr(
+        service,
+        "_publish_after_family_lock",
+        lambda _id: events.append("publish") or publication,
+    )
+
+    assert service.publish(uuid4()) is publication
+    assert events == ["lookup", "lock", "publish"]
 
 
 def test_same_identity_cannot_fill_both_approval_roles(repository, company, basis, manifest) -> None:

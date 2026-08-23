@@ -34,6 +34,7 @@ from app.underwriting.persistence.repository import UnderwritingRepository
 from app.underwriting.persistence.research_models import (
     UnderwritingEvidenceCandidateDossierVersion,
     UnderwritingEvidenceCandidateReviewVersion,
+    require_candidate_write_read_committed,
 )
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
 from app.underwriting.services.kernel import frozen_research_version_content_hash
@@ -269,6 +270,7 @@ class CandidateEvidenceService:
 
     def publish(self, dossier_id: UUID) -> CandidateEvidencePublication:
         """Publish only a sealed, non-answerable candidate revision; never commit."""
+        require_candidate_write_read_committed(self._session)
         target = self._dossier_for_lock(dossier_id)
         self._repository._lock_candidate_dossier_family(
             object_id=target.object_id,
