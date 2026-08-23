@@ -37,7 +37,7 @@ from app.underwriting.persistence.research_models import (
     begin_candidate_sqlite_write,
     candidate_dossier_family_lock,
     candidate_dossier_family_lock_statement,
-    mark_candidate_sqlite_write,
+    mark_sqlite_orm_write_transaction,
     release_candidate_sqlite_write,
     require_candidate_write_read_committed,
     validate_candidate_dossier_governance,
@@ -240,7 +240,7 @@ class UnderwritingResearchRepository:
                 try:
                     self._session.add(row)
                     self._session.flush()
-                    mark_candidate_sqlite_write(self._session)
+                    mark_sqlite_orm_write_transaction(self._session)
                 finally:
                     self._session.info.pop("candidate_repository_write", None)
         except IntegrityError as exc:

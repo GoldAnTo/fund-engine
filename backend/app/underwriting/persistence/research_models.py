@@ -27,6 +27,7 @@ from app.underwriting.domain.evidence_candidates import (
 
 _CANDIDATE_DOSSIER_FAMILY_LOCK_DOMAIN = b"underwriting:candidate-dossier-family:v1\x00"
 _CANDIDATE_SQLITE_WRITE_RESERVATION = "candidate_sqlite_write_reservation"
+_SQLITE_ORM_WRITE_TRANSACTION = "sqlite_orm_write_transaction"
 
 
 def _candidate_canonical_hash(value: object) -> str:
@@ -380,35 +381,55 @@ def _stored_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def begin_candidate_sqlite_write(session: Session) -> None:
+def _has_unrelated_pending_work(session: Session, candidate_rows: tuple[object, ...]) -> bool:
+    allowed = {id(row) for row in candidate_rows}
+    return any(
+        id(row) not in allowed
+        for rows in (session.new, session.dirty, session.deleted)
+        for row in rows
+    )
+
+
+def begin_candidate_sqlite_write(
+    session: Session, *, candidate_rows: tuple[object, ...] = (),
+) -> None:
     """Take SQLite's write reservation before any candidate-family read."""
     if session.get_bind().dialect.name != "sqlite":
         return
+    if _has_unrelated_pending_work(session, candidate_rows):
+        raise ValidationError("candidate write requires a clean SQLite Session")
     connection = session.connection()
     raw_connection = connection.connection.driver_connection
-    if session.info.get(_CANDIDATE_SQLITE_WRITE_RESERVATION):
+    if session.info.get(_CANDIDATE_SQLITE_WRITE_RESERVATION) is raw_connection:
         if raw_connection.in_transaction:
             return
         session.info.pop(_CANDIDATE_SQLITE_WRITE_RESERVATION, None)
     if raw_connection.in_transaction:
+        if session.info.get(_SQLITE_ORM_WRITE_TRANSACTION) is raw_connection:
+            return
         raise ValidationError("candidate write requires a fresh SQLite transaction")
     connection.exec_driver_sql("BEGIN IMMEDIATE")
-    session.info[_CANDIDATE_SQLITE_WRITE_RESERVATION] = True
+    session.info[_CANDIDATE_SQLITE_WRITE_RESERVATION] = raw_connection
 
 
 def release_candidate_sqlite_write(session: Session) -> None:
     """Release a reservation taken for a rejected repository candidate write."""
-    if session.info.pop(_CANDIDATE_SQLITE_WRITE_RESERVATION, None):
-        session.rollback()
+    reservation = session.info.pop(_CANDIDATE_SQLITE_WRITE_RESERVATION, None)
+    if reservation is not None:
+        raw_connection = session.connection().connection.driver_connection
+        if reservation is raw_connection and raw_connection.in_transaction:
+            # The preflight above guarantees this transaction contained no caller work.
+            # It is therefore safe to release only the reservation we opened.
+            session.rollback()
 
 
-def mark_candidate_sqlite_write(session: Session) -> None:
-    """Record a repository-owned SQLite write transaction as already reserved."""
+def mark_sqlite_orm_write_transaction(session: Session) -> None:
+    """Remember an active ORM write transaction without claiming a candidate lock."""
     if session.get_bind().dialect.name != "sqlite":
         return
     raw_connection = session.connection().connection.driver_connection
     if raw_connection.in_transaction:
-        session.info[_CANDIDATE_SQLITE_WRITE_RESERVATION] = True
+        session.info[_SQLITE_ORM_WRITE_TRANSACTION] = raw_connection
 
 
 def require_candidate_write_read_committed(session: Session) -> None:
@@ -448,12 +469,13 @@ def candidate_dossier_family_lock_statement(
 
 
 def candidate_dossier_family_lock(
-    session: Session, *, object_id: uuid.UUID, basis_id: uuid.UUID, dossier_key: str
+    session: Session, *, object_id: uuid.UUID, basis_id: uuid.UUID, dossier_key: str,
+    candidate_rows: tuple[object, ...] = (),
 ) -> None:
     """Acquire one transaction-scoped candidate-family lock on every dialect."""
     dialect = session.get_bind().dialect.name
     if dialect == "sqlite":
-        begin_candidate_sqlite_write(session)
+        begin_candidate_sqlite_write(session, candidate_rows=candidate_rows)
         return
     if dialect != "postgresql":
         raise RuntimeError("database dialect cannot serialize candidate dossier family")
@@ -695,13 +717,13 @@ def _validate_direct_candidate_writes(session, _flush_context, _instances) -> No
     if not _candidate_governance_schema_available(session):
         return
     require_candidate_write_read_committed(session)
-    begin_candidate_sqlite_write(session)
+    begin_candidate_sqlite_write(session, candidate_rows=candidates)
     with session.no_autoflush:
         for row in candidates:
             if isinstance(row, UnderwritingEvidenceCandidateDossierVersion):
                 candidate_dossier_family_lock(
                     session, object_id=row.object_id, basis_id=row.basis_id,
-                    dossier_key=row.dossier_key,
+                    dossier_key=row.dossier_key, candidate_rows=candidates,
                 )
                 validate_candidate_dossier_governance(session, row, enforce_current=True)
             else:
@@ -709,14 +731,14 @@ def _validate_direct_candidate_writes(session, _flush_context, _instances) -> No
                 if dossier is not None:
                     candidate_dossier_family_lock(
                         session, object_id=dossier.object_id, basis_id=dossier.basis_id,
-                        dossier_key=dossier.dossier_key,
+                        dossier_key=dossier.dossier_key, candidate_rows=candidates,
                     )
                 validate_candidate_review_governance(session, row, enforce_current=True)
 
 
 @event.listens_for(Session, "after_flush_postexec")
-def _mark_sqlite_candidate_write_after_any_flush(session, _flush_context) -> None:
-    mark_candidate_sqlite_write(session)
+def _mark_sqlite_orm_write_after_any_flush(session, _flush_context) -> None:
+    mark_sqlite_orm_write_transaction(session)
 
 
 @event.listens_for(UnderwritingEvidenceCandidateDossierVersion, "before_insert")

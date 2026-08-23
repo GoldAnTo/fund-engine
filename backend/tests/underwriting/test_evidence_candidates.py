@@ -19,6 +19,7 @@ from app.underwriting.domain.evidence_candidates import (
     CandidateEvidenceStatus,
 )
 from app.underwriting.domain.types import HistoricalBasisInput
+from app.underwriting.persistence.models import UnderwritingResearchObject
 from app.underwriting.persistence.repository import StaleParentError, UnderwritingRepository
 from app.underwriting.persistence.research_models import (
     UnderwritingEvidenceCandidateDossierVersion,
@@ -332,6 +333,44 @@ def test_invalid_repository_candidate_releases_sqlite_write_reservation(tmp_path
         with sessions() as contender:
             begin_candidate_sqlite_write(contender)
             contender.rollback()
+    finally:
+        engine.dispose()
+
+
+def test_invalid_candidate_does_not_rollback_unrelated_pending_sqlite_work(tmp_path) -> None:
+    engine, sessions, (company_id, basis_id, manifest_id, manifest_hash) = _seed_file_candidate_database(
+        tmp_path, "candidate-preserve-unrelated.sqlite",
+    )
+    try:
+        with sessions() as writer:
+            unrelated = UnderwritingResearchObject(
+                id=uuid4(), kind="company", external_key="US:MSFT:COMPANY",
+                canonical_name="Microsoft", created_at=NOW,
+            )
+            writer.add(unrelated)
+            unrelated_id = unrelated.id
+
+            with pytest.raises(ValidationError, match="clean SQLite Session"):
+                UnderwritingResearchRepository(writer).append_candidate_dossier(
+                    object_id=company_id, basis_id=basis_id, source_manifest_id=manifest_id,
+                    dossier_key="industry-capacity",
+                    payload=_dossier_payload(
+                        object_id=company_id, basis_id=basis_id, source_manifest_id=manifest_id,
+                        source_manifest_hash=manifest_hash,
+                        source_locator="https://example.test/forged",
+                    ),
+                    created_at=NOW, expected_parent_id=None,
+                )
+
+            assert unrelated in writer.new
+            with sessions() as contender:
+                begin_candidate_sqlite_write(contender)
+                contender.rollback()
+
+            writer.commit()
+
+        with sessions() as fresh:
+            assert fresh.get(UnderwritingResearchObject, unrelated_id) is not None
     finally:
         engine.dispose()
 
