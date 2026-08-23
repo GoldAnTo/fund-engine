@@ -905,3 +905,121 @@ def test_diff_follows_direct_and_multi_hop_successors_across_historical_bases(
     assert service.revision_summary(revisions[2].id).basis_id == bases[2].id
     assert direct.entries and multi_hop.entries
     assert {item.group for item in direct.entries} == {"evidence"}
+
+
+def test_research_archives_list_only_frozen_readable_families_and_degrade_corrupt_ones(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    """The archive is a persisted lineage index, never a current-ledger view."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    industry = kernel.add_object(ResearchObjectKind.INDUSTRY, "CN:Battery:INDUSTRY", "Battery")
+    industry_basis = kernel.add_basis(HistoricalBasisInput(NOW, None, "e" * 64))
+    industry_entry = kernel.append_ledger_entry(
+        industry.id, industry_basis.id,
+        LedgerEntryInput(LedgerKind.REALITY, "shipments", "reported", {}, NOW, NOW, "public"),
+        None,
+    )
+    industry_version = kernel.publish_research_version(
+        industry.id, industry_basis.id, "industry_model", [str(industry_entry.id)], None,
+    )
+    corrupt = kernel.publish_research_version(
+        seeded_revision.company.id, seeded_revision.basis.id, "corrupt_model", ["not-a-parent"], None,
+    )
+    service = ResearchRevisionDiffService(session)
+
+    page = service.research_archives(limit=100)
+
+    assert [(item.canonical_name, item.version_kind) for item in page.items] == [
+        ("Battery", "industry_model"),
+        ("CATL", "corrupt_model"),
+        ("CATL", "economic_model"),
+    ]
+    readable = next(item for item in page.items if item.latest_revision_id == industry_version.id)
+    assert readable == type(readable)(
+        object_id=industry.id,
+        object_kind="industry",
+        canonical_name="Battery",
+        external_key="CN:Battery:INDUSTRY",
+        version_kind="industry_model",
+        version_count=1,
+        lineage_state="readable",
+        latest_revision_id=industry_version.id,
+        latest_sequence=1,
+        cutoff=NOW,
+        source_manifest_hash="e" * 64,
+    )
+    unreadable = next(item for item in page.items if item.version_kind == "corrupt_model")
+    assert unreadable.object_id == seeded_revision.company.id
+    assert unreadable.version_count == 1
+    assert unreadable.lineage_state == "unreadable"
+    assert (
+        unreadable.latest_revision_id,
+        unreadable.latest_sequence,
+        unreadable.cutoff,
+        unreadable.source_manifest_hash,
+    ) == (None, None, None, None)
+    assert corrupt.id not in {item.latest_revision_id for item in page.items}
+
+    before = page
+    kernel.append_ledger_entry(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        LedgerEntryInput(LedgerKind.REALITY, "later_unreferenced", "reported", {}, NOW, NOW, "public"),
+        None,
+    )
+    session.expire_all()
+
+    assert ResearchRevisionDiffService(session).research_archives(limit=100) == before
+
+
+def test_research_archives_filter_and_paginate_with_a_canonical_opaque_cursor(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    alphabet = kernel.add_object(ResearchObjectKind.COMPANY, "US:ALP:COMPANY", "Alphabet")
+    basis = kernel.add_basis(HistoricalBasisInput(NOW, None, "f" * 64))
+    entry = kernel.append_ledger_entry(
+        alphabet.id, basis.id,
+        LedgerEntryInput(LedgerKind.REALITY, "revenue", "reported", {}, NOW, NOW, "public"), None,
+    )
+    kernel.publish_research_version(alphabet.id, basis.id, "economic_model", [str(entry.id)], None)
+    service = ResearchRevisionDiffService(session)
+
+    first = service.research_archives(limit=1)
+    second = service.research_archives(limit=1, cursor=first.next_cursor)
+    filtered = service.research_archives(query="300750", kind="company", limit=100)
+
+    assert [item.canonical_name for item in first.items + second.items] == ["Alphabet", "CATL"]
+    assert first.next_cursor is not None
+    assert second.next_cursor is None
+    assert [(item.canonical_name, item.object_kind) for item in filtered.items] == [("CATL", "company")]
+    assert service.research_archives(query="alphabet", kind="industry", limit=100).items == ()
+
+    for bad_cursor in ("not-base64", "eyJ2IjoyfQ", "eyJ2IjoxLCJhZnRlciI6W119"):
+        with pytest.raises(ValidationError, match="research archive cursor"):
+            service.research_archives(limit=1, cursor=bad_cursor)
+    for bad_limit in (0, 101):
+        with pytest.raises(ValidationError, match="research archive limit"):
+            service.research_archives(limit=bad_limit)
+
+
+def test_research_archives_do_not_autoflush_pending_objects(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    pending = UnderwritingResearchObject(
+        kind="company",
+        external_key=seeded_revision.company.external_key,
+        canonical_name="would violate uniqueness if flushed",
+        created_at=NOW,
+    )
+    session.add(pending)
+
+    page = ResearchRevisionDiffService(session).research_archives(limit=100)
+
+    assert pending in session.new
+    assert [item.canonical_name for item in page.items] == ["CATL"]

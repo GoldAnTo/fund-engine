@@ -6,10 +6,12 @@ for a current/latest artefact and it owns no write operation.
 """
 from __future__ import annotations
 
+import base64
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+import json
 import re
 from uuid import UUID
 
@@ -22,6 +24,7 @@ from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
     UnderwritingHistoricalBasis,
     UnderwritingLedgerEntry,
+    UnderwritingResearchObject,
     UnderwritingResearchVersion,
 )
 from app.underwriting.persistence.research_models import (
@@ -86,6 +89,34 @@ class RevisionHistory:
     object_id: UUID
     version_kind: str
     revisions: tuple[ResearchRevisionSummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchArchiveItem:
+    """One immutable object/version-kind family in the research archive.
+
+    An unreadable family deliberately keeps only persisted identity and count.
+    It must never expose a partially verified head as though it were a valid
+    historical research conclusion.
+    """
+
+    object_id: UUID
+    object_kind: str
+    canonical_name: str
+    external_key: str
+    version_kind: str
+    version_count: int
+    lineage_state: str
+    latest_revision_id: UUID | None
+    latest_sequence: int | None
+    cutoff: datetime | None
+    source_manifest_hash: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchArchivePage:
+    items: tuple[ResearchArchiveItem, ...]
+    next_cursor: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -625,6 +656,146 @@ class ResearchRevisionDiffService:
         with self._session.no_autoflush:
             rows = self._family_rows(object_id, version_kind)
             return self.revision_summary(rows[-1].id)
+
+    @staticmethod
+    def _archive_sort_key(item: ResearchArchiveItem) -> tuple[str, str, str, str]:
+        return (
+            item.canonical_name,
+            item.external_key,
+            str(item.object_id),
+            item.version_kind,
+        )
+
+    @staticmethod
+    def _encode_archive_cursor(after: tuple[str, str, str, str]) -> str:
+        payload = json.dumps(
+            {"after": list(after), "v": 1},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+    @classmethod
+    def _decode_archive_cursor(cls, cursor: str | None) -> tuple[str, str, str, str] | None:
+        if cursor is None:
+            return None
+        if not isinstance(cursor, str) or not cursor:
+            raise ValidationError("research archive cursor is malformed")
+        try:
+            raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+            payload = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValidationError("research archive cursor is malformed") from exc
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"v", "after"}
+            or payload.get("v") != 1
+            or not isinstance(payload.get("after"), list)
+            or len(payload["after"]) != 4
+            or not all(isinstance(value, str) for value in payload["after"])
+        ):
+            raise ValidationError("research archive cursor is malformed")
+        after = tuple(payload["after"])
+        assert len(after) == 4
+        try:
+            object_id = UUID(after[2])
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValidationError("research archive cursor is malformed") from exc
+        if str(object_id) != after[2] or cls._encode_archive_cursor(after) != cursor:
+            raise ValidationError("research archive cursor is malformed")
+        return after  # type: ignore[return-value]
+
+    def research_archives(
+        self,
+        query: str | None = None,
+        kind: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> ResearchArchivePage:
+        """List persisted research families without resolving a current state.
+
+        Each listing row is explicitly a *lineage health* result.  A corrupt
+        family remains discoverable so an analyst can repair it, but every
+        assertion derived from a revision is withheld until the complete
+        successor chain replays from frozen parents.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValidationError("research archive limit must be between 1 and 100")
+        after = self._decode_archive_cursor(cursor)
+        needle = query.casefold() if isinstance(query, str) else None
+        with self._session.no_autoflush:
+            rows = tuple(self._session.execute(
+                select(UnderwritingResearchObject, UnderwritingResearchVersion)
+                .join(
+                    UnderwritingResearchVersion,
+                    UnderwritingResearchVersion.object_id == UnderwritingResearchObject.id,
+                )
+            ))
+            families: dict[tuple[UUID, str], tuple[UnderwritingResearchObject, list[UnderwritingResearchVersion]]] = {}
+            for research_object, revision in rows:
+                if kind is not None and research_object.kind != kind:
+                    continue
+                if needle is not None and (
+                    needle not in research_object.canonical_name.casefold()
+                    and needle not in research_object.external_key.casefold()
+                ):
+                    continue
+                family_key = (research_object.id, revision.version_kind)
+                existing = families.get(family_key)
+                if existing is None:
+                    families[family_key] = (research_object, [revision])
+                else:
+                    existing[1].append(revision)
+
+            archive_items: list[ResearchArchiveItem] = []
+            for (object_id, version_kind), (research_object, revisions) in families.items():
+                try:
+                    # These are deliberately the established replay APIs, not
+                    # a copy of their logic over a current evidence ledger.
+                    self.revision_history(object_id, version_kind)
+                    latest = self.effective_revision(object_id, version_kind)
+                except ValidationError:
+                    archive_items.append(ResearchArchiveItem(
+                        object_id=object_id,
+                        object_kind=research_object.kind,
+                        canonical_name=research_object.canonical_name,
+                        external_key=research_object.external_key,
+                        version_kind=version_kind,
+                        version_count=len(revisions),
+                        lineage_state="unreadable",
+                        latest_revision_id=None,
+                        latest_sequence=None,
+                        cutoff=None,
+                        source_manifest_hash=None,
+                    ))
+                    continue
+                archive_items.append(ResearchArchiveItem(
+                    object_id=object_id,
+                    object_kind=research_object.kind,
+                    canonical_name=research_object.canonical_name,
+                    external_key=research_object.external_key,
+                    version_kind=version_kind,
+                    version_count=len(revisions),
+                    lineage_state="readable",
+                    latest_revision_id=latest.id,
+                    latest_sequence=latest.sequence,
+                    cutoff=latest.cutoff,
+                    source_manifest_hash=latest.source_manifest_hash,
+                ))
+
+            ordered = tuple(sorted(archive_items, key=self._archive_sort_key))
+            remaining = tuple(
+                item for item in ordered
+                if after is None or self._archive_sort_key(item) > after
+            )
+            page_items = remaining[:limit]
+            next_cursor = (
+                self._encode_archive_cursor(self._archive_sort_key(page_items[-1]))
+                if len(remaining) > limit
+                else None
+            )
+            return ResearchArchivePage(page_items, next_cursor)
 
     @staticmethod
     def _group_for(artifact_type: str) -> str:
