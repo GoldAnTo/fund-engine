@@ -40,6 +40,7 @@ from app.underwriting.persistence.research_models import (
     UnderwritingSourceManifestVersion,
 )
 from app.underwriting.services.kernel import canonical_hash, frozen_research_version_content_hash
+from app.underwriting.services.source_freeze import freeze_manifest
 from app.underwriting.services.revision_parent_seal import (
     CATL_PARENT_SET_ENTRY_TYPE,
     CATL_PARENT_SET_FAMILY,
@@ -233,9 +234,6 @@ class ResearchRevisionDiffService:
         manifest_cutoff = self._manifest_datetime(manifest.manifest.get("cutoff"), "source-manifest cutoff")
         if manifest_cutoff != cutoff:
             raise self._parent_error("source-manifest cutoff does not match historical basis")
-        if manifest.manifest_hash != basis.source_manifest_hash:
-            raise self._parent_error("source-manifest hash does not match historical basis")
-        self._require_available_at_cutoff(manifest.created_at, cutoff, "source manifest")
         sources = manifest.manifest.get("sources")
         if not isinstance(sources, list):
             raise self._parent_error("has malformed source-manifest lineage")
@@ -250,6 +248,15 @@ class ResearchRevisionDiffService:
             )
             self._require_available_at_cutoff(first_available_at, cutoff, "source")
             self._require_available_at_cutoff(published_at, cutoff, "source")
+        try:
+            frozen_manifest_hash = freeze_manifest(manifest.manifest, manifest_cutoff).manifest_hash
+        except ValidationError as exc:
+            raise self._parent_error("has malformed frozen source-manifest content") from exc
+        if manifest.manifest_hash != frozen_manifest_hash:
+            raise self._parent_error("source-manifest frozen hash does not match content")
+        if manifest.manifest_hash != basis.source_manifest_hash:
+            raise self._parent_error("source-manifest hash does not match historical basis")
+        self._require_available_at_cutoff(manifest.created_at, cutoff, "source manifest")
         if manifest.content_hash != canonical_hash(manifest.manifest):
             raise self._parent_error("has a source-manifest content hash mismatch")
         return manifest

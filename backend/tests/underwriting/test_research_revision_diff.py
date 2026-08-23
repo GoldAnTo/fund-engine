@@ -38,6 +38,7 @@ from app.underwriting.services.catl_baseline import CatlBaselineService
 from app.underwriting.persistence.repository import UnderwritingRepository
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
 from app.underwriting.services.kernel import UnderwritingKernelService, canonical_hash
+from app.underwriting.services.source_freeze import freeze_manifest
 from app.underwriting.services.revision_parent_seal import (
     CATL_PARENT_SET_ENTRY_TYPE,
     CATL_PARENT_SET_FAMILY,
@@ -65,6 +66,32 @@ def catl_revision(session: Session):
     return CatlBaselineService(session, now=lambda: NOW).import_fixture(load_catl_fixture())
 
 
+def _manifest_payload(source_locator: str) -> dict[str, object]:
+    return {
+        "schema_version": "underwriting.source-manifest.v1",
+        "cutoff": NOW.isoformat(),
+        "sources": [{
+            "source_id": "annual-report",
+            "title": "Annual report",
+            "publisher": "Issuer",
+            "locator": source_locator,
+            "published_at": NOW.isoformat(),
+            "first_available_at": NOW.isoformat(),
+            "retrieved_at": NOW.isoformat(),
+            "content_sha256": "a" * 64,
+            "authority": "issuer_filing",
+            "authorization": "authorized",
+            "display_policy": "derived_only",
+            "provider_capability": "public_http",
+            "retention": "hash_locator_and_derived_observations",
+        }],
+    }
+
+
+def _manifest_hash(source_locator: str) -> str:
+    return freeze_manifest(_manifest_payload(source_locator), NOW).manifest_hash
+
+
 def _append_observation(
     *,
     repository: UnderwritingResearchRepository,
@@ -73,20 +100,13 @@ def _append_observation(
     source_locator: str = "annual-report:p18",
     metric_key: str = "company.revenue",
 ):
-    manifest_payload = {
-        "cutoff": NOW.isoformat(),
-        "sources": [{
-            "source_id": "annual-report",
-            "locator": source_locator,
-            "published_at": NOW.isoformat(),
-            "first_available_at": NOW.isoformat(),
-        }],
-    }
+    manifest_payload = _manifest_payload(source_locator)
+    manifest_hash = _manifest_hash(source_locator)
     manifest = repository.add_source_manifest(
         manifest_key=f"manifest-{uuid4().hex}",
         basis_id=basis.id,
         manifest=manifest_payload,
-        manifest_hash="a" * 64,
+        manifest_hash=manifest_hash,
         content_hash=canonical_hash(manifest_payload),
         expected_parent_id=None,
         created_at=NOW,
@@ -145,7 +165,7 @@ def _append_observation(
 def seeded_revision(session: Session) -> SeededRevision:
     kernel = UnderwritingKernelService(session, now=lambda: NOW)
     company = kernel.add_object(ResearchObjectKind.COMPANY, "CN:300750:COMPANY", "CATL")
-    basis = kernel.add_basis(HistoricalBasisInput(NOW, None, "a" * 64))
+    basis = kernel.add_basis(HistoricalBasisInput(NOW, None, _manifest_hash("annual-report:p18")))
     manifest, observation = _append_observation(
         repository=UnderwritingResearchRepository(session), company=company, basis=basis,
     )
@@ -176,7 +196,7 @@ def test_foundation_summary_reads_only_the_revision_frozen_parents(
     )
     assert summary.content_hash == seeded_revision.first.content_hash
     assert summary.cutoff == NOW
-    assert summary.source_manifest_hash == "a" * 64
+    assert summary.source_manifest_hash == seeded_revision.basis.source_manifest_hash
     observation = next(ref for ref in summary.parent_refs if ref.reference == str(seeded_revision.observation.id))
     assert observation.artifact_type == "metric_observation"
     assert observation.identity == (
@@ -1097,15 +1117,19 @@ def test_revision_and_archive_reject_parent_evidence_available_after_cutoff(
         revision_id = revision.id
         version_kind = revision.version_kind
     else:
-        source = {
-            "source_id": "annual-report",
-            "locator": "annual-report:p18",
-            "published_at": (NOW + timedelta(seconds=1)).isoformat(),
-            "first_available_at": (NOW + timedelta(seconds=1)).isoformat(),
-        }
+        source = dict(_manifest_payload("annual-report:p18")["sources"][0])
+        source["published_at"] = (NOW + timedelta(seconds=1)).isoformat()
+        source["first_available_at"] = (NOW + timedelta(seconds=1)).isoformat()
         session.connection().exec_driver_sql(
             "UPDATE uw_source_manifest_versions SET manifest = ? WHERE id = ?",
-            (json.dumps({"cutoff": NOW.isoformat(), "sources": [source]}), seeded_revision.manifest.id.hex),
+            (
+                json.dumps({
+                    "schema_version": "underwriting.source-manifest.v1",
+                    "cutoff": NOW.isoformat(),
+                    "sources": [source],
+                }),
+                seeded_revision.manifest.id.hex,
+            ),
         )
         revision_id = seeded_revision.first.id
         version_kind = seeded_revision.first.version_kind
@@ -1178,6 +1202,36 @@ def test_catl_summary_and_archive_bind_the_exact_persisted_manifest_basis(
     service = ResearchRevisionDiffService(session)
 
     with pytest.raises(ValidationError, match=expected):
+        service.revision_summary(catl_revision.research_version.id)
+
+    item = next(
+        item for item in service.research_archives(limit=100).items
+        if item.object_id == catl_revision.company.id
+        and item.version_kind == catl_revision.research_version.version_kind
+    )
+    assert item.lineage_state == "unreadable"
+    assert item.latest_revision_id is None
+
+
+def test_catl_summary_and_archive_reject_a_correlated_basis_and_manifest_hash_tamper(
+    session: Session, catl_revision,
+) -> None:
+    """Matching two mutable columns cannot replace a frozen manifest digest."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    replacement = "a" * 64
+    session.connection().exec_driver_sql(
+        "UPDATE uw_historical_bases SET source_manifest_hash = ? WHERE id = ?",
+        (replacement, catl_revision.basis.id.hex),
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_source_manifest_versions SET manifest_hash = ? WHERE id = ?",
+        (replacement, catl_revision.source_manifest.id.hex),
+    )
+    session.expire_all()
+    service = ResearchRevisionDiffService(session)
+
+    with pytest.raises(ValidationError, match="source-manifest frozen hash"):
         service.revision_summary(catl_revision.research_version.id)
 
     item = next(
