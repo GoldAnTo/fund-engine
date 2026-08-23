@@ -47,6 +47,8 @@ from app.underwriting.services.revision_parent_seal import (
     CATL_PARENT_SET_ENTRY_TYPE,
     CATL_PARENT_SET_FAMILY,
     answerability_content_hash,
+    canonical_parent_refs,
+    catl_answerability_parent_content_hash,
     catl_parent_set_seal_payload,
     catl_revision_content_hash,
     parent_set_semantic_hash,
@@ -725,13 +727,14 @@ def test_diff_represents_a_sealed_answerability_revision_as_a_replacement(
     replacement_ref = {
         "reference": str(answerability.id), "artifact_type": "answerability",
         "identity": "answerability",
-        "content_hash": answerability_content_hash(
+        "content_hash": catl_answerability_parent_content_hash(
             object_id=answerability.object_id, basis_id=answerability.basis_id,
             version=answerability.version, state=answerability.state,
             blockers=answerability.blockers, research_debt_keys=answerability.research_debt_keys,
             resolvable_within_mandate=answerability.resolvable_within_mandate,
             allowed_action=answerability.allowed_action,
             resolution_requirements=answerability.resolution_requirements,
+            created_at=answerability.created_at,
         ),
     }
     refs = [
@@ -896,13 +899,110 @@ def test_boundary_answerability_preserves_the_governed_catl_parent(
     """The generic boundary reader does not weaken the CATL semantic seal."""
     from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
 
-    boundary = ResearchRevisionDiffService(session).revision_boundary(
+    service = ResearchRevisionDiffService(session)
+    summary = service.revision_summary(catl_revision.research_version.id)
+    boundary = service.revision_boundary(
         catl_revision.research_version.id,
     )
 
+    assert summary.answerability_timestamp_sealed is True
     assert boundary.answerability is not None
     assert boundary.answerability.state == "not_answerable"
     assert boundary.answerability.allowed_action == "wait_for_validation"
+
+
+def test_boundary_answerability_rejects_a_legacy_catl_parent_set_without_timestamp_seal(
+    session: Session, catl_revision,
+) -> None:
+    """A valid historical CATL v1 seal remains readable but is not a boundary."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    service = ResearchRevisionDiffService(session)
+    original = service.revision_summary(catl_revision.research_version.id)
+    parent_set_seal = next(
+        session.get(UnderwritingLedgerEntry, UUID(ref.reference))
+        for ref in original.parent_refs
+        if ref.artifact_type == "ledger"
+        and (row := session.get(UnderwritingLedgerEntry, UUID(ref.reference))) is not None
+        and row.family_key == CATL_PARENT_SET_FAMILY
+    )
+    token = next(ref.reference for ref in original.parent_refs if ref.artifact_type == "semantic_snapshot")
+    legacy_refs = [
+        {
+            "reference": ref.reference,
+            "artifact_type": ref.artifact_type,
+            "identity": ref.identity,
+            "content_hash": (
+                answerability_content_hash(
+                    object_id=catl_revision.answerability.object_id,
+                    basis_id=catl_revision.answerability.basis_id,
+                    version=catl_revision.answerability.version,
+                    state=catl_revision.answerability.state,
+                    blockers=catl_revision.answerability.blockers,
+                    research_debt_keys=catl_revision.answerability.research_debt_keys,
+                    resolvable_within_mandate=catl_revision.answerability.resolvable_within_mandate,
+                    allowed_action=catl_revision.answerability.allowed_action,
+                    resolution_requirements=catl_revision.answerability.resolution_requirements,
+                )
+                if ref.artifact_type == "answerability"
+                else ref.content_hash
+            ),
+        }
+        for ref in original.parent_refs
+        if ref.artifact_type != "semantic_snapshot" and ref.reference != str(parent_set_seal.id)
+    ]
+    legacy_payload = {
+        "schema_version": "underwriting.revision-parent-set-seal.v1",
+        "version_kind": "catl_economic_model_evidence_only",
+        "semantic_snapshot_token": token,
+        "parent_refs": list(canonical_parent_refs(legacy_refs)),
+    }
+    legacy_seal_hash = canonical_hash({
+        "ledger_kind": parent_set_seal.ledger_kind,
+        "family_key": parent_set_seal.family_key,
+        "entry_type": parent_set_seal.entry_type,
+        "payload": legacy_payload,
+        "effective_at": NOW,
+        "available_at": NOW,
+        "source_boundary": parent_set_seal.source_boundary,
+    })
+    legacy_revision_hash = catl_revision_content_hash(
+        semantic_snapshot_token=token,
+        parent_set_semantic_hash=parent_set_semantic_hash(legacy_refs),
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_ledger_entries SET payload = ?, content_hash = ? WHERE id = ?",
+        (json.dumps(legacy_payload), legacy_seal_hash, parent_set_seal.id.hex),
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_research_versions SET content_hash = ? WHERE id = ?",
+        (legacy_revision_hash, catl_revision.research_version.id.hex),
+    )
+    session.expire_all()
+
+    assert service.revision_summary(catl_revision.research_version.id).id == catl_revision.research_version.id
+    with pytest.raises(ValidationError, match="timestamp-sealed"):
+        service.revision_boundary(catl_revision.research_version.id)
+
+
+@pytest.mark.parametrize("offset", [timedelta(seconds=-1), timedelta(seconds=1)])
+def test_boundary_answerability_new_catl_seal_rejects_created_at_tamper(
+    session: Session, catl_revision, offset: timedelta,
+) -> None:
+    """CATL v2 binds creation time even when a rewrite remains cutoff-valid."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    session.connection().exec_driver_sql(
+        "UPDATE uw_answerability_evaluations SET created_at = ? WHERE id = ?",
+        ((NOW + offset).isoformat(), catl_revision.answerability.id.hex),
+    )
+    session.expire_all()
+
+    service = ResearchRevisionDiffService(session)
+    with pytest.raises(ValidationError, match="CATL semantic snapshot|research revision"):
+        service.revision_summary(catl_revision.research_version.id)
+    with pytest.raises(ValidationError, match="CATL semantic snapshot|research revision"):
+        service.revision_boundary(catl_revision.research_version.id)
 
 
 def test_boundary_answerability_rejects_multiple_frozen_parents(

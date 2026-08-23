@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from app.models.ledger import ValidationError
@@ -11,7 +12,11 @@ from app.underwriting.services.kernel import canonical_hash
 CATL_VERSION_KIND = "catl_economic_model_evidence_only"
 CATL_PARENT_SET_FAMILY = "research_revision:catl_economic_model_evidence_only:parent_set"
 CATL_PARENT_SET_ENTRY_TYPE = "research_revision_parent_set_seal"
-PARENT_SET_SCHEMA = "underwriting.revision-parent-set-seal.v1"
+PARENT_SET_SCHEMA_V1 = "underwriting.revision-parent-set-seal.v1"
+PARENT_SET_SCHEMA_V2 = "underwriting.revision-parent-set-seal.v2"
+# New CATL fixture publications use v2.  Keep v1 parse support for immutable
+# historical summaries, while the boundary reader can fail closed on it.
+PARENT_SET_SCHEMA = PARENT_SET_SCHEMA_V2
 
 
 def answerability_content_hash(
@@ -36,6 +41,48 @@ def answerability_content_hash(
         "resolvable_within_mandate": resolvable_within_mandate,
         "allowed_action": allowed_action,
         "resolution_requirements": list(resolution_requirements),
+    })
+
+
+def catl_answerability_parent_content_hash(
+    *,
+    object_id: object,
+    basis_id: object,
+    version: int,
+    state: str,
+    blockers: Iterable[str],
+    research_debt_keys: Iterable[str],
+    resolvable_within_mandate: bool,
+    allowed_action: str,
+    resolution_requirements: Iterable[str],
+    created_at: datetime,
+) -> str:
+    """Seal the v2 CATL parent descriptor, including creation time.
+
+    The semantic answerability hash intentionally remains cross-database
+    stable.  V2 appends the normalized persisted timestamp so a raw rewrite
+    cannot retain a plausible parent-set identity.
+    """
+    if (
+        not isinstance(created_at, datetime)
+        or created_at.tzinfo is None
+        or created_at.utcoffset() is None
+    ):
+        raise ValidationError("CATL answerability parent created_at is malformed")
+    return canonical_hash({
+        "schema_version": PARENT_SET_SCHEMA_V2,
+        "answerability_content_hash": answerability_content_hash(
+            object_id=object_id,
+            basis_id=basis_id,
+            version=version,
+            state=state,
+            blockers=blockers,
+            research_debt_keys=research_debt_keys,
+            resolvable_within_mandate=resolvable_within_mandate,
+            allowed_action=allowed_action,
+            resolution_requirements=resolution_requirements,
+        ),
+        "created_at": created_at.astimezone(UTC).isoformat(),
     })
 
 
@@ -71,10 +118,17 @@ def catl_parent_set_seal_payload(
     }
 
 
-def parse_catl_parent_set_seal(payload: object) -> tuple[str, tuple[dict[str, str], ...]]:
+def parse_catl_parent_set_seal(
+    payload: object,
+) -> tuple[str, tuple[dict[str, str], ...], bool]:
     if not isinstance(payload, Mapping):
         raise ValidationError("CATL revision parent seal payload is malformed")
-    if payload.get("schema_version") != PARENT_SET_SCHEMA or payload.get("version_kind") != CATL_VERSION_KIND:
+    schema_version = payload.get("schema_version")
+    if (
+        not isinstance(schema_version, str)
+        or schema_version not in {PARENT_SET_SCHEMA_V1, PARENT_SET_SCHEMA_V2}
+        or payload.get("version_kind") != CATL_VERSION_KIND
+    ):
         raise ValidationError("CATL revision parent seal schema is invalid")
     token = payload.get("semantic_snapshot_token")
     refs = payload.get("parent_refs")
@@ -83,7 +137,7 @@ def parse_catl_parent_set_seal(payload: object) -> tuple[str, tuple[dict[str, st
     normalized = canonical_parent_refs(refs)
     if list(normalized) != refs:
         raise ValidationError("CATL revision parent seal references are not canonical")
-    return token, normalized
+    return token, normalized, schema_version == PARENT_SET_SCHEMA_V2
 
 
 def parent_set_semantic_hash(refs: Iterable[Mapping[str, object]]) -> str:

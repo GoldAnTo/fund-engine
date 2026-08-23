@@ -23,7 +23,7 @@ from app.underwriting.services.kernel import UnderwritingKernelService
 from app.underwriting.services.revision_parent_seal import (
     CATL_PARENT_SET_ENTRY_TYPE,
     CATL_PARENT_SET_FAMILY,
-    answerability_content_hash,
+    catl_answerability_parent_content_hash,
     catl_parent_set_seal_payload,
     catl_revision_content_hash,
     parent_set_semantic_hash,
@@ -299,7 +299,7 @@ def _append_test_only_catl_answerability_successor(session, imported) -> None:
         "reference": str(successor_answerability.id),
         "artifact_type": "answerability",
         "identity": "answerability",
-        "content_hash": answerability_content_hash(
+        "content_hash": catl_answerability_parent_content_hash(
             object_id=successor_answerability.object_id,
             basis_id=successor_answerability.basis_id,
             version=successor_answerability.version,
@@ -309,6 +309,7 @@ def _append_test_only_catl_answerability_successor(session, imported) -> None:
             resolvable_within_mandate=successor_answerability.resolvable_within_mandate,
             allowed_action=successor_answerability.allowed_action,
             resolution_requirements=successor_answerability.resolution_requirements,
+            created_at=successor_answerability.created_at,
         ),
     }
     sealed_refs = [

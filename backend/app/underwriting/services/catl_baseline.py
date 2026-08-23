@@ -45,7 +45,7 @@ from app.underwriting.services.kernel import UnderwritingKernelService, canonica
 from app.underwriting.services.revision_parent_seal import (
     CATL_PARENT_SET_ENTRY_TYPE,
     CATL_PARENT_SET_FAMILY,
-    answerability_content_hash,
+    catl_answerability_parent_content_hash,
     catl_parent_set_seal_payload,
     catl_revision_content_hash,
     parent_set_semantic_hash,
@@ -458,13 +458,14 @@ class CatlBaselineService:
             parent_refs.append({
                 "reference": str(answerability.id), "artifact_type": "answerability",
                 "identity": "answerability",
-                "content_hash": answerability_content_hash(
+                "content_hash": catl_answerability_parent_content_hash(
                     object_id=answerability.object_id, basis_id=answerability.basis_id,
                     version=answerability.version, state=answerability.state,
                     blockers=answerability.blockers, research_debt_keys=answerability.research_debt_keys,
                     resolvable_within_mandate=answerability.resolvable_within_mandate,
                     allowed_action=answerability.allowed_action,
                     resolution_requirements=answerability.resolution_requirements,
+                    created_at=answerability.created_at,
                 ),
             })
             snapshot_hash = self._semantic_snapshot_hash(fixture)

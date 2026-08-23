@@ -57,6 +57,7 @@ from app.underwriting.services.revision_parent_seal import (
     CATL_PARENT_SET_FAMILY,
     CATL_VERSION_KIND,
     answerability_content_hash,
+    catl_answerability_parent_content_hash,
     canonical_parent_refs,
     catl_revision_content_hash,
     parent_set_semantic_hash,
@@ -65,6 +66,9 @@ from app.underwriting.services.revision_parent_seal import (
 
 
 _SNAPSHOT_TOKEN = re.compile(r"semantic_snapshot:[0-9a-f]{64}")
+_ANSWERABILITY_SEAL_LEGACY = "legacy"
+_ANSWERABILITY_SEAL_GENERIC_TIMESTAMP = "generic_timestamp"
+_ANSWERABILITY_SEAL_CATL_TIMESTAMP = "catl_timestamp"
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,6 +377,34 @@ class ResearchRevisionDiffService:
             "created_at": self._iso(created_at),
         })
 
+    def _answerability_descriptor_hash(
+        self,
+        row: UnderwritingAnswerabilityEvaluation,
+        *,
+        seal_kind: str,
+    ) -> str:
+        if seal_kind == _ANSWERABILITY_SEAL_LEGACY:
+            return self._answerability_hash(row)
+        if seal_kind == _ANSWERABILITY_SEAL_GENERIC_TIMESTAMP:
+            return self._answerability_parent_hash(row, seal_created_at=True)
+        if seal_kind == _ANSWERABILITY_SEAL_CATL_TIMESTAMP:
+            created_at = self._stored_datetime(row.created_at)
+            if created_at is None:
+                raise self._parent_error("has malformed answerability created_at")
+            return catl_answerability_parent_content_hash(
+                object_id=row.object_id,
+                basis_id=row.basis_id,
+                version=row.version,
+                state=row.state,
+                blockers=row.blockers,
+                research_debt_keys=row.research_debt_keys,
+                resolvable_within_mandate=row.resolvable_within_mandate,
+                allowed_action=row.allowed_action,
+                resolution_requirements=row.resolution_requirements,
+                created_at=created_at,
+            )
+        raise AssertionError(f"unrecognised answerability parent seal kind: {seal_kind}")
+
     @staticmethod
     def _controlled_string_sequence(value: object, field: str) -> tuple[str, ...]:
         """Return persisted controlled text only when its JSON shape is exact."""
@@ -594,7 +626,7 @@ class ResearchRevisionDiffService:
         row: object,
         reference: str,
         *,
-        seal_answerability_created_at: bool = False,
+        answerability_seal_kind: str = _ANSWERABILITY_SEAL_LEGACY,
     ) -> RevisionArtifactRef:
         if artifact_type == "source_manifest":
             assert isinstance(row, UnderwritingSourceManifestVersion)
@@ -672,8 +704,8 @@ class ResearchRevisionDiffService:
                 row.object_id, row.basis_id, "answerability_descriptor",
             ))
             return RevisionArtifactRef(
-                reference, artifact_type, "answerability", self._answerability_parent_hash(
-                    row, seal_created_at=seal_answerability_created_at,
+                reference, artifact_type, "answerability", self._answerability_descriptor_hash(
+                    row, seal_kind=answerability_seal_kind,
                 ),
                 (), None, None, None, None, answerability.state,
             )
@@ -685,7 +717,7 @@ class ResearchRevisionDiffService:
         reference: object,
         *,
         allow_legacy_unavailable_ledger: bool = False,
-        seal_answerability_created_at: bool = False,
+        answerability_seal_kind: str = _ANSWERABILITY_SEAL_LEGACY,
     ) -> RevisionArtifactRef:
         if not isinstance(reference, str):
             raise self._parent_error("must be a string")
@@ -722,7 +754,7 @@ class ResearchRevisionDiffService:
             artifact_type,
             row,
             reference,
-            seal_answerability_created_at=seal_answerability_created_at,
+            answerability_seal_kind=answerability_seal_kind,
         )
 
     @staticmethod
@@ -747,9 +779,38 @@ class ResearchRevisionDiffService:
             raise ValidationError("research revision not found")
         return row
 
+    def _catl_parent_set_seal(
+        self,
+        refs: tuple[RevisionArtifactRef, ...],
+    ) -> tuple[UnderwritingLedgerEntry, str, tuple[dict[str, str], ...], bool]:
+        """Read the selected CATL parent-set seal, never a current fixture."""
+        seal_rows: list[UnderwritingLedgerEntry] = []
+        for ref in refs:
+            if ref.artifact_type != "ledger":
+                continue
+            try:
+                row_id = UUID(ref.reference)
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise ValidationError("CATL semantic snapshot parent set has a malformed seal") from exc
+            row = self._session.get(UnderwritingLedgerEntry, row_id)
+            if (
+                row is not None
+                and row.family_key == CATL_PARENT_SET_FAMILY
+                and row.entry_type == CATL_PARENT_SET_ENTRY_TYPE
+            ):
+                seal_rows.append(row)
+        if len(seal_rows) != 1:
+            raise ValidationError("CATL semantic snapshot parent set is missing its seal")
+        seal = seal_rows[0]
+        try:
+            token, sealed_refs, answerability_timestamp_sealed = parse_catl_parent_set_seal(seal.payload)
+        except ValidationError as exc:
+            raise ValidationError("CATL semantic snapshot parent set seal is malformed") from exc
+        return seal, token, sealed_refs, answerability_timestamp_sealed
+
     def _validate_catl_semantic_snapshot(
         self, revision: UnderwritingResearchVersion, refs: tuple[RevisionArtifactRef, ...]
-    ) -> None:
+    ) -> bool:
         """Validate only IDs and seals stored on this selected revision.
 
         Do not load a fixture, resolve a natural key, or consult a current head:
@@ -768,20 +829,7 @@ class ResearchRevisionDiffService:
         # The selected parent (not a fixture lookup or current manifest head)
         # must itself bind the exact basis cutoff and manifest identity.
         self._verified_manifest(manifest_id, revision.basis_id)
-        seal_rows: list[UnderwritingLedgerEntry] = []
-        for ref in refs:
-            if ref.artifact_type != "ledger":
-                continue
-            row = self._session.get(UnderwritingLedgerEntry, UUID(ref.reference))
-            if row is not None and row.family_key == CATL_PARENT_SET_FAMILY and row.entry_type == CATL_PARENT_SET_ENTRY_TYPE:
-                seal_rows.append(row)
-        if len(seal_rows) != 1:
-            raise ValidationError("CATL semantic snapshot parent set is missing its seal")
-        seal = seal_rows[0]
-        try:
-            token, sealed_refs = parse_catl_parent_set_seal(seal.payload)
-        except ValidationError as exc:
-            raise ValidationError("CATL semantic snapshot parent set seal is malformed") from exc
+        seal, token, sealed_refs, answerability_timestamp_sealed = self._catl_parent_set_seal(refs)
         actual_refs = canonical_parent_refs(
             {
                 "reference": ref.reference,
@@ -801,6 +849,7 @@ class ResearchRevisionDiffService:
         )
         if revision.content_hash != expected_hash:
             raise ValidationError("CATL semantic snapshot content hash does not match its stored seal")
+        return answerability_timestamp_sealed
 
     def _legacy_frozen_snapshot_hash(
         self, revision: UnderwritingResearchVersion, refs: tuple[RevisionArtifactRef, ...],
@@ -933,7 +982,7 @@ class ResearchRevisionDiffService:
                 self._resolve_parent(
                     scope,
                     reference,
-                    seal_answerability_created_at=True,
+                    answerability_seal_kind=_ANSWERABILITY_SEAL_GENERIC_TIMESTAMP,
                 )
                 for reference in sorted(set(parent_ids))
             )
@@ -951,12 +1000,28 @@ class ResearchRevisionDiffService:
                 value for value in revision.parent_ids if _SNAPSHOT_TOKEN.fullmatch(value)
             )
             if snapshot_tokens:
-                refs = self._sort_refs(
+                legacy_refs = self._sort_refs(
                     self._resolve_parent(revision, reference)
                     for reference in revision.parent_ids
                 )
                 legacy_snapshot_candidate = False
-                answerability_timestamp_sealed = False
+                if revision.version_kind == CATL_VERSION_KIND:
+                    _, _, _, answerability_timestamp_sealed = self._catl_parent_set_seal(legacy_refs)
+                    refs = (
+                        self._sort_refs(
+                            self._resolve_parent(
+                                revision,
+                                reference,
+                                answerability_seal_kind=_ANSWERABILITY_SEAL_CATL_TIMESTAMP,
+                            )
+                            for reference in revision.parent_ids
+                        )
+                        if answerability_timestamp_sealed
+                        else legacy_refs
+                    )
+                else:
+                    refs = legacy_refs
+                    answerability_timestamp_sealed = False
             else:
                 # Pre-v2 legacy rows may list a late ledger candidate that
                 # their old snapshot algorithm excluded before hashing.  Read
@@ -967,7 +1032,7 @@ class ResearchRevisionDiffService:
                         revision,
                         reference,
                         allow_legacy_unavailable_ledger=True,
-                        seal_answerability_created_at=True,
+                        answerability_seal_kind=_ANSWERABILITY_SEAL_GENERIC_TIMESTAMP,
                     )
                     for reference in revision.parent_ids
                 )
@@ -992,7 +1057,7 @@ class ResearchRevisionDiffService:
                         self._resolve_parent(
                             revision,
                             reference,
-                            seal_answerability_created_at=True,
+                            answerability_seal_kind=_ANSWERABILITY_SEAL_GENERIC_TIMESTAMP,
                         )
                         for reference in revision.parent_ids
                     )
@@ -1066,10 +1131,7 @@ class ResearchRevisionDiffService:
                 return ResearchRevisionBoundary(summary, None)
             if len(refs) != 1:
                 raise ValidationError("research revision boundary has multiple answerability parents")
-            if (
-                summary.version_kind != CATL_VERSION_KIND
-                and not summary.answerability_timestamp_sealed
-            ):
+            if not summary.answerability_timestamp_sealed:
                 raise ValidationError(
                     "research revision boundary answerability parent is not timestamp-sealed"
                 )
@@ -1078,7 +1140,11 @@ class ResearchRevisionDiffService:
             resolved = self._resolve_parent(
                 revision,
                 reference.reference,
-                seal_answerability_created_at=(summary.version_kind != CATL_VERSION_KIND),
+                answerability_seal_kind=(
+                    _ANSWERABILITY_SEAL_CATL_TIMESTAMP
+                    if summary.version_kind == CATL_VERSION_KIND
+                    else _ANSWERABILITY_SEAL_GENERIC_TIMESTAMP
+                ),
             )
             if resolved != reference:
                 raise ValidationError("research revision boundary answerability parent changed after validation")
@@ -1090,9 +1156,13 @@ class ResearchRevisionDiffService:
             if row is None:
                 raise ValidationError("research revision boundary answerability parent is missing")
             answerability = self._validated_answerability(row, revision)
-            expected_parent_hash = self._answerability_parent_hash(
+            expected_parent_hash = self._answerability_descriptor_hash(
                 row,
-                seal_created_at=(summary.version_kind != CATL_VERSION_KIND),
+                seal_kind=(
+                    _ANSWERABILITY_SEAL_CATL_TIMESTAMP
+                    if summary.version_kind == CATL_VERSION_KIND
+                    else _ANSWERABILITY_SEAL_GENERIC_TIMESTAMP
+                ),
             )
             if (
                 answerability.reference != reference.reference
