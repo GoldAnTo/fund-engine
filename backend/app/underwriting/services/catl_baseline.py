@@ -453,6 +453,7 @@ class CatlBaselineService:
                     "complete independent mechanism review before formalization",
                 ),
                 None,
+                created_at=fixture.cutoff,
             )
             parent_ids.append(str(answerability.id))
             parent_refs.append({

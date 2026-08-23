@@ -317,11 +317,21 @@ class UnderwritingKernelService:
         requested_action: EligibleAction,
         resolution_requirements: tuple[str, ...],
         expected_parent_id: uuid.UUID | None,
+        *,
+        created_at: datetime | None = None,
     ):
         if self._repository.object(object_id) is None:
             raise ValidationError("research object not found")
-        if self._repository.basis(basis_id) is None:
+        basis = self._repository.basis(basis_id)
+        if basis is None:
             raise ValidationError("historical basis not found")
+        recorded_at = (
+            self._normalize_datetime(created_at, "answerability created_at")
+            if created_at is not None
+            else self._now()
+        )
+        if created_at is not None and recorded_at > self._stored_datetime(basis.cutoff):
+            raise ValidationError("answerability created_at must not exceed historical basis cutoff")
 
         result = evaluate_answerability(
             AnswerabilityInput(
@@ -352,7 +362,7 @@ class UnderwritingKernelService:
                     allowed_action=allowed_action.value,
                     resolution_requirements=list(resolution_requirements),
                     expected_parent_id=expected_parent_id,
-                    created_at=self._now(),
+                    created_at=recorded_at,
                 ),
             )
         except StaleParentError as exc:

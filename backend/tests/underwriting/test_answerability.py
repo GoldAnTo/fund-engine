@@ -157,6 +157,38 @@ def test_record_answerability_persists_resolvable_hard_gate(
     assert row.resolution_requirements == ["reconcile baseline"]
 
 
+def test_record_answerability_explicit_created_at_respects_historical_cutoff(
+    kernel: UnderwritingKernelService, answerability_subject,
+) -> None:
+    research_object, basis = answerability_subject
+
+    row = kernel.record_answerability(
+        research_object.id,
+        basis.id,
+        hard_blockers=(),
+        research_debt_keys=(),
+        resolvable_within_mandate=True,
+        requested_action=EligibleAction.OBSERVE,
+        resolution_requirements=(),
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+
+    assert row.created_at == NOW
+    with pytest.raises(ValidationError, match="created_at must not exceed"):
+        kernel.record_answerability(
+            research_object.id,
+            basis.id,
+            hard_blockers=(),
+            research_debt_keys=(),
+            resolvable_within_mandate=True,
+            requested_action=EligibleAction.OBSERVE,
+            resolution_requirements=(),
+            expected_parent_id=row.id,
+            created_at=NOW.replace(year=NOW.year + 1),
+        )
+
+
 def test_record_answerability_persists_unresolvable_as_do_not_enter_without_price_claims(
     kernel: UnderwritingKernelService, answerability_subject
 ) -> None:

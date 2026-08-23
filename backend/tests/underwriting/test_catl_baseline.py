@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine, func, select
@@ -43,13 +43,13 @@ def test_import_publishes_replayable_evidence_only_version_without_false_complet
     assert result.research_version.version_kind == "catl_economic_model_evidence_only"
 
 
-def _fresh_import_hashes() -> tuple[str, str]:
+def _fresh_import_hashes(*, now: datetime = NOW) -> tuple[str, str, str]:
     engine = create_engine("sqlite://", future=True, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     db = sessionmaker(bind=engine, future=True)()
     try:
-        result = CatlBaselineService(db, now=lambda: NOW).import_fixture(load_catl_fixture())
-        return result.snapshot_hash, result.preview_hash
+        result = CatlBaselineService(db, now=lambda: now).import_fixture(load_catl_fixture())
+        return result.snapshot_hash, result.preview_hash, result.research_version.content_hash
     finally:
         db.close()
         Base.metadata.drop_all(engine)
@@ -60,6 +60,14 @@ def test_import_is_deterministic_across_independent_databases() -> None:
     second = _fresh_import_hashes()
 
     assert first == second
+
+
+def test_import_seals_the_same_fixture_version_across_allowed_import_clocks() -> None:
+    """Fixture provenance, rather than wall-clock import time, owns the seal."""
+    at_cutoff = _fresh_import_hashes(now=NOW)
+    before_cutoff = _fresh_import_hashes(now=NOW - timedelta(seconds=1))
+
+    assert before_cutoff == at_cutoff
 
 
 def test_repeat_import_reuses_identities_and_does_not_duplicate_relations(session) -> None:
