@@ -26,6 +26,7 @@ from app.underwriting.persistence.research_models import (
     UnderwritingIndustryScenarioVersion,
     UnderwritingIndustryStateVersion,
     UnderwritingMechanismPackVersion,
+    UnderwritingMetricDefinitionVersion,
 )
 from app.underwriting.fixtures.catl_baseline import load_catl_fixture
 from app.underwriting.services.catl_baseline import CatlBaselineService
@@ -421,3 +422,45 @@ def test_foundation_fails_closed_for_an_unsealable_artifact_type(
 
     with pytest.raises(ValidationError, match="research revision parent.*unsealable"):
         ResearchRevisionDiffService(session).revision_summary(revision.id)
+
+
+def test_foundation_replays_the_original_catl_revision_after_successor_artifacts_exist(
+    session: Session, catl_revision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    service = ResearchRevisionDiffService(session)
+    original = service.revision_summary(catl_revision.research_version.id)
+    original_manifest = catl_revision.source_manifest
+    successor_manifest_payload = dict(original_manifest.manifest)
+    successor_manifest = type(original_manifest)(
+        manifest_key=original_manifest.manifest_key, version=original_manifest.version + 1,
+        basis_id=original_manifest.basis_id, manifest=successor_manifest_payload,
+        manifest_hash=original_manifest.manifest_hash,
+        content_hash=canonical_hash(successor_manifest_payload),
+        supersedes_id=original_manifest.id, created_at=NOW,
+    )
+    session.add(successor_manifest)
+    session.flush()
+    observation = catl_revision.metric_observations[0]
+    successor_definition = UnderwritingMetricDefinitionVersion(
+        metric_key=observation.metric_key, version=observation.definition_version + 1,
+        basis_id=catl_revision.basis.id, source_manifest_id=successor_manifest.id,
+        definition={"successor": True}, unit=observation.unit, period_semantics="flow",
+        source_role="reported", aggregation="none", reconciliation_tolerance=Decimal("0"),
+        content_hash=canonical_hash({"successor": True}), supersedes_id=observation.definition_id,
+        created_at=NOW,
+    )
+    original_mechanism = catl_revision.candidate_mechanisms[0]
+    successor_mechanism = UnderwritingMechanismPackVersion(
+        mechanism_key=original_mechanism.mechanism_key, version=original_mechanism.version + 1,
+        object_id=catl_revision.company.id, basis_id=catl_revision.basis.id,
+        source_manifest_id=original_manifest.id, status="adapted", payload=dict(original_mechanism.payload),
+        source_ids=list(original_mechanism.source_ids), definition_ids=list(original_mechanism.definition_ids),
+        content_hash=canonical_hash(dict(original_mechanism.payload)), supersedes_id=original_mechanism.id,
+        created_at=NOW,
+    )
+    session.add_all((successor_definition, successor_mechanism))
+    session.flush()
+
+    assert service.revision_summary(catl_revision.research_version.id) == original

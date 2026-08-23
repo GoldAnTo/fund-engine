@@ -42,6 +42,14 @@ from app.underwriting.persistence.research_models import (
     UnderwritingSourceManifestVersion,
 )
 from app.underwriting.services.kernel import UnderwritingKernelService, canonical_hash
+from app.underwriting.services.revision_parent_seal import (
+    CATL_PARENT_SET_ENTRY_TYPE,
+    CATL_PARENT_SET_FAMILY,
+    answerability_content_hash,
+    catl_parent_set_seal_payload,
+    catl_revision_content_hash,
+    parent_set_semantic_hash,
+)
 from app.underwriting.services.source_freeze import (
     validate_frozen_observation_set,
     validate_frozen_source_manifest,
@@ -170,18 +178,14 @@ class CatlBaselineService:
         })
 
     @classmethod
-    def _semantic_preview_hash(cls, fixture: CatlBaselineFixture) -> tuple[str, str]:
+    def _semantic_preview_hash(
+        cls, fixture: CatlBaselineFixture, *, parent_set_semantic_hash_value: str
+    ) -> tuple[str, str]:
         snapshot_hash = cls._semantic_snapshot_hash(fixture)
-        return snapshot_hash, canonical_hash({
-            "snapshot_hash": snapshot_hash,
-            "version_kind": "catl_economic_model_evidence_only",
-            "semantic_parent_hashes": sorted(
-                [fixture.source_manifest.manifest_hash]
-                + [item.content_hash for item in fixture.frozen_observations]
-                + [canonical_hash(item) for item in fixture.mechanisms]
-                + [canonical_hash({"key": item.definition_key, "source": item.source_id, "locator": item.source_locator, "available_at": item.available_at, "status": item.observation_status}) for item in fixture.observations if item.value is None]
-            ),
-        })
+        token = f"semantic_snapshot:{snapshot_hash}"
+        return snapshot_hash, catl_revision_content_hash(
+            semantic_snapshot_token=token, parent_set_semantic_hash=parent_set_semantic_hash_value,
+        )
 
     @staticmethod
     def _required_gaps(fixture: CatlBaselineFixture) -> tuple[object, ...]:
@@ -236,7 +240,23 @@ class CatlBaselineService:
         ))
         if None in (industry, security, manifest, answerability):
             raise ValidationError("existing CATL evidence-only import is incomplete")
-        snapshot_hash, preview_hash = self._semantic_preview_hash(fixture)
+        seals: list[object] = []
+        for parent in research_version.parent_ids:
+            if not isinstance(parent, str):
+                continue
+            try:
+                row = self._session.get(UnderwritingLedgerEntry, UUID(parent))
+            except ValueError:
+                continue
+            if row is not None and row.family_key == CATL_PARENT_SET_FAMILY and row.entry_type == CATL_PARENT_SET_ENTRY_TYPE:
+                seals.append(row)
+        if len(seals) != 1:
+            raise ValidationError("existing CATL evidence-only import is missing its parent-set seal")
+        seal = seals[0]
+        snapshot_hash, preview_hash = self._semantic_preview_hash(
+            fixture,
+            parent_set_semantic_hash_value=parent_set_semantic_hash(seal.payload["parent_refs"]),
+        )
         if research_version.content_hash != preview_hash:
             raise ValidationError("existing CATL evidence-only import does not match fixture semantics")
         return CatlBaselineImport(
@@ -323,6 +343,10 @@ class CatlBaselineService:
             persisted_observations: list[object] = []
             persisted_gaps: list[object] = []
             parent_ids: list[str] = [str(manifest.id)]
+            parent_refs: list[dict[str, object]] = [{
+                "reference": str(manifest.id), "artifact_type": "source_manifest",
+                "content_hash": manifest.content_hash,
+            }]
             for observation in fixture.frozen_observations:
                 evidence = fixture_by_key.get(observation.definition_key)
                 if evidence is None or evidence.value != observation.value:
@@ -364,6 +388,10 @@ class CatlBaselineService:
                 )
                 persisted_observations.append(row)
                 parent_ids.extend((str(definition.id), str(row.id)))
+                parent_refs.extend((
+                    {"reference": str(definition.id), "artifact_type": "metric_definition", "content_hash": definition.content_hash},
+                    {"reference": str(row.id), "artifact_type": "metric_observation", "content_hash": row.content_hash},
+                ))
                 target_object = industry.id if observation.definition_key.startswith("industry.") else company.id
                 self._append_reality(object_id=target_object, basis_id=basis.id, observation=observation, evidence=evidence)
             for gap in required_gaps:
@@ -394,6 +422,7 @@ class CatlBaselineService:
                 )
                 candidates.append(row)
                 parent_ids.append(str(row.id))
+                parent_refs.append({"reference": str(row.id), "artifact_type": "mechanism", "content_hash": row.content_hash})
                 self._append_candidate_belief(company_id=company.id, basis_id=basis.id, mechanism=persisted_mechanism)
 
             answerability = self._kernel.record_answerability(
@@ -410,8 +439,33 @@ class CatlBaselineService:
                 None,
             )
             parent_ids.append(str(answerability.id))
-            snapshot_hash, preview_hash = self._semantic_preview_hash(fixture)
-            parent_ids.append(f"semantic_snapshot:{snapshot_hash}")
+            parent_refs.append({
+                "reference": str(answerability.id), "artifact_type": "answerability",
+                "content_hash": answerability_content_hash(
+                    object_id=answerability.object_id, basis_id=answerability.basis_id,
+                    version=answerability.version, state=answerability.state,
+                    blockers=answerability.blockers, research_debt_keys=answerability.research_debt_keys,
+                    resolvable_within_mandate=answerability.resolvable_within_mandate,
+                    allowed_action=answerability.allowed_action,
+                    resolution_requirements=answerability.resolution_requirements,
+                ),
+            })
+            snapshot_hash = self._semantic_snapshot_hash(fixture)
+            semantic_token = f"semantic_snapshot:{snapshot_hash}"
+            parent_set_seal = self._kernel.append_ledger_entry(
+                company.id, basis.id,
+                LedgerEntryInput(
+                    LedgerKind.CALIBRATION, CATL_PARENT_SET_FAMILY, CATL_PARENT_SET_ENTRY_TYPE,
+                    catl_parent_set_seal_payload(semantic_snapshot_token=semantic_token, refs=parent_refs),
+                    fixture.cutoff, fixture.cutoff, "frozen_revision_parent_set",
+                ),
+                None,
+            )
+            parent_ids.append(str(parent_set_seal.id))
+            _, preview_hash = self._semantic_preview_hash(
+                fixture, parent_set_semantic_hash_value=parent_set_semantic_hash(parent_refs),
+            )
+            parent_ids.append(semantic_token)
             research_version = self._repository.append_research_version(
                 object_id=company.id, basis_id=basis.id,
                 version_kind="catl_economic_model_evidence_only", content_hash=preview_hash,

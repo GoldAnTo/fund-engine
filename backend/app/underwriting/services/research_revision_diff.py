@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
 from app.underwriting.domain.metrics import MetricObservation as DomainMetricObservation
-from app.underwriting.fixtures.catl_baseline import load_catl_fixture
 from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
     UnderwritingHistoricalBasis,
@@ -38,7 +37,16 @@ from app.underwriting.persistence.research_models import (
     UnderwritingSourceManifestVersion,
 )
 from app.underwriting.services.kernel import UnderwritingKernelService, canonical_hash
-from app.underwriting.services.catl_baseline import CatlBaselineService
+from app.underwriting.services.revision_parent_seal import (
+    CATL_PARENT_SET_ENTRY_TYPE,
+    CATL_PARENT_SET_FAMILY,
+    CATL_VERSION_KIND,
+    answerability_content_hash,
+    canonical_parent_refs,
+    catl_revision_content_hash,
+    parent_set_semantic_hash,
+    parse_catl_parent_set_seal,
+)
 
 
 _SNAPSHOT_TOKEN = re.compile(r"semantic_snapshot:[0-9a-f]{64}")
@@ -162,14 +170,14 @@ class ResearchRevisionDiffService:
 
     @staticmethod
     def _answerability_hash(row: UnderwritingAnswerabilityEvaluation) -> str:
-        return canonical_hash({
-            "object_id": str(row.object_id), "basis_id": str(row.basis_id),
-            "version": row.version, "state": row.state,
-            "blockers": row.blockers, "research_debt_keys": row.research_debt_keys,
-            "resolvable_within_mandate": row.resolvable_within_mandate,
-            "allowed_action": row.allowed_action,
-            "resolution_requirements": row.resolution_requirements,
-        })
+        return answerability_content_hash(
+            object_id=row.object_id, basis_id=row.basis_id, version=row.version,
+            state=row.state, blockers=row.blockers,
+            research_debt_keys=row.research_debt_keys,
+            resolvable_within_mandate=row.resolvable_within_mandate,
+            allowed_action=row.allowed_action,
+            resolution_requirements=row.resolution_requirements,
+        )
 
     def _matches_for_uuid(self, reference: UUID) -> list[tuple[str, object]]:
         """Return every recognised immutable row with this exact UUID.
@@ -406,98 +414,53 @@ class ResearchRevisionDiffService:
             raise ValidationError("research revision not found")
         return row
 
-    @staticmethod
-    def _exactly_one(rows: Iterable[object], label: str) -> object:
-        values = tuple(rows)
-        if len(values) != 1:
-            raise ValidationError(f"CATL semantic snapshot parent set has invalid {label}")
-        return values[0]
+    def _validate_catl_semantic_snapshot(
+        self, revision: UnderwritingResearchVersion, refs: tuple[RevisionArtifactRef, ...]
+    ) -> None:
+        """Validate only IDs and seals stored on this selected revision.
 
-    def _validate_catl_semantic_snapshot(self, revision: UnderwritingResearchVersion) -> None:
-        """Seal CATL's special fixture publication against its complete parent set."""
-        fixture = load_catl_fixture()
-        if self._stored_datetime(fixture.cutoff) != self._stored_datetime(
-            self._session.get(UnderwritingHistoricalBasis, revision.basis_id).cutoff  # type: ignore[union-attr]
-        ):
-            raise ValidationError("CATL semantic snapshot parent set has a different cutoff")
-        manifest = self._exactly_one(
-            self._session.scalars(select(UnderwritingSourceManifestVersion).where(
-                UnderwritingSourceManifestVersion.basis_id == revision.basis_id,
-                UnderwritingSourceManifestVersion.manifest_key == "catl-2024-economic-basis",
-            )), "source manifest",
+        Do not load a fixture, resolve a natural key, or consult a current head:
+        any of those would turn a later successor into a mutation of history.
+        """
+        snapshot_refs = tuple(ref for ref in refs if ref.artifact_type == "semantic_snapshot")
+        if len(snapshot_refs) != 1:
+            raise ValidationError("CATL semantic snapshot parent set is missing its token")
+        seal_rows: list[UnderwritingLedgerEntry] = []
+        for ref in refs:
+            if ref.artifact_type != "ledger":
+                continue
+            row = self._session.get(UnderwritingLedgerEntry, UUID(ref.reference))
+            if row is not None and row.family_key == CATL_PARENT_SET_FAMILY and row.entry_type == CATL_PARENT_SET_ENTRY_TYPE:
+                seal_rows.append(row)
+        if len(seal_rows) != 1:
+            raise ValidationError("CATL semantic snapshot parent set is missing its seal")
+        seal = seal_rows[0]
+        try:
+            token, sealed_refs = parse_catl_parent_set_seal(seal.payload)
+        except ValidationError as exc:
+            raise ValidationError("CATL semantic snapshot parent set seal is malformed") from exc
+        actual_refs = canonical_parent_refs(
+            {
+                "reference": ref.reference,
+                "artifact_type": ref.artifact_type,
+                "content_hash": ref.content_hash,
+            }
+            for ref in refs
+            if ref.artifact_type not in {"semantic_snapshot"}
+            and not (ref.artifact_type == "ledger" and ref.reference == str(seal.id))
         )
-        assert isinstance(manifest, UnderwritingSourceManifestVersion)
-        if manifest.manifest_hash != fixture.source_manifest.manifest_hash:
-            raise ValidationError("CATL semantic snapshot parent set has an unexpected source manifest")
-        expected_parent_ids: set[str] = {str(manifest.id)}
-        for observation in fixture.frozen_observations:
-            definition = self._exactly_one(
-                self._session.scalars(select(UnderwritingMetricDefinitionVersion).where(
-                    UnderwritingMetricDefinitionVersion.basis_id == revision.basis_id,
-                    UnderwritingMetricDefinitionVersion.source_manifest_id == manifest.id,
-                    UnderwritingMetricDefinitionVersion.metric_key == observation.definition_key,
-                    UnderwritingMetricDefinitionVersion.version == observation.definition_version,
-                )), f"metric definition {observation.definition_key}",
-            )
-            assert isinstance(definition, UnderwritingMetricDefinitionVersion)
-            expected_parent_ids.add(str(definition.id))
-            observation_row = self._exactly_one(
-                self._session.scalars(select(UnderwritingMetricObservation).where(
-                    UnderwritingMetricObservation.basis_id == revision.basis_id,
-                    UnderwritingMetricObservation.definition_id == definition.id,
-                    UnderwritingMetricObservation.metric_key == observation.definition_key,
-                    UnderwritingMetricObservation.definition_version == observation.definition_version,
-                    UnderwritingMetricObservation.source_id == observation.source_id,
-                    UnderwritingMetricObservation.dimension_hash == canonical_hash(dict(observation.dimensions)),
-                    UnderwritingMetricObservation.observed_end == observation.observed_end,
-                )), f"metric observation {observation.definition_key}",
-            )
-            assert isinstance(observation_row, UnderwritingMetricObservation)
-            expected_parent_ids.add(str(observation_row.id))
-        for mechanism in fixture.mechanisms:
-            key = mechanism["key"]
-            mechanism_row = self._exactly_one(
-                self._session.scalars(select(UnderwritingMechanismPackVersion).where(
-                    UnderwritingMechanismPackVersion.object_id == revision.object_id,
-                    UnderwritingMechanismPackVersion.basis_id == revision.basis_id,
-                    UnderwritingMechanismPackVersion.mechanism_key == key,
-                    UnderwritingMechanismPackVersion.version == 1,
-                    UnderwritingMechanismPackVersion.status == "candidate",
-                )), f"mechanism {key}",
-            )
-            assert isinstance(mechanism_row, UnderwritingMechanismPackVersion)
-            expected_parent_ids.add(str(mechanism_row.id))
-        answerability = self._exactly_one(
-            self._session.scalars(select(UnderwritingAnswerabilityEvaluation).where(
-                UnderwritingAnswerabilityEvaluation.object_id == revision.object_id,
-                UnderwritingAnswerabilityEvaluation.basis_id == revision.basis_id,
-                UnderwritingAnswerabilityEvaluation.version == 1,
-            )), "answerability",
+        if token != snapshot_refs[0].reference or sealed_refs != actual_refs:
+            raise ValidationError("CATL semantic snapshot parent set does not match its stored seal")
+        expected_hash = catl_revision_content_hash(
+            semantic_snapshot_token=token,
+            parent_set_semantic_hash=parent_set_semantic_hash(sealed_refs),
         )
-        assert isinstance(answerability, UnderwritingAnswerabilityEvaluation)
-        if (
-            answerability.state != "not_answerable"
-            or tuple(answerability.blockers) != ("missing_key_baseline", "mechanism_unidentified")
-            or tuple(answerability.research_debt_keys) != (
-                "industry.capacity_utilization_price_cost_baseline", "formal_mechanism_review",
-            )
-            or not answerability.resolvable_within_mandate
-            or answerability.allowed_action != "wait_for_validation"
-            or tuple(answerability.resolution_requirements) != (
-                "collect comparable capacity, utilization, price, and cost evidence",
-                "complete independent mechanism review before formalization",
-            )
-        ):
-            raise ValidationError("CATL semantic snapshot parent set has an unexpected answerability record")
-        expected_parent_ids.add(str(answerability.id))
-        snapshot_hash, preview_hash = CatlBaselineService._semantic_preview_hash(fixture)
-        expected_parent_ids.add(f"semantic_snapshot:{snapshot_hash}")
-        if set(revision.parent_ids) != expected_parent_ids:
-            raise ValidationError("CATL semantic snapshot parent set does not match frozen fixture")
-        if revision.content_hash != preview_hash:
-            raise ValidationError("CATL semantic snapshot content hash does not match frozen fixture")
+        if revision.content_hash != expected_hash:
+            raise ValidationError("CATL semantic snapshot content hash does not match its stored seal")
 
-    def _validate_revision_content(self, revision: UnderwritingResearchVersion) -> None:
+    def _validate_revision_content(
+        self, revision: UnderwritingResearchVersion, refs: tuple[RevisionArtifactRef, ...]
+    ) -> None:
         if not isinstance(revision.parent_ids, list) or not all(isinstance(value, str) for value in revision.parent_ids):
             raise ValidationError("research revision parents are malformed")
         if len(set(revision.parent_ids)) != len(revision.parent_ids):
@@ -509,9 +472,9 @@ class ResearchRevisionDiffService:
         # be substituted for it.
         snapshot_tokens = tuple(value for value in revision.parent_ids if _SNAPSHOT_TOKEN.fullmatch(value))
         if snapshot_tokens:
-            if revision.version_kind != "catl_economic_model_evidence_only" or len(snapshot_tokens) != 1:
+            if revision.version_kind != CATL_VERSION_KIND or len(snapshot_tokens) != 1:
                 raise ValidationError("research revision semantic snapshot is not governed")
-            self._validate_catl_semantic_snapshot(revision)
+            self._validate_catl_semantic_snapshot(revision, refs)
             return
         kernel = UnderwritingKernelService(self._session, now=lambda: self._stored_datetime(revision.created_at))
         expected = kernel.preview_research_version_hash(
@@ -520,6 +483,13 @@ class ResearchRevisionDiffService:
         if revision.content_hash != expected:
             raise ValidationError("research revision content hash does not match frozen parent set")
 
+    @staticmethod
+    def _validate_parent_shape(revision: UnderwritingResearchVersion) -> None:
+        if not isinstance(revision.parent_ids, list) or not all(isinstance(value, str) for value in revision.parent_ids):
+            raise ValidationError("research revision parents are malformed")
+        if len(set(revision.parent_ids)) != len(revision.parent_ids):
+            raise ValidationError("research revision parent set is duplicated")
+
     def revision_summary(self, revision_id: UUID) -> ResearchRevisionSummary:
         """Describe only parents explicitly frozen into ``revision_id``."""
         with self._session.no_autoflush:
@@ -527,8 +497,9 @@ class ResearchRevisionDiffService:
             basis = self._session.get(UnderwritingHistoricalBasis, revision.basis_id)
             if basis is None:
                 raise ValidationError("research revision basis is missing")
-            self._validate_revision_content(revision)
+            self._validate_parent_shape(revision)
             refs = self._sort_refs(self._resolve_parent(revision, reference) for reference in revision.parent_ids)
+            self._validate_revision_content(revision, refs)
             return ResearchRevisionSummary(
                 revision.id, revision.object_id, revision.basis_id, revision.version_kind,
                 revision.sequence, revision.content_hash, self._stored_datetime(basis.cutoff),
