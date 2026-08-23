@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 import re
 from typing import Mapping, TypeVar
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -23,6 +23,8 @@ from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.persistence.research_models import (
     UnderwritingCompanyExposureVersion,
     UnderwritingEarningsEngineVersion,
+    UnderwritingEvidenceCandidateDossierVersion,
+    UnderwritingEvidenceCandidateReviewVersion,
     UnderwritingFalsifierVersion,
     UnderwritingForecastInputVersion,
     UnderwritingIndustryScenarioVersion,
@@ -32,6 +34,12 @@ from app.underwriting.persistence.research_models import (
     UnderwritingMetricObservation,
     UnderwritingSourceManifestVersion,
 )
+from app.underwriting.domain.evidence_candidates import (
+    CandidateEvidenceDossier,
+    CandidateEvidenceReview,
+)
+from app.underwriting.services.kernel import canonical_hash
+from app.underwriting.services.source_freeze import freeze_manifest
 
 
 RowT = TypeVar("RowT")
@@ -47,6 +55,7 @@ _SUCCESSOR_TABLES = frozenset(
         "uw_earnings_engine_versions",
         "uw_forecast_input_versions",
         "uw_falsifier_versions",
+        "uw_evidence_candidate_dossier_versions",
     }
 )
 _SUCCESSOR_CONSTRAINTS = frozenset(
@@ -60,6 +69,7 @@ _SUCCESSOR_CONSTRAINTS = frozenset(
         "uq_uw_earnings_engine_version",
         "uq_uw_forecast_input_version",
         "uq_uw_falsifier_version",
+        "uq_uw_evidence_candidate_dossier_version",
     }
 )
 _MECHANISM_NEXT_STATUS = {
@@ -222,6 +232,76 @@ class UnderwritingResearchRepository:
         self._source_ids_in_manifest(row.manifest, cutoff)
         return row
 
+    def _verified_candidate_manifest(
+        self, manifest_id: UUID, basis_id: UUID, cutoff: datetime
+    ) -> UnderwritingSourceManifestVersion:
+        """Return the selected frozen manifest after sealing every boundary.
+
+        Candidate evidence carries a source locator, so source-ID membership is
+        not sufficient.  Re-freezing the persisted manifest makes the locator
+        lookup authoritative and ensures the manifest remains the one sealed by
+        the target historical basis.
+        """
+        manifest = self._manifest_for_basis(manifest_id, basis_id, cutoff)
+        basis = self._session.get(UnderwritingHistoricalBasis, basis_id)
+        if basis is None:  # ``_basis_cutoff`` already checks this; stay defensive.
+            raise ValidationError("historical basis does not exist")
+        try:
+            frozen = freeze_manifest(manifest.manifest, cutoff)
+        except ValidationError as exc:
+            raise ValidationError("source manifest is not a verified frozen manifest") from exc
+        if frozen.manifest_hash != manifest.manifest_hash:
+            raise ValidationError("source manifest frozen hash does not match content")
+        if manifest.manifest_hash != basis.source_manifest_hash:
+            raise ValidationError("source manifest hash does not match historical basis")
+        if manifest.content_hash != canonical_hash(manifest.manifest):
+            raise ValidationError("source manifest content hash does not match content")
+        return manifest
+
+    @staticmethod
+    def _candidate_contract_payload(
+        payload: Mapping[str, object]
+    ) -> CandidateEvidenceDossier:
+        contract = CandidateEvidenceDossier.from_canonical_payload(payload)
+        if dict(payload) != contract.canonical_payload:
+            raise ValidationError("dossier payload does not match canonical contract")
+        return contract
+
+    @staticmethod
+    def _review_contract_payload(payload: Mapping[str, object]) -> CandidateEvidenceReview:
+        contract = CandidateEvidenceReview.from_canonical_payload(payload)
+        if dict(payload) != contract.canonical_payload:
+            raise ValidationError("review payload does not match canonical contract")
+        return contract
+
+    def _validate_candidate_item_sources(
+        self, contract: CandidateEvidenceDossier, manifest: UnderwritingSourceManifestVersion,
+        cutoff: datetime,
+    ) -> None:
+        sources = manifest.manifest.get("sources") if isinstance(manifest.manifest, Mapping) else None
+        if not isinstance(sources, list):
+            raise ValidationError("source manifest sources must be a list")
+        manifest_sources: dict[str, str] = {}
+        for source in sources:
+            if not isinstance(source, Mapping):
+                raise ValidationError("source manifest source must be an object")
+            source_id = source.get("source_id")
+            locator = source.get("locator")
+            if not isinstance(source_id, str) or not source_id.strip():
+                raise ValidationError("source_id must not be empty")
+            if not isinstance(locator, str) or not locator.strip():
+                raise ValidationError("source locator is required")
+            if source_id in manifest_sources:
+                raise ValidationError("source_id must be unique")
+            manifest_sources[source_id] = locator
+        for item in contract.items:
+            if item.available_at > cutoff:
+                raise ValidationError("candidate item available_at must not exceed basis cutoff")
+            if item.source_id not in manifest_sources:
+                raise ValidationError("candidate item references unknown source")
+            if item.source_locator != manifest_sources[item.source_id]:
+                raise ValidationError("candidate item source_locator does not match source manifest")
+
     def _definition_for_basis(
         self,
         definition_id: UUID,
@@ -268,6 +348,133 @@ class UnderwritingResearchRepository:
         if self._utc(row.created_at, "industry state created_at") > cutoff:
             raise ValidationError("industry state is unavailable at basis cutoff")
         return row
+
+    def append_candidate_dossier(
+        self,
+        *,
+        object_id: UUID,
+        basis_id: UUID,
+        source_manifest_id: UUID,
+        dossier_key: str,
+        payload: Mapping[str, object],
+        created_at: datetime,
+        expected_parent_id: UUID | None,
+    ) -> UnderwritingEvidenceCandidateDossierVersion:
+        """Append one source-bound candidate dossier without promoting it.
+
+        The supplied payload is the contract's complete canonical form.  The
+        repository derives its version and predecessor from the sealed family,
+        rather than trusting an unverified correction chain from the caller.
+        """
+        cutoff = self._basis_cutoff(basis_id)
+        created_at = self._created_at_at_basis(created_at, cutoff)
+        contract = self._candidate_contract_payload(payload)
+        if (
+            contract.object_id != object_id
+            or contract.basis_id != basis_id
+            or contract.source_manifest_id != source_manifest_id
+            or contract.dossier_key != dossier_key
+            or contract.created_at != created_at
+        ):
+            raise ValidationError("dossier arguments do not match canonical payload")
+        manifest = self._verified_candidate_manifest(source_manifest_id, basis_id, cutoff)
+        if contract.source_manifest_hash != manifest.manifest_hash:
+            raise ValidationError("dossier source_manifest_hash does not match source manifest")
+        self._validate_candidate_item_sources(contract, manifest, cutoff)
+
+        if expected_parent_id is not None:
+            parent = self._session.get(
+                UnderwritingEvidenceCandidateDossierVersion, expected_parent_id
+            )
+            if parent is not None and (
+                parent.object_id != object_id or parent.basis_id != basis_id
+            ):
+                raise ValidationError("dossier successor must share object and basis")
+            if parent is not None and (
+                parent.dossier_key != dossier_key
+                or parent.source_manifest_id != source_manifest_id
+                or parent.source_manifest_hash != contract.source_manifest_hash
+            ):
+                raise ValidationError("dossier successor must preserve immutable references")
+        current = self._latest(
+            select(UnderwritingEvidenceCandidateDossierVersion)
+            .where(
+                UnderwritingEvidenceCandidateDossierVersion.object_id == object_id,
+                UnderwritingEvidenceCandidateDossierVersion.basis_id == basis_id,
+                UnderwritingEvidenceCandidateDossierVersion.dossier_key == dossier_key,
+            )
+            .order_by(
+                UnderwritingEvidenceCandidateDossierVersion.version.desc(),
+                UnderwritingEvidenceCandidateDossierVersion.id.desc(),
+            )
+        )
+        self._require_expected_parent(current.id if current else None, expected_parent_id)
+        expected_version = (current.version + 1) if current else 1
+        expected_supersedes_id = current.id if current else None
+        if (
+            contract.version != expected_version
+            or contract.supersedes_id != expected_supersedes_id
+        ):
+            raise ValidationError("dossier successor version or predecessor is not canonical")
+        return self._append(
+            UnderwritingEvidenceCandidateDossierVersion.from_contract(
+                id=uuid4(), contract=contract
+            )
+        )
+
+    def append_candidate_review(
+        self,
+        *,
+        dossier_id: UUID,
+        dossier_content_hash: str,
+        reviewer_identity: str,
+        reviewer_role: str,
+        decision: str,
+        payload: Mapping[str, object],
+        created_at: datetime,
+    ) -> UnderwritingEvidenceCandidateReviewVersion:
+        """Append an independently identified review of one exact dossier."""
+        dossier = self._session.get(UnderwritingEvidenceCandidateDossierVersion, dossier_id)
+        if dossier is None:
+            raise ValidationError("candidate dossier does not exist")
+        cutoff = self._basis_cutoff(dossier.basis_id)
+        created_at = self._created_at_at_basis(created_at, cutoff)
+        contract = self._review_contract_payload(payload)
+        if (
+            contract.dossier_id != dossier_id
+            or contract.dossier_content_hash != dossier_content_hash
+            or contract.reviewer_identity != reviewer_identity
+            or contract.reviewer_role != reviewer_role
+            or contract.decision != decision
+            or contract.reviewed_at != created_at
+        ):
+            raise ValidationError("review arguments do not match canonical payload")
+        self._hash(dossier_content_hash, "dossier_content_hash")
+        if dossier.content_hash != dossier_content_hash:
+            raise ValidationError("review dossier_content_hash does not match dossier")
+        if contract.reviewed_at > cutoff:
+            raise ValidationError("reviewed_at must not exceed basis cutoff")
+        same_identity = self._session.scalar(
+            select(UnderwritingEvidenceCandidateReviewVersion.id).where(
+                UnderwritingEvidenceCandidateReviewVersion.dossier_id == dossier_id,
+                UnderwritingEvidenceCandidateReviewVersion.reviewer_identity == reviewer_identity,
+            )
+        )
+        if same_identity is not None:
+            raise ValidationError("candidate reviews require different reviewer identities")
+        same_role = self._session.scalar(
+            select(UnderwritingEvidenceCandidateReviewVersion.id).where(
+                UnderwritingEvidenceCandidateReviewVersion.dossier_id == dossier_id,
+                UnderwritingEvidenceCandidateReviewVersion.reviewer_role == reviewer_role,
+            )
+        )
+        if same_role is not None:
+            raise ValidationError("candidate dossier already has a review for this role")
+        return self._append(
+            UnderwritingEvidenceCandidateReviewVersion.from_contract(
+                id=uuid4(), contract=contract
+            )
+        )
 
     def add_source_manifest(
         self,
@@ -843,5 +1050,21 @@ class UnderwritingResearchRepository:
             .order_by(
                 UnderwritingEarningsEngineVersion.version.desc(),
                 UnderwritingEarningsEngineVersion.id.desc(),
+            )
+        )
+
+    def effective_candidate_reviews(
+        self, dossier_id: UUID
+    ) -> list[UnderwritingEvidenceCandidateReviewVersion]:
+        """Read reviews bound to this dossier only; successors never inherit them."""
+        return list(
+            self._session.scalars(
+                select(UnderwritingEvidenceCandidateReviewVersion)
+                .where(UnderwritingEvidenceCandidateReviewVersion.dossier_id == dossier_id)
+                .order_by(
+                    UnderwritingEvidenceCandidateReviewVersion.reviewer_role,
+                    UnderwritingEvidenceCandidateReviewVersion.reviewed_at,
+                    UnderwritingEvidenceCandidateReviewVersion.id,
+                )
             )
         )
