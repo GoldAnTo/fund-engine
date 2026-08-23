@@ -2392,6 +2392,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/underwriting/v1/objects/{object_id}/research-versions/{version_kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Research Revision History */
+        get: operations["get_research_revision_history_api_underwriting_v1_objects__object_id__research_versions__version_kind__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/research-versions/{revision_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Research Revision */
+        get: operations["get_research_revision_api_underwriting_v1_research_versions__revision_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/research-versions/{from_revision_id}/diff/{to_revision_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Research Revision Diff */
+        get: operations["get_research_revision_diff_api_underwriting_v1_research_versions__from_revision_id__diff__to_revision_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/underwriting/v1/objects/{object_id}/economic-models/{basis_id}": {
         parameters: {
             query?: never;
@@ -7694,6 +7745,144 @@ export interface components {
             items: components["schemas"]["ResearchPreparationEventDTO"][];
             /** Next After Seq */
             next_after_seq?: number | null;
+        };
+        /** ResearchRevisionArtifactResponse */
+        ResearchRevisionArtifactResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Reference */
+            reference: string;
+            /** Artifact Type */
+            artifact_type: string;
+            /** Identity */
+            identity: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Source Locators */
+            source_locators: string[];
+            /** Unit */
+            unit: string | null;
+            /** Period Start */
+            period_start: string | null;
+            /** Period End */
+            period_end: string | null;
+            /** Available At */
+            available_at: string | null;
+            /** Status */
+            status: string | null;
+        };
+        /** ResearchRevisionChangeResponse */
+        ResearchRevisionChangeResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "evidence" | "mechanism" | "industry_model" | "answerability";
+            /**
+             * Change Type
+             * @enum {string}
+             */
+            change_type: "added" | "removed" | "replaced";
+            /** Artifact Type */
+            artifact_type: string;
+            /** Identity */
+            identity: string;
+            before: components["schemas"]["ResearchRevisionArtifactResponse"] | null;
+            after: components["schemas"]["ResearchRevisionArtifactResponse"] | null;
+        };
+        /** ResearchRevisionDiffResponse */
+        ResearchRevisionDiffResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * From Revision Id
+             * Format: uuid
+             */
+            from_revision_id: string;
+            /**
+             * To Revision Id
+             * Format: uuid
+             */
+            to_revision_id: string;
+            /** From Content Hash */
+            from_content_hash: string;
+            /** To Content Hash */
+            to_content_hash: string;
+            /** Entries */
+            entries: components["schemas"]["ResearchRevisionChangeResponse"][];
+            /** Diff Hash */
+            diff_hash: string;
+        };
+        /** ResearchRevisionHistoryResponse */
+        ResearchRevisionHistoryResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /** Version Kind */
+            version_kind: string;
+            /** Revisions */
+            revisions: components["schemas"]["ResearchRevisionResponse"][];
+        };
+        /** ResearchRevisionResponse */
+        ResearchRevisionResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /**
+             * Basis Id
+             * Format: uuid
+             */
+            basis_id: string;
+            /** Version Kind */
+            version_kind: string;
+            /** Sequence */
+            sequence: number;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Cutoff
+             * Format: date-time
+             */
+            cutoff: string;
+            /** Source Manifest Hash */
+            source_manifest_hash: string;
+            /** Parent Refs */
+            parent_refs: components["schemas"]["ResearchRevisionArtifactResponse"][];
         };
         /**
          * ResearchRunArchiveDTO
@@ -14266,6 +14455,128 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SnapshotResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_research_revision_history_api_underwriting_v1_objects__object_id__research_versions__version_kind__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                object_id: string;
+                version_kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRevisionHistoryResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_research_revision_api_underwriting_v1_research_versions__revision_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRevisionResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_research_revision_diff_api_underwriting_v1_research_versions__from_revision_id__diff__to_revision_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                from_revision_id: string;
+                to_revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRevisionDiffResponse"];
                 };
             };
             /** @description Not Found */

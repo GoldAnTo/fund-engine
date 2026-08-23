@@ -179,6 +179,55 @@ class SnapshotResponse(UnderwritingModel):
     snapshot_hash: str
 
 
+class ResearchRevisionArtifactResponse(UnderwritingModel):
+    reference: str
+    artifact_type: str
+    identity: str
+    content_hash: str
+    source_locators: list[str]
+    unit: str | None
+    period_start: datetime | None
+    period_end: datetime | None
+    available_at: datetime | None
+    status: str | None
+
+
+class ResearchRevisionResponse(UnderwritingModel):
+    id: UUID
+    object_id: UUID
+    basis_id: UUID
+    version_kind: str
+    sequence: int
+    content_hash: str
+    cutoff: datetime
+    source_manifest_hash: str
+    parent_refs: list[ResearchRevisionArtifactResponse]
+
+
+class ResearchRevisionHistoryResponse(UnderwritingModel):
+    object_id: UUID
+    version_kind: str
+    revisions: list[ResearchRevisionResponse]
+
+
+class ResearchRevisionChangeResponse(UnderwritingModel):
+    group: Literal["evidence", "mechanism", "industry_model", "answerability"]
+    change_type: Literal["added", "removed", "replaced"]
+    artifact_type: str
+    identity: str
+    before: ResearchRevisionArtifactResponse | None
+    after: ResearchRevisionArtifactResponse | None
+
+
+class ResearchRevisionDiffResponse(UnderwritingModel):
+    from_revision_id: UUID
+    to_revision_id: UUID
+    from_content_hash: str
+    to_content_hash: str
+    entries: list[ResearchRevisionChangeResponse]
+    diff_hash: str
+
+
 class EconomicSourceResponse(UnderwritingModel):
     source_id: str
     title: str

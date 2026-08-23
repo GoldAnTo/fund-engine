@@ -9395,6 +9395,184 @@
         }
       }
     },
+    "/api/underwriting/v1/objects/{object_id}/research-versions/{version_kind}": {
+      "get": {
+        "tags": [
+          "underwriting-v1"
+        ],
+        "summary": "Get Research Revision History",
+        "operationId": "get_research_revision_history_api_underwriting_v1_objects__object_id__research_versions__version_kind__get",
+        "parameters": [
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          },
+          {
+            "name": "version_kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Kind"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRevisionHistoryResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/research-versions/{revision_id}": {
+      "get": {
+        "tags": [
+          "underwriting-v1"
+        ],
+        "summary": "Get Research Revision",
+        "operationId": "get_research_revision_api_underwriting_v1_research_versions__revision_id__get",
+        "parameters": [
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Revision Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRevisionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/research-versions/{from_revision_id}/diff/{to_revision_id}": {
+      "get": {
+        "tags": [
+          "underwriting-v1"
+        ],
+        "summary": "Get Research Revision Diff",
+        "operationId": "get_research_revision_diff_api_underwriting_v1_research_versions__from_revision_id__diff__to_revision_id__get",
+        "parameters": [
+          {
+            "name": "from_revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "From Revision Id"
+            }
+          },
+          {
+            "name": "to_revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "To Revision Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRevisionDiffResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
     "/api/underwriting/v1/objects/{object_id}/economic-models/{basis_id}": {
       "get": {
         "tags": [
@@ -23798,6 +23976,331 @@
           "items"
         ],
         "title": "ResearchPreparationEventsResponse"
+      },
+      "ResearchRevisionArtifactResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "reference": {
+            "type": "string",
+            "title": "Reference"
+          },
+          "artifact_type": {
+            "type": "string",
+            "title": "Artifact Type"
+          },
+          "identity": {
+            "type": "string",
+            "title": "Identity"
+          },
+          "content_hash": {
+            "type": "string",
+            "title": "Content Hash"
+          },
+          "source_locators": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Locators"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "available_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available At"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reference",
+          "artifact_type",
+          "identity",
+          "content_hash",
+          "source_locators",
+          "unit",
+          "period_start",
+          "period_end",
+          "available_at",
+          "status"
+        ],
+        "title": "ResearchRevisionArtifactResponse"
+      },
+      "ResearchRevisionChangeResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "group": {
+            "type": "string",
+            "enum": [
+              "evidence",
+              "mechanism",
+              "industry_model",
+              "answerability"
+            ],
+            "title": "Group"
+          },
+          "change_type": {
+            "type": "string",
+            "enum": [
+              "added",
+              "removed",
+              "replaced"
+            ],
+            "title": "Change Type"
+          },
+          "artifact_type": {
+            "type": "string",
+            "title": "Artifact Type"
+          },
+          "identity": {
+            "type": "string",
+            "title": "Identity"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchRevisionArtifactResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "after": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchRevisionArtifactResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "group",
+          "change_type",
+          "artifact_type",
+          "identity",
+          "before",
+          "after"
+        ],
+        "title": "ResearchRevisionChangeResponse"
+      },
+      "ResearchRevisionDiffResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "from_revision_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "From Revision Id"
+          },
+          "to_revision_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "To Revision Id"
+          },
+          "from_content_hash": {
+            "type": "string",
+            "title": "From Content Hash"
+          },
+          "to_content_hash": {
+            "type": "string",
+            "title": "To Content Hash"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchRevisionChangeResponse"
+            },
+            "type": "array",
+            "title": "Entries"
+          },
+          "diff_hash": {
+            "type": "string",
+            "title": "Diff Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "from_revision_id",
+          "to_revision_id",
+          "from_content_hash",
+          "to_content_hash",
+          "entries",
+          "diff_hash"
+        ],
+        "title": "ResearchRevisionDiffResponse"
+      },
+      "ResearchRevisionHistoryResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "version_kind": {
+            "type": "string",
+            "title": "Version Kind"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchRevisionResponse"
+            },
+            "type": "array",
+            "title": "Revisions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "object_id",
+          "version_kind",
+          "revisions"
+        ],
+        "title": "ResearchRevisionHistoryResponse"
+      },
+      "ResearchRevisionResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "basis_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Basis Id"
+          },
+          "version_kind": {
+            "type": "string",
+            "title": "Version Kind"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "content_hash": {
+            "type": "string",
+            "title": "Content Hash"
+          },
+          "cutoff": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff"
+          },
+          "source_manifest_hash": {
+            "type": "string",
+            "title": "Source Manifest Hash"
+          },
+          "parent_refs": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchRevisionArtifactResponse"
+            },
+            "type": "array",
+            "title": "Parent Refs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "object_id",
+          "basis_id",
+          "version_kind",
+          "sequence",
+          "content_hash",
+          "cutoff",
+          "source_manifest_hash",
+          "parent_refs"
+        ],
+        "title": "ResearchRevisionResponse"
       },
       "ResearchRunArchiveDTO": {
         "properties": {

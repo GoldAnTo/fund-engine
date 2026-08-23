@@ -34,6 +34,11 @@ from app.underwriting.api.schemas import (
     EconomicSourceResponse,
     EconomicObservationResponse,
     CandidateMechanismResponse,
+    ResearchRevisionArtifactResponse,
+    ResearchRevisionChangeResponse,
+    ResearchRevisionDiffResponse,
+    ResearchRevisionHistoryResponse,
+    ResearchRevisionResponse,
 )
 from app.errors import NotFoundError
 from app.underwriting.persistence.models import UnderwritingAnswerabilityEvaluation, UnderwritingHistoricalBasis, UnderwritingResearchVersion, UnderwritingLedgerEntry, UnderwritingObjectRelation
@@ -49,6 +54,12 @@ from app.underwriting.domain.types import (
 )
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.services.kernel import UnderwritingKernelService
+from app.underwriting.services.research_revision_diff import (
+    ResearchRevisionDiffService,
+    RevisionArtifactRef,
+    RevisionChange,
+    ResearchRevisionSummary,
+)
 
 
 router = APIRouter(prefix="/api/underwriting/v1", tags=["underwriting-v1"])
@@ -165,6 +176,61 @@ def _answerability_response(value) -> AnswerabilityResponse:
     )
 
 
+def _revision_artifact_response(value: RevisionArtifactRef) -> ResearchRevisionArtifactResponse:
+    return ResearchRevisionArtifactResponse(
+        reference=value.reference,
+        artifact_type=value.artifact_type,
+        identity=value.identity,
+        content_hash=value.content_hash,
+        source_locators=list(value.source_locators),
+        unit=value.unit,
+        period_start=value.period_start,
+        period_end=value.period_end,
+        available_at=value.available_at,
+        status=value.status,
+    )
+
+
+def _revision_response(value: ResearchRevisionSummary) -> ResearchRevisionResponse:
+    return ResearchRevisionResponse(
+        id=value.id,
+        object_id=value.object_id,
+        basis_id=value.basis_id,
+        version_kind=value.version_kind,
+        sequence=value.sequence,
+        content_hash=value.content_hash,
+        cutoff=value.cutoff,
+        source_manifest_hash=value.source_manifest_hash,
+        parent_refs=[_revision_artifact_response(item) for item in value.parent_refs],
+    )
+
+
+def _revision_change_response(value: RevisionChange) -> ResearchRevisionChangeResponse:
+    return ResearchRevisionChangeResponse(
+        group=value.group,
+        change_type=value.change_type,
+        artifact_type=value.artifact_type,
+        identity=value.identity,
+        before=_revision_artifact_response(value.before) if value.before is not None else None,
+        after=_revision_artifact_response(value.after) if value.after is not None else None,
+    )
+
+
+def _require_research_revision(db: Session, revision_id: UUID) -> None:
+    with db.no_autoflush:
+        if db.get(UnderwritingResearchVersion, revision_id) is None:
+            raise NotFoundError("research revision not found")
+
+
+def _require_research_family(db: Session, object_id: UUID, version_kind: str) -> None:
+    with db.no_autoflush:
+        if db.scalar(select(UnderwritingResearchVersion.id).where(
+            UnderwritingResearchVersion.object_id == object_id,
+            UnderwritingResearchVersion.version_kind == version_kind,
+        ).limit(1)) is None:
+            raise NotFoundError("research revision not found")
+
+
 @router.post(
     "/objects",
     response_model=ResearchObjectResponse,
@@ -247,6 +313,63 @@ def get_snapshot(object_id: UUID, basis_id: UUID, db: Session = Depends(get_db))
         cutoff=snapshot.cutoff,
         entries=[_ledger_response(entry) for entry in snapshot.entries],
         snapshot_hash=snapshot.snapshot_hash,
+    )
+
+
+@router.get(
+    "/objects/{object_id}/research-versions/{version_kind}",
+    response_model=ResearchRevisionHistoryResponse,
+    responses=READ_ERROR_RESPONSES,
+)
+def get_research_revision_history(
+    object_id: UUID, version_kind: str, db: Session = Depends(get_db),
+) -> ResearchRevisionHistoryResponse:
+    _require_research_family(db, object_id, version_kind)
+    try:
+        history = ResearchRevisionDiffService(db).revision_history(object_id, version_kind)
+    except ValidationError as exc:
+        raise ValidationFailedError(str(exc)) from exc
+    return ResearchRevisionHistoryResponse(
+        object_id=history.object_id,
+        version_kind=history.version_kind,
+        revisions=[_revision_response(item) for item in history.revisions],
+    )
+
+
+@router.get(
+    "/research-versions/{revision_id}",
+    response_model=ResearchRevisionResponse,
+    responses=READ_ERROR_RESPONSES,
+)
+def get_research_revision(revision_id: UUID, db: Session = Depends(get_db)) -> ResearchRevisionResponse:
+    _require_research_revision(db, revision_id)
+    try:
+        return _revision_response(ResearchRevisionDiffService(db).revision_summary(revision_id))
+    except ValidationError as exc:
+        raise ValidationFailedError(str(exc)) from exc
+
+
+@router.get(
+    "/research-versions/{from_revision_id}/diff/{to_revision_id}",
+    response_model=ResearchRevisionDiffResponse,
+    responses=READ_ERROR_RESPONSES,
+)
+def get_research_revision_diff(
+    from_revision_id: UUID, to_revision_id: UUID, db: Session = Depends(get_db),
+) -> ResearchRevisionDiffResponse:
+    _require_research_revision(db, from_revision_id)
+    _require_research_revision(db, to_revision_id)
+    try:
+        result = ResearchRevisionDiffService(db).revision_diff(from_revision_id, to_revision_id)
+    except ValidationError as exc:
+        raise ValidationFailedError(str(exc)) from exc
+    return ResearchRevisionDiffResponse(
+        from_revision_id=result.from_revision_id,
+        to_revision_id=result.to_revision_id,
+        from_content_hash=result.from_content_hash,
+        to_content_hash=result.to_content_hash,
+        entries=[_revision_change_response(item) for item in result.entries],
+        diff_hash=result.diff_hash,
     )
 
 
