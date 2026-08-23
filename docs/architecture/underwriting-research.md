@@ -110,6 +110,26 @@ silently upgraded into a fact. `not_answerable` and
 `wait_for_validation` are displayed as unresolved research boundaries rather
 than conclusions.
 
+## Frozen research-boundary semantics
+
+`GET /api/underwriting/v1/research-versions/{revision_id}/boundary` returns
+only boundary parents explicitly sealed into that selected revision. Its
+identity tuple (`revision_id`, object, basis, version family, content hash,
+cutoff and source-manifest hash) is bound to the selected revision before the
+browser renders it. The browser rejects a response with an unknown field,
+malformed nested record, or any identity mismatch; it does not fall back to a
+status label, current ledger row, relation, fixture, or economic-model read.
+
+The optional answerability record states only the recorded answerability,
+blockers, research-debt keys, mandate flag and resolution requirements.
+Explicit `unknown_evidence_gaps` retain their source locator, unit, observed
+period, effective/available times and dimensions. If the selected frozen
+parent graph contains no displayable gap, the UI says exactly that. It does
+not turn the absence of such a parent into a claim that an industry gap was
+resolved. This is important for the CATL evidence-only version: its returned
+`not_answerable` record and empty selected gap list do not authorise a
+cross-object industry lookup or an inference about later research.
+
 ## Failure behaviour
 
 The API returns the normal underwriting `422` validation envelope when an

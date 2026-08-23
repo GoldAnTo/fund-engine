@@ -93,6 +93,28 @@ const revisionTwo = {
   }],
 };
 
+const boundaryTwo = {
+  schema_version: "underwriting.v1" as const,
+  revision_id: revisionTwo.id,
+  object_id: revisionTwo.object_id,
+  basis_id: revisionTwo.basis_id,
+  version_kind: revisionTwo.version_kind,
+  content_hash: revisionTwo.content_hash,
+  cutoff: revisionTwo.cutoff,
+  source_manifest_hash: revisionTwo.source_manifest_hash,
+  answerability: {
+    schema_version: "underwriting.v1" as const,
+    reference: "boundary-answerability-id",
+    content_hash: "5".repeat(64),
+    state: "not_answerable" as const,
+    blockers: ["missing_key_baseline"] as const,
+    research_debt_keys: ["industry_utilisation"],
+    resolvable_within_mandate: true,
+    resolution_requirements: ["核验行业有效产能与利用率口径"],
+  },
+  unknown_evidence_gaps: [],
+};
+
 function renderArchive(entry = "/underwriting/research") {
   return render(
     <MemoryRouter initialEntries={[entry]}>
@@ -166,6 +188,16 @@ function installApi(overrides: Partial<UnderwritingResearchApi> = {}) {
         },
       }],
     }),
+    boundary: vi.fn((revisionId: string) => Promise.resolve(revisionId === revisionOne.id ? {
+      ...boundaryTwo,
+      revision_id: revisionOne.id,
+      object_id: revisionOne.object_id,
+      basis_id: revisionOne.basis_id,
+      version_kind: revisionOne.version_kind,
+      content_hash: revisionOne.content_hash,
+      cutoff: revisionOne.cutoff,
+      source_manifest_hash: revisionOne.source_manifest_hash,
+    } : boundaryTwo)),
     ...overrides,
   } as unknown as UnderwritingResearchApi;
   setUnderwritingResearchApi(api);
@@ -202,21 +234,82 @@ describe("ResearchArchivePage", () => {
       );
   });
 
-  it("shows CATL unresolved evidence boundaries on a deep link", async () => {
+  it("shows the selected CATL frozen answerability and does not misrepresent an empty gap parent set", async () => {
     installApi();
     renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
 
     expect((await screen.findAllByText("研究尚需验证")).length).toBeGreaterThan(0);
-    expect(screen.queryByText("等待验证资料")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Unknown evidence gap").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("candidate").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("p.148").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("GWh").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("2024-01-01 至 2024-12-31").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("2025-05-14T00:00:00Z").length).toBeGreaterThan(0);
+    expect(screen.getByText("缺少关键基线")).toBeVisible();
+    expect(screen.getByText("industry_utilisation")).toBeVisible();
+    expect(screen.getByText("核验行业有效产能与利用率口径")).toBeVisible();
     const boundaries = screen.getByRole("complementary", { name: "研究边界" });
-    expect(within(boundaries).getByText(/Unknown evidence gap/)).toBeVisible();
-    expect(within(boundaries).getByText("candidate")).toBeVisible();
+    expect(within(boundaries).getByText("此版本的冻结父图未记录可展示的 Unknown gap；这不表示行业缺口已解决。")).toBeVisible();
+  });
+
+  it.each([
+    ["revision_id", "other-revision"],
+    ["object_id", "other-object"],
+    ["basis_id", "other-basis"],
+    ["version_kind", "other-version-kind"],
+    ["content_hash", "f".repeat(64)],
+    ["cutoff", "2025-05-16T00:00:00Z"],
+    ["source_manifest_hash", "e".repeat(64)],
+  ])("fails closed when boundary %s does not bind to the selected revision", async (field, value) => {
+    installApi({ boundary: vi.fn().mockResolvedValue({ ...boundaryTwo, [field]: value }) });
+    renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结档案的身份或版本链无法校验，未展示任何资料。");
+    expect(screen.queryByText("核验行业有效产能与利用率口径")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["accepts an unknown gap field", { ...boundaryTwo, unknown_evidence_gaps: [{
+      schema_version: "underwriting.v1", reference: "gap-id", content_hash: "8".repeat(64), metric_key: "effective_capacity", unit: "GWh", source_id: "source-1", source_locator: "p.1", observed_start: "2024-01-01T00:00:00Z", observed_end: "2024-12-31T00:00:00Z", effective_at: "2025-01-01T00:00:00Z", available_at: "2025-01-01T00:00:00Z", source_role: "primary", observation_status: "unknown", dimensions: {}, unexpected: true,
+    }] }],
+    ["returns a malformed unknown gap", { ...boundaryTwo, unknown_evidence_gaps: [{
+      schema_version: "underwriting.v1", reference: "gap-id", content_hash: "8".repeat(64), metric_key: "effective_capacity", unit: "GWh", source_id: "source-1", source_locator: "p.1", observed_start: "2024-01-01T00:00:00Z", observed_end: "2024-12-31T00:00:00Z", effective_at: "2025-01-01T00:00:00Z", available_at: "2025-01-01T00:00:00Z", source_role: "primary", observation_status: "unknown",
+    }] }],
+  ])("fails closed when boundary %s", async (_name, boundary) => {
+    installApi({ boundary: vi.fn().mockResolvedValue(boundary) });
+    renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结档案的身份或版本链无法校验，未展示任何资料。");
+  });
+
+  it("fails closed when the boundary response has an unrecognised top-level field", async () => {
+    installApi({ boundary: vi.fn().mockResolvedValue({ ...boundaryTwo, extra: "must not render" }) });
+    renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结档案的身份或版本链无法校验，未展示任何资料。");
+    expect(screen.queryByText("must not render")).not.toBeInTheDocument();
+  });
+
+  it("renders every typed locator, unit, period, and availability field for an explicit Unknown gap", async () => {
+    const gap = {
+      schema_version: "underwriting.v1" as const,
+      reference: "gap-id",
+      content_hash: "8".repeat(64),
+      metric_key: "effective_capacity",
+      unit: "GWh",
+      source_id: "source-1",
+      source_locator: "IEA, p.149",
+      observed_start: "2024-01-01T00:00:00Z",
+      observed_end: "2024-12-31T00:00:00Z",
+      effective_at: "2025-01-01T00:00:00Z",
+      available_at: "2025-01-02T00:00:00Z",
+      source_role: "primary",
+      observation_status: "unknown" as const,
+      dimensions: { geography: "CN" },
+    };
+    installApi({ boundary: vi.fn().mockResolvedValue({ ...boundaryTwo, unknown_evidence_gaps: [gap] }) });
+    renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+
+    const boundaries = await screen.findByRole("complementary", { name: "研究边界" });
+    expect(within(boundaries).getByText("effective_capacity")).toBeVisible();
+    expect(within(boundaries).getByText("IEA, p.149")).toBeVisible();
+    expect(within(boundaries).getByText("GWh")).toBeVisible();
+    expect(within(boundaries).getByText("2024-01-01T00:00:00Z 至 2024-12-31T00:00:00Z")).toBeVisible();
+    expect(within(boundaries).getByText("2025-01-02T00:00:00Z")).toBeVisible();
   });
 
   it("keeps an immediate predecessor artifact out of the selected frozen-evidence table", async () => {
@@ -529,7 +622,14 @@ describe("ResearchArchivePage", () => {
       String.fromCharCode(115, 101, 108, 108),
       String.fromCharCode(115, 116, 111, 112),
       String.fromCharCode(112, 111, 115, 105, 116, 105, 111, 110),
+      String.fromCharCode(97, 99, 116, 105, 111, 110),
+      String.fromCharCode(100, 105, 115, 112, 111, 115, 105, 116, 105, 111, 110),
+      String.fromCharCode(69, 108, 105, 103, 105, 98, 108, 101, 65, 99, 116, 105, 111, 110),
     ];
     expect(terms.every((term) => !new RegExp(`\\b${term}\\b`, "i").test(pageSource))).toBe(true);
+  });
+
+  it("does not use the economic-model resource as a boundary fallback", () => {
+    expect(pageSource).not.toContain(`/${"economic"}-${"models"}`);
   });
 });

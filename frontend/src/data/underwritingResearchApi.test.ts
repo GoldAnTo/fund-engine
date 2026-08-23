@@ -104,6 +104,7 @@ describe("underwriting research API", () => {
     await underwritingResearchApi.history("object id", "industry baseline");
     await underwritingResearchApi.revision("revision id");
     await underwritingResearchApi.diff("from id", "to id");
+    await underwritingResearchApi.boundary("revision id");
 
     const calls = fetchSpy.mock.calls as unknown as Array<[string, RequestInit]>;
     expect(calls.map(([url]) => url)).toEqual([
@@ -111,6 +112,7 @@ describe("underwriting research API", () => {
       "/api/underwriting/v1/objects/object%20id/research-versions/industry%20baseline",
       "/api/underwriting/v1/research-versions/revision%20id",
       "/api/underwriting/v1/research-versions/from%20id/diff/to%20id",
+      "/api/underwriting/v1/research-versions/revision%20id/boundary",
     ]);
     expect(calls.map(([, init]) => init)).toEqual(
       expect.arrayContaining([

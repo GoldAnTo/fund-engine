@@ -7,6 +7,7 @@ import {
   type ResearchArchiveItem,
   type ResearchArchiveList,
   type ResearchRevision,
+  type ResearchRevisionBoundary,
   type ResearchRevisionDiff,
   type ResearchRevisionHistory,
 } from "../../data/underwritingResearchApi";
@@ -20,7 +21,11 @@ type ArchiveKind = "" | ResearchArchiveItem["object_kind"];
 type Artifact = ResearchRevisionDiff["entries"][number]["after"] extends infer Value
   ? Exclude<Value, null>
   : never;
-type DetailLoad = { revision: ResearchRevision; diff: ResearchRevisionDiff | null };
+type DetailLoad = {
+  revision: ResearchRevision;
+  diff: ResearchRevisionDiff | null;
+  boundary: ResearchRevisionBoundary;
+};
 type DiffEntry = ResearchRevisionDiff["entries"][number];
 
 const GROUPS = [
@@ -184,6 +189,80 @@ function checkedRevision(value: unknown, expected: ResearchRevision): ResearchRe
     || !sameArtifactList(expected.parent_refs, value.parent_refs)
   ) throw new ArchiveIntegrityError();
   return value;
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const allowed = new Set(keys);
+  return Object.keys(value).every((key) => allowed.has(key))
+    && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+}
+
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(nonEmptyString);
+}
+
+function isFrozenAnswerability(value: unknown): boolean {
+  const answerability = record(value);
+  return answerability !== null
+    && hasOnlyKeys(answerability, [
+      "schema_version", "reference", "content_hash", "state", "blockers",
+      "research_debt_keys", "resolvable_within_mandate", "resolution_requirements",
+    ])
+    && answerability.schema_version === "underwriting.v1"
+    && nonEmptyString(answerability.reference)
+    && nonEmptyString(answerability.content_hash)
+    && ["answerable", "partially_answerable", "not_answerable"].includes(answerability.state as string)
+    && Array.isArray(answerability.blockers)
+    && answerability.blockers.every((blocker) => [
+      "missing_key_baseline", "unresolved_source_conflict", "mechanism_unidentified",
+      "financial_model_not_closed", "expectation_surface_unidentifiable", "source_unavailable",
+      "future_information_leakage",
+    ].includes(blocker as string))
+    && isStringList(answerability.research_debt_keys)
+    && typeof answerability.resolvable_within_mandate === "boolean"
+    && isStringList(answerability.resolution_requirements);
+}
+
+function isFrozenUnknownGap(value: unknown): boolean {
+  const gap = record(value);
+  const dimensions = record(gap?.dimensions);
+  return gap !== null
+    && hasOnlyKeys(gap, [
+      "schema_version", "reference", "content_hash", "metric_key", "unit", "source_id",
+      "source_locator", "observed_start", "observed_end", "effective_at", "available_at",
+      "source_role", "observation_status", "dimensions",
+    ])
+    && gap.schema_version === "underwriting.v1"
+    && [
+      "reference", "content_hash", "metric_key", "unit", "source_id", "source_locator",
+      "observed_start", "observed_end", "effective_at", "available_at", "source_role",
+    ].every((key) => nonEmptyString(gap[key]))
+    && gap.observation_status === "unknown"
+    && dimensions !== null
+    && Object.values(dimensions).every((dimension) => nonEmptyString(dimension));
+}
+
+function checkedBoundary(value: unknown, selected: ResearchRevision): ResearchRevisionBoundary {
+  const boundary = record(value);
+  if (
+    boundary === null
+    || !hasOnlyKeys(boundary, [
+      "schema_version", "revision_id", "object_id", "basis_id", "version_kind", "content_hash",
+      "cutoff", "source_manifest_hash", "answerability", "unknown_evidence_gaps",
+    ])
+    || boundary.schema_version !== "underwriting.v1"
+    || boundary.revision_id !== selected.id
+    || boundary.object_id !== selected.object_id
+    || boundary.basis_id !== selected.basis_id
+    || boundary.version_kind !== selected.version_kind
+    || boundary.content_hash !== selected.content_hash
+    || boundary.cutoff !== selected.cutoff
+    || boundary.source_manifest_hash !== selected.source_manifest_hash
+    || (boundary.answerability !== null && !isFrozenAnswerability(boundary.answerability))
+    || !Array.isArray(boundary.unknown_evidence_gaps)
+    || !boundary.unknown_evidence_gaps.every(isFrozenUnknownGap)
+  ) throw new ArchiveIntegrityError();
+  return boundary as ResearchRevisionBoundary;
 }
 
 function isDiff(value: unknown): value is ResearchRevisionDiff {
@@ -352,25 +431,44 @@ function EvidenceTable({ artifacts }: { artifacts: Artifact[] }) {
   );
 }
 
-function ResearchBoundaries({ artifacts }: { artifacts: Artifact[] }) {
-  const boundaryRecords = artifacts.filter((artifact) => artifact.artifact_type === "research_boundary"
-    || ["not_answerable", "wait_for_validation", "unknown_evidence_gap", "candidate"].includes(artifact.status ?? ""));
+function answerabilityLabel(state: "answerable" | "partially_answerable" | "not_answerable"): string {
+  return { answerable: "可回答", partially_answerable: "部分可回答", not_answerable: "研究尚需验证" }[state];
+}
+
+function blockerLabel(blocker: string): string {
+  const labels: Record<string, string> = {
+    missing_key_baseline: "缺少关键基线",
+    unresolved_source_conflict: "来源冲突尚未解决",
+    mechanism_unidentified: "传导机制尚未识别",
+    financial_model_not_closed: "财务模型尚未闭合",
+    expectation_surface_unidentifiable: "预期面无法识别",
+    source_unavailable: "来源不可用",
+    future_information_leakage: "存在未来信息泄漏",
+  };
+  return labels[blocker] ?? blocker;
+}
+
+function ResearchBoundaries({ boundary }: { boundary: ResearchRevisionBoundary }) {
+  const answerability = boundary.answerability;
+  const gaps = boundary.unknown_evidence_gaps;
   return (
     <aside className="ura-boundaries" aria-label="研究边界">
-      <p className="ros-eyebrow">当前冻结父引用</p>
+      <p className="ros-eyebrow">已校验的冻结父图</p>
       <h2>研究边界</h2>
-      <p className="ura-boundaries__intro">仅列出当前版本明确记录的状态、Unknown 或候选资料，不作额外推断。</p>
-      {boundaryRecords.length === 0 ? <p className="ura-boundaries__empty">当前版本没有记录边界资料。</p> : (
-        <ul className="ura-boundary-list">
-          {boundaryRecords.map((artifact) => (
-            <li key={`${artifact.artifact_type}:${artifact.identity}:${artifact.content_hash}`}>
-              <b>{labelForStatus(artifact.status) ?? "已记录资料"}</b>
-              <span>{artifact.reference}</span>
-              <small>{artifact.identity}{artifact.source_locators.length ? ` · ${artifact.source_locators.join("；")}` : ""}</small>
-            </li>
-          ))}
-        </ul>
-      )}
+      <p className="ura-boundaries__intro">只呈现该版本已验证的可回答性与明确记录的 Unknown gap，不从父引用状态推导边界。</p>
+      {answerability === null ? <p className="ura-boundaries__empty">此版本的冻结父图未记录可展示的可回答性资料。</p> : <>
+        <dl className="ura-boundary-details">
+          <div><dt>可回答性</dt><dd>{answerabilityLabel(answerability.state)}</dd></div>
+          <div><dt>研究债务</dt><dd>{answerability.research_debt_keys.length ? answerability.research_debt_keys.join("；") : "未记录"}</dd></div>
+          <div><dt>当前范围内可解决</dt><dd>{answerability.resolvable_within_mandate ? "是" : "否"}</dd></div>
+        </dl>
+        <section className="ura-boundary-section" aria-label="记录的阻塞项"><h3>记录的阻塞项</h3>{answerability.blockers.length ? <ul className="ura-boundary-list">{answerability.blockers.map((blocker) => <li key={blocker}>{blockerLabel(blocker)}</li>)}</ul> : <p>未记录</p>}</section>
+        <section className="ura-boundary-section" aria-label="验证要求"><h3>验证要求</h3>{answerability.resolution_requirements.length ? <ul className="ura-boundary-list">{answerability.resolution_requirements.map((requirement) => <li key={requirement}>{requirement}</li>)}</ul> : <p>未记录</p>}</section>
+      </>}
+      <section className="ura-boundary-section" aria-label="明确记录的 Unknown gap">
+        <h3>明确记录的 Unknown gap</h3>
+        {gaps.length === 0 ? <p className="ura-boundaries__empty">此版本的冻结父图未记录可展示的 Unknown gap；这不表示行业缺口已解决。</p> : <ul className="ura-boundary-list">{gaps.map((gap) => <li key={`${gap.reference}:${gap.content_hash}`}><b>{gap.metric_key}</b><dl className="ura-gap-details"><div><dt>来源定位</dt><dd>{gap.source_locator}</dd></div><div><dt>单位</dt><dd>{gap.unit}</dd></div><div><dt>观测期间</dt><dd>{formatPeriod(gap.observed_start, gap.observed_end)}</dd></div><div><dt>生效时间</dt><dd>{gap.effective_at}</dd></div><div><dt>可用时间</dt><dd>{gap.available_at}</dd></div></dl></li>)}</ul>}
+      </section>
     </aside>
   );
 }
@@ -478,12 +576,14 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
     void Promise.all([
       underwritingResearchApi.revision(selected.id),
       previous ? underwritingResearchApi.diff(previous.id, selected.id) : Promise.resolve(null),
-    ]).then(([revision, diff]) => {
+      underwritingResearchApi.boundary(selected.id),
+    ]).then(([revision, diff, boundary]) => {
       if (!live) return;
       const checked = checkedRevision(revision, selected);
       setDetailState({ state: "ready", value: {
         revision: checked,
         diff: previous ? checkedDiff(diff, previous, checked) : null,
+        boundary: checkedBoundary(boundary, checked),
       } });
     }).catch((error: unknown) => { if (live) setDetailState({ state: "error", error }); });
     return () => { live = false; };
@@ -498,7 +598,6 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
   const revision = detailState.value.revision;
   const changed = detailState.value.diff?.entries ?? [];
   const artifacts = revision.parent_refs;
-  const statuses = [...new Set(artifacts.map((artifact) => labelForStatus(artifact.status)).filter((status): status is string => Boolean(status)))];
 
   return (
     <main className="ros-page ura-page">
@@ -506,7 +605,7 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
       <div className="ura-layout">
         <aside className="ura-timeline" aria-label="研究版本时间线"><p className="ros-eyebrow">不可变版本</p>{revisions.map((revision) => <button key={revision.id} type="button" aria-pressed={revision.id === selected.id} className={revision.id === selected.id ? "ura-version is-selected" : "ura-version"} onClick={() => setSelectedId(revision.id)}><b>版本 {revision.sequence}</b><span>{revision.cutoff}</span></button>)}</aside>
         <section className="ura-detail" aria-label="已选冻结版本">
-          <section className="ura-version-summary"><h2>版本 {revision.sequence}</h2><dl><div><dt>截点</dt><dd>{revision.cutoff}</dd></div><div><dt>来源摘要</dt><dd>{revision.source_manifest_hash}</dd></div><div><dt>内容摘要</dt><dd>{revision.content_hash}</dd></div></dl>{statuses.length > 0 && <div className="ura-statuses" aria-label="当前冻结状态">{statuses.map((status) => <span key={status}>{status}</span>)}</div>}</section>
+          <section className="ura-version-summary"><h2>版本 {revision.sequence}</h2><dl><div><dt>截点</dt><dd>{revision.cutoff}</dd></div><div><dt>来源摘要</dt><dd>{revision.source_manifest_hash}</dd></div><div><dt>内容摘要</dt><dd>{revision.content_hash}</dd></div></dl></section>
           {previous ? <p className="ura-predecessor">仅与紧邻的版本 {previous.sequence} 对照。</p> : <p className="ura-predecessor">这是该档案最早的冻结版本，没有前序版本可对照。</p>}
           {previous && detailState.value.diff && <div className="ura-diff-groups">{GROUPS.map(([group, heading]) => {
             const entries = changed.filter((entry) => entry.group === group);
@@ -514,7 +613,7 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
           })}</div>}
           <EvidenceTable artifacts={artifacts} />
         </section>
-        <ResearchBoundaries artifacts={artifacts} />
+        <ResearchBoundaries boundary={detailState.value.boundary} />
       </div>
     </main>
   );
