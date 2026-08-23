@@ -127,7 +127,7 @@ const candidateRevision = {
   sequence: 1,
   content_hash: "c".repeat(64),
   cutoff: "2025-05-15T15:59:59Z",
-  source_manifest_hash: "d".repeat(64),
+  source_manifest_hash: "5".repeat(64),
   parent_refs: [{
     schema_version: "underwriting.v1" as const,
     reference: "00000000-0000-4000-8000-000000000107",
@@ -180,6 +180,11 @@ const candidateEvidence = {
   content_hash: candidateRevision.content_hash,
   cutoff: candidateRevision.cutoff,
   source_manifest_hash: candidateRevision.source_manifest_hash,
+  parent_refs: candidateRevision.parent_refs
+    .filter((parent) => ["candidate_dossier", "candidate_review", "source_manifest"].includes(parent.artifact_type))
+    .map(({ schema_version, reference, artifact_type, identity, content_hash }) => ({
+      schema_version, reference, artifact_type, identity, content_hash,
+    })),
   dossier: {
     schema_version: "underwriting.v1" as const,
     reference: "00000000-0000-4000-8000-000000000104",
@@ -450,6 +455,26 @@ describe("ResearchArchivePage", () => {
     ["has malformed frozen rejected calculations", { ...candidateEvidence, dossier: { ...candidateEvidence.dossier, rejected_calculations: [""] } }],
     ["uses a foreign but structurally valid dossier", { ...candidateEvidence, dossier: { ...candidateEvidence.dossier, reference: "00000000-0000-4000-8000-000000000109" } }],
     ["has a review content hash mismatch", { ...candidateEvidence, reviews: [{ ...candidateEvidence.reviews[0], content_hash: "a".repeat(64) }, candidateEvidence.reviews[1]] }],
+    ["omits a sealed parent descriptor", { ...candidateEvidence, parent_refs: candidateEvidence.parent_refs.slice(1) }],
+    ["duplicates a sealed parent descriptor", { ...candidateEvidence, parent_refs: [...candidateEvidence.parent_refs, candidateEvidence.parent_refs[3]] }],
+    ["uses a foreign sealed parent descriptor", {
+      ...candidateEvidence,
+      parent_refs: candidateEvidence.parent_refs.map((parent) => parent.artifact_type === "source_manifest" ? { ...parent, reference: "00000000-0000-4000-8000-000000000109" } : parent),
+    }],
+    ["changes the sealed manifest descriptor hash", {
+      ...candidateEvidence,
+      parent_refs: candidateEvidence.parent_refs.map((parent) => parent.artifact_type === "source_manifest" ? { ...parent, content_hash: "a".repeat(64) } : parent),
+    }],
+    ["has a rehashed forged dossier with the same reference", {
+      ...candidateEvidence,
+      parent_refs: candidateEvidence.parent_refs.map((parent) => parent.artifact_type === "candidate_dossier" ? { ...parent, content_hash: "a".repeat(64) } : parent),
+      dossier: { ...candidateEvidence.dossier, content_hash: "b".repeat(64), scope_statement: "篡改后的范围。" },
+    }],
+    ["has a rehashed forged review with the same reference", {
+      ...candidateEvidence,
+      parent_refs: candidateEvidence.parent_refs.map((parent) => parent.reference === candidateEvidence.reviews[0].reference ? { ...parent, content_hash: "a".repeat(64) } : parent),
+      reviews: [{ ...candidateEvidence.reviews[0], content_hash: "54ceb7e2a738d4180ba7303aa396c5e99eefa5cb757d58842eb8a287fccfd3bc", rationale: "篡改后的方法说明。" }, candidateEvidence.reviews[1]],
+    }],
     ["contains prohibited calculation semantics", { ...candidateEvidence, dossier: { ...candidateEvidence.dossier, rejected_calculations: ["建议买入并设定目标价"] } }],
   ])("fails closed when candidate evidence %s", async (_name, response) => {
     installApi({

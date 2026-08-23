@@ -406,10 +406,43 @@ function isStrictCandidateParentRef(value: unknown): boolean {
     && (parent.available_at === null || isUtcTimestamp(parent.available_at));
 }
 
+function isCandidateEvidenceParentRef(value: unknown): boolean {
+  const parent = record(value);
+  return parent !== null
+    && hasOnlyKeys(parent, ["schema_version", "reference", "artifact_type", "identity", "content_hash"])
+    && parent.schema_version === "underwriting.v1"
+    && isCanonicalUuid(parent.reference)
+    && ["candidate_dossier", "candidate_review", "source_manifest"].includes(parent.artifact_type as string)
+    && nonEmptyString(parent.identity)
+    && isContentHash(parent.content_hash);
+}
+
+function exactCandidateParentDescriptors(candidate: Record<string, unknown>, selected: ResearchRevision): boolean {
+  if (!Array.isArray(candidate.parent_refs) || !candidate.parent_refs.every(isCandidateEvidenceParentRef)) return false;
+  // Descriptor hashes may include server-side sealing timestamps, so they are
+  // authenticated against the selected revision rather than a raw response hash.
+  const selectedDescriptors = selected.parent_refs.filter((parent) => [
+    "candidate_dossier", "candidate_review", "source_manifest",
+  ].includes(parent.artifact_type));
+  if (candidate.parent_refs.length !== 4 || selectedDescriptors.length !== 4) return false;
+  return candidate.parent_refs.every((parent, index) => {
+    const responseParent = record(parent);
+    const selectedParent = selectedDescriptors[index];
+    return responseParent !== null && selectedParent !== undefined
+      && responseParent.reference === selectedParent.reference
+      && responseParent.artifact_type === selectedParent.artifact_type
+      && responseParent.identity === selectedParent.identity
+      && responseParent.content_hash === selectedParent.content_hash;
+  });
+}
+
 function candidateParentBindings(candidate: Record<string, unknown>, selected: ResearchRevision): boolean {
   const dossier = record(candidate.dossier);
   const answerability = record(candidate.answerability);
-  if (dossier === null || answerability === null || !selected.parent_refs.every(isStrictCandidateParentRef)) return false;
+  if (
+    dossier === null || answerability === null || !selected.parent_refs.every(isStrictCandidateParentRef)
+    || !exactCandidateParentDescriptors(candidate, selected)
+  ) return false;
   const byType = new Map<string, Record<string, unknown>[]>();
   for (const parent of selected.parent_refs) {
     const parentRecord = record(parent);
@@ -441,6 +474,10 @@ function candidateParentBindings(candidate: Record<string, unknown>, selected: R
     || answerabilityParent.content_hash !== answerability.content_hash
     || answerabilityParent.status !== answerability.state
   ) return false;
+
+  const candidateParents = candidate.parent_refs as unknown[];
+  const manifestDescriptor = candidateParents.find((parent) => record(parent)?.artifact_type === "source_manifest");
+  if (record(manifestDescriptor)?.content_hash !== candidate.source_manifest_hash) return false;
 
   const reviews = candidate.reviews as unknown[];
   return reviews.every((review) => {
@@ -476,7 +513,7 @@ async function checkedCandidateEvidence(value: unknown, selected: ResearchRevisi
   const answerability = record(candidate?.answerability);
   if (
     candidate === null
-    || !hasOnlyKeys(candidate, ["schema_version", "revision_id", "object_id", "basis_id", "version_kind", "content_hash", "cutoff", "source_manifest_hash", "dossier", "items", "reviews", "answerability"])
+    || !hasOnlyKeys(candidate, ["schema_version", "revision_id", "object_id", "basis_id", "version_kind", "content_hash", "cutoff", "source_manifest_hash", "parent_refs", "dossier", "items", "reviews", "answerability"])
     || candidate.schema_version !== "underwriting.v1"
     || !isCanonicalUuid(candidate.revision_id) || !isCanonicalUuid(candidate.object_id) || !isCanonicalUuid(candidate.basis_id)
     || candidate.revision_id !== selected.id || candidate.object_id !== selected.object_id || candidate.basis_id !== selected.basis_id
