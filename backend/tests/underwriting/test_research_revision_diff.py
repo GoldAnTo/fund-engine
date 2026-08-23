@@ -74,9 +74,11 @@ def _append_observation(
     metric_key: str = "company.revenue",
 ):
     manifest_payload = {
+        "cutoff": NOW.isoformat(),
         "sources": [{
             "source_id": "annual-report",
             "locator": source_locator,
+            "published_at": NOW.isoformat(),
             "first_available_at": NOW.isoformat(),
         }],
     }
@@ -813,7 +815,7 @@ def test_legacy_generic_revision_replays_from_its_frozen_ledger_parents(
         parent_ids=legacy_parent_ids, expected_parent_id=None, created_at=NOW,
     )
     successor = kernel.publish_research_version(
-        company.id, basis.id, "legacy_generic", legacy_parent_ids, legacy.id,
+        company.id, basis.id, "legacy_generic", [str(selected.id)], legacy.id,
     )
     kernel.append_ledger_entry(
         company.id, basis.id,
@@ -1023,3 +1025,165 @@ def test_research_archives_do_not_autoflush_pending_objects(
 
     assert pending in session.new
     assert [item.canonical_name for item in page.items] == ["CATL"]
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("cutoff", (NOW + timedelta(days=1)).isoformat()),
+        ("price_as_of", (NOW - timedelta(days=1)).isoformat()),
+        ("source_manifest_hash", "e" * 64),
+    ],
+)
+def test_revision_and_archive_fail_closed_when_a_generic_basis_is_tampered(
+    session: Session, column: str, value: str,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    company = kernel.add_object(ResearchObjectKind.COMPANY, "CN:basis-bound:COMPANY", "Basis bound")
+    basis = kernel.add_basis(HistoricalBasisInput(NOW, NOW, "d" * 64))
+    entry = kernel.append_ledger_entry(
+        company.id, basis.id,
+        LedgerEntryInput(LedgerKind.REALITY, "reported", "reported", {}, NOW, NOW, "public"), None,
+    )
+    revision = kernel.publish_research_version(
+        company.id, basis.id, "basis_bound_model", [str(entry.id)], None,
+    )
+    session.connection().exec_driver_sql(
+        f"UPDATE uw_historical_bases SET {column} = ? WHERE id = ?",
+        (value, basis.id.hex),
+    )
+    session.expire_all()
+    service = ResearchRevisionDiffService(session)
+
+    with pytest.raises(ValidationError, match="research revision content hash"):
+        service.revision_summary(revision.id)
+
+    archived = service.research_archives(limit=100)
+    item = next(item for item in archived.items if item.version_kind == "basis_bound_model")
+    assert item.lineage_state == "unreadable"
+    assert item.latest_revision_id is None
+
+
+@pytest.mark.parametrize("parent_kind", ["observation", "ledger", "manifest"])
+def test_revision_and_archive_reject_parent_evidence_available_after_cutoff(
+    session: Session, seeded_revision: SeededRevision, parent_kind: str,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    service = ResearchRevisionDiffService(session)
+    if parent_kind == "observation":
+        session.connection().exec_driver_sql(
+            "UPDATE uw_metric_observations SET available_at = ? WHERE id = ?",
+            ((NOW + timedelta(seconds=1)).isoformat(), seeded_revision.observation.id.hex),
+        )
+        revision_id = seeded_revision.first.id
+        version_kind = seeded_revision.first.version_kind
+    elif parent_kind == "ledger":
+        kernel = UnderwritingKernelService(session, now=lambda: NOW)
+        entry = kernel.append_ledger_entry(
+            seeded_revision.company.id, seeded_revision.basis.id,
+            LedgerEntryInput(LedgerKind.REALITY, "reported_ledger", "reported", {}, NOW, NOW, "public"),
+            None,
+        )
+        revision = kernel.publish_research_version(
+            seeded_revision.company.id, seeded_revision.basis.id, "ledger_model", [str(entry.id)], None,
+        )
+        session.connection().exec_driver_sql(
+            "UPDATE uw_ledger_entries SET available_at = ? WHERE id = ?",
+            ((NOW + timedelta(seconds=1)).isoformat(), entry.id.hex),
+        )
+        revision_id = revision.id
+        version_kind = revision.version_kind
+    else:
+        source = {
+            "source_id": "annual-report",
+            "locator": "annual-report:p18",
+            "published_at": (NOW + timedelta(seconds=1)).isoformat(),
+            "first_available_at": (NOW + timedelta(seconds=1)).isoformat(),
+        }
+        session.connection().exec_driver_sql(
+            "UPDATE uw_source_manifest_versions SET manifest = ? WHERE id = ?",
+            (json.dumps({"cutoff": NOW.isoformat(), "sources": [source]}), seeded_revision.manifest.id.hex),
+        )
+        revision_id = seeded_revision.first.id
+        version_kind = seeded_revision.first.version_kind
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="unavailable at research basis cutoff"):
+        service.revision_summary(revision_id)
+
+    archive = service.research_archives(limit=100)
+    item = next(item for item in archive.items if item.version_kind == version_kind)
+    assert item.lineage_state == "unreadable"
+    assert item.latest_revision_id is None
+
+
+def test_old_generic_parent_set_v1_is_not_treated_as_a_readable_historical_seal(
+    session: Session,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    company = kernel.add_object(ResearchObjectKind.COMPANY, "CN:old-v1:COMPANY", "Old v1")
+    basis = kernel.add_basis(HistoricalBasisInput(NOW, None, "a" * 64))
+    entry = kernel.append_ledger_entry(
+        company.id, basis.id,
+        LedgerEntryInput(LedgerKind.REALITY, "reported", "reported", {}, NOW, NOW, "public"), None,
+    )
+    parent_ids = [str(entry.id)]
+    revision = UnderwritingRepository(session).append_research_version(
+        object_id=company.id,
+        basis_id=basis.id,
+        version_kind="old_v1",
+        content_hash=canonical_hash({
+            "schema_version": "underwriting.research-version-parent-set.v1",
+            "object_id": str(company.id),
+            "basis_id": str(basis.id),
+            "version_kind": "old_v1",
+            "parent_ids": parent_ids,
+        }),
+        parent_ids=parent_ids,
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    service = ResearchRevisionDiffService(session)
+
+    with pytest.raises(ValidationError, match="research revision content hash"):
+        service.revision_summary(revision.id)
+
+    item = next(item for item in service.research_archives(limit=100).items if item.version_kind == "old_v1")
+    assert item.lineage_state == "unreadable"
+    assert item.latest_revision_id is None
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "expected"),
+    [
+        ("cutoff", (NOW + timedelta(seconds=1)).isoformat(), "source-manifest cutoff"),
+        ("source_manifest_hash", "f" * 64, "source-manifest hash"),
+    ],
+)
+def test_catl_summary_and_archive_bind_the_exact_persisted_manifest_basis(
+    session: Session, catl_revision, column: str, value: str, expected: str,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    session.connection().exec_driver_sql(
+        f"UPDATE uw_historical_bases SET {column} = ? WHERE id = ?",
+        (value, catl_revision.basis.id.hex),
+    )
+    session.expire_all()
+    service = ResearchRevisionDiffService(session)
+
+    with pytest.raises(ValidationError, match=expected):
+        service.revision_summary(catl_revision.research_version.id)
+
+    item = next(
+        item for item in service.research_archives(limit=100).items
+        if item.object_id == catl_revision.company.id
+        and item.version_kind == catl_revision.research_version.version_kind
+    )
+    assert item.lineage_state == "unreadable"
+    assert item.latest_revision_id is None

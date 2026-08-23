@@ -34,6 +34,7 @@ from app.underwriting.persistence.repository import StaleParentError, Underwriti
 
 
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+_RESEARCH_VERSION_PARENT_SET_SCHEMA = "underwriting.research-version-parent-set.v2"
 _RELATION_KINDS = {
     "industry_exposes_company": (
         ResearchObjectKind.INDUSTRY.value,
@@ -72,25 +73,43 @@ def frozen_research_version_content_hash(
     basis_id: uuid.UUID,
     version_kind: str,
     parent_ids: list[str],
+    *,
+    cutoff: datetime,
+    price_as_of: datetime | None,
+    source_manifest_hash: str,
 ) -> tuple[str, str, list[str]]:
-    """Seal a generic research version from its persisted parent set only.
+    """Seal a generic research version from frozen parents and historical basis.
 
     A research-version row is a historical assertion.  Its integrity cannot
     depend on the currently effective ledger, because unrelated evidence may
     be appended after publication.  Payload authenticity is verified by the
     reader when each frozen parent is resolved; this seal binds that exact
-    parent-id set to its object, basis, and version family.
+    parent-id set to its object, basis, version family, and the complete
+    historically knowable basis.  ``basis_id`` alone is not an integrity
+    boundary: an unsafe database update could otherwise alter its cutoff,
+    price timestamp, or source-manifest identity without invalidating history.
     """
     if not isinstance(version_kind, str) or not (normalized_kind := version_kind.strip()):
         raise ValidationError("version_kind must not be empty")
     if not isinstance(parent_ids, list) or not all(isinstance(value, str) for value in parent_ids):
         raise ValidationError("research revision parents are malformed")
+    if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+        raise ValidationError("research revision basis cutoff must be timezone-aware")
+    if price_as_of is not None and (price_as_of.tzinfo is None or price_as_of.utcoffset() is None):
+        raise ValidationError("research revision basis price_as_of must be timezone-aware")
+    if not isinstance(source_manifest_hash, str) or _SHA256_HEX.fullmatch(source_manifest_hash) is None:
+        raise ValidationError("research revision basis source_manifest_hash must be a sha256 hex digest")
     normalized_parent_ids = sorted(set(parent_ids))
     return (
         canonical_hash({
-            "schema_version": "underwriting.research-version-parent-set.v1",
+            "schema_version": _RESEARCH_VERSION_PARENT_SET_SCHEMA,
             "object_id": str(object_id),
             "basis_id": str(basis_id),
+            "basis": {
+                "cutoff": cutoff.astimezone(UTC).isoformat(),
+                "price_as_of": price_as_of.astimezone(UTC).isoformat() if price_as_of is not None else None,
+                "source_manifest_hash": source_manifest_hash,
+            },
             "version_kind": normalized_kind,
             "parent_ids": normalized_parent_ids,
         }),
@@ -347,10 +366,14 @@ class UnderwritingKernelService:
     ) -> str:
         if self._repository.object(object_id) is None:
             raise ValidationError("research object not found")
-        if self._repository.basis(basis_id) is None:
+        basis = self._repository.basis(basis_id)
+        if basis is None:
             raise ValidationError("historical basis not found")
         content_hash, _, _ = frozen_research_version_content_hash(
             object_id, basis_id, version_kind, parent_ids,
+            cutoff=self._stored_datetime(basis.cutoff),
+            price_as_of=self._stored_datetime(basis.price_as_of) if basis.price_as_of is not None else None,
+            source_manifest_hash=basis.source_manifest_hash,
         )
         return content_hash
 
@@ -364,10 +387,16 @@ class UnderwritingKernelService:
     ):
         if self._repository.object(object_id) is None:
             raise ValidationError("research object not found")
-        if self._repository.basis(basis_id) is None:
+        basis = self._repository.basis(basis_id)
+        if basis is None:
             raise ValidationError("historical basis not found")
         content_hash, normalized_kind, normalized_parent_ids = (
-            frozen_research_version_content_hash(object_id, basis_id, version_kind, parent_ids)
+            frozen_research_version_content_hash(
+                object_id, basis_id, version_kind, parent_ids,
+                cutoff=self._stored_datetime(basis.cutoff),
+                price_as_of=self._stored_datetime(basis.price_as_of) if basis.price_as_of is not None else None,
+                source_manifest_hash=basis.source_manifest_hash,
+            )
         )
         try:
             return self._write(

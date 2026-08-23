@@ -197,11 +197,60 @@ class ResearchRevisionDiffService:
     def _manifest_for_id(self, manifest_id: UUID) -> UnderwritingSourceManifestVersion | None:
         return self._session.get(UnderwritingSourceManifestVersion, manifest_id)
 
+    @staticmethod
+    def _manifest_datetime(value: object, field: str) -> datetime:
+        if not isinstance(value, str):
+            raise ValidationError(f"research revision parent has malformed {field}")
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValidationError(f"research revision parent has malformed {field}") from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValidationError(f"research revision parent has malformed {field}")
+        return parsed.astimezone(UTC)
+
+    def _basis_for_id(self, basis_id: UUID) -> UnderwritingHistoricalBasis:
+        basis = self._session.get(UnderwritingHistoricalBasis, basis_id)
+        if basis is None:
+            raise ValidationError("research revision basis is missing")
+        return basis
+
+    def _basis_cutoff(self, basis_id: UUID) -> datetime:
+        return self._stored_datetime(self._basis_for_id(basis_id).cutoff)
+
+    def _require_available_at_cutoff(self, value: datetime, cutoff: datetime, field: str) -> None:
+        if self._stored_datetime(value) > cutoff:
+            raise self._parent_error(f"{field} is unavailable at research basis cutoff")
+
     def _verified_manifest(self, manifest_id: UUID, basis_id: UUID) -> UnderwritingSourceManifestVersion:
         manifest = self._manifest_for_id(manifest_id)
         if manifest is None or manifest.basis_id != basis_id:
             raise self._parent_error("has an invalid source-manifest lineage")
-        if not isinstance(manifest.manifest, Mapping) or manifest.content_hash != canonical_hash(manifest.manifest):
+        basis = self._basis_for_id(basis_id)
+        cutoff = self._stored_datetime(basis.cutoff)
+        if not isinstance(manifest.manifest, Mapping):
+            raise self._parent_error("has a malformed source-manifest lineage")
+        manifest_cutoff = self._manifest_datetime(manifest.manifest.get("cutoff"), "source-manifest cutoff")
+        if manifest_cutoff != cutoff:
+            raise self._parent_error("source-manifest cutoff does not match historical basis")
+        if manifest.manifest_hash != basis.source_manifest_hash:
+            raise self._parent_error("source-manifest hash does not match historical basis")
+        self._require_available_at_cutoff(manifest.created_at, cutoff, "source manifest")
+        sources = manifest.manifest.get("sources")
+        if not isinstance(sources, list):
+            raise self._parent_error("has malformed source-manifest lineage")
+        for source in sources:
+            if not isinstance(source, Mapping):
+                raise self._parent_error("has malformed source-manifest lineage")
+            first_available_at = self._manifest_datetime(
+                source.get("first_available_at"), "source first_available_at",
+            )
+            published_at = self._manifest_datetime(
+                source.get("published_at"), "source published_at",
+            )
+            self._require_available_at_cutoff(first_available_at, cutoff, "source")
+            self._require_available_at_cutoff(published_at, cutoff, "source")
+        if manifest.content_hash != canonical_hash(manifest.manifest):
             raise self._parent_error("has a source-manifest content hash mismatch")
         return manifest
 
@@ -265,7 +314,14 @@ class ResearchRevisionDiffService:
             if (row := self._session.get(model, reference)) is not None
         ]
 
-    def _verify_artifact_lineage(self, artifact_type: str, row: object, revision: UnderwritingResearchVersion) -> None:
+    def _verify_artifact_lineage(
+        self,
+        artifact_type: str,
+        row: object,
+        revision: UnderwritingResearchVersion,
+        *,
+        allow_legacy_unavailable_ledger: bool = False,
+    ) -> None:
         """Recompute parent payload seals and verify its persisted dependencies.
 
         Immutable-table guards stop ordinary writes.  This additional read-time
@@ -273,18 +329,22 @@ class ResearchRevisionDiffService:
         a parent whose source locator, dimensions or content changed without a
         corresponding historical publication must not be presented as genuine.
         """
+        cutoff = self._basis_cutoff(revision.basis_id)
         if artifact_type == "source_manifest":
             assert isinstance(row, UnderwritingSourceManifestVersion)
             self._verified_manifest(row.id, revision.basis_id)
             return
         if artifact_type == "metric_definition":
             assert isinstance(row, UnderwritingMetricDefinitionVersion)
+            self._require_available_at_cutoff(row.created_at, cutoff, "metric definition")
             if row.content_hash != canonical_hash(row.definition):
                 raise self._parent_error("has a metric-definition content hash mismatch")
             self._verified_manifest(row.source_manifest_id, revision.basis_id)
             return
         if artifact_type == "metric_observation":
             assert isinstance(row, UnderwritingMetricObservation)
+            self._require_available_at_cutoff(row.available_at, cutoff, "metric observation")
+            self._require_available_at_cutoff(row.created_at, cutoff, "metric observation")
             if not isinstance(row.dimensions, Mapping) or not all(
                 isinstance(key, str) and isinstance(value, str)
                 for key, value in row.dimensions.items()
@@ -317,12 +377,16 @@ class ResearchRevisionDiffService:
             return
         if artifact_type == "mechanism":
             assert isinstance(row, UnderwritingMechanismPackVersion)
+            self._require_available_at_cutoff(row.created_at, cutoff, "mechanism")
             if row.content_hash != canonical_hash(row.payload):
                 raise self._parent_error("has a mechanism content hash mismatch")
             self._verified_manifest(row.source_manifest_id, revision.basis_id)
             return
         if artifact_type == "ledger":
             assert isinstance(row, UnderwritingLedgerEntry)
+            if not allow_legacy_unavailable_ledger:
+                self._require_available_at_cutoff(row.available_at, cutoff, "ledger")
+            self._require_available_at_cutoff(row.created_at, cutoff, "ledger")
             expected_hash = canonical_hash({
                 "ledger_kind": row.ledger_kind, "family_key": row.family_key,
                 "entry_type": row.entry_type, "payload": row.payload,
@@ -440,7 +504,13 @@ class ResearchRevisionDiffService:
             return RevisionArtifactRef(reference, artifact_type, "answerability", self._answerability_hash(row), (), None, None, None, None, row.state)
         raise AssertionError(f"unrecognised artifact type: {artifact_type}")
 
-    def _resolve_parent(self, revision: UnderwritingResearchVersion, reference: object) -> RevisionArtifactRef:
+    def _resolve_parent(
+        self,
+        revision: UnderwritingResearchVersion,
+        reference: object,
+        *,
+        allow_legacy_unavailable_ledger: bool = False,
+    ) -> RevisionArtifactRef:
         if not isinstance(reference, str):
             raise self._parent_error("must be a string")
         if _SNAPSHOT_TOKEN.fullmatch(reference):
@@ -466,7 +536,12 @@ class ResearchRevisionDiffService:
             "earnings_engine", "forecast_input", "falsifier", "ledger", "answerability",
         } and object_id != revision.object_id:
             raise self._parent_error("belongs to another research object")
-        self._verify_artifact_lineage(artifact_type, row, revision)
+        self._verify_artifact_lineage(
+            artifact_type,
+            row,
+            revision,
+            allow_legacy_unavailable_ledger=allow_legacy_unavailable_ledger,
+        )
         return self._descriptor(artifact_type, row, reference)
 
     @staticmethod
@@ -490,6 +565,16 @@ class ResearchRevisionDiffService:
         snapshot_refs = tuple(ref for ref in refs if ref.artifact_type == "semantic_snapshot")
         if len(snapshot_refs) != 1:
             raise ValidationError("CATL semantic snapshot parent set is missing its token")
+        manifest_refs = tuple(ref for ref in refs if ref.artifact_type == "source_manifest")
+        if len(manifest_refs) != 1:
+            raise ValidationError("CATL semantic snapshot parent set is missing its frozen source manifest")
+        try:
+            manifest_id = UUID(manifest_refs[0].reference)
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValidationError("CATL semantic snapshot parent set has a malformed source manifest") from exc
+        # The selected parent (not a fixture lookup or current manifest head)
+        # must itself bind the exact basis cutoff and manifest identity.
+        self._verified_manifest(manifest_id, revision.basis_id)
         seal_rows: list[UnderwritingLedgerEntry] = []
         for ref in refs:
             if ref.artifact_type != "ledger":
@@ -598,8 +683,16 @@ class ResearchRevisionDiffService:
                 raise ValidationError("research revision semantic snapshot is not governed")
             self._validate_catl_semantic_snapshot(revision, refs)
             return
+        basis = self._basis_for_id(revision.basis_id)
         expected, _, _ = frozen_research_version_content_hash(
             revision.object_id, revision.basis_id, revision.version_kind, list(revision.parent_ids),
+            cutoff=self._stored_datetime(basis.cutoff),
+            price_as_of=(
+                self._stored_datetime(basis.price_as_of)
+                if basis.price_as_of is not None
+                else None
+            ),
+            source_manifest_hash=basis.source_manifest_hash,
         )
         if revision.content_hash == expected:
             return
@@ -617,12 +710,54 @@ class ResearchRevisionDiffService:
         """Describe only parents explicitly frozen into ``revision_id``."""
         with self._session.no_autoflush:
             revision = self._revision(revision_id)
-            basis = self._session.get(UnderwritingHistoricalBasis, revision.basis_id)
-            if basis is None:
-                raise ValidationError("research revision basis is missing")
+            basis = self._basis_for_id(revision.basis_id)
             self._validate_parent_shape(revision)
-            refs = self._sort_refs(self._resolve_parent(revision, reference) for reference in revision.parent_ids)
+            snapshot_tokens = tuple(
+                value for value in revision.parent_ids if _SNAPSHOT_TOKEN.fullmatch(value)
+            )
+            expected_parent_set_hash: str | None = None
+            if not snapshot_tokens:
+                expected_parent_set_hash, _, _ = frozen_research_version_content_hash(
+                    revision.object_id,
+                    revision.basis_id,
+                    revision.version_kind,
+                    list(revision.parent_ids),
+                    cutoff=self._stored_datetime(basis.cutoff),
+                    price_as_of=(
+                        self._stored_datetime(basis.price_as_of)
+                        if basis.price_as_of is not None
+                        else None
+                    ),
+                    source_manifest_hash=basis.source_manifest_hash,
+                )
+            # Pre-v2 rows are replayed only long enough to prove the old
+            # snapshot formula.  That formula stored every historical ledger
+            # candidate, including candidates unavailable at the cutoff, and
+            # selected availability before hashing.  Do not expose those late
+            # candidates after the legacy seal has been verified.
+            legacy_snapshot_candidate = (
+                expected_parent_set_hash is not None
+                and revision.content_hash != expected_parent_set_hash
+            )
+            refs = self._sort_refs(
+                self._resolve_parent(
+                    revision,
+                    reference,
+                    allow_legacy_unavailable_ledger=legacy_snapshot_candidate,
+                )
+                for reference in revision.parent_ids
+            )
             self._validate_revision_content(revision, refs)
+            if legacy_snapshot_candidate:
+                cutoff = self._stored_datetime(basis.cutoff)
+                refs = tuple(
+                    ref for ref in refs
+                    if not (
+                        ref.artifact_type == "ledger"
+                        and ref.available_at is not None
+                        and ref.available_at > cutoff
+                    )
+                )
             return ResearchRevisionSummary(
                 revision.id, revision.object_id, revision.basis_id, revision.version_kind,
                 revision.sequence, revision.content_hash, self._stored_datetime(basis.cutoff),

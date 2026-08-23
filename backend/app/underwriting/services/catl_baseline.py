@@ -104,6 +104,7 @@ class CatlBaselineService:
     def _manifest_payload(fixture: CatlBaselineFixture) -> dict[str, object]:
         return {
             "schema_version": fixture.source_manifest.schema_version,
+            "cutoff": fixture.source_manifest.cutoff.isoformat(),
             "sources": [dict(source) for source in fixture.source_manifest.sources],
         }
 
