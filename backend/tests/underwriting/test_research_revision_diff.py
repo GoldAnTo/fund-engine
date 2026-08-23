@@ -37,7 +37,11 @@ from app.underwriting.fixtures.catl_baseline import load_catl_fixture
 from app.underwriting.services.catl_baseline import CatlBaselineService
 from app.underwriting.persistence.repository import UnderwritingRepository
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
-from app.underwriting.services.kernel import UnderwritingKernelService, canonical_hash
+from app.underwriting.services.kernel import (
+    UnderwritingKernelService,
+    canonical_hash,
+    frozen_research_version_content_hash,
+)
 from app.underwriting.services.source_freeze import freeze_manifest
 from app.underwriting.services.revision_parent_seal import (
     CATL_PARENT_SET_ENTRY_TYPE,
@@ -956,6 +960,109 @@ def test_boundary_answerability_rejects_a_tampered_revision_hash(
     with pytest.raises(ValidationError, match="research revision content hash"):
         service.revision_summary(revision.id)
     with pytest.raises(ValidationError, match="research revision content hash"):
+        service.revision_boundary(revision.id)
+
+
+def test_boundary_answerability_rejects_legacy_parent_without_timestamp_seal(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    """Legacy generic history remains readable but cannot claim a frozen boundary.
+
+    Its old semantic answerability hash deliberately excludes ``created_at``.
+    A cutoff-valid raw timestamp rewrite therefore leaves summary/history
+    compatible yet proves that the old parent descriptor cannot authenticate a
+    boundary answer.
+    """
+    from app.underwriting.services.research_revision_diff import (
+        ResearchRevisionDiffService,
+        RevisionArtifactRef,
+    )
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    answerability = kernel.record_answerability(
+        seeded_revision.company.id, seeded_revision.basis.id, (), (), True,
+        EligibleAction.OBSERVE, (), None,
+    )
+    service = ResearchRevisionDiffService(session)
+    manifest_ref = next(
+        ref for ref in service.revision_summary(seeded_revision.first.id).parent_refs
+        if ref.artifact_type == "source_manifest"
+    )
+    old_answerability_ref = RevisionArtifactRef(
+        str(answerability.id), "answerability", "answerability",
+        answerability_content_hash(
+            object_id=answerability.object_id,
+            basis_id=answerability.basis_id,
+            version=answerability.version,
+            state=answerability.state,
+            blockers=answerability.blockers,
+            research_debt_keys=answerability.research_debt_keys,
+            resolvable_within_mandate=answerability.resolvable_within_mandate,
+            allowed_action=answerability.allowed_action,
+            resolution_requirements=answerability.resolution_requirements,
+        ), (), None, None, None, None, answerability.state,
+    )
+    content_hash, _, _ = frozen_research_version_content_hash(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        "economic_model_boundary_legacy",
+        [manifest_ref.reference, str(answerability.id)],
+        cutoff=NOW,
+        price_as_of=None,
+        source_manifest_hash=seeded_revision.basis.source_manifest_hash,
+        parent_refs=service._canonical_ref_descriptors((manifest_ref, old_answerability_ref)),
+    )
+    legacy = UnderwritingRepository(session).append_research_version(
+        object_id=seeded_revision.company.id,
+        basis_id=seeded_revision.basis.id,
+        version_kind="economic_model_boundary_legacy",
+        content_hash=content_hash,
+        parent_ids=[manifest_ref.reference, str(answerability.id)],
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_answerability_evaluations SET created_at = ? WHERE id = ?",
+        ((NOW - timedelta(seconds=1)).isoformat(), answerability.id.hex),
+    )
+    session.expire_all()
+
+    assert service.revision_summary(legacy.id).id == legacy.id
+    assert [item.id for item in service.revision_history(
+        seeded_revision.company.id, "economic_model_boundary_legacy",
+    ).revisions] == [legacy.id]
+    with pytest.raises(ValidationError, match="timestamp-sealed"):
+        service.revision_boundary(legacy.id)
+
+
+def test_boundary_answerability_rejects_cutoff_valid_created_at_tamper_on_new_parent_seal(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    """New generic seals bind normalized answerability creation time as well."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    answerability = kernel.record_answerability(
+        seeded_revision.company.id, seeded_revision.basis.id, (), (), True,
+        EligibleAction.OBSERVE, (), None,
+    )
+    revision = kernel.publish_research_version(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        "economic_model_boundary_timestamp",
+        [str(seeded_revision.manifest.id), str(answerability.id)],
+        None,
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_answerability_evaluations SET created_at = ? WHERE id = ?",
+        ((NOW - timedelta(seconds=1)).isoformat(), answerability.id.hex),
+    )
+    session.expire_all()
+
+    service = ResearchRevisionDiffService(session)
+    with pytest.raises(ValidationError, match="content hash"):
+        service.revision_summary(revision.id)
+    with pytest.raises(ValidationError, match="content hash"):
         service.revision_boundary(revision.id)
 
 

@@ -103,6 +103,10 @@ class ResearchRevisionSummary:
     cutoff: datetime
     source_manifest_hash: str
     parent_refs: tuple[RevisionArtifactRef, ...]
+    # Internal provenance state: this is deliberately not projected by the
+    # existing history API.  A boundary reader needs it to distinguish an old
+    # generic parent descriptor that never sealed answerability.created_at.
+    answerability_timestamp_sealed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,6 +349,30 @@ class ResearchRevisionDiffService:
             resolution_requirements=row.resolution_requirements,
         )
 
+    def _answerability_parent_hash(
+        self,
+        row: UnderwritingAnswerabilityEvaluation,
+        *,
+        seal_created_at: bool,
+    ) -> str:
+        """Return the generic parent descriptor hash for answerability.
+
+        CATL's separately governed semantic snapshot intentionally retains its
+        original semantic hash.  New generic revisions add the normalized
+        creation time, which prevents a cutoff-valid timestamp rewrite from
+        looking like the same frozen parent.
+        """
+        semantic_hash = self._answerability_hash(row)
+        if not seal_created_at:
+            return semantic_hash
+        created_at = self._stored_datetime(row.created_at)
+        if created_at is None:
+            raise self._parent_error("has malformed answerability created_at")
+        return canonical_hash({
+            "answerability_content_hash": semantic_hash,
+            "created_at": self._iso(created_at),
+        })
+
     @staticmethod
     def _controlled_string_sequence(value: object, field: str) -> tuple[str, ...]:
         """Return persisted controlled text only when its JSON shape is exact."""
@@ -560,7 +588,14 @@ class ResearchRevisionDiffService:
             return mechanism.object_id if mechanism is not None and mechanism.basis_id == row.basis_id else None
         return None
 
-    def _descriptor(self, artifact_type: str, row: object, reference: str) -> RevisionArtifactRef:
+    def _descriptor(
+        self,
+        artifact_type: str,
+        row: object,
+        reference: str,
+        *,
+        seal_answerability_created_at: bool = False,
+    ) -> RevisionArtifactRef:
         if artifact_type == "source_manifest":
             assert isinstance(row, UnderwritingSourceManifestVersion)
             return RevisionArtifactRef(
@@ -637,7 +672,9 @@ class ResearchRevisionDiffService:
                 row.object_id, row.basis_id, "answerability_descriptor",
             ))
             return RevisionArtifactRef(
-                reference, artifact_type, "answerability", answerability.content_hash,
+                reference, artifact_type, "answerability", self._answerability_parent_hash(
+                    row, seal_created_at=seal_answerability_created_at,
+                ),
                 (), None, None, None, None, answerability.state,
             )
         raise AssertionError(f"unrecognised artifact type: {artifact_type}")
@@ -648,6 +685,7 @@ class ResearchRevisionDiffService:
         reference: object,
         *,
         allow_legacy_unavailable_ledger: bool = False,
+        seal_answerability_created_at: bool = False,
     ) -> RevisionArtifactRef:
         if not isinstance(reference, str):
             raise self._parent_error("must be a string")
@@ -680,7 +718,12 @@ class ResearchRevisionDiffService:
             revision,
             allow_legacy_unavailable_ledger=allow_legacy_unavailable_ledger,
         )
-        return self._descriptor(artifact_type, row, reference)
+        return self._descriptor(
+            artifact_type,
+            row,
+            reference,
+            seal_answerability_created_at=seal_answerability_created_at,
+        )
 
     @staticmethod
     def _sort_refs(values: Iterable[RevisionArtifactRef]) -> tuple[RevisionArtifactRef, ...]:
@@ -887,7 +930,11 @@ class ResearchRevisionDiffService:
             self._basis_for_id(basis_id)
             scope = _ResearchRevisionScope(object_id, basis_id, version_kind)
             refs = self._sort_refs(
-                self._resolve_parent(scope, reference)
+                self._resolve_parent(
+                    scope,
+                    reference,
+                    seal_answerability_created_at=True,
+                )
                 for reference in sorted(set(parent_ids))
             )
             if any(ref.artifact_type == "semantic_snapshot" for ref in refs):
@@ -909,20 +956,22 @@ class ResearchRevisionDiffService:
                     for reference in revision.parent_ids
                 )
                 legacy_snapshot_candidate = False
+                answerability_timestamp_sealed = False
             else:
                 # Pre-v2 legacy rows may list a late ledger candidate that
                 # their old snapshot algorithm excluded before hashing.  Read
                 # it only long enough to determine whether the stored legacy
                 # seal is authentic.  A v3 seal is then replayed strictly.
-                provisional_refs = self._sort_refs(
+                timestamp_sealed_provisional_refs = self._sort_refs(
                     self._resolve_parent(
                         revision,
                         reference,
                         allow_legacy_unavailable_ledger=True,
+                        seal_answerability_created_at=True,
                     )
                     for reference in revision.parent_ids
                 )
-                expected_parent_set_hash, _, _ = frozen_research_version_content_hash(
+                timestamp_sealed_hash, _, _ = frozen_research_version_content_hash(
                     revision.object_id,
                     revision.basis_id,
                     revision.version_kind,
@@ -934,17 +983,56 @@ class ResearchRevisionDiffService:
                         else None
                     ),
                     source_manifest_hash=basis.source_manifest_hash,
-                    parent_refs=self._canonical_ref_descriptors(provisional_refs),
+                    parent_refs=self._canonical_ref_descriptors(timestamp_sealed_provisional_refs),
                 )
-                legacy_snapshot_candidate = revision.content_hash != expected_parent_set_hash
-                refs = (
-                    provisional_refs
-                    if legacy_snapshot_candidate
-                    else self._sort_refs(
-                        self._resolve_parent(revision, reference)
+                if revision.content_hash == timestamp_sealed_hash:
+                    answerability_timestamp_sealed = True
+                    legacy_snapshot_candidate = False
+                    refs = self._sort_refs(
+                        self._resolve_parent(
+                            revision,
+                            reference,
+                            seal_answerability_created_at=True,
+                        )
                         for reference in revision.parent_ids
                     )
-                )
+                else:
+                    # Generic versions published before timestamp sealing must
+                    # remain readable as historical summaries.  They cannot,
+                    # however, later answer a boundary because their parent
+                    # descriptor never bound the original created_at value.
+                    legacy_provisional_refs = self._sort_refs(
+                        self._resolve_parent(
+                            revision,
+                            reference,
+                            allow_legacy_unavailable_ledger=True,
+                        )
+                        for reference in revision.parent_ids
+                    )
+                    legacy_parent_set_hash, _, _ = frozen_research_version_content_hash(
+                        revision.object_id,
+                        revision.basis_id,
+                        revision.version_kind,
+                        list(revision.parent_ids),
+                        cutoff=self._stored_datetime(basis.cutoff),
+                        price_as_of=(
+                            self._stored_datetime(basis.price_as_of)
+                            if basis.price_as_of is not None
+                            else None
+                        ),
+                        source_manifest_hash=basis.source_manifest_hash,
+                        parent_refs=self._canonical_ref_descriptors(legacy_provisional_refs),
+                    )
+                    answerability_timestamp_sealed = False
+                    legacy_snapshot_candidate = revision.content_hash != legacy_parent_set_hash
+                    refs = (
+                        legacy_provisional_refs
+                        if legacy_snapshot_candidate
+                        else self._sort_refs(
+                            self._resolve_parent(revision, reference)
+                            for reference in revision.parent_ids
+                        )
+                    )
             self._validate_revision_content(revision, refs)
             if legacy_snapshot_candidate:
                 cutoff = self._stored_datetime(basis.cutoff)
@@ -959,7 +1047,7 @@ class ResearchRevisionDiffService:
             return ResearchRevisionSummary(
                 revision.id, revision.object_id, revision.basis_id, revision.version_kind,
                 revision.sequence, revision.content_hash, self._stored_datetime(basis.cutoff),
-                basis.source_manifest_hash, refs,
+                basis.source_manifest_hash, refs, answerability_timestamp_sealed,
             )
 
     def revision_boundary(self, revision_id: UUID) -> ResearchRevisionBoundary:
@@ -978,9 +1066,20 @@ class ResearchRevisionDiffService:
                 return ResearchRevisionBoundary(summary, None)
             if len(refs) != 1:
                 raise ValidationError("research revision boundary has multiple answerability parents")
+            if (
+                summary.version_kind != CATL_VERSION_KIND
+                and not summary.answerability_timestamp_sealed
+            ):
+                raise ValidationError(
+                    "research revision boundary answerability parent is not timestamp-sealed"
+                )
             reference = refs[0]
             revision = self._revision(summary.id)
-            resolved = self._resolve_parent(revision, reference.reference)
+            resolved = self._resolve_parent(
+                revision,
+                reference.reference,
+                seal_answerability_created_at=(summary.version_kind != CATL_VERSION_KIND),
+            )
             if resolved != reference:
                 raise ValidationError("research revision boundary answerability parent changed after validation")
             try:
@@ -991,9 +1090,13 @@ class ResearchRevisionDiffService:
             if row is None:
                 raise ValidationError("research revision boundary answerability parent is missing")
             answerability = self._validated_answerability(row, revision)
+            expected_parent_hash = self._answerability_parent_hash(
+                row,
+                seal_created_at=(summary.version_kind != CATL_VERSION_KIND),
+            )
             if (
                 answerability.reference != reference.reference
-                or answerability.content_hash != reference.content_hash
+                or expected_parent_hash != reference.content_hash
                 or answerability.state != reference.status
             ):
                 raise ValidationError("research revision boundary answerability parent is not sealed")
