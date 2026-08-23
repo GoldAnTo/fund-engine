@@ -513,8 +513,16 @@ function normalizedUtc(value: string): string {
 
 export function compareCodePointTuple(left: readonly string[], right: readonly string[]): number {
   for (let index = 0; index < Math.min(left.length, right.length); index += 1) {
-    if (left[index] < right[index]) return -1;
-    if (left[index] > right[index]) return 1;
+    const leftPoints = Array.from(left[index]);
+    const rightPoints = Array.from(right[index]);
+    for (let pointIndex = 0; pointIndex < Math.min(leftPoints.length, rightPoints.length); pointIndex += 1) {
+      const leftPoint = leftPoints[pointIndex].codePointAt(0) as number;
+      const rightPoint = rightPoints[pointIndex].codePointAt(0) as number;
+      if (leftPoint < rightPoint) return -1;
+      if (leftPoint > rightPoint) return 1;
+    }
+    if (leftPoints.length < rightPoints.length) return -1;
+    if (leftPoints.length > rightPoints.length) return 1;
   }
   return left.length - right.length;
 }

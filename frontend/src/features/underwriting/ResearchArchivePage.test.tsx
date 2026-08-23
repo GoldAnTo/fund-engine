@@ -478,6 +478,8 @@ describe("ResearchArchivePage", () => {
   it("orders candidate payload keys with Python-compatible code points", () => {
     expect(compareCodePointTuple(["Z", "source"], ["a", "source"])).toBeLessThan(0);
     expect(compareCodePointTuple(["a", "source"], ["Z", "source"])).toBeGreaterThan(0);
+    expect(compareCodePointTuple(["\uE000"], ["😀"])).toBeLessThan(0);
+    expect(compareCodePointTuple(["😀"], ["\uE000"])).toBeGreaterThan(0);
   });
 
   it("renders only the selected reviewed candidate with chart, assumption, Unknown, and both reviews", async () => {
