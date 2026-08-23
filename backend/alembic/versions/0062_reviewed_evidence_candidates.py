@@ -57,6 +57,7 @@ def upgrade() -> None:
         sa.Column("scope_statement", sa.Text(), nullable=False),
         sa.Column("purpose", sa.String(length=32), nullable=False),
         sa.Column("status", sa.String(length=32), nullable=False),
+        sa.Column("rejected_calculations", sa.JSON(), nullable=False),
         sa.Column("payload", sa.JSON(), nullable=False),
         sa.Column("source_manifest_hash", sa.String(length=64), nullable=False),
         sa.Column("content_hash", sa.String(length=64), nullable=False),

@@ -78,6 +78,7 @@ class CandidateEvidenceItem:
     scope_statement: str
     exclusions: tuple[str, ...]
     methodology: str
+    prohibited_splicing_declaration: str
     transcription_method: str | None = None
     error_bound: Decimal | None = None
     scenario_use: str | None = None
@@ -88,7 +89,10 @@ class CandidateEvidenceItem:
         _text(self.metric_key, "metric_key")
         if not isinstance(self.status, CandidateEvidenceStatus):
             raise ValidationError("status must be a CandidateEvidenceStatus")
-        for field in ("source_id", "source_locator", "scope_statement", "methodology"):
+        for field in (
+            "metric_key", "source_id", "source_locator", "scope_statement", "methodology",
+            "prohibited_splicing_declaration",
+        ):
             object.__setattr__(self, field, _text(getattr(self, field), field))
         for field in ("observed_start", "observed_end", "available_at"):
             object.__setattr__(self, field, _utc(getattr(self, field), field))
@@ -150,6 +154,7 @@ class CandidateEvidenceItem:
             "scope_statement": self.scope_statement,
             "exclusions": self.exclusions,
             "methodology": self.methodology,
+            "prohibited_splicing_declaration": self.prohibited_splicing_declaration,
             "transcription_method": self.transcription_method,
             "error_bound": None if self.error_bound is None else str(self.error_bound),
             "scenario_use": self.scenario_use,
@@ -167,6 +172,7 @@ class CandidateEvidenceDossier:
     version: int
     scope_statement: str
     items: tuple[CandidateEvidenceItem, ...]
+    rejected_calculations: tuple[str, ...]
     source_manifest_hash: str
     created_at: datetime
     purpose: Literal["evidence_candidate"] = "evidence_candidate"
@@ -178,8 +184,8 @@ class CandidateEvidenceDossier:
                 raise ValidationError(f"{field} must be a UUID")
         if self.supersedes_id is not None and type(self.supersedes_id) is not UUID:
             raise ValidationError("supersedes_id must be a UUID")
-        _text(self.dossier_key, "dossier_key")
-        _text(self.scope_statement, "scope_statement")
+        object.__setattr__(self, "dossier_key", _text(self.dossier_key, "dossier_key"))
+        object.__setattr__(self, "scope_statement", _text(self.scope_statement, "scope_statement"))
         if self.version < 1:
             raise ValidationError("version must be at least 1")
         if self.purpose != "evidence_candidate":
@@ -190,6 +196,15 @@ class CandidateEvidenceDossier:
             raise ValidationError("items must contain CandidateEvidenceItem values")
         if len({item.content_hash for item in self.items}) != len(self.items):
             raise ValidationError("candidate items must be unique")
+        if not isinstance(self.rejected_calculations, tuple) or not self.rejected_calculations:
+            raise ValidationError("rejected_calculations must be a non-empty tuple")
+        rejected_calculations = tuple(
+            _text(calculation, "rejected_calculation")
+            for calculation in self.rejected_calculations
+        )
+        if len(set(rejected_calculations)) != len(rejected_calculations):
+            raise ValidationError("rejected_calculations must be unique")
+        object.__setattr__(self, "rejected_calculations", rejected_calculations)
         _hash(self.source_manifest_hash, "source_manifest_hash")
         object.__setattr__(self, "created_at", _utc(self.created_at, "created_at"))
 
@@ -200,6 +215,7 @@ class CandidateEvidenceDossier:
             "source_manifest_id": str(self.source_manifest_id), "dossier_key": self.dossier_key,
             "version": self.version, "scope_statement": self.scope_statement,
             "purpose": self.purpose, "items": tuple(item.content_hash for item in self.items),
+            "rejected_calculations": self.rejected_calculations,
             "source_manifest_hash": self.source_manifest_hash,
             "created_at": self.created_at.isoformat(),
             "supersedes_id": None if self.supersedes_id is None else str(self.supersedes_id),
@@ -223,12 +239,14 @@ class CandidateEvidenceReview:
         if type(self.dossier_id) is not UUID:
             raise ValidationError("dossier_id must be a UUID")
         _hash(self.dossier_content_hash, "dossier_content_hash")
-        _text(self.reviewer_identity, "reviewer_identity")
+        if self.reviewer_identity != self.reviewer_identity.strip():
+            raise ValidationError("reviewer_identity must be canonical")
+        object.__setattr__(self, "reviewer_identity", _text(self.reviewer_identity, "reviewer_identity"))
         if self.reviewer_role not in {role.value for role in CandidateEvidenceReviewRole}:
             raise ValidationError("reviewer_role must be provenance or methodology")
         if self.decision not in {decision.value for decision in CandidateEvidenceReviewDecision}:
             raise ValidationError("decision must be approve, reject, or request_changes")
-        _text(self.rationale, "rationale")
+        object.__setattr__(self, "rationale", _text(self.rationale, "rationale"))
         object.__setattr__(self, "reviewed_at", _utc(self.reviewed_at, "reviewed_at"))
 
     @property

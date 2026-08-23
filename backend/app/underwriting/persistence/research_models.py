@@ -245,6 +245,7 @@ class UnderwritingEvidenceCandidateDossierVersion(Base):
     scope_statement: Mapped[str] = mapped_column(Text, nullable=False)
     purpose: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    rejected_calculations: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
     source_manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)

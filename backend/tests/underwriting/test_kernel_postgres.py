@@ -112,8 +112,8 @@ def _insert_immutable_records(connection: sa.Connection) -> dict[str, tuple[uuid
     """), {**ids, "digest": digest})
     connection.execute(sa.text("""
         INSERT INTO uw_evidence_candidate_dossier_versions
-          (id, dossier_key, version, object_id, basis_id, source_manifest_id, scope_statement, purpose, status, payload, source_manifest_hash, content_hash, created_at)
-        VALUES (:dossier, 'pg.candidate', 1, :industry, :basis, :source, 'global batteries', 'evidence_candidate', 'candidate', '{}', :digest, :digest, CURRENT_TIMESTAMP)
+          (id, dossier_key, version, object_id, basis_id, source_manifest_id, scope_statement, purpose, status, rejected_calculations, payload, source_manifest_hash, content_hash, created_at)
+        VALUES (:dossier, 'pg.candidate', 1, :industry, :basis, :source, 'global batteries', 'evidence_candidate', 'candidate', '["output / nominal capacity"]', '{}', :digest, :digest, CURRENT_TIMESTAMP)
     """), {**ids, "digest": digest})
     connection.execute(sa.text("""
         INSERT INTO uw_evidence_candidate_review_versions

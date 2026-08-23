@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, inspect, update
@@ -11,7 +12,12 @@ from sqlalchemy.orm import Session
 from app.models import Base
 from app.models.ledger import IMMUTABLE_TABLES, ImmutableLedgerError
 from app.models.ledger import ValidationError
-from app.underwriting.domain import CandidateEvidenceItem, CandidateEvidenceStatus
+from app.underwriting.domain import (
+    CandidateEvidenceDossier,
+    CandidateEvidenceItem,
+    CandidateEvidenceReview,
+    CandidateEvidenceStatus,
+)
 from app.underwriting.persistence.research_models import (
     UnderwritingCompanyExposureVersion,
     UnderwritingEarningsEngineVersion,
@@ -67,6 +73,7 @@ def _candidate_item(**overrides: object) -> CandidateEvidenceItem:
         "scope_statement": "China lithium-ion battery cells, 2024",
         "exclusions": ("effective capacity",),
         "methodology": "manual chart reading",
+        "prohibited_splicing_declaration": "Do not infer utilization from this item.",
         "transcription_method": "read bar height against labelled axis",
         "error_bound": Decimal("0.1"),
     }
@@ -91,13 +98,89 @@ def test_unknown_candidate_cannot_carry_a_numeric_value() -> None:
         )
 
 
+def test_candidate_item_requires_a_prohibited_splicing_declaration() -> None:
+    with pytest.raises(ValidationError, match="prohibited_splicing_declaration"):
+        _candidate_item(prohibited_splicing_declaration="")
+
+
+def test_dossier_rejects_empty_or_duplicate_rejected_calculations() -> None:
+    values = {
+        "object_id": uuid4(),
+        "basis_id": uuid4(),
+        "source_manifest_id": uuid4(),
+        "dossier_key": "battery-capacity",
+        "version": 1,
+        "scope_statement": "China lithium-ion battery cells, 2024",
+        "items": (_candidate_item(prohibited_splicing_declaration="Do not combine this candidate with other items."),),
+        "source_manifest_hash": "a" * 64,
+        "created_at": NOW,
+    }
+    with pytest.raises(ValidationError, match="rejected_calculations must be a non-empty tuple"):
+        CandidateEvidenceDossier(**values, rejected_calculations=())
+    with pytest.raises(ValidationError, match="rejected_calculations must be unique"):
+        CandidateEvidenceDossier(
+            **values,
+            rejected_calculations=("utilization = output / nominal capacity", "utilization = output / nominal capacity"),
+        )
+
+
+def test_dossier_hash_binds_rejected_calculations_and_splicing_declarations() -> None:
+    values = {
+        "object_id": uuid4(),
+        "basis_id": uuid4(),
+        "source_manifest_id": uuid4(),
+        "dossier_key": "battery-capacity",
+        "version": 1,
+        "scope_statement": "China lithium-ion battery cells, 2024",
+        "source_manifest_hash": "a" * 64,
+        "created_at": NOW,
+        "rejected_calculations": ("utilization = output / nominal capacity",),
+    }
+    dossier = CandidateEvidenceDossier(
+        **values,
+        items=(_candidate_item(prohibited_splicing_declaration="Do not infer utilization from this item."),),
+    )
+    changed = CandidateEvidenceDossier(
+        **values,
+        items=(_candidate_item(prohibited_splicing_declaration="Do not infer effective capacity from this item."),),
+    )
+    changed_rejected_calculations = CandidateEvidenceDossier(
+        **{**values, "rejected_calculations": ("effective capacity = nominal capacity * availability",)},
+        items=(_candidate_item(prohibited_splicing_declaration="Do not infer utilization from this item."),),
+    )
+    assert dossier.content_hash != changed.content_hash
+    assert dossier.content_hash != changed_rejected_calculations.content_hash
+
+
+def test_review_rejects_a_whitespace_variant_of_an_existing_reviewer_identity() -> None:
+    CandidateEvidenceReview(
+        dossier_id=uuid4(),
+        dossier_content_hash="a" * 64,
+        reviewer_identity="reviewer:a",
+        reviewer_role="provenance",
+        decision="approve",
+        rationale="source verified",
+        reviewed_at=NOW,
+    )
+    with pytest.raises(ValidationError, match="reviewer_identity must be canonical"):
+        CandidateEvidenceReview(
+            dossier_id=uuid4(),
+            dossier_content_hash="a" * 64,
+            reviewer_identity=" reviewer:a ",
+            reviewer_role="methodology",
+            decision="approve",
+            rationale="method verified",
+            reviewed_at=NOW,
+        )
+
+
 def test_candidate_rows_capture_dossier_and_review_governance_contracts() -> None:
     dossier = Base.metadata.tables["uw_evidence_candidate_dossier_versions"]
     review = Base.metadata.tables["uw_evidence_candidate_review_versions"]
 
     assert {
         "object_id", "basis_id", "source_manifest_id", "dossier_key", "version",
-        "scope_statement", "purpose", "payload", "source_manifest_hash", "content_hash",
+        "scope_statement", "purpose", "rejected_calculations", "payload", "source_manifest_hash", "content_hash",
         "supersedes_id", "created_at",
     } <= set(dossier.c.keys())
     assert {"dossier_id", "dossier_content_hash", "reviewer_identity", "reviewer_role", "decision", "rationale", "payload", "content_hash", "reviewed_at", "created_at"} <= set(review.c.keys())
