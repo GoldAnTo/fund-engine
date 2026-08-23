@@ -109,15 +109,17 @@ def _contains_semantic_term(tokens: tuple[str, ...], term: str) -> bool:
 
 
 def _validate_candidate_semantics(*, fields: tuple[str, ...]) -> None:
-    """Reject governed claim tokens, not declarations of their exclusion.
+    """Reject governed claim tokens in every UI-visible claim field.
 
-    The caller supplies only candidate claim fields.  Exclusions and rejected
-    calculations deliberately remain outside this boundary so they can record
-    declarations such as ``No valuation model``.  The controlled vocabulary
-    covers the exact English tokens and Chinese phrases defined above. NFKC/
-    casefold tokenization prevents ``transaction`` from matching ``action``;
-    Chinese matching compares only normalized Han text against that explicit
-    phrase list rather than attempting language inference.
+    ``CandidateEvidenceItem`` supplies its complete UI-visible semantic
+    surface, including exclusions and the splicing declaration.  Only the
+    dossier's explicitly labelled ``rejected_calculations`` list remains
+    outside this boundary so its frozen rejected formulae can be reproduced.
+    The controlled vocabulary covers the exact English tokens and Chinese
+    phrases defined above. NFKC/casefold tokenization prevents
+    ``transaction`` from matching ``action``; Chinese matching compares only
+    normalized Han text against that explicit phrase list rather than
+    attempting language inference.
     """
     for field in fields:
         ascii_tokens, chinese_text = _normalized_semantic_text(field)
@@ -210,6 +212,7 @@ class CandidateEvidenceItem:
                 value for value in (
                     self.metric_key, self.scope_statement, self.methodology,
                     self.transcription_method, self.scenario_use, self.unknown_reason,
+                    self.prohibited_splicing_declaration, *self.exclusions,
                 )
                 if value is not None
             )

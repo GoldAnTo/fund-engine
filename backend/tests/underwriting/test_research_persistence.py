@@ -75,7 +75,7 @@ def _candidate_item(**overrides: object) -> CandidateEvidenceItem:
         "source_id": "iea-2024",
         "source_locator": "iea:chart:4",
         "scope_statement": "China lithium-ion battery cells, 2024",
-        "exclusions": ("effective capacity",),
+        "exclusions": ("Unverified production-line details.",),
         "methodology": "manual chart reading",
         "prohibited_splicing_declaration": "Do not infer utilization from this item.",
         "transcription_method": "read bar height against labelled axis",
@@ -194,6 +194,20 @@ def test_candidate_rejects_governed_chinese_detail_semantics() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("exclusions", ("建议买入并建仓。",)),
+        ("prohibited_splicing_declaration", "推荐持仓。"),
+    ),
+)
+def test_candidate_rejects_governed_chinese_visible_declarations(
+    field: str, value: object,
+) -> None:
+    with pytest.raises(ValidationError, match="forbidden candidate semantic"):
+        _candidate_item(**{field: value})
+
+
 def test_candidate_allows_bounded_utilization_assumption_and_prohibition_text() -> None:
     item = _candidate_item(
         metric_key="industry.utilization_assumption",
@@ -202,7 +216,7 @@ def test_candidate_allows_bounded_utilization_assumption_and_prohibition_text() 
         not_observed_declared=True,
         transcription_method=None,
         error_bound=None,
-        prohibited_splicing_declaration="No valuation model or action recommendation; 不含估值模型或买入建议。",
+        prohibited_splicing_declaration="No source splicing.",
     )
     dossier = _candidate_dossier(
         items=(item,), rejected_calculations=("No valuation model; 不含估值模型。",),
@@ -256,7 +270,7 @@ def test_dossier_hash_binds_rejected_calculations_and_splicing_declarations() ->
     )
     changed = CandidateEvidenceDossier(
         **values,
-        items=(_candidate_item(prohibited_splicing_declaration="Do not infer effective capacity from this item."),),
+        items=(_candidate_item(prohibited_splicing_declaration="No cross-source blending."),),
     )
     changed_rejected_calculations = CandidateEvidenceDossier(
         **{**values, "rejected_calculations": ("effective capacity = nominal capacity * availability",)},
