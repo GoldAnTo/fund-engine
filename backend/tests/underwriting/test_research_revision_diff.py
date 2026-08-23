@@ -836,6 +836,206 @@ def test_boundary_answerability_reads_the_exact_generic_v3_parent(
     )
 
 
+def _unknown_evidence_gap_payload(
+    *,
+    metric_key: str = "company.revenue",
+    available_at: datetime = NOW,
+) -> dict[str, object]:
+    return {
+        "metric_key": metric_key,
+        "unit": "CNY",
+        "source_id": "annual-report",
+        "source_locator": "annual-report:p18",
+        "observed_start": datetime(2024, 1, 1, tzinfo=UTC).isoformat(),
+        "observed_end": datetime(2024, 12, 31, tzinfo=UTC).isoformat(),
+        "effective_at": NOW.isoformat(),
+        "available_at": available_at.isoformat(),
+        "source_role": "reported",
+        "observation_status": "unknown",
+        "dimensions": {"scope": "company"},
+    }
+
+
+def _publish_boundary_with_gap(
+    session: Session,
+    seeded_revision: SeededRevision,
+    *,
+    payload: dict[str, object] | None = None,
+    family_key: str = "evidence_gap:company.revenue",
+):
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    gap = kernel.append_ledger_entry(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        LedgerEntryInput(
+            LedgerKind.REALITY,
+            family_key,
+            "unknown_evidence_gap",
+            payload or _unknown_evidence_gap_payload(),
+            NOW,
+            NOW,
+            "frozen_source_manifest",
+        ),
+        None,
+    )
+    revision = kernel.publish_research_version(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        f"economic_model_boundary_gap_{uuid4().hex}",
+        [str(seeded_revision.manifest.id), str(gap.id)],
+        None,
+    )
+    return revision, gap
+
+
+def test_boundary_gap_reads_only_a_selected_strict_unknown_evidence_gap_parent(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    revision, gap = _publish_boundary_with_gap(session, seeded_revision)
+
+    boundary = ResearchRevisionDiffService(session).revision_boundary(revision.id)
+
+    assert boundary.answerability is None
+    assert len(boundary.unknown_evidence_gaps) == 1
+    frozen_gap = boundary.unknown_evidence_gaps[0]
+    assert frozen_gap.reference == str(gap.id)
+    assert frozen_gap.content_hash == gap.content_hash
+    assert frozen_gap.metric_key == "company.revenue"
+    assert frozen_gap.observation_status == "unknown"
+    assert frozen_gap.source_locator == "annual-report:p18"
+    assert frozen_gap.observed_start == datetime(2024, 1, 1, tzinfo=UTC)
+    assert frozen_gap.observed_end == datetime(2024, 12, 31, tzinfo=UTC)
+    assert frozen_gap.effective_at == NOW
+    assert frozen_gap.available_at == NOW
+    assert frozen_gap.dimensions == (("scope", "company"),)
+
+
+@pytest.mark.parametrize(
+    ("payload", "family_key", "reason"),
+    [
+        (
+            {**_unknown_evidence_gap_payload(), "unexpected": "field"},
+            "evidence_gap:company.revenue",
+            "payload",
+        ),
+        (
+            {**_unknown_evidence_gap_payload(), "observation_status": "reported"},
+            "evidence_gap:company.revenue",
+            "observation_status",
+        ),
+        (
+            _unknown_evidence_gap_payload(metric_key="company.revenue"),
+            "evidence_gap:another_metric",
+            "family",
+        ),
+        (
+            {
+                **_unknown_evidence_gap_payload(),
+                "effective_at": (NOW - timedelta(days=600)).isoformat(),
+            },
+            "evidence_gap:company.revenue",
+            "time",
+        ),
+    ],
+)
+def test_boundary_gap_rejects_malformed_selected_parent(
+    session: Session,
+    seeded_revision: SeededRevision,
+    payload: dict[str, object],
+    family_key: str,
+    reason: str,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    revision, _ = _publish_boundary_with_gap(
+        session, seeded_revision, payload=payload, family_key=family_key,
+    )
+
+    with pytest.raises(ValidationError, match="unknown evidence gap"):
+        ResearchRevisionDiffService(session).revision_boundary(revision.id)
+
+
+def test_boundary_gap_rejects_duplicate_selected_metric_key(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    first = kernel.append_ledger_entry(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        LedgerEntryInput(
+            LedgerKind.REALITY, "evidence_gap:company.revenue", "unknown_evidence_gap",
+            _unknown_evidence_gap_payload(), NOW, NOW, "frozen_source_manifest",
+        ), None,
+    )
+    second = kernel.append_ledger_entry(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        LedgerEntryInput(
+            LedgerKind.REALITY, "evidence_gap:company.revenue", "unknown_evidence_gap",
+            _unknown_evidence_gap_payload(), NOW, NOW, "frozen_source_manifest",
+        ), first.id,
+    )
+    revision = kernel.publish_research_version(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        f"economic_model_boundary_duplicate_gap_{uuid4().hex}",
+        [str(seeded_revision.manifest.id), str(first.id), str(second.id)], None,
+    )
+
+    with pytest.raises(ValidationError, match="duplicate unknown evidence gap"):
+        ResearchRevisionDiffService(session).revision_boundary(revision.id)
+
+
+def test_boundary_gap_never_discovers_unreferenced_or_later_same_basis_rows(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    """The selected parent ID, not a ledger family head, owns the projection."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    revision, selected = _publish_boundary_with_gap(session, seeded_revision)
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    later = kernel.append_ledger_entry(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        LedgerEntryInput(
+            LedgerKind.REALITY, "evidence_gap:company.revenue", "unknown_evidence_gap",
+            _unknown_evidence_gap_payload(), NOW, NOW, "frozen_source_manifest",
+        ), selected.id,
+    )
+    unreferenced = kernel.append_ledger_entry(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        LedgerEntryInput(
+            LedgerKind.REALITY, "evidence_gap:company.cost", "unknown_evidence_gap",
+            _unknown_evidence_gap_payload(metric_key="company.cost"), NOW, NOW,
+            "frozen_source_manifest",
+        ), None,
+    )
+
+    boundary = ResearchRevisionDiffService(session).revision_boundary(revision.id)
+
+    assert [gap.reference for gap in boundary.unknown_evidence_gaps] == [str(selected.id)]
+    assert str(later.id) not in {gap.reference for gap in boundary.unknown_evidence_gaps}
+    assert str(unreferenced.id) not in {gap.reference for gap in boundary.unknown_evidence_gaps}
+
+
+@pytest.mark.parametrize("column", ["content_hash", "available_at"])
+def test_boundary_gap_rejects_hash_or_late_selected_parent_tamper(
+    session: Session, seeded_revision: SeededRevision, column: str,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    revision, gap = _publish_boundary_with_gap(session, seeded_revision)
+    value = "0" * 64 if column == "content_hash" else (NOW + timedelta(seconds=1)).isoformat()
+    session.connection().exec_driver_sql(
+        f"UPDATE uw_ledger_entries SET {column} = ? WHERE id = ?",
+        (value, gap.id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="research revision parent"):
+        ResearchRevisionDiffService(session).revision_boundary(revision.id)
+
+
 @pytest.mark.parametrize(
     ("column", "value"),
     [

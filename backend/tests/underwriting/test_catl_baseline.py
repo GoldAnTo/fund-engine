@@ -116,6 +116,19 @@ def test_unknown_evidence_gaps_are_persisted_and_required_for_publication(sessio
         CatlBaselineService(session, now=lambda: NOW).import_fixture(stripped)
 
 
+def test_boundary_does_not_follow_catl_related_industry_unknown_gaps(session) -> None:
+    """The company version may not borrow current or related industry gaps."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    result = CatlBaselineService(session, now=lambda: NOW).import_fixture(load_catl_fixture())
+
+    boundary = ResearchRevisionDiffService(session).revision_boundary(result.research_version.id)
+
+    assert boundary.answerability is not None
+    assert boundary.answerability.state == "not_answerable"
+    assert boundary.unknown_evidence_gaps == ()
+
+
 @pytest.mark.parametrize("field", ["source_locator", "source_id", "available_at", "dimensions"])
 def test_import_rejects_replaced_unknown_evidence_gap_forgery(session, field) -> None:
     fixture = load_catl_fixture()

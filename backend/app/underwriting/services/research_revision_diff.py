@@ -134,11 +134,37 @@ class FrozenAnswerability:
 
 
 @dataclass(frozen=True, slots=True)
+class FrozenUnknownEvidenceGap:
+    """One explicit Unknown evidence gap sealed into a selected revision.
+
+    This is deliberately a strict projection of a ``reality`` ledger parent,
+    not an inference from answerability, a relation, or a current ledger
+    family.  A missing projected row therefore means only that this version
+    did not seal a displayable gap record.
+    """
+
+    reference: str
+    content_hash: str
+    metric_key: str
+    unit: str
+    source_id: str
+    source_locator: str
+    observed_start: datetime
+    observed_end: datetime
+    effective_at: datetime
+    available_at: datetime
+    source_role: str
+    observation_status: str
+    dimensions: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ResearchRevisionBoundary:
     """The explicit research boundary recorded by one immutable revision."""
 
     revision: ResearchRevisionSummary
     answerability: FrozenAnswerability | None
+    unknown_evidence_gaps: tuple[FrozenUnknownEvidenceGap, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -473,6 +499,136 @@ class ResearchRevisionDiffService:
             resolvable_within_mandate=row.resolvable_within_mandate,
             allowed_action=action.value,
             resolution_requirements=requirements,
+        )
+
+    @staticmethod
+    def _unknown_gap_error(reason: str) -> ValidationError:
+        return ValidationError(f"research revision unknown evidence gap {reason}")
+
+    @staticmethod
+    def _unknown_gap_text(value: object, field: str) -> str:
+        if not isinstance(value, str) or not value or value.strip() != value:
+            raise ResearchRevisionDiffService._unknown_gap_error(f"has malformed {field}")
+        return value
+
+    @staticmethod
+    def _unknown_gap_datetime(value: object, field: str) -> datetime:
+        if not isinstance(value, str):
+            raise ResearchRevisionDiffService._unknown_gap_error(f"has malformed {field}")
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ResearchRevisionDiffService._unknown_gap_error(
+                f"has malformed {field}"
+            ) from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ResearchRevisionDiffService._unknown_gap_error(f"has malformed {field}")
+        return parsed.astimezone(UTC)
+
+    def _validated_unknown_evidence_gap(
+        self,
+        row: UnderwritingLedgerEntry,
+        revision: UnderwritingResearchVersion,
+    ) -> FrozenUnknownEvidenceGap:
+        """Parse one selected ``unknown_evidence_gap`` ledger parent exactly.
+
+        Ledger-level hash validation happens while replaying the revision
+        summary.  This parser supplies the narrower semantic contract required
+        to display an explicit Unknown: exact column/payload timestamps,
+        ordinary source fields, a canonical evidence-gap family, and no
+        unrecognised payload fields.  It intentionally does not search any
+        other ledger row when the parent set omits a gap.
+        """
+        cutoff = self._basis_cutoff(revision.basis_id)
+        if row.object_id != revision.object_id or row.basis_id != revision.basis_id:
+            raise self._unknown_gap_error("has an invalid historical scope")
+        if row.ledger_kind != "reality" or row.entry_type != "unknown_evidence_gap":
+            raise self._unknown_gap_error("has an invalid ledger type")
+        source_boundary = self._unknown_gap_text(row.source_boundary, "source boundary")
+        if source_boundary != "frozen_source_manifest":
+            raise self._unknown_gap_error("has an invalid source boundary")
+        if not isinstance(row.payload, Mapping):
+            raise self._unknown_gap_error("has malformed payload")
+        required_payload_keys = frozenset({
+            "metric_key", "unit", "source_id", "source_locator",
+            "observed_start", "observed_end", "effective_at", "available_at",
+            "source_role", "observation_status", "dimensions",
+        })
+        if set(row.payload) != required_payload_keys:
+            raise self._unknown_gap_error("has malformed payload")
+        metric_key = self._unknown_gap_text(row.payload["metric_key"], "metric_key")
+        if row.family_key != f"evidence_gap:{metric_key}":
+            raise self._unknown_gap_error("has a family that does not match metric_key")
+        unit = self._unknown_gap_text(row.payload["unit"], "unit")
+        source_id = self._unknown_gap_text(row.payload["source_id"], "source_id")
+        source_locator = self._unknown_gap_text(row.payload["source_locator"], "source_locator")
+        source_role = self._unknown_gap_text(row.payload["source_role"], "source_role")
+        observation_status = self._unknown_gap_text(
+            row.payload["observation_status"], "observation_status",
+        )
+        if observation_status != "unknown":
+            raise self._unknown_gap_error("has a non-unknown observation_status")
+        dimensions_value = row.payload["dimensions"]
+        if (
+            not isinstance(dimensions_value, Mapping)
+            or not dimensions_value
+            or not all(
+                isinstance(key, str) and key and key.strip() == key
+                and isinstance(value, str) and value and value.strip() == value
+                for key, value in dimensions_value.items()
+            )
+        ):
+            raise self._unknown_gap_error("has malformed dimensions")
+        dimensions = tuple(sorted(dimensions_value.items()))
+        observed_start = self._unknown_gap_datetime(row.payload["observed_start"], "observed_start")
+        observed_end = self._unknown_gap_datetime(row.payload["observed_end"], "observed_end")
+        effective_at = self._unknown_gap_datetime(row.payload["effective_at"], "effective_at")
+        available_at = self._unknown_gap_datetime(row.payload["available_at"], "available_at")
+        column_effective_at = self._stored_datetime(row.effective_at)
+        column_available_at = self._stored_datetime(row.available_at)
+        created_at = self._stored_datetime(row.created_at)
+        if (
+            column_effective_at is None
+            or column_available_at is None
+            or created_at is None
+            or effective_at != column_effective_at
+            or available_at != column_available_at
+        ):
+            raise self._unknown_gap_error("payload timestamps do not match ledger columns")
+        if (
+            observed_start > observed_end
+            or effective_at < observed_end
+            or available_at < effective_at
+            or any(value > cutoff for value in (
+                observed_start, observed_end, effective_at, available_at, created_at,
+            ))
+        ):
+            raise self._unknown_gap_error("has time outside its historical boundary")
+        expected_hash = canonical_hash({
+            "ledger_kind": row.ledger_kind,
+            "family_key": row.family_key,
+            "entry_type": row.entry_type,
+            "payload": row.payload,
+            "effective_at": column_effective_at,
+            "available_at": column_available_at,
+            "source_boundary": row.source_boundary,
+        })
+        if row.content_hash != expected_hash:
+            raise self._unknown_gap_error("has a ledger content hash mismatch")
+        return FrozenUnknownEvidenceGap(
+            reference=str(row.id),
+            content_hash=row.content_hash,
+            metric_key=metric_key,
+            unit=unit,
+            source_id=source_id,
+            source_locator=source_locator,
+            observed_start=observed_start,
+            observed_end=observed_end,
+            effective_at=effective_at,
+            available_at=available_at,
+            source_role=source_role,
+            observation_status=observation_status,
+            dimensions=dimensions,
         )
 
     def _matches_for_uuid(self, reference: UUID) -> list[tuple[str, object]]:
@@ -1116,61 +1272,98 @@ class ResearchRevisionDiffService:
             )
 
     def revision_boundary(self, revision_id: UUID) -> ResearchRevisionBoundary:
-        """Read only the answerability parent sealed into one checked revision.
+        """Read only explicitly typed parents sealed into one checked revision.
 
         No current answerability lookup is permitted: if this version did not
         freeze an answerability record, the boundary is explicitly ``None``.
-        A duplicate parent is ambiguous provenance and therefore fails closed.
+        Unknown evidence gaps follow the same rule: only selected ledger
+        parents that themselves identify as ``unknown_evidence_gap`` can be
+        displayed.  A duplicate parent is ambiguous provenance and therefore
+        fails closed.
         """
         with self._session.no_autoflush:
             summary = self.revision_summary(revision_id)
-            refs = tuple(
+            revision = self._revision(summary.id)
+            answerability_refs = tuple(
                 ref for ref in summary.parent_refs if ref.artifact_type == "answerability"
             )
-            if not refs:
-                return ResearchRevisionBoundary(summary, None)
-            if len(refs) != 1:
+            if len(answerability_refs) > 1:
                 raise ValidationError("research revision boundary has multiple answerability parents")
-            if not summary.answerability_timestamp_sealed:
+            answerability: FrozenAnswerability | None = None
+            if answerability_refs and not summary.answerability_timestamp_sealed:
                 raise ValidationError(
                     "research revision boundary answerability parent is not timestamp-sealed"
                 )
-            reference = refs[0]
-            revision = self._revision(summary.id)
-            resolved = self._resolve_parent(
-                revision,
-                reference.reference,
-                answerability_seal_kind=(
-                    _ANSWERABILITY_SEAL_CATL_TIMESTAMP
-                    if summary.version_kind == CATL_VERSION_KIND
-                    else _ANSWERABILITY_SEAL_GENERIC_TIMESTAMP
-                ),
+            if answerability_refs:
+                reference = answerability_refs[0]
+                resolved = self._resolve_parent(
+                    revision,
+                    reference.reference,
+                    answerability_seal_kind=(
+                        _ANSWERABILITY_SEAL_CATL_TIMESTAMP
+                        if summary.version_kind == CATL_VERSION_KIND
+                        else _ANSWERABILITY_SEAL_GENERIC_TIMESTAMP
+                    ),
+                )
+                if resolved != reference:
+                    raise ValidationError("research revision boundary answerability parent changed after validation")
+                try:
+                    row_id = UUID(reference.reference)
+                except (TypeError, ValueError, AttributeError) as exc:
+                    raise ValidationError("research revision boundary answerability parent is malformed") from exc
+                row = self._session.get(UnderwritingAnswerabilityEvaluation, row_id)
+                if row is None:
+                    raise ValidationError("research revision boundary answerability parent is missing")
+                answerability = self._validated_answerability(row, revision)
+                expected_parent_hash = self._answerability_descriptor_hash(
+                    row,
+                    seal_kind=(
+                        _ANSWERABILITY_SEAL_CATL_TIMESTAMP
+                        if summary.version_kind == CATL_VERSION_KIND
+                        else _ANSWERABILITY_SEAL_GENERIC_TIMESTAMP
+                    ),
+                )
+                if (
+                    answerability.reference != reference.reference
+                    or expected_parent_hash != reference.content_hash
+                    or answerability.state != reference.status
+                ):
+                    raise ValidationError("research revision boundary answerability parent is not sealed")
+
+            gaps: list[FrozenUnknownEvidenceGap] = []
+            gap_metric_keys: set[str] = set()
+            for reference in summary.parent_refs:
+                if (
+                    reference.artifact_type != "ledger"
+                    or reference.status != "unknown_evidence_gap"
+                ):
+                    continue
+                try:
+                    row_id = UUID(reference.reference)
+                except (TypeError, ValueError, AttributeError) as exc:
+                    raise self._unknown_gap_error("parent reference is malformed") from exc
+                row = self._session.get(UnderwritingLedgerEntry, row_id)
+                if row is None:
+                    raise self._unknown_gap_error("parent is missing")
+                resolved = self._resolve_parent(revision, reference.reference)
+                if resolved != reference:
+                    raise self._unknown_gap_error("parent changed after validation")
+                gap = self._validated_unknown_evidence_gap(row, revision)
+                if (
+                    gap.reference != reference.reference
+                    or gap.content_hash != reference.content_hash
+                    or reference.identity != f"reality|evidence_gap:{gap.metric_key}"
+                ):
+                    raise self._unknown_gap_error("parent descriptor is not sealed")
+                if gap.metric_key in gap_metric_keys:
+                    raise self._unknown_gap_error("has a duplicate unknown evidence gap metric_key")
+                gap_metric_keys.add(gap.metric_key)
+                gaps.append(gap)
+            return ResearchRevisionBoundary(
+                summary,
+                answerability,
+                tuple(sorted(gaps, key=lambda gap: (gap.metric_key, gap.reference))),
             )
-            if resolved != reference:
-                raise ValidationError("research revision boundary answerability parent changed after validation")
-            try:
-                row_id = UUID(reference.reference)
-            except (TypeError, ValueError, AttributeError) as exc:
-                raise ValidationError("research revision boundary answerability parent is malformed") from exc
-            row = self._session.get(UnderwritingAnswerabilityEvaluation, row_id)
-            if row is None:
-                raise ValidationError("research revision boundary answerability parent is missing")
-            answerability = self._validated_answerability(row, revision)
-            expected_parent_hash = self._answerability_descriptor_hash(
-                row,
-                seal_kind=(
-                    _ANSWERABILITY_SEAL_CATL_TIMESTAMP
-                    if summary.version_kind == CATL_VERSION_KIND
-                    else _ANSWERABILITY_SEAL_GENERIC_TIMESTAMP
-                ),
-            )
-            if (
-                answerability.reference != reference.reference
-                or expected_parent_hash != reference.content_hash
-                or answerability.state != reference.status
-            ):
-                raise ValidationError("research revision boundary answerability parent is not sealed")
-            return ResearchRevisionBoundary(summary, answerability)
 
     def _family_rows(self, object_id: UUID, version_kind: str) -> tuple[UnderwritingResearchVersion, ...]:
         rows = tuple(self._session.scalars(
