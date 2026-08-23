@@ -334,6 +334,9 @@ def get_research_revision_history(
         raise ValidationFailedError(str(exc)) from exc
     return ResearchRevisionHistoryResponse(
         object_id=history.object_id,
+        object_kind=history.object_kind,
+        canonical_name=history.canonical_name,
+        external_key=history.external_key,
         version_kind=history.version_kind,
         revisions=[_revision_response(item) for item in history.revisions],
     )

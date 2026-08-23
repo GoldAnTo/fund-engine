@@ -283,6 +283,57 @@ def test_foundation_history_is_persisted_ordered_and_read_only(
     assert not any(name.startswith(("add_", "append_", "publish_", "update_", "delete_")) for name in dir(service))
 
 
+def test_history_identity_is_read_from_the_addressed_persisted_research_object(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    history = ResearchRevisionDiffService(session).revision_history(
+        seeded_revision.company.id, "economic_model",
+    )
+
+    assert (
+        history.object_id,
+        history.object_kind,
+        history.canonical_name,
+        history.external_key,
+        history.version_kind,
+    ) == (
+        seeded_revision.company.id,
+        "company",
+        "CATL",
+        "CN:300750:COMPANY",
+        "economic_model",
+    )
+
+
+def test_history_rejects_a_missing_research_revision_family(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    with pytest.raises(ValidationError, match="research revision not found"):
+        ResearchRevisionDiffService(session).revision_history(uuid4(), "economic_model")
+
+
+def test_history_rejects_a_revision_family_with_a_missing_research_object(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    company_id = seeded_revision.company.id
+    session.connection().exec_driver_sql(
+        "DELETE FROM uw_research_objects WHERE id = ?",
+        (company_id.hex,),
+    )
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="research revision object is missing"):
+        ResearchRevisionDiffService(session).revision_history(
+            company_id, "economic_model",
+        )
+
+
 def test_foundation_read_does_not_flush_pending_writes(
     session: Session, seeded_revision: SeededRevision,
 ) -> None:
@@ -296,7 +347,11 @@ def test_foundation_read_does_not_flush_pending_writes(
     )
     session.add(pending)
 
-    assert ResearchRevisionDiffService(session).revision_summary(seeded_revision.first.id).id == seeded_revision.first.id
+    history = ResearchRevisionDiffService(session).revision_history(
+        seeded_revision.company.id, "economic_model",
+    )
+
+    assert history.object_id == seeded_revision.company.id
     assert pending in session.new
 
 

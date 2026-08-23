@@ -206,6 +206,9 @@ class ResearchRevisionResponse(UnderwritingModel):
 
 class ResearchRevisionHistoryResponse(UnderwritingModel):
     object_id: UUID
+    object_kind: ResearchObjectKind
+    canonical_name: str
+    external_key: str
     version_kind: str
     revisions: list[ResearchRevisionResponse]
 

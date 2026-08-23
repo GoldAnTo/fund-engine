@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
+from app.underwriting.domain.types import ResearchObjectKind
 from app.underwriting.domain.metrics import MetricObservation as DomainMetricObservation
 from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
@@ -97,6 +98,9 @@ class ResearchRevisionSummary:
 @dataclass(frozen=True, slots=True)
 class RevisionHistory:
     object_id: UUID
+    object_kind: ResearchObjectKind
+    canonical_name: str
+    external_key: str
     version_kind: str
     revisions: tuple[ResearchRevisionSummary, ...]
 
@@ -858,10 +862,41 @@ class ResearchRevisionDiffService:
             expected_previous = row.id
         return rows
 
+    def _history_object(self, object_id: UUID) -> tuple[UnderwritingResearchObject, ResearchObjectKind]:
+        """Load only the immutable object selected by a revision family.
+
+        This is deliberately not a current-security lookup or an inferred
+        identity from any parent artefact.  A malformed historical foreign key
+        must fail closed rather than silently falling back to a related object.
+        """
+        research_object = self._session.get(UnderwritingResearchObject, object_id)
+        if research_object is None or research_object.id != object_id:
+            raise ValidationError("research revision object is missing")
+        if (
+            not isinstance(research_object.canonical_name, str)
+            or not research_object.canonical_name.strip()
+            or not isinstance(research_object.external_key, str)
+            or not research_object.external_key.strip()
+        ):
+            raise ValidationError("research revision object identity is malformed")
+        try:
+            object_kind = ResearchObjectKind(research_object.kind)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("research revision object identity is malformed") from exc
+        return research_object, object_kind
+
     def revision_history(self, object_id: UUID, version_kind: str) -> RevisionHistory:
         with self._session.no_autoflush:
             rows = self._family_rows(object_id, version_kind)
-            return RevisionHistory(object_id, version_kind, tuple(self.revision_summary(row.id) for row in rows))
+            research_object, object_kind = self._history_object(object_id)
+            return RevisionHistory(
+                object_id,
+                object_kind,
+                research_object.canonical_name,
+                research_object.external_key,
+                version_kind,
+                tuple(self.revision_summary(row.id) for row in rows),
+            )
 
     def effective_revision(self, object_id: UUID, version_kind: str) -> ResearchRevisionSummary:
         with self._session.no_autoflush:

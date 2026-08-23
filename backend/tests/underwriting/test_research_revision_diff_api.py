@@ -86,6 +86,14 @@ def test_revision_history_detail_and_diff_are_read_only_and_historical(api_clien
 
     assert history.status_code == detail.status_code == diff.status_code == 200
     assert history.json()["schema_version"] == "underwriting.v1"
+    assert {
+        key: history.json()[key]
+        for key in ("object_kind", "canonical_name", "external_key")
+    } == {
+        "object_kind": "company",
+        "canonical_name": "Revision API",
+        "external_key": "company:revision-api",
+    }
     assert [item["sequence"] for item in history.json()["revisions"]] == [1, 2]
     assert history.json()["revisions"][0]["id"] == str(first.id)
     assert detail.json()["cutoff"] == NOW.isoformat().replace("+00:00", "Z")
