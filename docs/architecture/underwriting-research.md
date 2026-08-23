@@ -140,8 +140,8 @@ the basis cutoff, and the recorded authorization/retention boundary remains
 part of the source freeze. The selected dossier, source manifest and reviews
 are all immutable parents of the candidate revision.
 
-Publication requires two distinct authenticated reviewer identities in
-separate roles. The `provenance` review checks source identity, authorization,
+Publication requires two distinct recorded, auditable canonical reviewer
+identities in separate roles. The `provenance` review checks source identity, authorization,
 retention, locator, availability time and byte/version warnings. The
 `methodology` review checks scope, statistical denominator, chart
 transcription uncertainty, assumption/Unknown labels and the

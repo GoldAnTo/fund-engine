@@ -33,6 +33,10 @@ from app.underwriting.persistence.research_models import (
     UnderwritingEarningsEngineVersion,
     UnderwritingEvidenceCandidateDossierVersion,
     UnderwritingEvidenceCandidateReviewVersion,
+    UnderwritingFalsifierVersion,
+    UnderwritingForecastInputVersion,
+    UnderwritingCompanyExposureVersion,
+    UnderwritingIndustryScenarioVersion,
     UnderwritingIndustryStateVersion,
     UnderwritingMechanismPackVersion,
     UnderwritingSourceManifestVersion,
@@ -1167,9 +1171,31 @@ def test_candidate_evidence_never_unblocks_industry_state_or_action(
         )
     ).all() == []
     assert session.scalars(
+        select(UnderwritingIndustryScenarioVersion).where(
+            UnderwritingIndustryScenarioVersion.basis_id == basis.id,
+        )
+    ).all() == []
+    assert session.scalars(
+        select(UnderwritingCompanyExposureVersion).where(
+            UnderwritingCompanyExposureVersion.company_id == company.id,
+            UnderwritingCompanyExposureVersion.basis_id == basis.id,
+        )
+    ).all() == []
+    assert session.scalars(
         select(UnderwritingEarningsEngineVersion).where(
             UnderwritingEarningsEngineVersion.company_id == company.id,
             UnderwritingEarningsEngineVersion.basis_id == basis.id,
+        )
+    ).all() == []
+    assert session.scalars(
+        select(UnderwritingForecastInputVersion).where(
+            UnderwritingForecastInputVersion.company_id == company.id,
+            UnderwritingForecastInputVersion.basis_id == basis.id,
+        )
+    ).all() == []
+    assert session.scalars(
+        select(UnderwritingFalsifierVersion).where(
+            UnderwritingFalsifierVersion.basis_id == basis.id,
         )
     ).all() == []
     assert not {
