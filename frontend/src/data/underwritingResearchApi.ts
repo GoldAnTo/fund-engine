@@ -12,6 +12,7 @@ export type ResearchRevisionDiff = Schemas["ResearchRevisionDiffResponse"];
 // Task5 replaces these local wire-exact archive shapes with generated schema
 // aliases once the source contract has been generated into contracts/v1.ts.
 export type ResearchArchiveItem = {
+  schema_version: "underwriting.v1";
   object_id: string;
   object_kind: "industry" | "company" | "security";
   canonical_name: string;

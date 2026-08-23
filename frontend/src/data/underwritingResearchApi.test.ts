@@ -10,6 +10,7 @@ import {
   setUnderwritingResearchApi,
   underwritingResearchApi,
   type UnderwritingResearchApi,
+  type ResearchArchiveList,
 } from "./underwritingResearchApi";
 
 describe("underwriting research API", () => {
@@ -54,6 +55,32 @@ describe("underwriting research API", () => {
       "https://underwriting.example.test/v1/research-archives",
       expect.objectContaining({ method: "GET" }),
     );
+  });
+
+  it("preserves the schema version attached to every archive item", async () => {
+    const archive: ResearchArchiveList = {
+      schema_version: "underwriting.v1",
+      items: [{
+        schema_version: "underwriting.v1",
+        object_id: "company-1",
+        object_kind: "company",
+        canonical_name: "宁德时代",
+        external_key: "300750.SZ",
+        version_kind: "industry_baseline",
+        version_count: 2,
+        lineage_state: "readable",
+        latest_revision_id: "revision-2",
+        latest_sequence: 2,
+        cutoff: "2025-05-15T15:59:59Z",
+        source_manifest_hash: "a".repeat(64),
+      }],
+      next_cursor: null,
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(archive), {
+      status: 200,
+    })));
+
+    await expect(underwritingResearchApi.listArchives()).resolves.toEqual(archive);
   });
 
   it("requests each research archive resource through a GET-only underwriting URL", async () => {
