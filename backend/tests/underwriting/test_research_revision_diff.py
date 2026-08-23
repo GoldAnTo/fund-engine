@@ -957,6 +957,61 @@ def test_boundary_gap_rejects_malformed_selected_parent(
         ResearchRevisionDiffService(session).revision_boundary(revision.id)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {**_unknown_evidence_gap_payload(), "source_id": "forged-source"},
+        {**_unknown_evidence_gap_payload(), "source_locator": "forged-source:p99"},
+    ],
+)
+def test_boundary_gap_rejects_forged_selected_manifest_source_binding(
+    session: Session, seeded_revision: SeededRevision, payload: dict[str, object],
+) -> None:
+    """Valid generic v4 seals cannot authenticate an unmanifested source."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    revision, _ = _publish_boundary_with_gap(session, seeded_revision, payload=payload)
+
+    with pytest.raises(ValidationError, match="unknown evidence gap.*source"):
+        ResearchRevisionDiffService(session).revision_boundary(revision.id)
+
+
+@pytest.mark.parametrize("manifest_count", [0, 2])
+def test_boundary_gap_requires_exactly_one_selected_source_manifest(
+    session: Session, seeded_revision: SeededRevision, manifest_count: int,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    gap = kernel.append_ledger_entry(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        LedgerEntryInput(
+            LedgerKind.REALITY, "evidence_gap:company.revenue", "unknown_evidence_gap",
+            _unknown_evidence_gap_payload(), NOW, NOW, "frozen_source_manifest",
+        ), None,
+    )
+    parents = [str(gap.id)]
+    if manifest_count == 2:
+        second_manifest_payload = _manifest_payload("annual-report:p18")
+        second_manifest = UnderwritingResearchRepository(session).add_source_manifest(
+            manifest_key=f"second-manifest-{uuid4().hex}",
+            basis_id=seeded_revision.basis.id,
+            manifest=second_manifest_payload,
+            manifest_hash=_manifest_hash("annual-report:p18"),
+            content_hash=canonical_hash(second_manifest_payload),
+            expected_parent_id=None,
+            created_at=NOW,
+        )
+        parents = [str(seeded_revision.manifest.id), str(second_manifest.id), str(gap.id)]
+    revision = kernel.publish_research_version(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        f"economic_model_boundary_gap_manifest_{manifest_count}", parents, None,
+    )
+
+    with pytest.raises(ValidationError, match="unknown evidence gap.*source manifest"):
+        ResearchRevisionDiffService(session).revision_boundary(revision.id)
+
+
 def test_boundary_gap_rejects_duplicate_selected_metric_key(
     session: Session, seeded_revision: SeededRevision,
 ) -> None:

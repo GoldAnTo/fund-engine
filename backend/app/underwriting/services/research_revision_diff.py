@@ -664,6 +664,59 @@ class ResearchRevisionDiffService:
             dimensions=dimensions,
         )
 
+    def _selected_unknown_gap_manifest(
+        self,
+        summary: ResearchRevisionSummary,
+        revision: UnderwritingResearchVersion,
+    ) -> UnderwritingSourceManifestVersion:
+        """Return the one source manifest selected by a gap-bearing revision.
+
+        This is intentionally a parent-graph lookup, not a basis-wide search.
+        The source locator rule for an Unknown gap is exact equality with the
+        selected manifest source's ``locator``: any page or section qualifier
+        must therefore be part of the authenticated manifest record itself.
+        """
+        manifest_refs = tuple(
+            ref for ref in summary.parent_refs if ref.artifact_type == "source_manifest"
+        )
+        if len(manifest_refs) != 1:
+            raise self._unknown_gap_error("requires exactly one selected source manifest")
+        reference = manifest_refs[0]
+        try:
+            manifest_id = UUID(reference.reference)
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise self._unknown_gap_error("source manifest parent is malformed") from exc
+        manifest = self._verified_manifest(manifest_id, revision.basis_id)
+        resolved = self._resolve_parent(revision, reference.reference)
+        if resolved != reference or manifest.content_hash != reference.content_hash:
+            raise self._unknown_gap_error("source manifest parent changed after validation")
+        return manifest
+
+    def _validate_unknown_gap_manifest_source(
+        self,
+        gap: FrozenUnknownEvidenceGap,
+        manifest: UnderwritingSourceManifestVersion,
+    ) -> None:
+        """Authenticate an Unknown gap source against its selected manifest.
+
+        ``_manifest_source_ids`` also rejects duplicate/malformed source IDs.
+        After that, exact locator equality is deliberate: allowing a prefix,
+        substring, or an arbitrary page suffix would let a forged gap claim a
+        different source location than the sealed manifest recorded.
+        """
+        source_ids = self._manifest_source_ids(manifest)
+        if gap.source_id not in source_ids:
+            raise self._unknown_gap_error("source_id is absent from selected source manifest")
+        sources = manifest.manifest.get("sources")
+        assert isinstance(sources, list)
+        source = next(
+            item for item in sources
+            if isinstance(item, Mapping) and item.get("source_id") == gap.source_id
+        )
+        locator = source.get("locator")
+        if not isinstance(locator, str) or locator != gap.source_locator:
+            raise self._unknown_gap_error("source_locator does not match selected source manifest")
+
     def _matches_for_uuid(self, reference: UUID) -> list[tuple[str, object]]:
         """Return every recognised immutable row with this exact UUID.
 
@@ -1416,14 +1469,17 @@ class ResearchRevisionDiffService:
 
             gaps: list[FrozenUnknownEvidenceGap] = []
             gap_metric_keys: set[str] = set()
-            if (
-                any(
-                    ref.artifact_type == "ledger" and ref.status == "unknown_evidence_gap"
-                    for ref in summary.parent_refs
-                )
-                and not summary.ledger_timestamp_sealed
-            ):
+            gap_parent_refs = tuple(
+                ref for ref in summary.parent_refs
+                if ref.artifact_type == "ledger" and ref.status == "unknown_evidence_gap"
+            )
+            if gap_parent_refs and not summary.ledger_timestamp_sealed:
                 raise self._unknown_gap_error("parent is not ledger timestamp-sealed")
+            gap_manifest = (
+                self._selected_unknown_gap_manifest(summary, revision)
+                if gap_parent_refs
+                else None
+            )
             for reference in summary.parent_refs:
                 if (
                     reference.artifact_type != "ledger"
@@ -1456,6 +1512,8 @@ class ResearchRevisionDiffService:
                     raise self._unknown_gap_error("parent descriptor is not sealed")
                 if gap.metric_key in gap_metric_keys:
                     raise self._unknown_gap_error("has a duplicate unknown evidence gap metric_key")
+                assert gap_manifest is not None
+                self._validate_unknown_gap_manifest_source(gap, gap_manifest)
                 gap_metric_keys.add(gap.metric_key)
                 gaps.append(gap)
             return ResearchRevisionBoundary(
