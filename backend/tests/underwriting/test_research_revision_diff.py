@@ -736,3 +736,32 @@ def test_diff_fails_closed_for_ungoverned_semantic_token_and_corrupt_cycle(
     session.expire_all()
     with pytest.raises(ValidationError, match="history is corrupt|ancestor chain is cyclic"):
         ResearchRevisionDiffService(session).revision_diff(seeded_revision.first.id, successor.id)
+
+
+def test_diff_does_not_recompute_an_old_revision_from_current_effective_ledger(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    """An unreferenced later ledger fact must not invalidate frozen v1/v2."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    successor = kernel.publish_research_version(
+        seeded_revision.company.id, seeded_revision.basis.id, "economic_model",
+        [str(seeded_revision.manifest.id), str(seeded_revision.observation.id)],
+        seeded_revision.first.id,
+    )
+    service = ResearchRevisionDiffService(session)
+    before = service.revision_diff(seeded_revision.first.id, successor.id)
+    kernel.append_ledger_entry(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        LedgerEntryInput(
+            LedgerKind.REALITY, "unreferenced_later_fact", "reported",
+            {"source_locator": "later:p1"}, NOW, NOW, "public",
+        ),
+        None,
+    )
+    session.expire_all()
+
+    after = ResearchRevisionDiffService(session).revision_diff(seeded_revision.first.id, successor.id)
+
+    assert after == before

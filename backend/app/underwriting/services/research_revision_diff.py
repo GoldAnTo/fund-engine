@@ -36,7 +36,7 @@ from app.underwriting.persistence.research_models import (
     UnderwritingMetricObservation,
     UnderwritingSourceManifestVersion,
 )
-from app.underwriting.services.kernel import UnderwritingKernelService, canonical_hash
+from app.underwriting.services.kernel import canonical_hash, frozen_research_version_content_hash
 from app.underwriting.services.revision_parent_seal import (
     CATL_PARENT_SET_ENTRY_TYPE,
     CATL_PARENT_SET_FAMILY,
@@ -494,19 +494,18 @@ class ResearchRevisionDiffService:
             raise ValidationError("research revision parents are malformed")
         if len(set(revision.parent_ids)) != len(revision.parent_ids):
             raise ValidationError("research revision parent set is duplicated")
-        # Versions written by the generic kernel seal their current historical
-        # snapshot plus a canonical parent set.  A semantic snapshot denotes a
-        # separately governed fixture publication (such as CATL) whose payload
-        # has its own persisted fixture seal, so this generic formula must not
-        # be substituted for it.
+        # Generic revisions seal only their persisted parent set.  A current
+        # ledger snapshot is intentionally excluded: unrelated evidence may be
+        # appended after publication and must never rewrite historical reads.
+        # A semantic snapshot denotes a separately governed fixture
+        # publication (such as CATL), whose payload has its own persisted seal.
         snapshot_tokens = tuple(value for value in revision.parent_ids if _SNAPSHOT_TOKEN.fullmatch(value))
         if snapshot_tokens:
             if revision.version_kind != CATL_VERSION_KIND or len(snapshot_tokens) != 1:
                 raise ValidationError("research revision semantic snapshot is not governed")
             self._validate_catl_semantic_snapshot(revision, refs)
             return
-        kernel = UnderwritingKernelService(self._session, now=lambda: self._stored_datetime(revision.created_at))
-        expected = kernel.preview_research_version_hash(
+        expected, _, _ = frozen_research_version_content_hash(
             revision.object_id, revision.basis_id, revision.version_kind, list(revision.parent_ids),
         )
         if revision.content_hash != expected:

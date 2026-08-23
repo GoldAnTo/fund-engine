@@ -67,6 +67,38 @@ def canonical_hash(value: object) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
+def frozen_research_version_content_hash(
+    object_id: uuid.UUID,
+    basis_id: uuid.UUID,
+    version_kind: str,
+    parent_ids: list[str],
+) -> tuple[str, str, list[str]]:
+    """Seal a generic research version from its persisted parent set only.
+
+    A research-version row is a historical assertion.  Its integrity cannot
+    depend on the currently effective ledger, because unrelated evidence may
+    be appended after publication.  Payload authenticity is verified by the
+    reader when each frozen parent is resolved; this seal binds that exact
+    parent-id set to its object, basis, and version family.
+    """
+    if not isinstance(version_kind, str) or not (normalized_kind := version_kind.strip()):
+        raise ValidationError("version_kind must not be empty")
+    if not isinstance(parent_ids, list) or not all(isinstance(value, str) for value in parent_ids):
+        raise ValidationError("research revision parents are malformed")
+    normalized_parent_ids = sorted(set(parent_ids))
+    return (
+        canonical_hash({
+            "schema_version": "underwriting.research-version-parent-set.v1",
+            "object_id": str(object_id),
+            "basis_id": str(basis_id),
+            "version_kind": normalized_kind,
+            "parent_ids": normalized_parent_ids,
+        }),
+        normalized_kind,
+        normalized_parent_ids,
+    )
+
+
 class UnderwritingKernelService:
     """Validate and append immutable underwriting kernel records."""
 
@@ -306,26 +338,6 @@ class UnderwritingKernelService:
         )
         return KernelSnapshot(object_id, basis_id, cutoff, entries, snapshot_hash)
 
-    def _research_version_content_hash(
-        self,
-        snapshot: KernelSnapshot,
-        version_kind: str,
-        parent_ids: list[str],
-    ) -> tuple[str, str, list[str]]:
-        normalized_kind = self._require_text(version_kind, "version_kind")
-        normalized_parent_ids = sorted(set(parent_ids))
-        return (
-            canonical_hash(
-                {
-                    "snapshot_hash": snapshot.snapshot_hash,
-                    "version_kind": normalized_kind,
-                    "parent_ids": normalized_parent_ids,
-                }
-            ),
-            normalized_kind,
-            normalized_parent_ids,
-        )
-
     def preview_research_version_hash(
         self,
         object_id: uuid.UUID,
@@ -333,9 +345,12 @@ class UnderwritingKernelService:
         version_kind: str,
         parent_ids: list[str],
     ) -> str:
-        snapshot = self.snapshot(object_id, basis_id)
-        content_hash, _, _ = self._research_version_content_hash(
-            snapshot, version_kind, parent_ids
+        if self._repository.object(object_id) is None:
+            raise ValidationError("research object not found")
+        if self._repository.basis(basis_id) is None:
+            raise ValidationError("historical basis not found")
+        content_hash, _, _ = frozen_research_version_content_hash(
+            object_id, basis_id, version_kind, parent_ids,
         )
         return content_hash
 
@@ -347,9 +362,12 @@ class UnderwritingKernelService:
         parent_ids: list[str],
         expected_parent_id: uuid.UUID | None,
     ):
-        snapshot = self.snapshot(object_id, basis_id)
+        if self._repository.object(object_id) is None:
+            raise ValidationError("research object not found")
+        if self._repository.basis(basis_id) is None:
+            raise ValidationError("historical basis not found")
         content_hash, normalized_kind, normalized_parent_ids = (
-            self._research_version_content_hash(snapshot, version_kind, parent_ids)
+            frozen_research_version_content_hash(object_id, basis_id, version_kind, parent_ids)
         )
         try:
             return self._write(
