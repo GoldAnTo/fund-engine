@@ -23,6 +23,7 @@ from app.underwriting.services.kernel import UnderwritingKernelService
 from app.underwriting.services.revision_parent_seal import (
     CATL_PARENT_SET_ENTRY_TYPE,
     CATL_PARENT_SET_FAMILY,
+    answerability_content_hash,
     catl_answerability_parent_content_hash,
     catl_parent_set_seal_payload,
     catl_revision_content_hash,
@@ -139,6 +140,98 @@ def test_revision_reads_neither_flush_nor_commit_the_caller_session(api_client, 
 
     assert response.status_code == 200, response.text
     assert pending in session.new
+
+
+def test_research_revision_boundary_returns_only_the_selected_frozen_catl_state(
+    api_client, session,
+) -> None:
+    """The boundary binds the checked CATL revision, not a current-state lookup."""
+    imported = CatlBaselineService(session, now=lambda: NOW).import_fixture(load_catl_fixture())
+
+    response = api_client.get(
+        f"{BASE}/research-versions/{imported.research_version.id}/boundary",
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload == {
+        "schema_version": "underwriting.v1",
+        "revision_id": str(imported.research_version.id),
+        "object_id": str(imported.company.id),
+        "basis_id": str(imported.basis.id),
+        "version_kind": "catl_economic_model_evidence_only",
+        "content_hash": imported.research_version.content_hash,
+        "cutoff": NOW.isoformat().replace("+00:00", "Z"),
+        "source_manifest_hash": imported.basis.source_manifest_hash,
+        "answerability": {
+            "schema_version": "underwriting.v1",
+            "reference": str(imported.answerability.id),
+            "content_hash": answerability_content_hash(
+                object_id=imported.answerability.object_id,
+                basis_id=imported.answerability.basis_id,
+                version=imported.answerability.version,
+                state=imported.answerability.state,
+                blockers=imported.answerability.blockers,
+                research_debt_keys=imported.answerability.research_debt_keys,
+                resolvable_within_mandate=imported.answerability.resolvable_within_mandate,
+                allowed_action=imported.answerability.allowed_action,
+                resolution_requirements=imported.answerability.resolution_requirements,
+            ),
+            "state": "not_answerable",
+            "blockers": ["missing_key_baseline", "mechanism_unidentified"],
+            "research_debt_keys": [
+                "industry.capacity_utilization_price_cost_baseline",
+                "formal_mechanism_review",
+            ],
+            "resolvable_within_mandate": True,
+            "research_disposition": "wait_for_validation",
+            "resolution_requirements": [
+                "collect comparable capacity, utilization, price, and cost evidence",
+                "complete independent mechanism review before formalization",
+            ],
+        },
+        "unknown_evidence_gaps": [],
+    }
+    assert api_client.post(response.request.url.path).status_code == 405
+
+
+def test_research_revision_boundary_allows_a_null_frozen_answerability(
+    api_client, session,
+) -> None:
+    """No parent record means null—not an inferred answerability status."""
+    _, _, first, _ = _two_revision_chain(session)
+
+    response = api_client.get(f"{BASE}/research-versions/{first.id}/boundary")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["revision_id"] == str(first.id)
+    assert response.json()["answerability"] is None
+    assert response.json()["unknown_evidence_gaps"] == []
+
+
+def test_research_revision_boundary_uses_underwriting_error_envelopes(
+    api_client, session,
+) -> None:
+    company, basis, _, _ = _two_revision_chain(session)
+    corrupt = UnderwritingRepository(session).append_research_version(
+        object_id=company.id,
+        basis_id=basis.id,
+        version_kind="boundary-corrupt",
+        content_hash="a" * 64,
+        parent_ids=["not-a-parent"],
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+
+    missing = api_client.get(f"{BASE}/research-versions/{uuid4()}/boundary")
+    invalid = api_client.get(f"{BASE}/research-versions/{corrupt.id}/boundary")
+
+    assert missing.status_code == 404
+    assert missing.json()["schema_version"] == "underwriting.v1"
+    assert missing.json()["error"]["code"] == "not_found"
+    assert invalid.status_code == 422
+    assert invalid.json()["schema_version"] == "underwriting.v1"
+    assert invalid.json()["error"]["code"] == "validation_failed"
 
 
 def test_research_archives_list_sorted_readable_and_unreadable_families(api_client, session) -> None:

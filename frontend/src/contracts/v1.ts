@@ -2426,6 +2426,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/underwriting/v1/research-versions/{revision_id}/boundary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Research Revision Boundary
+         * @description Return only the selected revision's verified, explicit boundary.
+         */
+        get: operations["get_research_revision_boundary_api_underwriting_v1_research_versions__revision_id__boundary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/underwriting/v1/research-versions/{from_revision_id}/diff/{to_revision_id}": {
         parameters: {
             query?: never;
@@ -5473,6 +5493,43 @@ export interface components {
             formula: string;
         };
         /**
+         * FrozenAnswerabilityResponse
+         * @description A checked answerability parent from one selected research version.
+         */
+        FrozenAnswerabilityResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Reference
+             * Format: uuid
+             */
+            reference: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "answerable" | "partially_answerable" | "not_answerable";
+            /** Blockers */
+            blockers: ("missing_key_baseline" | "unresolved_source_conflict" | "mechanism_unidentified" | "financial_model_not_closed" | "expectation_surface_unidentifiable" | "source_unavailable" | "future_information_leakage")[];
+            /** Research Debt Keys */
+            research_debt_keys: string[];
+            /** Resolvable Within Mandate */
+            resolvable_within_mandate: boolean;
+            /**
+             * Research Disposition
+             * @enum {string}
+             */
+            research_disposition: "observe" | "wait_for_validation" | "eligible_for_probe_entry" | "eligible_for_staged_entry" | "do_not_enter";
+            /** Resolution Requirements */
+            resolution_requirements: string[];
+        };
+        /**
          * FrozenRunScopeDTO
          * @description Scope recorded when a run started; never reconstructed from current settings.
          */
@@ -5497,6 +5554,64 @@ export interface components {
             configured_by?: string | null;
             /** Configuration Change Reason */
             configuration_change_reason?: string | null;
+        };
+        /**
+         * FrozenUnknownEvidenceGapResponse
+         * @description One explicit Unknown ledger parent sealed into a research version.
+         */
+        FrozenUnknownEvidenceGapResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Reference
+             * Format: uuid
+             */
+            reference: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Metric Key */
+            metric_key: string;
+            /** Unit */
+            unit: string;
+            /** Source Id */
+            source_id: string;
+            /** Source Locator */
+            source_locator: string;
+            /**
+             * Observed Start
+             * Format: date-time
+             */
+            observed_start: string;
+            /**
+             * Observed End
+             * Format: date-time
+             */
+            observed_end: string;
+            /**
+             * Effective At
+             * Format: date-time
+             */
+            effective_at: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /** Source Role */
+            source_role: string;
+            /**
+             * Observation Status
+             * @constant
+             */
+            observation_status: "unknown";
+            /** Dimensions */
+            dimensions: {
+                [key: string]: string;
+            };
         };
         /**
          * FundCompositionResponse
@@ -7849,6 +7964,47 @@ export interface components {
             available_at: string | null;
             /** Status */
             status: string | null;
+        };
+        /**
+         * ResearchRevisionBoundaryResponse
+         * @description The selected immutable version's explicit research boundary only.
+         */
+        ResearchRevisionBoundaryResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Revision Id
+             * Format: uuid
+             */
+            revision_id: string;
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /**
+             * Basis Id
+             * Format: uuid
+             */
+            basis_id: string;
+            /** Version Kind */
+            version_kind: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Cutoff
+             * Format: date-time
+             */
+            cutoff: string;
+            /** Source Manifest Hash */
+            source_manifest_hash: string;
+            answerability: components["schemas"]["FrozenAnswerabilityResponse"] | null;
+            /** Unknown Evidence Gaps */
+            unknown_evidence_gaps: components["schemas"]["FrozenUnknownEvidenceGapResponse"][];
         };
         /** ResearchRevisionChangeResponse */
         ResearchRevisionChangeResponse: {
@@ -14620,6 +14776,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResearchRevisionResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_research_revision_boundary_api_underwriting_v1_research_versions__revision_id__boundary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchRevisionBoundaryResponse"];
                 };
             };
             /** @description Not Found */

@@ -15,6 +15,7 @@ REVISION_PATHS = {
     "/api/underwriting/v1/research-versions/{from_revision_id}/diff/{to_revision_id}",
 }
 ARCHIVE_PATH = "/api/underwriting/v1/research-archives"
+BOUNDARY_PATH = "/api/underwriting/v1/research-versions/{revision_id}/boundary"
 REVISION_SCHEMAS = {
     "ResearchRevisionArtifactResponse",
     "ResearchRevisionResponse",
@@ -25,6 +26,11 @@ REVISION_SCHEMAS = {
 ARCHIVE_SCHEMAS = {
     "ResearchArchiveItemResponse",
     "ResearchArchiveListResponse",
+}
+BOUNDARY_SCHEMAS = {
+    "ResearchRevisionBoundaryResponse",
+    "FrozenAnswerabilityResponse",
+    "FrozenUnknownEvidenceGapResponse",
 }
 FORBIDDEN_RESEARCH_FIELDS = {
     "pe", "pb", "dcf", "price", "target", "buy", "sell", "stop", "position",
@@ -70,11 +76,12 @@ def test_dump_openapi_includes_underwriting_routes() -> None:
 def test_revision_read_contract_has_only_get_operations_and_no_decision_fields() -> None:
     openapi = app.openapi()
 
-    assert REVISION_PATHS | {ARCHIVE_PATH} <= set(openapi["paths"])
+    assert REVISION_PATHS | {ARCHIVE_PATH, BOUNDARY_PATH} <= set(openapi["paths"])
     assert all(set(openapi["paths"][path]) == {"get"} for path in REVISION_PATHS)
     assert set(openapi["paths"][ARCHIVE_PATH]) == {"get"}
+    assert set(openapi["paths"][BOUNDARY_PATH]) == {"get"}
     schemas = openapi["components"]["schemas"]
-    for name in REVISION_SCHEMAS | ARCHIVE_SCHEMAS:
+    for name in REVISION_SCHEMAS | ARCHIVE_SCHEMAS | BOUNDARY_SCHEMAS:
         properties = schemas[name]["properties"]
         assert not (set(field.lower() for field in properties) & FORBIDDEN_RESEARCH_FIELDS)
     assert schemas["ResearchArchiveItemResponse"]["properties"]["object_kind"] == {
@@ -82,6 +89,24 @@ def test_revision_read_contract_has_only_get_operations_and_no_decision_fields()
         "enum": ["industry", "company", "security"],
         "title": "Object Kind",
     }
+
+
+def test_boundary_contract_binds_identity_and_exposes_only_typed_frozen_fields() -> None:
+    openapi = app.openapi()
+    schemas = openapi["components"]["schemas"]
+    boundary = schemas["ResearchRevisionBoundaryResponse"]
+
+    assert {
+        "revision_id", "object_id", "basis_id", "version_kind", "content_hash",
+        "cutoff", "source_manifest_hash", "answerability", "unknown_evidence_gaps",
+    } <= set(boundary["properties"])
+    assert boundary["additionalProperties"] is False
+    assert schemas["FrozenAnswerabilityResponse"]["additionalProperties"] is False
+    assert schemas["FrozenUnknownEvidenceGapResponse"]["additionalProperties"] is False
+    names: set[str] = set()
+    for name in BOUNDARY_SCHEMAS:
+        names.update(_property_names(schemas[name], schemas))
+    assert not (set(name.lower() for name in names) & FORBIDDEN_RESEARCH_FIELDS)
 
 
 def test_revision_history_identity_contract_includes_research_object_identity() -> None:

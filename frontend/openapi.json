@@ -9510,6 +9510,60 @@
         }
       }
     },
+    "/api/underwriting/v1/research-versions/{revision_id}/boundary": {
+      "get": {
+        "tags": [
+          "underwriting-v1"
+        ],
+        "summary": "Get Research Revision Boundary",
+        "description": "Return only the selected revision's verified, explicit boundary.",
+        "operationId": "get_research_revision_boundary_api_underwriting_v1_research_versions__revision_id__boundary_get",
+        "parameters": [
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Revision Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRevisionBoundaryResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
     "/api/underwriting/v1/research-versions/{from_revision_id}/diff/{to_revision_id}": {
       "get": {
         "tags": [
@@ -18079,6 +18133,94 @@
         ],
         "title": "FormalMechanismResponse"
       },
+      "FrozenAnswerabilityResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "reference": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reference"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "answerable",
+              "partially_answerable",
+              "not_answerable"
+            ],
+            "title": "State"
+          },
+          "blockers": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "missing_key_baseline",
+                "unresolved_source_conflict",
+                "mechanism_unidentified",
+                "financial_model_not_closed",
+                "expectation_surface_unidentifiable",
+                "source_unavailable",
+                "future_information_leakage"
+              ]
+            },
+            "type": "array",
+            "title": "Blockers"
+          },
+          "research_debt_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Research Debt Keys"
+          },
+          "resolvable_within_mandate": {
+            "type": "boolean",
+            "title": "Resolvable Within Mandate"
+          },
+          "research_disposition": {
+            "type": "string",
+            "enum": [
+              "observe",
+              "wait_for_validation",
+              "eligible_for_probe_entry",
+              "eligible_for_staged_entry",
+              "do_not_enter"
+            ],
+            "title": "Research Disposition"
+          },
+          "resolution_requirements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Resolution Requirements"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reference",
+          "content_hash",
+          "state",
+          "blockers",
+          "research_debt_keys",
+          "resolvable_within_mandate",
+          "research_disposition",
+          "resolution_requirements"
+        ],
+        "title": "FrozenAnswerabilityResponse",
+        "description": "A checked answerability parent from one selected research version."
+      },
       "FrozenRunScopeDTO": {
         "properties": {
           "trigger": {
@@ -18184,6 +18326,97 @@
         "type": "object",
         "title": "FrozenRunScopeDTO",
         "description": "Scope recorded when a run started; never reconstructed from current settings."
+      },
+      "FrozenUnknownEvidenceGapResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "reference": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reference"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "metric_key": {
+            "type": "string",
+            "title": "Metric Key"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "source_locator": {
+            "type": "string",
+            "title": "Source Locator"
+          },
+          "observed_start": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Observed Start"
+          },
+          "observed_end": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Observed End"
+          },
+          "effective_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Effective At"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "source_role": {
+            "type": "string",
+            "title": "Source Role"
+          },
+          "observation_status": {
+            "type": "string",
+            "const": "unknown",
+            "title": "Observation Status"
+          },
+          "dimensions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Dimensions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reference",
+          "content_hash",
+          "metric_key",
+          "unit",
+          "source_id",
+          "source_locator",
+          "observed_start",
+          "observed_end",
+          "effective_at",
+          "available_at",
+          "source_role",
+          "observation_status",
+          "dimensions"
+        ],
+        "title": "FrozenUnknownEvidenceGapResponse",
+        "description": "One explicit Unknown ledger parent sealed into a research version."
       },
       "FundCompositionResponse": {
         "properties": {
@@ -24329,6 +24562,82 @@
           "status"
         ],
         "title": "ResearchRevisionArtifactResponse"
+      },
+      "ResearchRevisionBoundaryResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "revision_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Revision Id"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "basis_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Basis Id"
+          },
+          "version_kind": {
+            "type": "string",
+            "title": "Version Kind"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "cutoff": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff"
+          },
+          "source_manifest_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Manifest Hash"
+          },
+          "answerability": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FrozenAnswerabilityResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unknown_evidence_gaps": {
+            "items": {
+              "$ref": "#/components/schemas/FrozenUnknownEvidenceGapResponse"
+            },
+            "type": "array",
+            "title": "Unknown Evidence Gaps"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision_id",
+          "object_id",
+          "basis_id",
+          "version_kind",
+          "content_hash",
+          "cutoff",
+          "source_manifest_hash",
+          "answerability",
+          "unknown_evidence_gaps"
+        ],
+        "title": "ResearchRevisionBoundaryResponse",
+        "description": "The selected immutable version's explicit research boundary only."
       },
       "ResearchRevisionChangeResponse": {
         "properties": {

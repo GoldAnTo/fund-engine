@@ -42,6 +42,9 @@ from app.underwriting.api.schemas import (
     ResearchRevisionDiffResponse,
     ResearchRevisionHistoryResponse,
     ResearchRevisionResponse,
+    FrozenAnswerabilityResponse,
+    FrozenUnknownEvidenceGapResponse,
+    ResearchRevisionBoundaryResponse,
 )
 from app.errors import NotFoundError
 from app.underwriting.persistence.models import UnderwritingAnswerabilityEvaluation, UnderwritingHistoricalBasis, UnderwritingResearchVersion, UnderwritingLedgerEntry, UnderwritingObjectRelation
@@ -61,6 +64,9 @@ from app.underwriting.services.research_revision_diff import (
     ResearchRevisionDiffService,
     RevisionArtifactRef,
     RevisionChange,
+    FrozenAnswerability,
+    FrozenUnknownEvidenceGap,
+    ResearchRevisionBoundary,
     ResearchRevisionSummary,
 )
 
@@ -219,6 +225,63 @@ def _revision_change_response(value: RevisionChange) -> ResearchRevisionChangeRe
     )
 
 
+def _frozen_answerability_response(value: FrozenAnswerability) -> FrozenAnswerabilityResponse:
+    return FrozenAnswerabilityResponse(
+        reference=UUID(value.reference),
+        content_hash=value.content_hash,
+        state=value.state,
+        blockers=list(value.blockers),
+        research_debt_keys=list(value.research_debt_keys),
+        resolvable_within_mandate=value.resolvable_within_mandate,
+        research_disposition=value.allowed_action,
+        resolution_requirements=list(value.resolution_requirements),
+    )
+
+
+def _frozen_unknown_evidence_gap_response(
+    value: FrozenUnknownEvidenceGap,
+) -> FrozenUnknownEvidenceGapResponse:
+    return FrozenUnknownEvidenceGapResponse(
+        reference=UUID(value.reference),
+        content_hash=value.content_hash,
+        metric_key=value.metric_key,
+        unit=value.unit,
+        source_id=value.source_id,
+        source_locator=value.source_locator,
+        observed_start=value.observed_start,
+        observed_end=value.observed_end,
+        effective_at=value.effective_at,
+        available_at=value.available_at,
+        source_role=value.source_role,
+        observation_status=value.observation_status,
+        dimensions=dict(value.dimensions),
+    )
+
+
+def _revision_boundary_response(
+    value: ResearchRevisionBoundary,
+) -> ResearchRevisionBoundaryResponse:
+    revision = value.revision
+    return ResearchRevisionBoundaryResponse(
+        revision_id=revision.id,
+        object_id=revision.object_id,
+        basis_id=revision.basis_id,
+        version_kind=revision.version_kind,
+        content_hash=revision.content_hash,
+        cutoff=revision.cutoff,
+        source_manifest_hash=revision.source_manifest_hash,
+        answerability=(
+            _frozen_answerability_response(value.answerability)
+            if value.answerability is not None
+            else None
+        ),
+        unknown_evidence_gaps=[
+            _frozen_unknown_evidence_gap_response(gap)
+            for gap in value.unknown_evidence_gaps
+        ],
+    )
+
+
 def _require_research_revision(db: Session, revision_id: UUID) -> None:
     with db.no_autoflush:
         if db.get(UnderwritingResearchVersion, revision_id) is None:
@@ -351,6 +414,24 @@ def get_research_revision(revision_id: UUID, db: Session = Depends(get_db)) -> R
     _require_research_revision(db, revision_id)
     try:
         return _revision_response(ResearchRevisionDiffService(db).revision_summary(revision_id))
+    except ValidationError as exc:
+        raise ValidationFailedError(str(exc)) from exc
+
+
+@router.get(
+    "/research-versions/{revision_id}/boundary",
+    response_model=ResearchRevisionBoundaryResponse,
+    responses=READ_ERROR_RESPONSES,
+)
+def get_research_revision_boundary(
+    revision_id: UUID, db: Session = Depends(get_db),
+) -> ResearchRevisionBoundaryResponse:
+    """Return only the selected revision's verified, explicit boundary."""
+    _require_research_revision(db, revision_id)
+    try:
+        return _revision_boundary_response(
+            ResearchRevisionDiffService(db).revision_boundary(revision_id),
+        )
     except ValidationError as exc:
         raise ValidationFailedError(str(exc)) from exc
 

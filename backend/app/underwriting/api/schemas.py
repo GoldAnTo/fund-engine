@@ -250,6 +250,53 @@ class ResearchArchiveListResponse(UnderwritingModel):
     next_cursor: str | None
 
 
+class FrozenAnswerabilityResponse(UnderwritingModel):
+    """A checked answerability parent from one selected research version."""
+
+    reference: UUID
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    state: AnswerabilityState
+    blockers: list[BlockerCode]
+    research_debt_keys: list[str]
+    resolvable_within_mandate: bool
+    # This is a research-process disposition (for example,
+    # ``wait_for_validation``), not a market action or recommendation.
+    research_disposition: EligibleAction
+    resolution_requirements: list[str]
+
+
+class FrozenUnknownEvidenceGapResponse(UnderwritingModel):
+    """One explicit Unknown ledger parent sealed into a research version."""
+
+    reference: UUID
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    metric_key: str
+    unit: str
+    source_id: str
+    source_locator: str
+    observed_start: datetime
+    observed_end: datetime
+    effective_at: datetime
+    available_at: datetime
+    source_role: str
+    observation_status: Literal["unknown"]
+    dimensions: dict[str, str]
+
+
+class ResearchRevisionBoundaryResponse(UnderwritingModel):
+    """The selected immutable version's explicit research boundary only."""
+
+    revision_id: UUID
+    object_id: UUID
+    basis_id: UUID
+    version_kind: str
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cutoff: datetime
+    source_manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    answerability: FrozenAnswerabilityResponse | None
+    unknown_evidence_gaps: list[FrozenUnknownEvidenceGapResponse]
+
+
 class EconomicSourceResponse(UnderwritingModel):
     source_id: str
     title: str
