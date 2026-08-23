@@ -11,10 +11,14 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.ledger import Base, _uuid
+from app.underwriting.domain.evidence_candidates import (
+    CandidateEvidenceDossier,
+    CandidateEvidenceReview,
+)
 
 
 class UnderwritingSourceManifestVersion(Base):
@@ -230,6 +234,10 @@ class UnderwritingEvidenceCandidateDossierVersion(Base):
             name="uq_uw_evidence_candidate_dossier_version",
         ),
         UniqueConstraint("supersedes_id", name="uq_uw_evidence_candidate_dossier_successor"),
+        CheckConstraint(
+            "status IN ('draft', 'reviewed_candidate')",
+            name="ck_uw_evidence_candidate_dossier_status",
+        ),
         Index(
             "ix_uw_evidence_candidate_dossiers_object_basis_status",
             "object_id", "basis_id", "status",
@@ -254,6 +262,29 @@ class UnderwritingEvidenceCandidateDossierVersion(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+    @classmethod
+    def from_contract(
+        cls, *, id: uuid.UUID, contract: CandidateEvidenceDossier
+    ) -> "UnderwritingEvidenceCandidateDossierVersion":
+        """Build a row solely from the sealed dossier contract."""
+        return cls(
+            id=id,
+            dossier_key=contract.dossier_key,
+            version=contract.version,
+            object_id=contract.object_id,
+            basis_id=contract.basis_id,
+            source_manifest_id=contract.source_manifest_id,
+            scope_statement=contract.scope_statement,
+            purpose=contract.purpose,
+            status=contract.status.value,
+            rejected_calculations=list(contract.rejected_calculations),
+            payload=contract.canonical_payload,
+            source_manifest_hash=contract.source_manifest_hash,
+            content_hash=contract.content_hash,
+            supersedes_id=contract.supersedes_id,
+            created_at=contract.created_at,
+        )
+
 
 class UnderwritingEvidenceCandidateReviewVersion(Base):
     __tablename__ = "uw_evidence_candidate_review_versions"
@@ -262,6 +293,8 @@ class UnderwritingEvidenceCandidateReviewVersion(Base):
             "dossier_id", "reviewer_identity", "reviewer_role",
             name="uq_uw_evidence_candidate_review_identity",
         ),
+        UniqueConstraint("dossier_id", "reviewer_role", name="uq_uw_evidence_candidate_review_role"),
+        UniqueConstraint("dossier_id", "reviewer_identity", name="uq_uw_evidence_candidate_review_reviewer"),
         Index("ix_uw_evidence_candidate_reviews_dossier_role", "dossier_id", "reviewer_role"),
     )
 
@@ -278,3 +311,22 @@ class UnderwritingEvidenceCandidateReviewVersion(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    @classmethod
+    def from_contract(
+        cls, *, id: uuid.UUID, contract: CandidateEvidenceReview
+    ) -> "UnderwritingEvidenceCandidateReviewVersion":
+        """Build a row solely from the sealed review contract."""
+        return cls(
+            id=id,
+            dossier_id=contract.dossier_id,
+            dossier_content_hash=contract.dossier_content_hash,
+            reviewer_identity=contract.reviewer_identity,
+            reviewer_role=contract.reviewer_role,
+            decision=contract.decision,
+            rationale=contract.rationale,
+            payload=contract.canonical_payload,
+            content_hash=contract.content_hash,
+            reviewed_at=contract.reviewed_at,
+            created_at=contract.reviewed_at,
+        )

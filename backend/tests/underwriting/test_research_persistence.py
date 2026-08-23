@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+import hashlib
+import json
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, inspect, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import Base
@@ -14,6 +17,7 @@ from app.models.ledger import IMMUTABLE_TABLES, ImmutableLedgerError
 from app.models.ledger import ValidationError
 from app.underwriting.domain import (
     CandidateEvidenceDossier,
+    CandidateEvidenceDossierStatus,
     CandidateEvidenceItem,
     CandidateEvidenceReview,
     CandidateEvidenceStatus,
@@ -79,6 +83,24 @@ def _candidate_item(**overrides: object) -> CandidateEvidenceItem:
     }
     values.update(overrides)
     return CandidateEvidenceItem(**values)  # type: ignore[arg-type]
+
+
+def _candidate_dossier(**overrides: object) -> CandidateEvidenceDossier:
+    values: dict[str, object] = {
+        "object_id": uuid4(),
+        "basis_id": uuid4(),
+        "source_manifest_id": uuid4(),
+        "dossier_key": "battery-capacity",
+        "version": 1,
+        "scope_statement": "China lithium-ion battery cells, 2024",
+        "items": (_candidate_item(),),
+        "rejected_calculations": ("utilization = output / nominal capacity",),
+        "source_manifest_hash": "a" * 64,
+        "created_at": NOW,
+        "status": CandidateEvidenceDossierStatus.DRAFT,
+    }
+    values.update(overrides)
+    return CandidateEvidenceDossier(**values)  # type: ignore[arg-type]
 
 
 def test_chart_candidate_requires_transcription_method() -> None:
@@ -188,6 +210,124 @@ def test_review_rejects_a_non_string_reviewer_identity_with_validation_error(
             rationale="source verified",
             reviewed_at=NOW,
         )
+
+
+@pytest.mark.parametrize("version", (True, 1.0, float("nan"), float("inf"), "1"))
+def test_candidate_dossier_requires_an_exact_integer_version(version: object) -> None:
+    with pytest.raises(ValidationError, match="version must be an integer"):
+        _candidate_dossier(version=version)
+
+
+def test_candidate_dossier_rejects_formal_status() -> None:
+    with pytest.raises(ValidationError, match="status must be a CandidateEvidenceDossierStatus"):
+        _candidate_dossier(status="formal")
+
+
+def test_candidate_dossier_and_review_payloads_are_canonical_and_sealed() -> None:
+    dossier = _candidate_dossier()
+    review = CandidateEvidenceReview(
+        dossier_id=uuid4(),
+        dossier_content_hash=dossier.content_hash,
+        reviewer_identity="reviewer:a",
+        reviewer_role="provenance",
+        decision="approve",
+        rationale="source verified",
+        reviewed_at=NOW,
+    )
+    assert dossier.canonical_payload["status"] == "draft"
+    reviewed = _candidate_dossier(status=CandidateEvidenceDossierStatus.REVIEWED_CANDIDATE)
+    assert dossier.content_hash != reviewed.content_hash
+    assert dossier.canonical_payload["items"][0]["prohibited_splicing_declaration"]
+    assert "formal" not in dossier.canonical_payload
+    assert "action" not in dossier.canonical_payload
+    assert "valuation" not in dossier.canonical_payload
+    with pytest.raises(ValidationError, match="dossier payload does not match"):
+        dossier.validate_persisted_payload(
+            {**dossier.canonical_payload, "formal": True}, dossier.content_hash
+        )
+    rehashed_dossier_payload = {**dossier.canonical_payload, "action": "forbidden"}
+    rehashed_dossier_hash = hashlib.sha256(
+        json.dumps(rehashed_dossier_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    with pytest.raises(ValidationError, match="dossier payload does not match"):
+        dossier.validate_persisted_payload(rehashed_dossier_payload, rehashed_dossier_hash)
+    with pytest.raises(ValidationError, match="dossier content_hash does not match"):
+        dossier.validate_persisted_payload(dossier.canonical_payload, "b" * 64)
+    with pytest.raises(ValidationError, match="review payload does not match"):
+        review.validate_persisted_payload(
+            {**review.canonical_payload, "valuation": "forbidden"}, review.content_hash
+        )
+    rehashed_review_payload = {**review.canonical_payload, "valuation": "forbidden"}
+    rehashed_review_hash = hashlib.sha256(
+        json.dumps(rehashed_review_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    with pytest.raises(ValidationError, match="review payload does not match"):
+        review.validate_persisted_payload(rehashed_review_payload, rehashed_review_hash)
+    with pytest.raises(ValidationError, match="review content_hash does not match"):
+        review.validate_persisted_payload(review.canonical_payload, "b" * 64)
+    dossier_row = UnderwritingEvidenceCandidateDossierVersion.from_contract(
+        id=uuid4(), contract=dossier
+    )
+    review_row = UnderwritingEvidenceCandidateReviewVersion.from_contract(
+        id=uuid4(), contract=review
+    )
+    assert dossier_row.payload == dossier.canonical_payload
+    assert dossier_row.content_hash == dossier.content_hash
+    assert review_row.payload == review.canonical_payload
+    assert review_row.content_hash == review.content_hash
+
+
+def test_candidate_database_rejects_formal_status_and_non_independent_reviews() -> None:
+    engine = create_engine("sqlite://")
+    tables = [
+        UnderwritingEvidenceCandidateDossierVersion.__table__,
+        UnderwritingEvidenceCandidateReviewVersion.__table__,
+    ]
+    Base.metadata.create_all(engine, tables=tables)
+    try:
+        with Session(engine) as session:
+            dossier = UnderwritingEvidenceCandidateDossierVersion(
+                id=uuid4(), dossier_key="battery-capacity", version=1,
+                object_id=uuid4(), basis_id=uuid4(), source_manifest_id=uuid4(),
+                scope_statement="China lithium-ion battery cells, 2024",
+                purpose="evidence_candidate", status="formal", rejected_calculations=["output / nominal capacity"],
+                payload={}, source_manifest_hash="a" * 64, content_hash="a" * 64, created_at=NOW,
+            )
+            session.add(dossier)
+            with pytest.raises(IntegrityError):
+                session.commit()
+            session.rollback()
+
+            dossier.status = "draft"
+            session.add(dossier)
+            session.commit()
+            first = UnderwritingEvidenceCandidateReviewVersion(
+                id=uuid4(), dossier_id=dossier.id, dossier_content_hash="a" * 64,
+                reviewer_identity="reviewer:a", reviewer_role="provenance", decision="approve",
+                rationale="source verified", payload={}, content_hash="a" * 64,
+                reviewed_at=NOW, created_at=NOW,
+            )
+            session.add(first)
+            session.commit()
+            session.add(UnderwritingEvidenceCandidateReviewVersion(
+                id=uuid4(), dossier_id=dossier.id, dossier_content_hash="a" * 64,
+                reviewer_identity="reviewer:a", reviewer_role="methodology", decision="approve",
+                rationale="method verified", payload={}, content_hash="a" * 64,
+                reviewed_at=NOW, created_at=NOW,
+            ))
+            with pytest.raises(IntegrityError):
+                session.commit()
+            session.rollback()
+            session.add(UnderwritingEvidenceCandidateReviewVersion(
+                id=uuid4(), dossier_id=dossier.id, dossier_content_hash="a" * 64,
+                reviewer_identity="reviewer:b", reviewer_role="provenance", decision="approve",
+                rationale="source verified", payload={}, content_hash="a" * 64,
+                reviewed_at=NOW, created_at=NOW,
+            ))
+            with pytest.raises(IntegrityError):
+                session.commit()
+    finally:
+        Base.metadata.drop_all(engine, tables=tables)
 
 
 def test_candidate_rows_capture_dossier_and_review_governance_contracts() -> None:

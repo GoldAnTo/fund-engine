@@ -156,6 +156,30 @@ def test_0062_downgrade_removes_only_candidate_evidence_tables(tmp_path) -> None
     )
     assert upgraded.returncode == 0, upgraded.stderr
 
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    try:
+        inspector = sa.inspect(engine)
+        checks = {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints(
+                "uw_evidence_candidate_dossier_versions"
+            )
+        }
+        review_uniques = {
+            constraint["name"]
+            for constraint in inspector.get_unique_constraints(
+                "uw_evidence_candidate_review_versions"
+            )
+        }
+        assert "ck_uw_evidence_candidate_dossier_status" in checks
+        assert {
+            "uq_uw_evidence_candidate_review_identity",
+            "uq_uw_evidence_candidate_review_role",
+            "uq_uw_evidence_candidate_review_reviewer",
+        }.issubset(review_uniques)
+    finally:
+        engine.dispose()
+
     downgraded = subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "0061"],
         cwd=backend,

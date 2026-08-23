@@ -7,7 +7,7 @@ from decimal import Decimal
 from enum import StrEnum
 import hashlib
 import json
-from typing import Literal
+from typing import Literal, Mapping
 from uuid import UUID
 
 from app.models.ledger import ValidationError
@@ -30,6 +30,11 @@ class CandidateEvidenceReviewDecision(StrEnum):
     APPROVE = "approve"
     REJECT = "reject"
     REQUEST_CHANGES = "request_changes"
+
+
+class CandidateEvidenceDossierStatus(StrEnum):
+    DRAFT = "draft"
+    REVIEWED_CANDIDATE = "reviewed_candidate"
 
 
 def _text(value: str, field: str) -> str:
@@ -140,8 +145,8 @@ class CandidateEvidenceItem:
             raise ValidationError("unknown_reason is only valid for unknown")
 
     @property
-    def content_hash(self) -> str:
-        return _canonical_hash({
+    def canonical_payload(self) -> dict[str, object]:
+        return {
             "metric_key": self.metric_key,
             "status": self.status.value,
             "value": None if self.value is None else str(self.value),
@@ -152,7 +157,7 @@ class CandidateEvidenceItem:
             "source_id": self.source_id,
             "source_locator": self.source_locator,
             "scope_statement": self.scope_statement,
-            "exclusions": self.exclusions,
+            "exclusions": list(self.exclusions),
             "methodology": self.methodology,
             "prohibited_splicing_declaration": self.prohibited_splicing_declaration,
             "transcription_method": self.transcription_method,
@@ -160,7 +165,11 @@ class CandidateEvidenceItem:
             "scenario_use": self.scenario_use,
             "not_observed_declared": self.not_observed_declared,
             "unknown_reason": self.unknown_reason,
-        })
+        }
+
+    @property
+    def content_hash(self) -> str:
+        return _canonical_hash(self.canonical_payload)
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +184,7 @@ class CandidateEvidenceDossier:
     rejected_calculations: tuple[str, ...]
     source_manifest_hash: str
     created_at: datetime
+    status: CandidateEvidenceDossierStatus = CandidateEvidenceDossierStatus.DRAFT
     purpose: Literal["evidence_candidate"] = "evidence_candidate"
     supersedes_id: UUID | None = None
 
@@ -186,8 +196,12 @@ class CandidateEvidenceDossier:
             raise ValidationError("supersedes_id must be a UUID")
         object.__setattr__(self, "dossier_key", _text(self.dossier_key, "dossier_key"))
         object.__setattr__(self, "scope_statement", _text(self.scope_statement, "scope_statement"))
+        if type(self.version) is not int:
+            raise ValidationError("version must be an integer")
         if self.version < 1:
             raise ValidationError("version must be at least 1")
+        if not isinstance(self.status, CandidateEvidenceDossierStatus):
+            raise ValidationError("status must be a CandidateEvidenceDossierStatus")
         if self.purpose != "evidence_candidate":
             raise ValidationError("purpose must be evidence_candidate")
         if not isinstance(self.items, tuple) or not self.items:
@@ -209,17 +223,31 @@ class CandidateEvidenceDossier:
         object.__setattr__(self, "created_at", _utc(self.created_at, "created_at"))
 
     @property
-    def content_hash(self) -> str:
-        return _canonical_hash({
+    def canonical_payload(self) -> dict[str, object]:
+        return {
             "object_id": str(self.object_id), "basis_id": str(self.basis_id),
             "source_manifest_id": str(self.source_manifest_id), "dossier_key": self.dossier_key,
             "version": self.version, "scope_statement": self.scope_statement,
-            "purpose": self.purpose, "items": tuple(item.content_hash for item in self.items),
-            "rejected_calculations": self.rejected_calculations,
+            "status": self.status.value,
+            "purpose": self.purpose,
+            "items": [item.canonical_payload for item in self.items],
+            "rejected_calculations": list(self.rejected_calculations),
             "source_manifest_hash": self.source_manifest_hash,
             "created_at": self.created_at.isoformat(),
             "supersedes_id": None if self.supersedes_id is None else str(self.supersedes_id),
-        })
+        }
+
+    @property
+    def content_hash(self) -> str:
+        return _canonical_hash(self.canonical_payload)
+
+    def validate_persisted_payload(
+        self, payload: Mapping[str, object], content_hash: str
+    ) -> None:
+        if not isinstance(payload, Mapping) or dict(payload) != self.canonical_payload:
+            raise ValidationError("dossier payload does not match canonical contract")
+        if content_hash != self.content_hash:
+            raise ValidationError("dossier content_hash does not match canonical contract")
 
 
 CandidateEvidenceDossierVersion = CandidateEvidenceDossier
@@ -251,10 +279,22 @@ class CandidateEvidenceReview:
         object.__setattr__(self, "reviewed_at", _utc(self.reviewed_at, "reviewed_at"))
 
     @property
-    def content_hash(self) -> str:
-        return _canonical_hash({
+    def canonical_payload(self) -> dict[str, object]:
+        return {
             "dossier_id": str(self.dossier_id), "dossier_content_hash": self.dossier_content_hash,
             "reviewer_identity": self.reviewer_identity, "reviewer_role": self.reviewer_role,
             "decision": self.decision, "rationale": self.rationale,
             "reviewed_at": self.reviewed_at.isoformat(),
-        })
+        }
+
+    @property
+    def content_hash(self) -> str:
+        return _canonical_hash(self.canonical_payload)
+
+    def validate_persisted_payload(
+        self, payload: Mapping[str, object], content_hash: str
+    ) -> None:
+        if not isinstance(payload, Mapping) or dict(payload) != self.canonical_payload:
+            raise ValidationError("review payload does not match canonical contract")
+        if content_hash != self.content_hash:
+            raise ValidationError("review content_hash does not match canonical contract")

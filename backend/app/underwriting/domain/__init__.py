@@ -30,6 +30,7 @@ from .metrics import (
 from .evidence_candidates import (
     CandidateEvidenceDossier,
     CandidateEvidenceDossierVersion,
+    CandidateEvidenceDossierStatus,
     CandidateEvidenceItem,
     CandidateEvidenceReview,
     CandidateEvidenceReviewDecision,
@@ -92,6 +93,7 @@ __all__ = [
     "reconcile",
     "CandidateEvidenceDossier",
     "CandidateEvidenceDossierVersion",
+    "CandidateEvidenceDossierStatus",
     "CandidateEvidenceItem",
     "CandidateEvidenceReview",
     "CandidateEvidenceReviewDecision",
