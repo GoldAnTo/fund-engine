@@ -33,8 +33,7 @@ class CandidateEvidenceReviewDecision(StrEnum):
 
 
 class CandidateEvidenceDossierStatus(StrEnum):
-    DRAFT = "draft"
-    REVIEWED_CANDIDATE = "reviewed_candidate"
+    CANDIDATE = "candidate"
 
 
 def _text(value: str, field: str) -> str:
@@ -171,6 +170,28 @@ class CandidateEvidenceItem:
     def content_hash(self) -> str:
         return _canonical_hash(self.canonical_payload)
 
+    @classmethod
+    def from_canonical_payload(cls, payload: Mapping[str, object]) -> "CandidateEvidenceItem":
+        expected = set(cls.__dataclass_fields__)
+        if not isinstance(payload, Mapping) or set(payload) != expected:
+            raise ValidationError("candidate item payload is not canonical")
+        try:
+            return cls(
+                metric_key=payload["metric_key"], status=CandidateEvidenceStatus(payload["status"]),
+                value=None if payload["value"] is None else Decimal(payload["value"]), unit=payload["unit"],
+                observed_start=datetime.fromisoformat(payload["observed_start"]), observed_end=datetime.fromisoformat(payload["observed_end"]),
+                available_at=datetime.fromisoformat(payload["available_at"]), source_id=payload["source_id"],
+                source_locator=payload["source_locator"], scope_statement=payload["scope_statement"],
+                exclusions=tuple(payload["exclusions"]), methodology=payload["methodology"],
+                prohibited_splicing_declaration=payload["prohibited_splicing_declaration"],
+                transcription_method=payload["transcription_method"],
+                error_bound=None if payload["error_bound"] is None else Decimal(payload["error_bound"]),
+                scenario_use=payload["scenario_use"], not_observed_declared=payload["not_observed_declared"],
+                unknown_reason=payload["unknown_reason"],
+            )
+        except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+            raise ValidationError("candidate item payload is not canonical") from exc
+
 
 @dataclass(frozen=True, slots=True)
 class CandidateEvidenceDossier:
@@ -184,7 +205,7 @@ class CandidateEvidenceDossier:
     rejected_calculations: tuple[str, ...]
     source_manifest_hash: str
     created_at: datetime
-    status: CandidateEvidenceDossierStatus = CandidateEvidenceDossierStatus.DRAFT
+    status: CandidateEvidenceDossierStatus = CandidateEvidenceDossierStatus.CANDIDATE
     purpose: Literal["evidence_candidate"] = "evidence_candidate"
     supersedes_id: UUID | None = None
 
@@ -249,6 +270,27 @@ class CandidateEvidenceDossier:
         if content_hash != self.content_hash:
             raise ValidationError("dossier content_hash does not match canonical contract")
 
+    @classmethod
+    def from_canonical_payload(cls, payload: Mapping[str, object]) -> "CandidateEvidenceDossier":
+        expected = {
+            "object_id", "basis_id", "source_manifest_id", "dossier_key", "version", "scope_statement",
+            "status", "purpose", "items", "rejected_calculations", "source_manifest_hash", "created_at", "supersedes_id",
+        }
+        if not isinstance(payload, Mapping) or set(payload) != expected:
+            raise ValidationError("dossier payload is not canonical")
+        try:
+            return cls(
+                object_id=UUID(payload["object_id"]), basis_id=UUID(payload["basis_id"]),
+                source_manifest_id=UUID(payload["source_manifest_id"]), dossier_key=payload["dossier_key"],
+                version=payload["version"], scope_statement=payload["scope_statement"],
+                items=tuple(CandidateEvidenceItem.from_canonical_payload(item) for item in payload["items"]),
+                rejected_calculations=tuple(payload["rejected_calculations"]), source_manifest_hash=payload["source_manifest_hash"],
+                created_at=datetime.fromisoformat(payload["created_at"]), status=CandidateEvidenceDossierStatus(payload["status"]),
+                purpose=payload["purpose"], supersedes_id=None if payload["supersedes_id"] is None else UUID(payload["supersedes_id"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValidationError("dossier payload is not canonical") from exc
+
 
 CandidateEvidenceDossierVersion = CandidateEvidenceDossier
 
@@ -298,3 +340,18 @@ class CandidateEvidenceReview:
             raise ValidationError("review payload does not match canonical contract")
         if content_hash != self.content_hash:
             raise ValidationError("review content_hash does not match canonical contract")
+
+    @classmethod
+    def from_canonical_payload(cls, payload: Mapping[str, object]) -> "CandidateEvidenceReview":
+        expected = {"dossier_id", "dossier_content_hash", "reviewer_identity", "reviewer_role", "decision", "rationale", "reviewed_at"}
+        if not isinstance(payload, Mapping) or set(payload) != expected:
+            raise ValidationError("review payload is not canonical")
+        try:
+            return cls(
+                dossier_id=UUID(payload["dossier_id"]), dossier_content_hash=payload["dossier_content_hash"],
+                reviewer_identity=payload["reviewer_identity"], reviewer_role=payload["reviewer_role"],
+                decision=payload["decision"], rationale=payload["rationale"],
+                reviewed_at=datetime.fromisoformat(payload["reviewed_at"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValidationError("review payload is not canonical") from exc

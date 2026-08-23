@@ -11,10 +11,10 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, Uuid, event, select
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from app.models.ledger import Base, _uuid
+from app.models.ledger import Base, ValidationError, _uuid
 from app.underwriting.domain.evidence_candidates import (
     CandidateEvidenceDossier,
     CandidateEvidenceReview,
@@ -235,7 +235,7 @@ class UnderwritingEvidenceCandidateDossierVersion(Base):
         ),
         UniqueConstraint("supersedes_id", name="uq_uw_evidence_candidate_dossier_successor"),
         CheckConstraint(
-            "status IN ('draft', 'reviewed_candidate')",
+            "status = 'candidate'",
             name="ck_uw_evidence_candidate_dossier_status",
         ),
         Index(
@@ -330,3 +330,61 @@ class UnderwritingEvidenceCandidateReviewVersion(Base):
             reviewed_at=contract.reviewed_at,
             created_at=contract.reviewed_at,
         )
+
+
+def _validate_dossier_row(row: UnderwritingEvidenceCandidateDossierVersion) -> None:
+    contract = CandidateEvidenceDossier.from_canonical_payload(row.payload)
+    contract.validate_persisted_payload(row.payload, row.content_hash)
+    if (row.object_id, row.basis_id, row.source_manifest_id, row.dossier_key, row.version,
+        row.scope_statement, row.purpose, row.status, tuple(row.rejected_calculations),
+        row.source_manifest_hash, row.supersedes_id, row.created_at) != (
+        contract.object_id, contract.basis_id, contract.source_manifest_id, contract.dossier_key, contract.version,
+        contract.scope_statement, contract.purpose, contract.status.value, contract.rejected_calculations,
+        contract.source_manifest_hash, contract.supersedes_id, contract.created_at):
+        raise ValidationError("dossier row does not match canonical contract")
+
+
+def _validate_review_row(row: UnderwritingEvidenceCandidateReviewVersion) -> None:
+    contract = CandidateEvidenceReview.from_canonical_payload(row.payload)
+    contract.validate_persisted_payload(row.payload, row.content_hash)
+    if (row.dossier_id, row.dossier_content_hash, row.reviewer_identity, row.reviewer_role,
+        row.decision, row.rationale, row.reviewed_at) != (
+        contract.dossier_id, contract.dossier_content_hash, contract.reviewer_identity, contract.reviewer_role,
+        contract.decision, contract.rationale, contract.reviewed_at):
+        raise ValidationError("review row does not match canonical contract")
+
+
+@event.listens_for(UnderwritingEvidenceCandidateDossierVersion, "before_insert")
+def _validate_candidate_dossier_insert(_mapper, _connection, target) -> None:
+    _validate_dossier_row(target)
+
+
+@event.listens_for(UnderwritingEvidenceCandidateDossierVersion, "load")
+def _validate_candidate_dossier_load(target, _context) -> None:
+    _validate_dossier_row(target)
+
+
+@event.listens_for(UnderwritingEvidenceCandidateReviewVersion, "before_insert")
+def _validate_candidate_review_insert(_mapper, connection, target) -> None:
+    _validate_review_row(target)
+    expected_hash = connection.execute(
+        select(UnderwritingEvidenceCandidateDossierVersion.content_hash).where(
+            UnderwritingEvidenceCandidateDossierVersion.id == target.dossier_id
+        )
+    ).scalar_one_or_none()
+    if expected_hash != target.dossier_content_hash:
+        raise ValidationError("review dossier_content_hash does not match dossier")
+
+
+@event.listens_for(UnderwritingEvidenceCandidateReviewVersion, "load")
+def _validate_candidate_review_load(target, _context) -> None:
+    _validate_review_row(target)
+
+
+@event.listens_for(Session, "loaded_as_persistent")
+def _validate_loaded_candidate_review_dossier_hash(session, instance) -> None:
+    if not isinstance(instance, UnderwritingEvidenceCandidateReviewVersion):
+        return
+    dossier = session.get(UnderwritingEvidenceCandidateDossierVersion, instance.dossier_id)
+    if dossier is None or dossier.content_hash != instance.dossier_content_hash:
+        raise ValidationError("review dossier_content_hash does not match dossier")

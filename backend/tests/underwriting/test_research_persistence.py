@@ -97,7 +97,7 @@ def _candidate_dossier(**overrides: object) -> CandidateEvidenceDossier:
         "rejected_calculations": ("utilization = output / nominal capacity",),
         "source_manifest_hash": "a" * 64,
         "created_at": NOW,
-        "status": CandidateEvidenceDossierStatus.DRAFT,
+        "status": CandidateEvidenceDossierStatus.CANDIDATE,
     }
     values.update(overrides)
     return CandidateEvidenceDossier(**values)  # type: ignore[arg-type]
@@ -234,9 +234,7 @@ def test_candidate_dossier_and_review_payloads_are_canonical_and_sealed() -> Non
         rationale="source verified",
         reviewed_at=NOW,
     )
-    assert dossier.canonical_payload["status"] == "draft"
-    reviewed = _candidate_dossier(status=CandidateEvidenceDossierStatus.REVIEWED_CANDIDATE)
-    assert dossier.content_hash != reviewed.content_hash
+    assert dossier.canonical_payload["status"] == "candidate"
     assert dossier.canonical_payload["items"][0]["prohibited_splicing_declaration"]
     assert "formal" not in dossier.canonical_payload
     assert "action" not in dossier.canonical_payload
@@ -286,48 +284,82 @@ def test_candidate_database_rejects_formal_status_and_non_independent_reviews() 
     Base.metadata.create_all(engine, tables=tables)
     try:
         with Session(engine) as session:
-            dossier = UnderwritingEvidenceCandidateDossierVersion(
-                id=uuid4(), dossier_key="battery-capacity", version=1,
-                object_id=uuid4(), basis_id=uuid4(), source_manifest_id=uuid4(),
-                scope_statement="China lithium-ion battery cells, 2024",
-                purpose="evidence_candidate", status="formal", rejected_calculations=["output / nominal capacity"],
-                payload={}, source_manifest_hash="a" * 64, content_hash="a" * 64, created_at=NOW,
+            dossier = UnderwritingEvidenceCandidateDossierVersion.from_contract(
+                id=uuid4(), contract=_candidate_dossier()
             )
+            dossier.status = "formal"
             session.add(dossier)
-            with pytest.raises(IntegrityError):
+            with pytest.raises((IntegrityError, ValidationError)):
                 session.commit()
             session.rollback()
 
-            dossier.status = "draft"
+            dossier = UnderwritingEvidenceCandidateDossierVersion.from_contract(
+                id=uuid4(), contract=_candidate_dossier()
+            )
             session.add(dossier)
             session.commit()
-            first = UnderwritingEvidenceCandidateReviewVersion(
-                id=uuid4(), dossier_id=dossier.id, dossier_content_hash="a" * 64,
-                reviewer_identity="reviewer:a", reviewer_role="provenance", decision="approve",
-                rationale="source verified", payload={}, content_hash="a" * 64,
-                reviewed_at=NOW, created_at=NOW,
+            first = UnderwritingEvidenceCandidateReviewVersion.from_contract(
+                id=uuid4(), contract=CandidateEvidenceReview(
+                    dossier_id=dossier.id, dossier_content_hash=dossier.content_hash,
+                    reviewer_identity="reviewer:a", reviewer_role="provenance", decision="approve",
+                    rationale="source verified", reviewed_at=NOW,
+                ),
             )
             session.add(first)
             session.commit()
-            session.add(UnderwritingEvidenceCandidateReviewVersion(
-                id=uuid4(), dossier_id=dossier.id, dossier_content_hash="a" * 64,
+            session.add(UnderwritingEvidenceCandidateReviewVersion.from_contract(id=uuid4(), contract=CandidateEvidenceReview(
+                dossier_id=dossier.id, dossier_content_hash="b" * 64,
+                reviewer_identity="reviewer:z", reviewer_role="methodology", decision="approve",
+                rationale="method verified", reviewed_at=NOW,
+            )))
+            with pytest.raises(ValidationError, match="dossier_content_hash"):
+                session.commit()
+            session.rollback()
+            session.add(UnderwritingEvidenceCandidateReviewVersion.from_contract(id=uuid4(), contract=CandidateEvidenceReview(
+                dossier_id=dossier.id, dossier_content_hash=dossier.content_hash,
                 reviewer_identity="reviewer:a", reviewer_role="methodology", decision="approve",
-                rationale="method verified", payload={}, content_hash="a" * 64,
-                reviewed_at=NOW, created_at=NOW,
-            ))
+                rationale="method verified", reviewed_at=NOW,
+            )))
             with pytest.raises(IntegrityError):
                 session.commit()
             session.rollback()
-            session.add(UnderwritingEvidenceCandidateReviewVersion(
-                id=uuid4(), dossier_id=dossier.id, dossier_content_hash="a" * 64,
+            session.add(UnderwritingEvidenceCandidateReviewVersion.from_contract(id=uuid4(), contract=CandidateEvidenceReview(
+                dossier_id=dossier.id, dossier_content_hash=dossier.content_hash,
                 reviewer_identity="reviewer:b", reviewer_role="provenance", decision="approve",
-                rationale="source verified", payload={}, content_hash="a" * 64,
-                reviewed_at=NOW, created_at=NOW,
-            ))
+                rationale="source verified", reviewed_at=NOW,
+            )))
             with pytest.raises(IntegrityError):
                 session.commit()
     finally:
         Base.metadata.drop_all(engine, tables=tables)
+
+
+def test_candidate_load_rejects_a_raw_rehashed_payload() -> None:
+    engine = create_engine("sqlite://")
+    table = UnderwritingEvidenceCandidateDossierVersion.__table__
+    Base.metadata.create_all(engine, tables=[table])
+    contract = _candidate_dossier()
+    row_id = uuid4()
+    payload = {**contract.canonical_payload, "action": "forbidden"}
+    content_hash = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    try:
+        with engine.begin() as connection:
+            connection.execute(table.insert().values(
+                id=row_id, dossier_key=contract.dossier_key, version=contract.version,
+                object_id=contract.object_id, basis_id=contract.basis_id,
+                source_manifest_id=contract.source_manifest_id, scope_statement=contract.scope_statement,
+                purpose=contract.purpose, status=contract.status.value,
+                rejected_calculations=list(contract.rejected_calculations), payload=payload,
+                source_manifest_hash=contract.source_manifest_hash, content_hash=content_hash,
+                supersedes_id=None, created_at=contract.created_at,
+            ))
+        with Session(engine) as fresh_session:
+            with pytest.raises(ValidationError, match="dossier payload is not canonical"):
+                fresh_session.get(UnderwritingEvidenceCandidateDossierVersion, row_id)
+    finally:
+        Base.metadata.drop_all(engine, tables=[table])
 
 
 def test_candidate_rows_capture_dossier_and_review_governance_contracts() -> None:

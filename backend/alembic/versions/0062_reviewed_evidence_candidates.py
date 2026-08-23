@@ -64,10 +64,6 @@ def upgrade() -> None:
         sa.Column("supersedes_id", sa.Uuid(), sa.ForeignKey("uw_evidence_candidate_dossier_versions.id"), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("purpose = 'evidence_candidate'", name="ck_uw_evidence_candidate_dossier_purpose"),
-        sa.CheckConstraint(
-            "status IN ('draft', 'reviewed_candidate')",
-            name="ck_uw_evidence_candidate_dossier_status",
-        ),
         sa.UniqueConstraint(
             "object_id", "basis_id", "dossier_key", "version",
             name="uq_uw_evidence_candidate_dossier_version",
@@ -104,8 +100,6 @@ def upgrade() -> None:
             "dossier_id", "reviewer_identity", "reviewer_role",
             name="uq_uw_evidence_candidate_review_identity",
         ),
-        sa.UniqueConstraint("dossier_id", "reviewer_role", name="uq_uw_evidence_candidate_review_role"),
-        sa.UniqueConstraint("dossier_id", "reviewer_identity", name="uq_uw_evidence_candidate_review_reviewer"),
     )
     op.create_index(
         "ix_uw_evidence_candidate_reviews_dossier_role",

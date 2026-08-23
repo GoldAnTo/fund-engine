@@ -113,7 +113,7 @@ def _insert_immutable_records(connection: sa.Connection) -> dict[str, tuple[uuid
     connection.execute(sa.text("""
         INSERT INTO uw_evidence_candidate_dossier_versions
           (id, dossier_key, version, object_id, basis_id, source_manifest_id, scope_statement, purpose, status, rejected_calculations, payload, source_manifest_hash, content_hash, created_at)
-        VALUES (:dossier, 'pg.candidate', 1, :industry, :basis, :source, 'global batteries', 'evidence_candidate', 'draft', '["output / nominal capacity"]', '{}', :digest, :digest, CURRENT_TIMESTAMP)
+        VALUES (:dossier, 'pg.candidate', 1, :industry, :basis, :source, 'global batteries', 'evidence_candidate', 'candidate', '["output / nominal capacity"]', '{}', :digest, :digest, CURRENT_TIMESTAMP)
     """), {**ids, "digest": digest})
     connection.execute(sa.text("""
         INSERT INTO uw_evidence_candidate_review_versions
@@ -158,9 +158,9 @@ def _insert_immutable_records(connection: sa.Connection) -> dict[str, tuple[uuid
 
 
 @pytest.mark.pg_only
-def test_0062_candidate_tables_install_immutable_triggers() -> None:
+def test_0063_candidate_tables_install_immutable_triggers() -> None:
     database_url = os.environ["TEST_DATABASE_URL"]
-    schema = f"underwriting_0062_{uuid.uuid4().hex}"
+    schema = f"underwriting_0063_{uuid.uuid4().hex}"
     migration_url = _schema_url(database_url, schema)
     admin = sa.create_engine(database_url, future=True)
     isolated = sa.create_engine(migration_url, future=True)
@@ -169,7 +169,7 @@ def test_0062_candidate_tables_install_immutable_triggers() -> None:
         with admin.begin() as connection:
             connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
         migrated = subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "0062"],
+            [sys.executable, "-m", "alembic", "upgrade", "0063"],
             cwd=backend,
             env={**os.environ, "DATABASE_URL": migration_url},
             text=True,
