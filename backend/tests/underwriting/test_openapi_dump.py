@@ -188,6 +188,15 @@ def test_candidate_evidence_contract_is_get_only_and_excludes_formal_outputs_rec
     parent = schemas["CandidateEvidenceParentResponse"]
     assert set(parent["properties"]) == {
         "schema_version", "reference", "artifact_type", "identity", "content_hash",
+        "descriptor_preimage",
+    }
+    assert parent["properties"]["descriptor_preimage"] == {
+        "anyOf": [
+            {"$ref": "#/components/schemas/CandidateEvidenceDossierParentPreimageResponse"},
+            {"$ref": "#/components/schemas/CandidateEvidenceReviewParentPreimageResponse"},
+            {"$ref": "#/components/schemas/CandidateEvidenceManifestParentPreimageResponse"},
+        ],
+        "title": "Descriptor Preimage",
     }
     assert schemas["CandidateEvidenceResponse"]["properties"]["parent_refs"] == {
         "items": {"$ref": "#/components/schemas/CandidateEvidenceParentResponse"},

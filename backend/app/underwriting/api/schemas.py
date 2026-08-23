@@ -306,6 +306,22 @@ class CandidateEvidenceDossierResponse(UnderwritingModel):
     rejected_calculations: list[str] = Field(min_length=1)
 
 
+class CandidateEvidenceDossierParentPreimageResponse(UnderwritingModel):
+    raw_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: datetime
+
+
+class CandidateEvidenceReviewParentPreimageResponse(UnderwritingModel):
+    raw_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: datetime
+    reviewed_at: datetime
+
+
+class CandidateEvidenceManifestParentPreimageResponse(UnderwritingModel):
+    row_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class CandidateEvidenceParentResponse(UnderwritingModel):
     """One exact descriptor sealed by the selected candidate revision."""
 
@@ -313,6 +329,11 @@ class CandidateEvidenceParentResponse(UnderwritingModel):
     artifact_type: Literal["candidate_dossier", "candidate_review", "source_manifest"]
     identity: str
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    descriptor_preimage: (
+        CandidateEvidenceDossierParentPreimageResponse
+        | CandidateEvidenceReviewParentPreimageResponse
+        | CandidateEvidenceManifestParentPreimageResponse
+    )
 
 
 class CandidateEvidenceItemResponse(UnderwritingModel):

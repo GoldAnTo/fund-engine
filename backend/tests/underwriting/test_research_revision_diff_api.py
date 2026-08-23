@@ -251,6 +251,11 @@ def test_candidate_evidence_is_get_only_parent_sealed_and_deterministic(api_clie
             "artifact_type": "candidate_dossier",
             "identity": "industry-capacity|1",
             "content_hash": body["parent_refs"][0]["content_hash"],
+            "descriptor_preimage": {
+                "schema_version": "underwriting.v1",
+                "raw_content_hash": dossier.content_hash,
+                "created_at": NOW.isoformat().replace("+00:00", "Z"),
+            },
         },
         {
             "schema_version": "underwriting.v1",
@@ -258,6 +263,12 @@ def test_candidate_evidence_is_get_only_parent_sealed_and_deterministic(api_clie
             "artifact_type": "candidate_review",
             "identity": f"{dossier.id}|methodology|reviewer:methodology",
             "content_hash": body["parent_refs"][1]["content_hash"],
+            "descriptor_preimage": {
+                "schema_version": "underwriting.v1",
+                "raw_content_hash": published.reviews[0].content_hash,
+                "created_at": NOW.isoformat().replace("+00:00", "Z"),
+                "reviewed_at": NOW.isoformat().replace("+00:00", "Z"),
+            },
         },
         {
             "schema_version": "underwriting.v1",
@@ -265,6 +276,12 @@ def test_candidate_evidence_is_get_only_parent_sealed_and_deterministic(api_clie
             "artifact_type": "candidate_review",
             "identity": f"{dossier.id}|provenance|reviewer:provenance",
             "content_hash": body["parent_refs"][2]["content_hash"],
+            "descriptor_preimage": {
+                "schema_version": "underwriting.v1",
+                "raw_content_hash": published.reviews[1].content_hash,
+                "created_at": NOW.isoformat().replace("+00:00", "Z"),
+                "reviewed_at": NOW.isoformat().replace("+00:00", "Z"),
+            },
         },
         {
             "schema_version": "underwriting.v1",
@@ -272,6 +289,11 @@ def test_candidate_evidence_is_get_only_parent_sealed_and_deterministic(api_clie
             "artifact_type": "source_manifest",
             "identity": "candidate-api|1",
             "content_hash": body["parent_refs"][3]["content_hash"],
+            "descriptor_preimage": {
+                "schema_version": "underwriting.v1",
+                "row_content_hash": manifest.content_hash,
+                "manifest_hash": manifest.manifest_hash,
+            },
         },
     ]
     assert all(len(parent["content_hash"]) == 64 for parent in body["parent_refs"])

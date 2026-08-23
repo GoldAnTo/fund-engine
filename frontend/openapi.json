@@ -12305,6 +12305,33 @@
         "title": "CandidateEvidenceAnswerabilityResponse",
         "description": "Only the candidate's research state, debt, and requirements."
       },
+      "CandidateEvidenceDossierParentPreimageResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "raw_content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Content Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "raw_content_hash",
+          "created_at"
+        ],
+        "title": "CandidateEvidenceDossierParentPreimageResponse"
+      },
       "CandidateEvidenceDossierResponse": {
         "properties": {
           "schema_version": {
@@ -12526,6 +12553,33 @@
         "title": "CandidateEvidenceItemResponse",
         "description": "One source-bound candidate item; never a formal model input."
       },
+      "CandidateEvidenceManifestParentPreimageResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "row_content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Row Content Hash"
+          },
+          "manifest_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Manifest Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "row_content_hash",
+          "manifest_hash"
+        ],
+        "title": "CandidateEvidenceManifestParentPreimageResponse"
+      },
       "CandidateEvidenceParentResponse": {
         "properties": {
           "schema_version": {
@@ -12556,6 +12610,20 @@
             "type": "string",
             "pattern": "^[0-9a-f]{64}$",
             "title": "Content Hash"
+          },
+          "descriptor_preimage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateEvidenceDossierParentPreimageResponse"
+              },
+              {
+                "$ref": "#/components/schemas/CandidateEvidenceReviewParentPreimageResponse"
+              },
+              {
+                "$ref": "#/components/schemas/CandidateEvidenceManifestParentPreimageResponse"
+              }
+            ],
+            "title": "Descriptor Preimage"
           }
         },
         "additionalProperties": false,
@@ -12564,7 +12632,8 @@
           "reference",
           "artifact_type",
           "identity",
-          "content_hash"
+          "content_hash",
+          "descriptor_preimage"
         ],
         "title": "CandidateEvidenceParentResponse",
         "description": "One exact descriptor sealed by the selected candidate revision."
@@ -12658,6 +12727,39 @@
         ],
         "title": "CandidateEvidenceResponse",
         "description": "Read-only evidence-candidate projection for one selected revision."
+      },
+      "CandidateEvidenceReviewParentPreimageResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "raw_content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Content Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "raw_content_hash",
+          "created_at",
+          "reviewed_at"
+        ],
+        "title": "CandidateEvidenceReviewParentPreimageResponse"
       },
       "CandidateEvidenceReviewResponse": {
         "properties": {

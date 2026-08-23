@@ -3435,6 +3435,22 @@ export interface components {
             /** Resolution Requirements */
             resolution_requirements: string[];
         };
+        /** CandidateEvidenceDossierParentPreimageResponse */
+        CandidateEvidenceDossierParentPreimageResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Raw Content Hash */
+            raw_content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /**
          * CandidateEvidenceDossierResponse
          * @description The selected candidate dossier identity and bounded research scope.
@@ -3527,6 +3543,19 @@ export interface components {
             /** Unknown Reason */
             unknown_reason: string | null;
         };
+        /** CandidateEvidenceManifestParentPreimageResponse */
+        CandidateEvidenceManifestParentPreimageResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Row Content Hash */
+            row_content_hash: string;
+            /** Manifest Hash */
+            manifest_hash: string;
+        };
         /**
          * CandidateEvidenceParentResponse
          * @description One exact descriptor sealed by the selected candidate revision.
@@ -3552,6 +3581,8 @@ export interface components {
             identity: string;
             /** Content Hash */
             content_hash: string;
+            /** Descriptor Preimage */
+            descriptor_preimage: components["schemas"]["CandidateEvidenceDossierParentPreimageResponse"] | components["schemas"]["CandidateEvidenceReviewParentPreimageResponse"] | components["schemas"]["CandidateEvidenceManifestParentPreimageResponse"];
         };
         /**
          * CandidateEvidenceResponse
@@ -3601,6 +3632,27 @@ export interface components {
             /** Reviews */
             reviews: components["schemas"]["CandidateEvidenceReviewResponse"][];
             answerability: components["schemas"]["CandidateEvidenceAnswerabilityResponse"];
+        };
+        /** CandidateEvidenceReviewParentPreimageResponse */
+        CandidateEvidenceReviewParentPreimageResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Raw Content Hash */
+            raw_content_hash: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
         };
         /**
          * CandidateEvidenceReviewResponse

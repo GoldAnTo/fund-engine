@@ -207,6 +207,7 @@ class FrozenCandidateReview:
     reviewer_role: str
     decision: str
     rationale: str
+    created_at: datetime
     reviewed_at: datetime
 
 
@@ -222,11 +223,25 @@ class FrozenCandidateAnswerability:
 
 
 @dataclass(frozen=True, slots=True)
+class FrozenCandidateParentRef:
+    """One sealed candidate parent descriptor and its hash preimage fields."""
+
+    reference: str
+    artifact_type: str
+    identity: str
+    content_hash: str
+    raw_content_hash: str
+    created_at: datetime | None = None
+    reviewed_at: datetime | None = None
+    manifest_hash: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class CandidateEvidenceRead:
     """Strict, selected-parent projection for an evidence-candidate revision."""
 
     revision: ResearchRevisionSummary
-    parent_refs: tuple[RevisionArtifactRef, ...]
+    parent_refs: tuple[FrozenCandidateParentRef, ...]
     dossier: FrozenCandidateDossier
     reviews: tuple[FrozenCandidateReview, ...]
     answerability: FrozenCandidateAnswerability
@@ -1764,10 +1779,14 @@ class ResearchRevisionDiffService:
                     "candidate_dossier", "candidate_review", "source_manifest",
                 }
             )
+            manifest_refs = tuple(
+                ref for ref in selected_parent_refs if ref.artifact_type == "source_manifest"
+            )
             if (
                 len(by_type["candidate_dossier"]) != 1
                 or len(by_type["candidate_review"]) != 2
                 or len(by_type["answerability"]) != 1
+                or len(manifest_refs) != 1
             ):
                 raise ValidationError("candidate revision parent graph is incomplete")
 
@@ -1791,6 +1810,23 @@ class ResearchRevisionDiffService:
                 or str(dossier_row.id) != dossier_ref.reference
             ):
                 raise ValidationError("candidate revision dossier parent is not sealed")
+
+            manifest_ref = manifest_refs[0]
+            try:
+                manifest_id = UUID(manifest_ref.reference)
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise ValidationError("candidate revision manifest parent is malformed") from exc
+            manifest_row = self._session.get(UnderwritingSourceManifestVersion, manifest_id)
+            if manifest_row is None:
+                raise ValidationError("candidate revision manifest parent is missing")
+            if self._resolve_parent(revision, manifest_ref.reference) != manifest_ref:
+                raise ValidationError("candidate revision manifest parent changed after validation")
+            if (
+                manifest_row.content_hash != manifest_ref.content_hash
+                or manifest_row.manifest_hash != dossier.source_manifest_hash
+                or manifest_row.manifest_hash != summary.source_manifest_hash
+            ):
+                raise ValidationError("candidate revision manifest parent is not sealed")
 
             reviews: list[FrozenCandidateReview] = []
             for review_ref in by_type["candidate_review"]:
@@ -1818,6 +1854,7 @@ class ResearchRevisionDiffService:
                     reviewer_role=review.reviewer_role,
                     decision=review.decision,
                     rationale=review.rationale,
+                    created_at=self._stored_datetime(review_row.created_at),
                     reviewed_at=review.reviewed_at,
                 ))
 
@@ -1856,7 +1893,39 @@ class ResearchRevisionDiffService:
             ))
             return CandidateEvidenceRead(
                 revision=summary,
-                parent_refs=selected_parent_refs,
+                parent_refs=tuple(sorted((
+                    FrozenCandidateParentRef(
+                        reference=dossier_ref.reference,
+                        artifact_type=dossier_ref.artifact_type,
+                        identity=dossier_ref.identity,
+                        content_hash=dossier_ref.content_hash,
+                        raw_content_hash=dossier.content_hash,
+                        created_at=self._stored_datetime(dossier_row.created_at),
+                    ),
+                    *(FrozenCandidateParentRef(
+                        reference=review.reference,
+                        artifact_type="candidate_review",
+                        identity=next(
+                            ref.identity for ref in by_type["candidate_review"]
+                            if ref.reference == review.reference
+                        ),
+                        content_hash=next(
+                            ref.content_hash for ref in by_type["candidate_review"]
+                            if ref.reference == review.reference
+                        ),
+                        raw_content_hash=review.content_hash,
+                        created_at=review.created_at,
+                        reviewed_at=review.reviewed_at,
+                    ) for review in reviews),
+                    FrozenCandidateParentRef(
+                        reference=manifest_ref.reference,
+                        artifact_type=manifest_ref.artifact_type,
+                        identity=manifest_ref.identity,
+                        content_hash=manifest_ref.content_hash,
+                        raw_content_hash=manifest_row.content_hash,
+                        manifest_hash=manifest_row.manifest_hash,
+                    ),
+                ), key=lambda ref: (ref.artifact_type, ref.identity, ref.reference))),
                 dossier=FrozenCandidateDossier(
                     reference=dossier_ref.reference,
                     content_hash=dossier.content_hash,
