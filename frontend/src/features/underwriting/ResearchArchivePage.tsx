@@ -201,8 +201,40 @@ function isStringList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(nonEmptyString);
 }
 
-function isTimestamp(value: unknown): value is string {
-  return nonEmptyString(value) && !Number.isNaN(Date.parse(value));
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const CONTENT_HASH = /^[0-9a-f]{64}$/;
+const UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:Z|\+00:00)$/;
+
+function isCanonicalUuid(value: unknown): value is string {
+  return typeof value === "string" && CANONICAL_UUID.test(value);
+}
+
+function isContentHash(value: unknown): value is string {
+  return typeof value === "string" && CONTENT_HASH.test(value);
+}
+
+function isUtcTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = UTC_TIMESTAMP.exec(value);
+  if (match === null) return false;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fraction = ""] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const millisecond = Number(fraction.padEnd(3, "0").slice(0, 3));
+  const timestamp = new Date(0);
+  timestamp.setUTCFullYear(year, month - 1, day);
+  timestamp.setUTCHours(hour, minute, second, millisecond);
+  return timestamp.getUTCFullYear() === year
+    && timestamp.getUTCMonth() === month - 1
+    && timestamp.getUTCDate() === day
+    && timestamp.getUTCHours() === hour
+    && timestamp.getUTCMinutes() === minute
+    && timestamp.getUTCSeconds() === second
+    && timestamp.getUTCMilliseconds() === millisecond;
 }
 
 function isFrozenAnswerability(value: unknown): boolean {
@@ -213,8 +245,8 @@ function isFrozenAnswerability(value: unknown): boolean {
       "research_debt_keys", "resolvable_within_mandate", "resolution_requirements",
     ])
     && answerability.schema_version === "underwriting.v1"
-    && nonEmptyString(answerability.reference)
-    && nonEmptyString(answerability.content_hash)
+    && isCanonicalUuid(answerability.reference)
+    && isContentHash(answerability.content_hash)
     && ["answerable", "partially_answerable", "not_answerable"].includes(answerability.state as string)
     && Array.isArray(answerability.blockers)
     && answerability.blockers.every((blocker) => [
@@ -237,14 +269,13 @@ function isFrozenUnknownGap(value: unknown): boolean {
       "source_role", "observation_status", "dimensions",
     ])
     && gap.schema_version === "underwriting.v1"
-    && [
-      "reference", "content_hash", "metric_key", "unit", "source_id", "source_locator",
-      "reference", "content_hash", "metric_key", "unit", "source_id", "source_locator", "source_role",
-    ].every((key) => nonEmptyString(gap[key]))
-    && ["observed_start", "observed_end", "effective_at", "available_at"].every((key) => isTimestamp(gap[key]))
+    && isCanonicalUuid(gap.reference)
+    && isContentHash(gap.content_hash)
+    && ["metric_key", "unit", "source_id", "source_locator", "source_role"].every((key) => nonEmptyString(gap[key]))
+    && ["observed_start", "observed_end", "effective_at", "available_at"].every((key) => isUtcTimestamp(gap[key]))
     && gap.observation_status === "unknown"
     && dimensions !== null
-    && Object.values(dimensions).every((dimension) => nonEmptyString(dimension));
+    && Object.entries(dimensions).every(([key, dimension]) => nonEmptyString(key) && nonEmptyString(dimension));
 }
 
 function checkedBoundary(value: unknown, selected: ResearchRevision): ResearchRevisionBoundary {
@@ -472,7 +503,7 @@ function ResearchBoundaries({ boundary }: { boundary: ResearchRevisionBoundary }
       </>}
       <section className="ura-boundary-section" aria-label="明确记录的 Unknown gap">
         <h3>明确记录的 Unknown gap</h3>
-        {gaps.length === 0 ? <p className="ura-boundaries__empty">此版本的冻结父图未记录可展示的 Unknown gap；这不表示行业缺口已解决。</p> : <ul className="ura-boundary-list">{gaps.map((gap) => <li key={`${gap.reference}:${gap.content_hash}`}><b>{gap.metric_key}</b><dl className="ura-gap-details"><div><dt>来源定位</dt><dd>{gap.source_locator}</dd></div><div><dt>单位</dt><dd>{gap.unit}</dd></div><div><dt>观测期间</dt><dd>{formatPeriod(gap.observed_start, gap.observed_end)}</dd></div><div><dt>生效时间</dt><dd>{gap.effective_at}</dd></div><div><dt>可用时间</dt><dd>{gap.available_at}</dd></div></dl></li>)}</ul>}
+        {gaps.length === 0 ? <p className="ura-boundaries__empty">此版本的冻结父图未记录可展示的 Unknown gap；这不表示行业缺口已解决。</p> : <ul className="ura-boundary-list">{gaps.map((gap) => <li key={`${gap.reference}:${gap.content_hash}`}><b>{gap.metric_key}</b><dl className="ura-gap-details"><div><dt>来源标识</dt><dd>{gap.source_id}</dd></div><div><dt>来源角色</dt><dd>{gap.source_role}</dd></div><div><dt>来源定位</dt><dd>{gap.source_locator}</dd></div><div><dt>单位</dt><dd>{gap.unit}</dd></div><div><dt>观测期间</dt><dd>{formatPeriod(gap.observed_start, gap.observed_end)}</dd></div><div><dt>生效时间</dt><dd>{gap.effective_at}</dd></div><div><dt>可用时间</dt><dd>{gap.available_at}</dd></div>{Object.entries(gap.dimensions).sort(([left], [right]) => left.localeCompare(right)).map(([key, dimension]) => <div key={key}><dt>维度 · {key}</dt><dd>{dimension}</dd></div>)}</dl></li>)}</ul>}
       </section>
     </aside>
   );
