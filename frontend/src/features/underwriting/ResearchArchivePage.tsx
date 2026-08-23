@@ -20,6 +20,7 @@ type ArchiveKind = "" | ResearchArchiveItem["object_kind"];
 type Artifact = ResearchRevisionDiff["entries"][number]["after"] extends infer Value
   ? Exclude<Value, null>
   : never;
+type DetailLoad = { revision: ResearchRevision; diff: ResearchRevisionDiff | null };
 
 const GROUPS = [
   ["evidence", "证据"],
@@ -28,10 +29,153 @@ const GROUPS = [
   ["answerability", "可回答性"],
 ] as const;
 
+const INTEGRITY_ERROR = "冻结档案的身份或版本链无法校验，未展示任何资料。";
+
+class ArchiveIntegrityError extends Error {
+  constructor() {
+    super(INTEGRITY_ERROR);
+    this.name = "ArchiveIntegrityError";
+  }
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function nullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+function isArtifact(value: unknown): value is Artifact {
+  const artifact = record(value);
+  return artifact?.schema_version === "underwriting.v1"
+    && nonEmptyString(artifact.reference)
+    && nonEmptyString(artifact.artifact_type)
+    && nonEmptyString(artifact.identity)
+    && nonEmptyString(artifact.content_hash)
+    && Array.isArray(artifact.source_locators)
+    && artifact.source_locators.every((locator) => typeof locator === "string")
+    && nullableString(artifact.unit)
+    && nullableString(artifact.period_start)
+    && nullableString(artifact.period_end)
+    && nullableString(artifact.available_at)
+    && nullableString(artifact.status);
+}
+
+function isRevision(value: unknown): value is ResearchRevision {
+  const revision = record(value);
+  return revision?.schema_version === "underwriting.v1"
+    && nonEmptyString(revision.id)
+    && nonEmptyString(revision.object_id)
+    && nonEmptyString(revision.basis_id)
+    && nonEmptyString(revision.version_kind)
+    && Number.isSafeInteger(revision.sequence)
+    && (revision.sequence as number) > 0
+    && nonEmptyString(revision.content_hash)
+    && nonEmptyString(revision.cutoff)
+    && nonEmptyString(revision.source_manifest_hash)
+    && Array.isArray(revision.parent_refs)
+    && revision.parent_refs.every(isArtifact);
+}
+
+function checkedHistory(value: unknown, objectId: string, versionKind: string): ResearchRevisionHistory {
+  const history = record(value);
+  if (
+    history?.schema_version !== "underwriting.v1"
+    || history.object_id !== objectId
+    || history.version_kind !== versionKind
+    || !Array.isArray(history.revisions)
+  ) throw new ArchiveIntegrityError();
+
+  const ids = new Set<string>();
+  const sequences = new Set<number>();
+  for (const revision of history.revisions) {
+    if (
+      !isRevision(revision)
+      || revision.object_id !== objectId
+      || revision.version_kind !== versionKind
+      || ids.has(revision.id)
+      || sequences.has(revision.sequence)
+    ) throw new ArchiveIntegrityError();
+    ids.add(revision.id);
+    sequences.add(revision.sequence);
+  }
+  const ordered = [...history.revisions].sort((left, right) => left.sequence - right.sequence);
+  if (ordered.some((revision, index) => revision.sequence !== index + 1)) throw new ArchiveIntegrityError();
+  return { ...history, revisions: ordered } as ResearchRevisionHistory;
+}
+
+function sameRevisionSummary(expected: ResearchRevision, received: ResearchRevision): boolean {
+  return expected.id === received.id
+    && expected.object_id === received.object_id
+    && expected.basis_id === received.basis_id
+    && expected.version_kind === received.version_kind
+    && expected.sequence === received.sequence
+    && expected.content_hash === received.content_hash
+    && expected.cutoff === received.cutoff
+    && expected.source_manifest_hash === received.source_manifest_hash;
+}
+
+function checkedRevision(value: unknown, expected: ResearchRevision): ResearchRevision {
+  if (!isRevision(value) || !sameRevisionSummary(expected, value)) throw new ArchiveIntegrityError();
+  return value;
+}
+
+function isDiff(value: unknown): value is ResearchRevisionDiff {
+  const diff = record(value);
+  return diff?.schema_version === "underwriting.v1"
+    && nonEmptyString(diff.from_revision_id)
+    && nonEmptyString(diff.to_revision_id)
+    && nonEmptyString(diff.from_content_hash)
+    && nonEmptyString(diff.to_content_hash)
+    && nonEmptyString(diff.diff_hash)
+    && Array.isArray(diff.entries)
+    && diff.entries.every((entry) => {
+      const change = record(entry);
+      return change?.schema_version === "underwriting.v1"
+        && GROUPS.some(([group]) => change.group === group)
+        && ["added", "removed", "replaced"].includes(change.change_type as string)
+        && nonEmptyString(change.artifact_type)
+        && nonEmptyString(change.identity)
+        && (change.before === null || isArtifact(change.before))
+        && (change.after === null || isArtifact(change.after));
+    });
+}
+
+function checkedDiff(value: unknown, previous: ResearchRevision, selected: ResearchRevision): ResearchRevisionDiff {
+  if (
+    !isDiff(value)
+    || value.from_revision_id !== previous.id
+    || value.to_revision_id !== selected.id
+    || value.from_content_hash !== previous.content_hash
+    || value.to_content_hash !== selected.content_hash
+  ) throw new ArchiveIntegrityError();
+  return value;
+}
+
+function safeEnvelopeText(value: string | undefined): string | null {
+  if (!value) return null;
+  const clean = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 240);
+  return clean || null;
+}
+
 function errorCopy(error: unknown, subject: "directory" | "detail"): string {
+  if (error instanceof ArchiveIntegrityError) return INTEGRITY_ERROR;
   if (error instanceof UnderwritingResearchRequestError) {
     if (error.status === 404 && subject === "detail") return "找不到该冻结版本档案。";
-    if (error.status === 422) return "查询条件无法读取，请修改后重试。";
+    if (error.status === 422) {
+      const message = safeEnvelopeText(error.message);
+      const requestId = safeEnvelopeText(error.requestId);
+      return ["查询条件无法读取，请修改后重试。", message && `服务说明：${message}`, requestId && `请求编号：${requestId}`]
+        .filter((part): part is string => Boolean(part))
+        .join(" ");
+    }
   }
   return subject === "directory"
     ? "冻结档案目录暂时无法读取，未展示替代资料。"
@@ -88,6 +232,29 @@ function EvidenceTable({ artifacts }: { artifacts: Artifact[] }) {
         </table>
       </div>
     </section>
+  );
+}
+
+function ResearchBoundaries({ artifacts }: { artifacts: Artifact[] }) {
+  const boundaryRecords = artifacts.filter((artifact) => artifact.artifact_type === "research_boundary"
+    || ["not_answerable", "wait_for_validation", "unknown_evidence_gap", "candidate"].includes(artifact.status ?? ""));
+  return (
+    <aside className="ura-boundaries" aria-label="研究边界">
+      <p className="ros-eyebrow">当前冻结父引用</p>
+      <h2>研究边界</h2>
+      <p className="ura-boundaries__intro">仅列出当前版本明确记录的状态、Unknown 或候选资料，不作额外推断。</p>
+      {boundaryRecords.length === 0 ? <p className="ura-boundaries__empty">当前版本没有记录边界资料。</p> : (
+        <ul className="ura-boundary-list">
+          {boundaryRecords.map((artifact) => (
+            <li key={`${artifact.artifact_type}:${artifact.identity}:${artifact.content_hash}`}>
+              <b>{labelForStatus(artifact.status) ?? "已记录资料"}</b>
+              <span>{artifact.reference}</span>
+              <small>{artifact.identity}{artifact.source_locators.length ? ` · ${artifact.source_locators.join("；")}` : ""}</small>
+            </li>
+          ))}
+        </ul>
+      )}
+    </aside>
   );
 }
 
@@ -166,24 +333,23 @@ function DirectoryPage() {
 function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: string }) {
   const [historyState, setHistoryState] = useState<LoadState<ResearchRevisionHistory>>({ state: "loading" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [revisionState, setRevisionState] = useState<LoadState<ResearchRevision> | null>(null);
-  const [diffState, setDiffState] = useState<LoadState<ResearchRevisionDiff> | null>(null);
+  const [detailState, setDetailState] = useState<LoadState<DetailLoad> | null>(null);
 
   useEffect(() => {
     let live = true;
     setHistoryState({ state: "loading" });
-    setSelectedId(null); setRevisionState(null); setDiffState(null);
+    setSelectedId(null); setDetailState(null);
     void underwritingResearchApi.history(objectId, versionKind).then((value) => {
       if (!live) return;
-      setHistoryState({ state: "ready", value });
-      const sorted = [...value.revisions].sort((left, right) => left.sequence - right.sequence);
-      const latest = sorted[sorted.length - 1];
+      const history = checkedHistory(value, objectId, versionKind);
+      setHistoryState({ state: "ready", value: history });
+      const latest = history.revisions[history.revisions.length - 1];
       setSelectedId(latest?.id ?? null);
     }).catch((error: unknown) => { if (live) setHistoryState({ state: "error", error }); });
     return () => { live = false; };
   }, [objectId, versionKind]);
 
-  const revisions = useMemo(() => historyState.state === "ready" ? [...historyState.value.revisions].sort((left, right) => left.sequence - right.sequence) : [], [historyState]);
+  const revisions = useMemo(() => historyState.state === "ready" ? historyState.value.revisions : [], [historyState]);
   const selectedIndex = revisions.findIndex((revision) => revision.id === selectedId);
   const selected = selectedIndex >= 0 ? revisions[selectedIndex] : null;
   const previous = selectedIndex > 0 ? revisions[selectedIndex - 1] : null;
@@ -191,19 +357,30 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
   useEffect(() => {
     if (!selected) return;
     let live = true;
-    setRevisionState({ state: "loading" });
-    setDiffState(previous ? { state: "loading" } : null);
-    void underwritingResearchApi.revision(selected.id).then((value) => { if (live) setRevisionState({ state: "ready", value }); }).catch((error: unknown) => { if (live) setRevisionState({ state: "error", error }); });
-    if (previous) void underwritingResearchApi.diff(previous.id, selected.id).then((value) => { if (live) setDiffState({ state: "ready", value }); }).catch((error: unknown) => { if (live) setDiffState({ state: "error", error }); });
+    setDetailState({ state: "loading" });
+    void Promise.all([
+      underwritingResearchApi.revision(selected.id),
+      previous ? underwritingResearchApi.diff(previous.id, selected.id) : Promise.resolve(null),
+    ]).then(([revision, diff]) => {
+      if (!live) return;
+      const checked = checkedRevision(revision, selected);
+      setDetailState({ state: "ready", value: {
+        revision: checked,
+        diff: previous ? checkedDiff(diff, previous, checked) : null,
+      } });
+    }).catch((error: unknown) => { if (live) setDetailState({ state: "error", error }); });
     return () => { live = false; };
   }, [selected?.id, previous?.id]);
 
   if (historyState.state === "loading") return <main className="ros-page ura-page"><p className="ura-loading" role="status">正在读取冻结版本档案</p></main>;
   if (historyState.state === "error") return <main className="ros-page ura-page"><p className="ura-alert" role="alert">{errorCopy(historyState.error, "detail")}</p></main>;
   if (!revisions.length || !selected) return <main className="ros-page ura-page"><p className="ura-empty" role="status">该档案没有可读取的冻结版本。</p></main>;
+  if (!detailState || detailState.state === "loading") return <main className="ros-page ura-page"><p className="ura-loading" role="status">正在校验已选冻结版本与相邻差异</p></main>;
+  if (detailState.state === "error") return <main className="ros-page ura-page"><p className="ura-alert" role="alert">{errorCopy(detailState.error, "detail")}</p></main>;
 
-  const changed = diffState?.state === "ready" ? diffState.value.entries : [];
-  const artifacts = revisionState?.state === "ready" ? revisionState.value.parent_refs : [];
+  const revision = detailState.value.revision;
+  const changed = detailState.value.diff?.entries ?? [];
+  const artifacts = revision.parent_refs;
   const statuses = [...new Set(artifacts.map((artifact) => labelForStatus(artifact.status)).filter((status): status is string => Boolean(status)))];
 
   return (
@@ -212,18 +389,15 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
       <div className="ura-layout">
         <aside className="ura-timeline" aria-label="研究版本时间线"><p className="ros-eyebrow">不可变版本</p>{revisions.map((revision) => <button key={revision.id} type="button" aria-pressed={revision.id === selected.id} className={revision.id === selected.id ? "ura-version is-selected" : "ura-version"} onClick={() => setSelectedId(revision.id)}><b>版本 {revision.sequence}</b><span>{revision.cutoff}</span></button>)}</aside>
         <section className="ura-detail" aria-label="已选冻结版本">
-          {revisionState?.state === "loading" && <p className="ura-loading" role="status">正在读取已选版本</p>}
-          {revisionState?.state === "error" && <p className="ura-alert" role="alert">{errorCopy(revisionState.error, "detail")}</p>}
-          {revisionState?.state === "ready" && <section className="ura-version-summary"><h2>版本 {revisionState.value.sequence}</h2><dl><div><dt>截点</dt><dd>{revisionState.value.cutoff}</dd></div><div><dt>来源摘要</dt><dd>{revisionState.value.source_manifest_hash}</dd></div><div><dt>内容摘要</dt><dd>{revisionState.value.content_hash}</dd></div></dl>{statuses.length > 0 && <div className="ura-statuses" aria-label="当前冻结状态">{statuses.map((status) => <span key={status}>{status}</span>)}</div>}</section>}
+          <section className="ura-version-summary"><h2>版本 {revision.sequence}</h2><dl><div><dt>截点</dt><dd>{revision.cutoff}</dd></div><div><dt>来源摘要</dt><dd>{revision.source_manifest_hash}</dd></div><div><dt>内容摘要</dt><dd>{revision.content_hash}</dd></div></dl>{statuses.length > 0 && <div className="ura-statuses" aria-label="当前冻结状态">{statuses.map((status) => <span key={status}>{status}</span>)}</div>}</section>
           {previous ? <p className="ura-predecessor">仅与紧邻的版本 {previous.sequence} 对照。</p> : <p className="ura-predecessor">这是该档案最早的冻结版本，没有前序版本可对照。</p>}
-          {diffState?.state === "loading" && <p className="ura-loading" role="status">正在读取相邻版本差异</p>}
-          {diffState?.state === "error" && <p className="ura-alert" role="alert">这个相邻版本差异暂时无法读取。</p>}
-          {previous && diffState?.state === "ready" && <div className="ura-diff-groups">{GROUPS.map(([group, heading]) => {
+          {previous && detailState.value.diff && <div className="ura-diff-groups">{GROUPS.map(([group, heading]) => {
             const entries = changed.filter((entry) => entry.group === group);
             return <section className="ura-diff-group" key={group}><h2>{heading}</h2>{entries.length === 0 ? <p>这一版本没有该类冻结变化</p> : entries.map((entry) => <article className="ura-diff-entry" key={`${entry.change_type}:${entry.artifact_type}:${entry.identity}`}><header><b>{entry.change_type}</b><span>{entry.artifact_type}</span></header>{entry.before && <section className="ura-diff-card" aria-label="前一版本证据"><h3>前一版本</h3><ArtifactDetails artifact={entry.before} /></section>}{entry.after && <section className="ura-diff-card" aria-label="当前版本证据"><h3>当前版本</h3><ArtifactDetails artifact={entry.after} /></section>}</article>)}</section>;
           })}</div>}
           <EvidenceTable artifacts={artifacts} />
         </section>
+        <ResearchBoundaries artifacts={artifacts} />
       </div>
     </main>
   );

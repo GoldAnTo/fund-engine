@@ -66,7 +66,31 @@ const revisionTwo = {
   content_hash: "2".repeat(64),
   cutoff: "2025-05-15T15:59:59Z",
   source_manifest_hash: "a".repeat(64),
-  parent_refs: [],
+  parent_refs: [{
+    schema_version: "underwriting.v1" as const,
+    reference: "IEA Global EV Outlook 2025",
+    artifact_type: "source_fact",
+    identity: "installed_capacity",
+    content_hash: "4".repeat(64),
+    source_locators: ["p.148"],
+    unit: "GWh",
+    period_start: "2024-01-01",
+    period_end: "2024-12-31",
+    available_at: "2025-05-14T00:00:00Z",
+    status: "candidate",
+  }, {
+    schema_version: "underwriting.v1" as const,
+    reference: "research boundary",
+    artifact_type: "research_boundary",
+    identity: "answerability",
+    content_hash: "5".repeat(64),
+    source_locators: ["Unknown evidence gap"],
+    unit: null,
+    period_start: null,
+    period_end: null,
+    available_at: null,
+    status: "not_answerable",
+  }],
 };
 
 function renderArchive(entry = "/underwriting/research") {
@@ -187,6 +211,9 @@ describe("ResearchArchivePage", () => {
     expect(screen.getAllByText("GWh").length).toBeGreaterThan(0);
     expect(screen.getAllByText("2024-01-01 至 2024-12-31").length).toBeGreaterThan(0);
     expect(screen.getAllByText("2025-05-14T00:00:00Z").length).toBeGreaterThan(0);
+    const boundaries = screen.getByRole("complementary", { name: "研究边界" });
+    expect(within(boundaries).getByText(/Unknown evidence gap/)).toBeVisible();
+    expect(within(boundaries).getByText("candidate")).toBeVisible();
   });
 
   it("keeps an immediate predecessor artifact out of the selected frozen-evidence table", async () => {
@@ -239,7 +266,9 @@ describe("ResearchArchivePage", () => {
   });
 
   it("uses only the selected revision's immediate predecessor and supports keyboard selection", async () => {
-    const api = installApi();
+    const api = installApi({
+      revision: vi.fn((revisionId: string) => Promise.resolve(revisionId === "revision-1" ? revisionOne : revisionTwo)),
+    });
     const user = userEvent.setup();
     renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
 
@@ -277,6 +306,69 @@ describe("ResearchArchivePage", () => {
     renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
 
     expect(await screen.findByRole("alert")).toHaveTextContent("查询条件无法读取，请修改后重试。");
+  });
+
+  it("fails closed when history does not bind to the requested archive", async () => {
+    installApi({
+      history: vi.fn().mockResolvedValue({
+        schema_version: "underwriting.v1",
+        object_id: "other-company-id",
+        version_kind: "catl_economic_model_evidence_only",
+        revisions: [revisionOne, revisionTwo],
+      }),
+    });
+    renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结档案的身份或版本链无法校验，未展示任何资料。");
+    expect(screen.queryByRole("button", { name: /版本 1/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("IEA Global EV Outlook 2025")).not.toBeInTheDocument();
+  });
+
+  it("fails closed when a selected revision does not match its frozen history entry", async () => {
+    installApi({
+      revision: vi.fn().mockResolvedValue({ ...revisionTwo, basis_id: "other-basis" }),
+    });
+    renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结档案的身份或版本链无法校验，未展示任何资料。");
+    expect(screen.queryByText("版本 2")).not.toBeInTheDocument();
+    expect(screen.queryByText("IEA Global EV Outlook 2025")).not.toBeInTheDocument();
+  });
+
+  it("fails closed when a diff is not exactly bound to its adjacent versions", async () => {
+    installApi({
+      diff: vi.fn().mockResolvedValue({
+        schema_version: "underwriting.v1",
+        from_revision_id: "revision-2",
+        to_revision_id: "revision-1",
+        from_content_hash: revisionTwo.content_hash,
+        to_content_hash: revisionOne.content_hash,
+        diff_hash: "3".repeat(64),
+        entries: [],
+      }),
+    });
+    renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结档案的身份或版本链无法校验，未展示任何资料。");
+    expect(screen.queryByText("版本 2")).not.toBeInTheDocument();
+    expect(screen.queryByText("仅与紧邻的版本 1 对照。")).not.toBeInTheDocument();
+  });
+
+  it("shows a safe validation-envelope message and request id", async () => {
+    installApi({
+      history: vi.fn().mockRejectedValue(new UnderwritingResearchRequestError(
+        "路径中有无法读取的符号 <invalid>",
+        422,
+        "invalid_path",
+        "request-422",
+      )),
+    });
+    renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("查询条件无法读取，请修改后重试。");
+    expect(alert).toHaveTextContent("路径中有无法读取的符号 <invalid>");
+    expect(alert).toHaveTextContent("request-422");
   });
 
   it("does not let a stale load-more response replace a changed directory filter", async () => {
