@@ -19,7 +19,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
+from app.underwriting.domain.answerability import (
+    AnswerabilityInput,
+    enforce_action_boundary,
+    evaluate_answerability,
+)
 from app.underwriting.domain.types import ResearchObjectKind
+from app.underwriting.domain.types import (
+    AnswerabilityState,
+    BlockerCode,
+    EligibleAction,
+)
 from app.underwriting.domain.metrics import MetricObservation as DomainMetricObservation
 from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
@@ -93,6 +103,34 @@ class ResearchRevisionSummary:
     cutoff: datetime
     source_manifest_hash: str
     parent_refs: tuple[RevisionArtifactRef, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenAnswerability:
+    """One answerability record sealed into a selected research revision.
+
+    This is intentionally a read-only projection of a parent row.  It carries
+    the row's recomputed semantic hash so callers can bind it to the selected
+    revision's already-checked parent descriptor rather than treating a
+    current answerability head as historical evidence.
+    """
+
+    reference: str
+    content_hash: str
+    state: str
+    blockers: tuple[str, ...]
+    research_debt_keys: tuple[str, ...]
+    resolvable_within_mandate: bool
+    allowed_action: str
+    resolution_requirements: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchRevisionBoundary:
+    """The explicit research boundary recorded by one immutable revision."""
+
+    revision: ResearchRevisionSummary
+    answerability: FrozenAnswerability | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,6 +345,76 @@ class ResearchRevisionDiffService:
             resolution_requirements=row.resolution_requirements,
         )
 
+    @staticmethod
+    def _controlled_string_sequence(value: object, field: str) -> tuple[str, ...]:
+        """Return persisted controlled text only when its JSON shape is exact."""
+        if (
+            not isinstance(value, list)
+            or not all(isinstance(item, str) and item.strip() == item and item for item in value)
+        ):
+            raise ValidationError(f"research revision parent has malformed answerability {field}")
+        return tuple(value)
+
+    def _validated_answerability(
+        self,
+        row: UnderwritingAnswerabilityEvaluation,
+        revision: UnderwritingResearchVersion | _ResearchRevisionScope,
+    ) -> FrozenAnswerability:
+        """Validate the complete controlled answerability state before replay.
+
+        ``uw_answerability_evaluations`` predates a dedicated content-hash
+        column.  Its canonical hash is therefore recomputed here and later
+        bound to the generic revision's parent descriptor/content hash.  A
+        malformed row is rejected before it can contribute that descriptor.
+        """
+        if row.object_id != revision.object_id or row.basis_id != revision.basis_id:
+            raise self._parent_error("has an invalid answerability scope")
+        if not isinstance(row.version, int) or isinstance(row.version, bool) or row.version < 1:
+            raise self._parent_error("has an invalid answerability version")
+        if not isinstance(row.resolvable_within_mandate, bool):
+            raise self._parent_error("has malformed answerability mandate control")
+        try:
+            state = AnswerabilityState(row.state)
+            action = EligibleAction(row.allowed_action)
+        except (TypeError, ValueError) as exc:
+            raise self._parent_error("has malformed answerability controls") from exc
+        blockers = self._controlled_string_sequence(row.blockers, "blockers")
+        debt_keys = self._controlled_string_sequence(row.research_debt_keys, "research_debt_keys")
+        requirements = self._controlled_string_sequence(
+            row.resolution_requirements, "resolution_requirements",
+        )
+        try:
+            blocker_codes = tuple(BlockerCode(value) for value in blockers)
+        except ValueError as exc:
+            raise self._parent_error("has malformed answerability blockers") from exc
+        evaluated = evaluate_answerability(
+            AnswerabilityInput(
+                hard_blockers=blocker_codes,
+                research_debt_keys=debt_keys,
+                resolvable_within_mandate=row.resolvable_within_mandate,
+            )
+        )
+        if evaluated.state is not state or evaluated.blockers != blocker_codes:
+            raise self._parent_error("has inconsistent answerability controls")
+        if enforce_action_boundary(evaluated, action) is not action:
+            raise self._parent_error("has an action outside its answerability boundary")
+        if state is AnswerabilityState.NOT_ANSWERABLE and not requirements:
+            raise self._parent_error("has missing answerability resolution requirements")
+        created_at = self._stored_datetime(row.created_at)
+        if created_at is None:
+            raise self._parent_error("has malformed answerability created_at")
+        self._require_available_at_cutoff(created_at, self._basis_cutoff(revision.basis_id), "answerability")
+        return FrozenAnswerability(
+            reference=str(row.id),
+            content_hash=self._answerability_hash(row),
+            state=state.value,
+            blockers=blockers,
+            research_debt_keys=debt_keys,
+            resolvable_within_mandate=row.resolvable_within_mandate,
+            allowed_action=action.value,
+            resolution_requirements=requirements,
+        )
+
     def _matches_for_uuid(self, reference: UUID) -> list[tuple[str, object]]:
         """Return every recognised immutable row with this exact UUID.
 
@@ -417,9 +525,13 @@ class ResearchRevisionDiffService:
             if row.content_hash != expected_hash:
                 raise self._parent_error("has a ledger content hash mismatch")
             return
-        if artifact_type == "answerability" and revision.version_kind == "catl_economic_model_evidence_only":
-            # The CATL semantic-snapshot validator below seals every persisted
-            # answerability field against its frozen fixture expectation.
+        if artifact_type == "answerability":
+            assert isinstance(row, UnderwritingAnswerabilityEvaluation)
+            # CATL also retains its special semantic parent-set seal; using the
+            # same validation here makes the generic and governed readers
+            # agree about malformed answerability controls before that special
+            # seal binds their exact canonical hash.
+            self._validated_answerability(row, revision)
             return
         # These rows do contain a ``content_hash`` column (except
         # answerability), but the existing persistence contract accepts an
@@ -521,7 +633,13 @@ class ResearchRevisionDiffService:
             )
         if artifact_type == "answerability":
             assert isinstance(row, UnderwritingAnswerabilityEvaluation)
-            return RevisionArtifactRef(reference, artifact_type, "answerability", self._answerability_hash(row), (), None, None, None, None, row.state)
+            answerability = self._validated_answerability(row, _ResearchRevisionScope(
+                row.object_id, row.basis_id, "answerability_descriptor",
+            ))
+            return RevisionArtifactRef(
+                reference, artifact_type, "answerability", answerability.content_hash,
+                (), None, None, None, None, answerability.state,
+            )
         raise AssertionError(f"unrecognised artifact type: {artifact_type}")
 
     def _resolve_parent(
@@ -843,6 +961,43 @@ class ResearchRevisionDiffService:
                 revision.sequence, revision.content_hash, self._stored_datetime(basis.cutoff),
                 basis.source_manifest_hash, refs,
             )
+
+    def revision_boundary(self, revision_id: UUID) -> ResearchRevisionBoundary:
+        """Read only the answerability parent sealed into one checked revision.
+
+        No current answerability lookup is permitted: if this version did not
+        freeze an answerability record, the boundary is explicitly ``None``.
+        A duplicate parent is ambiguous provenance and therefore fails closed.
+        """
+        with self._session.no_autoflush:
+            summary = self.revision_summary(revision_id)
+            refs = tuple(
+                ref for ref in summary.parent_refs if ref.artifact_type == "answerability"
+            )
+            if not refs:
+                return ResearchRevisionBoundary(summary, None)
+            if len(refs) != 1:
+                raise ValidationError("research revision boundary has multiple answerability parents")
+            reference = refs[0]
+            revision = self._revision(summary.id)
+            resolved = self._resolve_parent(revision, reference.reference)
+            if resolved != reference:
+                raise ValidationError("research revision boundary answerability parent changed after validation")
+            try:
+                row_id = UUID(reference.reference)
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise ValidationError("research revision boundary answerability parent is malformed") from exc
+            row = self._session.get(UnderwritingAnswerabilityEvaluation, row_id)
+            if row is None:
+                raise ValidationError("research revision boundary answerability parent is missing")
+            answerability = self._validated_answerability(row, revision)
+            if (
+                answerability.reference != reference.reference
+                or answerability.content_hash != reference.content_hash
+                or answerability.state != reference.status
+            ):
+                raise ValidationError("research revision boundary answerability parent is not sealed")
+            return ResearchRevisionBoundary(summary, answerability)
 
     def _family_rows(self, object_id: UUID, version_kind: str) -> tuple[UnderwritingResearchVersion, ...]:
         rows = tuple(self._session.scalars(

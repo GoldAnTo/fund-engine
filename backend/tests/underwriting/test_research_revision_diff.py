@@ -485,10 +485,10 @@ def test_foundation_rejects_nested_parent_ids_before_set_normalization(
 
 @pytest.mark.parametrize(
     "artifact_type",
-    [
-        "industry_state", "industry_scenario", "company_exposure", "earnings_engine",
-        "forecast_input", "falsifier", "answerability",
-    ],
+        [
+            "industry_state", "industry_scenario", "company_exposure", "earnings_engine",
+            "forecast_input", "falsifier",
+        ],
 )
 def test_foundation_fails_closed_for_an_unsealable_artifact_type(
     session: Session, seeded_revision: SeededRevision, artifact_type: str,
@@ -769,6 +769,194 @@ def test_diff_represents_a_sealed_answerability_revision_as_a_replacement(
     assert answerability_change.before == old_answerability
     assert answerability_change.after is not None
     assert answerability_change.after.reference == str(answerability.id)
+
+
+def test_boundary_answerability_reads_the_exact_generic_v3_parent(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    """A generic sealed version can expose only its frozen answerability parent."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    answerability = kernel.record_answerability(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        (BlockerCode.MISSING_KEY_BASELINE,),
+        ("industry.capacity_utilization_price_cost_baseline",),
+        True,
+        EligibleAction.ELIGIBLE_FOR_PROBE_ENTRY,
+        ("obtain a dated, comparable industry baseline",),
+        None,
+    )
+    revision = kernel.publish_research_version(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        "economic_model_boundary",
+        [str(seeded_revision.manifest.id), str(answerability.id)],
+        None,
+    )
+
+    boundary = ResearchRevisionDiffService(session).revision_boundary(revision.id)
+
+    assert boundary.revision.id == revision.id
+    assert boundary.answerability is not None
+    assert boundary.answerability.reference == str(answerability.id)
+    assert boundary.answerability.content_hash == answerability_content_hash(
+        object_id=answerability.object_id,
+        basis_id=answerability.basis_id,
+        version=answerability.version,
+        state="not_answerable",
+        blockers=("missing_key_baseline",),
+        research_debt_keys=("industry.capacity_utilization_price_cost_baseline",),
+        resolvable_within_mandate=True,
+        allowed_action="wait_for_validation",
+        resolution_requirements=("obtain a dated, comparable industry baseline",),
+    )
+    assert (
+        boundary.answerability.state,
+        boundary.answerability.blockers,
+        boundary.answerability.research_debt_keys,
+        boundary.answerability.resolvable_within_mandate,
+        boundary.answerability.allowed_action,
+        boundary.answerability.resolution_requirements,
+    ) == (
+        "not_answerable",
+        ("missing_key_baseline",),
+        ("industry.capacity_utilization_price_cost_baseline",),
+        True,
+        "wait_for_validation",
+        ("obtain a dated, comparable industry baseline",),
+    )
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("blockers", json.dumps(["unrecognised_blocker"])),
+        ("created_at", (NOW + timedelta(seconds=1)).isoformat()),
+    ],
+)
+def test_boundary_answerability_tamper_fails_summary_and_boundary(
+    session: Session,
+    seeded_revision: SeededRevision,
+    column: str,
+    value: str,
+) -> None:
+    """Raw database mutations must not turn into plausible generic history."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    answerability = kernel.record_answerability(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        (),
+        ("close the evidence review",),
+        True,
+        EligibleAction.OBSERVE,
+        (),
+        None,
+    )
+    revision = kernel.publish_research_version(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        "economic_model_boundary_tamper",
+        [str(seeded_revision.manifest.id), str(answerability.id)],
+        None,
+    )
+    session.connection().exec_driver_sql(
+        f"UPDATE uw_answerability_evaluations SET {column} = ? WHERE id = ?",
+        (value, answerability.id.hex),
+    )
+    session.expire_all()
+
+    service = ResearchRevisionDiffService(session)
+    with pytest.raises(ValidationError, match="research revision parent"):
+        service.revision_summary(revision.id)
+    with pytest.raises(ValidationError, match="research revision parent"):
+        service.revision_boundary(revision.id)
+
+
+def test_boundary_answerability_is_none_when_no_parent_is_frozen(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    boundary = ResearchRevisionDiffService(session).revision_boundary(seeded_revision.first.id)
+
+    assert boundary.answerability is None
+
+
+def test_boundary_answerability_preserves_the_governed_catl_parent(
+    session: Session, catl_revision,
+) -> None:
+    """The generic boundary reader does not weaken the CATL semantic seal."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    boundary = ResearchRevisionDiffService(session).revision_boundary(
+        catl_revision.research_version.id,
+    )
+
+    assert boundary.answerability is not None
+    assert boundary.answerability.state == "not_answerable"
+    assert boundary.answerability.allowed_action == "wait_for_validation"
+
+
+def test_boundary_answerability_rejects_multiple_frozen_parents(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    first = kernel.record_answerability(
+        seeded_revision.company.id, seeded_revision.basis.id, (), (), True,
+        EligibleAction.OBSERVE, (), None,
+    )
+    second = kernel.record_answerability(
+        seeded_revision.company.id, seeded_revision.basis.id,
+        (BlockerCode.MISSING_KEY_BASELINE,), (), True,
+        EligibleAction.OBSERVE, ("obtain a source",), first.id,
+    )
+    revision = kernel.publish_research_version(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        "economic_model_boundary_multiple",
+        [str(seeded_revision.manifest.id), str(first.id), str(second.id)],
+        None,
+    )
+
+    with pytest.raises(ValidationError, match="multiple answerability"):
+        ResearchRevisionDiffService(session).revision_boundary(revision.id)
+
+
+def test_boundary_answerability_rejects_a_tampered_revision_hash(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    """The parent record cannot be detached from its generic v3 parent seal."""
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    answerability = kernel.record_answerability(
+        seeded_revision.company.id, seeded_revision.basis.id, (), (), True,
+        EligibleAction.OBSERVE, (), None,
+    )
+    revision = kernel.publish_research_version(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        "economic_model_boundary_hash",
+        [str(seeded_revision.manifest.id), str(answerability.id)],
+        None,
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_research_versions SET content_hash = ? WHERE id = ?",
+        ("0" * 64, revision.id.hex),
+    )
+    session.expire_all()
+
+    service = ResearchRevisionDiffService(session)
+    with pytest.raises(ValidationError, match="research revision content hash"):
+        service.revision_summary(revision.id)
+    with pytest.raises(ValidationError, match="research revision content hash"):
+        service.revision_boundary(revision.id)
 
 
 @pytest.mark.parametrize("pair", ["reverse", "sibling", "cross_family"])
