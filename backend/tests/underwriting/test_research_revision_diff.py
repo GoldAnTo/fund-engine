@@ -16,6 +16,11 @@ from app.underwriting.domain.types import (
     LedgerKind, ResearchObjectKind,
 )
 from app.underwriting.domain.metrics import MetricObservation
+from app.underwriting.domain.evidence_candidates import (
+    CandidateEvidenceDossier,
+    CandidateEvidenceItem,
+    CandidateEvidenceStatus,
+)
 from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
     UnderwritingLedgerEntry,
@@ -43,6 +48,7 @@ from app.underwriting.services.kernel import (
     frozen_research_version_content_hash,
 )
 from app.underwriting.services.source_freeze import freeze_manifest
+from app.underwriting.services.candidate_evidence import CandidateEvidenceService
 from app.underwriting.services.revision_parent_seal import (
     CATL_PARENT_SET_ENTRY_TYPE,
     CATL_PARENT_SET_FAMILY,
@@ -203,6 +209,58 @@ def _append_unverified_revision(
         expected_parent_id=None,
         created_at=NOW,
     )
+
+
+def _publish_candidate(session: Session, seeded: SeededRevision):
+    repository = UnderwritingResearchRepository(session)
+    item = CandidateEvidenceItem(
+        metric_key="industry.capacity",
+        status=CandidateEvidenceStatus.SOURCE_REPORTED,
+        value=Decimal("100"),
+        unit="GWh",
+        observed_start=datetime(2024, 1, 1, tzinfo=UTC),
+        observed_end=NOW,
+        available_at=NOW,
+        source_id="annual-report",
+        source_locator="annual-report:p18",
+        scope_statement="Candidate industry evidence only.",
+        exclusions=("No investment conclusion.",),
+        methodology="Direct transcription.",
+        prohibited_splicing_declaration="No source splicing.",
+    )
+    payload = {
+        "object_id": str(seeded.company.id),
+        "basis_id": str(seeded.basis.id),
+        "source_manifest_id": str(seeded.manifest.id),
+        "dossier_key": "industry-capacity",
+        "version": 1,
+        "scope_statement": "Candidate industry evidence only.",
+        "status": "candidate",
+        "purpose": "evidence_candidate",
+        "items": [item.canonical_payload],
+        "rejected_calculations": ["No valuation model."],
+        "source_manifest_hash": seeded.manifest.manifest_hash,
+        "created_at": NOW.isoformat(),
+        "supersedes_id": None,
+    }
+    dossier = repository.append_candidate_dossier(
+        object_id=seeded.company.id, basis_id=seeded.basis.id,
+        source_manifest_id=seeded.manifest.id, dossier_key="industry-capacity",
+        payload=payload, created_at=NOW, expected_parent_id=None,
+    )
+    for role, identity in (("provenance", "reviewer:provenance"), ("methodology", "reviewer:methodology")):
+        review = {
+            "dossier_id": str(dossier.id), "dossier_content_hash": dossier.content_hash,
+            "reviewer_identity": identity, "reviewer_role": role, "decision": "approve",
+            "rationale": "Evidence is bounded and traceable.", "reviewed_at": NOW.isoformat(),
+        }
+        repository.append_candidate_review(
+            dossier_id=dossier.id, dossier_content_hash=dossier.content_hash,
+            reviewer_identity=identity, reviewer_role=role, decision="approve",
+            payload=review, created_at=NOW,
+        )
+    session.commit()
+    return CandidateEvidenceService(session, now=lambda: NOW).publish(dossier.id), payload
 
 
 def test_foundation_summary_reads_only_the_revision_frozen_parents(
@@ -2189,6 +2247,46 @@ def test_generic_v3_publication_seals_canonical_frozen_parent_descriptors(
 
     assert seeded_revision.first.content_hash == expected
     assert service.revision_summary(seeded_revision.first.id).id == seeded_revision.first.id
+
+
+def test_candidate_revision_replays_its_selected_dossier_after_successor_and_rejects_rehashed_tamper(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    published, payload = _publish_candidate(session, seeded_revision)
+    session.commit()
+    service = ResearchRevisionDiffService(session)
+    original = service.revision_summary(published.research_version.id)
+    dossier_ref = next(ref for ref in original.parent_refs if ref.artifact_type == "candidate_dossier")
+
+    successor_payload = dict(payload) | {
+        "version": 2,
+        "scope_statement": "Later candidate correction.",
+        "supersedes_id": str(published.dossier.id),
+    }
+    UnderwritingResearchRepository(session).append_candidate_dossier(
+        object_id=seeded_revision.company.id, basis_id=seeded_revision.basis.id,
+        source_manifest_id=seeded_revision.manifest.id, dossier_key="industry-capacity",
+        payload=successor_payload, created_at=NOW, expected_parent_id=published.dossier.id,
+    )
+    session.commit()
+
+    replayed = ResearchRevisionDiffService(session).revision_summary(published.research_version.id)
+    assert next(ref for ref in replayed.parent_refs if ref.artifact_type == "candidate_dossier") == dossier_ref
+
+    tampered = dict(payload) | {"scope_statement": "Tampered historical scope."}
+    tampered_contract = CandidateEvidenceDossier.from_canonical_payload(tampered)
+    session.connection().exec_driver_sql(
+        "UPDATE uw_evidence_candidate_dossier_versions "
+        "SET payload = ?, scope_statement = ?, content_hash = ? WHERE id = ?",
+        (json.dumps(tampered), tampered_contract.scope_statement, tampered_contract.content_hash,
+         published.dossier.id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="dossier_content_hash|research revision content hash"):
+        ResearchRevisionDiffService(session).revision_summary(published.research_version.id)
 
 
 @pytest.mark.parametrize("parent_kind", ["ledger", "metric_observation"])

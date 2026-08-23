@@ -29,8 +29,9 @@ from app.underwriting.persistence.research_models import (
     require_candidate_write_read_committed,
 )
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
-from app.underwriting.services.kernel import canonical_hash
+from app.underwriting.services.kernel import UnderwritingKernelService, canonical_hash
 from app.underwriting.services.source_freeze import freeze_manifest
+from app.underwriting.services.candidate_evidence import CandidateEvidenceService
 
 
 NOW = datetime(2025, 5, 15, 15, 59, 59, tzinfo=UTC)
@@ -39,6 +40,7 @@ NOW = datetime(2025, 5, 15, 15, 59, 59, tzinfo=UTC)
 def _manifest_payload(*, locator: str = "https://example.test/catl-2024-ar", available_at: datetime = NOW) -> dict[str, object]:
     return {
         "schema_version": "v1",
+        "cutoff": NOW.isoformat(),
         "sources": [{
             "source_id": "catl-2024-ar",
             "title": "CATL annual report",
@@ -1019,3 +1021,83 @@ def test_review_rejects_hash_from_another_dossier(repository, company, basis, ma
 
     with pytest.raises(ValidationError, match="dossier_content_hash does not match"):
         _append_review(repository, second, reviewer_identity="reviewer:a", reviewer_role="provenance", dossier_content_hash=first.content_hash)
+
+
+def test_publish_requires_exactly_two_distinct_approved_roles(
+    session: Session, repository, company, basis, manifest,
+) -> None:
+    dossier = _append_dossier(repository, company, basis, manifest)
+    _append_review(repository, dossier, reviewer_identity="reviewer:provenance", reviewer_role="provenance")
+
+    with pytest.raises(ValidationError, match="provenance and methodology approvals"):
+        CandidateEvidenceService(session, now=lambda: NOW).publish(dossier.id)
+
+
+def test_publish_reject_review_blocks_candidate_publication(
+    session: Session, repository, company, basis, manifest,
+) -> None:
+    dossier = _append_dossier(repository, company, basis, manifest)
+    _append_review(repository, dossier, reviewer_identity="reviewer:provenance", reviewer_role="provenance")
+    reject = _review_payload(
+        dossier_id=dossier.id, dossier_content_hash=dossier.content_hash,
+        reviewer_identity="reviewer:methodology", reviewer_role="methodology", decision="reject",
+    )
+    repository.append_candidate_review(
+        dossier_id=dossier.id, dossier_content_hash=dossier.content_hash,
+        reviewer_identity="reviewer:methodology", reviewer_role="methodology", decision="reject",
+        payload=reject, created_at=NOW,
+    )
+
+    with pytest.raises(ValidationError, match="provenance and methodology approvals"):
+        CandidateEvidenceService(session, now=lambda: NOW).publish(dossier.id)
+
+
+def test_publish_seals_candidate_only_with_not_answerable_boundary(
+    session: Session, repository, company, basis, manifest,
+) -> None:
+    dossier = _append_dossier(repository, company, basis, manifest)
+    _append_review(repository, dossier, reviewer_identity="reviewer:provenance", reviewer_role="provenance")
+    _append_review(repository, dossier, reviewer_identity="reviewer:methodology", reviewer_role="methodology")
+    session.commit()
+
+    published = CandidateEvidenceService(session, now=lambda: NOW).publish(dossier.id)
+
+    assert published.answerability.state == "not_answerable"
+    assert published.formal_mechanism_ids == ()
+    assert published.industry_state_id is None
+    assert published.earnings_engine_id is None
+    assert published.research_version.version_kind == "industry_evidence_candidate"
+    assert set(published.research_version.parent_ids) == {
+        str(dossier.id), str(manifest.id), str(published.answerability.id),
+        *(str(review.id) for review in published.reviews),
+    }
+
+
+def test_candidate_publication_does_not_commit_and_can_rollback(
+    session: Session, repository, company, basis, manifest,
+) -> None:
+    dossier = _append_dossier(repository, company, basis, manifest)
+    _append_review(repository, dossier, reviewer_identity="reviewer:provenance", reviewer_role="provenance")
+    _append_review(repository, dossier, reviewer_identity="reviewer:methodology", reviewer_role="methodology")
+    session.commit()
+
+    published = CandidateEvidenceService(session, now=lambda: NOW).publish(dossier.id)
+    revision_id = published.research_version.id
+    assert session.in_transaction()
+    session.rollback()
+
+    assert session.get(type(published.research_version), revision_id) is None
+
+
+def test_candidate_parents_cannot_be_promoted_into_another_revision_kind(
+    session: Session, repository, company, basis, manifest,
+) -> None:
+    dossier = _append_dossier(repository, company, basis, manifest)
+    _append_review(repository, dossier, reviewer_identity="reviewer:provenance", reviewer_role="provenance")
+    _append_review(repository, dossier, reviewer_identity="reviewer:methodology", reviewer_role="methodology")
+    session.commit()
+
+    with pytest.raises(ValidationError, match="candidate evidence cannot be promoted"):
+        UnderwritingKernelService(session, now=lambda: NOW).publish_research_version(
+            company.id, basis.id, "economic_model", [str(dossier.id)], None,
+        )

@@ -41,6 +41,8 @@ from app.underwriting.persistence.models import (
 from app.underwriting.persistence.research_models import (
     UnderwritingCompanyExposureVersion,
     UnderwritingEarningsEngineVersion,
+    UnderwritingEvidenceCandidateDossierVersion,
+    UnderwritingEvidenceCandidateReviewVersion,
     UnderwritingFalsifierVersion,
     UnderwritingForecastInputVersion,
     UnderwritingIndustryScenarioVersion,
@@ -49,8 +51,11 @@ from app.underwriting.persistence.research_models import (
     UnderwritingMetricDefinitionVersion,
     UnderwritingMetricObservation,
     UnderwritingSourceManifestVersion,
+    validate_candidate_dossier_governance,
+    validate_candidate_review_governance,
 )
 from app.underwriting.services.kernel import canonical_hash, frozen_research_version_content_hash
+from app.underwriting.services.candidate_evidence import INDUSTRY_EVIDENCE_CANDIDATE_KIND
 from app.underwriting.services.source_freeze import freeze_manifest
 from app.underwriting.services.revision_parent_seal import (
     CATL_PARENT_SET_ENTRY_TYPE,
@@ -735,6 +740,8 @@ class ResearchRevisionDiffService:
             ("falsifier", UnderwritingFalsifierVersion),
             ("ledger", UnderwritingLedgerEntry),
             ("answerability", UnderwritingAnswerabilityEvaluation),
+            ("candidate_dossier", UnderwritingEvidenceCandidateDossierVersion),
+            ("candidate_review", UnderwritingEvidenceCandidateReviewVersion),
         )
         return [
             (artifact_type, row)
@@ -833,6 +840,17 @@ class ResearchRevisionDiffService:
             # seal binds their exact canonical hash.
             self._validated_answerability(row, revision)
             return
+        if artifact_type == "candidate_dossier":
+            assert isinstance(row, UnderwritingEvidenceCandidateDossierVersion)
+            validate_candidate_dossier_governance(self._session, row, enforce_current=False)
+            self._require_available_at_cutoff(row.created_at, cutoff, "candidate dossier")
+            return
+        if artifact_type == "candidate_review":
+            assert isinstance(row, UnderwritingEvidenceCandidateReviewVersion)
+            validate_candidate_review_governance(self._session, row, enforce_current=False)
+            self._require_available_at_cutoff(row.reviewed_at, cutoff, "candidate review")
+            self._require_available_at_cutoff(row.created_at, cutoff, "candidate review")
+            return
         # These rows do contain a ``content_hash`` column (except
         # answerability), but the existing persistence contract accepts an
         # externally supplied hash without recording the canonical hash recipe
@@ -846,8 +864,12 @@ class ResearchRevisionDiffService:
         raise AssertionError(f"unrecognised artifact type: {artifact_type}")
 
     def _parent_object_id(self, artifact_type: str, row: object) -> UUID | None:
-        if artifact_type in {"mechanism", "industry_state", "ledger", "answerability"}:
+        if artifact_type in {"mechanism", "industry_state", "ledger", "answerability", "candidate_dossier"}:
             return getattr(row, "object_id")
+        if artifact_type == "candidate_review":
+            assert isinstance(row, UnderwritingEvidenceCandidateReviewVersion)
+            dossier = self._session.get(UnderwritingEvidenceCandidateDossierVersion, row.dossier_id)
+            return dossier.object_id if dossier is not None else None
         if artifact_type in {"company_exposure", "earnings_engine", "forecast_input"}:
             return getattr(row, "company_id")
         if artifact_type == "industry_scenario":
@@ -951,6 +973,41 @@ class ResearchRevisionDiffService:
                 ),
                 (), None, None, None, None, answerability.state,
             )
+        if artifact_type == "candidate_dossier":
+            assert isinstance(row, UnderwritingEvidenceCandidateDossierVersion)
+            return RevisionArtifactRef(
+                reference,
+                artifact_type,
+                f"{row.dossier_key}|{row.version}",
+                canonical_hash({
+                    "candidate_dossier_content_hash": row.content_hash,
+                    "created_at": self._iso(self._stored_datetime(row.created_at)),
+                }),
+                self._locators_from_manifest(row.source_manifest_id),
+                None,
+                None,
+                None,
+                self._stored_datetime(row.created_at),
+                row.status,
+            )
+        if artifact_type == "candidate_review":
+            assert isinstance(row, UnderwritingEvidenceCandidateReviewVersion)
+            return RevisionArtifactRef(
+                reference,
+                artifact_type,
+                f"{row.dossier_id}|{row.reviewer_role}|{row.reviewer_identity}",
+                canonical_hash({
+                    "candidate_review_content_hash": row.content_hash,
+                    "reviewed_at": self._iso(self._stored_datetime(row.reviewed_at)),
+                    "created_at": self._iso(self._stored_datetime(row.created_at)),
+                }),
+                (),
+                None,
+                None,
+                None,
+                self._stored_datetime(row.reviewed_at),
+                row.decision,
+            )
         raise AssertionError(f"unrecognised artifact type: {artifact_type}")
 
     def _resolve_parent(
@@ -979,12 +1036,17 @@ class ResearchRevisionDiffService:
             raise self._parent_error("is unresolved or ambiguous")
         artifact_type, row = matches[0]
         basis_id = getattr(row, "basis_id", None)
+        if artifact_type == "candidate_review":
+            assert isinstance(row, UnderwritingEvidenceCandidateReviewVersion)
+            dossier = self._session.get(UnderwritingEvidenceCandidateDossierVersion, row.dossier_id)
+            basis_id = dossier.basis_id if dossier is not None else None
         if basis_id != revision.basis_id:
             raise self._parent_error("belongs to another historical basis")
         object_id = self._parent_object_id(artifact_type, row)
         if artifact_type in {
             "mechanism", "industry_state", "industry_scenario", "company_exposure",
             "earnings_engine", "forecast_input", "falsifier", "ledger", "answerability",
+            "candidate_dossier", "candidate_review",
         } and object_id != revision.object_id:
             raise self._parent_error("belongs to another research object")
         self._verify_artifact_lineage(
@@ -1016,6 +1078,64 @@ class ResearchRevisionDiffService:
             }
             for ref in refs
         )
+
+    def _validate_candidate_parent_set(
+        self,
+        revision: UnderwritingResearchVersion | _ResearchRevisionScope,
+        refs: tuple[RevisionArtifactRef, ...],
+    ) -> None:
+        """Keep candidates in their one sealed, non-promotable revision family."""
+        candidate_types = {"candidate_dossier", "candidate_review"}
+        present_types = {ref.artifact_type for ref in refs}
+        if revision.version_kind != INDUSTRY_EVIDENCE_CANDIDATE_KIND:
+            if present_types & candidate_types:
+                raise ValidationError("candidate evidence cannot be promoted into a formal research revision")
+            return
+
+        expected_counts = {
+            "candidate_dossier": 1,
+            "candidate_review": 2,
+            "source_manifest": 1,
+            "answerability": 1,
+        }
+        actual_counts = {
+            artifact_type: sum(ref.artifact_type == artifact_type for ref in refs)
+            for artifact_type in set(expected_counts) | present_types
+        }
+        if actual_counts != expected_counts:
+            raise ValidationError("candidate revision must seal one dossier, two reviews, manifest, and answerability")
+        dossier_ref = next(ref for ref in refs if ref.artifact_type == "candidate_dossier")
+        manifest_ref = next(ref for ref in refs if ref.artifact_type == "source_manifest")
+        answerability_ref = next(ref for ref in refs if ref.artifact_type == "answerability")
+        dossier = self._session.get(UnderwritingEvidenceCandidateDossierVersion, UUID(dossier_ref.reference))
+        manifest = self._session.get(UnderwritingSourceManifestVersion, UUID(manifest_ref.reference))
+        answerability = self._session.get(UnderwritingAnswerabilityEvaluation, UUID(answerability_ref.reference))
+        if dossier is None or manifest is None or answerability is None:
+            raise ValidationError("candidate revision has an unresolved sealed parent")
+        if dossier.source_manifest_id != manifest.id:
+            raise ValidationError("candidate revision manifest does not match dossier")
+        if (
+            answerability.state != AnswerabilityState.NOT_ANSWERABLE.value
+            or not answerability.research_debt_keys
+            or not answerability.resolution_requirements
+            or answerability.allowed_action not in {
+                EligibleAction.WAIT_FOR_VALIDATION.value,
+                EligibleAction.DO_NOT_ENTER.value,
+            }
+        ):
+            raise ValidationError("candidate revision requires not_answerable research debt and requirements")
+        reviews = tuple(
+            self._session.get(UnderwritingEvidenceCandidateReviewVersion, UUID(ref.reference))
+            for ref in refs if ref.artifact_type == "candidate_review"
+        )
+        if (
+            any(review is None for review in reviews)
+            or {review.reviewer_role for review in reviews if review is not None} != {"provenance", "methodology"}
+            or any(review.decision != "approve" for review in reviews if review is not None)
+            or any(review.dossier_id != dossier.id or review.dossier_content_hash != dossier.content_hash for review in reviews if review is not None)
+            or len({review.reviewer_identity for review in reviews if review is not None}) != 2
+        ):
+            raise ValidationError("candidate revision requires exact distinct approved reviews")
 
     def _revision(self, revision_id: UUID) -> UnderwritingResearchVersion:
         row = self._session.get(UnderwritingResearchVersion, revision_id)
@@ -1233,6 +1353,7 @@ class ResearchRevisionDiffService:
             )
             if any(ref.artifact_type == "semantic_snapshot" for ref in refs):
                 raise ValidationError("generic research revision cannot seal a semantic snapshot token")
+            self._validate_candidate_parent_set(scope, refs)
             return self._canonical_ref_descriptors(refs)
 
     def revision_summary(self, revision_id: UUID) -> ResearchRevisionSummary:
@@ -1389,6 +1510,7 @@ class ResearchRevisionDiffService:
                             )
                         )
             self._validate_revision_content(revision, refs)
+            self._validate_candidate_parent_set(revision, refs)
             if legacy_snapshot_candidate:
                 cutoff = self._stored_datetime(basis.cutoff)
                 refs = tuple(
