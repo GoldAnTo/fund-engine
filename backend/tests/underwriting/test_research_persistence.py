@@ -141,6 +141,59 @@ def test_candidate_rejects_forbidden_dossier_scope_semantics() -> None:
         _candidate_dossier(scope_statement="Candidate valuation conclusion.")
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("dossier_key", "candidate-估值"), ("scope_statement", "候选价格结论。")),
+)
+def test_candidate_rejects_governed_chinese_dossier_semantics(field: str, value: str) -> None:
+    with pytest.raises(ValidationError, match="forbidden candidate semantic"):
+        _candidate_dossier(**{field: value})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("metric_key", "industry.实际产能利用率"),
+        ("methodology", "基于有效产能的推导。"),
+        ("scenario_use", "建议买入并建仓。"),
+    ),
+)
+def test_candidate_rejects_governed_chinese_claim_semantics(field: str, value: str) -> None:
+    overrides: dict[str, object] = {field: value}
+    if field == "scenario_use":
+        overrides.update(
+            status=CandidateEvidenceStatus.ASSUMPTION_BOUND,
+            not_observed_declared=True,
+            transcription_method=None,
+            error_bound=None,
+        )
+    with pytest.raises(ValidationError, match="forbidden candidate semantic"):
+        _candidate_item(**overrides)
+
+
+def test_candidate_review_rejects_governed_chinese_claim_rationale() -> None:
+    with pytest.raises(ValidationError, match="forbidden candidate semantic"):
+        CandidateEvidenceReview(
+            dossier_id=uuid4(), dossier_content_hash="a" * 64,
+            reviewer_identity="reviewer:chinese", reviewer_role="provenance", decision="approve",
+            rationale="建议买入并建仓。", reviewed_at=NOW,
+        )
+
+
+def test_candidate_rejects_governed_chinese_detail_semantics() -> None:
+    with pytest.raises(ValidationError, match="forbidden candidate semantic"):
+        _candidate_item(transcription_method="按照价格坐标读取。")
+    with pytest.raises(ValidationError, match="forbidden candidate semantic"):
+        _candidate_item(
+            status=CandidateEvidenceStatus.UNKNOWN,
+            value=None,
+            unit=None,
+            transcription_method=None,
+            error_bound=None,
+            unknown_reason="实际利用率未披露。",
+        )
+
+
 def test_candidate_allows_bounded_utilization_assumption_and_prohibition_text() -> None:
     item = _candidate_item(
         metric_key="industry.utilization_assumption",
@@ -149,11 +202,14 @@ def test_candidate_allows_bounded_utilization_assumption_and_prohibition_text() 
         not_observed_declared=True,
         transcription_method=None,
         error_bound=None,
-        prohibited_splicing_declaration="No valuation model or action recommendation.",
+        prohibited_splicing_declaration="No valuation model or action recommendation; 不含估值模型或买入建议。",
     )
-    dossier = _candidate_dossier(items=(item,), rejected_calculations=("No valuation model.",))
+    dossier = _candidate_dossier(
+        items=(item,), rejected_calculations=("No valuation model; 不含估值模型。",),
+    )
     assert dossier.items == (item,)
     assert _candidate_item(metric_key="industry.transaction_count").metric_key == "industry.transaction_count"
+    assert _candidate_item(metric_key="industry.标称产能").metric_key == "industry.标称产能"
 
 
 def test_candidate_item_requires_a_prohibited_splicing_declaration() -> None:

@@ -68,14 +68,36 @@ def _canonical_hash(payload: object) -> str:
     ).hexdigest()
 
 
-_FORBIDDEN_CANDIDATE_TERMS = (
-    "actual_utilization", "actual_utilisation", "effective_capacity",
-    "price", "valuation", "recommendation", "action",
+_FORBIDDEN_CANDIDATE_ENGLISH_TERMS = (
+    ("actual_utilization", ("actual_utilization", "actual_utilisation")),
+    ("effective_capacity", ("effective_capacity",)),
+    ("price", ("price",)),
+    ("valuation", ("valuation",)),
+    ("recommendation", ("recommendation",)),
+    ("action", ("action",)),
+)
+_FORBIDDEN_CANDIDATE_CHINESE_TERMS = (
+    ("actual_utilization", ("实际利用率", "实际产能利用率", "實際利用率", "實際產能利用率")),
+    ("effective_capacity", ("有效产能", "有效產能")),
+    ("price", ("价格", "價格", "售价", "售價")),
+    ("valuation", ("估值",)),
+    ("recommendation", ("建议", "建議", "推荐", "推薦")),
+    ("action", ("买入", "買入", "卖出", "賣出", "持仓", "持倉", "建仓", "建倉")),
 )
 
 
-def _normalized_semantic_text(value: str) -> str:
-    return re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", unicodedata.normalize("NFKC", value).casefold())).strip("_")
+def _normalized_semantic_text(value: str) -> tuple[tuple[str, ...], str]:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    ascii_tokens = tuple(
+        token
+        for token in re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", normalized)).strip("_").split("_")
+        if token
+    )
+    chinese_text = "".join(
+        character for character in normalized
+        if "\u3400" <= character <= "\u9fff"
+    )
+    return ascii_tokens, chinese_text
 
 
 def _contains_semantic_term(tokens: tuple[str, ...], term: str) -> bool:
@@ -91,14 +113,19 @@ def _validate_candidate_semantics(*, fields: tuple[str, ...]) -> None:
 
     The caller supplies only candidate claim fields.  Exclusions and rejected
     calculations deliberately remain outside this boundary so they can record
-    declarations such as ``No valuation model``.  NFKC/casefold tokenization
-    makes spelling and punctuation variants deterministic without treating a
-    substring such as ``transaction`` as the forbidden ``action`` token.
+    declarations such as ``No valuation model``.  The controlled vocabulary
+    covers the exact English tokens and Chinese phrases defined above. NFKC/
+    casefold tokenization prevents ``transaction`` from matching ``action``;
+    Chinese matching compares only normalized Han text against that explicit
+    phrase list rather than attempting language inference.
     """
     for field in fields:
-        tokens = tuple(token for token in _normalized_semantic_text(field).split("_") if token)
-        for term in _FORBIDDEN_CANDIDATE_TERMS:
-            if _contains_semantic_term(tokens, term):
+        ascii_tokens, chinese_text = _normalized_semantic_text(field)
+        for term, variants in _FORBIDDEN_CANDIDATE_ENGLISH_TERMS:
+            if any(_contains_semantic_term(ascii_tokens, variant) for variant in variants):
+                raise ValidationError(f"forbidden candidate semantic: {term}")
+        for term, variants in _FORBIDDEN_CANDIDATE_CHINESE_TERMS:
+            if any(variant in chinese_text for variant in variants):
                 raise ValidationError(f"forbidden candidate semantic: {term}")
 
 
@@ -180,7 +207,10 @@ class CandidateEvidenceItem:
             raise ValidationError("unknown_reason is only valid for unknown")
         _validate_candidate_semantics(
             fields=tuple(
-                value for value in (self.metric_key, self.scope_statement, self.methodology, self.scenario_use)
+                value for value in (
+                    self.metric_key, self.scope_statement, self.methodology,
+                    self.transcription_method, self.scenario_use, self.unknown_reason,
+                )
                 if value is not None
             )
         )
@@ -361,6 +391,7 @@ class CandidateEvidenceReview:
         if self.decision not in {decision.value for decision in CandidateEvidenceReviewDecision}:
             raise ValidationError("decision must be approve, reject, or request_changes")
         object.__setattr__(self, "rationale", _text(self.rationale, "rationale"))
+        _validate_candidate_semantics(fields=(self.rationale,))
         object.__setattr__(self, "reviewed_at", _utc(self.reviewed_at, "reviewed_at"))
 
     @property

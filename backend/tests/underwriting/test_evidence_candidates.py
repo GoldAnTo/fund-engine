@@ -1141,7 +1141,9 @@ def test_publish_reject_review_blocks_candidate_publication(
         CandidateEvidenceService(session, now=lambda: NOW).publish(dossier.id)
 
 
+@pytest.mark.parametrize("forbidden_metric", ("industry.actual_utilization", "行业.实际产能利用率"))
 def test_dual_reviewed_raw_forbidden_candidate_cannot_publish(
+    forbidden_metric: str,
     session: Session, repository, company, basis, manifest,
 ) -> None:
     """Raw corruption is rejected while materializing the dossier for publish."""
@@ -1151,7 +1153,7 @@ def test_dual_reviewed_raw_forbidden_candidate_cannot_publish(
     ) | {"dossier_key": "forbidden-capacity"})
     dossier_id = uuid4()
     forged_item = dict(contract.canonical_payload["items"][0])
-    forged_item["metric_key"] = "industry.actual_utilization"
+    forged_item["metric_key"] = forbidden_metric
     forged_payload = {**contract.canonical_payload, "items": [forged_item]}
     reviews = tuple(
         CandidateEvidenceReview(
