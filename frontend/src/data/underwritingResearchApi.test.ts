@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { createElement } from "react";
-import { MemoryRouter } from "react-router-dom";
+import { Fragment, createElement } from "react";
+import { MemoryRouter, NavLink, useLocation } from "react-router-dom";
 
 import {
   ResearchArchiveLoadErrorBoundary,
@@ -190,6 +190,45 @@ describe("underwriting research API", () => {
     );
     expect(screen.getByRole("link", { name: "返回档案目录" }))
       .toHaveAttribute("href", "/underwriting/research");
+    expect(consoleError).toHaveBeenCalled();
+  });
+
+  it("recovers the archive load boundary after client navigation changes its route identity", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    function BrokenArchive(): never {
+      throw new Error("archive module unavailable");
+    }
+
+    function ArchiveRecoveryHarness() {
+      const location = useLocation();
+      const broken = location.pathname === "/underwriting/research/broken/frozen";
+      return createElement(
+        Fragment,
+        null,
+        createElement(NavLink, { to: "/underwriting/research" }, "公司／行业档案目录"),
+        createElement(
+          ResearchArchiveLoadErrorBoundary,
+          {
+            resetKey: location.pathname,
+            children: broken ? createElement(BrokenArchive) : createElement("p", null, "冻结档案目录已恢复"),
+          },
+        ),
+      );
+    }
+
+    const user = (await import("@testing-library/user-event")).default.setup();
+    render(createElement(
+      MemoryRouter,
+      { initialEntries: ["/underwriting/research/broken/frozen"] },
+      createElement(ArchiveRecoveryHarness),
+    ));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("档案暂时无法载入");
+    await user.click(screen.getByRole("link", { name: "公司／行业档案目录" }));
+
+    expect(await screen.findByText("冻结档案目录已恢复")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(consoleError).toHaveBeenCalled();
   });
 });

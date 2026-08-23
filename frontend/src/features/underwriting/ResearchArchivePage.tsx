@@ -657,5 +657,7 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
 
 export default function ResearchArchivePage() {
   const { objectId, versionKind } = useParams();
-  return objectId && versionKind ? <DetailPage objectId={objectId} versionKind={versionKind} /> : <DirectoryPage />;
+  return objectId && versionKind
+    ? <DetailPage key={`${objectId}:${versionKind}`} objectId={objectId} versionKind={versionKind} />
+    : <DirectoryPage />;
 }

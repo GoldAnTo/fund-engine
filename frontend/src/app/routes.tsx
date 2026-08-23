@@ -1,5 +1,5 @@
 import { Component, lazy, Suspense, type ReactNode } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { AppShell } from "./AppShell";
 import { UnderwritingArchiveShell } from "./UnderwritingArchiveShell";
@@ -31,6 +31,7 @@ const ResearchArchivePage = lazy(() => import("../features/underwriting/Research
 
 type ResearchArchiveLoadErrorBoundaryProps = {
   children: ReactNode;
+  resetKey?: string;
 };
 
 type ResearchArchiveLoadErrorBoundaryState = {
@@ -45,6 +46,12 @@ export class ResearchArchiveLoadErrorBoundary extends Component<
 
   static getDerivedStateFromError(): ResearchArchiveLoadErrorBoundaryState {
     return { hasError: true };
+  }
+
+  componentDidUpdate(previousProps: ResearchArchiveLoadErrorBoundaryProps) {
+    if (this.state.hasError && previousProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false });
+    }
   }
 
   render() {
@@ -69,8 +76,9 @@ export class ResearchArchiveLoadErrorBoundary extends Component<
 }
 
 function ResearchArchiveRoute() {
+  const location = useLocation();
   return (
-    <ResearchArchiveLoadErrorBoundary>
+    <ResearchArchiveLoadErrorBoundary resetKey={location.pathname}>
       <Suspense fallback={(
         <main className="ros-page" aria-busy="true">
           <p>正在载入公司／行业档案…</p>

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import pageSource from "./ResearchArchivePage.tsx?raw";
 
 import ResearchArchivePage from "./ResearchArchivePage";
@@ -10,6 +10,9 @@ import {
   resetUnderwritingResearchApi,
   setUnderwritingResearchApi,
   type ResearchArchiveList,
+  type ResearchRevision,
+  type ResearchRevisionBoundary,
+  type ResearchRevisionHistory,
   type UnderwritingResearchApi,
 } from "../../data/underwritingResearchApi";
 
@@ -146,6 +149,18 @@ function renderArchive(entry = "/underwriting/research") {
   );
 }
 
+function renderArchiveNavigation(entry = "/underwriting/research/company-id/catl_economic_model_evidence_only") {
+  return render(
+    <MemoryRouter initialEntries={[entry]}>
+      <Link to="/underwriting/research/other-company-id/other_frozen_research">切换冻结档案</Link>
+      <Routes>
+        <Route path="/underwriting/research" element={<ResearchArchivePage />} />
+        <Route path="/underwriting/research/:objectId/:versionKind" element={<ResearchArchivePage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
 function installApi(overrides: Partial<UnderwritingResearchApi> = {}) {
   const api = {
     listArchives: vi.fn().mockResolvedValue(archive),
@@ -264,6 +279,57 @@ describe("ResearchArchivePage", () => {
     expect(screen.getByText("核验行业有效产能与利用率口径")).toBeVisible();
     const boundaries = screen.getByRole("complementary", { name: "研究边界" });
     expect(within(boundaries).getByText("此版本的冻结父图未记录可展示的 Unknown gap；这不表示行业缺口已解决。")).toBeVisible();
+  });
+
+  it("does not render one archive's frozen detail while the URL has switched to another archive", async () => {
+    const otherRevision = {
+      ...revisionTwo,
+      id: "other-revision-1",
+      object_id: "other-company-id",
+      basis_id: "other-basis-1",
+      version_kind: "other_frozen_research",
+      content_hash: "9".repeat(64),
+      source_manifest_hash: "e".repeat(64),
+      parent_refs: [],
+    };
+    const otherBoundary = {
+      ...boundaryTwo,
+      revision_id: otherRevision.id,
+      object_id: otherRevision.object_id,
+      basis_id: otherRevision.basis_id,
+      version_kind: otherRevision.version_kind,
+      content_hash: otherRevision.content_hash,
+      source_manifest_hash: otherRevision.source_manifest_hash,
+      answerability: null,
+    };
+    const otherHistory = new Promise<ResearchRevisionHistory>(() => undefined);
+    installApi({
+      history: vi.fn((objectId: string): Promise<ResearchRevisionHistory> => objectId === "company-id" ? Promise.resolve({
+        schema_version: "underwriting.v1",
+        object_id: "company-id",
+        version_kind: "catl_economic_model_evidence_only",
+        object_kind: "company",
+        canonical_name: "宁德时代",
+        external_key: "300750.SZ",
+        revisions: [revisionOne, revisionTwo],
+      } as ResearchRevisionHistory) : otherHistory),
+      revision: vi.fn((revisionId: string): Promise<ResearchRevision> => Promise.resolve(
+        (revisionId === revisionTwo.id ? revisionTwo : otherRevision) as ResearchRevision,
+      )),
+      boundary: vi.fn((revisionId: string): Promise<ResearchRevisionBoundary> => Promise.resolve(
+        (revisionId === revisionTwo.id ? boundaryTwo : otherBoundary) as ResearchRevisionBoundary,
+      )),
+    });
+    const user = userEvent.setup();
+    renderArchiveNavigation();
+
+    expect(await screen.findByRole("heading", { name: "宁德时代" })).toBeVisible();
+    await user.click(screen.getByRole("link", { name: "切换冻结档案" }));
+
+    expect(screen.getByRole("status")).toHaveTextContent("正在读取冻结版本档案");
+    expect(screen.queryByRole("heading", { name: "宁德时代" })).not.toBeInTheDocument();
+    expect(screen.queryByText(revisionTwo.content_hash)).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "研究边界" })).not.toBeInTheDocument();
   });
 
   it.each([

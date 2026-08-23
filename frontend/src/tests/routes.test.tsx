@@ -10,6 +10,7 @@ import { resetResearchClient, setResearchClient } from "../data/researchClient";
 import {
   resetUnderwritingResearchApi,
   setUnderwritingResearchApi,
+  type ResearchRevisionBoundary,
   type UnderwritingResearchApi,
 } from "../data/underwritingResearchApi";
 
@@ -176,6 +177,27 @@ describe("Research OS route inventory", () => {
       source_manifest_hash: "b".repeat(64),
       parent_refs: [],
     };
+    const boundary: ResearchRevisionBoundary = {
+      schema_version: "underwriting.v1",
+      revision_id: revision.id,
+      object_id: revision.object_id,
+      basis_id: revision.basis_id,
+      version_kind: revision.version_kind,
+      content_hash: revision.content_hash,
+      cutoff: revision.cutoff,
+      source_manifest_hash: revision.source_manifest_hash,
+      answerability: {
+        schema_version: "underwriting.v1",
+        reference: "00000000-0000-4000-8000-000000000001",
+        content_hash: "c".repeat(64),
+        state: "not_answerable",
+        blockers: ["missing_key_baseline"],
+        research_debt_keys: ["industry_utilisation"],
+        resolvable_within_mandate: true,
+        resolution_requirements: ["核验行业有效产能与利用率口径"],
+      },
+      unknown_evidence_gaps: [],
+    };
     setUnderwritingResearchApi({
       listArchives: vi.fn(),
       history: vi.fn().mockResolvedValue({
@@ -189,7 +211,8 @@ describe("Research OS route inventory", () => {
       }),
       revision: vi.fn().mockResolvedValue(revision),
       diff: vi.fn(),
-    } as unknown as UnderwritingResearchApi);
+      boundary: vi.fn().mockResolvedValue(boundary),
+    } satisfies UnderwritingResearchApi);
 
     render(
       <MemoryRouter initialEntries={["/underwriting/research/company-id/frozen-company-research"]}>
@@ -203,6 +226,9 @@ describe("Research OS route inventory", () => {
     expect(identityHeading).toBeVisible();
     expect(identityHeading.parentElement).toHaveTextContent("IMMUTABLE.ONLY");
     expect(identityHeading.parentElement).toHaveTextContent("公司");
+    expect(await screen.findByRole("complementary", { name: "研究边界" }))
+      .toHaveTextContent("研究尚需验证");
+    expect(screen.getByText("核验行业有效产能与利用率口径")).toBeVisible();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
