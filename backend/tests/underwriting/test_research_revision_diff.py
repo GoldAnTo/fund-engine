@@ -1416,3 +1416,57 @@ def test_generic_v3_summary_and_archive_reject_a_rehashed_frozen_parent_tamper(
     )
     assert item.lineage_state == "unreadable"
     assert item.latest_revision_id is None
+
+
+def test_catl_version_kind_is_reserved_for_its_governed_semantic_snapshot(
+    session: Session, seeded_revision: SeededRevision,
+) -> None:
+    from app.underwriting.services.kernel import frozen_research_version_content_hash
+    from app.underwriting.services.research_revision_diff import ResearchRevisionDiffService
+
+    kernel = UnderwritingKernelService(session, now=lambda: NOW)
+    with pytest.raises(ValidationError, match="CATL"):
+        kernel.preview_research_version_hash(
+            seeded_revision.company.id,
+            seeded_revision.basis.id,
+            "catl_economic_model_evidence_only",
+            [str(seeded_revision.manifest.id)],
+        )
+
+    service = ResearchRevisionDiffService(session)
+    parent_ids = [str(seeded_revision.manifest.id)]
+    parent_refs = service.frozen_parent_descriptors(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        "temporary_generic_model",
+        parent_ids,
+    )
+    content_hash, _, _ = frozen_research_version_content_hash(
+        seeded_revision.company.id,
+        seeded_revision.basis.id,
+        "catl_economic_model_evidence_only",
+        parent_ids,
+        cutoff=NOW,
+        price_as_of=None,
+        source_manifest_hash=seeded_revision.basis.source_manifest_hash,
+        parent_refs=parent_refs,
+    )
+    ungoverned = UnderwritingRepository(session).append_research_version(
+        object_id=seeded_revision.company.id,
+        basis_id=seeded_revision.basis.id,
+        version_kind="catl_economic_model_evidence_only",
+        content_hash=content_hash,
+        parent_ids=parent_ids,
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+
+    with pytest.raises(ValidationError, match="CATL semantic snapshot"):
+        service.revision_summary(ungoverned.id)
+
+    item = next(
+        item for item in service.research_archives(limit=100).items
+        if item.version_kind == "catl_economic_model_evidence_only"
+    )
+    assert item.lineage_state == "unreadable"
+    assert item.latest_revision_id is None

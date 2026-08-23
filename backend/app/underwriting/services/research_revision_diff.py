@@ -706,11 +706,13 @@ class ResearchRevisionDiffService:
         # A semantic snapshot denotes a separately governed fixture
         # publication (such as CATL), whose payload has its own persisted seal.
         snapshot_tokens = tuple(value for value in revision.parent_ids if _SNAPSHOT_TOKEN.fullmatch(value))
-        if snapshot_tokens:
-            if revision.version_kind != CATL_VERSION_KIND or len(snapshot_tokens) != 1:
-                raise ValidationError("research revision semantic snapshot is not governed")
+        if revision.version_kind == CATL_VERSION_KIND:
+            if len(snapshot_tokens) != 1:
+                raise ValidationError("CATL semantic snapshot parent set is missing its governed token")
             self._validate_catl_semantic_snapshot(revision, refs)
             return
+        if snapshot_tokens:
+            raise ValidationError("research revision semantic snapshot is not governed")
         basis = self._basis_for_id(revision.basis_id)
         expected, _, _ = frozen_research_version_content_hash(
             revision.object_id, revision.basis_id, revision.version_kind, list(revision.parent_ids),
@@ -754,6 +756,8 @@ class ResearchRevisionDiffService:
         before the immutable publication is appended.
         """
         with self._session.no_autoflush:
+            if version_kind == CATL_VERSION_KIND:
+                raise ValidationError("CATL version kind is reserved for the governed semantic snapshot publisher")
             if not isinstance(parent_ids, list) or not all(isinstance(value, str) for value in parent_ids):
                 raise ValidationError("research revision parents are malformed")
             if self._session.get(UnderwritingResearchObject, object_id) is None:
