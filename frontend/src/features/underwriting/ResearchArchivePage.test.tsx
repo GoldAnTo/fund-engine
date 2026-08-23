@@ -141,7 +141,7 @@ const candidateRevision = {
     reference: "00000000-0000-4000-8000-000000000104",
     artifact_type: "candidate_dossier",
     identity: "industry-capacity|1",
-    content_hash: "2".repeat(64),
+    content_hash: "1d8e553c41681de9e6c445647b79401f49975b80c15af61ecc59da2925e53648",
     source_locators: [], unit: null, period_start: null, period_end: null, available_at: null,
     status: "candidate",
   }, {
@@ -149,7 +149,7 @@ const candidateRevision = {
     reference: "00000000-0000-4000-8000-000000000105",
     artifact_type: "candidate_review",
     identity: "00000000-0000-4000-8000-000000000104|methodology|reviewer:methodology",
-    content_hash: "3".repeat(64),
+    content_hash: "6807beae14107e2d0fceb0f5ed221b46a0e949c4bbeac4ce36ac30a0cab9fc46",
     source_locators: [], unit: null, period_start: null, period_end: null, available_at: null,
     status: "approve",
   }, {
@@ -157,7 +157,7 @@ const candidateRevision = {
     reference: "00000000-0000-4000-8000-000000000106",
     artifact_type: "candidate_review",
     identity: "00000000-0000-4000-8000-000000000104|provenance|reviewer:provenance",
-    content_hash: "4".repeat(64),
+    content_hash: "7696ed8189e7f0afdb347c632b4202820d97cf79bb587fc0052286407d12bdd7",
     source_locators: [], unit: null, period_start: null, period_end: null, available_at: null,
     status: "approve",
   }, {
@@ -165,13 +165,13 @@ const candidateRevision = {
     reference: "00000000-0000-4000-8000-000000000108",
     artifact_type: "source_manifest",
     identity: "candidate-manifest|1",
-    content_hash: "5".repeat(64),
+    content_hash: "f".repeat(64),
     source_locators: [], unit: null, period_start: null, period_end: null, available_at: null,
     status: "frozen",
   }],
 };
 
-const candidateEvidence = {
+const candidateEvidenceBase = {
   schema_version: "underwriting.v1" as const,
   revision_id: candidateRevision.id,
   object_id: candidateRevision.object_id,
@@ -180,11 +180,6 @@ const candidateEvidence = {
   content_hash: candidateRevision.content_hash,
   cutoff: candidateRevision.cutoff,
   source_manifest_hash: candidateRevision.source_manifest_hash,
-  parent_refs: candidateRevision.parent_refs
-    .filter((parent) => ["candidate_dossier", "candidate_review", "source_manifest"].includes(parent.artifact_type))
-    .map(({ schema_version, reference, artifact_type, identity, content_hash }) => ({
-      schema_version, reference, artifact_type, identity, content_hash,
-    })),
   dossier: {
     schema_version: "underwriting.v1" as const,
     reference: "00000000-0000-4000-8000-000000000104",
@@ -286,6 +281,71 @@ const candidateEvidence = {
     research_debt_keys: ["candidate_evidence:industry-capacity"],
     resolution_requirements: ["正式化前不得使用。"],
   },
+};
+
+const candidateDossierCanonicalItems = candidateEvidenceBase.items.map(({
+  schema_version: _schemaVersion, observed_start, observed_end, available_at, ...item
+}) => ({
+  ...item,
+  observed_start: observed_start.replace("Z", "+00:00"),
+  observed_end: observed_end.replace("Z", "+00:00"),
+  available_at: available_at.replace("Z", "+00:00"),
+}));
+
+const candidateEvidence = {
+  ...candidateEvidenceBase,
+  items: [candidateEvidenceBase.items[1], candidateEvidenceBase.items[0], candidateEvidenceBase.items[2]],
+  parent_refs: candidateRevision.parent_refs
+    .filter((parent) => ["candidate_dossier", "candidate_review", "source_manifest"].includes(parent.artifact_type))
+    .map(({ schema_version, reference, artifact_type, identity, content_hash }) => ({
+      schema_version, reference, artifact_type, identity, content_hash,
+      descriptor_preimage: artifact_type === "candidate_dossier" ? {
+        schema_version: "underwriting.v1" as const,
+        raw_content_hash: "8a0991545eee9faa854880be4d95f566384e6d32d255776d6e48b9c6fa2ed110",
+        created_at: "2025-05-15T15:59:59+00:00",
+      } : artifact_type === "candidate_review" ? {
+        schema_version: "underwriting.v1" as const,
+        raw_content_hash: reference.endsWith("105")
+          ? "824f5d58e5251ed91a916340b1b0ba2f8c606261dddcf81f0b7ac203a2b3ac7e"
+          : "bc6fdfe9d7221f5992c18df7d5cb8713564cb5516a599acc0a9a5cd2c4e76274",
+        created_at: "2025-05-15T15:59:59+00:00",
+        reviewed_at: "2025-05-15T15:59:59+00:00",
+      } : {
+        schema_version: "underwriting.v1" as const,
+        row_content_hash: "f".repeat(64),
+        manifest_hash: "5".repeat(64),
+      },
+    })),
+  dossier: {
+    ...candidateEvidenceBase.dossier,
+    content_hash: "8a0991545eee9faa854880be4d95f566384e6d32d255776d6e48b9c6fa2ed110",
+    supersedes_id: null,
+    canonical_payload: {
+      object_id: candidateRevision.object_id,
+      basis_id: candidateRevision.basis_id,
+      source_manifest_id: "00000000-0000-4000-8000-000000000108",
+      dossier_key: "industry-capacity",
+      version: 1,
+      scope_statement: "仅限已冻结的行业产能候选证据。",
+      status: "candidate" as const,
+      purpose: "evidence_candidate" as const,
+      items: candidateDossierCanonicalItems,
+      rejected_calculations: [
+        "不得将图表转录与其他来源拼接。",
+        "不得将假设边界改写为观测事实。",
+      ],
+      source_manifest_hash: "5".repeat(64),
+      created_at: "2025-05-15T15:59:59+00:00",
+      supersedes_id: null,
+    },
+  },
+  reviews: [{
+    ...candidateEvidenceBase.reviews[0],
+    content_hash: "824f5d58e5251ed91a916340b1b0ba2f8c606261dddcf81f0b7ac203a2b3ac7e",
+  }, {
+    ...candidateEvidenceBase.reviews[1],
+    content_hash: "bc6fdfe9d7221f5992c18df7d5cb8713564cb5516a599acc0a9a5cd2c4e76274",
+  }],
 };
 
 function unknownGap(overrides: Record<string, unknown> = {}) {
@@ -467,13 +527,15 @@ describe("ResearchArchivePage", () => {
     }],
     ["has a rehashed forged dossier with the same reference", {
       ...candidateEvidence,
-      parent_refs: candidateEvidence.parent_refs.map((parent) => parent.artifact_type === "candidate_dossier" ? { ...parent, content_hash: "a".repeat(64) } : parent),
-      dossier: { ...candidateEvidence.dossier, content_hash: "b".repeat(64), scope_statement: "篡改后的范围。" },
+      dossier: {
+        ...candidateEvidence.dossier,
+        content_hash: "b".repeat(64), scope_statement: "篡改后的范围。",
+        canonical_payload: { ...candidateEvidence.dossier.canonical_payload, scope_statement: "篡改后的范围。" },
+      },
     }],
     ["has a rehashed forged review with the same reference", {
       ...candidateEvidence,
-      parent_refs: candidateEvidence.parent_refs.map((parent) => parent.reference === candidateEvidence.reviews[0].reference ? { ...parent, content_hash: "a".repeat(64) } : parent),
-      reviews: [{ ...candidateEvidence.reviews[0], content_hash: "54ceb7e2a738d4180ba7303aa396c5e99eefa5cb757d58842eb8a287fccfd3bc", rationale: "篡改后的方法说明。" }, candidateEvidence.reviews[1]],
+      reviews: [{ ...candidateEvidence.reviews[0], content_hash: "43c1672a21b1bd0dae4590e27d548db9a38199878fcd2de9993b9f01eeae1ed6", rationale: "篡改后的方法说明。" }, candidateEvidence.reviews[1]],
     }],
     ["contains prohibited calculation semantics", { ...candidateEvidence, dossier: { ...candidateEvidence.dossier, rejected_calculations: ["建议买入并设定目标价"] } }],
   ])("fails closed when candidate evidence %s", async (_name, response) => {

@@ -409,12 +409,32 @@ function isStrictCandidateParentRef(value: unknown): boolean {
 function isCandidateEvidenceParentRef(value: unknown): boolean {
   const parent = record(value);
   return parent !== null
-    && hasOnlyKeys(parent, ["schema_version", "reference", "artifact_type", "identity", "content_hash"])
+    && hasOnlyKeys(parent, ["schema_version", "reference", "artifact_type", "identity", "content_hash", "descriptor_preimage"])
     && parent.schema_version === "underwriting.v1"
     && isCanonicalUuid(parent.reference)
     && ["candidate_dossier", "candidate_review", "source_manifest"].includes(parent.artifact_type as string)
     && nonEmptyString(parent.identity)
-    && isContentHash(parent.content_hash);
+    && isContentHash(parent.content_hash)
+    && ((parent.artifact_type === "candidate_dossier" && (() => {
+      const preimage = record(parent.descriptor_preimage);
+      return preimage !== null
+        && hasOnlyKeys(preimage, ["schema_version", "raw_content_hash", "created_at"])
+        && preimage.schema_version === "underwriting.v1"
+        && isContentHash(preimage.raw_content_hash) && isUtcTimestamp(preimage.created_at);
+    })()) || (parent.artifact_type === "candidate_review" && (() => {
+      const preimage = record(parent.descriptor_preimage);
+      return preimage !== null
+        && hasOnlyKeys(preimage, ["schema_version", "raw_content_hash", "created_at", "reviewed_at"])
+        && preimage.schema_version === "underwriting.v1"
+        && isContentHash(preimage.raw_content_hash)
+        && isUtcTimestamp(preimage.created_at) && isUtcTimestamp(preimage.reviewed_at);
+    })()) || (parent.artifact_type === "source_manifest" && (() => {
+      const preimage = record(parent.descriptor_preimage);
+      return preimage !== null
+        && hasOnlyKeys(preimage, ["schema_version", "row_content_hash", "manifest_hash"])
+        && preimage.schema_version === "underwriting.v1"
+        && isContentHash(preimage.row_content_hash) && isContentHash(preimage.manifest_hash);
+    })()));
 }
 
 function exactCandidateParentDescriptors(candidate: Record<string, unknown>, selected: ResearchRevision): boolean {
@@ -475,12 +495,8 @@ function candidateParentBindings(candidate: Record<string, unknown>, selected: R
     || answerabilityParent.status !== answerability.state
   ) return false;
 
-  const candidateParents = candidate.parent_refs as unknown[];
-  const manifestDescriptor = candidateParents.find((parent) => record(parent)?.artifact_type === "source_manifest");
-  if (record(manifestDescriptor)?.content_hash !== candidate.source_manifest_hash) return false;
-
   const reviews = candidate.reviews as unknown[];
-  return reviews.every((review) => {
+  const valid = reviews.every((review) => {
     const reviewRecord = record(review);
     if (reviewRecord === null) return false;
     const parent = byType.get("candidate_review")?.find((item) => item.reference === reviewRecord.reference);
@@ -488,23 +504,121 @@ function candidateParentBindings(candidate: Record<string, unknown>, selected: R
       && parent.identity === `${dossier.reference}|${reviewRecord.reviewer_role}|${reviewRecord.reviewer_identity}`
       && parent.status === reviewRecord.decision;
   });
+  return valid;
 }
 
-async function canonicalReviewHash(review: Record<string, unknown>, dossier: Record<string, unknown>): Promise<string | null> {
+function normalizedUtc(value: string): string {
+  return value.endsWith("Z") ? `${value.slice(0, -1)}+00:00` : value;
+}
+
+async function canonicalCandidateHash(value: object, ensureAscii: boolean): Promise<string | null> {
   if (!globalThis.crypto?.subtle) return null;
-  const reviewedAt = review.reviewed_at;
-  if (typeof reviewedAt !== "string") return null;
-  const canonicalPayload = JSON.stringify({
-    decision: review.decision,
-    dossier_content_hash: dossier.content_hash,
-    dossier_id: dossier.reference,
-    rationale: review.rationale,
-    reviewed_at: reviewedAt.endsWith("Z") ? `${reviewedAt.slice(0, -1)}+00:00` : reviewedAt,
-    reviewer_identity: review.reviewer_identity,
-    reviewer_role: review.reviewer_role,
-  }).replace(/[\u0080-\uffff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
-  const bytes = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalPayload));
+  const canonicalPayload = JSON.stringify(value);
+  const serialized = ensureAscii
+    ? canonicalPayload.replace(/[\u0080-\uffff]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`)
+    : canonicalPayload;
+  const bytes = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(serialized));
   return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function canonicalCandidateItem(value: unknown): Record<string, unknown> | null {
+  const item = record(value);
+  if (item === null || !isCandidateItem({ ...item, schema_version: "underwriting.v1" })) return null;
+  const { schema_version: _schemaVersion, ...canonical } = item;
+  return {
+    available_at: normalizedUtc(canonical.available_at as string), error_bound: canonical.error_bound,
+    exclusions: canonical.exclusions, methodology: canonical.methodology, metric_key: canonical.metric_key,
+    not_observed_declared: canonical.not_observed_declared, observed_end: normalizedUtc(canonical.observed_end as string),
+    observed_start: normalizedUtc(canonical.observed_start as string),
+    prohibited_splicing_declaration: canonical.prohibited_splicing_declaration, scenario_use: canonical.scenario_use,
+    scope_statement: canonical.scope_statement, source_id: canonical.source_id, source_locator: canonical.source_locator,
+    status: canonical.status, transcription_method: canonical.transcription_method, unit: canonical.unit,
+    unknown_reason: canonical.unknown_reason, value: canonical.value,
+  };
+}
+
+function canonicalDossierPayload(value: unknown): Record<string, unknown> | null {
+  const payload = record(value);
+  if (
+    payload === null
+    || !hasOnlyKeys(payload, [
+      "object_id", "basis_id", "source_manifest_id", "dossier_key", "version", "scope_statement", "status",
+      "purpose", "items", "rejected_calculations", "source_manifest_hash", "created_at", "supersedes_id",
+    ])
+    || !isCanonicalUuid(payload.object_id) || !isCanonicalUuid(payload.basis_id) || !isCanonicalUuid(payload.source_manifest_id)
+    || !nonEmptyString(payload.dossier_key) || !Number.isSafeInteger(payload.version) || (payload.version as number) < 1
+    || !nonEmptyString(payload.scope_statement) || payload.status !== "candidate" || payload.purpose !== "evidence_candidate"
+    || !Array.isArray(payload.items) || payload.items.length === 0 || !payload.items.every((item) => canonicalCandidateItem(item) !== null)
+    || !isStringList(payload.rejected_calculations) || payload.rejected_calculations.length === 0
+    || !isContentHash(payload.source_manifest_hash) || !isUtcTimestamp(payload.created_at)
+    || !(payload.supersedes_id === null || isCanonicalUuid(payload.supersedes_id))
+  ) return null;
+  return {
+    basis_id: payload.basis_id, created_at: payload.created_at, dossier_key: payload.dossier_key,
+    items: payload.items.map((item) => canonicalCandidateItem(item)), object_id: payload.object_id,
+    purpose: payload.purpose, rejected_calculations: payload.rejected_calculations, scope_statement: payload.scope_statement,
+    source_manifest_hash: payload.source_manifest_hash, source_manifest_id: payload.source_manifest_id,
+    status: payload.status, supersedes_id: payload.supersedes_id, version: payload.version,
+  };
+}
+
+async function verifiedCandidatePayloadHashes(candidate: Record<string, unknown>): Promise<boolean> {
+  const dossier = record(candidate.dossier);
+  const payload = dossier === null ? null : canonicalDossierPayload(dossier.canonical_payload);
+  const parents = candidate.parent_refs as unknown[];
+  const dossierParent = parents.map(record).find((parent) => parent?.artifact_type === "candidate_dossier");
+  const manifestParent = parents.map(record).find((parent) => parent?.artifact_type === "source_manifest");
+  if (dossier === null || payload === null || dossierParent == null || manifestParent == null) return false;
+  const dossierPreimage = record(dossierParent.descriptor_preimage);
+  const manifestPreimage = record(manifestParent.descriptor_preimage);
+  if (
+    dossierPreimage === null || manifestPreimage === null
+    || dossier.content_hash !== dossierPreimage.raw_content_hash
+    || payload.object_id !== candidate.object_id || payload.basis_id !== candidate.basis_id
+    || payload.dossier_key !== dossier.dossier_key || payload.version !== dossier.version || payload.status !== dossier.status
+    || payload.scope_statement !== dossier.scope_statement || payload.supersedes_id !== dossier.supersedes_id
+    || JSON.stringify(payload.rejected_calculations) !== JSON.stringify(dossier.rejected_calculations)
+    || payload.created_at !== dossierPreimage.created_at
+    || payload.source_manifest_id !== manifestParent.reference
+    || payload.source_manifest_hash !== candidate.source_manifest_hash
+    || manifestPreimage.manifest_hash !== candidate.source_manifest_hash
+    || manifestPreimage.row_content_hash !== manifestParent.content_hash
+  ) return false;
+  const canonicalItems = payload.items as Record<string, unknown>[];
+  const itemHashes = await Promise.all(canonicalItems.map((item) => canonicalCandidateHash(item, true)));
+  if (itemHashes.some((hash) => hash === null)) return false;
+  const sortedItems = canonicalItems.map((item, index) => ({ item, hash: itemHashes[index] as string })).sort((left, right) => {
+    const leftKey = `${left.item.metric_key}\u0000${left.item.source_id}\u0000${left.item.source_locator}\u0000${left.item.observed_start}\u0000${left.item.observed_end}\u0000${left.hash}`;
+    const rightKey = `${right.item.metric_key}\u0000${right.item.source_id}\u0000${right.item.source_locator}\u0000${right.item.observed_start}\u0000${right.item.observed_end}\u0000${right.hash}`;
+    return leftKey.localeCompare(rightKey);
+  }).map(({ item }) => item);
+  const visibleItems = (candidate.items as unknown[]).map(canonicalCandidateItem);
+  if (visibleItems.some((item) => item === null) || JSON.stringify(visibleItems) !== JSON.stringify(sortedItems)) return false;
+  const dossierHash = await canonicalCandidateHash(payload, true);
+  const dossierDescriptorHash = await canonicalCandidateHash({
+    candidate_dossier_content_hash: dossier.content_hash, created_at: dossierPreimage.created_at,
+  }, false);
+  if (dossierHash !== dossier.content_hash || dossierHash !== dossierPreimage.raw_content_hash || dossierDescriptorHash !== dossierParent.content_hash) return false;
+
+  const reviews = candidate.reviews as unknown[];
+  for (const reviewValue of reviews) {
+    const review = record(reviewValue);
+    const parent = review === null ? undefined : parents.map(record).find((item) => item?.reference === review.reference);
+    const preimage = parent == null ? null : record(parent.descriptor_preimage);
+    if (review === null || parent == null || preimage === null || preimage.raw_content_hash !== review.content_hash) return false;
+    const reviewedAt = normalizedUtc(review.reviewed_at as string);
+    if (reviewedAt !== preimage.reviewed_at) return false;
+    const reviewHash = await canonicalCandidateHash({
+      decision: review.decision, dossier_content_hash: dossier.content_hash, dossier_id: dossier.reference,
+      rationale: review.rationale, reviewed_at: preimage.reviewed_at,
+      reviewer_identity: review.reviewer_identity, reviewer_role: review.reviewer_role,
+    }, true);
+    const descriptorHash = await canonicalCandidateHash({
+      candidate_review_content_hash: review.content_hash, created_at: preimage.created_at, reviewed_at: preimage.reviewed_at,
+    }, false);
+    if (reviewHash !== review.content_hash || descriptorHash !== parent.content_hash) return false;
+  }
+  return true;
 }
 
 async function checkedCandidateEvidence(value: unknown, selected: ResearchRevision): Promise<CandidateEvidence> {
@@ -522,10 +636,11 @@ async function checkedCandidateEvidence(value: unknown, selected: ResearchRevisi
     || !isUtcTimestamp(candidate.cutoff) || candidate.cutoff !== selected.cutoff
     || !isContentHash(candidate.source_manifest_hash) || candidate.source_manifest_hash !== selected.source_manifest_hash
     || dossier === null
-    || !hasOnlyKeys(dossier, ["schema_version", "reference", "content_hash", "dossier_key", "version", "status", "scope_statement", "rejected_calculations"])
+    || !hasOnlyKeys(dossier, ["schema_version", "reference", "content_hash", "dossier_key", "version", "status", "scope_statement", "rejected_calculations", "supersedes_id", "canonical_payload"])
     || dossier.schema_version !== "underwriting.v1" || !isCanonicalUuid(dossier.reference) || !isContentHash(dossier.content_hash)
     || !nonEmptyString(dossier.dossier_key) || !Number.isSafeInteger(dossier.version) || (dossier.version as number) < 1
     || dossier.status !== "candidate" || !nonEmptyString(dossier.scope_statement)
+    || !(dossier.supersedes_id === null || isCanonicalUuid(dossier.supersedes_id))
     || !hasControlledCandidateCalculations(dossier.rejected_calculations)
     || !Array.isArray(candidate.items) || candidate.items.length === 0 || !candidate.items.every(isCandidateItem)
     || !Array.isArray(candidate.reviews) || candidate.reviews.length !== 2 || !candidate.reviews.every(isCandidateReview)
@@ -538,9 +653,7 @@ async function checkedCandidateEvidence(value: unknown, selected: ResearchRevisi
     || !isStringList(answerability.research_debt_keys) || !isStringList(answerability.resolution_requirements)
     || !candidateParentBindings(candidate, selected)
   ) throw new CandidateEvidenceIntegrityError();
-  const reviews = candidate.reviews as unknown[];
-  const reviewHashes = await Promise.all(reviews.map((review) => canonicalReviewHash(record(review) ?? {}, dossier)));
-  if (reviewHashes.some((hash, index) => hash === null || hash !== record(reviews[index])?.content_hash)) {
+  if (!await verifiedCandidatePayloadHashes(candidate)) {
     throw new CandidateEvidenceIntegrityError();
   }
   return candidate as CandidateEvidence;
