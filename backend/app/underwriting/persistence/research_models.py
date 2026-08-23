@@ -8,6 +8,7 @@ was knowable at a particular cutoff.
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 import hashlib
@@ -28,6 +29,7 @@ from app.underwriting.domain.evidence_candidates import (
 _CANDIDATE_DOSSIER_FAMILY_LOCK_DOMAIN = b"underwriting:candidate-dossier-family:v1\x00"
 _CANDIDATE_SQLITE_WRITE_RESERVATION = "candidate_sqlite_write_reservation"
 _SQLITE_ORM_WRITE_TRANSACTION = "sqlite_orm_write_transaction"
+_CANDIDATE_SELECTED_REPLAY = "candidate_selected_replay"
 
 
 def _candidate_canonical_hash(value: object) -> str:
@@ -646,6 +648,7 @@ def validate_candidate_dossier_governance(
     row: UnderwritingEvidenceCandidateDossierVersion,
     *,
     enforce_current: bool,
+    enforce_lineage: bool = True,
 ) -> None:
     """Apply the candidate dossier's cross-row invariants for every writer."""
     _validate_dossier_row(row)
@@ -659,7 +662,8 @@ def validate_candidate_dossier_governance(
     if contract.source_manifest_hash != manifest.manifest_hash:
         raise ValidationError("dossier source_manifest_hash does not match source manifest")
     _candidate_items_match_manifest(contract, manifest, cutoff)
-    _validate_candidate_dossier_lineage(session, row)
+    if enforce_lineage:
+        _validate_candidate_dossier_lineage(session, row)
     if not enforce_current:
         return
     current = session.scalar(
@@ -679,6 +683,20 @@ def validate_candidate_dossier_governance(
     expected_parent = current.id if current else None
     if row.version != expected_version or row.supersedes_id != expected_parent:
         raise ValidationError("dossier successor version or predecessor is not canonical")
+
+
+@contextmanager
+def selected_candidate_replay(session: Session):
+    """Keep a selected revision replay local to its sealed candidate parents."""
+    previous = session.info.get(_CANDIDATE_SELECTED_REPLAY)
+    session.info[_CANDIDATE_SELECTED_REPLAY] = True
+    try:
+        yield
+    finally:
+        if previous is None:
+            session.info.pop(_CANDIDATE_SELECTED_REPLAY, None)
+        else:
+            session.info[_CANDIDATE_SELECTED_REPLAY] = previous
 
 
 def validate_candidate_review_governance(
@@ -804,7 +822,12 @@ def _validate_loaded_candidate_governance(session, instance) -> None:
         if isinstance(instance, UnderwritingEvidenceCandidateDossierVersion):
             # Older dossier versions remain valid historical evidence; only a
             # new successor must be the current family head before persistence.
-            validate_candidate_dossier_governance(session, instance, enforce_current=False)
+            validate_candidate_dossier_governance(
+                session,
+                instance,
+                enforce_current=False,
+                enforce_lineage=not session.info.get(_CANDIDATE_SELECTED_REPLAY, False),
+            )
         else:
             # A review is immutable historical evidence.  Currentness governs
             # insertion only; replay still verifies its sealed dossier hash,

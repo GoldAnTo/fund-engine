@@ -45,6 +45,11 @@ from app.underwriting.api.schemas import (
     FrozenAnswerabilityResponse,
     FrozenUnknownEvidenceGapResponse,
     ResearchRevisionBoundaryResponse,
+    CandidateEvidenceAnswerabilityResponse,
+    CandidateEvidenceDossierResponse,
+    CandidateEvidenceItemResponse,
+    CandidateEvidenceResponse,
+    CandidateEvidenceReviewResponse,
 )
 from app.errors import NotFoundError
 from app.underwriting.persistence.models import UnderwritingAnswerabilityEvaluation, UnderwritingHistoricalBasis, UnderwritingResearchVersion, UnderwritingLedgerEntry, UnderwritingObjectRelation
@@ -68,6 +73,7 @@ from app.underwriting.services.research_revision_diff import (
     FrozenUnknownEvidenceGap,
     ResearchRevisionBoundary,
     ResearchRevisionSummary,
+    CandidateEvidenceRead,
 )
 
 
@@ -281,6 +287,71 @@ def _revision_boundary_response(
     )
 
 
+def _candidate_evidence_response(value: CandidateEvidenceRead) -> CandidateEvidenceResponse:
+    """Render only the immutable candidate parents selected by the revision."""
+    revision = value.revision
+    dossier = value.dossier
+    return CandidateEvidenceResponse(
+        revision_id=revision.id,
+        object_id=revision.object_id,
+        basis_id=revision.basis_id,
+        version_kind=revision.version_kind,
+        content_hash=revision.content_hash,
+        cutoff=revision.cutoff,
+        source_manifest_hash=revision.source_manifest_hash,
+        dossier=CandidateEvidenceDossierResponse(
+            reference=UUID(dossier.reference),
+            content_hash=dossier.content_hash,
+            dossier_key=dossier.dossier_key,
+            version=dossier.version,
+            status=dossier.status,
+            scope_statement=dossier.scope_statement,
+        ),
+        items=[
+            CandidateEvidenceItemResponse(
+                metric_key=item.metric_key,
+                status=item.status.value,
+                value=item.value,
+                unit=item.unit,
+                observed_start=item.observed_start,
+                observed_end=item.observed_end,
+                available_at=item.available_at,
+                source_id=item.source_id,
+                source_locator=item.source_locator,
+                scope_statement=item.scope_statement,
+                exclusions=list(item.exclusions),
+                methodology=item.methodology,
+                prohibited_splicing_declaration=item.prohibited_splicing_declaration,
+                transcription_method=item.transcription_method,
+                error_bound=item.error_bound,
+                scenario_use=item.scenario_use,
+                not_observed_declared=item.not_observed_declared,
+                unknown_reason=item.unknown_reason,
+            )
+            for item in dossier.items
+        ],
+        reviews=[
+            CandidateEvidenceReviewResponse(
+                reference=UUID(review.reference),
+                content_hash=review.content_hash,
+                reviewer_identity=review.reviewer_identity,
+                reviewer_role=review.reviewer_role,
+                decision=review.decision,
+                rationale=review.rationale,
+                reviewed_at=review.reviewed_at,
+            )
+            for review in value.reviews
+        ],
+        answerability=CandidateEvidenceAnswerabilityResponse(
+            reference=UUID(value.answerability.reference),
+            content_hash=value.answerability.content_hash,
+            state=value.answerability.state,
+            research_debt_keys=list(value.answerability.research_debt_keys),
+            resolution_requirements=list(value.answerability.resolution_requirements),
+        ),
+    )
+
+
 def _require_research_revision(db: Session, revision_id: UUID) -> None:
     with db.no_autoflush:
         if db.get(UnderwritingResearchVersion, revision_id) is None:
@@ -430,6 +501,24 @@ def get_research_revision_boundary(
     try:
         return _revision_boundary_response(
             ResearchRevisionDiffService(db).revision_boundary(revision_id),
+        )
+    except ValidationError as exc:
+        raise ValidationFailedError(str(exc)) from exc
+
+
+@router.get(
+    "/research-versions/{revision_id}/candidate-evidence",
+    response_model=CandidateEvidenceResponse,
+    responses=READ_ERROR_RESPONSES,
+)
+def get_candidate_evidence(
+    revision_id: UUID, db: Session = Depends(get_db),
+) -> CandidateEvidenceResponse:
+    """Return the exact frozen candidate graph of the selected revision."""
+    _require_research_revision(db, revision_id)
+    try:
+        return _candidate_evidence_response(
+            ResearchRevisionDiffService(db).candidate_evidence(revision_id),
         )
     except ValidationError as exc:
         raise ValidationFailedError(str(exc)) from exc

@@ -24,6 +24,11 @@ from app.underwriting.domain.answerability import (
     enforce_action_boundary,
     evaluate_answerability,
 )
+from app.underwriting.domain.evidence_candidates import (
+    CandidateEvidenceDossier,
+    CandidateEvidenceItem,
+    CandidateEvidenceReview,
+)
 from app.underwriting.domain.types import ResearchObjectKind
 from app.underwriting.domain.types import (
     AnswerabilityState,
@@ -51,6 +56,7 @@ from app.underwriting.persistence.research_models import (
     UnderwritingMetricDefinitionVersion,
     UnderwritingMetricObservation,
     UnderwritingSourceManifestVersion,
+    selected_candidate_replay,
     validate_candidate_dossier_governance,
     validate_candidate_review_governance,
 )
@@ -175,6 +181,53 @@ class ResearchRevisionBoundary:
     revision: ResearchRevisionSummary
     answerability: FrozenAnswerability | None
     unknown_evidence_gaps: tuple[FrozenUnknownEvidenceGap, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenCandidateDossier:
+    """The dossier parent selected by one candidate-only revision."""
+
+    reference: str
+    content_hash: str
+    dossier_key: str
+    version: int
+    status: str
+    scope_statement: str
+    items: tuple[CandidateEvidenceItem, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenCandidateReview:
+    """One exact approved review selected by the candidate revision."""
+
+    reference: str
+    content_hash: str
+    reviewer_identity: str
+    reviewer_role: str
+    decision: str
+    rationale: str
+    reviewed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenCandidateAnswerability:
+    """The bounded research-state parent of a candidate revision."""
+
+    reference: str
+    content_hash: str
+    state: str
+    research_debt_keys: tuple[str, ...]
+    resolution_requirements: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateEvidenceRead:
+    """Strict, selected-parent projection for an evidence-candidate revision."""
+
+    revision: ResearchRevisionSummary
+    dossier: FrozenCandidateDossier
+    reviews: tuple[FrozenCandidateReview, ...]
+    answerability: FrozenCandidateAnswerability
 
 
 @dataclass(frozen=True, slots=True)
@@ -842,7 +895,15 @@ class ResearchRevisionDiffService:
             return
         if artifact_type == "candidate_dossier":
             assert isinstance(row, UnderwritingEvidenceCandidateDossierVersion)
-            validate_candidate_dossier_governance(self._session, row, enforce_current=False)
+            # This is a selected-parent replay.  A successor's predecessor
+            # chain is not a parent of the selected revision and must not
+            # become a current/history lookup that can rewrite this read.
+            validate_candidate_dossier_governance(
+                self._session,
+                row,
+                enforce_current=False,
+                enforce_lineage=False,
+            )
             self._require_available_at_cutoff(row.created_at, cutoff, "candidate dossier")
             return
         if artifact_type == "candidate_review":
@@ -1673,6 +1734,139 @@ class ResearchRevisionDiffService:
                 summary,
                 answerability,
                 tuple(sorted(gaps, key=lambda gap: (gap.metric_key, gap.reference))),
+            )
+
+    def candidate_evidence(self, revision_id: UUID) -> CandidateEvidenceRead:
+        """Project only the exact, verified parents of one candidate revision.
+
+        This deliberately begins with ``revision_summary``: that resolver
+        authenticates the selected revision hash and its complete parent graph.
+        The rows below are then addressed only by IDs already sealed in that
+        graph—never by a dossier key, a current head, or a fixture lookup.
+        """
+        with selected_candidate_replay(self._session), self._session.no_autoflush:
+            summary = self.revision_summary(revision_id)
+            if summary.version_kind != INDUSTRY_EVIDENCE_CANDIDATE_KIND:
+                raise ValidationError("research revision is not an industry evidence candidate")
+            revision = self._revision(summary.id)
+            by_type = {
+                artifact_type: tuple(
+                    ref for ref in summary.parent_refs if ref.artifact_type == artifact_type
+                )
+                for artifact_type in ("candidate_dossier", "candidate_review", "answerability")
+            }
+            if (
+                len(by_type["candidate_dossier"]) != 1
+                or len(by_type["candidate_review"]) != 2
+                or len(by_type["answerability"]) != 1
+            ):
+                raise ValidationError("candidate revision parent graph is incomplete")
+
+            dossier_ref = by_type["candidate_dossier"][0]
+            try:
+                dossier_id = UUID(dossier_ref.reference)
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise ValidationError("candidate revision dossier parent is malformed") from exc
+            dossier_row = self._session.get(UnderwritingEvidenceCandidateDossierVersion, dossier_id)
+            if dossier_row is None:
+                raise ValidationError("candidate revision dossier parent is missing")
+            # Re-resolve the precise stored row, catching a changed descriptor
+            # even if an ORM identity map existed before the read began.
+            if self._resolve_parent(revision, dossier_ref.reference) != dossier_ref:
+                raise ValidationError("candidate revision dossier parent changed after validation")
+            dossier = CandidateEvidenceDossier.from_canonical_payload(dossier_row.payload)
+            if (
+                dossier.object_id != summary.object_id
+                or dossier.basis_id != summary.basis_id
+                or dossier.content_hash != dossier_row.content_hash
+                or str(dossier_row.id) != dossier_ref.reference
+            ):
+                raise ValidationError("candidate revision dossier parent is not sealed")
+
+            reviews: list[FrozenCandidateReview] = []
+            for review_ref in by_type["candidate_review"]:
+                try:
+                    review_id = UUID(review_ref.reference)
+                except (TypeError, ValueError, AttributeError) as exc:
+                    raise ValidationError("candidate revision review parent is malformed") from exc
+                review_row = self._session.get(UnderwritingEvidenceCandidateReviewVersion, review_id)
+                if review_row is None:
+                    raise ValidationError("candidate revision review parent is missing")
+                if self._resolve_parent(revision, review_ref.reference) != review_ref:
+                    raise ValidationError("candidate revision review parent changed after validation")
+                review = CandidateEvidenceReview.from_canonical_payload(review_row.payload)
+                if (
+                    review.dossier_id != dossier_row.id
+                    or review.dossier_content_hash != dossier.content_hash
+                    or review.content_hash != review_row.content_hash
+                    or str(review_row.id) != review_ref.reference
+                ):
+                    raise ValidationError("candidate revision review parent is not sealed")
+                reviews.append(FrozenCandidateReview(
+                    reference=review_ref.reference,
+                    content_hash=review.content_hash,
+                    reviewer_identity=review.reviewer_identity,
+                    reviewer_role=review.reviewer_role,
+                    decision=review.decision,
+                    rationale=review.rationale,
+                    reviewed_at=review.reviewed_at,
+                ))
+
+            answerability_ref = by_type["answerability"][0]
+            try:
+                answerability_id = UUID(answerability_ref.reference)
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise ValidationError("candidate revision answerability parent is malformed") from exc
+            answerability_row = self._session.get(UnderwritingAnswerabilityEvaluation, answerability_id)
+            if answerability_row is None:
+                raise ValidationError("candidate revision answerability parent is missing")
+            if self._resolve_parent(
+                revision,
+                answerability_ref.reference,
+                answerability_seal_kind=_ANSWERABILITY_SEAL_GENERIC_TIMESTAMP,
+            ) != answerability_ref:
+                raise ValidationError("candidate revision answerability parent changed after validation")
+            answerability = self._validated_answerability(answerability_row, revision)
+            if (
+                answerability.state != AnswerabilityState.NOT_ANSWERABLE.value
+                or answerability.reference != answerability_ref.reference
+                or answerability_ref.status != answerability.state
+            ):
+                raise ValidationError("candidate revision answerability parent is not sealed")
+
+            items = tuple(sorted(
+                dossier.items,
+                key=lambda item: (
+                    item.metric_key,
+                    item.source_id,
+                    item.source_locator,
+                    item.observed_start,
+                    item.observed_end,
+                    item.content_hash,
+                ),
+            ))
+            return CandidateEvidenceRead(
+                revision=summary,
+                dossier=FrozenCandidateDossier(
+                    reference=dossier_ref.reference,
+                    content_hash=dossier.content_hash,
+                    dossier_key=dossier.dossier_key,
+                    version=dossier.version,
+                    status=dossier.status.value,
+                    scope_statement=dossier.scope_statement,
+                    items=items,
+                ),
+                reviews=tuple(sorted(
+                    reviews,
+                    key=lambda review: (review.reviewer_role, review.reviewer_identity, review.reference),
+                )),
+                answerability=FrozenCandidateAnswerability(
+                    reference=answerability_ref.reference,
+                    content_hash=answerability_ref.content_hash,
+                    state=answerability.state,
+                    research_debt_keys=answerability.research_debt_keys,
+                    resolution_requirements=answerability.resolution_requirements,
+                ),
             )
 
     def _family_rows(self, object_id: UUID, version_kind: str) -> tuple[UnderwritingResearchVersion, ...]:

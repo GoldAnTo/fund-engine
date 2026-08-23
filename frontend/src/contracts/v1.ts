@@ -2446,6 +2446,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/underwriting/v1/research-versions/{revision_id}/candidate-evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Candidate Evidence
+         * @description Return the exact frozen candidate graph of the selected revision.
+         */
+        get: operations["get_candidate_evidence_api_underwriting_v1_research_versions__revision_id__candidate_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/underwriting/v1/research-versions/{from_revision_id}/diff/{to_revision_id}": {
         parameters: {
             query?: never;
@@ -3386,6 +3406,209 @@ export interface components {
             updated_at: string;
             /** Next Action */
             next_action: string;
+        };
+        /**
+         * CandidateEvidenceAnswerabilityResponse
+         * @description Only the candidate's research state, debt, and requirements.
+         */
+        CandidateEvidenceAnswerabilityResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Reference
+             * Format: uuid
+             */
+            reference: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * State
+             * @constant
+             */
+            state: "not_answerable";
+            /** Research Debt Keys */
+            research_debt_keys: string[];
+            /** Resolution Requirements */
+            resolution_requirements: string[];
+        };
+        /**
+         * CandidateEvidenceDossierResponse
+         * @description The selected candidate dossier identity and bounded research scope.
+         */
+        CandidateEvidenceDossierResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Reference
+             * Format: uuid
+             */
+            reference: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Dossier Key */
+            dossier_key: string;
+            /** Version */
+            version: number;
+            /**
+             * Status
+             * @constant
+             */
+            status: "candidate";
+            /** Scope Statement */
+            scope_statement: string;
+        };
+        /**
+         * CandidateEvidenceItemResponse
+         * @description One source-bound candidate item; never a formal model input.
+         */
+        CandidateEvidenceItemResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Metric Key */
+            metric_key: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "source_reported" | "official_aggregate" | "chart_approximation" | "assumption_bound" | "unknown";
+            /** Value */
+            value: string | null;
+            /** Unit */
+            unit: string | null;
+            /**
+             * Observed Start
+             * Format: date-time
+             */
+            observed_start: string;
+            /**
+             * Observed End
+             * Format: date-time
+             */
+            observed_end: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /** Source Id */
+            source_id: string;
+            /** Source Locator */
+            source_locator: string;
+            /** Scope Statement */
+            scope_statement: string;
+            /** Exclusions */
+            exclusions: string[];
+            /** Methodology */
+            methodology: string;
+            /** Prohibited Splicing Declaration */
+            prohibited_splicing_declaration: string;
+            /** Transcription Method */
+            transcription_method: string | null;
+            /** Error Bound */
+            error_bound: string | null;
+            /** Scenario Use */
+            scenario_use: string | null;
+            /** Not Observed Declared */
+            not_observed_declared: boolean;
+            /** Unknown Reason */
+            unknown_reason: string | null;
+        };
+        /**
+         * CandidateEvidenceResponse
+         * @description Read-only evidence-candidate projection for one selected revision.
+         */
+        CandidateEvidenceResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Revision Id
+             * Format: uuid
+             */
+            revision_id: string;
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /**
+             * Basis Id
+             * Format: uuid
+             */
+            basis_id: string;
+            /**
+             * Version Kind
+             * @constant
+             */
+            version_kind: "industry_evidence_candidate";
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Cutoff
+             * Format: date-time
+             */
+            cutoff: string;
+            /** Source Manifest Hash */
+            source_manifest_hash: string;
+            dossier: components["schemas"]["CandidateEvidenceDossierResponse"];
+            /** Items */
+            items: components["schemas"]["CandidateEvidenceItemResponse"][];
+            /** Reviews */
+            reviews: components["schemas"]["CandidateEvidenceReviewResponse"][];
+            answerability: components["schemas"]["CandidateEvidenceAnswerabilityResponse"];
+        };
+        /**
+         * CandidateEvidenceReviewResponse
+         * @description One independently identified review sealed into the selected revision.
+         */
+        CandidateEvidenceReviewResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Reference
+             * Format: uuid
+             */
+            reference: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Reviewer Identity */
+            reviewer_identity: string;
+            /**
+             * Reviewer Role
+             * @enum {string}
+             */
+            reviewer_role: "provenance" | "methodology";
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "approve" | "reject" | "request_changes";
+            /** Rationale */
+            rationale: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at: string;
         };
         /** CandidateMechanismResponse */
         CandidateMechanismResponse: {
@@ -14446,7 +14669,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -14488,7 +14711,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -14530,7 +14753,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -14572,7 +14795,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -14616,7 +14839,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -14660,7 +14883,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -14701,7 +14924,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -14742,7 +14965,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -14782,7 +15005,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -14822,7 +15045,47 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_candidate_evidence_api_underwriting_v1_research_versions__revision_id__candidate_evidence_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateEvidenceResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -14863,7 +15126,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -14897,7 +15160,7 @@ export interface operations {
                     "application/json": components["schemas"]["ResearchArchiveListResponse"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -14938,7 +15201,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Unprocessable Content */
             422: {
                 headers: {
                     [name: string]: unknown;

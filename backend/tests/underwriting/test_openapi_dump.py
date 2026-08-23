@@ -16,6 +16,7 @@ REVISION_PATHS = {
 }
 ARCHIVE_PATH = "/api/underwriting/v1/research-archives"
 BOUNDARY_PATH = "/api/underwriting/v1/research-versions/{revision_id}/boundary"
+CANDIDATE_EVIDENCE_PATH = "/api/underwriting/v1/research-versions/{revision_id}/candidate-evidence"
 REVISION_SCHEMAS = {
     "ResearchRevisionArtifactResponse",
     "ResearchRevisionResponse",
@@ -31,6 +32,13 @@ BOUNDARY_SCHEMAS = {
     "ResearchRevisionBoundaryResponse",
     "FrozenAnswerabilityResponse",
     "FrozenUnknownEvidenceGapResponse",
+}
+CANDIDATE_EVIDENCE_SCHEMAS = {
+    "CandidateEvidenceResponse",
+    "CandidateEvidenceDossierResponse",
+    "CandidateEvidenceItemResponse",
+    "CandidateEvidenceReviewResponse",
+    "CandidateEvidenceAnswerabilityResponse",
 }
 FORBIDDEN_RESEARCH_FIELDS = {
     "pe", "pb", "dcf", "price", "target", "buy", "sell", "stop", "position",
@@ -145,6 +153,29 @@ def test_boundary_contract_binds_identity_and_exposes_only_typed_frozen_fields()
     for name in BOUNDARY_SCHEMAS:
         enum_values.update(_enum_values(schemas[name], schemas))
     assert not (enum_values & FORBIDDEN_BOUNDARY_ENUMS)
+
+
+def test_candidate_evidence_contract_is_get_only_and_excludes_formal_outputs_recursively() -> None:
+    """A reviewed candidate stays research evidence, not a decision surface."""
+    openapi = app.openapi()
+    schemas = openapi["components"]["schemas"]
+
+    assert set(openapi["paths"][CANDIDATE_EVIDENCE_PATH]) == {"get"}
+    for name in CANDIDATE_EVIDENCE_SCHEMAS:
+        assert schemas[name]["additionalProperties"] is False
+    names: set[str] = set()
+    for name in CANDIDATE_EVIDENCE_SCHEMAS:
+        names.update(_property_names(schemas[name], schemas))
+    forbidden = {"action", "entry", "price", "valuation", "recommendation"}
+    assert not (set(name.lower() for name in names) & forbidden)
+    assert "decision" not in set(schemas["CandidateEvidenceResponse"]["properties"])
+    assert set(schemas["CandidateEvidenceReviewResponse"]["properties"]) >= {
+        "reviewer_identity", "reviewer_role", "decision", "rationale", "reviewed_at",
+    }
+    assert set(schemas["CandidateEvidenceAnswerabilityResponse"]["properties"]) == {
+        "schema_version", "reference", "content_hash", "state", "research_debt_keys",
+        "resolution_requirements",
+    }
 
 
 def test_revision_history_identity_contract_includes_research_object_identity() -> None:

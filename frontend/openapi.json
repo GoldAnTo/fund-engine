@@ -9564,6 +9564,60 @@
         }
       }
     },
+    "/api/underwriting/v1/research-versions/{revision_id}/candidate-evidence": {
+      "get": {
+        "tags": [
+          "underwriting-v1"
+        ],
+        "summary": "Get Candidate Evidence",
+        "description": "Return the exact frozen candidate graph of the selected revision.",
+        "operationId": "get_candidate_evidence_api_underwriting_v1_research_versions__revision_id__candidate_evidence_get",
+        "parameters": [
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Revision Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateEvidenceResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
     "/api/underwriting/v1/research-versions/{from_revision_id}/diff/{to_revision_id}": {
       "get": {
         "tags": [
@@ -12200,6 +12254,413 @@
           "next_action"
         ],
         "title": "CancelRunResponse"
+      },
+      "CandidateEvidenceAnswerabilityResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "reference": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reference"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "state": {
+            "type": "string",
+            "const": "not_answerable",
+            "title": "State"
+          },
+          "research_debt_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Research Debt Keys"
+          },
+          "resolution_requirements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Resolution Requirements"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reference",
+          "content_hash",
+          "state",
+          "research_debt_keys",
+          "resolution_requirements"
+        ],
+        "title": "CandidateEvidenceAnswerabilityResponse",
+        "description": "Only the candidate's research state, debt, and requirements."
+      },
+      "CandidateEvidenceDossierResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "reference": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reference"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "dossier_key": {
+            "type": "string",
+            "title": "Dossier Key"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "status": {
+            "type": "string",
+            "const": "candidate",
+            "title": "Status"
+          },
+          "scope_statement": {
+            "type": "string",
+            "title": "Scope Statement"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reference",
+          "content_hash",
+          "dossier_key",
+          "version",
+          "status",
+          "scope_statement"
+        ],
+        "title": "CandidateEvidenceDossierResponse",
+        "description": "The selected candidate dossier identity and bounded research scope."
+      },
+      "CandidateEvidenceItemResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "metric_key": {
+            "type": "string",
+            "title": "Metric Key"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "source_reported",
+              "official_aggregate",
+              "chart_approximation",
+              "assumption_bound",
+              "unknown"
+            ],
+            "title": "Status"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "observed_start": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Observed Start"
+          },
+          "observed_end": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Observed End"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "source_locator": {
+            "type": "string",
+            "title": "Source Locator"
+          },
+          "scope_statement": {
+            "type": "string",
+            "title": "Scope Statement"
+          },
+          "exclusions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exclusions"
+          },
+          "methodology": {
+            "type": "string",
+            "title": "Methodology"
+          },
+          "prohibited_splicing_declaration": {
+            "type": "string",
+            "title": "Prohibited Splicing Declaration"
+          },
+          "transcription_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcription Method"
+          },
+          "error_bound": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Bound"
+          },
+          "scenario_use": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scenario Use"
+          },
+          "not_observed_declared": {
+            "type": "boolean",
+            "title": "Not Observed Declared"
+          },
+          "unknown_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unknown Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "metric_key",
+          "status",
+          "value",
+          "unit",
+          "observed_start",
+          "observed_end",
+          "available_at",
+          "source_id",
+          "source_locator",
+          "scope_statement",
+          "exclusions",
+          "methodology",
+          "prohibited_splicing_declaration",
+          "transcription_method",
+          "error_bound",
+          "scenario_use",
+          "not_observed_declared",
+          "unknown_reason"
+        ],
+        "title": "CandidateEvidenceItemResponse",
+        "description": "One source-bound candidate item; never a formal model input."
+      },
+      "CandidateEvidenceResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "revision_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Revision Id"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "basis_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Basis Id"
+          },
+          "version_kind": {
+            "type": "string",
+            "const": "industry_evidence_candidate",
+            "title": "Version Kind"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "cutoff": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff"
+          },
+          "source_manifest_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Manifest Hash"
+          },
+          "dossier": {
+            "$ref": "#/components/schemas/CandidateEvidenceDossierResponse"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateEvidenceItemResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateEvidenceReviewResponse"
+            },
+            "type": "array",
+            "title": "Reviews"
+          },
+          "answerability": {
+            "$ref": "#/components/schemas/CandidateEvidenceAnswerabilityResponse"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision_id",
+          "object_id",
+          "basis_id",
+          "version_kind",
+          "content_hash",
+          "cutoff",
+          "source_manifest_hash",
+          "dossier",
+          "items",
+          "reviews",
+          "answerability"
+        ],
+        "title": "CandidateEvidenceResponse",
+        "description": "Read-only evidence-candidate projection for one selected revision."
+      },
+      "CandidateEvidenceReviewResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "reference": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Reference"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "reviewer_identity": {
+            "type": "string",
+            "title": "Reviewer Identity"
+          },
+          "reviewer_role": {
+            "type": "string",
+            "enum": [
+              "provenance",
+              "methodology"
+            ],
+            "title": "Reviewer Role"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "request_changes"
+            ],
+            "title": "Decision"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reference",
+          "content_hash",
+          "reviewer_identity",
+          "reviewer_role",
+          "decision",
+          "rationale",
+          "reviewed_at"
+        ],
+        "title": "CandidateEvidenceReviewResponse",
+        "description": "One independently identified review sealed into the selected revision."
       },
       "CandidateMechanismResponse": {
         "properties": {

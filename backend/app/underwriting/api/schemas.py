@@ -294,6 +294,80 @@ class ResearchRevisionBoundaryResponse(UnderwritingModel):
     unknown_evidence_gaps: list[FrozenUnknownEvidenceGapResponse]
 
 
+class CandidateEvidenceDossierResponse(UnderwritingModel):
+    """The selected candidate dossier identity and bounded research scope."""
+
+    reference: UUID
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dossier_key: str
+    version: int
+    status: Literal["candidate"]
+    scope_statement: str
+
+
+class CandidateEvidenceItemResponse(UnderwritingModel):
+    """One source-bound candidate item; never a formal model input."""
+
+    metric_key: str
+    status: Literal[
+        "source_reported", "official_aggregate", "chart_approximation", "assumption_bound", "unknown",
+    ]
+    value: Decimal | None
+    unit: str | None
+    observed_start: datetime
+    observed_end: datetime
+    available_at: datetime
+    source_id: str
+    source_locator: str
+    scope_statement: str
+    exclusions: list[str]
+    methodology: str
+    prohibited_splicing_declaration: str
+    transcription_method: str | None
+    error_bound: Decimal | None
+    scenario_use: str | None
+    not_observed_declared: bool
+    unknown_reason: str | None
+
+
+class CandidateEvidenceReviewResponse(UnderwritingModel):
+    """One independently identified review sealed into the selected revision."""
+
+    reference: UUID
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reviewer_identity: str
+    reviewer_role: Literal["provenance", "methodology"]
+    decision: Literal["approve", "reject", "request_changes"]
+    rationale: str
+    reviewed_at: datetime
+
+
+class CandidateEvidenceAnswerabilityResponse(UnderwritingModel):
+    """Only the candidate's research state, debt, and requirements."""
+
+    reference: UUID
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    state: Literal["not_answerable"]
+    research_debt_keys: list[str]
+    resolution_requirements: list[str]
+
+
+class CandidateEvidenceResponse(UnderwritingModel):
+    """Read-only evidence-candidate projection for one selected revision."""
+
+    revision_id: UUID
+    object_id: UUID
+    basis_id: UUID
+    version_kind: Literal["industry_evidence_candidate"]
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cutoff: datetime
+    source_manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dossier: CandidateEvidenceDossierResponse
+    items: list[CandidateEvidenceItemResponse]
+    reviews: list[CandidateEvidenceReviewResponse]
+    answerability: CandidateEvidenceAnswerabilityResponse
+
+
 class EconomicSourceResponse(UnderwritingModel):
     source_id: str
     title: str
