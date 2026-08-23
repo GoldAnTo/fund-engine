@@ -437,6 +437,20 @@ class UnderwritingResearchRepository:
         dossier = self._session.get(UnderwritingEvidenceCandidateDossierVersion, dossier_id)
         if dossier is None:
             raise ValidationError("candidate dossier does not exist")
+        current = self._latest(
+            select(UnderwritingEvidenceCandidateDossierVersion)
+            .where(
+                UnderwritingEvidenceCandidateDossierVersion.object_id == dossier.object_id,
+                UnderwritingEvidenceCandidateDossierVersion.basis_id == dossier.basis_id,
+                UnderwritingEvidenceCandidateDossierVersion.dossier_key == dossier.dossier_key,
+            )
+            .order_by(
+                UnderwritingEvidenceCandidateDossierVersion.version.desc(),
+                UnderwritingEvidenceCandidateDossierVersion.id.desc(),
+            )
+        )
+        if current is None or current.id != dossier.id:
+            raise ValidationError("candidate dossier is no longer current")
         cutoff = self._basis_cutoff(dossier.basis_id)
         created_at = self._created_at_at_basis(created_at, cutoff)
         contract = self._review_contract_payload(payload)

@@ -163,6 +163,21 @@ def test_successor_cannot_reuse_prior_dossier_review(repository, company, basis,
     assert repository.effective_candidate_reviews(successor.id) == []
 
 
+def test_review_rejects_dossier_that_has_been_superseded(repository, company, basis, manifest) -> None:
+    dossier = _append_dossier(repository, company, basis, manifest)
+    successor_payload = _dossier_payload(
+        object_id=company.id, basis_id=basis.id, source_manifest_id=manifest.id,
+        source_manifest_hash=manifest.manifest_hash, version=2, supersedes_id=dossier.id,
+    )
+    _append_dossier(
+        repository, company, basis, manifest, payload=successor_payload,
+        expected_parent_id=dossier.id,
+    )
+
+    with pytest.raises(ValidationError, match="dossier is no longer current"):
+        _append_review(repository, dossier, reviewer_identity="reviewer:a", reviewer_role="provenance")
+
+
 def test_dossier_rejects_stale_parent(repository, company, basis, manifest) -> None:
     dossier = _append_dossier(repository, company, basis, manifest)
     payload = _dossier_payload(

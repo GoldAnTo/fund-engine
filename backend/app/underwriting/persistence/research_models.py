@@ -238,6 +238,10 @@ class UnderwritingEvidenceCandidateDossierVersion(Base):
             "status = 'candidate'",
             name="ck_uw_evidence_candidate_dossier_status",
         ),
+        CheckConstraint(
+            "purpose = 'evidence_candidate'",
+            name="ck_uw_evidence_candidate_dossier_purpose",
+        ),
         Index(
             "ix_uw_evidence_candidate_dossiers_object_basis_status",
             "object_id", "basis_id", "status",

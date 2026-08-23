@@ -398,6 +398,12 @@ def test_candidate_rows_capture_dossier_and_review_governance_contracts() -> Non
     assert {"dossier_id", "dossier_content_hash", "reviewer_identity", "reviewer_role", "decision", "rationale", "payload", "content_hash", "reviewed_at", "created_at"} <= set(review.c.keys())
     assert dossier.c.object_id.foreign_keys and dossier.c.basis_id.foreign_keys
     assert dossier.c.source_manifest_id.foreign_keys and review.c.dossier_id.foreign_keys
+    assert {
+        constraint.name for constraint in dossier.constraints
+    } >= {
+        "ck_uw_evidence_candidate_dossier_purpose",
+        "ck_uw_evidence_candidate_dossier_status",
+    }
 
 
 def test_candidate_tables_are_registered_and_append_only() -> None:
