@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import {
@@ -95,13 +95,15 @@ function DirectoryPage() {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<ArchiveKind>("");
   const [archiveState, setArchiveState] = useState<LoadState<ResearchArchiveList>>({ state: "loading" });
+  const filterGeneration = useRef(0);
 
   useEffect(() => {
     let live = true;
+    const generation = ++filterGeneration.current;
     setArchiveState({ state: "loading" });
     void underwritingResearchApi.listArchives({ query: query.trim() || undefined, kind: kind === "" ? undefined : kind })
-      .then((value) => { if (live) setArchiveState({ state: "ready", value }); })
-      .catch((error: unknown) => { if (live) setArchiveState({ state: "error", error }); });
+      .then((value) => { if (live && filterGeneration.current === generation) setArchiveState({ state: "ready", value }); })
+      .catch((error: unknown) => { if (live && filterGeneration.current === generation) setArchiveState({ state: "error", error }); });
     return () => { live = false; };
   }, [query, kind]);
 
@@ -110,6 +112,7 @@ function DirectoryPage() {
     const previous = archiveState.value;
     const cursor = previous.next_cursor;
     if (!cursor) return;
+    const generation = filterGeneration.current;
     setArchiveState({ state: "loading", value: previous });
     try {
       const next = await underwritingResearchApi.listArchives({
@@ -117,9 +120,11 @@ function DirectoryPage() {
         kind: kind === "" ? undefined : kind,
         cursor,
       });
-      setArchiveState({ state: "ready", value: { ...next, items: [...previous.items, ...next.items] } });
+      if (filterGeneration.current === generation) {
+        setArchiveState({ state: "ready", value: { ...next, items: [...previous.items, ...next.items] } });
+      }
     } catch (error) {
-      setArchiveState({ state: "error", error });
+      if (filterGeneration.current === generation) setArchiveState({ state: "error", error });
     }
   }
 
@@ -198,16 +203,8 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
   if (!revisions.length || !selected) return <main className="ros-page ura-page"><p className="ura-empty" role="status">该档案没有可读取的冻结版本。</p></main>;
 
   const changed = diffState?.state === "ready" ? diffState.value.entries : [];
-  const artifacts = [
-    ...(revisionState?.state === "ready" ? revisionState.value.parent_refs : []),
-    ...changed.flatMap((entry) => [entry.after, entry.before].filter((artifact): artifact is Artifact => artifact !== null)),
-  ];
+  const artifacts = revisionState?.state === "ready" ? revisionState.value.parent_refs : [];
   const statuses = [...new Set(artifacts.map((artifact) => labelForStatus(artifact.status)).filter((status): status is string => Boolean(status)))];
-  if (
-    versionKind === "catl_economic_model_evidence_only"
-    && statuses.includes("研究尚需验证")
-    && !statuses.includes("等待验证资料")
-  ) statuses.unshift("等待验证资料");
 
   return (
     <main className="ros-page ura-page">
@@ -223,7 +220,7 @@ function DetailPage({ objectId, versionKind }: { objectId: string; versionKind: 
           {diffState?.state === "error" && <p className="ura-alert" role="alert">这个相邻版本差异暂时无法读取。</p>}
           {previous && diffState?.state === "ready" && <div className="ura-diff-groups">{GROUPS.map(([group, heading]) => {
             const entries = changed.filter((entry) => entry.group === group);
-            return <section className="ura-diff-group" key={group}><h2>{heading}</h2>{entries.length === 0 ? <p>这一版本没有该类冻结变化</p> : entries.map((entry) => <article className="ura-diff-entry" key={`${entry.change_type}:${entry.artifact_type}:${entry.identity}`}><header><b>{entry.change_type}</b><span>{entry.artifact_type}</span></header>{entry.after && <ArtifactDetails artifact={entry.after} />}{!entry.after && entry.before && <ArtifactDetails artifact={entry.before} />}</article>)}</section>;
+            return <section className="ura-diff-group" key={group}><h2>{heading}</h2>{entries.length === 0 ? <p>这一版本没有该类冻结变化</p> : entries.map((entry) => <article className="ura-diff-entry" key={`${entry.change_type}:${entry.artifact_type}:${entry.identity}`}><header><b>{entry.change_type}</b><span>{entry.artifact_type}</span></header>{entry.before && <section className="ura-diff-card" aria-label="前一版本证据"><h3>前一版本</h3><ArtifactDetails artifact={entry.before} /></section>}{entry.after && <section className="ura-diff-card" aria-label="当前版本证据"><h3>当前版本</h3><ArtifactDetails artifact={entry.after} /></section>}</article>)}</section>;
           })}</div>}
           <EvidenceTable artifacts={artifacts} />
         </section>

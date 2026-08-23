@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import pageSource from "./ResearchArchivePage.tsx?raw";
@@ -180,13 +180,62 @@ describe("ResearchArchivePage", () => {
     renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
 
     expect((await screen.findAllByText("研究尚需验证")).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("等待验证资料").length).toBeGreaterThan(0);
+    expect(screen.queryByText("等待验证资料")).not.toBeInTheDocument();
     expect(screen.getAllByText("Unknown evidence gap").length).toBeGreaterThan(0);
     expect(screen.getAllByText("candidate").length).toBeGreaterThan(0);
     expect(screen.getAllByText("p.148").length).toBeGreaterThan(0);
     expect(screen.getAllByText("GWh").length).toBeGreaterThan(0);
     expect(screen.getAllByText("2024-01-01 至 2024-12-31").length).toBeGreaterThan(0);
     expect(screen.getAllByText("2025-05-14T00:00:00Z").length).toBeGreaterThan(0);
+  });
+
+  it("keeps an immediate predecessor artifact out of the selected frozen-evidence table", async () => {
+    const selectedArtifact = {
+      schema_version: "underwriting.v1" as const,
+      reference: "Selected frozen source",
+      artifact_type: "source_fact",
+      identity: "selected-only",
+      content_hash: "6".repeat(64),
+      source_locators: ["p.20"],
+      unit: null,
+      period_start: null,
+      period_end: null,
+      available_at: null,
+      status: "candidate",
+    };
+    const predecessorArtifact = {
+      ...selectedArtifact,
+      reference: "Predecessor-only source",
+      identity: "old-only",
+      content_hash: "7".repeat(64),
+    };
+    installApi({
+      revision: vi.fn().mockResolvedValue({ ...revisionTwo, parent_refs: [selectedArtifact] }),
+      diff: vi.fn().mockResolvedValue({
+        schema_version: "underwriting.v1",
+        from_revision_id: "revision-1",
+        to_revision_id: "revision-2",
+        from_content_hash: revisionOne.content_hash,
+        to_content_hash: revisionTwo.content_hash,
+        diff_hash: "8".repeat(64),
+        entries: [{
+          schema_version: "underwriting.v1",
+          group: "evidence",
+          change_type: "replaced",
+          artifact_type: "source_fact",
+          identity: "selected-only",
+          before: predecessorArtifact,
+          after: selectedArtifact,
+        }],
+      }),
+    });
+
+    renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
+
+    const evidence = await screen.findByRole("region", { name: "冻结证据记录" });
+    expect(within(evidence).getByText("Selected frozen source")).toBeVisible();
+    expect(within(evidence).queryByText("Predecessor-only source")).not.toBeInTheDocument();
+    expect(screen.getByText("Predecessor-only source")).toBeVisible();
   });
 
   it("uses only the selected revision's immediate predecessor and supports keyboard selection", async () => {
@@ -228,6 +277,33 @@ describe("ResearchArchivePage", () => {
     renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
 
     expect(await screen.findByRole("alert")).toHaveTextContent("查询条件无法读取，请修改后重试。");
+  });
+
+  it("does not let a stale load-more response replace a changed directory filter", async () => {
+    let resolveLoadMore: ((value: ResearchArchiveList) => void) | undefined;
+    const loadMorePending = new Promise<ResearchArchiveList>((resolve) => { resolveLoadMore = resolve; });
+    const filteredArchive: ResearchArchiveList = {
+      ...archive,
+      items: [{ ...archive.items[0], canonical_name: "新查询档案" }],
+      next_cursor: null,
+    };
+    const listArchives = vi.fn()
+      .mockResolvedValueOnce(archive)
+      .mockReturnValueOnce(loadMorePending)
+      .mockResolvedValueOnce(filteredArchive);
+    installApi({ listArchives });
+    const user = userEvent.setup();
+    renderArchive();
+
+    await screen.findByRole("button", { name: "载入后续档案" });
+    await user.click(screen.getByRole("button", { name: "载入后续档案" }));
+    await user.type(screen.getByRole("searchbox", { name: "搜索公司或行业档案" }), "新");
+    await waitFor(() => expect(listArchives).toHaveBeenLastCalledWith(expect.objectContaining({ query: "新" })));
+    expect(await screen.findByText("新查询档案")).toBeVisible();
+
+    resolveLoadMore?.({ ...archive, items: [{ ...archive.items[0], canonical_name: "旧分页档案" }], next_cursor: null });
+    await waitFor(() => expect(screen.queryByText("旧分页档案")).not.toBeInTheDocument());
+    expect(screen.getByText("新查询档案")).toBeVisible();
   });
 
   it("does not contain prohibited guidance terminology in its display source", () => {
