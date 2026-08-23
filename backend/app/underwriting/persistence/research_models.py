@@ -220,3 +220,60 @@ class UnderwritingFalsifierVersion(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     supersedes_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("uw_falsifier_versions.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class UnderwritingEvidenceCandidateDossierVersion(Base):
+    __tablename__ = "uw_evidence_candidate_dossier_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "object_id", "basis_id", "dossier_key", "version",
+            name="uq_uw_evidence_candidate_dossier_version",
+        ),
+        UniqueConstraint("supersedes_id", name="uq_uw_evidence_candidate_dossier_successor"),
+        Index(
+            "ix_uw_evidence_candidate_dossiers_object_basis_status",
+            "object_id", "basis_id", "status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    dossier_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    object_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("uw_research_objects.id"), nullable=False)
+    basis_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("uw_historical_bases.id"), nullable=False)
+    source_manifest_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("uw_source_manifest_versions.id"), nullable=False)
+    scope_statement: Mapped[str] = mapped_column(Text, nullable=False)
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    source_manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("uw_evidence_candidate_dossier_versions.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class UnderwritingEvidenceCandidateReviewVersion(Base):
+    __tablename__ = "uw_evidence_candidate_review_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "dossier_id", "reviewer_identity", "reviewer_role",
+            name="uq_uw_evidence_candidate_review_identity",
+        ),
+        Index("ix_uw_evidence_candidate_reviews_dossier_role", "dossier_id", "reviewer_role"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    dossier_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("uw_evidence_candidate_dossier_versions.id"), nullable=False
+    )
+    dossier_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    reviewer_identity: Mapped[str] = mapped_column(String(320), nullable=False)
+    reviewer_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

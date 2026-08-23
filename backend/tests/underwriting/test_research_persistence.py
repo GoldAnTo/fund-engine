@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine, inspect, update
@@ -9,9 +10,13 @@ from sqlalchemy.orm import Session
 
 from app.models import Base
 from app.models.ledger import IMMUTABLE_TABLES, ImmutableLedgerError
+from app.models.ledger import ValidationError
+from app.underwriting.domain import CandidateEvidenceItem, CandidateEvidenceStatus
 from app.underwriting.persistence.research_models import (
     UnderwritingCompanyExposureVersion,
     UnderwritingEarningsEngineVersion,
+    UnderwritingEvidenceCandidateDossierVersion,
+    UnderwritingEvidenceCandidateReviewVersion,
     UnderwritingFalsifierVersion,
     UnderwritingForecastInputVersion,
     UnderwritingIndustryScenarioVersion,
@@ -39,6 +44,70 @@ WAVE2_TABLES = frozenset(
         "uw_falsifier_versions",
     }
 )
+
+CANDIDATE_EVIDENCE_TABLES = frozenset(
+    {
+        "uw_evidence_candidate_dossier_versions",
+        "uw_evidence_candidate_review_versions",
+    }
+)
+
+
+def _candidate_item(**overrides: object) -> CandidateEvidenceItem:
+    values: dict[str, object] = {
+        "metric_key": "industry.nominal_capacity",
+        "status": CandidateEvidenceStatus.CHART_APPROXIMATION,
+        "value": Decimal("0.9"),
+        "unit": "TWh",
+        "observed_start": NOW,
+        "observed_end": NOW,
+        "available_at": NOW,
+        "source_id": "iea-2024",
+        "source_locator": "iea:chart:4",
+        "scope_statement": "China lithium-ion battery cells, 2024",
+        "exclusions": ("effective capacity",),
+        "methodology": "manual chart reading",
+        "transcription_method": "read bar height against labelled axis",
+        "error_bound": Decimal("0.1"),
+    }
+    values.update(overrides)
+    return CandidateEvidenceItem(**values)  # type: ignore[arg-type]
+
+
+def test_chart_candidate_requires_transcription_method() -> None:
+    with pytest.raises(ValidationError, match="chart_approximation requires transcription_method"):
+        _candidate_item(transcription_method=None)
+
+
+def test_unknown_candidate_cannot_carry_a_numeric_value() -> None:
+    with pytest.raises(ValidationError, match="unknown must not carry a numeric value"):
+        _candidate_item(
+            status=CandidateEvidenceStatus.UNKNOWN,
+            value=Decimal("0"),
+            unit=None,
+            transcription_method=None,
+            error_bound=None,
+            unknown_reason="not published",
+        )
+
+
+def test_candidate_rows_capture_dossier_and_review_governance_contracts() -> None:
+    dossier = Base.metadata.tables["uw_evidence_candidate_dossier_versions"]
+    review = Base.metadata.tables["uw_evidence_candidate_review_versions"]
+
+    assert {
+        "object_id", "basis_id", "source_manifest_id", "dossier_key", "version",
+        "scope_statement", "purpose", "payload", "source_manifest_hash", "content_hash",
+        "supersedes_id", "created_at",
+    } <= set(dossier.c.keys())
+    assert {"dossier_id", "dossier_content_hash", "reviewer_identity", "reviewer_role", "decision", "rationale", "payload", "content_hash", "reviewed_at", "created_at"} <= set(review.c.keys())
+    assert dossier.c.object_id.foreign_keys and dossier.c.basis_id.foreign_keys
+    assert dossier.c.source_manifest_id.foreign_keys and review.c.dossier_id.foreign_keys
+
+
+def test_candidate_tables_are_registered_and_append_only() -> None:
+    assert CANDIDATE_EVIDENCE_TABLES <= set(Base.metadata.tables)
+    assert CANDIDATE_EVIDENCE_TABLES <= IMMUTABLE_TABLES
 
 
 EXPECTED_UNIQUES = {
@@ -69,6 +138,14 @@ EXPECTED_UNIQUES = {
     "uw_falsifier_versions": (
         "uq_uw_falsifier_version",
         ("mechanism_id", "falsifier_key", "version"),
+    ),
+    "uw_evidence_candidate_dossier_versions": (
+        "uq_uw_evidence_candidate_dossier_version",
+        ("object_id", "basis_id", "dossier_key", "version"),
+    ),
+    "uw_evidence_candidate_review_versions": (
+        "uq_uw_evidence_candidate_review_identity",
+        ("dossier_id", "reviewer_identity", "reviewer_role"),
     ),
 }
 
@@ -161,6 +238,16 @@ def test_wave2_metadata_can_create_and_drop_on_sqlite() -> None:
         Base.metadata.drop_all(engine, tables=tables)
 
 
+def test_candidate_metadata_can_create_and_drop_on_sqlite() -> None:
+    engine = create_engine("sqlite://")
+    tables = [Base.metadata.tables[name] for name in CANDIDATE_EVIDENCE_TABLES]
+    try:
+        Base.metadata.create_all(engine, tables=tables)
+        assert CANDIDATE_EVIDENCE_TABLES <= set(inspect(engine).get_table_names())
+    finally:
+        Base.metadata.drop_all(engine, tables=tables)
+
+
 def test_wave2_models_are_importable_for_the_future_repository_contract() -> None:
     assert {
         UnderwritingMetricDefinitionVersion,
@@ -172,4 +259,6 @@ def test_wave2_models_are_importable_for_the_future_repository_contract() -> Non
         UnderwritingEarningsEngineVersion,
         UnderwritingForecastInputVersion,
         UnderwritingFalsifierVersion,
+        UnderwritingEvidenceCandidateDossierVersion,
+        UnderwritingEvidenceCandidateReviewVersion,
     }

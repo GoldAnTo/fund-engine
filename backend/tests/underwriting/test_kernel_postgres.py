@@ -29,6 +29,8 @@ TABLES = {
     "uw_earnings_engine_versions",
     "uw_forecast_input_versions",
     "uw_falsifier_versions",
+    "uw_evidence_candidate_dossier_versions",
+    "uw_evidence_candidate_review_versions",
 }
 
 
@@ -42,7 +44,7 @@ def _insert_immutable_records(connection: sa.Connection) -> dict[str, tuple[uuid
     ids = {name: uuid.uuid4() for name in (
         "industry", "company", "security", "relation", "mandate", "basis", "source",
         "definition", "observation", "mechanism", "industry_state", "scenario", "exposure",
-        "earnings", "forecast", "falsifier", "ledger", "research", "answerability",
+        "earnings", "forecast", "falsifier", "dossier", "review", "ledger", "research", "answerability",
     )}
     digest = "a" * 64
     connection.execute(sa.text("""
@@ -109,6 +111,16 @@ def _insert_immutable_records(connection: sa.Connection) -> dict[str, tuple[uuid
         VALUES (:falsifier, :mechanism, 'pg.falsifier', 1, :basis, '{}', :digest, CURRENT_TIMESTAMP)
     """), {**ids, "digest": digest})
     connection.execute(sa.text("""
+        INSERT INTO uw_evidence_candidate_dossier_versions
+          (id, dossier_key, version, object_id, basis_id, source_manifest_id, scope_statement, purpose, status, payload, source_manifest_hash, content_hash, created_at)
+        VALUES (:dossier, 'pg.candidate', 1, :industry, :basis, :source, 'global batteries', 'evidence_candidate', 'candidate', '{}', :digest, :digest, CURRENT_TIMESTAMP)
+    """), {**ids, "digest": digest})
+    connection.execute(sa.text("""
+        INSERT INTO uw_evidence_candidate_review_versions
+          (id, dossier_id, dossier_content_hash, reviewer_identity, reviewer_role, decision, rationale, payload, content_hash, reviewed_at, created_at)
+        VALUES (:review, :dossier, :digest, 'reviewer:pg', 'provenance', 'approve', 'verified', '{}', :digest, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    """), {**ids, "digest": digest})
+    connection.execute(sa.text("""
         INSERT INTO uw_ledger_entries
           (id, object_id, basis_id, ledger_kind, family_key, entry_type, version, payload, effective_at, available_at, source_boundary, content_hash, created_at)
         VALUES (:ledger, :company, :basis, 'reality', 'pg', 'metric', 1, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'pg', :digest, CURRENT_TIMESTAMP)
@@ -140,13 +152,15 @@ def _insert_immutable_records(connection: sa.Connection) -> dict[str, tuple[uuid
         "uw_earnings_engine_versions": (ids["earnings"], "content_hash", "b" * 64),
         "uw_forecast_input_versions": (ids["forecast"], "content_hash", "b" * 64),
         "uw_falsifier_versions": (ids["falsifier"], "content_hash", "b" * 64),
+        "uw_evidence_candidate_dossier_versions": (ids["dossier"], "content_hash", "b" * 64),
+        "uw_evidence_candidate_review_versions": (ids["review"], "content_hash", "b" * 64),
     }
 
 
 @pytest.mark.pg_only
-def test_0061_installs_all_underwriting_tables_and_immutable_triggers() -> None:
+def test_0062_candidate_tables_install_immutable_triggers() -> None:
     database_url = os.environ["TEST_DATABASE_URL"]
-    schema = f"underwriting_0061_{uuid.uuid4().hex}"
+    schema = f"underwriting_0062_{uuid.uuid4().hex}"
     migration_url = _schema_url(database_url, schema)
     admin = sa.create_engine(database_url, future=True)
     isolated = sa.create_engine(migration_url, future=True)
@@ -155,7 +169,7 @@ def test_0061_installs_all_underwriting_tables_and_immutable_triggers() -> None:
         with admin.begin() as connection:
             connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
         migrated = subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "0061"],
+            [sys.executable, "-m", "alembic", "upgrade", "0062"],
             cwd=backend,
             env={**os.environ, "DATABASE_URL": migration_url},
             text=True,

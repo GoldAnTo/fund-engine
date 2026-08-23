@@ -145,6 +145,8 @@ IMMUTABLE_TABLES = frozenset(
         "uw_earnings_engine_versions",
         "uw_forecast_input_versions",
         "uw_falsifier_versions",
+        "uw_evidence_candidate_dossier_versions",
+        "uw_evidence_candidate_review_versions",
     }
 )
 

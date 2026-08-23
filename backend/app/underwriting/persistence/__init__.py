@@ -12,6 +12,8 @@ from app.underwriting.persistence.models import (
 from app.underwriting.persistence.research_models import (
     UnderwritingCompanyExposureVersion,
     UnderwritingEarningsEngineVersion,
+    UnderwritingEvidenceCandidateDossierVersion,
+    UnderwritingEvidenceCandidateReviewVersion,
     UnderwritingFalsifierVersion,
     UnderwritingForecastInputVersion,
     UnderwritingIndustryScenarioVersion,
@@ -43,6 +45,8 @@ __all__ = [
     "UnderwritingIndustryScenarioVersion",
     "UnderwritingCompanyExposureVersion",
     "UnderwritingEarningsEngineVersion",
+    "UnderwritingEvidenceCandidateDossierVersion",
+    "UnderwritingEvidenceCandidateReviewVersion",
     "UnderwritingForecastInputVersion",
     "UnderwritingFalsifierVersion",
     "StaleParentError",

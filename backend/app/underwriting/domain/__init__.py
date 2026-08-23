@@ -27,6 +27,15 @@ from .metrics import (
     SourceRole,
     reconcile,
 )
+from .evidence_candidates import (
+    CandidateEvidenceDossier,
+    CandidateEvidenceDossierVersion,
+    CandidateEvidenceItem,
+    CandidateEvidenceReview,
+    CandidateEvidenceReviewDecision,
+    CandidateEvidenceReviewRole,
+    CandidateEvidenceStatus,
+)
 from .mechanisms import (
     Falsifier,
     FinancialMapping,
@@ -81,6 +90,13 @@ __all__ = [
     "ReconciliationResult",
     "SourceRole",
     "reconcile",
+    "CandidateEvidenceDossier",
+    "CandidateEvidenceDossierVersion",
+    "CandidateEvidenceItem",
+    "CandidateEvidenceReview",
+    "CandidateEvidenceReviewDecision",
+    "CandidateEvidenceReviewRole",
+    "CandidateEvidenceStatus",
     "Falsifier",
     "FinancialMapping",
     "MechanismPack",
