@@ -7915,6 +7915,15 @@ export interface components {
              * Format: uuid
              */
             object_id: string;
+            /**
+             * Object Kind
+             * @enum {string}
+             */
+            object_kind: "industry" | "company" | "security";
+            /** Canonical Name */
+            canonical_name: string;
+            /** External Key */
+            external_key: string;
             /** Version Kind */
             version_kind: string;
             /** Revisions */

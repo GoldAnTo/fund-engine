@@ -27,6 +27,20 @@ parent IDs. Older generic versions are checked against their historical
 snapshot reconstructed only from ledger IDs frozen on that revision; a reader
 does not query later effective ledger state to make them readable.
 
+## Archive identity and runtime isolation
+
+A historical family identifies itself from the persisted `uw_research_objects`
+row selected by that same immutable family. The history response returns its
+controlled object kind, canonical name, and external key only after that row
+has been checked; it never substitutes a current security, event, market, or
+fixture record.
+
+The browser archive lives under a small archive-only route shell rather than
+the event workbench shell. It does not import event polling, worker controls,
+fund-disclosure data, mocks, or a current-data client. A deep link therefore
+uses the URL only to address the frozen family; all displayed identity is the
+checked history response.
+
 ## Parent resolution and presentation
 
 Each selected UUID must resolve to exactly one allowed immutable row and match

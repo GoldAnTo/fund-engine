@@ -24461,6 +24461,23 @@
             "format": "uuid",
             "title": "Object Id"
           },
+          "object_kind": {
+            "type": "string",
+            "enum": [
+              "industry",
+              "company",
+              "security"
+            ],
+            "title": "Object Kind"
+          },
+          "canonical_name": {
+            "type": "string",
+            "title": "Canonical Name"
+          },
+          "external_key": {
+            "type": "string",
+            "title": "External Key"
+          },
           "version_kind": {
             "type": "string",
             "title": "Version Kind"
@@ -24477,6 +24494,9 @@
         "type": "object",
         "required": [
           "object_id",
+          "object_kind",
+          "canonical_name",
+          "external_key",
           "version_kind",
           "revisions"
         ],

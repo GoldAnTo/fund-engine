@@ -6,14 +6,7 @@ type Schemas = components["schemas"];
 
 export type UnderwritingErrorEnvelope = Schemas["UnderwritingErrorEnvelope"];
 export type ResearchRevision = Schemas["ResearchRevisionResponse"];
-// Task 1 already returns this immutable object identity, but the generated
-// contract is deliberately refreshed only in Task 3. Keep the narrow overlay
-// here so archive rendering cannot fall back to route or current-record data.
-export type ResearchRevisionHistory = Schemas["ResearchRevisionHistoryResponse"] & {
-  object_kind: ResearchArchiveItem["object_kind"];
-  canonical_name: string;
-  external_key: string;
-};
+export type ResearchRevisionHistory = Schemas["ResearchRevisionHistoryResponse"];
 export type ResearchRevisionDiff = Schemas["ResearchRevisionDiffResponse"];
 export type ResearchArchiveItem = Schemas["ResearchArchiveItemResponse"];
 export type ResearchArchiveList = Schemas["ResearchArchiveListResponse"];

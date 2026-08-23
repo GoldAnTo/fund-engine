@@ -84,6 +84,14 @@ def test_revision_read_contract_has_only_get_operations_and_no_decision_fields()
     }
 
 
+def test_revision_history_identity_contract_includes_research_object_identity() -> None:
+    """A history identifies its immutable persisted research object."""
+    openapi = app.openapi()
+    properties = openapi["components"]["schemas"]["ResearchRevisionHistoryResponse"]["properties"]
+
+    assert {"object_kind", "canonical_name", "external_key"} <= set(properties)
+
+
 def test_archive_contract_and_ui_sources_do_not_introduce_investment_fields() -> None:
     """The archive is evidence infrastructure, never an action or valuation surface."""
     openapi = app.openapi()
