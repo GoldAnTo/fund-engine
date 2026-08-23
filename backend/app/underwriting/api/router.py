@@ -233,7 +233,6 @@ def _frozen_answerability_response(value: FrozenAnswerability) -> FrozenAnswerab
         blockers=list(value.blockers),
         research_debt_keys=list(value.research_debt_keys),
         resolvable_within_mandate=value.resolvable_within_mandate,
-        research_disposition=value.allowed_action,
         resolution_requirements=list(value.resolution_requirements),
     )
 

@@ -16,7 +16,7 @@
 - Modify: `backend/app/underwriting/services/research_revision_diff.py`
 - Test: `backend/tests/underwriting/test_research_revision_diff.py`
 
-- [ ] **Step 1: Write RED tests:** a generic v3 revision with one answerability parent returns its exact state, blockers, debt keys, mandate flag, allowed research action, and requirements; a raw payload/created-at/hash tamper causes both summary and boundary reads to fail. Zero or multiple answerability parents is explicit (null or 422 as specified), never inferred answerable.
+- [ ] **Step 1: Write RED tests:** a generic v3 revision with one answerability parent returns its exact state, blockers, debt keys, mandate flag, and requirements; a raw payload/created-at/hash tamper causes both summary and boundary reads to fail. Zero or multiple answerability parents is explicit (null or 422 as specified), never inferred answerable.
 - [ ] **Step 2: Confirm RED:** `cd backend && pytest -q tests/underwriting/test_research_revision_diff.py -k boundary_answerability`.
 - [ ] **Step 3: Implement:** add frozen boundary dataclasses. Replace the generic “unsealable answerability” bypass with strict parent validation: exact scope/basis, controlled fields, finite/valid content, `created_at <= cutoff`, and `answerability_content_hash` recomputation. `revision_boundary(revision_id)` must call `revision_summary` and resolve only IDs listed in its checked parent refs.
 - [ ] **Step 4: Confirm GREEN and commit:** run the focused revision/history/archive suite and commit `feat: read frozen research answerability boundaries`.
@@ -69,4 +69,3 @@
 - [ ] Unknown gap records are explicit and structured; absent displayed gaps are not misrepresented as resolved gaps.
 - [ ] CATL continues to be `not_answerable / wait_for_validation`; IndustryState is not fabricated.
 - [ ] The UI makes the frozen version’s limitations legible without price, valuation, or action guidance.
-

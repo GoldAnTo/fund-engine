@@ -259,9 +259,6 @@ class FrozenAnswerabilityResponse(UnderwritingModel):
     blockers: list[BlockerCode]
     research_debt_keys: list[str]
     resolvable_within_mandate: bool
-    # This is a research-process disposition (for example,
-    # ``wait_for_validation``), not a market action or recommendation.
-    research_disposition: EligibleAction
     resolution_requirements: list[str]
 
 

@@ -36,6 +36,12 @@ FORBIDDEN_RESEARCH_FIELDS = {
     "pe", "pb", "dcf", "price", "target", "buy", "sell", "stop", "position",
     "return", "valuation", "recommend", "action",
 }
+FORBIDDEN_BOUNDARY_FIELD_NAMES = {
+    "action", "allowed_action", "requested_action", "research_disposition",
+}
+FORBIDDEN_BOUNDARY_ENUMS = {
+    "eligible_for_probe_entry", "eligible_for_staged_entry", "do_not_enter",
+}
 
 
 def _property_names(schema: object, schemas: dict[str, object], seen: set[str] | None = None) -> set[str]:
@@ -59,6 +65,33 @@ def _property_names(schema: object, schemas: dict[str, object], seen: set[str] |
         else:
             names.update(_property_names(child, schemas, seen))
     return names
+
+
+def _enum_values(schema: object, schemas: dict[str, object], seen: set[str] | None = None) -> set[str]:
+    """Collect enum literals through the public frozen-boundary response tree."""
+    if not isinstance(schema, dict):
+        return set()
+    seen = seen if seen is not None else set()
+    reference = schema.get("$ref")
+    if isinstance(reference, str) and reference.startswith("#/components/schemas/"):
+        name = reference.rsplit("/", 1)[-1]
+        if name in seen:
+            return set()
+        seen.add(name)
+        return _enum_values(schemas[name], schemas, seen)
+    values = {
+        value for value in schema.get("enum", [])
+        if isinstance(value, str)
+    }
+    for key in ("properties", "items", "allOf", "anyOf", "oneOf"):
+        child = schema.get(key)
+        if isinstance(child, dict):
+            for item in child.values() if key == "properties" else (child,):
+                values.update(_enum_values(item, schemas, seen))
+        elif isinstance(child, list):
+            for item in child:
+                values.update(_enum_values(item, schemas, seen))
+    return values
 
 
 def test_dump_openapi_includes_underwriting_routes() -> None:
@@ -107,6 +140,11 @@ def test_boundary_contract_binds_identity_and_exposes_only_typed_frozen_fields()
     for name in BOUNDARY_SCHEMAS:
         names.update(_property_names(schemas[name], schemas))
     assert not (set(name.lower() for name in names) & FORBIDDEN_RESEARCH_FIELDS)
+    assert not (set(name.lower() for name in names) & FORBIDDEN_BOUNDARY_FIELD_NAMES)
+    enum_values: set[str] = set()
+    for name in BOUNDARY_SCHEMAS:
+        enum_values.update(_enum_values(schemas[name], schemas))
+    assert not (enum_values & FORBIDDEN_BOUNDARY_ENUMS)
 
 
 def test_revision_history_identity_contract_includes_research_object_identity() -> None:

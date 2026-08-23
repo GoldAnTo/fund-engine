@@ -5521,11 +5521,6 @@ export interface components {
             research_debt_keys: string[];
             /** Resolvable Within Mandate */
             resolvable_within_mandate: boolean;
-            /**
-             * Research Disposition
-             * @enum {string}
-             */
-            research_disposition: "observe" | "wait_for_validation" | "eligible_for_probe_entry" | "eligible_for_staged_entry" | "do_not_enter";
             /** Resolution Requirements */
             resolution_requirements: string[];
         };

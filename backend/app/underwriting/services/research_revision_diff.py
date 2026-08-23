@@ -135,7 +135,6 @@ class FrozenAnswerability:
     blockers: tuple[str, ...]
     research_debt_keys: tuple[str, ...]
     resolvable_within_mandate: bool
-    allowed_action: str
     resolution_requirements: tuple[str, ...]
 
 
@@ -530,7 +529,6 @@ class ResearchRevisionDiffService:
             blockers=blockers,
             research_debt_keys=debt_keys,
             resolvable_within_mandate=row.resolvable_within_mandate,
-            allowed_action=action.value,
             resolution_requirements=requirements,
         )
 

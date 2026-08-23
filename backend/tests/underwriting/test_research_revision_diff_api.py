@@ -184,7 +184,6 @@ def test_research_revision_boundary_returns_only_the_selected_frozen_catl_state(
                 "formal_mechanism_review",
             ],
             "resolvable_within_mandate": True,
-            "research_disposition": "wait_for_validation",
             "resolution_requirements": [
                 "collect comparable capacity, utilization, price, and cost evidence",
                 "complete independent mechanism review before formalization",

@@ -18187,17 +18187,6 @@
             "type": "boolean",
             "title": "Resolvable Within Mandate"
           },
-          "research_disposition": {
-            "type": "string",
-            "enum": [
-              "observe",
-              "wait_for_validation",
-              "eligible_for_probe_entry",
-              "eligible_for_staged_entry",
-              "do_not_enter"
-            ],
-            "title": "Research Disposition"
-          },
           "resolution_requirements": {
             "items": {
               "type": "string"
@@ -18215,7 +18204,6 @@
           "blockers",
           "research_debt_keys",
           "resolvable_within_mandate",
-          "research_disposition",
           "resolution_requirements"
         ],
         "title": "FrozenAnswerabilityResponse",

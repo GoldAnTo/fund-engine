@@ -824,14 +824,12 @@ def test_boundary_answerability_reads_the_exact_generic_v3_parent(
         boundary.answerability.blockers,
         boundary.answerability.research_debt_keys,
         boundary.answerability.resolvable_within_mandate,
-        boundary.answerability.allowed_action,
         boundary.answerability.resolution_requirements,
     ) == (
         "not_answerable",
         ("missing_key_baseline",),
         ("industry.capacity_utilization_price_cost_baseline",),
         True,
-        "wait_for_validation",
         ("obtain a dated, comparable industry baseline",),
     )
 
@@ -1254,7 +1252,7 @@ def test_boundary_answerability_preserves_the_governed_catl_parent(
     assert summary.answerability_timestamp_sealed is True
     assert boundary.answerability is not None
     assert boundary.answerability.state == "not_answerable"
-    assert boundary.answerability.allowed_action == "wait_for_validation"
+    assert boundary.answerability.resolution_requirements
 
 
 def test_boundary_answerability_rejects_a_legacy_catl_parent_set_without_timestamp_seal(
