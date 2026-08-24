@@ -605,7 +605,7 @@ def test_restore_refuses_foreign_live_files_volume_before_mutation(
         "#!/bin/sh\n"
         'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
         'case "$*" in\n'
-        "  *' config --format json'*) printf '%s' '{\"name\":\"expected-project\",\"volumes\":{\"fund-engine-one-click-data\":{\"name\":\"expected-db\"},\"fund-engine-one-click-files\":{\"name\":\"expected-files\"}}}' ;;\n"
+        '  *\' config --format json\'*) printf \'%s\' \'{"name":"expected-project","volumes":{"fund-engine-one-click-data":{"name":"expected-db"},"fund-engine-one-click-files":{"name":"expected-files"}}}\' ;;\n'
         "  *' ps --status running --services'*) printf 'postgres\\n' ;;\n"
         "  *'volume inspect --format'*' expected-db'*) printf '%s\\n' 'expected-db|expected-project|fund-engine-one-click-data|||' ;;\n"
         "  *'volume inspect --format'*' expected-files'*) printf '%s\\n' 'expected-files|foreign-project|foreign-logical|||' ;;\n"
@@ -645,7 +645,7 @@ def test_up_refuses_foreign_postgres_volume_before_start_or_legacy_stop(
         "set -euo pipefail\n"
         'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
         'case "$*" in\n'
-        "  *' config --format json'*) printf '%s' '{\"name\":\"expected-project\",\"volumes\":{\"fund-engine-one-click-data\":{\"name\":\"expected-db\"},\"fund-engine-one-click-files\":{\"name\":\"expected-files\"}}}'; exit 0 ;;\n"
+        '  *\' config --format json\'*) printf \'%s\' \'{"name":"expected-project","volumes":{"fund-engine-one-click-data":{"name":"expected-db"},"fund-engine-one-click-files":{"name":"expected-files"}}}\'; exit 0 ;;\n'
         "  *' config -q'*) exit 0 ;;\n"
         "  *' build'*) exit 0 ;;\n"
         "esac\n"
@@ -690,14 +690,14 @@ def test_up_creates_and_validates_fresh_postgres_volume_before_full_start(
         "set -euo pipefail\n"
         'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
         'case "$*" in\n'
-        "  *' config --format json'*) printf '%s' '{\"name\":\"fresh-project\",\"volumes\":{\"fund-engine-one-click-data\":{\"name\":\"fresh-db\"},\"fund-engine-one-click-files\":{\"name\":\"fresh-files\"}}}'; exit 0 ;;\n"
+        '  *\' config --format json\'*) printf \'%s\' \'{"name":"fresh-project","volumes":{"fund-engine-one-click-data":{"name":"fresh-db"},"fund-engine-one-click-files":{"name":"fresh-files"}}}\'; exit 0 ;;\n'
         "  *' config -q'*) exit 0 ;;\n"
         "  *' build'*) exit 0 ;;\n"
         "  *' create postgres'*) : > \"$VOLUME_STATE\"; exit 0 ;;\n"
         "  *' up -d --no-build'*) exit 0 ;;\n"
         "esac\n"
         'if [[ "$1 $2" == "volume inspect" && "${!#}" == "fresh-db" ]]; then\n'
-        '  if [[ ! -e "$VOLUME_STATE" ]]; then printf \'No such volume: fresh-db\\n\' >&2; exit 1; fi\n'
+        "  if [[ ! -e \"$VOLUME_STATE\" ]]; then printf 'No such volume: fresh-db\\n' >&2; exit 1; fi\n"
         "  printf '%s\\n' 'fresh-db|fresh-project|fund-engine-one-click-data|||'\n"
         "  exit 0\n"
         "fi\n"
@@ -719,13 +719,17 @@ def test_up_creates_and_validates_fresh_postgres_volume_before_full_start(
 
     assert completed.returncode == 0, completed.stderr
     commands = log.read_text().splitlines()
-    create_index = next(i for i, value in enumerate(commands) if " create postgres" in value)
+    create_index = next(
+        i for i, value in enumerate(commands) if " create postgres" in value
+    )
     validate_index = next(
         i
         for i, value in enumerate(commands)
         if value.startswith("volume inspect --format") and value.endswith(" fresh-db")
     )
-    up_index = next(i for i, value in enumerate(commands) if " up -d --no-build" in value)
+    up_index = next(
+        i for i, value in enumerate(commands) if " up -d --no-build" in value
+    )
     assert create_index < validate_index < up_index
 
 
@@ -742,7 +746,7 @@ def test_up_fails_closed_when_postgres_volume_inspection_is_uncertain(
         "set -euo pipefail\n"
         'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
         'case "$*" in\n'
-        "  *' config --format json'*) printf '%s' '{\"name\":\"test-project\",\"volumes\":{\"fund-engine-one-click-data\":{\"name\":\"test-db\"}}}'; exit 0 ;;\n"
+        '  *\' config --format json\'*) printf \'%s\' \'{"name":"test-project","volumes":{"fund-engine-one-click-data":{"name":"test-db"}}}\'; exit 0 ;;\n'
         "  *' config -q'*) exit 0 ;;\n"
         "  *' build'*) exit 0 ;;\n"
         "esac\n"
@@ -845,8 +849,12 @@ def test_restore_uses_docker_generated_operation_volumes(
         line for line in commands.splitlines() if line.startswith("volume create ")
     ]
     assert len(create_commands) == 2
-    assert all("com.fund-engine.one-click.operation=" in line for line in create_commands)
-    assert all("fund-engine-one-click-files-restore-" not in line for line in create_commands)
+    assert all(
+        "com.fund-engine.one-click.operation=" in line for line in create_commands
+    )
+    assert all(
+        "fund-engine-one-click-files-restore-" not in line for line in create_commands
+    )
     assert "generated-restore-staging-" in commands
     assert "generated-restore-rollback-" in commands
     assert not tuple(volume_state.iterdir())
@@ -965,7 +973,7 @@ def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
         "#!/bin/sh\n"
         'printf \'<%s>\\n\' "$@" >> "$DOCKER_LOG"\n'
         'case "$*" in\n'
-        "  *' config --format json'*) printf '%s' '{\"name\":\"test-project\",\"volumes\":{\"fund-engine-one-click-data\":{\"name\":\"custom-task11-db\"},\"fund-engine-one-click-files\":{\"name\":\"custom-task11-files\"}}}' ;;\n"
+        '  *\' config --format json\'*) printf \'%s\' \'{"name":"test-project","volumes":{"fund-engine-one-click-data":{"name":"custom-task11-db"},"fund-engine-one-click-files":{"name":"custom-task11-files"}}}\' ;;\n'
         "  *' ps --status running --services'*) printf 'postgres\\n' ;;\n"
         "  *'volume inspect --format'*' custom-task11-db'*) printf '%s\\n' 'custom-task11-db|test-project|fund-engine-one-click-data|||' ;;\n"
         "  *'volume inspect --format'*' custom-task11-files'*) printf '%s\\n' 'custom-task11-files|test-project|fund-engine-one-click-files|||' ;;\n"
@@ -1057,7 +1065,10 @@ def test_restore_preserves_recovery_artifacts_when_compensation_fails(
     commands = log.read_text()
     assert completed.returncode != 0
     assert "automatic restore rollback failed; preserved" in completed.stderr
-    assert "manual recovery required; keep application services stopped" in completed.stderr
+    assert (
+        "manual recovery required; keep application services stopped"
+        in completed.stderr
+    )
     assert "docker volume inspect" in completed.stderr
     assert "recovery command" in completed.stderr
     assert "volume rm" not in commands
@@ -1156,7 +1167,7 @@ def test_runtime_verifier_checks_increment_a_shell_api_and_revision() -> None:
     assert "投资研究" in script
     assert '"$API_URL/api/underwriting/v1/product/objects?query=CATL"' in script
     assert "CATL object foundation is incomplete" in script
-    assert 'printf \'Authorization: Bearer %s\\n\'' in script
+    assert "printf 'Authorization: Bearer %s\\n'" in script
     assert "--header @-" in script
     assert '-H "Authorization: Bearer ${bearer_token}"' not in script
 
