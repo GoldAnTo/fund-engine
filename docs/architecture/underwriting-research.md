@@ -29,13 +29,26 @@ does not query later effective ledger state to make them readable.
 
 ## Legacy hash compatibility boundary
 
-Legacy v1-v3 revision hashes continue to include the stored legacy basis
-fields—cutoff, `price_as_of`, and `source_manifest_hash`—using the exact
-historical parent-descriptor and hash recipes that sealed those rows. New
-product revisions will use `underwriting.research-revision-manifest.v1` as a
-separate manifest contract. The product boundary must never reinterpret,
-replace, or backfill a legacy hash: a legacy row is verified only against the
-stored basis fields and its original seal semantics.
+The reader preserves each historical hash family without attempting to upgrade
+one family into another:
+
+- Pre-parent-set generic rows hash their frozen legacy ledger snapshot
+  (object, basis cutoff, source-manifest hash, and selected ledger IDs/content
+  hashes), then bind that snapshot hash to the version kind and sorted parent
+  IDs. They do not include `price_as_of` in that historical preimage.
+- CATL parent-set seal v1/v2 rows hash the stored semantic-snapshot token,
+  CATL version kind, and semantic hash of their canonical sealed parent refs.
+  V2 additionally seals the CATL answerability parent creation time; v1
+  remains readable under its original, less specific seal and cannot be
+  upgraded by the reader.
+- Generic parent-set v3 rows hash their schema tag, object/basis IDs, stored
+  basis cutoff, `price_as_of`, source-manifest hash, version kind, canonical
+  parent IDs, and canonical parent descriptors.
+
+New product revisions will dispatch through the separate
+`underwriting.research-revision-manifest.v1` contract. That dispatch neither
+reinterprets nor backfills a legacy hash: each legacy row is verified only
+against its stored basis fields and original seal semantics.
 
 ## Archive identity and runtime isolation
 
