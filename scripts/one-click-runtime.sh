@@ -9,6 +9,7 @@ readonly RUNTIME_ENV_FILE="$REPO_ROOT/.env.one-click.local"
 readonly LEGACY_PROJECT="fund-engine-event"
 readonly LEGACY_STOPPED_STATE_DIR="$REPO_ROOT/.one-click-runtime"
 readonly LEGACY_STOPPED_STATE_FILE="$LEGACY_STOPPED_STATE_DIR/legacy-stopped-containers"
+readonly DEFAULT_FILES_VOLUME="fund-engine-one-click-files"
 
 die() {
   printf 'one-click runtime: %s\n' "$*" >&2
@@ -23,6 +24,59 @@ require_runtime_files() {
   [[ -f "$COMPOSE_FILE" ]] || die "missing compose file: $COMPOSE_FILE"
   [[ -f "$BASE_ENV_FILE" ]] || die "missing base environment file: $BASE_ENV_FILE"
   [[ -f "$RUNTIME_ENV_FILE" ]] || die "run '$0 init' first"
+}
+
+runtime_env_value() {
+  local key="$1"
+  local matches value
+  matches="$(grep -E "^${key}=" "$RUNTIME_ENV_FILE" || true)"
+  [[ -n "$matches" && "$(printf '%s\n' "$matches" | wc -l | tr -d ' ')" == "1" ]] \
+    || die "missing or duplicate ${key} in runtime environment"
+  value="${matches#*=}"
+  [[ -n "$value" ]] || die "empty ${key} in runtime environment"
+  printf '%s' "$value"
+}
+
+files_volume_name() {
+  local value="${ONE_CLICK_FILES_VOLUME:-$DEFAULT_FILES_VOLUME}"
+  [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] \
+    || die "invalid one-click files volume name"
+  printf '%s' "$value"
+}
+
+validate_specific_path() {
+  local path="$1"
+  [[ "$path" = /* ]] || die "path must be a specific absolute directory"
+  case "$path" in
+    /|/tmp|/private/tmp|/var|/private/var|/Users|/Volumes|/opt|/usr|/etc)
+      die "path must be a specific absolute directory"
+      ;;
+  esac
+}
+
+validate_new_backup_path() {
+  local path="$1"
+  local parent canonical_parent canonical_path
+  validate_specific_path "$path"
+  [[ ! -e "$path" && ! -L "$path" ]] \
+    || die "backup directory must not already exist"
+  parent="${path%/*}"
+  [[ -d "$parent" && ! -L "$parent" ]] \
+    || die "backup parent must be an existing non-symlink directory"
+  canonical_parent="$(cd -P "$parent" && pwd)"
+  canonical_path="${canonical_parent}/${path##*/}"
+  [[ "$canonical_path" == "$path" ]] \
+    || die "backup path must not escape through a symlink"
+}
+
+validate_existing_backup_path() {
+  local path="$1"
+  local canonical_path
+  validate_specific_path "$path"
+  [[ -d "$path" && ! -L "$path" ]] || die "invalid backup directory"
+  canonical_path="$(cd -P "$path" && pwd)"
+  [[ "$canonical_path" == "$path" ]] \
+    || die "backup path must not escape through a symlink"
 }
 
 compose() {
@@ -49,7 +103,7 @@ init_runtime_environment() {
       "ONE_CLICK_POSTGRES_PASSWORD=${postgres_password}" \
       "RESEARCH_BEARER_TOKEN=${bearer_token}" \
       "RESEARCH_TENANT_TOKENS={\"${bearer_token}\":\"local-one-click\"}" \
-      'ACQUISITION_ENABLED_ADAPTERS=sse,szse,gildata' \
+      'ACQUISITION_ENABLED_ADAPTERS=sse,szse' \
       > "$RUNTIME_ENV_FILE"
   )
 
@@ -210,8 +264,177 @@ rollback_runtime() {
   printf 'Restored legacy application containers.\n'
 }
 
+validate_research_archive() {
+  local archive="$1"
+  tar -tzf "$archive" >/dev/null || die "research file archive is unreadable"
+  python3 - "$archive" <<'PY'
+import pathlib
+import sys
+import tarfile
+
+archive = pathlib.Path(sys.argv[1])
+with tarfile.open(archive, mode="r:gz") as bundle:
+    for member in bundle.getmembers():
+        normalized = pathlib.PurePosixPath(member.name)
+        if (
+            normalized.is_absolute()
+            or not member.name
+            or ".." in normalized.parts
+            or member.issym()
+            or member.islnk()
+            or not (member.isdir() or member.isfile())
+        ):
+            raise SystemExit(f"unsafe research archive member: {member.name!r}")
+        if any(part.startswith(".env") for part in normalized.parts):
+            raise SystemExit(f"secret research archive member: {member.name!r}")
+PY
+}
+
+backup_runtime() (
+  set -euo pipefail
+  local output_dir="$1"
+  local parent temporary_dir volume_name
+  validate_new_backup_path "$output_dir"
+  require_command docker
+  require_command python3
+  require_command shasum
+  require_runtime_files
+  parent="${output_dir%/*}"
+  temporary_dir="$(mktemp -d "$parent/.one-click-backup.XXXXXX")"
+  trap 'rm -rf -- "$temporary_dir"' EXIT
+  volume_name="$(files_volume_name)"
+
+  compose exec -T postgres pg_dump -Fc \
+    -U "$(runtime_env_value ONE_CLICK_POSTGRES_USER)" \
+    "$(runtime_env_value ONE_CLICK_POSTGRES_DB)" > "$temporary_dir/postgres.dump"
+  [[ -s "$temporary_dir/postgres.dump" ]] || die "PostgreSQL backup is empty"
+  docker run --rm \
+    -v "$volume_name:/source:ro" \
+    -v "$temporary_dir:/backup" \
+    alpine sh -eu -c \
+    'tar --exclude=.env --exclude=.env* -C /source -czf /backup/research-files.tar.gz .'
+  validate_research_archive "$temporary_dir/research-files.tar.gz"
+  (
+    cd "$temporary_dir"
+    shasum -a 256 postgres.dump research-files.tar.gz > manifest.sha256
+  )
+  mv -- "$temporary_dir" "$output_dir"
+  trap - EXIT
+  printf 'Created one-click backup at %s.\n' "$output_dir"
+)
+
+validate_backup_bundle() {
+  local backup_dir="$1"
+  local actual_files manifest_files
+  validate_existing_backup_path "$backup_dir"
+  for artifact in manifest.sha256 postgres.dump research-files.tar.gz; do
+    [[ -f "$backup_dir/$artifact" && ! -L "$backup_dir/$artifact" ]] \
+      || die "backup artifact is missing or unsafe: $artifact"
+  done
+  actual_files="$(find "$backup_dir" -mindepth 1 -maxdepth 1 -exec basename {} \; | LC_ALL=C sort)"
+  [[ "$actual_files" == $'manifest.sha256\npostgres.dump\nresearch-files.tar.gz' ]] \
+    || die "backup directory contains unexpected artifacts"
+  manifest_files="$(awk 'NF == 2 && $1 ~ /^[0-9a-f]{64}$/ {sub(/^\*/, "", $2); print $2}' "$backup_dir/manifest.sha256" | LC_ALL=C sort)"
+  [[ "$manifest_files" == $'postgres.dump\nresearch-files.tar.gz' ]] \
+    || die "backup checksum manifest has an invalid artifact allowlist"
+  [[ "$(wc -l < "$backup_dir/manifest.sha256" | tr -d ' ')" == "2" ]] \
+    || die "backup checksum manifest has an invalid artifact count"
+  (cd "$backup_dir" && shasum -a 256 -c manifest.sha256) \
+    || die "backup checksum validation failed"
+  validate_research_archive "$backup_dir/research-files.tar.gz"
+}
+
+copy_volume_contents() {
+  local source_volume="$1"
+  local target_volume="$2"
+  docker run --rm \
+    -v "$source_volume:/source:ro" \
+    -v "$target_volume:/target" \
+    alpine sh -eu -c \
+    'find /target -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; cp -a /source/. /target/'
+}
+
+restore_runtime() (
+  set -euo pipefail
+  local backup_dir="$1"
+  local database_user database_name suffix staging_database old_database
+  local files_volume staging_volume rollback_volume running_services
+  local database_swapped="false"
+
+  validate_existing_backup_path "$backup_dir"
+  require_command docker
+  require_command openssl
+  require_command python3
+  require_command shasum
+  require_runtime_files
+  validate_backup_bundle "$backup_dir"
+  running_services="$(compose ps --status running --services | grep -Ev '^(postgres|migrate)$' || true)"
+  [[ -z "$running_services" ]] || die "stop application services before restore"
+  compose ps --status running --services | grep -Fxq postgres \
+    || die "one-click postgres must be running for restore"
+
+  database_user="$(runtime_env_value ONE_CLICK_POSTGRES_USER)"
+  database_name="$(runtime_env_value ONE_CLICK_POSTGRES_DB)"
+  [[ "$database_name" =~ ^[A-Za-z_][A-Za-z0-9_]{0,39}$ ]] \
+    || die "one-click database name is unsafe for restore"
+  suffix="$(openssl rand -hex 4)"
+  staging_database="${database_name}_restore_${suffix}"
+  old_database="${database_name}_before_${suffix}"
+  files_volume="$(files_volume_name)"
+  staging_volume="${files_volume}-restore-${suffix}"
+  rollback_volume="${files_volume}-before-${suffix}"
+
+  cleanup_restore() {
+    docker volume rm "$staging_volume" "$rollback_volume" >/dev/null 2>&1 || true
+    if [[ "$database_swapped" != "true" ]]; then
+      compose exec -T postgres dropdb --if-exists -U "$database_user" "$staging_database" >/dev/null 2>&1 || true
+    fi
+  }
+  trap cleanup_restore EXIT
+
+  compose exec -T postgres createdb -U "$database_user" "$staging_database"
+  compose exec -T postgres pg_restore --exit-on-error --no-owner --no-privileges \
+    -U "$database_user" -d "$staging_database" < "$backup_dir/postgres.dump"
+  docker volume create "$staging_volume" >/dev/null
+  docker run --rm \
+    -v "$staging_volume:/target" \
+    -v "$backup_dir:/backup:ro" \
+    alpine tar -C /target -xzf /backup/research-files.tar.gz
+
+  ONE_CLICK_POSTGRES_DB="$staging_database" ONE_CLICK_FILES_VOLUME="$staging_volume" \
+    compose run --rm --no-deps migrate
+  ONE_CLICK_POSTGRES_DB="$staging_database" ONE_CLICK_FILES_VOLUME="$staging_volume" \
+    compose run --rm --no-deps api python -m app.scripts.load_product_foundation_fixture
+  ONE_CLICK_POSTGRES_DB="$staging_database" ONE_CLICK_FILES_VOLUME="$staging_volume" \
+    compose run --rm --no-deps api python -m app.scripts.verify_underwriting_revision_manifests
+
+  docker volume create "$rollback_volume" >/dev/null
+  copy_volume_contents "$files_volume" "$rollback_volume"
+  compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
+    -c "ALTER DATABASE \"$database_name\" RENAME TO \"$old_database\";"
+  if ! compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
+    -c "ALTER DATABASE \"$staging_database\" RENAME TO \"$database_name\";"; then
+    compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
+      -c "ALTER DATABASE \"$old_database\" RENAME TO \"$database_name\";" || true
+    die "failed to activate restored database"
+  fi
+  database_swapped="true"
+  if ! copy_volume_contents "$staging_volume" "$files_volume"; then
+    copy_volume_contents "$rollback_volume" "$files_volume" || true
+    compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
+      -c "ALTER DATABASE \"$database_name\" RENAME TO \"$staging_database\";" || true
+    compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
+      -c "ALTER DATABASE \"$old_database\" RENAME TO \"$database_name\";" || true
+    database_swapped="false"
+    die "failed to activate restored research files"
+  fi
+  compose exec -T postgres dropdb -U "$database_user" "$old_database"
+  compose run --rm --no-deps api python -m app.scripts.verify_underwriting_revision_manifests
+  printf 'Restored and verified one-click backup from %s.\n' "$backup_dir"
+)
+
 usage() {
-  printf 'Usage: %s {init|up|down|status|rollback}\n' "$0" >&2
+  printf 'Usage: %s {init|up|down|status|rollback|backup <absolute-output-dir>|restore <absolute-backup-dir>}\n' "$0" >&2
 }
 
 case "${1:-}" in
@@ -220,5 +443,7 @@ case "${1:-}" in
   down) stop_one_click_runtime ;;
   status) show_runtime_status ;;
   rollback) rollback_runtime ;;
+  backup) [[ "$#" -eq 2 ]] || { usage; exit 2; }; backup_runtime "$2" ;;
+  restore) [[ "$#" -eq 2 ]] || { usage; exit 2; }; restore_runtime "$2" ;;
   *) usage; exit 2 ;;
 esac

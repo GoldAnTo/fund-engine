@@ -15,7 +15,7 @@ def test_runtime_control_script_keeps_credentials_local_and_switches_only_app_se
     assert "openssl rand -hex 32" in script
     assert "RESEARCH_TENANT_TOKENS=" in script
     assert "local-one-click" in script
-    assert "ACQUISITION_ENABLED_ADAPTERS=sse,szse,gildata" in script
+    assert "ACQUISITION_ENABLED_ADAPTERS=sse,szse" in script
     assert 'LEGACY_PROJECT="fund-engine-event"' in script
     assert "label=com.docker.compose.project=" in script
     for service in ("api", "frontend", "research-worker", "acquisition-worker", "scheduler"):
@@ -28,7 +28,7 @@ def test_runtime_control_script_keeps_credentials_local_and_switches_only_app_se
 
 def test_rollback_restarts_only_legacy_application_containers() -> None:
     script = (ROOT / "scripts" / "one-click-runtime.sh").read_text()
-    rollback = script[script.index("restore_legacy_application_services"): script.index("usage()")]
+    rollback = script[script.index("restore_legacy_application_services"): script.index("validate_research_archive")]
 
     assert "rollback_runtime" in rollback
     assert "stop_one_click_runtime" in rollback
@@ -111,11 +111,13 @@ def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> Non
     script = (ROOT / "scripts" / "verify-one-click-runtime.sh").read_text()
 
     assert "config -q" in script
-    assert "http://127.0.0.1:8000/health" in script
-    assert "http://127.0.0.1:8080/health" in script
+    assert 'API_URL="${ONE_CLICK_API_URL:-http://127.0.0.1:' in script
+    assert 'FRONTEND_URL="${ONE_CLICK_FRONTEND_URL:-http://127.0.0.1:' in script
+    assert '"$API_URL/health"' in script
+    assert '"$FRONTEND_URL/health"' in script
     for service in ("postgres", "api", "research-worker", "acquisition-worker", "frontend"):
         assert service in script
-    assert "0059" in script
+    assert "0065" in script
     assert "0062" in script
     assert "fund-engine-event" in script
     assert 'LEGACY_DATABASE_CONTAINER="fund-engine-event-postgres-1"' in script
@@ -139,6 +141,8 @@ def test_readme_documents_the_local_one_click_runtime_without_secrets() -> None:
         "scripts/one-click-runtime.sh status",
         "scripts/one-click-runtime.sh down",
         "scripts/one-click-runtime.sh rollback",
+        "scripts/one-click-runtime.sh backup /absolute/path/to/new-backup",
+        "scripts/one-click-runtime.sh restore /absolute/path/to/backup",
     ):
         assert command in readme
     assert "http://127.0.0.1:8080/events/new" in readme
