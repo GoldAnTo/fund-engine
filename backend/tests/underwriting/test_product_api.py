@@ -6,8 +6,10 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import func, select
 
+from app.underwriting.api.product_schemas import AgendaGeneratorResponse
 from app.underwriting.persistence.models import (
     UnderwritingObjectRelation,
     UnderwritingResearchObject,
@@ -34,6 +36,19 @@ D64 = "d" * 64
 
 def _error_code(response) -> str:
     return response.json()["error"]["code"]
+
+
+def test_agenda_generator_response_rejects_invalid_input_summary_hash() -> None:
+    with pytest.raises(PydanticValidationError, match="input_summary_hash"):
+        AgendaGeneratorResponse(
+            method="ai_generated",
+            template_key=None,
+            template_version=None,
+            model_name="research-model",
+            prompt_template_version="v1",
+            input_summary_hash="not-a-hash",
+            output_hash=A64,
+        )
 
 
 def _seed_object(session, kind: str, key: str, name: str):

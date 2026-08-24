@@ -233,7 +233,7 @@ class AgendaGeneratorResponse(UnderwritingModel):
     template_version: str | None
     model_name: str | None
     prompt_template_version: str | None
-    input_summary_hash: str | None
+    input_summary_hash: str | None = Field(pattern=SHA256_PATTERN)
     output_hash: str = Field(pattern=SHA256_PATTERN)
 
 

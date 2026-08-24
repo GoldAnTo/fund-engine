@@ -190,6 +190,18 @@ def test_product_openapi_is_exact_strict_and_has_idempotency_header() -> None:
     } <= set(schemas["ProductRevisionResponse"]["properties"])
 
 
+def test_agenda_generator_response_openapi_preserves_sha256_constraint() -> None:
+    response_schema = app.openapi()["components"]["schemas"][
+        "AgendaGeneratorResponse"
+    ]
+    input_summary_hash = response_schema["properties"]["input_summary_hash"]
+
+    assert {"type": "string", "pattern": r"^[0-9a-f]{64}$"} in input_summary_hash[
+        "anyOf"
+    ]
+    assert "input_summary_hash" in response_schema["required"]
+
+
 def test_revision_read_contract_has_only_get_operations_and_no_decision_fields() -> None:
     openapi = app.openapi()
 
