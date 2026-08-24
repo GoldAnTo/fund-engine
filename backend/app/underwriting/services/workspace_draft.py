@@ -31,7 +31,9 @@ _REFERENCE_TUPLE_FIELDS = frozenset(
 )
 
 
-def _canonical_references(value: tuple[UUID, ...] | None):
+def _canonical_references(
+    value: tuple[UUID, ...] | None,
+) -> tuple[UUID, ...] | None:
     if value is None:
         return None
     return tuple(sorted(set(value), key=str))
@@ -228,6 +230,13 @@ class WorkspaceDraftService:
         if current is None:
             raise ValidationError("workspace draft does not exist for project")
         current_content = self._content(current.content)
+        updated_at = self._utc(self._now(), "clock")
+        if updated_at < self._stored_utc(
+            current.created_at
+        ) or updated_at < self._stored_utc(current.updated_at):
+            raise ValidationError(
+                "workspace draft updated_at cannot be earlier than its persisted times"
+            )
 
         merged = current_content.model_dump(mode="python")
         for field in validated_patch.model_fields_set:
@@ -246,6 +255,6 @@ class WorkspaceDraftService:
             project_id=project_id,
             expected_lock_version=expected_lock_version,
             content=content.model_dump(mode="json"),
-            updated_at=self._utc(self._now(), "clock"),
+            updated_at=updated_at,
         )
         return self._view(row)

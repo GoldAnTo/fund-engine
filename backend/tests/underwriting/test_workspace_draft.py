@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+import inspect
 import sqlite3
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import ValidationError as PydanticValidationError
@@ -21,6 +23,7 @@ from app.underwriting.persistence.product_models import (
     UnderwritingWorkspaceDraft,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
+from app.underwriting.persistence import product_repository as product_repository_module
 from app.underwriting.services.workspace_draft import (
     WorkspaceDraftPatch,
     WorkspaceDraftService,
@@ -329,13 +332,164 @@ def test_normal_save_cannot_change_base_revision(session, service) -> None:
         base_revision_id=revision.id,
     )
 
-    saved = service.save(
+    saved = WorkspaceDraftService(session, now=lambda: LATER).save(
         project.id,
         expected_lock_version=reset.lock_version,
         patch={"user_focus": "preserve base"},
     )
 
     assert saved.base_revision_id == revision.id
+
+
+def test_internal_base_reset_accepts_only_an_owned_revision_or_none(
+    session, service
+) -> None:
+    project = _project(session, "company:owner")
+    other_project = _project(session, "company:other")
+    created = service.create(project.id)
+
+    def revision_for(
+        target: UnderwritingResearchProject | None,
+        *,
+        kind: str,
+    ) -> UnderwritingResearchVersion:
+        basis = UnderwritingHistoricalBasis(
+            cutoff=NOW,
+            price_as_of=None,
+            source_manifest_hash=A64,
+            definition_bundle_hash=A64,
+            parser_bundle_hash=A64,
+            boundary_schema_version="product.historical-basis.v1",
+            content_hash=A64,
+            created_at=NOW,
+        )
+        session.add(basis)
+        session.flush()
+        row = UnderwritingResearchVersion(
+            object_id=(target or project).primary_company_id,
+            basis_id=basis.id,
+            version_kind=kind,
+            sequence=1,
+            content_hash=A64,
+            parent_ids=[],
+            project_id=target.id if target is not None else None,
+            publication_status="user_frozen" if target is not None else None,
+            created_at=NOW,
+        )
+        session.add(row)
+        session.flush()
+        return row
+
+    owned = revision_for(project, kind="owned-revision")
+    foreign = revision_for(other_project, kind="foreign-revision")
+    legacy = revision_for(None, kind="legacy-revision")
+    repository = ProductRepository(session)
+    content = created.content.model_dump(mode="json")
+
+    for invalid in (
+        str(owned.id),
+        True,
+        1,
+        object(),
+        product_repository_module._UnchangedBaseRevision(),
+        uuid4(),
+        foreign.id,
+        legacy.id,
+    ):
+        with pytest.raises(ValidationError, match="base_revision_id"):
+            repository.compare_and_swap_workspace_draft(
+                project_id=project.id,
+                expected_lock_version=1,
+                content=content,
+                updated_at=NOW,
+                base_revision_id=invalid,
+            )
+        assert session.scalar(select(UnderwritingResearchProject.id)) is not None
+
+    reset = repository.compare_and_swap_workspace_draft(
+        project_id=project.id,
+        expected_lock_version=1,
+        content=content,
+        updated_at=NOW,
+        base_revision_id=owned.id,
+    )
+    assert reset.base_revision_id == owned.id
+    cleared = repository.compare_and_swap_workspace_draft(
+        project_id=project.id,
+        expected_lock_version=2,
+        content=content,
+        updated_at=NOW,
+        base_revision_id=None,
+    )
+    assert cleared.base_revision_id is None
+
+
+def test_service_rejects_timestamp_regression_and_allows_equal_time(
+    session, service
+) -> None:
+    project = _project(session)
+    service.create(project.id)
+
+    regressing = WorkspaceDraftService(
+        session, now=lambda: NOW - timedelta(microseconds=1)
+    )
+    with pytest.raises(ValidationError, match="updated_at.*earlier"):
+        regressing.save(
+            project.id,
+            expected_lock_version=1,
+            patch={"user_focus": "regression"},
+        )
+
+    current = service.read(project.id)
+    assert current is not None
+    assert current.lock_version == 1
+    equal = service.save(
+        project.id,
+        expected_lock_version=1,
+        patch={"user_focus": "equal is valid"},
+    )
+    assert equal.lock_version == 2
+    assert equal.updated_at == NOW
+
+
+def test_timestamp_monotonicity_compares_dst_instants_not_wall_clock(session) -> None:
+    zone = ZoneInfo("America/New_York")
+    first_instant = datetime(2026, 11, 1, 1, 30, tzinfo=zone, fold=0)
+    later_instant_with_earlier_wall_time = datetime(
+        2026, 11, 1, 1, 15, tzinfo=zone, fold=1
+    )
+    project = _project(session)
+    WorkspaceDraftService(session, now=lambda: first_instant).create(project.id)
+
+    saved = WorkspaceDraftService(
+        session, now=lambda: later_instant_with_earlier_wall_time
+    ).save(
+        project.id,
+        expected_lock_version=1,
+        patch={"user_focus": "later absolute instant"},
+    )
+
+    assert saved.updated_at == later_instant_with_earlier_wall_time.astimezone(UTC)
+
+
+def test_repository_cas_rejects_an_older_timestamp_even_with_current_lock(
+    session, service
+) -> None:
+    project = _project(session)
+    created = service.create(project.id)
+
+    with pytest.raises(ConflictError, match="draft changed"):
+        ProductRepository(session).compare_and_swap_workspace_draft(
+            project_id=project.id,
+            expected_lock_version=created.lock_version,
+            content=created.content.model_dump(mode="json"),
+            updated_at=NOW - timedelta(seconds=1),
+        )
+
+    current = service.read(project.id)
+    assert current is not None
+    assert current.lock_version == 1
+    assert current.updated_at == NOW
 
 
 def test_service_results_do_not_alias_input_or_expose_mutable_content(
@@ -438,6 +592,87 @@ def test_two_sessions_cannot_overwrite_the_same_lock_version(tmp_path) -> None:
         second.close()
         Base.metadata.drop_all(engine)
         engine.dispose()
+
+
+def test_two_sessions_that_observe_no_draft_converge_on_one_create(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'draft-create.sqlite'}", future=True)
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    seed = sessions()
+    project_id = _project(seed).id
+    seed.commit()
+    seed.close()
+    first = sessions()
+    second = sessions()
+    try:
+        first_repository = ProductRepository(first)
+        second_repository = ProductRepository(second)
+        assert first_repository.workspace_draft(project_id) is None
+        assert second_repository.workspace_draft(project_id) is None
+
+        winner = first_repository.create_workspace_draft(
+            draft_id=uuid4(),
+            project_id=project_id,
+            content=_empty_content(),
+            created_at=NOW,
+        )
+        first.commit()
+        recovered = second_repository.create_workspace_draft(
+            draft_id=uuid4(),
+            project_id=project_id,
+            content=_empty_content(),
+            created_at=NOW,
+        )
+
+        assert recovered.id == winner.id
+        assert second.scalar(select(UnderwritingResearchProject.id)) == project_id
+    finally:
+        first.rollback()
+        second.rollback()
+        first.close()
+        second.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+def test_postgres_two_session_create_race_if_configured(session, engine) -> None:
+    if engine.dialect.name != "postgresql":
+        pytest.skip("TEST_DATABASE_URL is not configured")
+    project_id = _project(session).id
+    session.commit()
+    sessions = sessionmaker(bind=engine, future=True)
+    first = sessions()
+    second = sessions()
+    try:
+        first_repository = ProductRepository(first)
+        second_repository = ProductRepository(second)
+        assert first_repository.workspace_draft(project_id) is None
+        assert second_repository.workspace_draft(project_id) is None
+        winner = first_repository.create_workspace_draft(
+            draft_id=uuid4(),
+            project_id=project_id,
+            content=_empty_content(),
+            created_at=NOW,
+        )
+        first.commit()
+        recovered = second_repository.create_workspace_draft(
+            draft_id=uuid4(),
+            project_id=project_id,
+            content=_empty_content(),
+            created_at=NOW,
+        )
+        assert recovered.id == winner.id
+        assert second.scalar(select(UnderwritingResearchProject.id)) == project_id
+    finally:
+        first.close()
+        second.close()
+
+
+def test_repository_centralizes_sqlite_savepoints_and_unique_parsing() -> None:
+    source = inspect.getsource(product_repository_module)
+
+    assert source.count('exec_driver_sql("BEGIN")') == 1
+    assert source.count('marker = "unique constraint failed:"') == 1
 
 
 def test_create_race_savepoint_does_not_commit_the_outer_transaction(

@@ -17,8 +17,9 @@ from app.underwriting.persistence.models import (
     UnderwritingMandateVersion,
     UnderwritingObjectRelation,
     UnderwritingResearchObject,
+    UnderwritingResearchVersion,
 )
-from app.models.ledger import ConflictError
+from app.models.ledger import ConflictError, ValidationError
 from app.underwriting.persistence.product_models import (
     UnderwritingCapitalStructureSnapshot,
     UnderwritingFXSnapshot,
@@ -142,7 +143,34 @@ _SQLITE_SNAPSHOT_IDENTITY_COLUMNS = {
     ),
 }
 _WORKSPACE_DRAFT_PROJECT_CONSTRAINT = "uq_uw_workspace_draft_project"
-_UNSET_BASE_REVISION = object()
+
+
+class _UnchangedBaseRevision:
+    """Typed sentinel that keeps the ordinary draft-save path base-blind."""
+
+    __slots__ = ()
+
+
+_UNCHANGED_BASE_REVISION = _UnchangedBaseRevision()
+
+
+def _sqlite_unique_columns(
+    exc: IntegrityError, expected_table: str
+) -> frozenset[str] | None:
+    """Return exact SQLite UNIQUE columns only for ``expected_table``."""
+    detail = str(getattr(exc, "orig", exc)).casefold().replace('"', "")
+    marker = "unique constraint failed:"
+    if marker not in detail:
+        return None
+    raw_columns = detail.split(marker, 1)[1].splitlines()[0]
+    columns: set[str] = set()
+    for raw_column in raw_columns.split(","):
+        qualified = raw_column.strip().removeprefix("main.")
+        parts = qualified.split(".")
+        if len(parts) < 2 or parts[-2] != expected_table:
+            return None
+        columns.add(parts[-1])
+    return frozenset(columns)
 
 
 class ProductRepository:
@@ -150,6 +178,25 @@ class ProductRepository:
 
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def _flush_in_savepoint(self, row: Any) -> None:
+        """Flush one new row without letting SQLite release the outer unit of work."""
+        connection = self._session.connection()
+        if connection.dialect.name == "sqlite":
+            dbapi_connection = getattr(
+                connection.connection,
+                "driver_connection",
+                connection.connection,
+            )
+            if not dbapi_connection.in_transaction:
+                # In sqlite3 legacy transaction mode, a top-level SAVEPOINT is
+                # committed when released. Anchor it in the caller transaction.
+                connection.exec_driver_sql("BEGIN")
+        # begin_nested flushes pending state before opening the savepoint, so
+        # this row must not be attached until the savepoint exists.
+        with self._session.begin_nested():
+            self._session.add(row)
+            self._session.flush([row])
 
     @staticmethod
     def _require_expected_parent(
@@ -182,37 +229,13 @@ class ProductRepository:
                 )
             )
 
-        detail = str(getattr(exc, "orig", exc)).casefold().replace('"', "")
-        marker = "unique constraint failed:"
-        if marker not in detail:
-            return False
-        raw_columns = detail.split(marker, 1)[1].splitlines()[0]
-        columns = frozenset(
-            column.strip().removeprefix("main.").split(".")[-1]
-            for column in raw_columns.split(",")
-        )
+        columns = _sqlite_unique_columns(exc, table_name)
         return columns in _SQLITE_CAS_COLUMNS[table_name]
 
     def _flush_version(self, row: Any) -> Any:
         """Flush one CAS append inside a savepoint and classify only CAS races."""
         try:
-            connection = self._session.connection()
-            if connection.dialect.name == "sqlite":
-                dbapi_connection = getattr(
-                    connection.connection,
-                    "driver_connection",
-                    connection.connection,
-                )
-                if not dbapi_connection.in_transaction:
-                    # In sqlite3 legacy transaction mode, a top-level SAVEPOINT
-                    # is committed when released. Start the caller transaction
-                    # explicitly so releasing our savepoint cannot commit it.
-                    connection.exec_driver_sql("BEGIN")
-            # ``begin_nested`` flushes existing pending state before opening the
-            # savepoint, so this row must not be added until the savepoint exists.
-            with self._session.begin_nested():
-                self._session.add(row)
-                self._session.flush([row])
+            self._flush_in_savepoint(row)
         except IntegrityError as exc:
             if self._is_cas_integrity_error(row, exc):
                 raise StaleParentError(_STALE_MESSAGE) from exc
@@ -229,32 +252,13 @@ class ProductRepository:
         constraint_name = getattr(diagnostic, "constraint_name", None)
         if isinstance(constraint_name, str):
             return constraint_name == constraint
-        detail = str(getattr(exc, "orig", exc)).casefold().replace('"', "")
-        marker = "unique constraint failed:"
-        if marker not in detail:
-            return False
-        raw_columns = detail.split(marker, 1)[1].splitlines()[0]
-        columns = frozenset(
-            column.strip().removeprefix("main.").split(".")[-1]
-            for column in raw_columns.split(",")
-        )
+        columns = _sqlite_unique_columns(exc, table_name)
         return columns == _SQLITE_SNAPSHOT_IDENTITY_COLUMNS[table_name]
 
     def _flush_snapshot(self, row: Any, existing_statement: Any) -> Any:
         """Insert an immutable snapshot, recovering exact natural-key retries."""
         try:
-            connection = self._session.connection()
-            if connection.dialect.name == "sqlite":
-                dbapi_connection = getattr(
-                    connection.connection,
-                    "driver_connection",
-                    connection.connection,
-                )
-                if not dbapi_connection.in_transaction:
-                    connection.exec_driver_sql("BEGIN")
-            with self._session.begin_nested():
-                self._session.add(row)
-                self._session.flush([row])
+            self._flush_in_savepoint(row)
             return row
         except IntegrityError as exc:
             if not self._is_snapshot_identity_error(row, exc):
@@ -489,15 +493,8 @@ class ProductRepository:
         if isinstance(constraint_name, str):
             return constraint_name == _WORKSPACE_DRAFT_PROJECT_CONSTRAINT
 
-        detail = str(getattr(exc, "orig", exc)).casefold().replace('"', "")
-        marker = "unique constraint failed:"
-        if marker not in detail:
-            return False
-        raw_columns = detail.split(marker, 1)[1].splitlines()[0]
-        columns = frozenset(
-            column.strip().removeprefix("main.") for column in raw_columns.split(",")
-        )
-        return columns == frozenset({"uw_workspace_drafts.project_id"})
+        columns = _sqlite_unique_columns(exc, "uw_workspace_drafts")
+        return columns == frozenset({"project_id"})
 
     def workspace_draft(self, project_id: UUID) -> UnderwritingWorkspaceDraft | None:
         return self._session.scalar(
@@ -526,18 +523,7 @@ class ProductRepository:
             updated_at=created_at,
         )
         try:
-            connection = self._session.connection()
-            if connection.dialect.name == "sqlite":
-                dbapi_connection = getattr(
-                    connection.connection,
-                    "driver_connection",
-                    connection.connection,
-                )
-                if not dbapi_connection.in_transaction:
-                    connection.exec_driver_sql("BEGIN")
-            with self._session.begin_nested():
-                self._session.add(row)
-                self._session.flush([row])
+            self._flush_in_savepoint(row)
         except IntegrityError as exc:
             if not self._is_workspace_draft_project_error(exc):
                 raise
@@ -556,21 +542,38 @@ class ProductRepository:
         expected_lock_version: int,
         content: dict[str, object],
         updated_at: datetime,
-        base_revision_id: UUID | None | object = _UNSET_BASE_REVISION,
+        base_revision_id: UUID | None | _UnchangedBaseRevision = (
+            _UNCHANGED_BASE_REVISION
+        ),
     ) -> UnderwritingWorkspaceDraft:
         """Atomically update a draft; publication may also reset its base."""
+        if base_revision_id is not _UNCHANGED_BASE_REVISION:
+            if base_revision_id is not None and type(base_revision_id) is not UUID:
+                raise ValidationError(
+                    "base_revision_id must be an exact UUID, None, or omitted"
+                )
+            if base_revision_id is not None:
+                revision = self._session.get(
+                    UnderwritingResearchVersion, base_revision_id
+                )
+                if revision is None or revision.project_id != project_id:
+                    raise ValidationError(
+                        "base_revision_id must reference a revision owned by the draft project"
+                    )
         values: dict[str, object] = {
             "content": deepcopy(content),
             "lock_version": expected_lock_version + 1,
             "updated_at": updated_at,
         }
-        if base_revision_id is not _UNSET_BASE_REVISION:
+        if base_revision_id is not _UNCHANGED_BASE_REVISION:
             values["base_revision_id"] = base_revision_id
         result = self._session.execute(
             update(UnderwritingWorkspaceDraft)
             .where(
                 UnderwritingWorkspaceDraft.project_id == project_id,
                 UnderwritingWorkspaceDraft.lock_version == expected_lock_version,
+                UnderwritingWorkspaceDraft.created_at <= updated_at,
+                UnderwritingWorkspaceDraft.updated_at <= updated_at,
             )
             .values(**values)
             .execution_options(synchronize_session=False)
