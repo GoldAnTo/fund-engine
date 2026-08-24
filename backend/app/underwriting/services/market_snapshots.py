@@ -236,7 +236,13 @@ def validate_market_coverage(
         raise ValidationError("boundary capital structure reference does not match")
     if context.requires_fx and not boundary.fx_snapshot_ids:
         raise ValidationError("FX snapshot is required for cross-currency valuation")
-    if set(context.fx_pairs) != set(context.required_fx_pairs):
+    if len(context.fx_pairs) != len(set(context.fx_pairs)) or len(
+        context.required_fx_pairs
+    ) != len(set(context.required_fx_pairs)):
+        raise ValidationError("boundary contains a duplicate FX pair")
+    if len(context.fx_pairs) != len(context.required_fx_pairs) or set(
+        context.fx_pairs
+    ) != set(context.required_fx_pairs):
         raise ValidationError(
             "boundary FX pairs must exactly cover required quote directions"
         )
@@ -441,11 +447,7 @@ class MarketSnapshotService:
         )
         head = self._repository.rights_head(value.security_identity_id)
         if head is not None and head.id == expected_parent_id:
-            if head.effective_to is None:
-                raise ValidationError(
-                    "cannot append rights after an open-ended effective interval"
-                )
-            if effective_from < _stored_utc(head.effective_from):
+            if effective_from <= _stored_utc(head.effective_from):
                 raise ValidationError("rights effective_from must advance")
             if head.effective_to is not None and effective_from < _stored_utc(
                 head.effective_to
@@ -564,15 +566,10 @@ class MarketSnapshotService:
                 "capital structure must reference the project Company"
             )
         for item in rights:
-            effective_from = _stored_utc(item.effective_from)
-            effective_to = (
-                _stored_utc(item.effective_to)
-                if item.effective_to is not None
-                else None
+            effective = self._repository.effective_security_rights(
+                item.security_identity_id, boundary_at
             )
-            if effective_from > boundary_at or (
-                effective_to is not None and effective_to <= boundary_at
-            ):
+            if effective is None or effective.id != item.id:
                 raise ValidationError("boundary requires effective rights at as_of")
 
         base_currency = mandate.base_currency

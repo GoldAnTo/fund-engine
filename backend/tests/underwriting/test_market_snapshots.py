@@ -411,7 +411,7 @@ def test_security_rights_reject_wrong_kind_overlap_and_excess_precision(
         )
 
 
-def test_security_rights_reject_successor_of_open_ended_parent(
+def test_security_rights_open_ended_parent_switches_to_finite_successor_without_revival(
     session, services
 ) -> None:
     _, security, _ = _seed_project(session, services)
@@ -419,15 +419,53 @@ def test_security_rights_reject_successor_of_open_ended_parent(
         _rights(security.id), expected_parent_id=None
     )
 
-    with pytest.raises(ValidationError, match="open-ended|overlap"):
+    with pytest.raises(ValidationError, match="advance"):
         services.market.freeze_security_rights(
             _rights(
                 security.id,
-                effective_from=MARKET,
+                effective_from=EFFECTIVE,
                 raw_hash="e" * 64,
             ),
             expected_parent_id=first.id,
         )
+    with pytest.raises(ValidationError, match="advance"):
+        services.market.freeze_security_rights(
+            _rights(
+                security.id,
+                effective_from=EFFECTIVE - timedelta(seconds=1),
+                raw_hash="e" * 64,
+            ),
+            expected_parent_id=first.id,
+        )
+
+    successor = services.market.freeze_security_rights(
+        _rights(
+            security.id,
+            effective_from=MARKET,
+            effective_to=MARKET + timedelta(days=1),
+            raw_hash="e" * 64,
+        ),
+        expected_parent_id=first.id,
+    )
+    session.refresh(first)
+
+    assert first.effective_to is None
+    assert (
+        services.market.effective_security_rights(
+            security.id, MARKET - timedelta(seconds=1)
+        ).id
+        == first.id
+    )
+    assert (
+        services.market.effective_security_rights(security.id, MARKET).id
+        == successor.id
+    )
+    assert (
+        services.market.effective_security_rights(
+            security.id, MARKET + timedelta(days=1)
+        )
+        is None
+    )
 
 
 def test_price_may_follow_evidence_cutoff_without_future_evidence(
@@ -452,6 +490,7 @@ def _product_boundary(
     *,
     security_currency: str = "CNY",
     include_out_of_scope_security: bool = False,
+    rights_open_ended: bool = False,
 ):
     if include_out_of_scope_security:
         company = _object(session, "company", f"company:{uuid4()}")
@@ -515,7 +554,10 @@ def _product_boundary(
     )
     capital = services.market.freeze_capital_structure(_capital(company.id))
     rights = services.market.freeze_security_rights(
-        _rights(security.id, effective_to=MARKET + timedelta(days=1)),
+        _rights(
+            security.id,
+            effective_to=(None if rights_open_ended else MARKET + timedelta(days=1)),
+        ),
         expected_parent_id=None,
     )
     boundary = RevisionBoundaryInput(
@@ -575,6 +617,29 @@ def test_boundary_coverage_follows_frozen_scope_targets_not_all_project_members(
     assert graph["extra_security"].id not in context.target_security_ids
 
 
+def test_boundary_context_does_not_revive_open_ended_predecessor_after_successor_expires(
+    session, services
+) -> None:
+    graph = _product_boundary(session, services, rights_open_ended=True)
+    services.market.freeze_security_rights(
+        _rights(
+            graph["security"].id,
+            effective_from=MARKET + timedelta(days=1),
+            effective_to=MARKET + timedelta(days=2),
+            raw_hash="e" * 64,
+        ),
+        expected_parent_id=graph["rights"].id,
+    )
+
+    with pytest.raises(ValidationError, match="effective rights"):
+        services.market.boundary_context(
+            graph["project"].id,
+            graph["boundary"],
+            as_of=MARKET + timedelta(days=2),
+            model_currency="CNY",
+        )
+
+
 def test_market_coverage_rejects_duplicate_target_mapping() -> None:
     security_id = uuid4()
     context = BoundaryContext(
@@ -598,6 +663,68 @@ def test_market_coverage_rejects_duplicate_target_mapping() -> None:
                 rights_security_ids=(security_id, security_id),
                 requires_fx=False,
             ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("required_pairs", "fx_pairs"),
+    [
+        ((("USD", "CNY"),), (("USD", "CNY"), ("USD", "CNY"))),
+        ((("USD", "CNY"), ("USD", "CNY")), (("USD", "CNY"),)),
+    ],
+)
+def test_market_coverage_rejects_duplicate_fx_pairs(required_pairs, fx_pairs) -> None:
+    security_id = uuid4()
+    fx_id = uuid4()
+    boundary = RevisionBoundaryInput(
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        (uuid4(),),
+        (fx_id,),
+        uuid4(),
+        (uuid4(),),
+        None,
+    )
+    context = BoundaryContext(
+        target_security_ids=(security_id,),
+        price_security_ids=(security_id,),
+        rights_security_ids=(security_id,),
+        requires_fx=True,
+        fx_snapshot_ids=(fx_id,),
+        required_fx_pairs=required_pairs,
+        fx_pairs=fx_pairs,
+    )
+
+    with pytest.raises(ValidationError, match="duplicate FX pair"):
+        validate_market_coverage(boundary, context)
+
+
+def test_boundary_context_rejects_two_snapshots_for_the_same_fx_pair(
+    session, services
+) -> None:
+    graph = _product_boundary(session, services, security_currency="USD")
+    first = services.market.freeze_fx(_fx())
+    second = services.market.freeze_fx(_fx(source_id="second-feed", raw_hash="e" * 64))
+    boundary = RevisionBoundaryInput(
+        graph["basis"].id,
+        graph["mandate"].id,
+        graph["scope"].id,
+        graph["agenda"].id,
+        (graph["price"].id,),
+        (first.id, second.id),
+        graph["capital"].id,
+        (graph["rights"].id,),
+        None,
+    )
+
+    with pytest.raises(ValidationError, match="duplicate FX pair"):
+        services.market.boundary_context(
+            graph["project"].id,
+            boundary,
+            as_of=MARKET,
+            model_currency="USD",
         )
 
 

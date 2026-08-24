@@ -988,20 +988,29 @@ class ProductRepository:
     def effective_security_rights(
         self, security_identity_id: UUID, as_of: datetime
     ) -> UnderwritingSecurityRightsVersion | None:
+        candidate = aliased(UnderwritingSecurityRightsVersion)
+        latest_started_id = (
+            select(candidate.id)
+            .where(
+                candidate.security_identity_id == security_identity_id,
+                candidate.effective_from <= as_of,
+            )
+            .order_by(
+                candidate.effective_from.desc(),
+                candidate.version.desc(),
+                candidate.id.desc(),
+            )
+            .limit(1)
+            .scalar_subquery()
+        )
         return self._session.scalar(
             select(UnderwritingSecurityRightsVersion)
             .where(
-                UnderwritingSecurityRightsVersion.security_identity_id
-                == security_identity_id,
-                UnderwritingSecurityRightsVersion.effective_from <= as_of,
+                UnderwritingSecurityRightsVersion.id == latest_started_id,
                 or_(
                     UnderwritingSecurityRightsVersion.effective_to.is_(None),
                     UnderwritingSecurityRightsVersion.effective_to > as_of,
                 ),
-            )
-            .order_by(
-                UnderwritingSecurityRightsVersion.version.desc(),
-                UnderwritingSecurityRightsVersion.id.desc(),
             )
             .limit(1)
         )
