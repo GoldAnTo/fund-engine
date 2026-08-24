@@ -11,6 +11,7 @@ from decimal import Decimal
 import pytest
 import sqlalchemy as sa
 from sqlalchemy import create_engine, delete, inspect, update
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 
 from app.models import Base
@@ -562,6 +563,24 @@ def test_product_revision_discriminator_indexes_and_json_types_are_registered() 
         assert all(table.c[name].type.none_as_null for name in column_names)
 
 
+JSON_SHAPE_CHECKS = {
+    "ck_uw_revision_boundary_price_refs_array",
+    "ck_uw_revision_boundary_fx_refs_array",
+    "ck_uw_revision_boundary_rights_refs_array",
+    "ck_uw_revision_manifest_object",
+}
+
+
+def _reflected_json_shape_checks(connection: sa.Connection) -> set[str]:
+    inspector = sa.inspect(connection)
+    return {
+        constraint["name"]
+        for table_name in ("uw_revision_boundaries", "uw_revision_manifests")
+        for constraint in inspector.get_check_constraints(table_name)
+        if constraint["name"] in JSON_SHAPE_CHECKS
+    }
+
+
 @pytest.fixture(scope="module")
 def migrated_0065_engine(tmp_path_factory: pytest.TempPathFactory):
     database_path = tmp_path_factory.mktemp("product-0065") / "product.db"
@@ -709,6 +728,21 @@ def _insert_product_revision(
     })
 
 
+def _clone_boundary(
+    connection: sa.Connection,
+    source_boundary_id: uuid.UUID,
+) -> uuid.UUID:
+    table = Base.metadata.tables["uw_revision_boundaries"]
+    values = dict(
+        connection.execute(
+            sa.select(table).where(table.c.id == source_boundary_id)
+        ).mappings().one()
+    )
+    boundary_id = uuid.uuid4()
+    connection.execute(table.insert(), {**values, "id": boundary_id})
+    return boundary_id
+
+
 def test_0065_product_revision_round_trip_and_project_scoped_sequences(
     migrated_0065_engine: sa.Engine,
 ) -> None:
@@ -808,21 +842,112 @@ def test_0065_migrated_json_shapes_reject_nulls_and_wrong_containers(
                     )
 
     manifest = Base.metadata.tables["uw_revision_manifests"]
-    for invalid in (None, sa.JSON.NULL, "scalar", []):
-        with pytest.raises(IntegrityError):
+    with migrated_0065_engine.begin() as connection:
+        valid_boundary_id = _clone_boundary(connection, ids["boundary"])
+        connection.execute(
+            manifest.insert(),
+            {
+                "id": uuid.uuid4(),
+                "project_id": ids["project"],
+                "boundary_id": valid_boundary_id,
+                "idempotency_key": uuid.uuid4().hex,
+                "manifest": {"schema": MANIFEST_SCHEMA},
+                "content_hash": "b" * 64,
+                "created_at": datetime(2026, 8, 24, tzinfo=UTC),
+            },
+        )
+    for invalid in (sa.JSON.NULL, "scalar", []):
+        with pytest.raises(IntegrityError, match="ck_uw_revision_manifest_object"):
             with migrated_0065_engine.begin() as connection:
+                boundary_id = _clone_boundary(connection, ids["boundary"])
                 connection.execute(
                     manifest.insert(),
                     {
                         "id": uuid.uuid4(),
                         "project_id": ids["project"],
-                        "boundary_id": uuid.uuid4(),
+                        "boundary_id": boundary_id,
                         "idempotency_key": uuid.uuid4().hex,
                         "manifest": invalid,
                         "content_hash": "b" * 64,
                         "created_at": datetime(2026, 8, 24, tzinfo=UTC),
                     },
                 )
+    with pytest.raises(IntegrityError, match="NOT NULL"):
+        with migrated_0065_engine.begin() as connection:
+            boundary_id = _clone_boundary(connection, ids["boundary"])
+            connection.execute(
+                manifest.insert(),
+                {
+                    "id": uuid.uuid4(),
+                    "project_id": ids["project"],
+                    "boundary_id": boundary_id,
+                    "idempotency_key": uuid.uuid4().hex,
+                    "manifest": None,
+                    "content_hash": "b" * 64,
+                    "created_at": datetime(2026, 8, 24, tzinfo=UTC),
+                },
+            )
+
+
+def test_metadata_created_sqlite_json_shape_checks_match_migration_and_enforce_shapes(
+    migrated_0065_engine: sa.Engine,
+) -> None:
+    engine = create_engine("sqlite://")
+    dependency_tables = {
+        "uw_research_objects",
+        "uw_mandate_versions",
+        "uw_historical_bases",
+        "uw_research_versions",
+    }
+    tables = [
+        Base.metadata.tables[name] for name in PRODUCT_TABLES | dependency_tables
+    ]
+    for table_name in ("uw_revision_boundaries", "uw_revision_manifests"):
+        table = Base.metadata.tables[table_name]
+        sqlite_ddl = str(sa.schema.CreateTable(table).compile(dialect=sqlite.dialect()))
+        postgres_ddl = str(
+            sa.schema.CreateTable(table).compile(dialect=postgresql.dialect())
+        )
+        assert "json_type(" in sqlite_ddl
+        assert "json_typeof(" not in sqlite_ddl
+        assert "json_typeof(" in postgres_ddl
+        assert "json_type(" not in postgres_ddl
+    Base.metadata.create_all(engine, tables=tables)
+    try:
+        with engine.begin() as connection:
+            assert _reflected_json_shape_checks(connection) == JSON_SHAPE_CHECKS
+            ids = _seed_migrated_product_graph(connection, "metadata-json-shapes")
+        with pytest.raises(IntegrityError, match="ck_uw_revision_boundary_price_refs_array"):
+            with engine.begin() as connection:
+                table = Base.metadata.tables["uw_revision_boundaries"]
+                values = dict(
+                    connection.execute(
+                        sa.select(table).where(table.c.id == ids["boundary"])
+                    ).mappings().one()
+                )
+                connection.execute(
+                    table.insert(),
+                    {**values, "id": uuid.uuid4(), "price_snapshot_ids": {}},
+                )
+        with pytest.raises(IntegrityError, match="ck_uw_revision_manifest_object"):
+            with engine.begin() as connection:
+                boundary_id = _clone_boundary(connection, ids["boundary"])
+                connection.execute(
+                    Base.metadata.tables["uw_revision_manifests"].insert(),
+                    {
+                        "id": uuid.uuid4(),
+                        "project_id": ids["project"],
+                        "boundary_id": boundary_id,
+                        "idempotency_key": uuid.uuid4().hex,
+                        "manifest": [],
+                        "content_hash": "b" * 64,
+                        "created_at": datetime(2026, 8, 24, tzinfo=UTC),
+                    },
+                )
+        with migrated_0065_engine.connect() as migrated:
+            assert _reflected_json_shape_checks(migrated) == JSON_SHAPE_CHECKS
+    finally:
+        Base.metadata.drop_all(engine, tables=tables)
 
 
 def test_0065_sqlite_database_guards_protect_persisted_draft_and_formal_rows(
@@ -926,6 +1051,169 @@ def test_product_dependency_graph_can_create_and_drop_in_sqlite() -> None:
     assert PRODUCT_TABLES <= set(inspect(engine).get_table_names())
     Base.metadata.drop_all(engine, tables=tables)
     assert not PRODUCT_TABLES & set(inspect(engine).get_table_names())
+
+
+def _upgrade_sqlite_to_0065(
+    tmp_path: Path,
+    database_name: str,
+) -> tuple[sa.Engine, Path, dict[str, str]]:
+    backend = Path(__file__).parents[2]
+    database_url = f"sqlite:///{tmp_path / database_name}"
+    environment = {**os.environ, "DATABASE_URL": database_url}
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0065"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    return sa.create_engine(database_url), backend, environment
+
+
+def _refuse_sqlite_downgrade(
+    backend: Path,
+    environment: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    downgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0064"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert downgraded.returncode != 0
+    assert "0065 downgrade refused" in downgraded.stderr
+    return downgraded
+
+
+def _assert_refused_sqlite_downgrade_state(connection: sa.Connection) -> None:
+    inspector = sa.inspect(connection)
+    table_names = set(inspector.get_table_names())
+    assert PRODUCT_TABLES <= table_names
+    assert not {name for name in table_names if name.startswith("_alembic_tmp_")}
+    assert connection.execute(
+        sa.text("SELECT version_num FROM alembic_version")
+    ).scalar_one() == "0065"
+    assert {
+        LEGACY_REVISION_INDEX,
+        PRODUCT_REVISION_INDEX,
+        "ix_uw_research_versions_project",
+    } <= {
+        index["name"] for index in inspector.get_indexes("uw_research_versions")
+    }
+    trigger_names = {
+        row[0]
+        for row in connection.execute(
+            sa.text("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+        )
+    }
+    assert "no_update_uw_research_projects" in trigger_names
+    assert "no_delete_uw_workspace_drafts" in trigger_names
+
+
+def test_0065_sqlite_downgrade_refuses_complete_product_revision_without_ddl(
+    tmp_path: Path,
+) -> None:
+    engine, backend, environment = _upgrade_sqlite_to_0065(
+        tmp_path, "populated-product.db"
+    )
+    try:
+        with engine.begin() as connection:
+            ids = _seed_migrated_product_graph(connection, "downgrade-product")
+            revision_id = uuid.uuid4()
+            _insert_product_revision(connection, ids, revision_id=revision_id)
+        _refuse_sqlite_downgrade(backend, environment)
+        with engine.connect() as connection:
+            _assert_refused_sqlite_downgrade_state(connection)
+            assert connection.execute(
+                sa.text("SELECT manifest_schema FROM uw_research_versions WHERE id = :id"),
+                {"id": revision_id.hex},
+            ).scalar_one() == MANIFEST_SCHEMA
+        with pytest.raises(sa.exc.DBAPIError, match="append-only|immutable"):
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "UPDATE uw_research_projects SET content_hash = :digest "
+                        "WHERE id = :id"
+                    ),
+                    {"digest": "b" * 64, "id": ids["project"].hex},
+                )
+    finally:
+        engine.dispose()
+
+
+def test_0065_sqlite_downgrade_refuses_two_project_sequences_without_partial_ddl(
+    tmp_path: Path,
+) -> None:
+    engine, backend, environment = _upgrade_sqlite_to_0065(
+        tmp_path, "populated-project-sequences.db"
+    )
+    try:
+        with engine.begin() as connection:
+            first = _seed_migrated_product_graph(connection, "downgrade-project-1")
+            second = _seed_migrated_product_graph(
+                connection,
+                "downgrade-project-2",
+                company_id=first["company"],
+            )
+            _insert_product_revision(connection, first, revision_id=uuid.uuid4())
+            _insert_product_revision(connection, second, revision_id=uuid.uuid4())
+        _refuse_sqlite_downgrade(backend, environment)
+        with engine.connect() as connection:
+            _assert_refused_sqlite_downgrade_state(connection)
+            assert connection.execute(
+                sa.text(
+                    "SELECT count(*) FROM uw_research_versions "
+                    "WHERE project_id IN (:first, :second) "
+                    "AND version_kind = 'independent_research' AND sequence = 1"
+                ),
+                {"first": first["project"].hex, "second": second["project"].hex},
+            ).scalar_one() == 2
+    finally:
+        engine.dispose()
+
+
+def test_0065_sqlite_downgrade_refuses_populated_compatibility_column(
+    tmp_path: Path,
+) -> None:
+    engine, backend, environment = _upgrade_sqlite_to_0065(
+        tmp_path, "populated-compatibility.db"
+    )
+    mandate_id = uuid.uuid4().hex
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_mandate_versions "
+                    "(id, mandate_key, version, horizon_years, base_currency, "
+                    "required_return, permanent_loss_limit, comparison_set, "
+                    "benchmark_key, created_at) VALUES "
+                    "(:id, 'compatibility-only', 1, 3, 'CNY', 0.1, 0.2, '[]', "
+                    "'CSI-300', CURRENT_TIMESTAMP)"
+                ),
+                {"id": mandate_id},
+            )
+            assert all(
+                connection.execute(
+                    sa.text(f"SELECT count(*) FROM {table_name}")
+                ).scalar_one()
+                == 0
+                for table_name in PRODUCT_TABLES
+            )
+        _refuse_sqlite_downgrade(backend, environment)
+        with engine.connect() as connection:
+            _assert_refused_sqlite_downgrade_state(connection)
+            assert connection.execute(
+                sa.text(
+                    "SELECT benchmark_key FROM uw_mandate_versions WHERE id = :id"
+                ),
+                {"id": mandate_id},
+            ).scalar_one() == "CSI-300"
+    finally:
+        engine.dispose()
 
 
 def test_0065_migration_source_is_additive_and_has_no_legacy_backfill() -> None:

@@ -864,3 +864,93 @@ def test_0065_downgrade_removes_only_product_foundation_and_restores_legacy_uniq
         with admin.begin() as connection:
             connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
         admin.dispose()
+
+
+@pytest.mark.pg_only
+def test_0065_populated_downgrade_refuses_before_changing_postgres_schema() -> None:
+    database_url = os.environ["TEST_DATABASE_URL"]
+    schema = f"underwriting_0065_refuse_{uuid.uuid4().hex}"
+    migration_url = _schema_url(database_url, schema)
+    admin = sa.create_engine(database_url, future=True)
+    isolated = sa.create_engine(migration_url, future=True)
+    backend = Path(__file__).parents[2]
+    company, project = uuid.uuid4(), uuid.uuid4()
+    digest = "a" * 64
+    try:
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+        migrated = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "0065"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert migrated.returncode == 0, migrated.stderr
+        with isolated.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_research_objects "
+                    "(id, kind, external_key, canonical_name, created_at) "
+                    "VALUES (:company, 'company', '0065-refusal-company', "
+                    "'Company', CURRENT_TIMESTAMP)"
+                ),
+                {"company": company},
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_research_projects "
+                    "(id, primary_company_id, content_hash, created_at) "
+                    "VALUES (:project, :company, :digest, CURRENT_TIMESTAMP)"
+                ),
+                {"project": project, "company": company, "digest": digest},
+            )
+
+        downgraded = subprocess.run(
+            [sys.executable, "-m", "alembic", "downgrade", "0064"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert downgraded.returncode != 0
+        assert "0065 downgrade refused" in downgraded.stderr
+        with isolated.connect() as connection:
+            inspector = sa.inspect(connection)
+            assert PRODUCT_TABLES <= set(inspector.get_table_names())
+            assert connection.execute(
+                sa.text("SELECT version_num FROM alembic_version")
+            ).scalar_one() == "0065"
+            assert connection.execute(
+                sa.text("SELECT content_hash FROM uw_research_projects WHERE id = :id"),
+                {"id": project},
+            ).scalar_one() == digest
+            assert {
+                "uq_uw_research_version_legacy_sequence",
+                "uq_uw_research_version_project_sequence",
+                "ix_uw_research_versions_project",
+            } <= {
+                item["name"]
+                for item in inspector.get_indexes("uw_research_versions")
+            }
+            assert {
+                row[0]
+                for row in connection.execute(
+                    sa.text(
+                        "SELECT t.tgname FROM pg_trigger AS t "
+                        "JOIN pg_class AS c ON c.oid = t.tgrelid "
+                        "WHERE NOT t.tgisinternal "
+                        "AND c.relname = 'uw_research_projects'"
+                    )
+                )
+            } == {
+                "no_update_uw_research_projects",
+                "no_delete_uw_research_projects",
+            }
+    finally:
+        isolated.dispose()
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin.dispose()

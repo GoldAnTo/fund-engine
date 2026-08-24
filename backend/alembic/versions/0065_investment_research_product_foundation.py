@@ -32,6 +32,32 @@ IMMUTABLE_PRODUCT_TABLES = (
     "uw_revision_manifests",
 )
 
+PRODUCT_TABLES = (*IMMUTABLE_PRODUCT_TABLES, "uw_workspace_drafts")
+
+COMPATIBILITY_COLUMNS = {
+    "uw_mandate_versions": (
+        "project_id",
+        "benchmark_key",
+        "required_excess_return",
+        "effective_at",
+        "expires_at",
+        "content_hash",
+    ),
+    "uw_historical_bases": (
+        "definition_bundle_hash",
+        "parser_bundle_hash",
+        "boundary_schema_version",
+        "content_hash",
+    ),
+    "uw_research_versions": (
+        "project_id",
+        "boundary_id",
+        "manifest_id",
+        "manifest_schema",
+        "publication_status",
+    ),
+}
+
 LEGACY_REVISION_INDEX = "uq_uw_research_version_legacy_sequence"
 PRODUCT_REVISION_INDEX = "uq_uw_research_version_project_sequence"
 
@@ -262,6 +288,26 @@ def _drop_compatibility_columns() -> None:
         "project_id",
     ):
         op.drop_column("uw_mandate_versions", column)
+
+
+def _ensure_downgrade_is_lossless() -> None:
+    bind = op.get_bind()
+    for table_name in PRODUCT_TABLES:
+        if bind.execute(sa.text(f"SELECT 1 FROM {table_name} LIMIT 1")).first():
+            raise RuntimeError(
+                f"0065 downgrade refused: product table {table_name} contains rows"
+            )
+    for table_name, column_names in COMPATIBILITY_COLUMNS.items():
+        populated = " OR ".join(
+            f"{column_name} IS NOT NULL" for column_name in column_names
+        )
+        if bind.execute(
+            sa.text(f"SELECT 1 FROM {table_name} WHERE {populated} LIMIT 1")
+        ).first():
+            raise RuntimeError(
+                "0065 downgrade refused: compatibility columns on "
+                f"{table_name} are populated"
+            )
 
 
 def upgrade() -> None:
@@ -926,6 +972,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    _ensure_downgrade_is_lossless()
     dialect_name = op.get_bind().dialect.name
     if dialect_name == "postgresql":
         op.execute(

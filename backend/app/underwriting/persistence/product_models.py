@@ -26,6 +26,23 @@ from app.models.ledger import Base, _uuid
 _HASH_CHECK = "length(content_hash) = 64"
 
 
+def _json_shape_constraints(
+    column_name: str,
+    expected_shape: str,
+    constraint_name: str,
+) -> tuple[CheckConstraint, CheckConstraint]:
+    return (
+        CheckConstraint(
+            f"json_type({column_name}) = '{expected_shape}'",
+            name=constraint_name,
+        ).ddl_if(dialect="sqlite"),
+        CheckConstraint(
+            f"json_typeof({column_name}) = '{expected_shape}'",
+            name=constraint_name,
+        ).ddl_if(dialect="postgresql"),
+    )
+
+
 class UnderwritingObjectIdentityVersion(Base):
     __tablename__ = "uw_object_identity_versions"
     __table_args__ = (
@@ -474,6 +491,21 @@ class UnderwritingRevisionBoundary(Base):
             name="ck_uw_revision_boundary_schema_version",
         ),
         CheckConstraint(_HASH_CHECK, name="ck_uw_revision_boundary_content_hash"),
+        *_json_shape_constraints(
+            "price_snapshot_ids",
+            "array",
+            "ck_uw_revision_boundary_price_refs_array",
+        ),
+        *_json_shape_constraints(
+            "fx_snapshot_ids",
+            "array",
+            "ck_uw_revision_boundary_fx_refs_array",
+        ),
+        *_json_shape_constraints(
+            "security_rights_ids",
+            "array",
+            "ck_uw_revision_boundary_rights_refs_array",
+        ),
         Index("ix_uw_revision_boundary_project_created", "project_id", "created_at"),
     )
 
@@ -521,6 +553,11 @@ class UnderwritingRevisionManifest(Base):
             name="ck_uw_revision_manifest_idempotency_key",
         ),
         CheckConstraint(_HASH_CHECK, name="ck_uw_revision_manifest_content_hash"),
+        *_json_shape_constraints(
+            "manifest",
+            "object",
+            "ck_uw_revision_manifest_object",
+        ),
         UniqueConstraint(
             "project_id",
             "idempotency_key",
