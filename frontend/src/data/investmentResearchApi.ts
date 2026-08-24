@@ -473,7 +473,7 @@ function isEffectiveRights(value: unknown): value is EffectiveSecurityRights {
   if (state === "before_head:adjust_market_at") {
     return value.effective === null && value.head !== null && !value.append_allowed
       && value.expected_parent_id === null && value.minimum_effective_from === null
-      && Date.parse(value.as_of) < Date.parse(value.head.effective_from);
+      && Date.parse(value.as_of) < Date.parse(String(value.head.effective_from));
   }
   if (state === "successor_required:append_successor") {
     return value.effective === null && value.head !== null && value.append_allowed

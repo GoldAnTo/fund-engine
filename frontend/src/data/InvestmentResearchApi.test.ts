@@ -73,6 +73,29 @@ function basisBody() {
   return { schema_version: "underwriting.v1", id: ids.basis, cutoff_at: now, price_as_of: null, source_manifest_hash: hash, definition_bundle_hash: hash, parser_bundle_hash: hash, boundary_schema_version: "product.historical-basis.v1", content_hash: hash, created_at: now };
 }
 
+function effectiveRightsBody(effective = rightsBody()) {
+  return {
+    schema_version: "underwriting.v1",
+    security_identity_id: ids.securityA,
+    as_of: now,
+    effective,
+    head: {
+      schema_version: "underwriting.v1",
+      id: ids.rightsA,
+      effective_from: effective.effective_from,
+      effective_to: effective.effective_to,
+    },
+    append_allowed: false,
+    expected_parent_id: null,
+    minimum_effective_from: null,
+    reason: {
+      schema_version: "underwriting.v1",
+      code: "effective_version_found",
+      action: "reuse_effective",
+    },
+  };
+}
+
 function priceBody(id = ids.priceA, securityId = ids.securityA) {
   return { schema_version: "underwriting.v1", id, security_identity_id: securityId, price: "100", currency: "CNY", price_type: "close", adjustment_basis: "unadjusted", market_at: now, available_at: now, source_id: "source", raw_hash: hash, content_hash: hash, created_at: now };
 }
@@ -156,7 +179,7 @@ const operationCases: OperationCase[] = [
   { name: "create FX", status: 201, body: fxBody(), method: "POST", url: "/api/underwriting/v1/product/market/fx-snapshots", run: (api) => api.createFxSnapshot(fxRequest) },
   { name: "create capital", status: 201, body: capitalBody(), method: "POST", url: "/api/underwriting/v1/product/market/capital-structure-snapshots", run: (api) => api.createCapitalStructure(capitalRequest) },
   { name: "create rights", status: 201, body: rightsBody(), method: "POST", url: "/api/underwriting/v1/product/market/security-rights", run: (api) => api.createSecurityRights(rightsRequest) },
-  { name: "get effective rights", status: 200, body: { schema_version: "underwriting.v1", security_identity_id: ids.securityA, as_of: now, effective: rightsBody(), head_id: ids.rightsA }, method: "GET", url: `/api/underwriting/v1/product/market/security-rights/effective?security_identity_id=${ids.securityA}&as_of=2026-08-24T00%3A00%3A00Z`, run: (api) => api.effectiveSecurityRights(ids.securityA, now) },
+  { name: "get effective rights", status: 200, body: effectiveRightsBody(), method: "GET", url: `/api/underwriting/v1/product/market/security-rights/effective?security_identity_id=${ids.securityA}&as_of=2026-08-24T00%3A00%3A00Z`, run: (api) => api.effectiveSecurityRights(ids.securityA, now) },
   { name: "get draft", status: 200, body: draftBody(), method: "GET", url: `/api/underwriting/v1/product/projects/${ids.project}/draft`, run: (api) => api.draft(ids.project) },
   { name: "patch draft", status: 200, body: draftBody(), method: "PATCH", url: `/api/underwriting/v1/product/projects/${ids.project}/draft`, run: (api) => api.saveDraft(ids.project, patchRequest) },
   { name: "preview", status: 200, body: previewBody(), method: "POST", url: `/api/underwriting/v1/product/projects/${ids.project}/publication-preview`, run: (api) => api.preview(ids.project, { schema_version: "underwriting.v1", expected_lock_version: 2 }) },
@@ -203,13 +226,25 @@ describe("InvestmentResearchApi", () => {
   it("rejects an effective-rights response whose version does not cover as_of", async () => {
     const invalid = rightsBody();
     invalid.effective_from = "2026-08-25T00:00:00Z";
-    vi.stubGlobal("fetch", vi.fn(async () => response({
-      schema_version: "underwriting.v1",
-      security_identity_id: ids.securityA,
-      as_of: now,
-      effective: invalid,
-      head_id: ids.rightsA,
-    })));
+    vi.stubGlobal("fetch", vi.fn(async () => response(effectiveRightsBody(invalid))));
+
+    await expect(new InvestmentResearchApi().effectiveSecurityRights(ids.securityA, now))
+      .rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects an appendable rights response without the explicit head parent", async () => {
+    const invalid = {
+      ...effectiveRightsBody(),
+      effective: null,
+      append_allowed: true,
+      minimum_effective_from: "2026-08-23T00:00:00Z",
+      reason: {
+        schema_version: "underwriting.v1",
+        code: "successor_required",
+        action: "append_successor",
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => response(invalid)));
 
     await expect(new InvestmentResearchApi().effectiveSecurityRights(ids.securityA, now))
       .rejects.toMatchObject({ code: "invalid_response" });
