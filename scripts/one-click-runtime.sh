@@ -460,6 +460,10 @@ print_restore_recovery_instructions() {
       printf 'one-click runtime: preserved database names: %q %q\n' \
         "$database_name" "$staging_database" >&2
       ;;
+    finalizing_uncertain)
+      printf 'one-click runtime: final database cleanup may have completed; inspect possible names before taking action: %q %q\n' \
+        "$database_name" "$old_database" >&2
+      ;;
     *)
       printf 'one-click runtime: database cutover state is uncertain; inspect possible names: %q %q %q\n' \
         "$database_name" "$staging_database" "$old_database" >&2
@@ -589,6 +593,7 @@ restore_runtime() (
   if ! compose run --rm --no-deps api python -m app.scripts.verify_underwriting_revision_manifests; then
     die "restored runtime failed final verification; preserved recovery artifacts and kept application services stopped"
   fi
+  database_state="finalizing_uncertain"
   compose exec -T postgres dropdb -U "$database_user" "$old_database"
   preserve_recovery_state="false"
   printf 'Restored and verified one-click backup from %s.\n' "$backup_dir"

@@ -157,6 +157,11 @@ def test_runtime_backup_restore_contract_is_fail_closed() -> None:
     assert script.index('preserve_recovery_state="true"', cutover_start) < (
         first_destructive_rename
     )
+    final_drop = script.index(
+        'compose exec -T postgres dropdb -U "$database_user" "$old_database"'
+    )
+    assert script.index('database_state="finalizing_uncertain"') < final_drop
+    assert script.index('preserve_recovery_state="false"', final_drop) > final_drop
     assert "automatic restore rollback failed; preserved" in script
     assert "manual recovery required; keep application services stopped" in script
     assert "docker volume inspect" in script
