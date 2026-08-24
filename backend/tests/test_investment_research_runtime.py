@@ -450,6 +450,47 @@ def test_restore_preserves_recovery_artifacts_when_compensation_fails(
     assert "dropdb" not in commands
 
 
+def test_restore_finalization_uncertainty_prints_inventory_only(
+    tmp_path: Path,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    backup = tmp_path / "backup"
+    _write_backup_bundle(backup)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "docker.log"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
+        'case "$*" in\n'
+        "  *' config --format json'*) printf '%s' '{\"volumes\":{\"fund-engine-one-click-files\":{\"name\":\"fund-engine-one-click-files\"}}}' ;;\n"
+        "  *' ps --status running --services'*) printf 'postgres\\n' ;;\n"
+        "  *' exec -T postgres dropdb -U one_click fund_engine_one_click_before_'*) exit 44 ;;\n"
+        "esac\n"
+    )
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "restore", str(backup)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(log),
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "final database cleanup may have completed" in completed.stderr
+    assert "inspect databases with" in completed.stderr
+    assert "docker volume inspect" in completed.stderr
+    assert "database rollback" not in completed.stderr
+    assert "file recovery command" not in completed.stderr
+    assert "volume rm" not in log.read_text()
+
+
 def test_runtime_verifier_checks_increment_a_shell_api_and_revision() -> None:
     script = (ROOT / "scripts" / "verify-one-click-runtime.sh").read_text()
 

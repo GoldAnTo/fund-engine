@@ -471,6 +471,7 @@ print_restore_recovery_instructions() {
   esac
   printf 'one-click runtime: inspect volumes with: docker volume inspect %q %q %q\n' \
     "$files_volume" "$staging_volume" "$rollback_volume" >&2
+  [[ "$database_state" != "finalizing_uncertain" ]] || return 0
   printf 'one-click runtime: file recovery command: docker run --rm -v %q:/source:ro -v %q:/target alpine sh -eu -c %q\n' \
     "$rollback_volume" "$files_volume" \
     'find /target -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; cp -a /source/. /target/' >&2
