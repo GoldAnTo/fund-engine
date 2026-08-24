@@ -26,13 +26,18 @@ from app.underwriting.persistence.product_models import (
     UnderwritingObjectIdentityVersion,
     UnderwritingPriceSnapshot,
     UnderwritingResearchAgendaVersion,
+    UnderwritingResearchAssessmentVersion,
     UnderwritingResearchProject,
     UnderwritingResearchProjectSecurity,
     UnderwritingResearchScopeVersion,
+    UnderwritingRevisionBoundary,
+    UnderwritingRevisionManifest,
     UnderwritingSecurityRightsVersion,
     UnderwritingWorkspaceDraft,
 )
+from app.underwriting.domain.product_contracts import RevisionBoundaryInput
 from app.underwriting.persistence.repository import StaleParentError
+from app.underwriting.services.kernel import canonical_hash
 
 
 _STALE_MESSAGE = "expected parent is not the version family head"
@@ -143,6 +148,8 @@ _SQLITE_SNAPSHOT_IDENTITY_COLUMNS = {
     ),
 }
 _WORKSPACE_DRAFT_PROJECT_CONSTRAINT = "uq_uw_workspace_draft_project"
+_PRODUCT_MANIFEST_SCHEMA = "underwriting.research-revision-manifest.v1"
+_PRODUCT_REVISION_KIND = "independent_research"
 
 
 class _UnchangedBaseRevision:
@@ -1135,4 +1142,242 @@ class ProductRepository:
                 ),
             )
             .limit(1)
+        )
+
+    def lock_project(self, project_id: UUID) -> UnderwritingResearchProject:
+        row = self._session.scalar(
+            select(UnderwritingResearchProject)
+            .where(UnderwritingResearchProject.id == project_id)
+            .with_for_update()
+        )
+        if row is None:
+            raise ValidationError("research project does not exist")
+        return row
+
+    def product_revision_head(
+        self, project_id: UUID, *, lock: bool = False
+    ) -> UnderwritingResearchVersion | None:
+        statement = (
+            select(UnderwritingResearchVersion)
+            .where(
+                UnderwritingResearchVersion.project_id == project_id,
+                UnderwritingResearchVersion.version_kind == "independent_research",
+            )
+            .order_by(
+                UnderwritingResearchVersion.sequence.desc(),
+                UnderwritingResearchVersion.id.desc(),
+            )
+            .limit(1)
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return self._session.scalar(statement)
+
+    def manifest(self, manifest_id: UUID | None) -> UnderwritingRevisionManifest | None:
+        if manifest_id is None:
+            return None
+        return self._session.get(UnderwritingRevisionManifest, manifest_id)
+
+    def boundary(self, boundary_id: UUID | None) -> UnderwritingRevisionBoundary | None:
+        if boundary_id is None:
+            return None
+        return self._session.get(UnderwritingRevisionBoundary, boundary_id)
+
+    def assessment(
+        self, assessment_id: UUID
+    ) -> UnderwritingResearchAssessmentVersion | None:
+        return self._session.get(UnderwritingResearchAssessmentVersion, assessment_id)
+
+    def revision_for_idempotency(
+        self, project_id: UUID, idempotency_key: str
+    ) -> UnderwritingResearchVersion | None:
+        return self._session.scalar(
+            select(UnderwritingResearchVersion)
+            .join(
+                UnderwritingRevisionManifest,
+                UnderwritingRevisionManifest.id
+                == UnderwritingResearchVersion.manifest_id,
+            )
+            .where(
+                UnderwritingRevisionManifest.project_id == project_id,
+                UnderwritingRevisionManifest.idempotency_key == idempotency_key,
+            )
+            .limit(1)
+            .execution_options(populate_existing=True)
+        )
+
+    def append_assessment(
+        self,
+        *,
+        project_id: UUID,
+        answerability: str,
+        direction: str | None,
+        confidence: str | None,
+        publication_status: str,
+        blockers: list[str],
+        resolution_requirements: list[str],
+        next_review_at: datetime | None,
+        content_hash: str,
+        expected_parent_id: UUID | None,
+        created_at: datetime,
+    ) -> UnderwritingResearchAssessmentVersion:
+        head = self._session.scalar(
+            select(UnderwritingResearchAssessmentVersion)
+            .where(UnderwritingResearchAssessmentVersion.project_id == project_id)
+            .order_by(
+                UnderwritingResearchAssessmentVersion.version.desc(),
+                UnderwritingResearchAssessmentVersion.id.desc(),
+            )
+            .limit(1)
+            .with_for_update()
+        )
+        actual_parent_id = head.id if head is not None else None
+        self._require_expected_parent(actual_parent_id, expected_parent_id)
+        row = UnderwritingResearchAssessmentVersion(
+            project_id=project_id,
+            version=1 if head is None else head.version + 1,
+            supersedes_id=actual_parent_id,
+            answerability=answerability,
+            direction=direction,
+            confidence=confidence,
+            publication_status=publication_status,
+            blockers=deepcopy(blockers),
+            resolution_requirements=deepcopy(resolution_requirements),
+            next_review_at=next_review_at,
+            content_hash=content_hash,
+            created_at=created_at,
+        )
+        self._session.add(row)
+        self._session.flush([row])
+        return row
+
+    def append_boundary(
+        self,
+        *,
+        project_id: UUID,
+        value: RevisionBoundaryInput,
+        schema_version: str,
+        content_hash: str,
+        created_at: datetime,
+    ) -> UnderwritingRevisionBoundary:
+        row = UnderwritingRevisionBoundary(
+            project_id=project_id,
+            historical_basis_id=value.historical_basis_id,
+            mandate_id=value.mandate_id,
+            scope_id=value.scope_id,
+            agenda_id=value.agenda_id,
+            price_snapshot_ids=[str(item) for item in value.price_snapshot_ids],
+            fx_snapshot_ids=[str(item) for item in value.fx_snapshot_ids],
+            capital_structure_snapshot_id=value.capital_structure_snapshot_id,
+            security_rights_ids=[str(item) for item in value.security_rights_ids],
+            parent_revision_id=value.parent_revision_id,
+            schema_version=schema_version,
+            content_hash=content_hash,
+            created_at=created_at,
+        )
+        self._session.add(row)
+        self._session.flush([row])
+        return row
+
+    def append_manifest(
+        self,
+        *,
+        project_id: UUID,
+        boundary_id: UUID,
+        idempotency_key: str,
+        manifest: dict[str, object],
+        content_hash: str,
+        created_at: datetime,
+    ) -> UnderwritingRevisionManifest:
+        row = UnderwritingRevisionManifest(
+            project_id=project_id,
+            boundary_id=boundary_id,
+            idempotency_key=idempotency_key,
+            manifest=deepcopy(manifest),
+            content_hash=content_hash,
+            created_at=created_at,
+        )
+        self._session.add(row)
+        self._session.flush([row])
+        return row
+
+    def append_product_revision(
+        self,
+        *,
+        project_id: UUID,
+        object_id: UUID | str,
+        basis_id: UUID,
+        boundary_id: UUID,
+        manifest_id: UUID,
+        manifest_hash: str,
+        assessment_id: UUID,
+        parent_revision_id: UUID | None,
+        created_at: datetime,
+    ) -> UnderwritingResearchVersion:
+        if isinstance(object_id, str):
+            try:
+                object_id = UUID(object_id)
+            except ValueError as exc:
+                raise ValidationError("primary object reference is malformed") from exc
+        head = self.product_revision_head(project_id, lock=True)
+        actual_parent_id = head.id if head is not None else None
+        if actual_parent_id != parent_revision_id:
+            raise StaleParentError(_STALE_MESSAGE)
+        sequence = 1 if head is None else head.sequence + 1
+        content_hash = canonical_hash(
+            {
+                "schema_version": "product.research-revision.v1",
+                "project_id": str(project_id),
+                "object_id": str(object_id),
+                "basis_id": str(basis_id),
+                "version_kind": _PRODUCT_REVISION_KIND,
+                "sequence": sequence,
+                "boundary_id": str(boundary_id),
+                "manifest_id": str(manifest_id),
+                "manifest_hash": manifest_hash,
+                "assessment_id": str(assessment_id),
+                "parent_revision_id": (
+                    str(parent_revision_id) if parent_revision_id is not None else None
+                ),
+                "publication_status": "user_frozen",
+            }
+        )
+        row = UnderwritingResearchVersion(
+            object_id=object_id,
+            basis_id=basis_id,
+            version_kind=_PRODUCT_REVISION_KIND,
+            sequence=sequence,
+            content_hash=content_hash,
+            parent_ids=(
+                [str(parent_revision_id)] if parent_revision_id is not None else []
+            ),
+            supersedes_id=parent_revision_id,
+            project_id=project_id,
+            boundary_id=boundary_id,
+            manifest_id=manifest_id,
+            manifest_schema=_PRODUCT_MANIFEST_SCHEMA,
+            publication_status="user_frozen",
+            created_at=created_at,
+        )
+        self._session.add(row)
+        self._session.flush([row])
+        return row
+
+    def reset_draft_after_publish(
+        self,
+        *,
+        project_id: UUID,
+        expected_lock_version: int,
+        base_revision_id: UUID,
+        updated_at: datetime,
+    ) -> UnderwritingWorkspaceDraft:
+        current = self.workspace_draft(project_id)
+        if current is None:
+            raise ValidationError("workspace draft does not exist for project")
+        return self.compare_and_swap_workspace_draft(
+            project_id=project_id,
+            expected_lock_version=expected_lock_version,
+            content=deepcopy(current.content),
+            updated_at=updated_at,
+            base_revision_id=base_revision_id,
         )

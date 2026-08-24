@@ -29,6 +29,12 @@ from app.underwriting.domain.evidence_candidates import (
     CandidateEvidenceItem,
     CandidateEvidenceReview,
 )
+from app.underwriting.domain.product_contracts import (
+    AssessmentConfidence,
+    AssessmentDirection,
+    PublicationStatus,
+    RevisionBoundaryInput,
+)
 from app.underwriting.domain.types import ResearchObjectKind
 from app.underwriting.domain.types import (
     AnswerabilityState,
@@ -40,8 +46,22 @@ from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
     UnderwritingHistoricalBasis,
     UnderwritingLedgerEntry,
+    UnderwritingMandateVersion,
     UnderwritingResearchObject,
     UnderwritingResearchVersion,
+)
+from app.underwriting.persistence.product_models import (
+    UnderwritingCapitalStructureSnapshot,
+    UnderwritingFXSnapshot,
+    UnderwritingPriceSnapshot,
+    UnderwritingResearchAgendaVersion,
+    UnderwritingResearchAssessmentVersion,
+    UnderwritingResearchProject,
+    UnderwritingResearchProjectSecurity,
+    UnderwritingResearchScopeVersion,
+    UnderwritingRevisionBoundary,
+    UnderwritingRevisionManifest,
+    UnderwritingSecurityRightsVersion,
 )
 from app.underwriting.persistence.research_models import (
     UnderwritingCompanyExposureVersion,
@@ -61,6 +81,12 @@ from app.underwriting.persistence.research_models import (
     validate_candidate_review_governance,
 )
 from app.underwriting.services.kernel import canonical_hash, frozen_research_version_content_hash
+from app.underwriting.services.market_snapshots import (
+    capital_structure_snapshot_hash,
+    fx_snapshot_hash,
+    price_snapshot_hash,
+    security_rights_hash,
+)
 from app.underwriting.services.candidate_evidence import INDUSTRY_EVIDENCE_CANDIDATE_KIND
 from app.underwriting.services.source_freeze import freeze_manifest
 from app.underwriting.services.revision_parent_seal import (
@@ -82,6 +108,58 @@ _ANSWERABILITY_SEAL_GENERIC_TIMESTAMP = "generic_timestamp"
 _ANSWERABILITY_SEAL_CATL_TIMESTAMP = "catl_timestamp"
 _LEDGER_SEAL_LEGACY = "legacy"
 _LEDGER_SEAL_GENERIC_TIMESTAMP = "generic_timestamp"
+PRODUCT_MANIFEST_SCHEMA = "underwriting.research-revision-manifest.v1"
+PRODUCT_BOUNDARY_SCHEMA = "product.revision-boundary.v1"
+PRODUCT_REVISION_KIND = "independent_research"
+
+
+def _product_boundary_payload(project_id: UUID, boundary: RevisionBoundaryInput) -> dict[str, object]:
+    return {
+        "schema_version": PRODUCT_BOUNDARY_SCHEMA,
+        "project_id": str(project_id),
+        "historical_basis_id": str(boundary.historical_basis_id),
+        "mandate_id": str(boundary.mandate_id),
+        "scope_id": str(boundary.scope_id),
+        "agenda_id": str(boundary.agenda_id),
+        "price_snapshot_ids": [str(value) for value in boundary.price_snapshot_ids],
+        "fx_snapshot_ids": [str(value) for value in boundary.fx_snapshot_ids],
+        "capital_structure_snapshot_id": str(boundary.capital_structure_snapshot_id),
+        "security_rights_ids": [str(value) for value in boundary.security_rights_ids],
+        "parent_revision_id": str(boundary.parent_revision_id) if boundary.parent_revision_id else None,
+    }
+
+
+def _product_assessment_payload(project_id: UUID, row: UnderwritingResearchAssessmentVersion) -> dict[str, object]:
+    next_review_at = ResearchRevisionDiffService._stored_datetime(row.next_review_at) if row.next_review_at else None
+    return {
+        "schema_version": "product.research-assessment.v1",
+        "project_id": str(project_id),
+        "parent_assessment_id": str(row.supersedes_id) if row.supersedes_id else None,
+        "answerability": row.answerability,
+        "direction": row.direction,
+        "confidence": row.confidence,
+        "publication_status": row.publication_status,
+        "blockers": row.blockers,
+        "resolution_requirements": row.resolution_requirements,
+        "next_review_at": next_review_at.isoformat() if next_review_at else None,
+    }
+
+
+def _product_revision_payload(revision: UnderwritingResearchVersion, manifest_hash: str, assessment_id: UUID) -> dict[str, object]:
+    return {
+        "schema_version": "product.research-revision.v1",
+        "project_id": str(revision.project_id),
+        "object_id": str(revision.object_id),
+        "basis_id": str(revision.basis_id),
+        "version_kind": revision.version_kind,
+        "sequence": revision.sequence,
+        "boundary_id": str(revision.boundary_id),
+        "manifest_id": str(revision.manifest_id),
+        "manifest_hash": manifest_hash,
+        "assessment_id": str(assessment_id),
+        "parent_revision_id": str(revision.supersedes_id) if revision.supersedes_id else None,
+        "publication_status": revision.publication_status,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +206,34 @@ class ResearchRevisionSummary:
     # summaries remain readable, but an Unknown gap cannot be authenticated
     # from a descriptor that omitted the row creation timestamp.
     ledger_timestamp_sealed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ProductResearchRevisionSummary:
+    """Strict projection of one exact product manifest and frozen boundary."""
+
+    id: UUID
+    project_id: UUID
+    object_id: UUID
+    basis_id: UUID
+    boundary_id: UUID
+    manifest_id: UUID
+    version_kind: str
+    sequence: int
+    content_hash: str
+    cutoff: datetime
+    source_manifest_hash: str
+    manifest_hash: str
+    parent_revision_id: UUID | None
+    price_snapshot_ids: tuple[UUID, ...]
+    fx_snapshot_ids: tuple[UUID, ...]
+    capital_structure_snapshot_id: UUID
+    security_rights_ids: tuple[UUID, ...]
+    market_snapshot_ids: tuple[UUID, ...]
+    answerability: AnswerabilityState
+    direction: AssessmentDirection | None
+    confidence: AssessmentConfidence | None
+    publication_status: PublicationStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -1471,10 +1577,262 @@ class ResearchRevisionDiffService:
             self._validate_candidate_parent_set(scope, refs)
             return self._canonical_ref_descriptors(refs)
 
-    def revision_summary(self, revision_id: UUID) -> ResearchRevisionSummary:
+    @staticmethod
+    def _product_uuid(value: object, field: str) -> UUID:
+        if not isinstance(value, str):
+            raise ValidationError(f"product manifest {field} is malformed")
+        try:
+            parsed = UUID(value)
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValidationError(f"product manifest {field} is malformed") from exc
+        if str(parsed) != value:
+            raise ValidationError(f"product manifest {field} is not canonical")
+        return parsed
+
+    @classmethod
+    def _product_uuid_list(cls, value: object, field: str, *, nonempty: bool = False) -> tuple[UUID, ...]:
+        if not isinstance(value, list) or (nonempty and not value):
+            raise ValidationError(f"product manifest {field} is malformed")
+        parsed = tuple(cls._product_uuid(item, field) for item in value)
+        if len(parsed) != len(set(parsed)) or parsed != tuple(sorted(parsed, key=str)):
+            raise ValidationError(f"product manifest {field} is not canonical")
+        return parsed
+
+    def _product_revision_summary(self, revision: UnderwritingResearchVersion) -> ProductResearchRevisionSummary:
+        if (
+            revision.project_id is None or revision.boundary_id is None
+            or revision.manifest_id is None or revision.version_kind != PRODUCT_REVISION_KIND
+            or revision.publication_status != PublicationStatus.USER_FROZEN.value
+        ):
+            raise ValidationError("product research revision columns are incomplete")
+        project = self._session.get(UnderwritingResearchProject, revision.project_id)
+        boundary = self._session.get(UnderwritingRevisionBoundary, revision.boundary_id)
+        manifest = self._session.get(UnderwritingRevisionManifest, revision.manifest_id)
+        if project is None or boundary is None or manifest is None:
+            raise ValidationError("product research revision frozen graph is missing")
+        primary_object = self._session.get(UnderwritingResearchObject, project.primary_company_id)
+        memberships = tuple(self._session.scalars(
+            select(UnderwritingResearchProjectSecurity)
+            .where(UnderwritingResearchProjectSecurity.project_id == project.id)
+            .order_by(UnderwritingResearchProjectSecurity.security_id)
+        ))
+        project_security_ids = tuple(row.security_id for row in memberships)
+        expected_project_hash = canonical_hash({
+            "schema_version": "product.research-project.v1",
+            "primary_company_id": str(project.primary_company_id),
+            "target_security_ids": [str(value) for value in project_security_ids],
+        })
+        if (
+            primary_object is None or primary_object.kind != ResearchObjectKind.COMPANY.value
+            or not memberships or project.content_hash != expected_project_hash
+            or any(
+                row.content_hash != canonical_hash({
+                    "schema_version": "product.research-project-security.v1",
+                    "project_id": str(project.id),
+                    "security_id": str(row.security_id),
+                })
+                for row in memberships
+            )
+        ):
+            raise ValidationError("product research project identity is invalid")
+        if (
+            boundary.project_id != revision.project_id or manifest.project_id != revision.project_id
+            or manifest.boundary_id != boundary.id or boundary.schema_version != PRODUCT_BOUNDARY_SCHEMA
+        ):
+            raise ValidationError("product research revision frozen graph crosses projects")
+        if not isinstance(manifest.manifest, Mapping):
+            raise ValidationError("product research revision manifest is malformed")
+        payload = dict(manifest.manifest)
+        expected_keys = {
+            "schema_version", "project_id", "primary_object_id", "boundary_ref", "mandate_id",
+            "scope_id", "agenda_id", "historical_basis_id", "price_snapshot_ids",
+            "fx_snapshot_ids", "capital_structure_snapshot_id", "security_rights_ids",
+            "market_snapshot_refs", "model_refs", "assessment_ref", "memo_ref",
+            "parent_revision_id",
+        }
+        if set(payload) != expected_keys or payload.get("schema_version") != PRODUCT_MANIFEST_SCHEMA:
+            raise ValidationError("product research revision manifest shape is malformed")
+        if manifest.content_hash != canonical_hash(payload):
+            raise ValidationError("product research revision manifest hash mismatch")
+        project_id = self._product_uuid(payload.get("project_id"), "project_id")
+        primary_object_id = self._product_uuid(payload.get("primary_object_id"), "primary_object_id")
+        boundary_ref = self._product_uuid(payload.get("boundary_ref"), "boundary_ref")
+        assessment_id = self._product_uuid(payload.get("assessment_ref"), "assessment_ref")
+        basis_id = self._product_uuid(payload.get("historical_basis_id"), "historical_basis_id")
+        mandate_id = self._product_uuid(payload.get("mandate_id"), "mandate_id")
+        scope_id = self._product_uuid(payload.get("scope_id"), "scope_id")
+        agenda_id = self._product_uuid(payload.get("agenda_id"), "agenda_id")
+        capital_id = self._product_uuid(payload.get("capital_structure_snapshot_id"), "capital_structure_snapshot_id")
+        price_ids = self._product_uuid_list(payload.get("price_snapshot_ids"), "price_snapshot_ids", nonempty=True)
+        fx_ids = self._product_uuid_list(payload.get("fx_snapshot_ids"), "fx_snapshot_ids")
+        rights_ids = self._product_uuid_list(payload.get("security_rights_ids"), "security_rights_ids", nonempty=True)
+        parent_id = self._product_uuid(payload.get("parent_revision_id"), "parent_revision_id") if payload.get("parent_revision_id") is not None else None
+        if (
+            project_id != revision.project_id or primary_object_id != project.primary_company_id
+            or primary_object_id != revision.object_id or boundary_ref != boundary.id
+            or basis_id != revision.basis_id or basis_id != boundary.historical_basis_id
+            or mandate_id != boundary.mandate_id or scope_id != boundary.scope_id
+            or agenda_id != boundary.agenda_id
+            or price_ids != tuple(UUID(item) for item in boundary.price_snapshot_ids)
+            or fx_ids != tuple(UUID(item) for item in boundary.fx_snapshot_ids)
+            or capital_id != boundary.capital_structure_snapshot_id
+            or rights_ids != tuple(UUID(item) for item in boundary.security_rights_ids)
+            or parent_id != boundary.parent_revision_id
+        ):
+            raise ValidationError("product manifest does not match its exact boundary")
+        boundary_value = RevisionBoundaryInput(
+            basis_id, mandate_id, scope_id, agenda_id, price_ids, fx_ids, capital_id,
+            rights_ids, parent_id,
+        )
+        if boundary.content_hash != canonical_hash(_product_boundary_payload(project_id, boundary_value)):
+            raise ValidationError("product revision boundary hash mismatch")
+        expected_market_refs = sorted(
+            [f"price:{item}" for item in price_ids] + [f"fx:{item}" for item in fx_ids]
+            + [f"capital_structure:{capital_id}"]
+            + [f"security_rights:{item}" for item in rights_ids]
+        )
+        if payload.get("market_snapshot_refs") != expected_market_refs or payload.get("model_refs") != [] or payload.get("memo_ref") is not None:
+            raise ValidationError("product manifest frozen reference set is malformed")
+
+        basis = self._session.get(UnderwritingHistoricalBasis, basis_id)
+        mandate = self._session.get(UnderwritingMandateVersion, mandate_id)
+        scope = self._session.get(UnderwritingResearchScopeVersion, scope_id)
+        agenda = self._session.get(UnderwritingResearchAgendaVersion, agenda_id)
+        assessment = self._session.get(UnderwritingResearchAssessmentVersion, assessment_id)
+        prices = tuple(self._session.get(UnderwritingPriceSnapshot, item) for item in price_ids)
+        fxs = tuple(self._session.get(UnderwritingFXSnapshot, item) for item in fx_ids)
+        capital = self._session.get(UnderwritingCapitalStructureSnapshot, capital_id)
+        rights = tuple(self._session.get(UnderwritingSecurityRightsVersion, item) for item in rights_ids)
+        if (
+            basis is None or mandate is None or scope is None or agenda is None or assessment is None
+            or capital is None or any(item is None for item in (*prices, *fxs, *rights))
+        ):
+            raise ValidationError("product research revision exact reference is missing")
+        basis_hash = canonical_hash({
+            "schema_version": "product.historical-basis.v1",
+            "cutoff_at": self._stored_datetime(basis.cutoff).isoformat(),
+            "source_manifest_hash": basis.source_manifest_hash,
+            "definition_bundle_hash": basis.definition_bundle_hash,
+            "parser_bundle_hash": basis.parser_bundle_hash,
+        })
+        mandate_hash = canonical_hash({
+            "schema_version": "product.investment-mandate.v1", "project_id": str(project_id),
+            "mandate_key": mandate.mandate_key, "horizon_years": mandate.horizon_years,
+            "base_currency": mandate.base_currency, "required_return": format(mandate.required_return, ".8f"),
+            "permanent_loss_limit": format(mandate.permanent_loss_limit, ".8f"),
+            "comparison_set": list(mandate.comparison_set), "benchmark_key": mandate.benchmark_key,
+            "required_excess_return": format(mandate.required_excess_return, ".8f") if mandate.required_excess_return is not None else None,
+            "effective_at": self._stored_datetime(mandate.effective_at).isoformat() if mandate.effective_at else None,
+            "expires_at": self._stored_datetime(mandate.expires_at).isoformat() if mandate.expires_at else None,
+        })
+        scope_hash = canonical_hash({"schema_version": "product.research-scope.v1", "project_id": str(project_id), "scope": scope.payload})
+        agenda_hash = canonical_hash({
+            "schema_version": "product.research-agenda.v1", "project_id": str(project_id),
+            "scope_id": str(scope.id), "items": agenda.payload.get("items"),
+            "generator": agenda.generator_provenance,
+        })
+        if (
+            basis.boundary_schema_version != "product.historical-basis.v1" or basis.price_as_of is not None
+            or basis.content_hash != basis_hash or mandate.project_id != project_id
+            or mandate.content_hash != mandate_hash or scope.project_id != project_id
+            or scope.content_hash != scope_hash or agenda.project_id != project_id
+            or agenda.scope_id != scope.id or agenda.content_hash != agenda_hash
+            or assessment.project_id != project_id
+        ):
+            raise ValidationError("product foundation reference is invalid")
+        if (
+            any(item.content_hash != price_snapshot_hash(item) for item in prices)
+            or any(item.content_hash != fx_snapshot_hash(item) for item in fxs)
+            or capital.content_hash != capital_structure_snapshot_hash(capital)
+            or any(item.content_hash != security_rights_hash(item) for item in rights)
+        ):
+            raise ValidationError("product market snapshot content hash mismatch")
+        raw_targets = scope.payload.get("target_security_ids")
+        target_ids = self._product_uuid_list(raw_targets, "scope target_security_ids", nonempty=True)
+        if (
+            scope.payload.get("primary_company_id") != str(primary_object_id)
+            or not set(target_ids).issubset(project_security_ids)
+            or tuple(item.security_identity_id for item in prices) != target_ids
+            or tuple(item.security_identity_id for item in rights) != target_ids
+            or capital.company_id != primary_object_id
+        ):
+            raise ValidationError("product market snapshot ownership is invalid")
+        boundary_at = max(self._stored_datetime(item.market_at) for item in prices)
+        if (
+            mandate.effective_at is None or self._stored_datetime(mandate.effective_at) > boundary_at
+            or (mandate.expires_at is not None and self._stored_datetime(mandate.expires_at) <= boundary_at)
+            or any(
+                self._stored_datetime(item.effective_from) > boundary_at
+                or (item.effective_to is not None and self._stored_datetime(item.effective_to) <= boundary_at)
+                for item in rights
+            )
+        ):
+            raise ValidationError("product frozen market instant is outside an effective interval")
+        required_fx_pairs = sorted({
+            (currency, mandate.base_currency)
+            for currency in {*(item.currency for item in prices), capital.currency}
+            if currency != mandate.base_currency
+        })
+        if [(item.base_currency, item.quote_currency) for item in fxs] != required_fx_pairs:
+            raise ValidationError("product exact FX references do not cover the boundary")
+
+        if (
+            assessment.answerability != AnswerabilityState.NOT_ANSWERABLE.value
+            or assessment.direction is not None or assessment.confidence is not None
+            or assessment.publication_status != PublicationStatus.USER_FROZEN.value
+            or not isinstance(assessment.blockers, list) or not assessment.blockers
+            or assessment.blockers != sorted(set(assessment.blockers))
+            or not isinstance(assessment.resolution_requirements, list)
+            or not assessment.resolution_requirements
+            or assessment.resolution_requirements != sorted(set(assessment.resolution_requirements))
+            or assessment.content_hash != canonical_hash(_product_assessment_payload(project_id, assessment))
+        ):
+            raise ValidationError("product research assessment is malformed")
+        if parent_id is None:
+            if (
+                revision.sequence != 1 or revision.supersedes_id is not None or revision.parent_ids != []
+                or assessment.version != 1 or assessment.supersedes_id is not None
+            ):
+                raise ValidationError("product research initial lineage is malformed")
+        else:
+            parent = self._session.get(UnderwritingResearchVersion, parent_id)
+            if (
+                parent is None or parent.project_id != project_id
+                or parent.manifest_schema != PRODUCT_MANIFEST_SCHEMA or parent.version_kind != PRODUCT_REVISION_KIND
+                or revision.sequence != parent.sequence + 1 or revision.supersedes_id != parent.id
+                or revision.parent_ids != [str(parent.id)]
+            ):
+                raise ValidationError("product research successor lineage is malformed")
+            self._product_revision_summary(parent)
+            parent_manifest = self._session.get(UnderwritingRevisionManifest, parent.manifest_id)
+            if parent_manifest is None or not isinstance(parent_manifest.manifest, Mapping):
+                raise ValidationError("product assessment successor lineage is malformed")
+            parent_assessment_id = self._product_uuid(parent_manifest.manifest.get("assessment_ref"), "parent assessment_ref")
+            parent_assessment = self._session.get(UnderwritingResearchAssessmentVersion, parent_assessment_id)
+            if (
+                parent_assessment is None or assessment.supersedes_id != parent_assessment.id
+                or assessment.version != parent_assessment.version + 1
+            ):
+                raise ValidationError("product assessment successor lineage is malformed")
+        if revision.content_hash != canonical_hash(_product_revision_payload(revision, manifest.content_hash, assessment.id)):
+            raise ValidationError("product research revision content hash mismatch")
+        return ProductResearchRevisionSummary(
+            revision.id, project_id, primary_object_id, basis_id, boundary.id, manifest.id,
+            revision.version_kind, revision.sequence, revision.content_hash,
+            self._stored_datetime(basis.cutoff), basis.source_manifest_hash, manifest.content_hash,
+            parent_id, price_ids, fx_ids, capital_id, rights_ids,
+            (*price_ids, *fx_ids, capital_id, *rights_ids), AnswerabilityState.NOT_ANSWERABLE,
+            None, None, PublicationStatus.USER_FROZEN,
+        )
+
+    def revision_summary(self, revision_id: UUID) -> ResearchRevisionSummary | ProductResearchRevisionSummary:
         """Describe only parents explicitly frozen into ``revision_id``."""
         with self._session.no_autoflush:
             revision = self._revision(revision_id)
+            if revision.manifest_schema is not None:
+                if revision.manifest_schema != PRODUCT_MANIFEST_SCHEMA:
+                    raise ValidationError("research revision manifest schema is unsupported")
+                return self._product_revision_summary(revision)
             basis = self._basis_for_id(revision.basis_id)
             self._validate_parent_shape(revision)
             snapshot_tokens = tuple(
@@ -1643,7 +2001,7 @@ class ResearchRevisionDiffService:
                 ledger_timestamp_sealed,
             )
 
-    def revision_boundary(self, revision_id: UUID) -> ResearchRevisionBoundary:
+    def revision_boundary(self, revision_id: UUID) -> ResearchRevisionBoundary | ProductResearchRevisionSummary:
         """Read only explicitly typed parents sealed into one checked revision.
 
         No current answerability lookup is permitted: if this version did not
@@ -1655,6 +2013,8 @@ class ResearchRevisionDiffService:
         """
         with self._session.no_autoflush:
             summary = self.revision_summary(revision_id)
+            if isinstance(summary, ProductResearchRevisionSummary):
+                return summary
             revision = self._revision(summary.id)
             answerability_refs = tuple(
                 ref for ref in summary.parent_refs if ref.artifact_type == "answerability"
