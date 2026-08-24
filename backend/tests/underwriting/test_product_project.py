@@ -790,6 +790,66 @@ def test_product_mandate_normalizes_numeric_scale_before_hashing(
     assert persisted.content_hash == persisted_hash
 
 
+def test_product_mandate_canonicalizes_signed_zero_before_hash_and_reload(
+    session, service
+) -> None:
+    _graph, project = _project(session, service)
+    session.commit()
+    hashes: list[str] = []
+    canonical_id = None
+    for raw_zero in ("-0", "-0.00000000", "0"):
+        row = service.append_product_mandate(
+            project_id=project.id,
+            value=InvestmentMandateInput(
+                mandate_key="ignored",
+                horizon_years=5,
+                base_currency="USD",
+                required_return=Decimal(raw_zero),
+                permanent_loss_limit=Decimal(raw_zero),
+                comparison_set=("cash",),
+            ),
+            benchmark_key="index",
+            required_excess_return=Decimal(raw_zero),
+            effective_at=OLD_FROM,
+            expires_at=None,
+            expected_parent_id=None,
+        )
+        assert not row.required_return.is_signed()
+        assert not row.permanent_loss_limit.is_signed()
+        assert not row.required_excess_return.is_signed()
+        hashes.append(row.content_hash)
+        if raw_zero == "0":
+            canonical_id = row.id
+        else:
+            session.rollback()
+
+    assert len(set(hashes)) == 1
+    assert canonical_id is not None
+    session.commit()
+    session.expire_all()
+    persisted = service.product_mandate(project.id, canonical_id)
+    assert persisted is not None
+    assert format(persisted.required_return, ".8f") == "0.00000000"
+    assert format(persisted.permanent_loss_limit, ".8f") == "0.00000000"
+    assert format(persisted.required_excess_return, ".8f") == "0.00000000"
+    assert persisted.content_hash == canonical_hash(
+        {
+            "schema_version": "product.investment-mandate.v1",
+            "project_id": str(project.id),
+            "mandate_key": persisted.mandate_key,
+            "horizon_years": persisted.horizon_years,
+            "base_currency": persisted.base_currency,
+            "required_return": "0.00000000",
+            "permanent_loss_limit": "0.00000000",
+            "comparison_set": persisted.comparison_set,
+            "benchmark_key": persisted.benchmark_key,
+            "required_excess_return": "0.00000000",
+            "effective_at": persisted.effective_at.replace(tzinfo=UTC).isoformat(),
+            "expires_at": None,
+        }
+    )
+
+
 def test_product_mandate_rejects_meaningful_precision_beyond_storage_scale(
     session, service
 ) -> None:

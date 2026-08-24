@@ -33,6 +33,7 @@ _COMPANY_SECURITY_RELATION = "company_has_security"
 # ordinary hurdle rates while rejecting percentages accidentally supplied as 3.
 _MAX_REQUIRED_EXCESS_RETURN = Decimal("1")
 _MANDATE_NUMERIC_QUANTUM = Decimal("0.00000001")
+_MANDATE_NUMERIC_ZERO = Decimal("0.00000000")
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +108,8 @@ class ResearchProjectService:
             raise ValidationError(f"{field} must fit 8 decimal places") from exc
         if normalized != decimal_value:
             raise ValidationError(f"{field} must fit 8 decimal places without rounding")
+        if normalized.is_zero():
+            return _MANDATE_NUMERIC_ZERO
         return normalized
 
     def _created_at(self) -> datetime:
