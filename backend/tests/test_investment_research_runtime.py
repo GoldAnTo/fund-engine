@@ -117,6 +117,10 @@ def _replace_research_archive_with_raw_member(
         + bytes((-member_size) % 512)
         + bytes(1024)
     )
+    _replace_research_archive_bytes(backup, raw_archive)
+
+
+def _replace_research_archive_bytes(backup: Path, raw_archive: bytes) -> None:
     with gzip.open(backup / "research-files.tar.gz", "wb") as archive:
         archive.write(raw_archive)
     manifest = subprocess.run(
@@ -127,6 +131,12 @@ def _replace_research_archive_with_raw_member(
         text=True,
     ).stdout
     (backup / "manifest.sha256").write_text(manifest)
+
+
+def _refresh_ustar_checksum(header: bytearray) -> None:
+    header[148:156] = b"        "
+    checksum = sum(header)
+    header[148:156] = f"{checksum:06o}\0 ".encode()
 
 
 @pytest.mark.parametrize("target", ["relative", "/", "/tmp", "/var", "/Users"])
@@ -439,6 +449,53 @@ def test_restore_rejects_raw_tar_metadata_payloads_before_docker(
 
 
 @pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    [
+        ("base256_uid", "base-256 uid encoding"),
+        ("invalid_magic", "USTAR magic or version"),
+        ("missing_end", "double-zero end marker"),
+    ],
+)
+def test_restore_rejects_noncanonical_ustar_headers_before_docker(
+    tmp_path: Path,
+    mutation: str,
+    expected_error: str,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    backup = tmp_path / "backup"
+    _write_backup_bundle(backup)
+    member = tarfile.TarInfo("plain-file")
+    member.size = 0
+    header = bytearray(member.tobuf(format=tarfile.USTAR_FORMAT))
+    ending = bytes(1024)
+    if mutation == "base256_uid":
+        header[108:116] = b"\x80" + bytes(7)
+        _refresh_ustar_checksum(header)
+    elif mutation == "invalid_magic":
+        header[257:265] = b"invalid!"
+        _refresh_ustar_checksum(header)
+    else:
+        ending = b""
+    _replace_research_archive_bytes(backup, bytes(header) + ending)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text("#!/bin/sh\nprintf 'docker must not run\\n' >&2\nexit 93\n")
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "restore", str(backup)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert completed.returncode != 0
+    assert expected_error in completed.stderr
+    assert "docker must not run" not in completed.stderr
+
+
+@pytest.mark.parametrize(
     ("limit_name", "expected_artifact"),
     [
         ("ONE_CLICK_BACKUP_MAX_MANIFEST_BYTES", "manifest.sha256"),
@@ -592,6 +649,45 @@ def test_restore_never_reuses_or_removes_existing_foreign_operation_volume(
     assert ":/target" not in commands
 
 
+def test_restore_never_removes_preexisting_exact_label_operation_volume(
+    tmp_path: Path,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    backup = tmp_path / "backup"
+    _write_backup_bundle(backup)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "docker.log"
+    volume_state = tmp_path / "volumes"
+    volume_state.mkdir()
+    existing_name = "fund-engine-one-click-files-restore-deadbeef"
+    existing_identity = f"{existing_name}|||test-project|deadbeef|restore-staging\n"
+    (volume_state / existing_name).write_text(existing_identity)
+    docker = fake_bin / "docker"
+    docker.write_text(_stateful_volume_docker())
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+    openssl = fake_bin / "openssl"
+    openssl.write_text("#!/bin/sh\nprintf 'deadbeef\\n'\n")
+    openssl.chmod(openssl.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "restore", str(backup)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(log),
+            "VOLUME_STATE": str(volume_state),
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "refusing to reuse existing restore operation volume" in completed.stderr
+    assert (volume_state / existing_name).read_text() == existing_identity
+    assert f"volume rm {existing_name}" not in log.read_text()
+
+
 def test_restore_interrupt_during_operation_volume_create_cleans_owned_volume(
     tmp_path: Path,
 ) -> None:
@@ -672,12 +768,7 @@ def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
         "  *' ps --status running --services'*) printf 'postgres\\n' ;;\n"
         "  *'volume inspect --format'*' custom-task11-files'*) printf '%s\\n' 'custom-task11-files|test-project|fund-engine-one-click-files|||' ;;\n"
         "  *' pg_dump -Fc '*) if [ \"${FAIL_DUMP:-0}\" = 1 ]; then exit 17; else printf 'custom-dump'; fi ;;\n"
-        "  *' alpine sh -eu -c '*)\n"
-        "    previous=''\n"
-        '    for argument in "$@"; do\n'
-        '      case "$argument" in *:/backup) host=${argument%:/backup}; tar -czf "$host/research-files.tar.gz" --files-from /dev/null ;; esac\n'
-        "      previous=$argument\n"
-        "    done ;;\n"
+        "  *' alpine sh -eu -c '*) tar -czf - --files-from /dev/null ;;\n"
         "esac\n"
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
@@ -700,10 +791,6 @@ def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
         "postgres.dump",
         "research-files.tar.gz",
     }
-    assert any(
-        ".one-click-backup." in line and line.endswith(":/backup>")
-        for line in log.read_text().splitlines()
-    )
     assert "<custom-task11-files:/source:ro>" in log.read_text()
 
     failed_output = tmp_path / "failed backup"
@@ -716,6 +803,21 @@ def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
     assert failed.returncode != 0
     assert not failed_output.exists()
     assert not tuple(tmp_path.glob(".one-click-backup.*"))
+
+    for limit_name in (
+        "ONE_CLICK_BACKUP_MAX_POSTGRES_DUMP_BYTES",
+        "ONE_CLICK_BACKUP_MAX_MANIFEST_BYTES",
+    ):
+        limited_output = tmp_path / f"limited-{limit_name.lower()}"
+        limited = subprocess.run(
+            [script, "backup", str(limited_output)],
+            capture_output=True,
+            text=True,
+            env={**env, limit_name: "1"},
+        )
+        assert limited.returncode != 0
+        assert "backup artifact exceeds byte limit" in limited.stderr
+        assert not limited_output.exists()
 
 
 def test_restore_preserves_recovery_artifacts_when_compensation_fails(

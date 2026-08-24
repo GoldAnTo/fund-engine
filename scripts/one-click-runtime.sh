@@ -189,14 +189,18 @@ validate_operation_volume() {
   [[ "$actual" == "$expected" ]]
 }
 
+require_operation_volume_absent() {
+  local volume_name="$1"
+  if docker volume inspect "$volume_name" >/dev/null 2>&1; then
+    die "refusing to reuse existing restore operation volume: $volume_name"
+  fi
+}
+
 create_operation_volume() {
   local volume_name="$1"
   local project_name="$2"
   local operation="$3"
   local purpose="$4"
-  if docker volume inspect "$volume_name" >/dev/null 2>&1; then
-    die "refusing to reuse existing restore operation volume: $volume_name"
-  fi
   docker volume create \
     --label "${OPERATION_PROJECT_LABEL}=${project_name}" \
     --label "${OPERATION_ID_LABEL}=${operation}" \
@@ -604,18 +608,19 @@ def discard_exact(stream: gzip.GzipFile, size: int) -> None:
         remaining -= len(chunk)
 
 
-def parse_ustar_size(field: bytes) -> int:
+def parse_ustar_number(field: bytes, field_name: str) -> int:
     if field and field[0] & 0x80:
-        raise SystemExit("research archive uses unsupported base-256 size encoding")
+        raise SystemExit(f"research archive uses unsupported base-256 {field_name} encoding")
     raw = field.rstrip(b"\0 ").lstrip(b" ") or b"0"
     if any(value not in b"01234567" for value in raw):
-        raise SystemExit("research archive has an invalid USTAR size")
+        raise SystemExit(f"research archive has an invalid USTAR {field_name}")
     return int(raw, 8)
 
 
 try:
     with gzip.open(archive, mode="rb") as raw_bundle:
         zero_blocks = 0
+        end_marker_seen = False
         while True:
             header = raw_bundle.read(512)
             if not header:
@@ -626,6 +631,7 @@ try:
             if header == bytes(512):
                 zero_blocks += 1
                 if zero_blocks >= 2:
+                    end_marker_seen = True
                     while True:
                         trailing = raw_bundle.read(64 * 1024)
                         if not trailing:
@@ -636,10 +642,30 @@ try:
                     break
                 continue
             zero_blocks = 0
+            magic_and_version = header[257:265]
+            if magic_and_version not in (b"ustar\x0000", b"ustar  \x00"):
+                raise SystemExit("research archive has an unsupported USTAR magic or version")
+            expected_checksum = parse_ustar_number(header[148:156], "checksum")
+            actual_checksum = sum(header[:148]) + (8 * ord(" ")) + sum(header[156:])
+            if expected_checksum != actual_checksum:
+                raise SystemExit("research archive has an invalid USTAR checksum")
+            numeric_fields = {
+                "mode": header[100:108],
+                "uid": header[108:116],
+                "gid": header[116:124],
+                "size": header[124:136],
+                "mtime": header[136:148],
+                "device-major": header[329:337],
+                "device-minor": header[337:345],
+            }
+            parsed_fields = {
+                name: parse_ustar_number(field, name)
+                for name, field in numeric_fields.items()
+            }
             raw_member_count += 1
             if raw_member_count > max_members:
                 raise SystemExit("research archive exceeds member count limit")
-            member_size = parse_ustar_size(header[124:136])
+            member_size = parsed_fields["size"]
             member_type = header[156:157]
             if member_type in (b"", b"\0", b"0"):
                 if member_size > max_single_file:
@@ -656,6 +682,8 @@ try:
             padding = (-member_size) % 512
             if padding:
                 discard_exact(raw_bundle, padding)
+        if not end_marker_seen:
+            raise SystemExit("research archive is missing the required double-zero end marker")
 
     member_count = 0
     semantic_file_total = 0
@@ -784,6 +812,75 @@ require_application_services_stopped() {
     || die "one-click postgres must be running for ${action}"
 }
 
+write_limited_artifact() {
+  local output_path="$1"
+  local limit_name="$2"
+  local default_limit="$3"
+  local artifact_name="$4"
+  python3 -c '
+import os
+import sys
+
+output_path, limit_name, default_limit, artifact_name = sys.argv[1:]
+raw_limit = os.environ.get(limit_name, default_limit)
+try:
+    limit = int(raw_limit)
+except ValueError as exc:
+    raise SystemExit(f"{limit_name} must be a positive integer") from exc
+if limit <= 0:
+    raise SystemExit(f"{limit_name} must be a positive integer")
+descriptor = os.open(
+    output_path,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+    0o600,
+)
+with os.fdopen(descriptor, "wb") as output_file:
+    written = 0
+    while True:
+        chunk = sys.stdin.buffer.read(1024 * 1024)
+        if not chunk:
+            break
+        written += len(chunk)
+        if written > limit:
+            raise SystemExit(f"backup artifact exceeds byte limit while writing: {artifact_name}")
+        output_file.write(chunk)
+    output_file.flush()
+    os.fsync(output_file.fileno())
+' "$output_path" "$limit_name" "$default_limit" "$artifact_name"
+}
+
+validate_backup_artifact_sizes() {
+  local backup_dir="$1"
+  python3 - "$backup_dir" <<'PY'
+import os
+import pathlib
+import sys
+
+backup_dir = pathlib.Path(sys.argv[1])
+
+
+def positive_limit(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be a positive integer") from exc
+    if value <= 0:
+        raise SystemExit(f"{name} must be a positive integer")
+    return value
+
+
+limits = {
+    "manifest.sha256": positive_limit("ONE_CLICK_BACKUP_MAX_MANIFEST_BYTES", 65_536),
+    "postgres.dump": positive_limit("ONE_CLICK_BACKUP_MAX_POSTGRES_DUMP_BYTES", 8_589_934_592),
+    "research-files.tar.gz": positive_limit("ONE_CLICK_BACKUP_MAX_COMPRESSED_BYTES", 1_073_741_824),
+}
+for artifact, limit in limits.items():
+    if (backup_dir / artifact).stat().st_size > limit:
+        raise SystemExit(f"backup artifact exceeds byte limit: {artifact}")
+PY
+}
+
 backup_runtime() (
   set -euo pipefail
   local output_dir="$1"
@@ -803,18 +900,26 @@ backup_runtime() (
 
   compose exec -T postgres pg_dump -Fc \
     -U "$(runtime_env_value ONE_CLICK_POSTGRES_USER)" \
-    "$(runtime_env_value ONE_CLICK_POSTGRES_DB)" > "$temporary_dir/postgres.dump"
+    "$(runtime_env_value ONE_CLICK_POSTGRES_DB)" | \
+    write_limited_artifact \
+      "$temporary_dir/postgres.dump" ONE_CLICK_BACKUP_MAX_POSTGRES_DUMP_BYTES \
+      8589934592 postgres.dump
   [[ -s "$temporary_dir/postgres.dump" ]] || die "PostgreSQL backup is empty"
   docker run --rm \
     -v "$volume_name:/source:ro" \
-    -v "$temporary_dir:/backup" \
     alpine sh -eu -c \
-    'tar --exclude=.env --exclude=.env* -C /source -czf /backup/research-files.tar.gz .'
+    'tar --exclude=.env --exclude=.env* -C /source -czf - .' | \
+    write_limited_artifact \
+      "$temporary_dir/research-files.tar.gz" ONE_CLICK_BACKUP_MAX_COMPRESSED_BYTES \
+      1073741824 research-files.tar.gz
   validate_research_archive "$temporary_dir/research-files.tar.gz"
   (
     cd "$temporary_dir"
-    shasum -a 256 postgres.dump research-files.tar.gz > manifest.sha256
-  )
+    shasum -a 256 postgres.dump research-files.tar.gz
+  ) | write_limited_artifact \
+    "$temporary_dir/manifest.sha256" ONE_CLICK_BACKUP_MAX_MANIFEST_BYTES \
+    65536 manifest.sha256
+  validate_backup_artifact_sizes "$temporary_dir"
   mv -- "$temporary_dir" "$output_dir"
   trap - EXIT
   printf 'Created one-click backup at %s.\n' "$output_dir"
@@ -828,6 +933,7 @@ validate_backup_bundle() {
     [[ -f "$backup_dir/$artifact" && ! -L "$backup_dir/$artifact" ]] \
       || die "backup artifact is missing or unsafe: $artifact"
   done
+  validate_backup_artifact_sizes "$backup_dir"
   actual_files="$(find "$backup_dir" -mindepth 1 -maxdepth 1 -exec basename {} \; | LC_ALL=C sort)"
   [[ "$actual_files" == $'manifest.sha256\npostgres.dump\nresearch-files.tar.gz' ]] \
     || die "backup directory contains unexpected artifacts"
@@ -972,6 +1078,7 @@ restore_runtime() (
   compose exec -T postgres createdb -U "$database_user" "$staging_database"
   compose exec -T postgres pg_restore --exit-on-error --no-owner --no-privileges \
     -U "$database_user" -d "$staging_database" < "$private_backup/postgres.dump"
+  require_operation_volume_absent "$staging_volume"
   staging_volume_tracked="true"
   create_operation_volume \
     "$staging_volume" "$project_name" "$suffix" restore-staging
@@ -990,6 +1097,7 @@ restore_runtime() (
   ONE_CLICK_POSTGRES_DB="$staging_database" ONE_CLICK_FILES_VOLUME="$staging_volume" \
     compose run --rm --no-deps api python -m app.scripts.verify_underwriting_revision_manifests
 
+  require_operation_volume_absent "$rollback_volume"
   rollback_volume_tracked="true"
   create_operation_volume \
     "$rollback_volume" "$project_name" "$suffix" restore-rollback
