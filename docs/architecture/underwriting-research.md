@@ -220,3 +220,63 @@ This component does not calculate or expose:
 - a valuation or action workspace disguised as an archive, including any
   recommendation generated from a directory state, version delta, candidate,
   or unresolved boundary.
+
+## Increment A foundation release evidence (2026-08-25)
+
+The independent-investment-research foundation is released at Alembic head
+`0065`. The migration remains additive for legacy rows and enforces a strict
+SecurityRightsVersion interval (`effective_to` must be later than
+`effective_from`, not equal). The one-click migrate job then runs the explicit,
+idempotent bundled fixture loader; ordinary application imports never write
+fixture state and the runner owns the commit.
+
+The bundled CATL/Alphabet identity foundation contains two companies, three
+securities, three exact `company_has_security` relations and three distinct
+rights rows. Its canonical content hash is
+`bcf4fe19ec98a28ea249bcb6a8bfbdbb3ac77af9d1d0cca8fb26e8b5d71aca55`.
+Both the CATL company and 300750 Security carry the explicit `CATL` alias, so a
+fresh `/api/underwriting/v1/product/objects?query=CATL` request returns those
+two persisted identities rather than a mock or a current-data fallback.
+
+The fresh Increment A gate produced these results:
+
+- backend: 331 passed, 2 skipped, 1 existing Pydantic field-shadow warning;
+  the two skips are the PostgreSQL concurrency variants guarded by
+  `TEST_DATABASE_URL` in the workspace-draft and publisher tests;
+- frontend: 75 passed across the product shell, setup flow, strict API reader,
+  accessibility contract and deterministic foundation helpers;
+- TypeScript typecheck, Vite production build and Python `compileall`: passed;
+- full repository regression: backend 3,073 passed / 33 skipped / 3 warnings;
+  frontend 537 passed across 25 files;
+- legacy compatibility: 5 passed; the stored CATL evidence-only response and
+  hash replayed deterministically before and after product rows were present.
+
+The restore verifier is schema-first and scans every persisted
+`independent_research` revision in deterministic order, failing on the first
+schema, lineage, manifest or replay-hash mismatch. A concrete synthetic CATL
+foundation publication used by the release run produced revision
+`62e2f220-4f98-4616-83f1-fed182458371` and manifest hash
+`c71f4bb0919a289e0b253cc23f30e84368032eb8fa64f66e7c1ae8e0cdb43e8c`;
+the verifier replayed exactly one of one revision. These two identifiers are
+evidence from that test run, not global golden constants: product UUIDs are
+part of the canonical manifest, while the automated assertion always compares
+the stored hash with the same revision's independently replayed hash.
+
+Docker runtime verification used the disposable Compose project
+`codex-task11-20260825`, ports 18000/18080, unique image tags and the isolated
+`codex-task11-20260825-db` / `codex-task11-20260825-files` volumes. PostgreSQL,
+API, frontend, one research worker and three acquisition workers all became
+healthy at revision `0065` with `LLM_API_KEY` and `GILDATA_TOKEN` empty. The
+unconfigured acquisition AI boundary permits an idle worker to start but fails
+any attempted model call as a provider error; it never supplies mock output.
+The existing legacy PostgreSQL container was inspected read-only and remained
+at `0062`.
+
+The same disposable runtime completed a custom-format PostgreSQL backup, a
+secret-excluding research-file tarball and exact SHA-256 manifest. Restore
+validated the three-artifact allowlist, checksums and safe tar members before
+Docker mutation, required application services to be stopped, restored into a
+random staging database and volume, reran migration plus fixture initialization
+and revision replay, and only then activated the restored state. After restart,
+all services were healthy, the CATL query still returned two identities and a
+file written through the non-root API user matched its pre-backup contents.

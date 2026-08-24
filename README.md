@@ -94,7 +94,8 @@ scripts/one-click-runtime.sh up
 scripts/verify-one-click-runtime.sh
 ```
 
-前端入口是 [http://127.0.0.1:8080/events/new](http://127.0.0.1:8080/events/new)，
+独立投资研究入口是 [http://127.0.0.1:8080/research](http://127.0.0.1:8080/research)；
+旧事件研究入口仍是 [http://127.0.0.1:8080/events/new](http://127.0.0.1:8080/events/new)。
 API 地址是 [http://127.0.0.1:8000](http://127.0.0.1:8000)。查看状态、停止新运行环境或
 恢复旧应用服务分别使用：
 
@@ -104,9 +105,20 @@ scripts/one-click-runtime.sh down
 scripts/one-click-runtime.sh rollback
 ```
 
+备份目标必须是尚不存在的具体绝对目录；恢复要求 API、前端和 worker 已停止，但
+PostgreSQL 保持运行。恢复会先校验精确的三件套、SHA-256 和 tar 路径，再在隔离的
+暂存数据库与文件卷中验证迁移、身份 fixture 和研究版本回放，通过后才切换：
+
+```bash
+scripts/one-click-runtime.sh backup /absolute/path/to/new-backup
+scripts/one-click-runtime.sh restore /absolute/path/to/backup
+```
+
 `init` 生成的本地凭证保存在忽略的 `.env.one-click.local`，不会打印密钥；不要提交或
 手工分享该文件。`down` 保留一键运行环境的数据卷。`rollback` 停止一键运行环境后，只恢复
 本工具此前停止的旧应用容器。旧版 PostgreSQL 和 Keycloak 始终保留，既有数据不会被迁移或删除。
+LLM 与 Gildata 凭证是可选的：未配置时产品壳、CATL/Alphabet 身份底座和 worker
+心跳仍可运行，但任何实际 AI 操作会失败关闭，不会回退为 mock 研究结果。
 
 ### 一键自动研究运行条件
 
