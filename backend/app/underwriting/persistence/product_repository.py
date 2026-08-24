@@ -139,19 +139,25 @@ class ProductRepository:
         object_id: UUID,
         as_of: datetime,
     ) -> UnderwritingObjectIdentityVersion | None:
+        candidate = aliased(UnderwritingObjectIdentityVersion)
+        latest_started_id = (
+            select(candidate.id)
+            .where(
+                candidate.object_id == object_id,
+                candidate.effective_from <= as_of,
+            )
+            .order_by(candidate.version.desc(), candidate.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
         return self._session.scalar(
             select(UnderwritingObjectIdentityVersion)
             .where(
-                UnderwritingObjectIdentityVersion.object_id == object_id,
-                UnderwritingObjectIdentityVersion.effective_from <= as_of,
+                UnderwritingObjectIdentityVersion.id == latest_started_id,
                 or_(
                     UnderwritingObjectIdentityVersion.effective_to.is_(None),
                     UnderwritingObjectIdentityVersion.effective_to > as_of,
                 ),
-            )
-            .order_by(
-                UnderwritingObjectIdentityVersion.version.desc(),
-                UnderwritingObjectIdentityVersion.id.desc(),
             )
             .limit(1)
         )
@@ -161,27 +167,11 @@ class ProductRepository:
         object_id: UUID,
         as_of: datetime,
     ) -> tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion] | None:
-        row = self._session.execute(
-            select(UnderwritingResearchObject, UnderwritingObjectIdentityVersion)
-            .join(
-                UnderwritingObjectIdentityVersion,
-                UnderwritingObjectIdentityVersion.object_id
-                == UnderwritingResearchObject.id,
-            )
-            .where(
-                UnderwritingResearchObject.id == object_id,
-                UnderwritingObjectIdentityVersion.effective_from <= as_of,
-                or_(
-                    UnderwritingObjectIdentityVersion.effective_to.is_(None),
-                    UnderwritingObjectIdentityVersion.effective_to > as_of,
-                ),
-            )
-            .order_by(UnderwritingObjectIdentityVersion.version.desc())
-            .limit(1)
-        ).first()
-        if row is None:
+        identity = self.effective_identity(object_id, as_of)
+        research_object = self.object(object_id)
+        if research_object is None or identity is None:
             return None
-        return row[0], row[1]
+        return research_object, identity
 
     def search_objects(
         self,
@@ -196,7 +186,6 @@ class ProductRepository:
             .where(
                 candidate.object_id == UnderwritingResearchObject.id,
                 candidate.effective_from <= as_of,
-                or_(candidate.effective_to.is_(None), candidate.effective_to > as_of),
             )
             .order_by(candidate.version.desc(), candidate.id.desc())
             .limit(1)
@@ -325,6 +314,18 @@ class ProductRepository:
             .limit(1)
         )
 
+    def product_mandate(
+        self, project_id: UUID, mandate_id: UUID
+    ) -> UnderwritingMandateVersion | None:
+        return self._session.scalar(
+            select(UnderwritingMandateVersion)
+            .where(
+                UnderwritingMandateVersion.id == mandate_id,
+                UnderwritingMandateVersion.project_id == project_id,
+            )
+            .limit(1)
+        )
+
     def append_product_mandate(
         self,
         *,
@@ -375,7 +376,19 @@ class ProductRepository:
             )
         )
 
-    def scope(self, scope_id: UUID) -> UnderwritingResearchScopeVersion | None:
+    def scope(
+        self, project_id: UUID, scope_id: UUID
+    ) -> UnderwritingResearchScopeVersion | None:
+        return self._session.scalar(
+            select(UnderwritingResearchScopeVersion)
+            .where(
+                UnderwritingResearchScopeVersion.id == scope_id,
+                UnderwritingResearchScopeVersion.project_id == project_id,
+            )
+            .limit(1)
+        )
+
+    def scope_by_id(self, scope_id: UUID) -> UnderwritingResearchScopeVersion | None:
         return self._session.get(UnderwritingResearchScopeVersion, scope_id)
 
     def append_scope(
@@ -446,6 +459,18 @@ class ProductRepository:
             )
         )
 
+    def agenda(
+        self, project_id: UUID, agenda_id: UUID
+    ) -> UnderwritingResearchAgendaVersion | None:
+        return self._session.scalar(
+            select(UnderwritingResearchAgendaVersion)
+            .where(
+                UnderwritingResearchAgendaVersion.id == agenda_id,
+                UnderwritingResearchAgendaVersion.project_id == project_id,
+            )
+            .limit(1)
+        )
+
     def create_product_basis(
         self,
         *,
@@ -470,3 +495,6 @@ class ProductRepository:
         self._session.add(row)
         self._session.flush()
         return row
+
+    def product_basis(self, basis_id: UUID) -> UnderwritingHistoricalBasis | None:
+        return self._session.get(UnderwritingHistoricalBasis, basis_id)

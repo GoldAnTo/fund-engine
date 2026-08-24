@@ -251,6 +251,68 @@ def test_identity_successors_reject_overlap_regression_and_stale_parent(
         )
 
 
+def test_open_ended_identity_head_can_be_superseded_by_a_later_version(
+    session, service
+) -> None:
+    security = _object(session, "security", "OPEN.TEST", "Open Identity")
+    first = _identity(
+        service,
+        security,
+        symbol="OPEN",
+        effective_from=OLD_FROM,
+        effective_to=None,
+        currency="USD",
+    )
+    switch_at = datetime(2021, 6, 1, tzinfo=UTC)
+    second = _identity(
+        service,
+        security,
+        name="Renamed Identity",
+        symbol="RENAMED",
+        effective_from=switch_at,
+        effective_to=None,
+        expected_parent_id=first.id,
+        currency="USD",
+    )
+
+    assert (
+        service.effective_identity(
+            security.id, datetime(2021, 5, 31, 23, 59, tzinfo=UTC)
+        ).id
+        == first.id
+    )
+    assert service.effective_identity(security.id, switch_at).id == second.id
+    assert service.effective_identity(security.id, NOW).id == second.id
+
+    with pytest.raises(ValidationError, match="advance"):
+        _identity(
+            service,
+            security,
+            symbol="SAME",
+            effective_from=switch_at,
+            expected_parent_id=second.id,
+            currency="USD",
+        )
+    with pytest.raises(ValidationError, match="advance"):
+        _identity(
+            service,
+            security,
+            symbol="REGRESS",
+            effective_from=datetime(2021, 1, 1, tzinfo=UTC),
+            expected_parent_id=second.id,
+            currency="USD",
+        )
+    with pytest.raises(ConflictError, match="parent|head"):
+        _identity(
+            service,
+            security,
+            symbol="STALE",
+            effective_from=datetime(2022, 1, 1, tzinfo=UTC),
+            expected_parent_id=first.id,
+            currency="USD",
+        )
+
+
 @pytest.mark.parametrize("kind", ["company", "industry"])
 def test_non_security_identity_rejects_security_fields(session, service, kind) -> None:
     row = _object(session, kind, f"{kind}:one", kind.title())
@@ -513,6 +575,37 @@ def test_product_mandate_chain_hashes_every_field_and_has_no_market_cutoff(
         )
 
 
+def test_product_mandate_reads_exact_id_with_project_ownership(
+    session, service
+) -> None:
+    graph = _seed_project_graph(session, service)
+    project = service.create_project(graph["catl"].id, (graph["catl_security"].id,))
+    other_project = service.create_project(graph["alphabet"].id, (graph["goog"].id,))
+    first = service.append_product_mandate(
+        project_id=project.id,
+        value=_mandate(),
+        benchmark_key=None,
+        required_excess_return=None,
+        effective_at=OLD_FROM,
+        expires_at=None,
+        expected_parent_id=None,
+    )
+    second = service.append_product_mandate(
+        project_id=project.id,
+        value=_mandate("CNY"),
+        benchmark_key=None,
+        required_excess_return=None,
+        effective_at=OLD_TO,
+        expires_at=None,
+        expected_parent_id=first.id,
+    )
+
+    assert service.product_mandate(project.id, first.id) is first
+    assert service.product_mandate(project.id, second.id) is second
+    assert service.product_mandate(other_project.id, first.id) is None
+    assert service.product_mandate(project.id, uuid4()) is None
+
+
 @pytest.mark.parametrize(
     ("benchmark", "excess", "effective", "expires", "currency"),
     [
@@ -742,6 +835,55 @@ def test_agenda_rejects_scope_from_another_project(session, service) -> None:
     )
 
 
+def test_scope_and_agenda_reads_are_exact_and_project_scoped(session, service) -> None:
+    graph = _seed_project_graph(session, service)
+    project = service.create_project(graph["catl"].id, (graph["catl_security"].id,))
+    other_project = service.create_project(graph["alphabet"].id, (graph["goog"].id,))
+    first_scope = service.append_scope(
+        project.id,
+        ResearchScopeInput(
+            graph["catl"].id,
+            (graph["catl_security"].id,),
+            (graph["industry"].id,),
+            ("Core",),
+            None,
+            (),
+        ),
+        None,
+    )
+    second_scope = service.append_scope(
+        project.id,
+        ResearchScopeInput(
+            graph["catl"].id,
+            (graph["catl_security"].id,),
+            (graph["industry"].id,),
+            ("Core", "Risks"),
+            None,
+            (),
+        ),
+        first_scope.id,
+    )
+    first_agenda = service.append_agenda(
+        project.id,
+        _deterministic_agenda(first_scope.id, ("First",)),
+        None,
+    )
+    second_agenda = service.append_agenda(
+        project.id,
+        _deterministic_agenda(second_scope.id, ("Second",)),
+        first_agenda.id,
+    )
+
+    assert service.scope(project.id, first_scope.id) is first_scope
+    assert service.scope(project.id, second_scope.id) is second_scope
+    assert service.scope(other_project.id, first_scope.id) is None
+    assert service.scope(project.id, uuid4()) is None
+    assert service.agenda(project.id, first_agenda.id) is first_agenda
+    assert service.agenda(project.id, second_agenda.id) is second_agenda
+    assert service.agenda(other_project.id, first_agenda.id) is None
+    assert service.agenda(project.id, uuid4()) is None
+
+
 @pytest.mark.parametrize(
     "cutoff",
     [datetime(1999, 1, 1, tzinfo=UTC), datetime(2099, 1, 1, tzinfo=UTC)],
@@ -767,6 +909,8 @@ def test_product_historical_basis_has_exact_boundary_hashes_and_no_price(
         }
     )
     assert session.get(UnderwritingHistoricalBasis, basis.id) is basis
+    assert service.historical_basis(basis.id) is basis
+    assert service.historical_basis(uuid4()) is None
 
 
 def test_product_project_modules_stay_isolated_and_only_borrow_hash_helper() -> None:

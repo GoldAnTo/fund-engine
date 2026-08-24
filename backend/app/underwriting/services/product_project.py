@@ -169,12 +169,12 @@ class ResearchProjectService:
 
         head = self._repository.identity_head(object_id)
         if head is not None and head.id == expected_parent_id:
-            if head.effective_to is None:
-                raise ValidationError(
-                    "identity successor overlaps an open-ended parent"
-                )
-            parent_end = self._stored_utc(head.effective_to)
-            if normalized_from < parent_end:
+            parent_from = self._stored_utc(head.effective_from)
+            if normalized_from <= parent_from:
+                raise ValidationError("identity successor effective_from must advance")
+            if head.effective_to is not None and normalized_from < self._stored_utc(
+                head.effective_to
+            ):
                 raise ValidationError(
                     "identity successor effective interval overlaps or regresses"
                 )
@@ -349,6 +349,11 @@ class ResearchProjectService:
             for record in self._repository.list_projects(limit)
         )
 
+    def product_mandate(self, project_id: UUID, mandate_id: UUID):
+        project_id = self._uuid(project_id, "project_id")
+        mandate_id = self._uuid(mandate_id, "mandate_id")
+        return self._repository.product_mandate(project_id, mandate_id)
+
     def append_product_mandate(
         self,
         *,
@@ -520,6 +525,11 @@ class ResearchProjectService:
             )
         )
 
+    def scope(self, project_id: UUID, scope_id: UUID):
+        project_id = self._uuid(project_id, "project_id")
+        scope_id = self._uuid(scope_id, "scope_id")
+        return self._repository.scope(project_id, scope_id)
+
     def append_agenda(
         self,
         project_id: UUID,
@@ -531,7 +541,7 @@ class ResearchProjectService:
             raise ValidationError("value must be a ResearchAgendaInput")
         if self._repository.project(project_id) is None:
             raise ValidationError("project does not exist")
-        scope = self._repository.scope(value.scope_id)
+        scope = self._repository.scope_by_id(value.scope_id)
         if scope is None:
             raise ValidationError("agenda scope does not exist")
         if scope.project_id != project_id:
@@ -569,6 +579,11 @@ class ResearchProjectService:
             )
         )
 
+    def agenda(self, project_id: UUID, agenda_id: UUID):
+        project_id = self._uuid(project_id, "project_id")
+        agenda_id = self._uuid(agenda_id, "agenda_id")
+        return self._repository.agenda(project_id, agenda_id)
+
     def create_historical_basis(self, value: ProductHistoricalBasisInput):
         if type(value) is not ProductHistoricalBasisInput:
             raise ValidationError("value must be a ProductHistoricalBasisInput")
@@ -589,3 +604,7 @@ class ResearchProjectService:
             content_hash=canonical_hash(payload),
             created_at=self._created_at(),
         )
+
+    def historical_basis(self, basis_id: UUID):
+        basis_id = self._uuid(basis_id, "basis_id")
+        return self._repository.product_basis(basis_id)
