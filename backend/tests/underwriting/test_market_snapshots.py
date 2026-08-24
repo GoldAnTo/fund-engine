@@ -540,6 +540,72 @@ def test_security_rights_are_versioned_with_exact_parent_and_effective_lookup(
         )
 
 
+def test_security_rights_resolution_forbids_backfill_before_head_and_allows_explicit_successor(
+    session, services
+) -> None:
+    _, security, _ = _seed_project(session, services)
+    head_from = MARKET
+    head_to = MARKET + timedelta(days=1)
+    head = services.market.freeze_security_rights(
+        _rights(
+            security.id,
+            effective_from=head_from,
+            effective_to=head_to,
+        ),
+        expected_parent_id=None,
+    )
+
+    before = services.market.resolve_security_rights(
+        security.id, head_from - timedelta(seconds=1)
+    )
+    assert before.effective is None
+    assert before.head.id == head.id
+    assert before.append_allowed is False
+    assert before.expected_parent_id is None
+    assert before.minimum_effective_from is None
+    assert before.reason_code == "before_head"
+    assert before.reason_action == "adjust_market_at"
+
+    after = services.market.resolve_security_rights(security.id, head_to)
+    assert after.effective is None
+    assert after.head.id == head.id
+    assert after.append_allowed is True
+    assert after.expected_parent_id == head.id
+    assert after.minimum_effective_from == head_to
+    assert after.reason_code == "successor_required"
+    assert after.reason_action == "append_successor"
+
+    successor = services.market.freeze_security_rights(
+        _rights(
+            security.id,
+            effective_from=after.minimum_effective_from,
+            raw_hash="e" * 64,
+        ),
+        expected_parent_id=after.expected_parent_id,
+    )
+    assert successor.supersedes_id == head.id
+    assert (
+        services.market.resolve_security_rights(security.id, head_to).effective.id
+        == successor.id
+    )
+
+
+def test_security_rights_resolution_allows_explicit_initial_version_only_without_history(
+    session, services
+) -> None:
+    _, security, _ = _seed_project(session, services)
+
+    resolution = services.market.resolve_security_rights(security.id, MARKET)
+
+    assert resolution.effective is None
+    assert resolution.head is None
+    assert resolution.append_allowed is True
+    assert resolution.expected_parent_id is None
+    assert resolution.minimum_effective_from is None
+    assert resolution.reason_code == "no_history"
+    assert resolution.reason_action == "create_initial"
+
+
 def test_security_rights_reject_wrong_kind_overlap_and_excess_precision(
     session, services
 ) -> None:

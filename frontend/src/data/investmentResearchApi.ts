@@ -439,17 +439,48 @@ function isRights(value: unknown): value is ProductSecurityRights {
 }
 
 function isEffectiveRights(value: unknown): value is EffectiveSecurityRights {
-  return isProductDto(value)
-    && hasExactKeys(value, ["schema_version", "security_identity_id", "as_of", "effective", "head_id"])
-    && isUuid(value.security_identity_id) && isDateTime(value.as_of)
-    && (value.effective === null || isRights(value.effective))
-    && isNullableUuid(value.head_id)
-    && (value.effective === null || (
-      value.effective.security_identity_id === value.security_identity_id
-      && isAtOrBefore(value.effective.effective_from, value.as_of)
-      && (value.effective.effective_to === null
-        || Date.parse(value.as_of) < Date.parse(value.effective.effective_to))
-    ));
+  if (!isProductDto(value)
+    || !hasExactKeys(value, ["schema_version", "security_identity_id", "as_of", "effective", "head", "append_allowed", "expected_parent_id", "minimum_effective_from", "reason"])
+    || !isUuid(value.security_identity_id) || !isDateTime(value.as_of)
+    || !(value.effective === null || isRights(value.effective))
+    || !(value.head === null || (isProductDto(value.head)
+      && hasExactKeys(value.head, ["schema_version", "id", "effective_from", "effective_to"])
+      && isUuid(value.head.id) && isDateTime(value.head.effective_from)
+      && isNullableDateTime(value.head.effective_to)
+      && (value.head.effective_to === null || isAtOrBefore(value.head.effective_from, value.head.effective_to))))
+    || typeof value.append_allowed !== "boolean"
+    || !isNullableUuid(value.expected_parent_id)
+    || !isNullableDateTime(value.minimum_effective_from)
+    || !isProductDto(value.reason)
+    || !hasExactKeys(value.reason, ["schema_version", "code", "action"])) return false;
+
+  if (value.effective !== null && (
+    value.effective.security_identity_id !== value.security_identity_id
+    || !isAtOrBefore(value.effective.effective_from, value.as_of)
+    || (value.effective.effective_to !== null
+      && Date.parse(value.as_of) >= Date.parse(value.effective.effective_to))
+  )) return false;
+
+  const state = `${String(value.reason.code)}:${String(value.reason.action)}`;
+  if (state === "effective_version_found:reuse_effective") {
+    return value.effective !== null && !value.append_allowed
+      && value.expected_parent_id === null && value.minimum_effective_from === null;
+  }
+  if (state === "no_history:create_initial") {
+    return value.effective === null && value.head === null && value.append_allowed
+      && value.expected_parent_id === null && value.minimum_effective_from === null;
+  }
+  if (state === "before_head:adjust_market_at") {
+    return value.effective === null && value.head !== null && !value.append_allowed
+      && value.expected_parent_id === null && value.minimum_effective_from === null
+      && Date.parse(value.as_of) < Date.parse(value.head.effective_from);
+  }
+  if (state === "successor_required:append_successor") {
+    return value.effective === null && value.head !== null && value.append_allowed
+      && value.expected_parent_id === value.head.id && value.minimum_effective_from !== null
+      && isAtOrBefore(value.minimum_effective_from, value.as_of);
+  }
+  return false;
 }
 
 function isDraftContent(value: unknown): boolean {

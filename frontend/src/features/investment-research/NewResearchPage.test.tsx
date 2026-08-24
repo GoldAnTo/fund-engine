@@ -47,7 +47,7 @@ function parseBody(init?: RequestInit): Record<string, unknown> {
 }
 
 type Captured = { url: string; method: string; body: Record<string, unknown> | null };
-function server(options: { draftFailures?: number; scopeFailures?: number; mandateFailures?: number; searchItems?: object[]; existingRights?: boolean; rightsHeadWithoutEffective?: boolean } = {}) {
+function server(options: { draftFailures?: number; scopeFailures?: number; mandateFailures?: number; searchItems?: object[]; existingRights?: boolean; rightsHeadWithoutEffective?: boolean; appendableRightsHead?: boolean } = {}) {
   const requests: Captured[] = [];
   let draftFailures = options.draftFailures ?? 0;
   let scopeFailures = options.scopeFailures ?? 0;
@@ -94,11 +94,26 @@ function server(options: { draftFailures?: number; scopeFailures?: number; manda
     if (url.includes("/security-rights/effective?") && method === "GET") {
       const parsed = new URL(url, "http://test"); const securityId = parsed.searchParams.get("security_identity_id") ?? ""; const asOf = parsed.searchParams.get("as_of") ?? now;
       const effective = options.existingRights ? { ...dto, id: securityId === ids.securityA ? ids.rightsA : ids.rightsB, security_identity_id: securityId, version: 1, economic_units: "1", votes_per_unit: "1", conversion_ratio: "1", adr_ratio: "1", dividend_rights_per_unit: "1", effective_from: now, effective_to: null, source_id: "listing-rules", raw_hash: hash, supersedes_id: null, content_hash: hash, created_at: now } : null;
-      return json({ ...dto, security_identity_id: securityId, as_of: asOf, effective, head_id: effective?.id ?? (options.rightsHeadWithoutEffective ? (securityId === ids.securityA ? ids.rightsA : ids.rightsB) : null) });
+      const headId = securityId === ids.securityA ? ids.rightsA : ids.rightsB;
+      const head = effective
+        ? { ...dto, id: effective.id, effective_from: effective.effective_from, effective_to: effective.effective_to }
+        : options.rightsHeadWithoutEffective
+          ? { ...dto, id: headId, effective_from: "2026-08-25T00:00:00Z", effective_to: null }
+          : options.appendableRightsHead
+            ? { ...dto, id: headId, effective_from: "2026-08-22T00:00:00Z", effective_to: "2026-08-23T00:00:00Z" }
+            : null;
+      const reason = effective
+        ? { ...dto, code: "effective_version_found", action: "reuse_effective" }
+        : options.rightsHeadWithoutEffective
+          ? { ...dto, code: "before_head", action: "adjust_market_at" }
+          : options.appendableRightsHead
+            ? { ...dto, code: "successor_required", action: "append_successor" }
+            : { ...dto, code: "no_history", action: "create_initial" };
+      return json({ ...dto, security_identity_id: securityId, as_of: asOf, effective, head, append_allowed: !effective && !options.rightsHeadWithoutEffective, expected_parent_id: options.appendableRightsHead ? headId : null, minimum_effective_from: options.appendableRightsHead ? "2026-08-23T00:00:00Z" : null, reason });
     }
     if (url.endsWith("/security-rights") && body) {
       const securityId = String(body.security_identity_id);
-      return json({ ...dto, id: securityId === ids.securityA ? ids.rightsA : ids.rightsB, security_identity_id: securityId, version: 1, economic_units: body.economic_units, votes_per_unit: body.votes_per_unit, conversion_ratio: body.conversion_ratio, adr_ratio: body.adr_ratio, dividend_rights_per_unit: body.dividend_rights_per_unit, effective_from: body.effective_from, effective_to: body.effective_to, source_id: body.source_id, raw_hash: body.raw_hash, supersedes_id: null, content_hash: hash, created_at: now }, 201);
+      return json({ ...dto, id: securityId === ids.securityA ? ids.rightsA : ids.rightsB, security_identity_id: securityId, version: body.expected_parent_id ? 2 : 1, economic_units: body.economic_units, votes_per_unit: body.votes_per_unit, conversion_ratio: body.conversion_ratio, adr_ratio: body.adr_ratio, dividend_rights_per_unit: body.dividend_rights_per_unit, effective_from: body.effective_from, effective_to: body.effective_to, source_id: body.source_id, raw_hash: body.raw_hash, supersedes_id: body.expected_parent_id ?? null, content_hash: hash, created_at: now }, 201);
     }
     if (url.endsWith("/draft") && method === "PATCH") return json(draftBody(true));
     if (url.endsWith("/publication-preview")) return json(previewBody());
@@ -263,9 +278,20 @@ describe("new independent investment research setup", () => {
     await user.click(screen.getByRole("button", { name: "预览模板议程" }));
     await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" }));
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("调整价格市场时间至已有权利有效期");
-    expect(alert).toHaveTextContent("以该 head 为父版本");
+    expect(alert).toHaveTextContent("早于当前权利 head");
+    expect(alert).toHaveTextContent("调整价格市场时间");
     expect(product.requests.filter((request) => request.url.endsWith("/mandates"))).toHaveLength(0);
+  }, setupFlowTimeout);
+
+  it("appends an explicit successor with the server-provided parent when the boundary follows the rights head", async () => {
+    const user = userEvent.setup(); const product = server({ appendableRightsHead: true }); vi.stubGlobal("fetch", product.fetch); renderPage();
+    await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
+    await user.click(screen.getByRole("button", { name: "预览模板议程" }));
+    await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" }));
+    await screen.findByRole("heading", { name: "研究工作台" });
+    const writes = product.requests.filter((request) => request.url.endsWith("/security-rights") && request.method === "POST");
+    expect(writes).toHaveLength(2);
+    expect(writes.map((request) => request.body?.expected_parent_id)).toEqual([ids.rightsA, ids.rightsB]);
   }, setupFlowTimeout);
 
   it("does not restore a stale agenda preview after its inputs change", async () => {

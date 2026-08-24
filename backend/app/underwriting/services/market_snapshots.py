@@ -220,6 +220,17 @@ class BoundaryContext:
     fx_pairs: tuple[tuple[str, str], ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class SecurityRightsResolution:
+    effective: object | None
+    head: object | None
+    append_allowed: bool
+    expected_parent_id: UUID | None
+    minimum_effective_from: datetime | None
+    reason_code: str
+    reason_action: str
+
+
 def validate_market_coverage(
     boundary: RevisionBoundaryInput, context: BoundaryContext
 ) -> None:
@@ -519,6 +530,59 @@ class MarketSnapshotService:
         self._security(security_id)
         return self._repository.effective_security_rights(
             security_id, _utc(as_of, "as_of")
+        )
+
+    def resolve_security_rights(
+        self, security_id: UUID, as_of: datetime
+    ) -> SecurityRightsResolution:
+        self._security(security_id)
+        boundary_at = _utc(as_of, "as_of")
+        effective = self._repository.effective_security_rights(security_id, boundary_at)
+        head = self._repository.rights_head(security_id)
+        if effective is not None:
+            return SecurityRightsResolution(
+                effective=effective,
+                head=head,
+                append_allowed=False,
+                expected_parent_id=None,
+                minimum_effective_from=None,
+                reason_code="effective_version_found",
+                reason_action="reuse_effective",
+            )
+        if head is None:
+            return SecurityRightsResolution(
+                effective=None,
+                head=None,
+                append_allowed=True,
+                expected_parent_id=None,
+                minimum_effective_from=None,
+                reason_code="no_history",
+                reason_action="create_initial",
+            )
+        head_from = _stored_utc(head.effective_from)
+        if boundary_at < head_from:
+            return SecurityRightsResolution(
+                effective=None,
+                head=head,
+                append_allowed=False,
+                expected_parent_id=None,
+                minimum_effective_from=None,
+                reason_code="before_head",
+                reason_action="adjust_market_at",
+            )
+        minimum_effective_from = (
+            _stored_utc(head.effective_to)
+            if head.effective_to is not None
+            else head_from
+        )
+        return SecurityRightsResolution(
+            effective=None,
+            head=head,
+            append_allowed=True,
+            expected_parent_id=head.id,
+            minimum_effective_from=minimum_effective_from,
+            reason_code="successor_required",
+            reason_action="append_successor",
         )
 
     def security_rights_head(self, security_id: UUID):

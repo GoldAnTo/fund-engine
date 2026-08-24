@@ -491,11 +491,17 @@ export default function NewResearchPage() {
           next.rights[key] = result.effective;
           continue;
         }
-        if (result.head_id) {
-          throw new Error(`${security.symbol ?? security.external_key} 在价格市场边界 ${marketBoundaryAt} 无有效权利版本，但存在 head ${result.head_id}；请调整价格市场时间至已有权利有效期，或先在权利账本追加以该 head 为父版本的 successor；本页不会回填历史权利`);
+        if (!result.append_allowed) {
+          if (result.reason.code === "before_head" && result.head) {
+            throw new Error(`${security.symbol ?? security.external_key} 的价格市场边界 ${marketBoundaryAt} 早于当前权利 head ${result.head.id}（${result.head.effective_from}）；本页禁止历史回填，请调整价格市场时间`);
+          }
+          throw new Error(`${security.symbol ?? security.external_key} 在价格市场边界 ${marketBoundaryAt} 无有效权利版本，且服务端禁止追加；请调整价格市场时间`);
         }
         const effectiveFrom = frozen(`rights_effective_from_${key}`);
         const effectiveTo = optionalField(form, `rights_effective_to_${key}`) ? frozen(`rights_effective_to_${key}`) : null;
+        if (result.minimum_effective_from && Date.parse(effectiveFrom) < Date.parse(result.minimum_effective_from)) {
+          throw new Error(`${security.symbol ?? security.external_key} successor 生效时间不得早于 ${result.minimum_effective_from}`);
+        }
         if (!intervalContains(effectiveFrom, effectiveTo, marketBoundaryAt)) {
           throw new Error(`${security.symbol ?? security.external_key} 新建权利版本必须覆盖价格市场边界 ${marketBoundaryAt}；请调整权利有效期或价格市场时间`);
         }
@@ -511,7 +517,7 @@ export default function NewResearchPage() {
           effective_to: effectiveTo,
           source_id: field(form, `rights_source_${key}`),
           raw_hash: field(form, `rights_raw_hash_${key}`),
-          expected_parent_id: null,
+          expected_parent_id: result.expected_parent_id,
         };
       }
 

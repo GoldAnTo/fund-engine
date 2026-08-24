@@ -377,7 +377,20 @@ def test_product_http_foundation_round_trip_is_exact_and_idempotent(
     )
     assert effective_rights.status_code == 200, effective_rights.text
     assert effective_rights.json()["effective"]["id"] == foundation["rights"]["id"]
-    assert effective_rights.json()["head_id"] == foundation["rights"]["id"]
+    assert effective_rights.json()["head"] == {
+        "schema_version": "underwriting.v1",
+        "id": foundation["rights"]["id"],
+        "effective_from": foundation["rights"]["effective_from"],
+        "effective_to": None,
+    }
+    assert effective_rights.json()["append_allowed"] is False
+    assert effective_rights.json()["expected_parent_id"] is None
+    assert effective_rights.json()["minimum_effective_from"] is None
+    assert effective_rights.json()["reason"] == {
+        "schema_version": "underwriting.v1",
+        "code": "effective_version_found",
+        "action": "reuse_effective",
+    }
 
     patch = api_client.patch(
         f"{BASE}/projects/{project_id}/draft",

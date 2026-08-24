@@ -504,11 +504,30 @@ class SecurityRightsResponse(UnderwritingModel):
     created_at: datetime
 
 
+class SecurityRightsHeadResponse(UnderwritingModel):
+    id: UUID
+    effective_from: datetime
+    effective_to: datetime | None
+
+
+class SecurityRightsResolutionReasonResponse(UnderwritingModel):
+    code: Literal[
+        "effective_version_found", "no_history", "before_head", "successor_required"
+    ]
+    action: Literal[
+        "reuse_effective", "create_initial", "adjust_market_at", "append_successor"
+    ]
+
+
 class EffectiveSecurityRightsResponse(UnderwritingModel):
     security_identity_id: UUID
     as_of: datetime
     effective: SecurityRightsResponse | None
-    head_id: UUID | None
+    head: SecurityRightsHeadResponse | None
+    append_allowed: bool
+    expected_parent_id: UUID | None
+    minimum_effective_from: datetime | None
+    reason: SecurityRightsResolutionReasonResponse
 
 
 class WorkspaceDraftContentResponse(UnderwritingModel):

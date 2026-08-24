@@ -5821,8 +5821,14 @@ export interface components {
              */
             as_of: string;
             effective: components["schemas"]["SecurityRightsResponse"] | null;
-            /** Head Id */
-            head_id: string | null;
+            head: components["schemas"]["SecurityRightsHeadResponse"] | null;
+            /** Append Allowed */
+            append_allowed: boolean;
+            /** Expected Parent Id */
+            expected_parent_id: string | null;
+            /** Minimum Effective From */
+            minimum_effective_from: string | null;
+            reason: components["schemas"]["SecurityRightsResolutionReasonResponse"];
         };
         /** ErrorBody */
         ErrorBody: {
@@ -10426,6 +10432,46 @@ export interface components {
             /** Groups */
             groups: components["schemas"]["SearchGroupDTO"][];
             page: components["schemas"]["CursorPage"];
+        };
+        /** SecurityRightsHeadResponse */
+        SecurityRightsHeadResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Effective From
+             * Format: date-time
+             */
+            effective_from: string;
+            /** Effective To */
+            effective_to: string | null;
+        };
+        /** SecurityRightsResolutionReasonResponse */
+        SecurityRightsResolutionReasonResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "effective_version_found" | "no_history" | "before_head" | "successor_required";
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "reuse_effective" | "create_initial" | "adjust_market_at" | "append_successor";
         };
         /** SecurityRightsResponse */
         SecurityRightsResponse: {

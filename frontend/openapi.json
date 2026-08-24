@@ -18987,7 +18987,21 @@
               }
             ]
           },
-          "head_id": {
+          "head": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecurityRightsHeadResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "append_allowed": {
+            "type": "boolean",
+            "title": "Append Allowed"
+          },
+          "expected_parent_id": {
             "anyOf": [
               {
                 "type": "string",
@@ -18997,7 +19011,22 @@
                 "type": "null"
               }
             ],
-            "title": "Head Id"
+            "title": "Expected Parent Id"
+          },
+          "minimum_effective_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum Effective From"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/SecurityRightsResolutionReasonResponse"
           }
         },
         "additionalProperties": false,
@@ -19006,7 +19035,11 @@
           "security_identity_id",
           "as_of",
           "effective",
-          "head_id"
+          "head",
+          "append_allowed",
+          "expected_parent_id",
+          "minimum_effective_from",
+          "reason"
         ],
         "title": "EffectiveSecurityRightsResponse"
       },
@@ -30898,6 +30931,83 @@
           "page"
         ],
         "title": "SearchResponse"
+      },
+      "SecurityRightsHeadResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Effective From"
+          },
+          "effective_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective To"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "effective_from",
+          "effective_to"
+        ],
+        "title": "SecurityRightsHeadResponse"
+      },
+      "SecurityRightsResolutionReasonResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "effective_version_found",
+              "no_history",
+              "before_head",
+              "successor_required"
+            ],
+            "title": "Code"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "reuse_effective",
+              "create_initial",
+              "adjust_market_at",
+              "append_successor"
+            ],
+            "title": "Action"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "action"
+        ],
+        "title": "SecurityRightsResolutionReasonResponse"
       },
       "SecurityRightsResponse": {
         "properties": {

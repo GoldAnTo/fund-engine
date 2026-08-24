@@ -52,6 +52,8 @@ from app.underwriting.api.product_schemas import (
     ResearchScopeResponse,
     RevisionBoundaryResponse,
     SecurityRightsResponse,
+    SecurityRightsHeadResponse,
+    SecurityRightsResolutionReasonResponse,
     WorkspaceDraftContentResponse,
     WorkspaceDraftResponse,
 )
@@ -683,15 +685,37 @@ def get_effective_security_rights(
     db: Session = Depends(get_db),
 ) -> EffectiveSecurityRightsResponse:
     service = MarketSnapshotService(db, now=_now)
-    effective = _read_value(
-        lambda: service.effective_security_rights(security_identity_id, as_of)
+    resolution = _read_value(
+        lambda: service.resolve_security_rights(security_identity_id, as_of)
     )
-    head = _read_value(lambda: service.security_rights_head(security_identity_id))
     return EffectiveSecurityRightsResponse(
         security_identity_id=security_identity_id,
         as_of=as_of,
-        effective=_rights_response(effective) if effective is not None else None,
-        head_id=head.id if head is not None else None,
+        effective=(
+            _rights_response(resolution.effective)
+            if resolution.effective is not None
+            else None
+        ),
+        head=(
+            SecurityRightsHeadResponse(
+                id=resolution.head.id,
+                effective_from=_stored_utc(resolution.head.effective_from),
+                effective_to=(
+                    _stored_utc(resolution.head.effective_to)
+                    if resolution.head.effective_to is not None
+                    else None
+                ),
+            )
+            if resolution.head is not None
+            else None
+        ),
+        append_allowed=resolution.append_allowed,
+        expected_parent_id=resolution.expected_parent_id,
+        minimum_effective_from=resolution.minimum_effective_from,
+        reason=SecurityRightsResolutionReasonResponse(
+            code=resolution.reason_code,
+            action=resolution.reason_action,
+        ),
     )
 
 
