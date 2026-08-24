@@ -4,6 +4,7 @@ These value objects preserve caller-supplied timestamps as supplied.  Services
 are responsible for normalizing timestamps to UTC before they cross a storage
 or external-system boundary.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -112,7 +113,11 @@ def agenda_items_hash(items: tuple[str, ...]) -> str:
 
 
 def _require_aware_datetime(value: object, field_name: str) -> None:
-    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+    if (
+        not isinstance(value, datetime)
+        or value.tzinfo is None
+        or value.utcoffset() is None
+    ):
         raise ValueError(f"{field_name} must be a timezone-aware datetime")
 
 
@@ -148,7 +153,9 @@ def _require_enum(value: object, enum_type: type[StrEnum], field_name: str) -> N
         raise ValueError(f"{field_name} is invalid")
 
 
-def _require_text_tuple(value: object, field_name: str, *, nonempty: bool = False) -> None:
+def _require_text_tuple(
+    value: object, field_name: str, *, nonempty: bool = False
+) -> None:
     if not isinstance(value, tuple) or (nonempty and not value):
         suffix = " a non-empty tuple" if nonempty else " a tuple"
         raise ValueError(f"{field_name} must be{suffix}")
@@ -158,7 +165,9 @@ def _require_text_tuple(value: object, field_name: str, *, nonempty: bool = Fals
         raise ValueError(f"{field_name} must not contain duplicates")
 
 
-def _require_uuid_tuple(value: object, field_name: str, *, nonempty: bool = False) -> None:
+def _require_uuid_tuple(
+    value: object, field_name: str, *, nonempty: bool = False
+) -> None:
     if not isinstance(value, tuple) or (nonempty and not value):
         suffix = " a non-empty tuple" if nonempty else " a tuple"
         raise ValueError(f"{field_name} must be{suffix}")
@@ -186,7 +195,9 @@ class ResearchScopeInput:
 
     def __post_init__(self) -> None:
         _require_uuid(self.primary_company_id, "primary_company_id")
-        _require_uuid_tuple(self.target_security_ids, "target_security_ids", nonempty=True)
+        _require_uuid_tuple(
+            self.target_security_ids, "target_security_ids", nonempty=True
+        )
         _require_uuid_tuple(self.industry_ids, "industry_ids")
         _require_text_tuple(self.covered_segments, "covered_segments")
         if self.user_focus is not None:
@@ -220,16 +231,22 @@ class AgendaGeneratorInput:
                     self.input_summary_hash,
                 )
             ):
-                raise ValueError("deterministic agenda provenance must not include AI fields")
+                raise ValueError(
+                    "deterministic agenda provenance must not include AI fields"
+                )
             return
         if any(
             value is None or not isinstance(value, str) or not value.strip()
             for value in (self.model_name, self.prompt_template_version)
         ):
-            raise ValueError("AI agenda provenance requires model, prompt, and input summary hashes")
+            raise ValueError(
+                "AI agenda provenance requires model, prompt, and input summary hashes"
+            )
         _require_sha256(self.input_summary_hash, "input_summary_hash")
         if self.template_key is not None or self.template_version is not None:
-            raise ValueError("AI agenda provenance must not include deterministic template fields")
+            raise ValueError(
+                "AI agenda provenance must not include deterministic template fields"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,12 +413,16 @@ class AssessmentState:
         if self.direction is not None:
             _require_enum(self.direction, AssessmentDirection, "assessment direction")
         if self.confidence is not None:
-            _require_enum(self.confidence, AssessmentConfidence, "assessment confidence")
+            _require_enum(
+                self.confidence, AssessmentConfidence, "assessment confidence"
+            )
         _require_enum(self.publication_status, PublicationStatus, "publication status")
         if self.answerability is AnswerabilityState.NOT_ANSWERABLE and (
             self.direction is not None or self.confidence is not None
         ):
-            raise ValueError("direction and confidence must be null when not_answerable")
+            raise ValueError(
+                "direction and confidence must be null when not_answerable"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -425,9 +446,13 @@ class RevisionBoundaryInput:
             "capital_structure_snapshot_id",
         ):
             _require_uuid(getattr(self, field_name), field_name)
-        _require_uuid_tuple(self.price_snapshot_ids, "price_snapshot_ids", nonempty=True)
+        _require_uuid_tuple(
+            self.price_snapshot_ids, "price_snapshot_ids", nonempty=True
+        )
         _require_uuid_tuple(self.fx_snapshot_ids, "fx_snapshot_ids")
-        _require_uuid_tuple(self.security_rights_ids, "security_rights_ids", nonempty=True)
+        _require_uuid_tuple(
+            self.security_rights_ids, "security_rights_ids", nonempty=True
+        )
         if self.parent_revision_id is not None:
             _require_uuid(self.parent_revision_id, "parent_revision_id")
 
@@ -438,6 +463,10 @@ class ProductRevisionView:
     project_id: UUID
     boundary_id: UUID
     manifest_hash: str
+    price_snapshot_ids: tuple[UUID, ...]
+    fx_snapshot_ids: tuple[UUID, ...]
+    capital_structure_snapshot_id: UUID
+    security_rights_ids: tuple[UUID, ...]
     answerability: AnswerabilityState
     direction: AssessmentDirection | None
     confidence: AssessmentConfidence | None
@@ -448,6 +477,23 @@ class ProductRevisionView:
         _require_uuid(self.project_id, "project_id")
         _require_uuid(self.boundary_id, "boundary_id")
         _require_sha256(self.manifest_hash, "manifest_hash")
+        _require_uuid_tuple(
+            self.price_snapshot_ids, "price_snapshot_ids", nonempty=True
+        )
+        _require_uuid_tuple(self.fx_snapshot_ids, "fx_snapshot_ids")
+        _require_uuid(
+            self.capital_structure_snapshot_id, "capital_structure_snapshot_id"
+        )
+        _require_uuid_tuple(
+            self.security_rights_ids, "security_rights_ids", nonempty=True
+        )
+        for value, field_name in (
+            (self.price_snapshot_ids, "price_snapshot_ids"),
+            (self.fx_snapshot_ids, "fx_snapshot_ids"),
+            (self.security_rights_ids, "security_rights_ids"),
+        ):
+            if value != tuple(sorted(value, key=str)):
+                raise ValueError(f"{field_name} must be canonical")
         AssessmentState(
             answerability=self.answerability,
             direction=self.direction,

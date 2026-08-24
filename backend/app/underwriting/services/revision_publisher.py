@@ -261,6 +261,50 @@ class RevisionPublisher:
         ):
             raise ValidationError("mandate expired before the frozen market instant")
 
+    @staticmethod
+    def _project_references(project, memberships):
+        if not memberships:
+            raise ValidationError("research project must contain target Securities")
+        membership_ids = tuple(row.id for row in memberships)
+        security_ids = tuple(sorted((row.security_id for row in memberships), key=str))
+        if (
+            len(membership_ids) != len(set(membership_ids))
+            or len(security_ids) != len(set(security_ids))
+            or any(row.project_id != project.id for row in memberships)
+            or project.content_hash
+            != canonical_hash(
+                {
+                    "schema_version": "product.research-project.v1",
+                    "primary_company_id": str(project.primary_company_id),
+                    "target_security_ids": [str(value) for value in security_ids],
+                }
+            )
+            or any(
+                row.content_hash
+                != canonical_hash(
+                    {
+                        "schema_version": "product.research-project-security.v1",
+                        "project_id": str(project.id),
+                        "security_id": str(row.security_id),
+                    }
+                )
+                for row in memberships
+            )
+        ):
+            raise ValidationError("research project membership identity is invalid")
+        return (
+            {"project_id": str(project.id), "content_hash": project.content_hash},
+            [
+                {
+                    "membership_id": str(row.id),
+                    "security_id": str(row.security_id),
+                    "content_hash": row.content_hash,
+                }
+                for row in sorted(memberships, key=lambda item: str(item.id))
+            ],
+            security_ids,
+        )
+
     def _validate_frozen_hashes(
         self, project_id: UUID, boundary: RevisionBoundaryInput, mandate
     ) -> None:
@@ -349,7 +393,12 @@ class RevisionPublisher:
             record = self.repository.project(project_id)
             if record is None:
                 raise ValidationError("research project does not exist")
-            project, project_security_ids = record
+            project, _ = record
+            project_ref, membership_refs, project_security_ids = (
+                self._project_references(
+                    project, self.repository.project_memberships(project_id)
+                )
+            )
             company = self.repository.object(project.primary_company_id)
             if company is None or company.kind != ResearchObjectKind.COMPANY.value:
                 raise ValidationError("project primary object must be a Company")
@@ -399,7 +448,7 @@ class RevisionPublisher:
             self._validate_frozen_hashes(project_id, boundary, mandate)
             self._validate_identity_boundary(
                 company_id=project.primary_company_id,
-                target_security_ids=context.target_security_ids,
+                target_security_ids=project_security_ids,
                 boundary_at=boundary_at,
             )
             if set(context.target_security_ids) - set(project_security_ids):
@@ -436,6 +485,8 @@ class RevisionPublisher:
             manifest: dict[str, object] = {
                 "schema_version": PRODUCT_MANIFEST_SCHEMA,
                 "project_id": str(project_id),
+                "project_ref": project_ref,
+                "project_membership_refs": membership_refs,
                 "primary_object_id": str(project.primary_company_id),
                 "boundary_ref": "$boundary",
                 "mandate_id": str(boundary.mandate_id),
@@ -506,6 +557,10 @@ class RevisionPublisher:
             summary.project_id,
             summary.boundary_id,
             summary.manifest_hash,
+            summary.price_snapshot_ids,
+            summary.fx_snapshot_ids,
+            summary.capital_structure_snapshot_id,
+            summary.security_rights_ids,
             summary.answerability,
             summary.direction,
             summary.confidence,

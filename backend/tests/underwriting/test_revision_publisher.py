@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import sqlite3
-from uuid import uuid4
+from threading import Barrier
+from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
@@ -33,6 +35,7 @@ from app.underwriting.persistence.models import (
 )
 from app.underwriting.persistence.product_models import (
     UnderwritingResearchAssessmentVersion,
+    UnderwritingResearchProjectSecurity,
     UnderwritingRevisionBoundary,
     UnderwritingRevisionManifest,
     UnderwritingWorkspaceDraft,
@@ -257,6 +260,26 @@ def test_preview_is_deterministic_fail_closed_and_has_zero_writes(session) -> No
     assert first.boundary_as_of == MARKET
     assert first.manifest["schema_version"] == PRODUCT_MANIFEST_SCHEMA
     assert first.manifest["assessment_ref"] == "$assessment"
+    assert first.manifest["project_ref"] == {
+        "project_id": str(graph["project"].id),
+        "content_hash": graph["project"].content_hash,
+    }
+    assert first.manifest["project_membership_refs"] == [
+        {
+            "membership_id": str(membership.id),
+            "security_id": str(membership.security_id),
+            "content_hash": membership.content_hash,
+        }
+        for membership in sorted(
+            session.scalars(
+                select(UnderwritingResearchProjectSecurity).where(
+                    UnderwritingResearchProjectSecurity.project_id
+                    == graph["project"].id
+                )
+            ),
+            key=lambda row: str(row.id),
+        )
+    ]
     assert first.manifest["model_refs"] == []
     assert first.manifest["memo_ref"] is None
     assert first.manifest_hash == canonical_hash(first.manifest)
@@ -344,6 +367,10 @@ def test_publish_freezes_exact_graph_and_reader_replays_without_latest_queries(
     assert summary.direction is None and summary.confidence is None
     assert summary.publication_status is PublicationStatus.USER_FROZEN
     assert summary.manifest_hash == published.manifest_hash
+    assert published.price_snapshot_ids == (graph["price"].id,)
+    assert published.fx_snapshot_ids == ()
+    assert published.capital_structure_snapshot_id == graph["capital"].id
+    assert published.security_rights_ids == (graph["rights"].id,)
     assert preview.manifest["project_id"] == str(summary.project_id)
 
     _ready_graph(session, suffix="later")
@@ -517,6 +544,201 @@ def test_reader_fails_closed_when_manifest_or_exact_reference_is_tampered(
         )
 
 
+def test_reader_uses_only_manifest_frozen_project_memberships(session) -> None:
+    graph = _ready_graph(session)
+    published = RevisionPublisher(session, now=lambda: NOW).publish(
+        graph["project"].id,
+        graph["draft"].lock_version,
+        idempotency_key="publish-memberships",
+    )
+    session.commit()
+    original = ResearchRevisionDiffService(session).revision_summary(published.id)
+    revision = session.get(UnderwritingResearchVersion, published.id)
+    manifest = session.get(UnderwritingRevisionManifest, revision.manifest_id)
+    frozen_ref = manifest.manifest["project_membership_refs"][0]
+
+    later_security = _object(session, "security", "SEC-later-membership")
+    session.add(
+        UnderwritingResearchProjectSecurity(
+            project_id=graph["project"].id,
+            security_id=later_security.id,
+            content_hash=canonical_hash(
+                {
+                    "schema_version": "product.research-project-security.v1",
+                    "project_id": str(graph["project"].id),
+                    "security_id": str(later_security.id),
+                }
+            ),
+            created_at=NOW + timedelta(days=1),
+        )
+    )
+    session.commit()
+
+    assert (
+        ResearchRevisionDiffService(session).revision_summary(published.id) == original
+    )
+
+    frozen_membership = session.get(
+        UnderwritingResearchProjectSecurity, UUID(frozen_ref["membership_id"])
+    )
+    frozen_membership.content_hash = B64
+    with pytest.raises(ValidationError, match="project.*identity|membership"):
+        ResearchRevisionDiffService(session).revision_summary(published.id)
+
+
+def test_reader_rejects_deleted_exact_project_membership(session) -> None:
+    graph = _ready_graph(session)
+    published = RevisionPublisher(session, now=lambda: NOW).publish(
+        graph["project"].id,
+        graph["draft"].lock_version,
+        idempotency_key="publish-delete-membership",
+    )
+    revision = session.get(UnderwritingResearchVersion, published.id)
+    manifest = session.get(UnderwritingRevisionManifest, revision.manifest_id)
+    membership_id = UUID(
+        manifest.manifest["project_membership_refs"][0]["membership_id"]
+    )
+    stored_id = (
+        membership_id.hex
+        if session.get_bind().dialect.name == "sqlite"
+        else str(membership_id)
+    )
+    session.execute(
+        text("DELETE FROM uw_research_project_securities WHERE id = :membership_id"),
+        {"membership_id": stored_id},
+    )
+    session.flush()
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="project.*identity|membership"):
+        ResearchRevisionDiffService(session).revision_summary(published.id)
+
+
+def test_real_sqlite_caller_rollback_reverts_entire_publication(tmp_path) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'revision-publication-rollback.sqlite'}", future=True
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    seed = sessions()
+    graph = _ready_graph(seed)
+    project_id = graph["project"].id
+    expected_lock = graph["draft"].lock_version
+    seed.commit()
+    seed.close()
+
+    publishing = sessions()
+    try:
+        assert (
+            WorkspaceDraftService(publishing, now=lambda: NOW)
+            .read(project_id)
+            .lock_version
+            == expected_lock
+        )
+        RevisionPublisher(publishing, now=lambda: NOW).publish(
+            project_id, expected_lock, idempotency_key="publish-rollback"
+        )
+        publishing.rollback()
+
+        observer = sessions()
+        try:
+            assert _formal_counts(observer) == (0, 0, 0, 0)
+            draft = WorkspaceDraftService(observer, now=lambda: NOW).read(project_id)
+            assert draft.lock_version == expected_lock
+            assert draft.base_revision_id is None
+        finally:
+            observer.close()
+    finally:
+        publishing.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+def _run_concurrent_publications(sessions, project_id, expected_lock, keys):
+    barrier = Barrier(2)
+
+    def publish(key):
+        worker = sessions()
+        try:
+            barrier.wait(timeout=5)
+            result = RevisionPublisher(worker, now=lambda: NOW).publish(
+                project_id, expected_lock, idempotency_key=key
+            )
+            worker.commit()
+            return result
+        except Exception as exc:  # The assertions inspect the exact domain outcome.
+            worker.rollback()
+            return exc
+        finally:
+            worker.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(publish, key) for key in keys]
+        return tuple(future.result(timeout=20) for future in futures)
+
+
+def test_real_sqlite_concurrent_same_key_converges_to_one_revision(tmp_path) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'revision-publication-same.sqlite'}",
+        future=True,
+        connect_args={"timeout": 10},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    seed = sessions()
+    graph = _ready_graph(seed)
+    project_id = graph["project"].id
+    expected_lock = graph["draft"].lock_version
+    seed.commit()
+    seed.close()
+    try:
+        results = _run_concurrent_publications(
+            sessions, project_id, expected_lock, ("same-key", "same-key")
+        )
+        assert all(not isinstance(result, Exception) for result in results)
+        assert results[0].id == results[1].id
+        observer = sessions()
+        try:
+            assert _formal_counts(observer) == (1, 1, 1, 1)
+        finally:
+            observer.close()
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+def test_real_sqlite_concurrent_different_keys_has_one_winner(tmp_path) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'revision-publication-different.sqlite'}",
+        future=True,
+        connect_args={"timeout": 10},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    seed = sessions()
+    graph = _ready_graph(seed)
+    project_id = graph["project"].id
+    expected_lock = graph["draft"].lock_version
+    seed.commit()
+    seed.close()
+    try:
+        results = _run_concurrent_publications(
+            sessions, project_id, expected_lock, ("key-one", "key-two")
+        )
+        assert sum(not isinstance(result, Exception) for result in results) == 1
+        errors = [result for result in results if isinstance(result, Exception)]
+        assert len(errors) == 1
+        assert isinstance(errors[0], ConflictError)
+        observer = sessions()
+        try:
+            assert _formal_counts(observer) == (1, 1, 1, 1)
+        finally:
+            observer.close()
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
 def test_real_sqlite_two_sessions_converge_same_key_and_reject_other_key(
     tmp_path,
 ) -> None:
@@ -556,6 +778,7 @@ def test_real_sqlite_two_sessions_converge_same_key_and_reject_other_key(
             project_id, expected_lock, idempotency_key="publish-1"
         )
         assert recovered.id == winner.id
+        same_key.rollback()
         with pytest.raises(ConflictError, match="draft changed"):
             RevisionPublisher(other_key, now=lambda: NOW).publish(
                 project_id, expected_lock, idempotency_key="publish-2"

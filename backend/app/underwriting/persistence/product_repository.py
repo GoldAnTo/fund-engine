@@ -9,7 +9,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, or_, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased
 
 from app.underwriting.persistence.models import (
@@ -606,13 +606,20 @@ class ProductRepository:
         if project is None:
             return None
         security_ids = tuple(
+            row.security_id for row in self.project_memberships(project_id)
+        )
+        return project, security_ids
+
+    def project_memberships(
+        self, project_id: UUID
+    ) -> tuple[UnderwritingResearchProjectSecurity, ...]:
+        return tuple(
             self._session.scalars(
-                select(UnderwritingResearchProjectSecurity.security_id)
+                select(UnderwritingResearchProjectSecurity)
                 .where(UnderwritingResearchProjectSecurity.project_id == project_id)
                 .order_by(UnderwritingResearchProjectSecurity.security_id)
             )
         )
-        return project, security_ids
 
     def list_projects(
         self, limit: int
@@ -1145,6 +1152,19 @@ class ProductRepository:
         )
 
     def lock_project(self, project_id: UUID) -> UnderwritingResearchProject:
+        connection = self._session.connection()
+        if connection.dialect.name == "sqlite":
+            driver_connection = connection.connection.driver_connection
+            if not driver_connection.in_transaction:
+                try:
+                    connection.exec_driver_sql("BEGIN IMMEDIATE")
+                except OperationalError as exc:
+                    message = str(getattr(exc, "orig", exc)).lower()
+                    if "locked" in message or "busy" in message:
+                        raise ConflictError(
+                            "research project publication lock is busy; retry"
+                        ) from exc
+                    raise
         row = self._session.scalar(
             select(UnderwritingResearchProject)
             .where(UnderwritingResearchProject.id == project_id)

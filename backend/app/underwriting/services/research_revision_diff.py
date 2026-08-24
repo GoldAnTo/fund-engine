@@ -1598,6 +1598,76 @@ class ResearchRevisionDiffService:
             raise ValidationError(f"product manifest {field} is not canonical")
         return parsed
 
+    def _product_project_security_ids(
+        self, payload: Mapping[str, object], project: UnderwritingResearchProject
+    ) -> tuple[UUID, ...]:
+        project_ref = payload.get("project_ref")
+        raw_memberships = payload.get("project_membership_refs")
+        if (
+            not isinstance(project_ref, Mapping)
+            or set(project_ref) != {"project_id", "content_hash"}
+            or not isinstance(raw_memberships, list)
+            or not raw_memberships
+        ):
+            raise ValidationError("product manifest project membership refs are malformed")
+        referenced_project_id = self._product_uuid(
+            project_ref.get("project_id"), "project_ref.project_id"
+        )
+        if (
+            referenced_project_id != project.id
+            or project_ref.get("content_hash") != project.content_hash
+        ):
+            raise ValidationError("product manifest project ref is invalid")
+
+        descriptors: list[tuple[UUID, UUID, str]] = []
+        for raw in raw_memberships:
+            if not isinstance(raw, Mapping) or set(raw) != {
+                "membership_id", "security_id", "content_hash"
+            }:
+                raise ValidationError("product manifest project membership ref is malformed")
+            content_hash = raw.get("content_hash")
+            if not isinstance(content_hash, str):
+                raise ValidationError("product manifest project membership hash is malformed")
+            descriptors.append(
+                (
+                    self._product_uuid(raw.get("membership_id"), "membership_id"),
+                    self._product_uuid(raw.get("security_id"), "membership security_id"),
+                    content_hash,
+                )
+            )
+        membership_ids = tuple(item[0] for item in descriptors)
+        security_ids = tuple(item[1] for item in descriptors)
+        if (
+            descriptors != sorted(descriptors, key=lambda item: str(item[0]))
+            or len(membership_ids) != len(set(membership_ids))
+            or len(security_ids) != len(set(security_ids))
+        ):
+            raise ValidationError("product manifest project membership refs are not canonical")
+        for membership_id, security_id, content_hash in descriptors:
+            row = self._session.get(UnderwritingResearchProjectSecurity, membership_id)
+            security = self._session.get(UnderwritingResearchObject, security_id)
+            expected_hash = canonical_hash({
+                "schema_version": "product.research-project-security.v1",
+                "project_id": str(project.id),
+                "security_id": str(security_id),
+            })
+            if (
+                row is None or row.project_id != project.id
+                or row.security_id != security_id or row.content_hash != content_hash
+                or content_hash != expected_hash
+                or security is None or security.kind != ResearchObjectKind.SECURITY.value
+            ):
+                raise ValidationError("product research project membership identity is invalid")
+        canonical_security_ids = tuple(sorted(security_ids, key=str))
+        expected_project_hash = canonical_hash({
+            "schema_version": "product.research-project.v1",
+            "primary_company_id": str(project.primary_company_id),
+            "target_security_ids": [str(value) for value in canonical_security_ids],
+        })
+        if project.content_hash != expected_project_hash:
+            raise ValidationError("product research project identity is invalid")
+        return canonical_security_ids
+
     def _product_revision_summary(self, revision: UnderwritingResearchVersion) -> ProductResearchRevisionSummary:
         if (
             revision.project_id is None or revision.boundary_id is None
@@ -1611,30 +1681,6 @@ class ResearchRevisionDiffService:
         if project is None or boundary is None or manifest is None:
             raise ValidationError("product research revision frozen graph is missing")
         primary_object = self._session.get(UnderwritingResearchObject, project.primary_company_id)
-        memberships = tuple(self._session.scalars(
-            select(UnderwritingResearchProjectSecurity)
-            .where(UnderwritingResearchProjectSecurity.project_id == project.id)
-            .order_by(UnderwritingResearchProjectSecurity.security_id)
-        ))
-        project_security_ids = tuple(row.security_id for row in memberships)
-        expected_project_hash = canonical_hash({
-            "schema_version": "product.research-project.v1",
-            "primary_company_id": str(project.primary_company_id),
-            "target_security_ids": [str(value) for value in project_security_ids],
-        })
-        if (
-            primary_object is None or primary_object.kind != ResearchObjectKind.COMPANY.value
-            or not memberships or project.content_hash != expected_project_hash
-            or any(
-                row.content_hash != canonical_hash({
-                    "schema_version": "product.research-project-security.v1",
-                    "project_id": str(project.id),
-                    "security_id": str(row.security_id),
-                })
-                for row in memberships
-            )
-        ):
-            raise ValidationError("product research project identity is invalid")
         if (
             boundary.project_id != revision.project_id or manifest.project_id != revision.project_id
             or manifest.boundary_id != boundary.id or boundary.schema_version != PRODUCT_BOUNDARY_SCHEMA
@@ -1644,7 +1690,8 @@ class ResearchRevisionDiffService:
             raise ValidationError("product research revision manifest is malformed")
         payload = dict(manifest.manifest)
         expected_keys = {
-            "schema_version", "project_id", "primary_object_id", "boundary_ref", "mandate_id",
+            "schema_version", "project_id", "project_ref", "project_membership_refs",
+            "primary_object_id", "boundary_ref", "mandate_id",
             "scope_id", "agenda_id", "historical_basis_id", "price_snapshot_ids",
             "fx_snapshot_ids", "capital_structure_snapshot_id", "security_rights_ids",
             "market_snapshot_refs", "model_refs", "assessment_ref", "memo_ref",
@@ -1654,6 +1701,9 @@ class ResearchRevisionDiffService:
             raise ValidationError("product research revision manifest shape is malformed")
         if manifest.content_hash != canonical_hash(payload):
             raise ValidationError("product research revision manifest hash mismatch")
+        project_security_ids = self._product_project_security_ids(payload, project)
+        if primary_object is None or primary_object.kind != ResearchObjectKind.COMPANY.value:
+            raise ValidationError("product research project identity is invalid")
         project_id = self._product_uuid(payload.get("project_id"), "project_id")
         primary_object_id = self._product_uuid(payload.get("primary_object_id"), "primary_object_id")
         boundary_ref = self._product_uuid(payload.get("boundary_ref"), "boundary_ref")
