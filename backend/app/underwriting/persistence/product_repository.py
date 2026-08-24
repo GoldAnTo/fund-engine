@@ -497,4 +497,13 @@ class ProductRepository:
         return row
 
     def product_basis(self, basis_id: UUID) -> UnderwritingHistoricalBasis | None:
-        return self._session.get(UnderwritingHistoricalBasis, basis_id)
+        return self._session.scalar(
+            select(UnderwritingHistoricalBasis)
+            .where(
+                UnderwritingHistoricalBasis.id == basis_id,
+                UnderwritingHistoricalBasis.boundary_schema_version
+                == "product.historical-basis.v1",
+                UnderwritingHistoricalBasis.price_as_of.is_(None),
+            )
+            .limit(1)
+        )

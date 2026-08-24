@@ -313,6 +313,43 @@ def test_open_ended_identity_head_can_be_superseded_by_a_later_version(
         )
 
 
+def test_finite_identity_successor_does_not_resurrect_open_ended_parent(
+    session, service
+) -> None:
+    security = _object(session, "security", "stable-key", "Legacy Identity")
+    first = _identity(
+        service,
+        security,
+        name="Legacy Identity",
+        symbol="OLD",
+        effective_from=OLD_FROM,
+        effective_to=None,
+        currency="USD",
+    )
+    switch_at = datetime(2021, 1, 1, tzinfo=UTC)
+    expires_at = datetime(2022, 1, 1, tzinfo=UTC)
+    second = _identity(
+        service,
+        security,
+        name="Replacement Identity",
+        symbol="NEW",
+        effective_from=switch_at,
+        effective_to=expires_at,
+        expected_parent_id=first.id,
+        currency="USD",
+    )
+
+    assert (
+        service.effective_identity(security.id, datetime(2020, 12, 31, tzinfo=UTC)).id
+        == first.id
+    )
+    assert service.effective_identity(security.id, switch_at).id == second.id
+    assert service.effective_identity(security.id, expires_at) is None
+    assert service.effective_identity(security.id, NOW) is None
+    assert service.search_objects("stable-key", expires_at, 10) == ()
+    assert service.search_objects("legacy", NOW, 10) == ()
+
+
 @pytest.mark.parametrize("kind", ["company", "industry"])
 def test_non_security_identity_rejects_security_fields(session, service, kind) -> None:
     row = _object(session, kind, f"{kind}:one", kind.title())
@@ -911,6 +948,47 @@ def test_product_historical_basis_has_exact_boundary_hashes_and_no_price(
     assert session.get(UnderwritingHistoricalBasis, basis.id) is basis
     assert service.historical_basis(basis.id) is basis
     assert service.historical_basis(uuid4()) is None
+
+
+def test_historical_basis_read_rejects_legacy_and_non_product_rows(
+    session, service
+) -> None:
+    legacy_priced = UnderwritingHistoricalBasis(
+        cutoff=NOW,
+        price_as_of=NOW,
+        source_manifest_hash=A64,
+        definition_bundle_hash=None,
+        parser_bundle_hash=None,
+        boundary_schema_version=None,
+        content_hash=None,
+        created_at=NOW,
+    )
+    schema_less = UnderwritingHistoricalBasis(
+        cutoff=NOW,
+        price_as_of=None,
+        source_manifest_hash=A64,
+        definition_bundle_hash=B64,
+        parser_bundle_hash=C64,
+        boundary_schema_version=None,
+        content_hash=A64,
+        created_at=NOW,
+    )
+    product_schema_with_price = UnderwritingHistoricalBasis(
+        cutoff=NOW,
+        price_as_of=NOW,
+        source_manifest_hash=A64,
+        definition_bundle_hash=B64,
+        parser_bundle_hash=C64,
+        boundary_schema_version="product.historical-basis.v1",
+        content_hash=A64,
+        created_at=NOW,
+    )
+    session.add_all((legacy_priced, schema_less, product_schema_with_price))
+    session.flush()
+
+    assert service.historical_basis(legacy_priced.id) is None
+    assert service.historical_basis(schema_less.id) is None
+    assert service.historical_basis(product_schema_with_price.id) is None
 
 
 def test_product_project_modules_stay_isolated_and_only_borrow_hash_helper() -> None:
