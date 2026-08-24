@@ -1038,7 +1038,7 @@ git commit -m "test: add investment research identity fixtures"
 - Create: `scripts/verify-investment-research-foundation.sh`
 - Modify: `docs/architecture/underwriting-research.md`
 
-- [ ] **Step 1: Write shell-level contract checks.** Extend the verifier to assert current Alembic revision `0065`, `/research` returns the product shell, product API health succeeds, and runtime starts when optional commercial data and AI keys are absent.
+- [x] **Step 1: Write shell-level contract checks.** Extend the verifier to assert current Alembic revision `0065`, `/research` returns the product shell, product API health succeeds, and runtime starts when optional commercial data and AI keys are absent.
 
 ```bash
 require_revision "$new_revision" 0065
@@ -1047,7 +1047,7 @@ curl --fail --silent --show-error \
   'http://127.0.0.1:8000/api/underwriting/v1/product/objects?query=CATL' >/dev/null
 ```
 
-- [ ] **Step 2: Add local file storage and backup.** Mount `fund-engine-one-click-files:/data/research-files` into API and workers. `one-click-runtime.sh backup <absolute-output-dir>` must create a PostgreSQL custom-format dump, a compressed file-store archive and `manifest.sha256`; it must reject broad or relative output targets.
+- [x] **Step 2: Add local file storage and backup.** Mount `fund-engine-one-click-files:/data/research-files` into API and workers. `one-click-runtime.sh backup <absolute-output-dir>` must create a PostgreSQL custom-format dump, a compressed file-store archive and `manifest.sha256`; it must reject broad or relative output targets.
 
 ```yaml
 services:
@@ -1093,7 +1093,7 @@ backup_runtime() {
 }
 ```
 
-- [ ] **Step 3: Add fail-closed restore.** `restore <absolute-backup-dir>` requires the one-click application services to be stopped, validates all checksums, restores into the isolated one-click volumes, runs Alembic to head and verifies stored ResearchRevision manifest hashes. Secrets and `.env*` files are never copied into backup artifacts.
+- [x] **Step 3: Add fail-closed restore.** `restore <absolute-backup-dir>` requires the one-click application services to be stopped, validates all checksums, restores into the isolated one-click volumes, runs Alembic to head and verifies stored ResearchRevision manifest hashes. Secrets and `.env*` files are never copied into backup artifacts.
 
 The verifier opens one database session, loads every `independent_research` revision, calls `ResearchRevisionDiffService.revision_summary(id)` and exits nonzero on the first stored/recomputed hash mismatch:
 
@@ -1135,7 +1135,7 @@ restore_runtime() {
 }
 ```
 
-- [ ] **Step 4: Add the full Increment A gate script.**
+- [x] **Step 4: Add the full Increment A gate script.**
 
 ```bash
 #!/usr/bin/env bash
@@ -1157,7 +1157,7 @@ npm run typecheck
 npm run build
 ```
 
-- [ ] **Step 5: Run fresh full verification.**
+- [x] **Step 5: Run fresh full verification.**
 
 Run:
 
@@ -1170,7 +1170,7 @@ git diff --check
 
 Expected: all commands exit 0. If Docker is available, also run `./scripts/one-click-runtime.sh up`, `./scripts/verify-one-click-runtime.sh`, backup, restore into a disposable isolated runtime, then compare the foundation revision manifest hash.
 
-- [ ] **Step 6: Document and commit the gate.** Record actual test counts, skipped external-service checks, current migration, CATL foundation revision hash and legacy replay result in the architecture completion section.
+- [x] **Step 6: Document and commit the gate.** Record actual test counts, skipped external-service checks, current migration, CATL foundation revision hash and legacy replay result in the architecture completion section.
 
 ```bash
 git add docker-compose.one-click.yml scripts/one-click-runtime.sh scripts/verify-one-click-runtime.sh scripts/verify-investment-research-foundation.sh backend/app/scripts/verify_underwriting_revision_manifests.py docs/architecture/underwriting-research.md
@@ -1179,14 +1179,14 @@ git commit -m "chore: gate investment research product foundation"
 
 ## Increment A completion checklist
 
-- [ ] Existing CATL evidence-only revisions retain their stored hashes and read responses.
-- [ ] New HistoricalBasis rows use `price_as_of=NULL`; price/FX/capital structure/rights are independent frozen rows.
-- [ ] ResearchProject requires a Company and at least one related Security.
-- [ ] InvestmentMandate, ResearchScope and ResearchAgenda have immutable successor chains.
-- [ ] WorkspaceDraft rejects stale writes and is never returned as a formal revision.
-- [ ] Publication preview is write-free; publication is atomic and idempotent.
-- [ ] Foundation publication can only produce `insufficient_evidence`, not a provisional direction.
-- [ ] `/research` is isolated from Event Research and displays unfinished modules honestly.
-- [ ] CATL and Alphabet identity fixtures prove one-company/multi-security contracts.
-- [ ] Generated OpenAPI and TypeScript contracts compile without absorbing the user's pre-existing unstaged OpenAPI edit.
-- [ ] Runtime startup, status, backup and restore verification pass or record the unavailable Docker prerequisite explicitly.
+- [x] Existing CATL evidence-only revisions retain their stored hashes and read responses.
+- [x] New HistoricalBasis rows use `price_as_of=NULL`; price/FX/capital structure/rights are independent frozen rows.
+- [x] ResearchProject requires a Company and at least one related Security.
+- [x] InvestmentMandate, ResearchScope and ResearchAgenda have immutable successor chains.
+- [x] WorkspaceDraft rejects stale writes and is never returned as a formal revision.
+- [x] Publication preview is write-free; publication is atomic and idempotent.
+- [x] Foundation publication can only produce `insufficient_evidence`, not a provisional direction.
+- [x] `/research` is isolated from Event Research and displays unfinished modules honestly.
+- [x] CATL and Alphabet identity fixtures prove one-company/multi-security contracts.
+- [x] Generated OpenAPI and TypeScript contracts compile without absorbing the user's pre-existing unstaged OpenAPI edit.
+- [x] Runtime startup, status, backup and restore verification pass or record the unavailable Docker prerequisite explicitly.
