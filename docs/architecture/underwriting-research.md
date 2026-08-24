@@ -240,13 +240,13 @@ two persisted identities rather than a mock or a current-data fallback.
 
 The fresh Increment A gate produced these results:
 
-- backend: 341 passed, 2 skipped, 1 existing Pydantic field-shadow warning;
+- backend: 352 passed, 2 skipped, 1 existing Pydantic field-shadow warning;
   the two skips are the PostgreSQL concurrency variants guarded by
   `TEST_DATABASE_URL` in the workspace-draft and publisher tests;
 - frontend: 75 passed across the product shell, setup flow, strict API reader,
   accessibility contract and deterministic foundation helpers;
 - TypeScript typecheck, Vite production build and Python `compileall`: passed;
-- full repository regression: backend 3,083 passed / 33 skipped / 3 warnings;
+- full repository regression: backend 3,094 passed / 33 skipped / 3 warnings;
   frontend 537 passed across 25 files;
 - legacy compatibility: 5 passed; the stored CATL evidence-only response and
   hash replayed deterministically before and after product rows were present.
@@ -298,6 +298,20 @@ labels and no staging or rollback volume remained. Unit-level failure injection
 also replaced the source bundle after validation: restore continued from its
 private `0700`, no-follow snapshot rather than the changed source. Streaming
 tar validation enforces compressed-size, member-count, single-file, total-size
-and compression-ratio limits. The third project, network, volumes and unique
-images were removed; its temporary backup and generated environment file were
-moved to Trash, and existing Docker runtimes remained unchanged.
+and compression-ratio limits. A final interruption test moved operation-volume
+naming entirely to Docker and proved that cleanup by a 128-bit operation UUID
+removes a just-created volume even before its name returns to the restore
+runner, without removing a volume from another operation. The third project,
+network, volumes and unique images were removed; its temporary backup and
+generated environment file were moved to Trash, and existing Docker runtimes
+remained unchanged.
+
+A fourth disposable `codex-task11-nonce-20260825` project revalidated the
+final operation-volume protocol against Docker itself. Restore used
+Docker-generated anonymous names carrying a separate 128-bit operation UUID,
+returned to Alembic `0065`, reinstalled the same foundation hash and preserved
+the backed-up file. No operation-labelled volume remained afterward. Its one
+container, network, two uniquely named persistent volumes and unique backend
+image were then removed; the temporary backup was moved to Trash and the test
+environment file was removed. Existing Docker projects and volumes were not
+changed.

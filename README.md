@@ -109,7 +109,8 @@ scripts/one-click-runtime.sh rollback
 文件处于同一个静止边界。备份目标必须是尚不存在的具体绝对目录。恢复会先校验精确的
 三件套、SHA-256 和 tar 路径，再在隔离的暂存数据库与文件卷中验证迁移、身份 fixture
 和研究版本回放，通过后才切换。恢复只会写入带有当前 Compose project/logical-volume
-标签的文件卷，临时卷也必须带有本次恢复的 project、operation 和 purpose 标签：
+标签的文件卷；临时卷由 Docker 随机命名，并以本次恢复的高熵 operation UUID 加上
+project、purpose 标签限定清理范围：
 
 ```bash
 scripts/one-click-runtime.sh backup /absolute/path/to/new-backup

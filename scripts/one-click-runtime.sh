@@ -189,41 +189,44 @@ validate_operation_volume() {
   [[ "$actual" == "$expected" ]]
 }
 
-require_operation_volume_absent() {
-  local volume_name="$1"
-  if docker volume inspect "$volume_name" >/dev/null 2>&1; then
-    die "refusing to reuse existing restore operation volume: $volume_name"
-  fi
-}
-
 create_operation_volume() {
-  local volume_name="$1"
-  local project_name="$2"
-  local operation="$3"
-  local purpose="$4"
-  docker volume create \
+  local project_name="$1"
+  local operation="$2"
+  local purpose="$3"
+  local volume_name
+  volume_name="$(docker volume create \
     --label "${OPERATION_PROJECT_LABEL}=${project_name}" \
     --label "${OPERATION_ID_LABEL}=${operation}" \
-    --label "${OPERATION_PURPOSE_LABEL}=${purpose}" \
-    "$volume_name" >/dev/null
+    --label "${OPERATION_PURPOSE_LABEL}=${purpose}")" \
+    || die "unable to create restore operation volume"
   validate_operation_volume "$volume_name" "$project_name" "$operation" "$purpose" \
     || die "created restore operation volume has unexpected identity"
+  printf '%s' "$volume_name"
 }
 
-remove_operation_volume() {
-  local volume_name="$1"
-  local project_name="$2"
-  local operation="$3"
-  local purpose="$4"
-  local actual expected
-  expected="${volume_name}|||${project_name}|${operation}|${purpose}"
-  actual="$(volume_identity "$volume_name" 2>/dev/null)" || return 0
-  if [[ "$actual" != "$expected" ]]; then
-    printf 'one-click runtime: refusing to remove operation volume with unexpected identity: %s\n' \
-      "$volume_name" >&2
+remove_operation_volumes() {
+  local project_name="$1"
+  local operation="$2"
+  local purpose="$3"
+  local volume_names volume_name failed="false"
+  if ! volume_names="$(docker volume ls --quiet \
+    --filter "label=${OPERATION_PROJECT_LABEL}=${project_name}" \
+    --filter "label=${OPERATION_ID_LABEL}=${operation}" \
+    --filter "label=${OPERATION_PURPOSE_LABEL}=${purpose}")"; then
+    printf 'one-click runtime: unable to enumerate restore operation volumes for cleanup\n' >&2
     return 1
   fi
-  docker volume rm "$volume_name" >/dev/null
+  while IFS= read -r volume_name; do
+    [[ -n "$volume_name" ]] || continue
+    if ! validate_operation_volume "$volume_name" "$project_name" "$operation" "$purpose"; then
+      printf 'one-click runtime: refusing to remove operation volume with unexpected identity: %s\n' \
+        "$volume_name" >&2
+      failed="true"
+      continue
+    fi
+    docker volume rm "$volume_name" >/dev/null || failed="true"
+  done <<< "$volume_names"
+  [[ "$failed" != "true" ]]
 }
 
 gildata_token_is_configured() {
@@ -1013,20 +1016,15 @@ restore_runtime() (
   set -euo pipefail
   local backup_dir="$1"
   local private_backup="" private_backup_parent=""
-  local database_user="" database_name="" suffix="" staging_database="" old_database=""
+  local database_user="" database_name="" suffix="" operation_id="" staging_database="" old_database=""
   local project_name="" files_volume="" staging_volume="" rollback_volume=""
   local database_swapped="false"
   local preserve_recovery_state="false"
   local database_state="pre_cutover"
-  local staging_volume_tracked="false"
-  local rollback_volume_tracked="false"
 
   cleanup_restore() {
     if [[ -n "$private_backup" ]]; then
       rm -rf -- "$private_backup"
-    fi
-    if [[ -z "$staging_volume" ]]; then
-      return 0
     fi
     if [[ "$preserve_recovery_state" == "true" ]]; then
       print_restore_recovery_instructions \
@@ -1035,13 +1033,11 @@ restore_runtime() (
         "$files_volume" "$staging_volume" "$rollback_volume"
       return 0
     fi
-    if [[ "$staging_volume_tracked" == "true" ]]; then
-      remove_operation_volume \
-        "$staging_volume" "$project_name" "$suffix" restore-staging || true
-    fi
-    if [[ "$rollback_volume_tracked" == "true" ]]; then
-      remove_operation_volume \
-        "$rollback_volume" "$project_name" "$suffix" restore-rollback || true
+    if [[ -n "$operation_id" && -n "$project_name" ]]; then
+      remove_operation_volumes \
+        "$project_name" "$operation_id" restore-staging || true
+      remove_operation_volumes \
+        "$project_name" "$operation_id" restore-rollback || true
     fi
     if [[ "$database_swapped" != "true" && -n "$staging_database" ]]; then
       compose exec -T postgres dropdb --if-exists -U "$database_user" "$staging_database" >/dev/null 2>&1 || true
@@ -1067,23 +1063,20 @@ restore_runtime() (
   [[ "$database_name" =~ ^[A-Za-z_][A-Za-z0-9_]{0,39}$ ]] \
     || die "one-click database name is unsafe for restore"
   suffix="$(openssl rand -hex 4)"
+  operation_id="$(openssl rand -hex 16)"
   staging_database="${database_name}_restore_${suffix}"
   old_database="${database_name}_before_${suffix}"
   files_volume="$(files_volume_name)"
   project_name="$(compose_project_name)"
-  staging_volume="${files_volume}-restore-${suffix}"
-  rollback_volume="${files_volume}-before-${suffix}"
   validate_live_files_volume "$files_volume" "$project_name"
 
   compose exec -T postgres createdb -U "$database_user" "$staging_database"
   compose exec -T postgres pg_restore --exit-on-error --no-owner --no-privileges \
     -U "$database_user" -d "$staging_database" < "$private_backup/postgres.dump"
-  require_operation_volume_absent "$staging_volume"
-  staging_volume_tracked="true"
-  create_operation_volume \
-    "$staging_volume" "$project_name" "$suffix" restore-staging
+  staging_volume="$(create_operation_volume \
+    "$project_name" "$operation_id" restore-staging)"
   validate_operation_volume \
-    "$staging_volume" "$project_name" "$suffix" restore-staging \
+    "$staging_volume" "$project_name" "$operation_id" restore-staging \
     || die "restore staging volume identity changed before extraction"
   docker run --rm \
     -v "$staging_volume:/target" \
@@ -1097,13 +1090,11 @@ restore_runtime() (
   ONE_CLICK_POSTGRES_DB="$staging_database" ONE_CLICK_FILES_VOLUME="$staging_volume" \
     compose run --rm --no-deps api python -m app.scripts.verify_underwriting_revision_manifests
 
-  require_operation_volume_absent "$rollback_volume"
-  rollback_volume_tracked="true"
-  create_operation_volume \
-    "$rollback_volume" "$project_name" "$suffix" restore-rollback
+  rollback_volume="$(create_operation_volume \
+    "$project_name" "$operation_id" restore-rollback)"
   validate_live_files_volume "$files_volume" "$project_name"
   validate_operation_volume \
-    "$rollback_volume" "$project_name" "$suffix" restore-rollback \
+    "$rollback_volume" "$project_name" "$operation_id" restore-rollback \
     || die "restore rollback volume identity changed before snapshot"
   copy_volume_contents "$files_volume" "$rollback_volume"
   preserve_recovery_state="true"
@@ -1128,14 +1119,14 @@ restore_runtime() (
   database_swapped="true"
   validate_live_files_volume "$files_volume" "$project_name"
   validate_operation_volume \
-    "$staging_volume" "$project_name" "$suffix" restore-staging \
+    "$staging_volume" "$project_name" "$operation_id" restore-staging \
     || die "restore staging volume identity changed before activation"
   if ! copy_volume_contents "$staging_volume" "$files_volume"; then
     local files_rollback_succeeded="true"
     local database_rollback_succeeded="true"
     if ! validate_live_files_volume "$files_volume" "$project_name" \
       || ! validate_operation_volume \
-        "$rollback_volume" "$project_name" "$suffix" restore-rollback \
+        "$rollback_volume" "$project_name" "$operation_id" restore-rollback \
       || ! copy_volume_contents "$rollback_volume" "$files_volume"; then
       files_rollback_succeeded="false"
     fi

@@ -79,18 +79,40 @@ if [[ "$1 $2" == "volume inspect" ]]; then
   exit 0
 fi
 if [[ "$1 $2" == "volume create" ]]; then
-  name="${{!#}}"
-  case "$name" in
-    *-restore-*) suffix="${{name##*-restore-}}"; purpose=restore-staging ;;
-    *-before-*) suffix="${{name##*-before-}}"; purpose=restore-rollback ;;
-    *) exit 91 ;;
-  esac
-  printf '%s\\n' "$name|||test-project|$suffix|$purpose" > "$VOLUME_STATE/$name"
+  operation=""
+  project=""
+  purpose=""
+  while [[ "$#" -gt 0 ]]; do
+    if [[ "$1" == "--label" ]]; then
+      shift
+      case "$1" in
+        com.fund-engine.one-click.project=*) project="${{1#*=}}" ;;
+        com.fund-engine.one-click.operation=*) operation="${{1#*=}}" ;;
+        com.fund-engine.one-click.purpose=*) purpose="${{1#*=}}" ;;
+      esac
+    fi
+    shift
+  done
+  [[ -n "$operation" && -n "$project" && -n "$purpose" ]] || exit 91
+  name="generated-$purpose-$operation-$RANDOM"
+  printf '%s\\n' "$name|||$project|$operation|$purpose" > "$VOLUME_STATE/$name"
   if [[ "${{INTERRUPT_OPERATION_CREATE:-}}" == "$purpose" ]]; then
     kill -TERM "$PPID"
     sleep 0.1
   fi
   printf '%s\\n' "$name"
+  exit 0
+fi
+if [[ "$1 $2" == "volume ls" ]]; then
+  filters="$*"
+  for state in "$VOLUME_STATE"/*; do
+    [[ -e "$state" ]] || continue
+    IFS='|' read -r stored_name _ _ stored_project stored_operation stored_purpose < "$state"
+    [[ "$filters" == *"label=com.fund-engine.one-click.project=$stored_project"* ]] || continue
+    [[ "$filters" == *"label=com.fund-engine.one-click.operation=$stored_operation"* ]] || continue
+    [[ "$filters" == *"label=com.fund-engine.one-click.purpose=$stored_purpose"* ]] || continue
+    printf '%s\\n' "$stored_name"
+  done
   exit 0
 fi
 if [[ "$1 $2" == "volume rm" ]]; then
@@ -607,7 +629,7 @@ def test_restore_refuses_foreign_live_files_volume_before_mutation(
     assert "volume rm" not in commands
 
 
-def test_restore_never_reuses_or_removes_existing_foreign_operation_volume(
+def test_restore_uses_docker_generated_operation_volumes(
     tmp_path: Path,
 ) -> None:
     script = _runtime_copy(tmp_path)
@@ -619,15 +641,8 @@ def test_restore_never_reuses_or_removes_existing_foreign_operation_volume(
     volume_state = tmp_path / "volumes"
     volume_state.mkdir()
     docker = fake_bin / "docker"
-    docker.write_text(
-        _stateful_volume_docker(
-            "  *'volume inspect fund-engine-one-click-files-restore-deadbeef'*) printf '%s\\n' 'foreign-volume'; exit 0 ;;"
-        )
-    )
+    docker.write_text(_stateful_volume_docker())
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
-    openssl = fake_bin / "openssl"
-    openssl.write_text("#!/bin/sh\nprintf 'deadbeef\\n'\n")
-    openssl.chmod(openssl.stat().st_mode | stat.S_IXUSR)
 
     completed = subprocess.run(
         [script, "restore", str(backup)],
@@ -641,15 +656,20 @@ def test_restore_never_reuses_or_removes_existing_foreign_operation_volume(
         },
     )
 
-    assert completed.returncode != 0
-    assert "refusing to reuse existing restore operation volume" in completed.stderr
+    assert completed.returncode == 0, completed.stderr
     commands = log.read_text()
-    assert "volume create" not in commands
-    assert "volume rm" not in commands
-    assert ":/target" not in commands
+    create_commands = [
+        line for line in commands.splitlines() if line.startswith("volume create ")
+    ]
+    assert len(create_commands) == 2
+    assert all("com.fund-engine.one-click.operation=" in line for line in create_commands)
+    assert all("fund-engine-one-click-files-restore-" not in line for line in create_commands)
+    assert "generated-restore-staging-" in commands
+    assert "generated-restore-rollback-" in commands
+    assert not tuple(volume_state.iterdir())
 
 
-def test_restore_never_removes_preexisting_exact_label_operation_volume(
+def test_restore_cleanup_is_scoped_to_current_operation_nonce(
     tmp_path: Path,
 ) -> None:
     script = _runtime_copy(tmp_path)
@@ -660,15 +680,14 @@ def test_restore_never_removes_preexisting_exact_label_operation_volume(
     log = tmp_path / "docker.log"
     volume_state = tmp_path / "volumes"
     volume_state.mkdir()
-    existing_name = "fund-engine-one-click-files-restore-deadbeef"
-    existing_identity = f"{existing_name}|||test-project|deadbeef|restore-staging\n"
+    existing_name = "preexisting-unrelated-operation-volume"
+    existing_identity = (
+        f"{existing_name}|||test-project|different-operation|restore-staging\n"
+    )
     (volume_state / existing_name).write_text(existing_identity)
     docker = fake_bin / "docker"
     docker.write_text(_stateful_volume_docker())
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
-    openssl = fake_bin / "openssl"
-    openssl.write_text("#!/bin/sh\nprintf 'deadbeef\\n'\n")
-    openssl.chmod(openssl.stat().st_mode | stat.S_IXUSR)
 
     completed = subprocess.run(
         [script, "restore", str(backup)],
@@ -682,8 +701,7 @@ def test_restore_never_removes_preexisting_exact_label_operation_volume(
         },
     )
 
-    assert completed.returncode != 0
-    assert "refusing to reuse existing restore operation volume" in completed.stderr
+    assert completed.returncode == 0, completed.stderr
     assert (volume_state / existing_name).read_text() == existing_identity
     assert f"volume rm {existing_name}" not in log.read_text()
 
@@ -718,7 +736,7 @@ def test_restore_interrupt_during_operation_volume_create_cleans_owned_volume(
 
     assert completed.returncode != 0
     assert not tuple(volume_state.iterdir())
-    assert "volume rm fund-engine-one-click-files-restore-" in log.read_text()
+    assert "volume rm generated-restore-staging-" in log.read_text()
 
 
 def test_backup_checks_stopped_services_before_dump(tmp_path: Path) -> None:
@@ -834,8 +852,8 @@ def test_restore_preserves_recovery_artifacts_when_compensation_fails(
     docker = fake_bin / "docker"
     docker.write_text(
         _stateful_volume_docker(
-            "  *'run --rm -v fund-engine-one-click-files-restore-'*':/source:ro'*) exit 41 ;;\n"
-            "  *'run --rm -v fund-engine-one-click-files-before-'*':/source:ro'*) exit 42 ;;"
+            "  *'run --rm -v generated-restore-staging-'*':/source:ro'*) exit 41 ;;\n"
+            "  *'run --rm -v generated-restore-rollback-'*':/source:ro'*) exit 42 ;;"
         )
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
