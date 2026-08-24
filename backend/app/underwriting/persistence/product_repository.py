@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -547,6 +547,13 @@ class ProductRepository:
         ),
     ) -> UnderwritingWorkspaceDraft:
         """Atomically update a draft; publication may also reset its base."""
+        if (
+            not isinstance(updated_at, datetime)
+            or updated_at.tzinfo is None
+            or updated_at.utcoffset() is None
+        ):
+            raise ValidationError("updated_at must be a timezone-aware datetime")
+        normalized_updated_at = updated_at.astimezone(UTC)
         if base_revision_id is not _UNCHANGED_BASE_REVISION:
             if base_revision_id is not None and type(base_revision_id) is not UUID:
                 raise ValidationError(
@@ -563,7 +570,7 @@ class ProductRepository:
         values: dict[str, object] = {
             "content": deepcopy(content),
             "lock_version": expected_lock_version + 1,
-            "updated_at": updated_at,
+            "updated_at": normalized_updated_at,
         }
         if base_revision_id is not _UNCHANGED_BASE_REVISION:
             values["base_revision_id"] = base_revision_id
@@ -572,8 +579,8 @@ class ProductRepository:
             .where(
                 UnderwritingWorkspaceDraft.project_id == project_id,
                 UnderwritingWorkspaceDraft.lock_version == expected_lock_version,
-                UnderwritingWorkspaceDraft.created_at <= updated_at,
-                UnderwritingWorkspaceDraft.updated_at <= updated_at,
+                UnderwritingWorkspaceDraft.created_at <= normalized_updated_at,
+                UnderwritingWorkspaceDraft.updated_at <= normalized_updated_at,
             )
             .values(**values)
             .execution_options(synchronize_session=False)

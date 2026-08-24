@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 import inspect
 import sqlite3
 from uuid import UUID, uuid4
@@ -490,6 +490,65 @@ def test_repository_cas_rejects_an_older_timestamp_even_with_current_lock(
     assert current is not None
     assert current.lock_version == 1
     assert current.updated_at == NOW
+
+
+def test_repository_cas_normalizes_dst_fold_before_sqlite_comparison(session) -> None:
+    zone = ZoneInfo("America/New_York")
+    existing_instant = datetime(2026, 11, 1, 5, 30, tzinfo=UTC)
+    later_fold_instant = datetime(2026, 11, 1, 1, 15, tzinfo=zone, fold=1)
+    project = _project(session)
+    created = WorkspaceDraftService(session, now=lambda: existing_instant).create(
+        project.id
+    )
+
+    saved = ProductRepository(session).compare_and_swap_workspace_draft(
+        project_id=project.id,
+        expected_lock_version=created.lock_version,
+        content=created.content.model_dump(mode="json"),
+        updated_at=later_fold_instant,
+    )
+
+    assert saved.lock_version == 2
+    assert WorkspaceDraftService._stored_utc(saved.updated_at) == datetime(
+        2026, 11, 1, 6, 15, tzinfo=UTC
+    )
+
+
+def test_repository_cas_accepts_the_same_instant_with_another_offset(session) -> None:
+    instant = datetime(2026, 11, 1, 6, 15, tzinfo=UTC)
+    same_instant = datetime(2026, 11, 1, 8, 15, tzinfo=timezone(timedelta(hours=2)))
+    project = _project(session)
+    created = WorkspaceDraftService(session, now=lambda: instant).create(project.id)
+
+    saved = ProductRepository(session).compare_and_swap_workspace_draft(
+        project_id=project.id,
+        expected_lock_version=created.lock_version,
+        content=created.content.model_dump(mode="json"),
+        updated_at=same_instant,
+    )
+
+    assert saved.lock_version == 2
+    assert WorkspaceDraftService._stored_utc(saved.updated_at) == instant
+
+
+@pytest.mark.parametrize(
+    "invalid", [datetime(2026, 11, 1, 6, 15), "2026-11-01T06:15:00Z", True, None]
+)
+def test_repository_cas_rejects_non_aware_update_times(
+    session, service, invalid
+) -> None:
+    project = _project(session)
+    created = service.create(project.id)
+
+    with pytest.raises(ValidationError, match="updated_at.*timezone-aware"):
+        ProductRepository(session).compare_and_swap_workspace_draft(
+            project_id=project.id,
+            expected_lock_version=created.lock_version,
+            content=created.content.model_dump(mode="json"),
+            updated_at=invalid,
+        )
+
+    assert session.scalar(select(UnderwritingResearchProject.id)) is not None
 
 
 def test_service_results_do_not_alias_input_or_expose_mutable_content(
