@@ -1,14 +1,16 @@
-"""Authenticated identity-only CATL and Alphabet foundation fixture."""
+"""Trusted bundled and checksum-validated custom identity foundation fixtures."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from decimal import Decimal, InvalidOperation
+import hashlib
 import json
 from pathlib import Path
 from types import MappingProxyType
 from collections.abc import Mapping
+import unicodedata
 
 from app.models.ledger import ValidationError
 from app.underwriting.services.kernel import canonical_hash
@@ -16,6 +18,10 @@ from app.underwriting.services.kernel import canonical_hash
 
 _ROOT = Path(__file__).resolve().parent
 _SCHEMA_VERSION = "product.foundation-identities.v1"
+# SHA-256 over the exact bundled UTF-8 bytes, independent of its self-declared hash.
+BUNDLED_MANIFEST_CONTENT_SHA256 = (
+    "dc772d7f2b57c4f7583547424299714b2e030f4e5b01241921b19803d0451164"
+)
 _TOP_LEVEL_KEYS = frozenset(
     {"schema_version", "content_hash", "companies", "securities", "rights"}
 )
@@ -44,9 +50,26 @@ def _exact_object(value: object, keys: frozenset[str], field: str) -> dict:
 
 
 def _text(value: object, field: str) -> str:
-    if not isinstance(value, str) or not (normalized := value.strip()):
+    if not isinstance(value, str) or not value:
         raise ValidationError(f"product foundation {field} must not be empty")
-    return normalized
+    if value != value.strip():
+        raise ValidationError(
+            f"product foundation {field} must not contain leading or trailing whitespace"
+        )
+    if unicodedata.normalize("NFC", value) != value:
+        raise ValidationError(f"product foundation {field} must use NFC text")
+    return value
+
+
+def _strict_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValidationError(
+                f"product foundation manifest contains duplicate key {key!r}"
+            )
+        value[key] = item
+    return value
 
 
 def _timestamp(value: object, field: str) -> datetime:
@@ -123,10 +146,23 @@ def _sequence(value: object, field: str) -> list:
 def load_product_foundation_fixture(
     manifest_path: Path | None = None,
 ) -> ProductFoundationFixture:
+    """Load the trusted bundled fixture or a checksum-validated custom import."""
+
     path = manifest_path or (_ROOT / "manifest.json")
     try:
-        raw_value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        manifest_bytes = path.read_bytes()
+        if (
+            manifest_path is None
+            and hashlib.sha256(manifest_bytes).hexdigest()
+            != BUNDLED_MANIFEST_CONTENT_SHA256
+        ):
+            raise ValidationError(
+                "product foundation bundled manifest trusted content digest mismatch"
+            )
+        raw_value = json.loads(
+            manifest_bytes.decode("utf-8"), object_pairs_hook=_strict_json_object
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValidationError("product foundation manifest is unreadable") from exc
     raw = _exact_object(raw_value, _TOP_LEVEL_KEYS, "manifest")
     if raw["schema_version"] != _SCHEMA_VERSION:
@@ -186,6 +222,10 @@ def load_product_foundation_fixture(
             raise ValidationError(
                 "product foundation rights.effective_from must be YYYY-MM-DD"
             ) from exc
+        if effective_date.isoformat() != date_text:
+            raise ValidationError(
+                "product foundation rights.effective_from must be YYYY-MM-DD"
+            )
         effective_from = datetime.combine(
             effective_date, time.min, tzinfo=security.effective_from.tzinfo
         ).astimezone(UTC)
@@ -227,10 +267,13 @@ def load_product_foundation_fixture(
 
 
 def validate_product_foundation_fixture(value: ProductFoundationFixture) -> None:
-    """Reject detached or forged fixture values before persistence."""
+    """Reject values detached from their trusted or checksum-validated manifest."""
     if type(value) is not ProductFoundationFixture:
         raise ValidationError("fixture must be a ProductFoundationFixture")
-    authenticated = load_product_foundation_fixture(value.manifest_path)
+    bundled_path = (_ROOT / "manifest.json").resolve()
+    validated_import = load_product_foundation_fixture(
+        None if value.manifest_path.resolve() == bundled_path else value.manifest_path
+    )
     if (
         value.schema_version,
         value.content_hash,
@@ -238,10 +281,13 @@ def validate_product_foundation_fixture(value: ProductFoundationFixture) -> None
         value.securities,
         value.rights,
     ) != (
-        authenticated.schema_version,
-        authenticated.content_hash,
-        authenticated.companies,
-        authenticated.securities,
-        authenticated.rights,
+        validated_import.schema_version,
+        validated_import.content_hash,
+        validated_import.companies,
+        validated_import.securities,
+        validated_import.rights,
     ):
-        raise ValidationError("product foundation content hash authentication failed")
+        raise ValidationError(
+            "product foundation content hash no longer matches its "
+            "checksum-validated manifest"
+        )

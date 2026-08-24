@@ -6,12 +6,14 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+import hashlib
 from types import MappingProxyType
 
-from sqlalchemy import or_, select
+from sqlalchemy import bindparam, func, or_, select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from app.models.ledger import ValidationError
+from app.models.ledger import ConflictError, ValidationError
 from app.underwriting.domain.product_contracts import SecurityRightsInput
 from app.underwriting.fixtures.product_foundation import (
     ProductFoundationFixture,
@@ -24,6 +26,7 @@ from app.underwriting.persistence.models import (
 from app.underwriting.persistence.product_models import (
     UnderwritingObjectIdentityVersion,
     UnderwritingSecurityRightsVersion,
+    UnderwritingWorkspaceDraft,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.services.kernel import canonical_hash
@@ -32,6 +35,13 @@ from app.underwriting.services.market_snapshots import (
     security_rights_hash,
 )
 from app.underwriting.services.product_project import ResearchProjectService
+
+
+_FOUNDATION_LOAD_LOCK_ID = int.from_bytes(
+    hashlib.sha256(b"fund-engine:product-foundation-load:v1").digest()[:8],
+    byteorder="big",
+    signed=True,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +65,50 @@ class ProductFoundationFixtureService:
         self._projects = ResearchProjectService(session, now=now)
         self._market = MarketSnapshotService(session, now=now)
         self._repository = ProductRepository(session)
+
+    @staticmethod
+    def postgresql_load_lock_statement() -> tuple[object, int]:
+        """Return the stable transaction-scoped PostgreSQL fixture load lock."""
+        return (
+            select(
+                func.pg_advisory_xact_lock(
+                    bindparam(
+                        "product_foundation_load_lock_id",
+                        value=_FOUNDATION_LOAD_LOCK_ID,
+                    )
+                )
+            ),
+            _FOUNDATION_LOAD_LOCK_ID,
+        )
+
+    def _serialize_load(self) -> None:
+        """Reserve the caller-owned transaction before any fixture-state read."""
+        dialect = self._session.get_bind().dialect.name
+        if dialect == "postgresql":
+            statement, _ = self.postgresql_load_lock_statement()
+            self._session.execute(statement)
+            return
+        if dialect != "sqlite":
+            raise RuntimeError("database dialect cannot serialize foundation loading")
+        connection = self._session.connection()
+        raw_connection = connection.connection.driver_connection
+        try:
+            if not raw_connection.in_transaction:
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+            else:
+                self._session.execute(
+                    update(UnderwritingWorkspaceDraft)
+                    .where(UnderwritingWorkspaceDraft.id.is_(None))
+                    .values(lock_version=UnderwritingWorkspaceDraft.lock_version)
+                    .execution_options(synchronize_session=False)
+                )
+        except OperationalError as exc:
+            message = str(getattr(exc, "orig", exc)).lower()
+            if "locked" in message or "busy" in message:
+                raise ConflictError(
+                    "product foundation load lock is busy; retry"
+                ) from exc
+            raise
 
     @staticmethod
     def _validate_successor_chain(rows: tuple[object, ...], label: str) -> None:
@@ -268,6 +322,7 @@ class ProductFoundationFixtureService:
 
     def load(self, fixture: ProductFoundationFixture) -> ProductFoundationImport:
         validate_product_foundation_fixture(fixture)
+        self._serialize_load()
         objects: dict[str, UnderwritingResearchObject] = {}
         identities: dict[str, object] = {}
         rights: dict[str, object] = {}
@@ -309,6 +364,7 @@ class ProductFoundationFixtureService:
                 (objects[item.company_key].id, objects[item.external_key].id)
                 for item in fixture.securities
             }
+            fixture_object_ids = [row.id for row in objects.values()]
             existing_relations = set(
                 self._session.execute(
                     select(
@@ -319,17 +375,9 @@ class ProductFoundationFixtureService:
                         == "company_has_security",
                         or_(
                             UnderwritingObjectRelation.parent_id.in_(
-                                [
-                                    objects[item.external_key].id
-                                    for item in fixture.companies
-                                ]
+                                fixture_object_ids
                             ),
-                            UnderwritingObjectRelation.child_id.in_(
-                                [
-                                    objects[item.external_key].id
-                                    for item in fixture.securities
-                                ]
-                            ),
+                            UnderwritingObjectRelation.child_id.in_(fixture_object_ids),
                         ),
                     )
                 )

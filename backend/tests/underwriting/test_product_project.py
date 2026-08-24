@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import ast
+from concurrent.futures import ThreadPoolExecutor
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from threading import Barrier
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import sessionmaker
 
-from app.models.ledger import ConflictError, ValidationError
+import app.underwriting.fixtures.product_foundation as product_foundation_fixture
+from app.models.ledger import Base, ConflictError, ValidationError
 from app.underwriting.domain.product_contracts import (
     AgendaGenerationMethod,
     AgendaGeneratorInput,
@@ -1421,6 +1426,205 @@ def test_foundation_fixture_is_idempotent_content_checked_and_contains_no_resear
         ProductFoundationFixtureService(session, now=lambda: NOW).load(forged)
 
 
+def _write_checksum_validated_manifest(tmp_path, mutate) -> Path:
+    raw = json.loads(load_product_foundation_fixture().manifest_path.read_text("utf-8"))
+    mutate(raw)
+    raw["content_hash"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "content_hash"}
+    )
+    path = tmp_path / f"custom-{uuid4()}.json"
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_foundation_manifest_rejects_duplicate_json_keys(tmp_path) -> None:
+    original = load_product_foundation_fixture().manifest_path.read_text("utf-8")
+    duplicate = original.replace(
+        '"schema_version": "product.foundation-identities.v1",',
+        '"schema_version": "product.foundation-identities.v1",\n'
+        '  "schema_version": "product.foundation-identities.v1",',
+        1,
+    )
+    path = tmp_path / "duplicate.json"
+    path.write_text(duplicate, encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="duplicate key"):
+        load_product_foundation_fixture(path)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda raw: raw["companies"][1].__setitem__(
+                "canonical_name", " Alphabet Inc."
+            ),
+            "leading or trailing whitespace",
+        ),
+        (
+            lambda raw: raw["companies"][1].__setitem__(
+                "canonical_name", "Alphabe\N{COMBINING ACUTE ACCENT}t Inc."
+            ),
+            "NFC",
+        ),
+        (
+            lambda raw: raw["rights"][0].__setitem__("effective_from", "2018-6-11"),
+            "YYYY-MM-DD",
+        ),
+    ],
+)
+def test_custom_foundation_manifest_rejects_noncanonical_text_and_dates(
+    tmp_path, mutate, message
+) -> None:
+    path = _write_checksum_validated_manifest(tmp_path, mutate)
+
+    with pytest.raises(ValidationError, match=message):
+        load_product_foundation_fixture(path)
+
+
+def test_bundled_foundation_manifest_requires_a_fixed_trusted_content_digest(
+    tmp_path, monkeypatch
+) -> None:
+    path = _write_checksum_validated_manifest(
+        tmp_path,
+        lambda raw: raw["companies"][1].__setitem__(
+            "canonical_name", "Alphabet Holdings Inc."
+        ),
+    )
+    path.rename(tmp_path / "manifest.json")
+    bundled_path = tmp_path / "manifest.json"
+    monkeypatch.setattr(product_foundation_fixture, "_ROOT", tmp_path)
+
+    with pytest.raises(ValidationError, match="trusted content digest"):
+        load_product_foundation_fixture()
+
+    custom = load_product_foundation_fixture(bundled_path)
+    assert custom.companies[1].canonical_name == "Alphabet Holdings Inc."
+
+
+def test_foundation_fixture_two_real_sqlite_sessions_converge_on_identical_roots(
+    tmp_path,
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'product-foundation-concurrency.sqlite'}",
+        future=True,
+        connect_args={"timeout": 10},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    barrier = Barrier(2)
+
+    def load_and_commit():
+        worker = sessions()
+        try:
+            barrier.wait(timeout=5)
+            loaded = ProductFoundationFixtureService(worker, now=lambda: NOW).load(
+                load_product_foundation_fixture()
+            )
+            ids = (
+                {key: row.id for key, row in loaded.objects.items()},
+                {key: row.id for key, row in loaded.identities.items()},
+                {key: row.id for key, row in loaded.rights.items()},
+            )
+            worker.commit()
+            return ids
+        except Exception as exc:  # Assertions inspect leaked concurrency failures.
+            worker.rollback()
+            return exc
+        finally:
+            worker.close()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(load_and_commit) for _ in range(2)]
+            results = tuple(future.result(timeout=20) for future in futures)
+        assert all(not isinstance(result, Exception) for result in results), results
+        assert results[0] == results[1]
+        observer = sessions()
+        try:
+            assert (
+                observer.scalar(
+                    select(func.count()).select_from(UnderwritingResearchObject)
+                )
+                == 5
+            )
+            assert (
+                observer.scalar(
+                    select(func.count()).select_from(UnderwritingObjectIdentityVersion)
+                )
+                == 5
+            )
+            assert (
+                observer.scalar(
+                    select(func.count()).select_from(UnderwritingObjectRelation)
+                )
+                == 3
+            )
+            assert (
+                observer.scalar(
+                    select(func.count()).select_from(UnderwritingSecurityRightsVersion)
+                )
+                == 3
+            )
+        finally:
+            observer.close()
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+def test_foundation_fixture_load_never_commits_the_caller_transaction(tmp_path) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'product-foundation-rollback.sqlite'}", future=True
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    worker = sessions()
+    try:
+        ProductFoundationFixtureService(worker, now=lambda: NOW).load(
+            load_product_foundation_fixture()
+        )
+        assert (
+            worker.scalar(select(func.count()).select_from(UnderwritingResearchObject))
+            == 5
+        )
+        worker.rollback()
+        observer = sessions()
+        try:
+            assert (
+                observer.scalar(
+                    select(func.count()).select_from(UnderwritingResearchObject)
+                )
+                == 0
+            )
+            assert (
+                observer.scalar(
+                    select(func.count()).select_from(UnderwritingSecurityRightsVersion)
+                )
+                == 0
+            )
+        finally:
+            observer.close()
+    finally:
+        worker.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+def test_foundation_fixture_postgres_lock_is_transaction_scoped() -> None:
+    statement, lock_id = (
+        ProductFoundationFixtureService.postgresql_load_lock_statement()
+    )
+    compiled = str(
+        statement.compile(
+            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+
+    assert "pg_advisory_xact_lock" in compiled
+    assert str(lock_id) in compiled
+
+
 def test_foundation_fixture_adopts_existing_catl_objects_and_reuses_rights(
     session,
 ) -> None:
@@ -1673,6 +1877,78 @@ def test_foundation_fixture_rejects_fixture_company_relation_to_extra_security(
     assert {
         row.external_key for row in session.scalars(select(UnderwritingResearchObject))
     } == {"CN:300750:COMPANY", "OTHER:SECURITY"}
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingObjectIdentityVersion)
+        )
+        == 0
+    )
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingSecurityRightsVersion)
+        )
+        == 0
+    )
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingObjectRelation))
+        == 1
+    )
+
+
+def test_foundation_fixture_rejects_reversed_relation_between_fixture_objects(
+    session,
+) -> None:
+    catl_company = _object(session, "company", "CN:300750:COMPANY", "宁德时代")
+    catl_security = _object(session, "security", "SZSE:300750", "宁德时代 A 股")
+    _relation(
+        session,
+        catl_security.id,
+        catl_company.id,
+        "company_has_security",
+    )
+
+    with pytest.raises(ValidationError, match="relation conflict"):
+        ProductFoundationFixtureService(session, now=lambda: NOW).load(
+            load_product_foundation_fixture()
+        )
+
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingObjectIdentityVersion)
+        )
+        == 0
+    )
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingSecurityRightsVersion)
+        )
+        == 0
+    )
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingObjectRelation))
+        == 1
+    )
+
+
+def test_foundation_fixture_rejects_external_parent_for_fixture_company(
+    session,
+) -> None:
+    catl_company = _object(session, "company", "CN:300750:COMPANY", "宁德时代")
+    external_security = _object(
+        session, "security", "EXTERNAL:SECURITY", "External Security"
+    )
+    _relation(
+        session,
+        external_security.id,
+        catl_company.id,
+        "company_has_security",
+    )
+
+    with pytest.raises(ValidationError, match="relation conflict"):
+        ProductFoundationFixtureService(session, now=lambda: NOW).load(
+            load_product_foundation_fixture()
+        )
+
     assert (
         session.scalar(
             select(func.count()).select_from(UnderwritingObjectIdentityVersion)
