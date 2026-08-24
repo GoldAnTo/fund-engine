@@ -250,6 +250,7 @@ git commit -m "feat: define investment research product contracts"
 - Create: `backend/app/underwriting/persistence/product_models.py`
 - Modify: `backend/app/underwriting/persistence/models.py`
 - Modify: `backend/app/underwriting/persistence/__init__.py`
+- Modify: `backend/app/models/ledger.py`
 - Modify: `backend/tests/underwriting/test_kernel_persistence.py`
 - Modify: `backend/tests/underwriting/test_kernel_postgres.py`
 - Create: `backend/tests/underwriting/test_product_persistence.py`
@@ -274,7 +275,7 @@ PRODUCT_TABLES = {
 }
 ```
 
-Assert every table except `uw_workspace_drafts` is registered in `IMMUTABLE_TABLES`; drafts must allow controlled UPDATE but reject DELETE through the service contract.
+Assert every table except `uw_workspace_drafts` is registered in `IMMUTABLE_TABLES`; register drafts in a separate delete-protected set so controlled optimistic-lock UPDATE remains possible but application and PostgreSQL paths reject DELETE.
 
 - [ ] **Step 2: Confirm RED.**
 
@@ -397,7 +398,7 @@ pytest -q tests/underwriting/test_kernel_postgres.py -k 0065
 Expected: SQLite tests PASS; PostgreSQL test PASS when `TEST_DATABASE_URL` exists, otherwise marked skipped by `pg_only`.
 
 ```bash
-git add backend/alembic/versions/0065_investment_research_product_foundation.py backend/app/underwriting/persistence backend/tests/underwriting/test_product_persistence.py backend/tests/underwriting/test_kernel_persistence.py backend/tests/underwriting/test_kernel_postgres.py
+git add backend/alembic/versions/0065_investment_research_product_foundation.py backend/app/models/ledger.py backend/app/underwriting/persistence backend/tests/underwriting/test_product_persistence.py backend/tests/underwriting/test_kernel_persistence.py backend/tests/underwriting/test_kernel_postgres.py
 git commit -m "feat: persist investment research product foundation"
 ```
 
