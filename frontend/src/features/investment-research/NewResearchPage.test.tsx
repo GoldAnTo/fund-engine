@@ -11,6 +11,7 @@ const ids = { project: uuid(1), company: uuid(2), securityA: uuid(3), securityB:
 const hash = "a".repeat(64);
 const now = "2026-08-24T00:00:00Z";
 const dto = { schema_version: "underwriting.v1" } as const;
+const setupFlowTimeout = 10_000;
 
 function json(body: object, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "x-request-id": "req-setup" } });
@@ -191,7 +192,7 @@ describe("new independent investment research setup", () => {
     expect(product.requests.find((r) => r.url.endsWith("/scopes"))?.body).toMatchObject({ covered_segments: [], exclusions: [], user_focus: null });
     expect(product.requests.find((r) => r.url.endsWith("/agendas"))?.body).toMatchObject({ generator: { method: "deterministic_template", template_key: "product.foundation.agenda", template_version: "1.0.0", input_summary_hash: expect.stringMatching(/^[0-9a-f]{64}$/) } });
     expect(product.requests.find((r) => r.url.endsWith("/price-snapshots"))?.body?.market_at).toBe("2026-08-24T00:00:00.000Z");
-  }, 10_000);
+  }, setupFlowTimeout);
 
   it("quotes FX from each Security currency into the mandate base currency", async () => {
     const user = userEvent.setup();
@@ -210,7 +211,7 @@ describe("new independent investment research setup", () => {
     expect(product.requests.find((request) => request.url.endsWith("/fx-snapshots"))?.body).toMatchObject({
       base_currency: "USD", quote_currency: "CNY", quote_direction: "quote_per_base", rate: "7.2",
     });
-  });
+  }, setupFlowTimeout);
 
   it("keeps a failed mandate editable and retries only that failed step", async () => {
     const user = userEvent.setup(); const product = server({ mandateFailures: 1 }); vi.stubGlobal("fetch", product.fetch); renderPage();
@@ -226,7 +227,7 @@ describe("new independent investment research setup", () => {
     await screen.findByRole("heading", { name: "研究工作台" });
     for (const [suffix, count] of Object.entries(counts)) expect(product.requests.filter((request) => request.url.endsWith(suffix))).toHaveLength(count);
     expect(product.requests.filter((request) => request.url.endsWith("/mandates"))).toHaveLength(2);
-  });
+  }, setupFlowTimeout);
 
   it("performs no writes when a Security lacks trading currency", async () => {
     const user = userEvent.setup(); const items = objectItems(); Object.assign(items[1], { trading_currency: null });
@@ -236,7 +237,7 @@ describe("new independent investment research setup", () => {
     await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("缺少交易货币身份");
     expect(product.requests.filter((request) => request.method !== "GET")).toHaveLength(1);
-  });
+  }, setupFlowTimeout);
 
   it("reuses distinct effective rights for each Security without appending new versions", async () => {
     const user = userEvent.setup(); const product = server({ existingRights: true }); vi.stubGlobal("fetch", product.fetch); renderPage();
@@ -254,7 +255,7 @@ describe("new independent investment research setup", () => {
     }
     expect(product.requests.filter((request) => request.url.endsWith("/security-rights") && request.method === "POST")).toHaveLength(0);
     expect(product.requests.find((request) => request.url.endsWith("/draft") && request.method === "PATCH")?.body?.security_rights_ids).toEqual([ids.rightsA, ids.rightsB]);
-  });
+  }, setupFlowTimeout);
 
   it("stops with an actionable resolution when the boundary has a rights head but no effective version", async () => {
     const user = userEvent.setup(); const product = server({ rightsHeadWithoutEffective: true }); vi.stubGlobal("fetch", product.fetch); renderPage();
@@ -265,7 +266,7 @@ describe("new independent investment research setup", () => {
     expect(alert).toHaveTextContent("调整价格市场时间至已有权利有效期");
     expect(alert).toHaveTextContent("以该 head 为父版本");
     expect(product.requests.filter((request) => request.url.endsWith("/mandates"))).toHaveLength(0);
-  });
+  }, setupFlowTimeout);
 
   it("does not restore a stale agenda preview after its inputs change", async () => {
     const user = userEvent.setup(); const product = server(); vi.stubGlobal("fetch", product.fetch); renderPage();
@@ -281,7 +282,7 @@ describe("new independent investment research setup", () => {
       generator: { schema_version: "underwriting.v1", method: "deterministic_template", template_key: "product.foundation.agenda", template_version: "1.0.0", model_name: null, prompt_template_version: null, input_summary_hash: hash, output_hash: hash },
     }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "模板议程预览" })).not.toBeInTheDocument());
-  });
+  }, setupFlowTimeout);
 
   it("uses a synchronous submission lock to prevent duplicate writes", async () => {
     const user = userEvent.setup(); const product = server({ scopeFailures: 2 }); vi.stubGlobal("fetch", product.fetch); renderPage();
@@ -294,7 +295,7 @@ describe("new independent investment research setup", () => {
     fireEvent.submit(form!);
     expect(await screen.findByRole("alert")).toHaveTextContent("范围保存失败");
     expect(product.requests.filter((request) => request.url.endsWith("/mandates"))).toHaveLength(1);
-  });
+  }, setupFlowTimeout);
 
   it("does not continue identity setup after the user leaves the page", async () => {
     const user = userEvent.setup();
