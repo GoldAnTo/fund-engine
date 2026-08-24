@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -1400,6 +1401,17 @@ def test_foundation_fixture_is_idempotent_content_checked_and_contains_no_resear
     manifest_path.write_text(original.replace("Class C", "Class B"), encoding="utf-8")
     with pytest.raises(ValidationError, match="content hash"):
         load_product_foundation_fixture(manifest_path)
+
+    shifted_manifest = json.loads(original)
+    shifted_manifest["rights"][0]["effective_from"] = "2018-06-12"
+    shifted_manifest["content_hash"] = canonical_hash(
+        {key: value for key, value in shifted_manifest.items() if key != "content_hash"}
+    )
+    manifest_path.write_text(
+        json.dumps(shifted_manifest, ensure_ascii=False), encoding="utf-8"
+    )
+    shifted = load_product_foundation_fixture(manifest_path)
+    assert shifted.rights[0].effective_from == datetime(2018, 6, 11, 16, tzinfo=UTC)
 
     forged = load_product_foundation_fixture()
     object.__setattr__(forged, "content_hash", "b" * 64)

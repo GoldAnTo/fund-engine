@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
@@ -59,7 +59,7 @@ def _timestamp(value: object, field: str) -> datetime:
         ) from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValidationError(f"product foundation {field} must be timezone-aware")
-    return parsed.astimezone(UTC)
+    return parsed
 
 
 def _decimal(value: object, field: str, *, positive: bool) -> Decimal:
@@ -181,12 +181,18 @@ def load_product_foundation_fixture(
             )
         date_text = _text(item["effective_from"], "rights.effective_from")
         try:
-            datetime.strptime(date_text, "%Y-%m-%d")
+            effective_date = datetime.strptime(date_text, "%Y-%m-%d").date()
         except ValueError as exc:
             raise ValidationError(
                 "product foundation rights.effective_from must be YYYY-MM-DD"
             ) from exc
-        # Rights start at the same listing instant encoded by the Security identity.
+        effective_from = datetime.combine(
+            effective_date, time.min, tzinfo=security.effective_from.tzinfo
+        ).astimezone(UTC)
+        if effective_from < security.effective_from.astimezone(UTC):
+            raise ValidationError(
+                "product foundation rights cannot predate Security identity"
+            )
         raw_hash = canonical_hash(item)
         rights.append(
             FoundationRights(
@@ -197,7 +203,7 @@ def load_product_foundation_fixture(
                 votes_per_unit=_decimal(
                     item["votes_per_unit"], "rights.votes_per_unit", positive=False
                 ),
-                effective_from=security.effective_from,
+                effective_from=effective_from,
                 source_id=f"fixture:product-foundation:{security_key}",
                 raw_hash=raw_hash,
             )
