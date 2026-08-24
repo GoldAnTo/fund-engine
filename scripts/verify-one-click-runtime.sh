@@ -48,7 +48,10 @@ require_expected_healthy_replicas() {
   local container_id health_status
   local running_status
   local container_ids=()
-  mapfile -t container_ids < <(compose ps --all --quiet "$service")
+  while IFS= read -r container_id; do
+    [[ -n "$container_id" ]] || continue
+    container_ids[${#container_ids[@]}]="$container_id"
+  done < <(compose ps --all --quiet "$service")
   [[ "${#container_ids[@]}" -eq "$expected_count" ]] || die "expected ${expected_count} containers for ${service}, got ${#container_ids[@]}"
   for container_id in "${container_ids[@]}"; do
     [[ -n "$container_id" ]] || continue

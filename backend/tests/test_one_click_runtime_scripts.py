@@ -107,6 +107,94 @@ esac
     assert not (tmp_path / ".one-click-runtime" / "legacy-stopped-containers").exists()
 
 
+def test_up_restores_every_prerecorded_container_when_stop_reports_failure(
+    tmp_path: Path,
+) -> None:
+    api_short = "89c5b6eb2322"
+    api_full = api_short + "a" * 52
+    frontend_short = "3d70c9b8e735"
+    frontend_full = frontend_short + "b" * 52
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    script = scripts_dir / "one-click-runtime.sh"
+    shutil.copy(ROOT / "scripts" / "one-click-runtime.sh", script)
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    (tmp_path / "docker-compose.one-click.yml").touch()
+    (tmp_path / ".env").touch()
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$DOCKER_LOG"
+case "$1" in
+  compose)
+    [[ "$*" == *" config -q"* || "$*" == *" build"* ]] && exit 0
+    ;;
+  ps)
+    [[ "$*" == *"service=api"* ]] && printf '{api_short}\\n'
+    [[ "$*" == *"service=frontend"* ]] && printf '{frontend_short}\\n'
+    exit 0
+    ;;
+  inspect)
+    container_id="${{!#}}"
+    case "$container_id" in
+      {api_short}|{api_full}) canonical_id="{api_full}"; service="api" ;;
+      {frontend_short}|{frontend_full}) canonical_id="{frontend_full}"; service="frontend" ;;
+      *) exit 1 ;;
+    esac
+    [[ "$*" == *"{{{{.Id}}}}"* ]] && printf '%s\\n' "$canonical_id"
+    [[ "$*" == *"com.docker.compose.project"* ]] && printf 'fund-engine-event\\n'
+    [[ "$*" == *"com.docker.compose.service"* ]] && printf '%s\\n' "$service"
+    [[ "$*" == *".State.Running"* ]] && printf 'false\\n'
+    exit 0
+    ;;
+  stop)
+    [[ "$2" == "{api_full}" ]] && exit 37
+    exit 0
+    ;;
+  start) exit 0 ;;
+esac
+"""
+    )
+    fake_docker.chmod(fake_docker.stat().st_mode | stat.S_IXUSR)
+    log = tmp_path / "docker.log"
+
+    completed = subprocess.run(
+        [script, "up"],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(log),
+        },
+    )
+
+    assert completed.returncode != 0
+    commands = log.read_text().splitlines()
+    first_stop = next(index for index, value in enumerate(commands) if value.startswith("stop "))
+    api_recorded = next(
+        index
+        for index, value in enumerate(commands)
+        if value == f"inspect --format {{{{.Id}}}} {api_short}"
+    )
+    frontend_recorded = next(
+        index
+        for index, value in enumerate(commands)
+        if value == f"inspect --format {{{{.Id}}}} {frontend_short}"
+    )
+    assert api_recorded < first_stop
+    assert frontend_recorded < first_stop
+    assert {value for value in commands if value.startswith("start ")} == {
+        f"start {api_full}",
+        f"start {frontend_full}",
+    }
+    assert not (tmp_path / ".one-click-runtime" / "legacy-stopped-containers").exists()
+
+
 def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> None:
     script = (ROOT / "scripts" / "verify-one-click-runtime.sh").read_text()
 
@@ -129,6 +217,9 @@ def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> Non
     assert 'require_expected_healthy_replicas research-worker 1' in script
     assert 'require_expected_healthy_replicas acquisition-worker 3' in script
     assert "compose ps --all --quiet" in script
+    assert "mapfile" not in script
+    for shell_script in ("one-click-runtime.sh", "verify-one-click-runtime.sh"):
+        subprocess.run(["/bin/bash", "-n", ROOT / "scripts" / shell_script], check=True)
 
 
 def test_readme_documents_the_local_one_click_runtime_without_secrets() -> None:
@@ -159,7 +250,9 @@ def test_init_generates_private_local_credentials_without_echoing_them(tmp_path:
     shutil.copy(ROOT / "scripts" / "one-click-runtime.sh", script)
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
 
-    created = subprocess.run([script, "init"], check=True, capture_output=True, text=True)
+    created = subprocess.run(
+        ["/bin/bash", script, "init"], check=True, capture_output=True, text=True
+    )
     runtime_env = tmp_path / ".env.one-click.local"
     contents = runtime_env.read_text()
 
@@ -174,6 +267,34 @@ def test_init_generates_private_local_credentials_without_echoing_them(tmp_path:
 
     existing = subprocess.run([script, "init"], check=True, capture_output=True, text=True)
     assert existing.stdout == "One-click runtime environment already exists.\n"
+
+
+def test_init_rejects_symlink_runtime_env_and_repairs_private_mode(
+    tmp_path: Path,
+) -> None:
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    script = scripts_dir / "one-click-runtime.sh"
+    shutil.copy(ROOT / "scripts" / "one-click-runtime.sh", script)
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    target = tmp_path / "outside.env"
+    target.write_text("ONE_CLICK_POSTGRES_PASSWORD=secret\n")
+    runtime_env = tmp_path / ".env.one-click.local"
+    runtime_env.symlink_to(target)
+
+    rejected = subprocess.run([script, "init"], capture_output=True, text=True)
+
+    assert rejected.returncode != 0
+    assert "regular, owner-controlled file" in rejected.stderr
+    assert target.read_text() == "ONE_CLICK_POSTGRES_PASSWORD=secret\n"
+
+    runtime_env.unlink()
+    runtime_env.write_text("ONE_CLICK_POSTGRES_PASSWORD=secret\n")
+    runtime_env.chmod(0o644)
+    repaired = subprocess.run([script, "init"], capture_output=True, text=True)
+
+    assert repaired.returncode == 0
+    assert stat.S_IMODE(runtime_env.stat().st_mode) == 0o600
 
 
 def test_init_upgrades_the_previous_default_gildata_adapter_without_exposing_secrets(

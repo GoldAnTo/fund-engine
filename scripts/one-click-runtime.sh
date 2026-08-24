@@ -9,6 +9,10 @@ readonly RUNTIME_ENV_FILE="$REPO_ROOT/.env.one-click.local"
 readonly LEGACY_PROJECT="fund-engine-event"
 readonly LEGACY_STOPPED_STATE_DIR="$REPO_ROOT/.one-click-runtime"
 readonly LEGACY_STOPPED_STATE_FILE="$LEGACY_STOPPED_STATE_DIR/legacy-stopped-containers"
+readonly FILES_VOLUME_LOGICAL_NAME="fund-engine-one-click-files"
+readonly OPERATION_PROJECT_LABEL="com.fund-engine.one-click.project"
+readonly OPERATION_ID_LABEL="com.fund-engine.one-click.operation"
+readonly OPERATION_PURPOSE_LABEL="com.fund-engine.one-click.purpose"
 
 die() {
   printf 'one-click runtime: %s\n' "$*" >&2
@@ -19,10 +23,18 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || die "required command is unavailable: $1"
 }
 
+validate_runtime_env_file() {
+  [[ -f "$RUNTIME_ENV_FILE" && ! -L "$RUNTIME_ENV_FILE" && -O "$RUNTIME_ENV_FILE" ]] \
+    || die "runtime environment must be a regular, owner-controlled file: $RUNTIME_ENV_FILE"
+  chmod 600 "$RUNTIME_ENV_FILE" \
+    || die "unable to restrict runtime environment permissions"
+}
+
 require_runtime_files() {
   [[ -f "$COMPOSE_FILE" ]] || die "missing compose file: $COMPOSE_FILE"
   [[ -f "$BASE_ENV_FILE" ]] || die "missing base environment file: $BASE_ENV_FILE"
-  [[ -f "$RUNTIME_ENV_FILE" ]] || die "run '$0 init' first"
+  [[ -e "$RUNTIME_ENV_FILE" || -L "$RUNTIME_ENV_FILE" ]] || die "run '$0 init' first"
+  validate_runtime_env_file
 }
 
 runtime_env_value() {
@@ -53,6 +65,84 @@ print(name, end="")
   [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] \
     || die "invalid one-click files volume name"
   printf '%s' "$value"
+}
+
+compose_project_name() {
+  local value
+  if ! value="$(compose config --format json | python3 -c '
+import json
+import sys
+
+config = json.load(sys.stdin)
+name = config.get("name")
+if not isinstance(name, str) or not name:
+    raise SystemExit("rendered Compose config has no project name")
+print(name, end="")
+')"; then
+    die "unable to resolve one-click project from rendered Compose config"
+  fi
+  [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] \
+    || die "invalid one-click Compose project name"
+  printf '%s' "$value"
+}
+
+volume_identity() {
+  local volume_name="$1"
+  docker volume inspect --format \
+    '{{.Name}}|{{with index .Labels "com.docker.compose.project"}}{{.}}{{end}}|{{with index .Labels "com.docker.compose.volume"}}{{.}}{{end}}|{{with index .Labels "com.fund-engine.one-click.project"}}{{.}}{{end}}|{{with index .Labels "com.fund-engine.one-click.operation"}}{{.}}{{end}}|{{with index .Labels "com.fund-engine.one-click.purpose"}}{{.}}{{end}}' \
+    "$volume_name"
+}
+
+validate_live_files_volume() {
+  local volume_name="$1"
+  local project_name="$2"
+  local actual expected
+  expected="${volume_name}|${project_name}|${FILES_VOLUME_LOGICAL_NAME}|||"
+  actual="$(volume_identity "$volume_name")" \
+    || die "unable to inspect one-click files volume identity"
+  [[ "$actual" == "$expected" ]] \
+    || die "one-click files volume identity does not match rendered Compose ownership"
+}
+
+validate_operation_volume() {
+  local volume_name="$1"
+  local project_name="$2"
+  local operation="$3"
+  local purpose="$4"
+  local actual expected
+  expected="${volume_name}|||${project_name}|${operation}|${purpose}"
+  actual="$(volume_identity "$volume_name")" || return 1
+  [[ "$actual" == "$expected" ]]
+}
+
+create_operation_volume() {
+  local volume_name="$1"
+  local project_name="$2"
+  local operation="$3"
+  local purpose="$4"
+  if docker volume inspect "$volume_name" >/dev/null 2>&1; then
+    die "refusing to reuse existing restore operation volume: $volume_name"
+  fi
+  docker volume create \
+    --label "${OPERATION_PROJECT_LABEL}=${project_name}" \
+    --label "${OPERATION_ID_LABEL}=${operation}" \
+    --label "${OPERATION_PURPOSE_LABEL}=${purpose}" \
+    "$volume_name" >/dev/null
+  validate_operation_volume "$volume_name" "$project_name" "$operation" "$purpose" \
+    || die "created restore operation volume has unexpected identity"
+}
+
+remove_operation_volume() {
+  local volume_name="$1"
+  local project_name="$2"
+  local operation="$3"
+  local purpose="$4"
+  if ! validate_operation_volume "$volume_name" "$project_name" "$operation" "$purpose"; then
+    printf 'one-click runtime: refusing to remove operation volume with unexpected identity: %s\n' \
+      "$volume_name" >&2
+    return 1
+  fi
+  docker volume rm "$volume_name" >/dev/null
 }
 
 gildata_token_is_configured() {
@@ -143,7 +233,8 @@ upgrade_legacy_runtime_defaults() {
 init_runtime_environment() {
   require_command openssl
 
-  if [[ -e "$RUNTIME_ENV_FILE" ]]; then
+  if [[ -e "$RUNTIME_ENV_FILE" || -L "$RUNTIME_ENV_FILE" ]]; then
+    validate_runtime_env_file
     upgrade_legacy_runtime_defaults
     printf 'One-click runtime environment already exists.\n'
     return 0
@@ -164,6 +255,7 @@ init_runtime_environment() {
       'ACQUISITION_ENABLED_ADAPTERS=sse,szse' \
       > "$RUNTIME_ENV_FILE"
   )
+  validate_runtime_env_file
 
   printf 'Created local one-click runtime environment.\n'
 }
@@ -226,8 +318,8 @@ normalize_legacy_stop_state() {
   )
 }
 
-stop_legacy_application_services() {
-  local service container_id full_container_id
+prepare_legacy_stop_state() {
+  local service container_id full_container_id actual_project actual_service
   [[ -e "$LEGACY_STOPPED_STATE_FILE" ]] && return 0
   begin_legacy_stop_state
 
@@ -235,9 +327,11 @@ stop_legacy_application_services() {
     while IFS= read -r container_id; do
       [[ -n "$container_id" ]] || continue
       full_container_id="$(docker inspect --format '{{.Id}}' "$container_id")" || return 1
-      if ! docker stop "$full_container_id" >/dev/null; then
-        return 1
-      fi
+      actual_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$full_container_id")" || return 1
+      actual_service="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$full_container_id")" || return 1
+      [[ "$full_container_id" =~ ^[0-9a-f]{64}$ \
+        && "$actual_project" == "$LEGACY_PROJECT" \
+        && "$actual_service" == "$service" ]] || return 1
       record_stopped_legacy_container "$service" "$full_container_id"
     done < <(
       docker ps -q \
@@ -252,8 +346,40 @@ stop_legacy_application_services() {
   fi
 }
 
+validate_prepared_legacy_stop_state() {
+  local service container_id extra_field actual_id actual_project actual_service
+  [[ -e "$LEGACY_STOPPED_STATE_FILE" ]] || return 0
+  normalize_legacy_stop_state || return 1
+  while IFS=$'\t' read -r service container_id extra_field; do
+    [[ -n "$service" && -n "$container_id" && -z "$extra_field" ]] || return 1
+    legacy_service_is_allowed "$service" || return 1
+    actual_id="$(docker inspect --format '{{.Id}}' "$container_id")" || return 1
+    actual_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id")" || return 1
+    actual_service="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_id")" || return 1
+    [[ "$actual_id" == "$container_id" \
+      && "$actual_project" == "$LEGACY_PROJECT" \
+      && "$actual_service" == "$service" ]] || return 1
+  done < "$LEGACY_STOPPED_STATE_FILE"
+}
+
+stop_legacy_application_services() {
+  local service container_id extra_field failed="false"
+  prepare_legacy_stop_state || return 1
+  [[ -e "$LEGACY_STOPPED_STATE_FILE" ]] || return 0
+  validate_prepared_legacy_stop_state || return 1
+  while IFS=$'\t' read -r service container_id extra_field; do
+    [[ -n "$service" && -n "$container_id" && -z "$extra_field" ]] || return 1
+    if ! docker stop "$container_id" >/dev/null; then
+      failed="true"
+      break
+    fi
+  done < "$LEGACY_STOPPED_STATE_FILE"
+  [[ "$failed" != "true" ]]
+}
+
 restore_legacy_application_services() {
   local service container_id extra_field actual_id actual_project actual_service running
+  local failed="false"
   [[ -e "$LEGACY_STOPPED_STATE_FILE" ]] || return 0
   normalize_legacy_stop_state || {
     printf 'one-click runtime: unable to normalize legacy stop state\n' >&2
@@ -263,42 +389,69 @@ restore_legacy_application_services() {
   while IFS=$'\t' read -r service container_id extra_field; do
     [[ -n "$service" && -n "$container_id" && -z "$extra_field" ]] || {
       printf 'one-click runtime: invalid legacy stop state\n' >&2
-      return 1
+      failed="true"
+      continue
     }
     legacy_service_is_allowed "$service" || {
       printf 'one-click runtime: unexpected legacy service in stop state\n' >&2
-      return 1
+      failed="true"
+      continue
     }
-    actual_id="$(docker inspect --format '{{.Id}}' "$container_id" 2>/dev/null)" || return 1
-    actual_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id")" || return 1
-    actual_service="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_id")" || return 1
+    if ! actual_id="$(docker inspect --format '{{.Id}}' "$container_id" 2>/dev/null)" \
+      || ! actual_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id")" \
+      || ! actual_service="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_id")"; then
+      failed="true"
+      continue
+    fi
     [[ "$actual_id" == "$container_id" && "$actual_project" == "$LEGACY_PROJECT" && "$actual_service" == "$service" ]] || {
       printf 'one-click runtime: legacy stop state identity check failed\n' >&2
-      return 1
+      failed="true"
+      continue
     }
-    running="$(docker inspect --format '{{.State.Running}}' "$container_id")" || return 1
-    [[ "$running" == "true" ]] || docker start "$container_id" >/dev/null || return 1
+    if ! running="$(docker inspect --format '{{.State.Running}}' "$container_id")"; then
+      failed="true"
+      continue
+    fi
+    if [[ "$running" != "true" ]] && ! docker start "$container_id" >/dev/null; then
+      failed="true"
+    fi
   done < "$LEGACY_STOPPED_STATE_FILE"
 
+  [[ "$failed" != "true" ]] || return 1
   rm -f "$LEGACY_STOPPED_STATE_FILE"
   rmdir "$LEGACY_STOPPED_STATE_DIR" 2>/dev/null || true
 }
 
-start_one_click_runtime() {
+start_one_click_runtime() (
+  local rollback_required="false"
+  cleanup_start() {
+    local status="$?"
+    trap - EXIT INT TERM
+    if [[ "$rollback_required" == "true" ]]; then
+      if ! restore_legacy_application_services; then
+        printf 'one-click runtime: failed to restore all prerecorded legacy containers\n' >&2
+        status=1
+      fi
+    fi
+    exit "$status"
+  }
+  trap cleanup_start EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
   require_command docker
   init_runtime_environment
   require_runtime_files
   compose config -q
   compose build
-  if ! stop_legacy_application_services; then
-    restore_legacy_application_services || die "failed to restore legacy application containers after cutover failed"
-    die "failed to stop legacy application containers"
-  fi
-  if ! compose up -d --no-build --scale acquisition-worker=3; then
-    restore_legacy_application_services || die "failed to restore legacy application containers after one-click startup failed"
-    die "one-click startup failed; restored legacy application containers"
-  fi
-}
+  rollback_required="true"
+  prepare_legacy_stop_state || die "failed to prerecord legacy application containers"
+  stop_legacy_application_services || die "failed to stop legacy application containers"
+  compose up -d --no-build --scale acquisition-worker=3 \
+    || die "one-click startup failed"
+  rollback_required="false"
+  trap - EXIT INT TERM
+)
 
 stop_one_click_runtime() {
   require_command docker
@@ -324,27 +477,109 @@ rollback_runtime() {
 
 validate_research_archive() {
   local archive="$1"
-  tar -tzf "$archive" >/dev/null || die "research file archive is unreadable"
   python3 - "$archive" <<'PY'
+import os
 import pathlib
 import sys
 import tarfile
 
 archive = pathlib.Path(sys.argv[1])
-with tarfile.open(archive, mode="r:gz") as bundle:
-    for member in bundle.getmembers():
-        normalized = pathlib.PurePosixPath(member.name)
-        if (
-            normalized.is_absolute()
-            or not member.name
-            or ".." in normalized.parts
-            or member.issym()
-            or member.islnk()
-            or not (member.isdir() or member.isfile())
-        ):
-            raise SystemExit(f"unsafe research archive member: {member.name!r}")
-        if any(part.startswith(".env") for part in normalized.parts):
-            raise SystemExit(f"secret research archive member: {member.name!r}")
+
+
+def positive_limit(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be a positive integer") from exc
+    if value <= 0:
+        raise SystemExit(f"{name} must be a positive integer")
+    return value
+
+
+max_compressed = positive_limit("ONE_CLICK_BACKUP_MAX_COMPRESSED_BYTES", 1_073_741_824)
+max_members = positive_limit("ONE_CLICK_BACKUP_MAX_MEMBERS", 100_000)
+max_single_file = positive_limit("ONE_CLICK_BACKUP_MAX_SINGLE_FILE_BYTES", 536_870_912)
+max_total = positive_limit("ONE_CLICK_BACKUP_MAX_TOTAL_BYTES", 2_147_483_648)
+max_ratio = positive_limit("ONE_CLICK_BACKUP_MAX_COMPRESSION_RATIO", 200)
+compressed_size = archive.stat().st_size
+if compressed_size > max_compressed:
+    raise SystemExit("research archive exceeds compressed byte limit")
+if compressed_size <= 0:
+    raise SystemExit("research archive is empty")
+
+member_count = 0
+total_size = 0
+try:
+    bundle = tarfile.open(archive, mode="r|gz")
+    with bundle:
+        for member in bundle:
+            member_count += 1
+            if member_count > max_members:
+                raise SystemExit("research archive exceeds member count limit")
+            normalized = pathlib.PurePosixPath(member.name)
+            if (
+                normalized.is_absolute()
+                or not member.name
+                or ".." in normalized.parts
+                or member.issym()
+                or member.islnk()
+                or not (member.isdir() or member.isfile())
+            ):
+                raise SystemExit(f"unsafe research archive member: {member.name!r}")
+            if any(part.startswith(".env") for part in normalized.parts):
+                raise SystemExit(f"secret research archive member: {member.name!r}")
+            if member.isfile():
+                if member.size < 0 or member.size > max_single_file:
+                    raise SystemExit("research archive exceeds single file byte limit")
+                total_size += member.size
+                if total_size > max_total:
+                    raise SystemExit("research archive exceeds total byte limit")
+                if total_size > compressed_size * max_ratio:
+                    raise SystemExit("research archive exceeds compression ratio limit")
+except (OSError, tarfile.TarError) as exc:
+    raise SystemExit(f"research archive is unreadable: {exc}") from exc
+PY
+}
+
+snapshot_backup_bundle() {
+  local source_dir="$1"
+  local destination_dir="$2"
+  python3 - "$source_dir" "$destination_dir" <<'PY'
+import os
+import shutil
+import stat
+import sys
+
+source_path, destination_path = sys.argv[1:]
+artifacts = ("manifest.sha256", "postgres.dump", "research-files.tar.gz")
+directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+source_fd = os.open(source_path, directory_flags)
+try:
+    if set(os.listdir(source_fd)) != set(artifacts):
+        raise SystemExit("backup directory contains unexpected artifacts")
+    for artifact in artifacts:
+        source_file_fd = os.open(
+            artifact,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=source_fd,
+        )
+        try:
+            metadata = os.fstat(source_file_fd)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise SystemExit(f"backup artifact is not a regular file: {artifact}")
+            destination_file_fd = os.open(
+                os.path.join(destination_path, artifact),
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            with os.fdopen(source_file_fd, "rb", closefd=False) as source_file:
+                with os.fdopen(destination_file_fd, "wb") as destination_file:
+                    shutil.copyfileobj(source_file, destination_file, length=1024 * 1024)
+        finally:
+            os.close(source_file_fd)
+finally:
+    os.close(source_fd)
 PY
 }
 
@@ -363,7 +598,7 @@ require_application_services_stopped() {
 backup_runtime() (
   set -euo pipefail
   local output_dir="$1"
-  local parent temporary_dir volume_name
+  local parent temporary_dir volume_name project_name
   validate_new_backup_path "$output_dir"
   require_command docker
   require_command python3
@@ -374,6 +609,8 @@ backup_runtime() (
   temporary_dir="$(mktemp -d "$parent/.one-click-backup.XXXXXX")"
   trap 'rm -rf -- "$temporary_dir"' EXIT
   volume_name="$(files_volume_name)"
+  project_name="$(compose_project_name)"
+  validate_live_files_volume "$volume_name" "$project_name"
 
   compose exec -T postgres pg_dump -Fc \
     -U "$(runtime_env_value ONE_CLICK_POSTGRES_USER)" \
@@ -480,19 +717,54 @@ print_restore_recovery_instructions() {
 restore_runtime() (
   set -euo pipefail
   local backup_dir="$1"
-  local database_user database_name suffix staging_database old_database
-  local files_volume staging_volume rollback_volume
+  local private_backup="" private_backup_parent=""
+  local database_user="" database_name="" suffix="" staging_database="" old_database=""
+  local project_name="" files_volume="" staging_volume="" rollback_volume=""
   local database_swapped="false"
   local preserve_recovery_state="false"
   local database_state="pre_cutover"
+  local staging_volume_created="false"
+  local rollback_volume_created="false"
+
+  cleanup_restore() {
+    if [[ -n "$private_backup" ]]; then
+      rm -rf -- "$private_backup"
+    fi
+    if [[ -z "$staging_volume" ]]; then
+      return 0
+    fi
+    if [[ "$preserve_recovery_state" == "true" ]]; then
+      print_restore_recovery_instructions \
+        "$database_user" "$database_name" "$staging_database" "$old_database" \
+        "$database_state" \
+        "$files_volume" "$staging_volume" "$rollback_volume"
+      return 0
+    fi
+    if [[ "$staging_volume_created" == "true" ]]; then
+      remove_operation_volume \
+        "$staging_volume" "$project_name" "$suffix" restore-staging || true
+    fi
+    if [[ "$rollback_volume_created" == "true" ]]; then
+      remove_operation_volume \
+        "$rollback_volume" "$project_name" "$suffix" restore-rollback || true
+    fi
+    if [[ "$database_swapped" != "true" && -n "$staging_database" ]]; then
+      compose exec -T postgres dropdb --if-exists -U "$database_user" "$staging_database" >/dev/null 2>&1 || true
+    fi
+  }
+  trap cleanup_restore EXIT
 
   validate_existing_backup_path "$backup_dir"
-  require_command docker
-  require_command openssl
   require_command python3
   require_command shasum
+  private_backup_parent="$(cd -P "${TMPDIR:-/tmp}" && pwd)"
+  private_backup="$(mktemp -d "${private_backup_parent}/one-click-restore.XXXXXX")"
+  chmod 700 "$private_backup"
+  snapshot_backup_bundle "$backup_dir" "$private_backup"
+  validate_backup_bundle "$private_backup"
+  require_command docker
+  require_command openssl
   require_runtime_files
-  validate_backup_bundle "$backup_dir"
   require_application_services_stopped restore
 
   database_user="$(runtime_env_value ONE_CLICK_POSTGRES_USER)"
@@ -503,31 +775,23 @@ restore_runtime() (
   staging_database="${database_name}_restore_${suffix}"
   old_database="${database_name}_before_${suffix}"
   files_volume="$(files_volume_name)"
+  project_name="$(compose_project_name)"
   staging_volume="${files_volume}-restore-${suffix}"
   rollback_volume="${files_volume}-before-${suffix}"
-
-  cleanup_restore() {
-    if [[ "$preserve_recovery_state" == "true" ]]; then
-      print_restore_recovery_instructions \
-        "$database_user" "$database_name" "$staging_database" "$old_database" \
-        "$database_state" \
-        "$files_volume" "$staging_volume" "$rollback_volume"
-      return 0
-    fi
-    docker volume rm "$staging_volume" "$rollback_volume" >/dev/null 2>&1 || true
-    if [[ "$database_swapped" != "true" ]]; then
-      compose exec -T postgres dropdb --if-exists -U "$database_user" "$staging_database" >/dev/null 2>&1 || true
-    fi
-  }
-  trap cleanup_restore EXIT
+  validate_live_files_volume "$files_volume" "$project_name"
 
   compose exec -T postgres createdb -U "$database_user" "$staging_database"
   compose exec -T postgres pg_restore --exit-on-error --no-owner --no-privileges \
-    -U "$database_user" -d "$staging_database" < "$backup_dir/postgres.dump"
-  docker volume create "$staging_volume" >/dev/null
+    -U "$database_user" -d "$staging_database" < "$private_backup/postgres.dump"
+  create_operation_volume \
+    "$staging_volume" "$project_name" "$suffix" restore-staging
+  staging_volume_created="true"
+  validate_operation_volume \
+    "$staging_volume" "$project_name" "$suffix" restore-staging \
+    || die "restore staging volume identity changed before extraction"
   docker run --rm \
     -v "$staging_volume:/target" \
-    -v "$backup_dir:/backup:ro" \
+    -v "$private_backup:/backup:ro" \
     alpine tar -C /target -xzf /backup/research-files.tar.gz
 
   ONE_CLICK_POSTGRES_DB="$staging_database" ONE_CLICK_FILES_VOLUME="$staging_volume" \
@@ -537,7 +801,13 @@ restore_runtime() (
   ONE_CLICK_POSTGRES_DB="$staging_database" ONE_CLICK_FILES_VOLUME="$staging_volume" \
     compose run --rm --no-deps api python -m app.scripts.verify_underwriting_revision_manifests
 
-  docker volume create "$rollback_volume" >/dev/null
+  create_operation_volume \
+    "$rollback_volume" "$project_name" "$suffix" restore-rollback
+  rollback_volume_created="true"
+  validate_live_files_volume "$files_volume" "$project_name"
+  validate_operation_volume \
+    "$rollback_volume" "$project_name" "$suffix" restore-rollback \
+    || die "restore rollback volume identity changed before snapshot"
   copy_volume_contents "$files_volume" "$rollback_volume"
   preserve_recovery_state="true"
   database_state="cutover_uncertain"
@@ -559,11 +829,19 @@ restore_runtime() (
   fi
   database_state="restored_active"
   database_swapped="true"
+  validate_live_files_volume "$files_volume" "$project_name"
+  validate_operation_volume \
+    "$staging_volume" "$project_name" "$suffix" restore-staging \
+    || die "restore staging volume identity changed before activation"
   if ! copy_volume_contents "$staging_volume" "$files_volume"; then
     local files_rollback_succeeded="true"
     local database_rollback_succeeded="true"
-    copy_volume_contents "$rollback_volume" "$files_volume" \
-      || files_rollback_succeeded="false"
+    if ! validate_live_files_volume "$files_volume" "$project_name" \
+      || ! validate_operation_volume \
+        "$rollback_volume" "$project_name" "$suffix" restore-rollback \
+      || ! copy_volume_contents "$rollback_volume" "$files_volume"; then
+      files_rollback_succeeded="false"
+    fi
     database_state="cutover_uncertain"
     if ! compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
       -c "ALTER DATABASE \"$database_name\" RENAME TO \"$staging_database\";"; then

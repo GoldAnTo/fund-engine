@@ -57,6 +57,46 @@ def _write_backup_bundle(backup: Path) -> None:
     (backup / "manifest.sha256").write_text(manifest)
 
 
+def _stateful_volume_docker(extra_cases: str = "") -> str:
+    return f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$DOCKER_LOG"
+case "$*" in
+  *' config --format json'*) printf '%s' '{{"name":"test-project","volumes":{{"fund-engine-one-click-files":{{"name":"fund-engine-one-click-files"}}}}}}'; exit 0 ;;
+{extra_cases}
+  *' ps --status running --services'*) printf 'postgres\\n'; exit 0 ;;
+esac
+if [[ "$1 $2" == "volume inspect" ]]; then
+  name="${{!#}}"
+  if [[ "$name" == "fund-engine-one-click-files" ]]; then
+    printf '%s\\n' 'fund-engine-one-click-files|test-project|fund-engine-one-click-files|||'
+  elif [[ -f "$VOLUME_STATE/$name" ]]; then
+    cat "$VOLUME_STATE/$name"
+  else
+    exit 1
+  fi
+  exit 0
+fi
+if [[ "$1 $2" == "volume create" ]]; then
+  name="${{!#}}"
+  case "$name" in
+    *-restore-*) suffix="${{name##*-restore-}}"; purpose=restore-staging ;;
+    *-before-*) suffix="${{name##*-before-}}"; purpose=restore-rollback ;;
+    *) exit 91 ;;
+  esac
+  printf '%s\\n' "$name|||test-project|$suffix|$purpose" > "$VOLUME_STATE/$name"
+  printf '%s\\n' "$name"
+  exit 0
+fi
+if [[ "$1 $2" == "volume rm" ]]; then
+  name="${{!#}}"
+  rm -f "$VOLUME_STATE/$name"
+  exit 0
+fi
+exit 0
+"""
+
+
 @pytest.mark.parametrize("target", ["relative", "/", "/tmp", "/var", "/Users"])
 def test_backup_rejects_non_specific_targets_before_docker(
     tmp_path: Path, target: str
@@ -141,7 +181,6 @@ def test_runtime_backup_restore_contract_is_fail_closed() -> None:
     assert "--exclude=.env" in script
     assert "--exclude=.env*" in script
     assert "sha256" in script
-    assert "tar -tzf" in script
     assert "verify_underwriting_revision_manifests" in script
     assert "load_product_foundation_fixture" in script
     assert script.count("compose run --rm --no-deps") >= 4
@@ -169,6 +208,21 @@ def test_runtime_backup_restore_contract_is_fail_closed() -> None:
     assert "database rollback step 2" in script
     assert "file recovery command" in script
     assert "compose config --format json" in script
+    assert "com.docker.compose.project" in script
+    assert "com.docker.compose.volume" in script
+    assert "com.fund-engine.one-click.operation" in script
+    assert "com.fund-engine.one-click.purpose" in script
+    assert "snapshot_backup_bundle" in script
+    assert 'mode="r|gz"' in script
+    assert "getmembers" not in script
+    for limit in (
+        "ONE_CLICK_BACKUP_MAX_COMPRESSED_BYTES",
+        "ONE_CLICK_BACKUP_MAX_MEMBERS",
+        "ONE_CLICK_BACKUP_MAX_SINGLE_FILE_BYTES",
+        "ONE_CLICK_BACKUP_MAX_TOTAL_BYTES",
+        "ONE_CLICK_BACKUP_MAX_COMPRESSION_RATIO",
+    ):
+        assert limit in script
     assert "postgres.dump" in script and "research-files.tar.gz" in script
     assert "--volumes" not in script
 
@@ -280,6 +334,32 @@ def test_restore_rejects_checksum_and_unsafe_tar_before_docker(tmp_path: Path) -
     assert "docker must not run" not in secret_result.stderr
 
 
+def test_restore_rejects_archive_resource_limit_before_docker(tmp_path: Path) -> None:
+    script = _runtime_copy(tmp_path)
+    backup = tmp_path / "backup"
+    _write_backup_bundle(backup)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text("#!/bin/sh\nprintf 'docker must not run\\n' >&2\nexit 93\n")
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "restore", str(backup)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "ONE_CLICK_BACKUP_MAX_COMPRESSED_BYTES": "1",
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "compressed byte limit" in completed.stderr
+    assert "docker must not run" not in completed.stderr
+
+
 def test_restore_checks_stopped_services_before_database_mutation(
     tmp_path: Path,
 ) -> None:
@@ -313,6 +393,88 @@ def test_restore_checks_stopped_services_before_database_mutation(
     assert completed.returncode != 0
     assert "stop application services before restore" in completed.stderr
     assert "createdb" not in log.read_text()
+
+
+def test_restore_refuses_foreign_live_files_volume_before_mutation(
+    tmp_path: Path,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    backup = tmp_path / "backup"
+    _write_backup_bundle(backup)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "docker.log"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
+        'case "$*" in\n'
+        "  *' config --format json'*) printf '%s' '{\"name\":\"expected-project\",\"volumes\":{\"fund-engine-one-click-files\":{\"name\":\"expected-files\"}}}' ;;\n"
+        "  *' ps --status running --services'*) printf 'postgres\\n' ;;\n"
+        "  *'volume inspect --format'*' expected-files'*) printf '%s\\n' 'expected-files|foreign-project|foreign-logical|||' ;;\n"
+        "esac\n"
+    )
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "restore", str(backup)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(log),
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "volume identity" in completed.stderr
+    commands = log.read_text()
+    assert "createdb" not in commands
+    assert "docker run" not in commands
+    assert "volume rm" not in commands
+
+
+def test_restore_never_reuses_or_removes_existing_foreign_operation_volume(
+    tmp_path: Path,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    backup = tmp_path / "backup"
+    _write_backup_bundle(backup)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "docker.log"
+    volume_state = tmp_path / "volumes"
+    volume_state.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        _stateful_volume_docker(
+            "  *'volume inspect fund-engine-one-click-files-restore-deadbeef'*) printf '%s\\n' 'foreign-volume'; exit 0 ;;"
+        )
+    )
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+    openssl = fake_bin / "openssl"
+    openssl.write_text("#!/bin/sh\nprintf 'deadbeef\\n'\n")
+    openssl.chmod(openssl.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "restore", str(backup)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(log),
+            "VOLUME_STATE": str(volume_state),
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "refusing to reuse existing restore operation volume" in completed.stderr
+    commands = log.read_text()
+    assert "volume create" not in commands
+    assert "volume rm" not in commands
+    assert ":/target" not in commands
 
 
 def test_backup_checks_stopped_services_before_dump(tmp_path: Path) -> None:
@@ -358,8 +520,9 @@ def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
         "#!/bin/sh\n"
         'printf \'<%s>\\n\' "$@" >> "$DOCKER_LOG"\n'
         'case "$*" in\n'
-        "  *' config --format json'*) printf '%s' '{\"volumes\":{\"fund-engine-one-click-files\":{\"name\":\"custom-task11-files\"}}}' ;;\n"
+        "  *' config --format json'*) printf '%s' '{\"name\":\"test-project\",\"volumes\":{\"fund-engine-one-click-files\":{\"name\":\"custom-task11-files\"}}}' ;;\n"
         "  *' ps --status running --services'*) printf 'postgres\\n' ;;\n"
+        "  *'volume inspect --format'*' custom-task11-files'*) printf '%s\\n' 'custom-task11-files|test-project|fund-engine-one-click-files|||' ;;\n"
         "  *' pg_dump -Fc '*) if [ \"${FAIL_DUMP:-0}\" = 1 ]; then exit 17; else printf 'custom-dump'; fi ;;\n"
         "  *' alpine sh -eu -c '*)\n"
         "    previous=''\n"
@@ -416,16 +579,14 @@ def test_restore_preserves_recovery_artifacts_when_compensation_fails(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     log = tmp_path / "docker.log"
+    volume_state = tmp_path / "volumes"
+    volume_state.mkdir()
     docker = fake_bin / "docker"
     docker.write_text(
-        "#!/bin/sh\n"
-        'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
-        'case "$*" in\n'
-        "  *' config --format json'*) printf '%s' '{\"volumes\":{\"fund-engine-one-click-files\":{\"name\":\"fund-engine-one-click-files\"}}}' ;;\n"
-        "  *' ps --status running --services'*) printf 'postgres\\n' ;;\n"
-        "  *'run --rm -v fund-engine-one-click-files-restore-'*':/source:ro'*) exit 41 ;;\n"
-        "  *'run --rm -v fund-engine-one-click-files-before-'*':/source:ro'*) exit 42 ;;\n"
-        "esac\n"
+        _stateful_volume_docker(
+            "  *'run --rm -v fund-engine-one-click-files-restore-'*':/source:ro'*) exit 41 ;;\n"
+            "  *'run --rm -v fund-engine-one-click-files-before-'*':/source:ro'*) exit 42 ;;"
+        )
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
 
@@ -437,6 +598,7 @@ def test_restore_preserves_recovery_artifacts_when_compensation_fails(
             **os.environ,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "DOCKER_LOG": str(log),
+            "VOLUME_STATE": str(volume_state),
         },
     )
 
@@ -459,15 +621,13 @@ def test_restore_finalization_uncertainty_prints_inventory_only(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     log = tmp_path / "docker.log"
+    volume_state = tmp_path / "volumes"
+    volume_state.mkdir()
     docker = fake_bin / "docker"
     docker.write_text(
-        "#!/bin/sh\n"
-        'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
-        'case "$*" in\n'
-        "  *' config --format json'*) printf '%s' '{\"volumes\":{\"fund-engine-one-click-files\":{\"name\":\"fund-engine-one-click-files\"}}}' ;;\n"
-        "  *' ps --status running --services'*) printf 'postgres\\n' ;;\n"
-        "  *' exec -T postgres dropdb -U one_click fund_engine_one_click_before_'*) exit 44 ;;\n"
-        "esac\n"
+        _stateful_volume_docker(
+            "  *' exec -T postgres dropdb -U one_click fund_engine_one_click_before_'*) exit 44 ;;"
+        )
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
 
@@ -479,6 +639,7 @@ def test_restore_finalization_uncertainty_prints_inventory_only(
             **os.environ,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "DOCKER_LOG": str(log),
+            "VOLUME_STATE": str(volume_state),
         },
     )
 
@@ -489,6 +650,48 @@ def test_restore_finalization_uncertainty_prints_inventory_only(
     assert "database rollback" not in completed.stderr
     assert "file recovery command" not in completed.stderr
     assert "volume rm" not in log.read_text()
+
+
+def test_restore_uses_private_snapshot_after_source_bundle_changes(
+    tmp_path: Path,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    backup = tmp_path / "backup"
+    _write_backup_bundle(backup)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "docker.log"
+    volume_state = tmp_path / "volumes"
+    volume_state.mkdir()
+    private_tmp = tmp_path / "private-tmp"
+    private_tmp.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        _stateful_volume_docker(
+            "  *' ps --status running --services'*) printf 'mutated source' > \"$SOURCE_BACKUP/postgres.dump\"; printf 'postgres\\n'; exit 0 ;;\n"
+            "  *' exec -T postgres pg_restore '* ) content=$(cat); [[ \"$content\" == 'custom dump' ]] || exit 88; exit 0 ;;"
+        )
+    )
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "restore", str(backup)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(log),
+            "VOLUME_STATE": str(volume_state),
+            "SOURCE_BACKUP": str(backup),
+            "TMPDIR": str(private_tmp),
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert (backup / "postgres.dump").read_text() == "mutated source"
+    assert str(backup) not in log.read_text()
+    assert not tuple(private_tmp.iterdir())
 
 
 def test_runtime_verifier_checks_increment_a_shell_api_and_revision() -> None:
