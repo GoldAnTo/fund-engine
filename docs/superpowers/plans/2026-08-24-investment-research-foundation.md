@@ -888,17 +888,17 @@ git commit -m "feat: expose investment research product foundation api"
 - Modify: `frontend/src/app/routes.tsx`
 - Modify: `frontend/src/styles/underwriting-research.css`
 
-- [ ] **Step 1: Write RED route/shell tests.** `/research`, `/research/new` and `/research/projects/:projectId` render outside `AppShell` and outside `UnderwritingArchiveShell`. Assert no event navigation, worker controls, fund pages, mock research client or automatic-research polling import is reachable.
+- [x] **Step 1: Write RED route/shell tests.** `/research`, `/research/new` and `/research/projects/:projectId` render outside `AppShell` and outside `UnderwritingArchiveShell`. Assert no event navigation, worker controls, fund pages, mock research client or automatic-research polling import is reachable.
 
-- [ ] **Step 2: Write RED setup-flow tests.** Search CATL, distinguish Company from 300750.SZ Security, create mandate/scope/boundary, enter workbench, and render the publication preview as `insufficient_evidence`. Industry-only selection must require a Company/Security before project creation.
+- [x] **Step 2: Write RED setup-flow tests.** Search CATL, distinguish Company from 300750.SZ Security, create mandate/scope/boundary, enter workbench, and render the publication preview as `insufficient_evidence`. Industry-only selection must require a Company/Security before project creation.
 
-- [ ] **Step 3: Confirm RED.**
+- [x] **Step 3: Confirm RED.**
 
 Run: `cd frontend && npm test -- InvestmentResearchShell.test.tsx NewResearchPage.test.tsx InvestmentResearchApi.test.ts`
 
 Expected: missing module/route failures.
 
-- [ ] **Step 4: Implement a generated-contract-only client.** Export typed methods for the Task 8 routes. Validate HTTP envelopes and identity-bind returned project/draft/revision IDs. Do not import `researchClient`, `researchOsApi`, `mockResearchOsApi` or Event Research types.
+- [x] **Step 4: Implement a generated-contract-only client.** Export typed methods for the Task 8 routes. Validate HTTP envelopes and identity-bind returned project/draft/revision IDs. Do not import `researchClient`, `researchOsApi`, `mockResearchOsApi` or Event Research types.
 
 ```typescript
 import type { components } from "../contracts/v1";
@@ -935,7 +935,7 @@ export class InvestmentResearchApi {
 }
 ```
 
-- [ ] **Step 5: Implement the three pages.** The shell contains only product navigation. Home provides object search and recent projects. Setup captures InvestmentMandate, ResearchScope and RevisionBoundary. Workbench renders the nine module tabs, but only Overview, Versions and boundary metadata are enabled; unfinished modules display explicit “尚未建立” states and never fixture values.
+- [x] **Step 5: Implement the three pages.** The shell contains only product navigation. Home provides object search and recent projects. Setup captures InvestmentMandate, ResearchScope and RevisionBoundary. Workbench renders the nine module tabs, but only Overview, Versions and boundary metadata are enabled; unfinished modules display explicit “尚未建立” states and never fixture values.
 
 ```tsx
 const modules = [
@@ -944,7 +944,7 @@ const modules = [
 ] as const;
 ```
 
-- [ ] **Step 6: Run GREEN, typecheck, build and commit.**
+- [x] **Step 6: Run GREEN, typecheck, build and commit.**
 
 Run:
 
