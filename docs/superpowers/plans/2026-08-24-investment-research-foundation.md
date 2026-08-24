@@ -411,7 +411,7 @@ git commit -m "feat: persist investment research product foundation"
 - Create: `backend/app/underwriting/services/product_project.py`
 - Create: `backend/tests/underwriting/test_product_project.py`
 
-- [ ] **Step 1: Write RED service tests.** Cover effective Company/Security identity versions, company/security relation validation, multi-Security project membership, Industry search redirect semantics, mandate successor conflicts, scope identity, agenda provenance and product basis writes with `price_as_of is None`.
+- [x] **Step 1: Write RED service tests.** Cover effective Company/Security identity versions, company/security relation validation, multi-Security project membership, Industry search redirect semantics, mandate successor conflicts, scope identity, agenda provenance and product basis writes with `price_as_of is None`.
 
 ```python
 def test_product_basis_never_writes_legacy_price_as_of(session, product_service) -> None:
@@ -422,13 +422,13 @@ def test_product_basis_never_writes_legacy_price_as_of(session, product_service)
     assert basis.boundary_schema_version == "product.historical-basis.v1"
 ```
 
-- [ ] **Step 2: Confirm RED.**
+- [x] **Step 2: Confirm RED.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_product_project.py`
 
 Expected: import failure for the new repository/service.
 
-- [ ] **Step 3: Implement focused repository methods.** Provide `append_identity_version`, `create_project`, `project`, `list_projects`, `search_objects`, `append_scope`, `append_agenda`, `append_product_mandate`, `create_product_basis` and exact expected-parent checks. Search resolves the identity version effective at the requested `as_of` time and returns persisted Industry/Company/Security identities only; it does not query legacy Event/Theme fixtures.
+- [x] **Step 3: Implement focused repository methods.** Provide `append_identity_version`, `create_project`, `project`, `list_projects`, `search_objects`, `append_scope`, `append_agenda`, `append_product_mandate`, `create_product_basis` and exact expected-parent checks. Search resolves the identity version effective at the requested `as_of` time and returns persisted Industry/Company/Security identities only; it does not query legacy Event/Theme fixtures.
 
 ```python
 class ProductRepository:
@@ -487,7 +487,7 @@ class ProductRepository:
         )
 ```
 
-- [ ] **Step 4: Implement service validation and canonical hashes.** Require a Company primary object and at least one related target Security. An Industry result is selectable for browsing but cannot create a project until Company and Security are confirmed. Agenda provenance must be either deterministic template metadata or complete AI provenance.
+- [x] **Step 4: Implement service validation and canonical hashes.** Require a Company primary object and at least one related target Security. An Industry result is selectable for browsing but cannot create a project until Company and Security are confirmed. Agenda provenance must be either deterministic template metadata or complete AI provenance.
 
 ```python
 agenda_hash = canonical_hash({
@@ -498,7 +498,7 @@ agenda_hash = canonical_hash({
 })
 ```
 
-- [ ] **Step 5: Run GREEN and commit.**
+- [x] **Step 5: Run GREEN and commit.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_product_project.py tests/underwriting/test_kernel_service.py tests/underwriting/test_isolation_contract.py`
 
