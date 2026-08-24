@@ -659,7 +659,7 @@ git commit -m "feat: add optimistic investment research drafts"
 - Modify: `backend/app/underwriting/persistence/product_repository.py`
 - Modify: `backend/app/underwriting/services/research_revision_diff.py`
 
-- [ ] **Step 1: Write RED publication tests.** Cover preview determinism, missing boundary members, cross-project references, stale draft lock, idempotent retry, partial insert rollback, successor lineage and legacy reader compatibility.
+- [x] **Step 1: Write RED publication tests.** Cover preview determinism, missing boundary members, cross-project references, stale draft lock, idempotent retry, partial insert rollback, successor lineage and legacy reader compatibility.
 
 ```python
 def test_publish_is_atomic_when_manifest_insert_fails(session, publisher, ready_draft, monkeypatch) -> None:
@@ -671,13 +671,13 @@ def test_publish_is_atomic_when_manifest_insert_fails(session, publisher, ready_
     assert count_product_revisions(session) == 0
 ```
 
-- [ ] **Step 2: Confirm RED.**
+- [x] **Step 2: Confirm RED.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_revision_publisher.py`
 
 Expected: import failure for `revision_publisher`.
 
-- [ ] **Step 3: Implement canonical boundary and manifest builders.**
+- [x] **Step 3: Implement canonical boundary and manifest builders.**
 
 ```python
 manifest = {
@@ -698,7 +698,7 @@ manifest = {
 
 The foundation permits empty model and memo refs only when the referenced assessment is `not_answerable`; `assessment_ref` is always required. The UI maps this fail-closed shape to `insufficient_evidence`. Increment A cannot persist a provisional direction.
 
-- [ ] **Step 4: Implement preview and publish.** Preview runs identity, cutoff, snapshot, scope, mandate and legacy-boundary gates without writes and returns the canonical fail-closed Assessment payload. Publish begins by locking the project row, then checks `project_id + idempotency_key`; this serializes concurrent retries before they inspect the draft. It repeats the gates inside the transaction and inserts assessment → boundary → manifest → `UnderwritingResearchVersion(version_kind="independent_research")`, then compare-and-swap resets the draft base. Retry returns the same revision ID.
+- [x] **Step 4: Implement preview and publish.** Preview runs identity, cutoff, snapshot, scope, mandate and legacy-boundary gates without writes and returns the canonical fail-closed Assessment payload. Publish begins by locking the project row, then checks `project_id + idempotency_key`; this serializes concurrent retries before they inspect the draft. It repeats the gates inside the transaction and inserts assessment → boundary → manifest → `UnderwritingResearchVersion(version_kind="independent_research")`, then compare-and-swap resets the draft base. Retry returns the same revision ID.
 
 ```python
 def publish(self, project_id: UUID, expected_lock_version: int, idempotency_key: str):
@@ -719,7 +719,7 @@ def publish(self, project_id: UUID, expected_lock_version: int, idempotency_key:
     return revision
 ```
 
-- [ ] **Step 5: Extend the reader by manifest schema dispatch.** Legacy rows keep the v3 hash path. New rows require project/boundary/manifest IDs, recompute the v1 canonical manifest and expose market snapshot references without querying latest rows.
+- [x] **Step 5: Extend the reader by manifest schema dispatch.** Legacy rows keep the v3 hash path. New rows require project/boundary/manifest IDs, recompute the v1 canonical manifest and expose market snapshot references without querying latest rows.
 
 ```python
 if revision.manifest_schema == "underwriting.research-revision-manifest.v1":
@@ -727,7 +727,7 @@ if revision.manifest_schema == "underwriting.research-revision-manifest.v1":
 return self._legacy_revision_summary(revision)
 ```
 
-- [ ] **Step 6: Run GREEN and commit.**
+- [x] **Step 6: Run GREEN and commit.**
 
 Run:
 
