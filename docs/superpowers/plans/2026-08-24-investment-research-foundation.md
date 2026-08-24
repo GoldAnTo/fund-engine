@@ -591,7 +591,7 @@ git commit -m "feat: freeze independent investment market snapshots"
 - Create: `backend/tests/underwriting/test_workspace_draft.py`
 - Modify: `backend/app/underwriting/persistence/product_repository.py`
 
-- [ ] **Step 1: Write RED tests for create, save and stale writes.**
+- [x] **Step 1: Write RED tests for create, save and stale writes.**
 
 ```python
 def test_stale_draft_save_is_rejected(session, draft_service, project) -> None:
@@ -602,13 +602,13 @@ def test_stale_draft_save_is_rejected(session, draft_service, project) -> None:
         draft_service.save(project.id, expected_lock_version=1, patch={"user_focus": "storage"})
 ```
 
-- [ ] **Step 2: Confirm RED.**
+- [x] **Step 2: Confirm RED.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_workspace_draft.py`
 
 Expected: import failure for `workspace_draft`.
 
-- [ ] **Step 3: Implement an allowlisted patch contract.** Draft content may contain only IDs and user-authored draft fields defined by `WorkspaceDraftContent`; reject arbitrary nested keys, formal status claims and any `publication_status=user_frozen` input.
+- [x] **Step 3: Implement an allowlisted patch contract.** Draft content may contain only IDs and user-authored draft fields defined by `WorkspaceDraftContent`; reject arbitrary nested keys, formal status claims and any `publication_status=user_frozen` input.
 
 ```python
 class WorkspaceDraftPatch(BaseModel):
@@ -624,7 +624,7 @@ class WorkspaceDraftPatch(BaseModel):
     user_focus: str | None = None
 ```
 
-- [ ] **Step 4: Implement one-statement compare-and-swap.** Execute `UPDATE ... WHERE project_id=:id AND lock_version=:expected`, increment lock version, set `updated_at`, and require `rowcount == 1`. Draft deletion is not exposed; a published revision resets the existing draft to a new base through the same compare-and-swap path.
+- [x] **Step 4: Implement one-statement compare-and-swap.** Execute `UPDATE ... WHERE project_id=:id AND lock_version=:expected`, increment lock version, set `updated_at`, and require `rowcount == 1`. Draft deletion is not exposed; a published revision resets the existing draft to a new base through the same compare-and-swap path.
 
 ```python
 statement = (
@@ -639,7 +639,7 @@ if self._session.execute(statement).rowcount != 1:
     raise ConflictError("workspace draft changed; reload before saving")
 ```
 
-- [ ] **Step 5: Run GREEN and commit.**
+- [x] **Step 5: Run GREEN and commit.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_workspace_draft.py tests/underwriting/test_product_persistence.py`
 
