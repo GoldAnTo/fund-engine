@@ -117,10 +117,13 @@ scripts/one-click-runtime.sh restore /absolute/path/to/backup
 ```
 
 tar 校验默认限制为：压缩文件 1 GiB、100,000 个成员、单文件 512 MiB、解压总量
-2 GiB、最大压缩比 200。可用同名的 `ONE_CLICK_BACKUP_MAX_COMPRESSED_BYTES`、
+2 GiB、最大压缩比 200；同时只接受普通文件和零负载目录组成的简单 USTAR，不接受
+PAX/GNU 扩展头、链接或特殊文件。checksum manifest 上限为 64 KiB，PostgreSQL dump
+上限为 8 GiB。可用同名的 `ONE_CLICK_BACKUP_MAX_COMPRESSED_BYTES`、
 `ONE_CLICK_BACKUP_MAX_MEMBERS`、`ONE_CLICK_BACKUP_MAX_SINGLE_FILE_BYTES`、
 `ONE_CLICK_BACKUP_MAX_TOTAL_BYTES` 和 `ONE_CLICK_BACKUP_MAX_COMPRESSION_RATIO`
-环境变量设置其他正整数上限。
+环境变量设置其他正整数上限；manifest 和 dump 对应
+`ONE_CLICK_BACKUP_MAX_MANIFEST_BYTES`、`ONE_CLICK_BACKUP_MAX_POSTGRES_DUMP_BYTES`。
 
 `init` 生成的本地凭证保存在忽略的 `.env.one-click.local`，不会打印密钥；不要提交或
 手工分享该文件。脚本拒绝符号链接、非普通文件或非当前用户持有的运行环境文件，并将

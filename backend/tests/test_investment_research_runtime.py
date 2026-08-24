@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import os
 import shutil
 import stat
@@ -85,6 +86,10 @@ if [[ "$1 $2" == "volume create" ]]; then
     *) exit 91 ;;
   esac
   printf '%s\\n' "$name|||test-project|$suffix|$purpose" > "$VOLUME_STATE/$name"
+  if [[ "${{INTERRUPT_OPERATION_CREATE:-}}" == "$purpose" ]]; then
+    kill -TERM "$PPID"
+    sleep 0.1
+  fi
   printf '%s\\n' "$name"
   exit 0
 fi
@@ -95,6 +100,33 @@ if [[ "$1 $2" == "volume rm" ]]; then
 fi
 exit 0
 """
+
+
+def _replace_research_archive_with_raw_member(
+    backup: Path,
+    *,
+    member_type: bytes,
+    member_size: int,
+) -> None:
+    member = tarfile.TarInfo("raw-member")
+    member.type = member_type
+    member.size = member_size
+    raw_archive = (
+        member.tobuf(format=tarfile.USTAR_FORMAT)
+        + bytes(member_size)
+        + bytes((-member_size) % 512)
+        + bytes(1024)
+    )
+    with gzip.open(backup / "research-files.tar.gz", "wb") as archive:
+        archive.write(raw_archive)
+    manifest = subprocess.run(
+        ["shasum", "-a", "256", "postgres.dump", "research-files.tar.gz"],
+        cwd=backup,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    (backup / "manifest.sha256").write_text(manifest)
 
 
 @pytest.mark.parametrize("target", ["relative", "/", "/tmp", "/var", "/Users"])
@@ -221,6 +253,8 @@ def test_runtime_backup_restore_contract_is_fail_closed() -> None:
         "ONE_CLICK_BACKUP_MAX_SINGLE_FILE_BYTES",
         "ONE_CLICK_BACKUP_MAX_TOTAL_BYTES",
         "ONE_CLICK_BACKUP_MAX_COMPRESSION_RATIO",
+        "ONE_CLICK_BACKUP_MAX_MANIFEST_BYTES",
+        "ONE_CLICK_BACKUP_MAX_POSTGRES_DUMP_BYTES",
     ):
         assert limit in script
     assert "postgres.dump" in script and "research-files.tar.gz" in script
@@ -307,7 +341,11 @@ def test_restore_rejects_checksum_and_unsafe_tar_before_docker(tmp_path: Path) -
     secret_source = secret_tar.parent / "secret-source"
     (secret_source / "nested").mkdir(parents=True)
     (secret_source / "nested" / ".env.production").write_text("TOKEN=secret\n")
-    with tarfile.open(secret_tar / "research-files.tar.gz", "w:gz") as archive:
+    with tarfile.open(
+        secret_tar / "research-files.tar.gz",
+        "w:gz",
+        format=tarfile.USTAR_FORMAT,
+    ) as archive:
         archive.add(secret_source / "nested", arcname="nested")
     manifest = subprocess.run(
         [
@@ -357,6 +395,83 @@ def test_restore_rejects_archive_resource_limit_before_docker(tmp_path: Path) ->
 
     assert completed.returncode != 0
     assert "compressed byte limit" in completed.stderr
+    assert "docker must not run" not in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("member_type", "member_size", "expected_error"),
+    [
+        (tarfile.DIRTYPE, 1_048_576, "directory has a non-zero payload"),
+        (tarfile.XHDTYPE, 1, "USTAR policy"),
+        (tarfile.GNUTYPE_LONGNAME, 1, "USTAR policy"),
+    ],
+)
+def test_restore_rejects_raw_tar_metadata_payloads_before_docker(
+    tmp_path: Path,
+    member_type: bytes,
+    member_size: int,
+    expected_error: str,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    backup = tmp_path / "backup"
+    _write_backup_bundle(backup)
+    _replace_research_archive_with_raw_member(
+        backup,
+        member_type=member_type,
+        member_size=member_size,
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text("#!/bin/sh\nprintf 'docker must not run\\n' >&2\nexit 93\n")
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "restore", str(backup)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert completed.returncode != 0
+    assert expected_error in completed.stderr
+    assert "docker must not run" not in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "expected_artifact"),
+    [
+        ("ONE_CLICK_BACKUP_MAX_MANIFEST_BYTES", "manifest.sha256"),
+        ("ONE_CLICK_BACKUP_MAX_POSTGRES_DUMP_BYTES", "postgres.dump"),
+    ],
+)
+def test_restore_caps_artifacts_before_private_snapshot_copy(
+    tmp_path: Path,
+    limit_name: str,
+    expected_artifact: str,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    backup = tmp_path / "backup"
+    _write_backup_bundle(backup)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text("#!/bin/sh\nprintf 'docker must not run\\n' >&2\nexit 93\n")
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "restore", str(backup)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            limit_name: "1",
+        },
+    )
+
+    assert completed.returncode != 0
+    assert f"byte limit: {expected_artifact}" in completed.stderr
     assert "docker must not run" not in completed.stderr
 
 
@@ -475,6 +590,39 @@ def test_restore_never_reuses_or_removes_existing_foreign_operation_volume(
     assert "volume create" not in commands
     assert "volume rm" not in commands
     assert ":/target" not in commands
+
+
+def test_restore_interrupt_during_operation_volume_create_cleans_owned_volume(
+    tmp_path: Path,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    backup = tmp_path / "backup"
+    _write_backup_bundle(backup)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "docker.log"
+    volume_state = tmp_path / "volumes"
+    volume_state.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(_stateful_volume_docker())
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "restore", str(backup)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(log),
+            "VOLUME_STATE": str(volume_state),
+            "INTERRUPT_OPERATION_CREATE": "restore-staging",
+        },
+    )
+
+    assert completed.returncode != 0
+    assert not tuple(volume_state.iterdir())
+    assert "volume rm fund-engine-one-click-files-restore-" in log.read_text()
 
 
 def test_backup_checks_stopped_services_before_dump(tmp_path: Path) -> None:

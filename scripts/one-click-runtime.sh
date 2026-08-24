@@ -24,10 +24,84 @@ require_command() {
 }
 
 validate_runtime_env_file() {
-  [[ -f "$RUNTIME_ENV_FILE" && ! -L "$RUNTIME_ENV_FILE" && -O "$RUNTIME_ENV_FILE" ]] \
-    || die "runtime environment must be a regular, owner-controlled file: $RUNTIME_ENV_FILE"
-  chmod 600 "$RUNTIME_ENV_FILE" \
-    || die "unable to restrict runtime environment permissions"
+  require_command python3
+  if ! python3 -c '
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+try:
+    descriptor = os.open(path, flags)
+except OSError as exc:
+    raise SystemExit(f"unable to open runtime environment safely: {exc}") from exc
+try:
+    descriptor_stat = os.fstat(descriptor)
+    if not stat.S_ISREG(descriptor_stat.st_mode) or descriptor_stat.st_uid != os.geteuid():
+        raise SystemExit("runtime environment is not a regular owner-controlled file")
+    os.fchmod(descriptor, 0o600)
+    path_stat = os.stat(path, follow_symlinks=False)
+    if (
+        not stat.S_ISREG(path_stat.st_mode)
+        or path_stat.st_dev != descriptor_stat.st_dev
+        or path_stat.st_ino != descriptor_stat.st_ino
+    ):
+        raise SystemExit("runtime environment identity changed during validation")
+finally:
+    os.close(descriptor)
+' "$RUNTIME_ENV_FILE"; then
+    die "runtime environment must be a regular, owner-controlled file: $RUNTIME_ENV_FILE"
+  fi
+}
+
+create_runtime_env_file() {
+  local postgres_password="$1"
+  local bearer_token="$2"
+  if ! printf '%s\n%s\n' "$postgres_password" "$bearer_token" | \
+    python3 -c '
+import json
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+secrets = sys.stdin.read().splitlines()
+if len(secrets) != 2 or not all(secrets):
+    raise SystemExit("generated runtime credentials are invalid")
+postgres_password, bearer_token = secrets
+payload = "\n".join(
+    (
+        "ONE_CLICK_POSTGRES_DB=fund_engine_one_click",
+        "ONE_CLICK_POSTGRES_USER=one_click",
+        f"ONE_CLICK_POSTGRES_PASSWORD={postgres_password}",
+        f"RESEARCH_BEARER_TOKEN={bearer_token}",
+        "RESEARCH_TENANT_TOKENS=" + json.dumps({bearer_token: "local-one-click"}, separators=(",", ":")),
+        "ACQUISITION_ENABLED_ADAPTERS=sse,szse",
+        "",
+    )
+)
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+try:
+    descriptor = os.open(path, flags, 0o600)
+except FileExistsError as exc:
+    raise SystemExit("runtime environment appeared during atomic creation; refusing to overwrite") from exc
+with os.fdopen(descriptor, "w", encoding="utf-8") as runtime_file:
+    runtime_file.write(payload)
+    runtime_file.flush()
+    os.fsync(runtime_file.fileno())
+    descriptor_stat = os.fstat(runtime_file.fileno())
+    path_stat = os.stat(path, follow_symlinks=False)
+    if (
+        not stat.S_ISREG(path_stat.st_mode)
+        or path_stat.st_dev != descriptor_stat.st_dev
+        or path_stat.st_ino != descriptor_stat.st_ino
+        or path_stat.st_uid != os.geteuid()
+    ):
+        raise SystemExit("runtime environment identity changed during atomic creation")
+' "$RUNTIME_ENV_FILE"; then
+    die "unable to atomically create runtime environment"
+  fi
 }
 
 require_runtime_files() {
@@ -137,7 +211,10 @@ remove_operation_volume() {
   local project_name="$2"
   local operation="$3"
   local purpose="$4"
-  if ! validate_operation_volume "$volume_name" "$project_name" "$operation" "$purpose"; then
+  local actual expected
+  expected="${volume_name}|||${project_name}|${operation}|${purpose}"
+  actual="$(volume_identity "$volume_name" 2>/dev/null)" || return 0
+  if [[ "$actual" != "$expected" ]]; then
     printf 'one-click runtime: refusing to remove operation volume with unexpected identity: %s\n' \
       "$volume_name" >&2
     return 1
@@ -232,6 +309,7 @@ upgrade_legacy_runtime_defaults() {
 
 init_runtime_environment() {
   require_command openssl
+  require_command python3
 
   if [[ -e "$RUNTIME_ENV_FILE" || -L "$RUNTIME_ENV_FILE" ]]; then
     validate_runtime_env_file
@@ -244,17 +322,7 @@ init_runtime_environment() {
   postgres_password="$(openssl rand -hex 32)"
   bearer_token="$(openssl rand -hex 32)"
 
-  (
-    umask 077
-    printf '%s\n' \
-      'ONE_CLICK_POSTGRES_DB=fund_engine_one_click' \
-      'ONE_CLICK_POSTGRES_USER=one_click' \
-      "ONE_CLICK_POSTGRES_PASSWORD=${postgres_password}" \
-      "RESEARCH_BEARER_TOKEN=${bearer_token}" \
-      "RESEARCH_TENANT_TOKENS={\"${bearer_token}\":\"local-one-click\"}" \
-      'ACQUISITION_ENABLED_ADAPTERS=sse,szse' \
-      > "$RUNTIME_ENV_FILE"
-  )
+  create_runtime_env_file "$postgres_password" "$bearer_token"
   validate_runtime_env_file
 
   printf 'Created local one-click runtime environment.\n'
@@ -428,7 +496,10 @@ start_one_click_runtime() (
     local status="$?"
     trap - EXIT INT TERM
     if [[ "$rollback_required" == "true" ]]; then
-      if ! restore_legacy_application_services; then
+      if ! compose down; then
+        printf 'one-click runtime: unable to stop a partially started one-click stack; legacy container state is preserved for manual recovery\n' >&2
+        status=1
+      elif ! restore_legacy_application_services; then
         printf 'one-click runtime: failed to restore all prerecorded legacy containers\n' >&2
         status=1
       fi
@@ -480,6 +551,7 @@ validate_research_archive() {
   python3 - "$archive" <<'PY'
 import os
 import pathlib
+import gzip
 import sys
 import tarfile
 
@@ -508,9 +580,85 @@ if compressed_size > max_compressed:
 if compressed_size <= 0:
     raise SystemExit("research archive is empty")
 
-member_count = 0
-total_size = 0
+raw_member_count = 0
+raw_total = 0
+file_total = 0
+
+
+def account_raw(size: int) -> None:
+    global raw_total
+    raw_total += size
+    if raw_total > max_total:
+        raise SystemExit("research archive exceeds total byte limit")
+    if raw_total > compressed_size * max_ratio:
+        raise SystemExit("research archive exceeds compression ratio limit")
+
+
+def discard_exact(stream: gzip.GzipFile, size: int) -> None:
+    remaining = size
+    while remaining:
+        chunk = stream.read(min(remaining, 64 * 1024))
+        if not chunk:
+            raise SystemExit("research archive is truncated")
+        account_raw(len(chunk))
+        remaining -= len(chunk)
+
+
+def parse_ustar_size(field: bytes) -> int:
+    if field and field[0] & 0x80:
+        raise SystemExit("research archive uses unsupported base-256 size encoding")
+    raw = field.rstrip(b"\0 ").lstrip(b" ") or b"0"
+    if any(value not in b"01234567" for value in raw):
+        raise SystemExit("research archive has an invalid USTAR size")
+    return int(raw, 8)
+
+
 try:
+    with gzip.open(archive, mode="rb") as raw_bundle:
+        zero_blocks = 0
+        while True:
+            header = raw_bundle.read(512)
+            if not header:
+                break
+            account_raw(len(header))
+            if len(header) != 512:
+                raise SystemExit("research archive has a partial USTAR header")
+            if header == bytes(512):
+                zero_blocks += 1
+                if zero_blocks >= 2:
+                    while True:
+                        trailing = raw_bundle.read(64 * 1024)
+                        if not trailing:
+                            break
+                        account_raw(len(trailing))
+                        if any(trailing):
+                            raise SystemExit("research archive has data after its end marker")
+                    break
+                continue
+            zero_blocks = 0
+            raw_member_count += 1
+            if raw_member_count > max_members:
+                raise SystemExit("research archive exceeds member count limit")
+            member_size = parse_ustar_size(header[124:136])
+            member_type = header[156:157]
+            if member_type in (b"", b"\0", b"0"):
+                if member_size > max_single_file:
+                    raise SystemExit("research archive exceeds single file byte limit")
+                file_total += member_size
+                if file_total > max_total:
+                    raise SystemExit("research archive exceeds total byte limit")
+            elif member_type == b"5":
+                if member_size != 0:
+                    raise SystemExit("research archive directory has a non-zero payload")
+            else:
+                raise SystemExit("unsafe research archive member type is unsupported by the USTAR policy")
+            discard_exact(raw_bundle, member_size)
+            padding = (-member_size) % 512
+            if padding:
+                discard_exact(raw_bundle, padding)
+
+    member_count = 0
+    semantic_file_total = 0
     bundle = tarfile.open(archive, mode="r|gz")
     with bundle:
         for member in bundle:
@@ -532,11 +680,11 @@ try:
             if member.isfile():
                 if member.size < 0 or member.size > max_single_file:
                     raise SystemExit("research archive exceeds single file byte limit")
-                total_size += member.size
-                if total_size > max_total:
+                semantic_file_total += member.size
+                if semantic_file_total > max_total:
                     raise SystemExit("research archive exceeds total byte limit")
-                if total_size > compressed_size * max_ratio:
-                    raise SystemExit("research archive exceeds compression ratio limit")
+            elif member.size != 0:
+                raise SystemExit("research archive directory has a non-zero payload")
 except (OSError, tarfile.TarError) as exc:
     raise SystemExit(f"research archive is unreadable: {exc}") from exc
 PY
@@ -547,12 +695,38 @@ snapshot_backup_bundle() {
   local destination_dir="$2"
   python3 - "$source_dir" "$destination_dir" <<'PY'
 import os
-import shutil
 import stat
 import sys
 
 source_path, destination_path = sys.argv[1:]
 artifacts = ("manifest.sha256", "postgres.dump", "research-files.tar.gz")
+
+
+def positive_limit(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be a positive integer") from exc
+    if value <= 0:
+        raise SystemExit(f"{name} must be a positive integer")
+    return value
+
+
+artifact_limits = {
+    "manifest.sha256": positive_limit("ONE_CLICK_BACKUP_MAX_MANIFEST_BYTES", 65_536),
+    "postgres.dump": positive_limit("ONE_CLICK_BACKUP_MAX_POSTGRES_DUMP_BYTES", 8_589_934_592),
+    "research-files.tar.gz": positive_limit("ONE_CLICK_BACKUP_MAX_COMPRESSED_BYTES", 1_073_741_824),
+}
+
+
+def limit_error(artifact: str, during_copy: bool = False) -> str:
+    if artifact == "research-files.tar.gz":
+        return "research archive exceeds compressed byte limit"
+    suffix = " while copying" if during_copy else ""
+    return f"backup artifact exceeds byte limit{suffix}: {artifact}"
+
+
 directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 source_fd = os.open(source_path, directory_flags)
 try:
@@ -568,6 +742,9 @@ try:
             metadata = os.fstat(source_file_fd)
             if not stat.S_ISREG(metadata.st_mode):
                 raise SystemExit(f"backup artifact is not a regular file: {artifact}")
+            limit = artifact_limits[artifact]
+            if metadata.st_size > limit:
+                raise SystemExit(limit_error(artifact))
             destination_file_fd = os.open(
                 os.path.join(destination_path, artifact),
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -575,7 +752,19 @@ try:
             )
             with os.fdopen(source_file_fd, "rb", closefd=False) as source_file:
                 with os.fdopen(destination_file_fd, "wb") as destination_file:
-                    shutil.copyfileobj(source_file, destination_file, length=1024 * 1024)
+                    copied = 0
+                    while True:
+                        chunk = source_file.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        copied += len(chunk)
+                        if copied > limit:
+                            raise SystemExit(limit_error(artifact, during_copy=True))
+                        destination_file.write(chunk)
+                    destination_file.flush()
+                    os.fsync(destination_file.fileno())
+                    if copied != metadata.st_size or os.fstat(source_file_fd).st_size != metadata.st_size:
+                        raise SystemExit(f"backup artifact changed while copying: {artifact}")
         finally:
             os.close(source_file_fd)
 finally:
@@ -723,8 +912,8 @@ restore_runtime() (
   local database_swapped="false"
   local preserve_recovery_state="false"
   local database_state="pre_cutover"
-  local staging_volume_created="false"
-  local rollback_volume_created="false"
+  local staging_volume_tracked="false"
+  local rollback_volume_tracked="false"
 
   cleanup_restore() {
     if [[ -n "$private_backup" ]]; then
@@ -740,11 +929,11 @@ restore_runtime() (
         "$files_volume" "$staging_volume" "$rollback_volume"
       return 0
     fi
-    if [[ "$staging_volume_created" == "true" ]]; then
+    if [[ "$staging_volume_tracked" == "true" ]]; then
       remove_operation_volume \
         "$staging_volume" "$project_name" "$suffix" restore-staging || true
     fi
-    if [[ "$rollback_volume_created" == "true" ]]; then
+    if [[ "$rollback_volume_tracked" == "true" ]]; then
       remove_operation_volume \
         "$rollback_volume" "$project_name" "$suffix" restore-rollback || true
     fi
@@ -783,9 +972,9 @@ restore_runtime() (
   compose exec -T postgres createdb -U "$database_user" "$staging_database"
   compose exec -T postgres pg_restore --exit-on-error --no-owner --no-privileges \
     -U "$database_user" -d "$staging_database" < "$private_backup/postgres.dump"
+  staging_volume_tracked="true"
   create_operation_volume \
     "$staging_volume" "$project_name" "$suffix" restore-staging
-  staging_volume_created="true"
   validate_operation_volume \
     "$staging_volume" "$project_name" "$suffix" restore-staging \
     || die "restore staging volume identity changed before extraction"
@@ -801,9 +990,9 @@ restore_runtime() (
   ONE_CLICK_POSTGRES_DB="$staging_database" ONE_CLICK_FILES_VOLUME="$staging_volume" \
     compose run --rm --no-deps api python -m app.scripts.verify_underwriting_revision_manifests
 
+  rollback_volume_tracked="true"
   create_operation_volume \
     "$rollback_volume" "$project_name" "$suffix" restore-rollback
-  rollback_volume_created="true"
   validate_live_files_volume "$files_volume" "$project_name"
   validate_operation_volume \
     "$rollback_volume" "$project_name" "$suffix" restore-rollback \

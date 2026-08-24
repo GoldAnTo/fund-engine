@@ -66,6 +66,7 @@ case "$1" in
   compose)
     [[ "$*" == *" config -q"* || "$*" == *" build"* ]] && exit 0
     [[ "$*" == *" up -d --no-build"* ]] && exit 1
+    [[ "$*" == *" down"* ]] && {{ [[ "${{FAIL_DOWN:-0}}" == 1 ]] && exit 39 || exit 0; }}
     ;;
   ps)
     [[ "$*" == *"service=api"* ]] && printf '{api_short}\\n'
@@ -101,10 +102,29 @@ esac
     build_index = next(index for index, command in enumerate(commands) if command.endswith(" build"))
     first_stop_index = next(index for index, command in enumerate(commands) if command.startswith("stop "))
     up_index = next(index for index, command in enumerate(commands) if " up -d --no-build" in command)
+    down_index = next(index for index, command in enumerate(commands) if command.endswith(" down"))
+    first_start_index = next(
+        index for index, command in enumerate(commands) if command.startswith("start ")
+    )
     assert config_index < build_index < first_stop_index < up_index
+    assert up_index < down_index < first_start_index
     assert {command for command in commands if command.startswith("stop ")} == {f"stop {api_full}", f"stop {frontend_full}"}
     assert {command for command in commands if command.startswith("start ")} == {f"start {api_full}", f"start {frontend_full}"}
     assert not (tmp_path / ".one-click-runtime" / "legacy-stopped-containers").exists()
+
+    log.write_text("")
+    blocked = subprocess.run(
+        [script, "up"],
+        capture_output=True,
+        text=True,
+        env={**env, "FAIL_DOWN": "1"},
+    )
+    assert blocked.returncode != 0
+    assert "state is preserved for manual recovery" in blocked.stderr
+    blocked_commands = log.read_text().splitlines()
+    assert any(command.endswith(" down") for command in blocked_commands)
+    assert not any(command.startswith("start ") for command in blocked_commands)
+    assert (tmp_path / ".one-click-runtime" / "legacy-stopped-containers").exists()
 
 
 def test_up_restores_every_prerecorded_container_when_stop_reports_failure(
@@ -132,6 +152,7 @@ printf '%s\\n' "$*" >> "$DOCKER_LOG"
 case "$1" in
   compose)
     [[ "$*" == *" config -q"* || "$*" == *" build"* ]] && exit 0
+    [[ "$*" == *" down"* ]] && exit 0
     ;;
   ps)
     [[ "$*" == *"service=api"* ]] && printf '{api_short}\\n'
@@ -295,6 +316,49 @@ def test_init_rejects_symlink_runtime_env_and_repairs_private_mode(
 
     assert repaired.returncode == 0
     assert stat.S_IMODE(runtime_env.stat().st_mode) == 0o600
+
+
+def test_init_atomic_create_does_not_follow_symlink_inserted_during_generation(
+    tmp_path: Path,
+) -> None:
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    script = scripts_dir / "one-click-runtime.sh"
+    shutil.copy(ROOT / "scripts" / "one-click-runtime.sh", script)
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    outside = tmp_path / "outside.env"
+    outside.write_text("must remain unchanged\n")
+    runtime_env = tmp_path / ".env.one-click.local"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    openssl = fake_bin / "openssl"
+    openssl.write_text(
+        "#!/bin/sh\n"
+        'if [ ! -e "$RACE_MARKER" ]; then\n'
+        '  : > "$RACE_MARKER"\n'
+        '  ln -s "$RACE_TARGET" "$RUNTIME_ENV_PATH"\n'
+        "fi\n"
+        "printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\\n'\n"
+    )
+    openssl.chmod(openssl.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        ["/bin/bash", script, "init"],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "RACE_MARKER": str(tmp_path / "race-marker"),
+            "RACE_TARGET": str(outside),
+            "RUNTIME_ENV_PATH": str(runtime_env),
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "atomically create runtime environment" in completed.stderr
+    assert runtime_env.is_symlink()
+    assert outside.read_text() == "must remain unchanged\n"
 
 
 def test_init_upgrades_the_previous_default_gildata_adapter_without_exposing_secrets(
