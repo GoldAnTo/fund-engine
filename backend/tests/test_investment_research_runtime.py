@@ -116,6 +116,7 @@ def test_runtime_compose_installs_fixture_and_has_optional_integrations() -> Non
         "${ONE_CLICK_FRONTEND_IMAGE:-fund-engine-one-click-frontend:local}" in compose
     )
     assert "file-store-init:" in compose
+    assert compose.count("context: ./backend") == 1
     assert "install -d -o app -g app -m 700 /data/research-files" in compose
     following_service = {
         "api": "research-worker",
@@ -144,7 +145,13 @@ def test_runtime_backup_restore_contract_is_fail_closed() -> None:
     assert "verify_underwriting_revision_manifests" in script
     assert "load_product_foundation_fixture" in script
     assert script.count("compose run --rm --no-deps") >= 4
-    assert "stop application services before restore" in script
+    assert "require_application_services_stopped backup" in script
+    assert "require_application_services_stopped restore" in script
+    assert 'preserve_recovery_state="true"' in script
+    assert "automatic restore rollback failed; preserved" in script
+    assert "manual recovery required; keep application services stopped" in script
+    assert "docker volume inspect" in script
+    assert "compose config --format json" in script
     assert "postgres.dump" in script and "research-files.tar.gz" in script
     assert "--volumes" not in script
 
@@ -291,6 +298,37 @@ def test_restore_checks_stopped_services_before_database_mutation(
     assert "createdb" not in log.read_text()
 
 
+def test_backup_checks_stopped_services_before_dump(tmp_path: Path) -> None:
+    script = _runtime_copy(tmp_path)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "docker.log"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
+        'case "$*" in\n'
+        "  *' ps --status running --services'*) printf 'api\\npostgres\\n' ;;\n"
+        "esac\n"
+    )
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "backup", str(tmp_path / "backup")],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(log),
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "stop application services before backup" in completed.stderr
+    assert "pg_dump" not in log.read_text()
+
+
 def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
     tmp_path: Path,
 ) -> None:
@@ -302,9 +340,10 @@ def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
     docker.write_text(
         "#!/bin/sh\n"
         'printf \'<%s>\\n\' "$@" >> "$DOCKER_LOG"\n'
-        'if [ "${FAIL_DUMP:-0}" = 1 ]; then exit 17; fi\n'
         'case "$*" in\n'
-        "  *' pg_dump -Fc '*) printf 'custom-dump' ;;\n"
+        "  *' config --format json'*) printf '%s' '{\"volumes\":{\"fund-engine-one-click-files\":{\"name\":\"custom-task11-files\"}}}' ;;\n"
+        "  *' ps --status running --services'*) printf 'postgres\\n' ;;\n"
+        "  *' pg_dump -Fc '*) if [ \"${FAIL_DUMP:-0}\" = 1 ]; then exit 17; else printf 'custom-dump'; fi ;;\n"
         "  *' alpine sh -eu -c '*)\n"
         "    previous=''\n"
         '    for argument in "$@"; do\n'
@@ -319,6 +358,8 @@ def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "DOCKER_LOG": str(log),
     }
+    with (tmp_path / ".env.one-click.local").open("a") as runtime_env:
+        runtime_env.write("ONE_CLICK_FILES_VOLUME=custom-task11-files\n")
     output = tmp_path / "backup with spaces"
 
     completed = subprocess.run(
@@ -335,6 +376,7 @@ def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
         ".one-click-backup." in line and line.endswith(":/backup>")
         for line in log.read_text().splitlines()
     )
+    assert "<custom-task11-files:/source:ro>" in log.read_text()
 
     failed_output = tmp_path / "failed backup"
     failed = subprocess.run(
@@ -348,6 +390,48 @@ def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
     assert not tuple(tmp_path.glob(".one-click-backup.*"))
 
 
+def test_restore_preserves_recovery_artifacts_when_compensation_fails(
+    tmp_path: Path,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    backup = tmp_path / "backup"
+    _write_backup_bundle(backup)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "docker.log"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
+        'case "$*" in\n'
+        "  *' config --format json'*) printf '%s' '{\"volumes\":{\"fund-engine-one-click-files\":{\"name\":\"fund-engine-one-click-files\"}}}' ;;\n"
+        "  *' ps --status running --services'*) printf 'postgres\\n' ;;\n"
+        "  *'run --rm -v fund-engine-one-click-files-restore-'*':/source:ro'*) exit 41 ;;\n"
+        "  *'run --rm -v fund-engine-one-click-files-before-'*':/source:ro'*) exit 42 ;;\n"
+        "esac\n"
+    )
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "restore", str(backup)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(log),
+        },
+    )
+
+    commands = log.read_text()
+    assert completed.returncode != 0
+    assert "automatic restore rollback failed; preserved" in completed.stderr
+    assert "manual recovery required; keep application services stopped" in completed.stderr
+    assert "docker volume inspect" in completed.stderr
+    assert "volume rm" not in commands
+    assert "dropdb" not in commands
+
+
 def test_runtime_verifier_checks_increment_a_shell_api_and_revision() -> None:
     script = (ROOT / "scripts" / "verify-one-click-runtime.sh").read_text()
 
@@ -358,6 +442,9 @@ def test_runtime_verifier_checks_increment_a_shell_api_and_revision() -> None:
     assert "投资研究" in script
     assert '"$API_URL/api/underwriting/v1/product/objects?query=CATL"' in script
     assert "CATL object foundation is incomplete" in script
+    assert 'printf \'Authorization: Bearer %s\\n\'' in script
+    assert "--header @-" in script
+    assert '-H "Authorization: Bearer ${bearer_token}"' not in script
 
 
 def test_increment_a_gate_uses_repo_python_and_covers_all_layers() -> None:

@@ -174,3 +174,39 @@ def test_init_generates_private_local_credentials_without_echoing_them(tmp_path:
 
     existing = subprocess.run([script, "init"], check=True, capture_output=True, text=True)
     assert existing.stdout == "One-click runtime environment already exists.\n"
+
+
+def test_init_upgrades_the_previous_default_gildata_adapter_without_exposing_secrets(
+    tmp_path: Path,
+) -> None:
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    script = scripts_dir / "one-click-runtime.sh"
+    shutil.copy(ROOT / "scripts" / "one-click-runtime.sh", script)
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    runtime_env = tmp_path / ".env.one-click.local"
+    runtime_env.write_text(
+        "ONE_CLICK_POSTGRES_PASSWORD=do-not-print-me\n"
+        "ACQUISITION_ENABLED_ADAPTERS=sse,szse,gildata\n"
+    )
+
+    completed = subprocess.run(
+        [script, "init"], check=True, capture_output=True, text=True
+    )
+
+    assert "ACQUISITION_ENABLED_ADAPTERS=sse,szse\n" in runtime_env.read_text()
+    assert "gildata" not in runtime_env.read_text()
+    assert "do-not-print-me" not in completed.stdout
+
+    runtime_env.write_text(
+        "ONE_CLICK_POSTGRES_PASSWORD=do-not-print-me\n"
+        "ACQUISITION_ENABLED_ADAPTERS=sse,szse,gildata\n"
+    )
+    subprocess.run(
+        [script, "init"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "GILDATA_TOKEN": "explicitly-configured"},
+    )
+    assert "ACQUISITION_ENABLED_ADAPTERS=sse,szse,gildata\n" in runtime_env.read_text()

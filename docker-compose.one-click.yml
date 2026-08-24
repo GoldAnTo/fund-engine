@@ -34,8 +34,6 @@ services:
 
   file-store-init:
     image: ${ONE_CLICK_BACKEND_IMAGE:-fund-engine-one-click-backend:local}
-    build:
-      context: ./backend
     user: root
     restart: "no"
     command: ["sh", "-eu", "-c", "install -d -o app -g app -m 700 /data/research-files"]
@@ -44,8 +42,6 @@ services:
 
   api:
     image: ${ONE_CLICK_BACKEND_IMAGE:-fund-engine-one-click-backend:local}
-    build:
-      context: ./backend
     restart: unless-stopped
     ports:
       - 127.0.0.1:${ONE_CLICK_API_PORT:-8000}:8000
@@ -73,8 +69,6 @@ services:
 
   research-worker:
     image: ${ONE_CLICK_BACKEND_IMAGE:-fund-engine-one-click-backend:local}
-    build:
-      context: ./backend
     restart: unless-stopped
     command: ["python", "-m", "app.scripts.run_research_worker", "--loop", "--poll-seconds", "1"]
     environment:
@@ -99,8 +93,6 @@ services:
 
   acquisition-worker:
     image: ${ONE_CLICK_BACKEND_IMAGE:-fund-engine-one-click-backend:local}
-    build:
-      context: ./backend
     restart: unless-stopped
     command: ["python", "-m", "app.scripts.run_acquisition_worker", "--loop", "--poll-seconds", "1"]
     environment:

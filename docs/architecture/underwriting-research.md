@@ -240,13 +240,13 @@ two persisted identities rather than a mock or a current-data fallback.
 
 The fresh Increment A gate produced these results:
 
-- backend: 331 passed, 2 skipped, 1 existing Pydantic field-shadow warning;
+- backend: 334 passed, 2 skipped, 1 existing Pydantic field-shadow warning;
   the two skips are the PostgreSQL concurrency variants guarded by
   `TEST_DATABASE_URL` in the workspace-draft and publisher tests;
 - frontend: 75 passed across the product shell, setup flow, strict API reader,
   accessibility contract and deterministic foundation helpers;
 - TypeScript typecheck, Vite production build and Python `compileall`: passed;
-- full repository regression: backend 3,073 passed / 33 skipped / 3 warnings;
+- full repository regression: backend 3,076 passed / 33 skipped / 3 warnings;
   frontend 537 passed across 25 files;
 - legacy compatibility: 5 passed; the stored CATL evidence-only response and
   hash replayed deterministically before and after product rows were present.
@@ -280,3 +280,10 @@ random staging database and volume, reran migration plus fixture initialization
 and revision replay, and only then activated the restored state. After restart,
 all services were healthy, the CATL query still returned two identities and a
 file written through the non-root API user matched its pre-backup contents.
+After review hardening, the disposable `codex-task11-review-20260825` project
+repeated the build, startup, backup and restore sequence with application
+services explicitly stopped during backup. It also verified rendered Compose
+volume-name resolution, stdin-only bearer header delivery, zero leftover
+restore databases or volumes, and a healthy restart; the project, its uniquely
+named volumes and images were then removed without touching either existing
+runtime.

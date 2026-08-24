@@ -105,9 +105,10 @@ scripts/one-click-runtime.sh down
 scripts/one-click-runtime.sh rollback
 ```
 
-备份目标必须是尚不存在的具体绝对目录；恢复要求 API、前端和 worker 已停止，但
-PostgreSQL 保持运行。恢复会先校验精确的三件套、SHA-256 和 tar 路径，再在隔离的
-暂存数据库与文件卷中验证迁移、身份 fixture 和研究版本回放，通过后才切换：
+备份和恢复都要求 API、前端和 worker 已停止，但 PostgreSQL 保持运行，以保证数据库与
+文件处于同一个静止边界。备份目标必须是尚不存在的具体绝对目录。恢复会先校验精确的
+三件套、SHA-256 和 tar 路径，再在隔离的暂存数据库与文件卷中验证迁移、身份 fixture
+和研究版本回放，通过后才切换：
 
 ```bash
 scripts/one-click-runtime.sh backup /absolute/path/to/new-backup

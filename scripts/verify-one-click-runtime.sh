@@ -90,9 +90,9 @@ main() {
   database_user="$(runtime_env_value ONE_CLICK_POSTGRES_USER)"
   database_name="$(runtime_env_value ONE_CLICK_POSTGRES_DB)"
   bearer_token="$(runtime_env_value RESEARCH_BEARER_TOKEN)"
-  product_objects="$(curl --fail --silent --show-error \
-    -H "Authorization: Bearer ${bearer_token}" \
-    "$API_URL/api/underwriting/v1/product/objects?query=CATL")"
+  product_objects="$(printf 'Authorization: Bearer %s\n' "$bearer_token" | \
+    curl --fail --silent --show-error --header @- \
+      "$API_URL/api/underwriting/v1/product/objects?query=CATL")"
   printf '%s' "$product_objects" | python3 -c '
 import json, sys
 value = json.load(sys.stdin)
