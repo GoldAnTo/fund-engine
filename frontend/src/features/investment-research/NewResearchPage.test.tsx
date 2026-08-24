@@ -168,7 +168,17 @@ describe("new independent investment research setup", () => {
     const user = userEvent.setup(); const product = server({ scopeFailures: 1 }); vi.stubGlobal("fetch", product.fetch); renderPage();
     await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
     expect(screen.getByLabelText("研究焦点（可选）")).not.toBeRequired(); expect(screen.getByLabelText("冻结时区 / UTC offset")).toHaveValue("+08:00");
+    expect(screen.getByLabelText("必要回报率")).toHaveAttribute("pattern", "0(?:\\.\\d+)?");
+    expect(screen.getByText("小数格式：0.15 = 15%")).toBeVisible();
+    expect(screen.getAllByText("64 位小写十六进制 SHA-256").length).toBeGreaterThan(0);
+    expect(screen.getByText("金额与股数沿用原始来源单位；同组字段必须保持一致。")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "预览模板议程" })); expect(await screen.findByRole("region", { name: "模板议程预览" })).toHaveTextContent("不构成研究完成或投资结论");
+    const confirmation = screen.getByRole("region", { name: "提交确认摘要" });
+    expect(confirmation).toHaveTextContent("宁德时代新能源科技股份有限公司");
+    expect(confirmation).toHaveTextContent("300750");
+    expect(confirmation).toHaveTextContent("CNY");
+    expect(confirmation).toHaveTextContent("3 年");
+    expect(confirmation).toHaveTextContent("+08:00");
     await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" })); expect(await screen.findByRole("alert")).toHaveTextContent("范围保存失败");
     expect(screen.getByLabelText("研究期限（年）")).toBeDisabled();
     const mandateCount = product.requests.filter((r) => r.url.endsWith("/mandates")).length; await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" })); await screen.findByRole("heading", { name: "研究工作台" });

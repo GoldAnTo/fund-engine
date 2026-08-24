@@ -33,6 +33,10 @@ import {
 
 const schemaVersion = "underwriting.v1" as const;
 const hashPattern = "[0-9a-f]{64}";
+const fractionPattern = "0(?:\\.\\d+)?";
+const positiveDecimalPattern = "(?:0\\.\\d*[1-9]\\d*|[1-9]\\d*(?:\\.\\d+)?)";
+const nonNegativeDecimalPattern = "(?:0|[1-9]\\d*)(?:\\.\\d+)?";
+const hashHint = "64 位小写十六进制 SHA-256";
 
 function field(form: FormData, name: string): string {
   const value = form.get(name);
@@ -51,15 +55,18 @@ function lines(value: string): string[] {
   return value.split(/\n|，|,/).map((item) => item.trim()).filter(Boolean);
 }
 
-function FormField({ label, name, children, ...props }: {
+function FormField({ label, name, children, hint, ...props }: {
   label: string;
   name: string;
   children?: ReactNode;
+  hint?: string;
 } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "name">) {
+  const hintId = `${name.replace(/[^a-zA-Z0-9_-]/g, "-")}-hint`;
   return (
     <label className="ir-field">
       <span>{label}</span>
-      {children ?? <input name={name} {...props} />}
+      {children ?? <input aria-describedby={hint ? hintId : undefined} aria-label={label} name={name} {...props} />}
+      {hint ? <small className="ir-field-help" id={hintId}>{hint}</small> : null}
     </label>
   );
 }
@@ -131,6 +138,12 @@ export default function NewResearchPage() {
   const [baseCurrency, setBaseCurrency] = useState<"CNY" | "USD">("CNY");
   const [timezone, setTimezone] = useState<FrozenTimezone>("+08:00");
   const [agendaPreview, setAgendaPreview] = useState<GeneratedFoundationAgenda | null>(null);
+  const [confirmationSummary, setConfirmationSummary] = useState<{
+    company: string;
+    securities: string;
+    mandate: string;
+    timezone: FrozenTimezone;
+  } | null>(null);
   const [foundation, setFoundation] = useState<{
     mandate?: ProductMandate;
     scope?: ProductScope;
@@ -299,8 +312,17 @@ export default function NewResearchPage() {
     }
     const epoch = ++agendaEpochRef.current;
     try {
-      const preview = await generateFoundationAgenda(agendaInput(new FormData(formElement)));
-      if (mountedRef.current && agendaEpochRef.current === epoch) setAgendaPreview(preview);
+      const input = agendaInput(new FormData(formElement));
+      const preview = await generateFoundationAgenda(input);
+      if (mountedRef.current && agendaEpochRef.current === epoch) {
+        setAgendaPreview(preview);
+        setConfirmationSummary({
+          company: input.company.canonicalName,
+          securities: input.securities.map((security) => security.symbol ?? security.canonicalName).join("、"),
+          mandate: `${input.mandate.horizonYears} 年 · ${input.mandate.baseCurrency}`,
+          timezone,
+        });
+      }
     } catch (error) {
       if (!mountedRef.current || agendaEpochRef.current !== epoch) return;
       setSetupError(error instanceof Error ? error.message : "议程预览失败");
@@ -318,7 +340,7 @@ export default function NewResearchPage() {
     setSubmitting(true);
     setSetupError(null);
     try {
-      if (!agendaPreview) throw new Error("请先预览由固定模板生成的研究议程");
+      if (!agendaPreview || !confirmationSummary) throw new Error("请先预览并核对提交确认摘要");
       const currentAgenda = await generateFoundationAgenda(agendaInput(form));
       if (currentAgenda.inputSummaryHash !== agendaPreview.inputSummaryHash) {
         throw new Error("研究约束已变化，请重新预览议程");
@@ -584,19 +606,19 @@ export default function NewResearchPage() {
       </section>
 
       {project && draft ? (
-        <form ref={boundaryFormRef} aria-busy={submitting} onInput={() => { agendaEpochRef.current += 1; setAgendaPreview(null); }} onSubmit={establishBoundary}>
+        <form ref={boundaryFormRef} aria-busy={submitting} onInput={() => { agendaEpochRef.current += 1; setAgendaPreview(null); setConfirmationSummary(null); }} onSubmit={establishBoundary}>
           <section className="ir-step" aria-labelledby="mandate-step-title">
             <header><span>02</span><div><h2 id="mandate-step-title">研究任务与边界</h2><p>记录 InvestmentMandate 与 ResearchScope，不要求预先写出研究问题。</p></div></header>
             <div className="ir-form-grid">
               <FormField disabled={Boolean(foundation.mandate)} label="研究期限（年）" name="horizon_years" min="3" max="5" required type="number" />
               <label className="ir-field"><span>基础货币</span><select disabled={Boolean(foundation.mandate || foundation.capital || Object.keys(foundation.fxRates).length)} name="base_currency" value={baseCurrency} onChange={(event) => setBaseCurrency(event.target.value === "USD" ? "USD" : "CNY")}><option value="CNY">CNY</option><option value="USD">USD</option></select></label>
-              <FormField disabled={Boolean(foundation.mandate)} label="必要回报率" name="required_return" required inputMode="decimal" />
-              <FormField disabled={Boolean(foundation.mandate)} label="永久损失上限" name="permanent_loss_limit" required inputMode="decimal" />
+              <FormField disabled={Boolean(foundation.mandate)} hint="小数格式：0.15 = 15%" label="必要回报率" name="required_return" pattern={fractionPattern} required inputMode="decimal" />
+              <FormField disabled={Boolean(foundation.mandate)} hint="填写 0 到 1 之间的小数" label="永久损失上限" name="permanent_loss_limit" pattern={fractionPattern} required inputMode="decimal" />
               <FormField disabled={Boolean(foundation.mandate)} label="比较集合" name="comparison_set" required />
               <FormField disabled={Boolean(foundation.mandate)} label="生效时间" name="effective_at" required type="datetime-local" />
               <label className="ir-field"><span>冻结时区 / UTC offset</span><select disabled={foundationStarted} name="frozen_timezone" value={timezone} onChange={(event) => setTimezone(event.target.value === "Z" ? "Z" : "+08:00")}><option value="+08:00">+08:00（中国标准时间）</option><option value="Z">Z（UTC）</option></select></label>
               <FormField disabled={Boolean(foundation.mandate)} label="基准标识（可选）" name="benchmark_key" />
-              <FormField disabled={Boolean(foundation.mandate)} label="必要超额回报（与基准同时填写）" name="required_excess_return" inputMode="decimal" />
+              <FormField disabled={Boolean(foundation.mandate)} hint="小数格式，与基准标识同时填写" label="必要超额回报（与基准同时填写）" name="required_excess_return" pattern={fractionPattern} inputMode="decimal" />
               <FormField disabled={Boolean(foundation.mandate)} label="到期时间（可选）" name="expires_at" type="datetime-local" />
               <FormField disabled={Boolean(foundation.scope)} label="覆盖业务分部（可选）" name="covered_segments" />
               <FormField disabled={Boolean(foundation.scope)} label="研究焦点（可选）" name="user_focus" />
@@ -613,6 +635,18 @@ export default function NewResearchPage() {
                 <p>模板 product.foundation.agenda / 1.0.0 · 输入与输出 SHA-256 已由浏览器计算。</p>
               </div>
             ) : <p className="ir-empty">填写研究约束后预览；预览后才能提交。</p>}
+            {confirmationSummary ? (
+              <section className="ir-confirmation-summary" role="region" aria-label="提交确认摘要">
+                <h3>提交前确认</h3>
+                <dl>
+                  <div><dt>Company</dt><dd>{confirmationSummary.company}</dd></div>
+                  <div><dt>Security</dt><dd>{confirmationSummary.securities}</dd></div>
+                  <div><dt>Mandate</dt><dd>{confirmationSummary.mandate}</dd></div>
+                  <div><dt>冻结时区</dt><dd>{confirmationSummary.timezone}</dd></div>
+                </dl>
+                <p>请核对身份、研究期限、基础货币与冻结时区；提交仍由后端身份账本和领域约束最终校验。</p>
+              </section>
+            ) : null}
           </section>
 
           <section className="ir-step" aria-labelledby="boundary-step-title">
@@ -621,9 +655,9 @@ export default function NewResearchPage() {
               <legend>历史口径</legend>
               <div className="ir-form-grid">
                 <FormField disabled={Boolean(foundation.basis)} label="历史截止时间" name="cutoff_at" required type="datetime-local" />
-                <FormField disabled={Boolean(foundation.basis)} label="来源清单哈希" name="source_manifest_hash" pattern={hashPattern} required />
-                <FormField disabled={Boolean(foundation.basis)} label="定义包哈希" name="definition_bundle_hash" pattern={hashPattern} required />
-                <FormField disabled={Boolean(foundation.basis)} label="解析器包哈希" name="parser_bundle_hash" pattern={hashPattern} required />
+                <FormField disabled={Boolean(foundation.basis)} hint={hashHint} label="来源清单哈希" name="source_manifest_hash" pattern={hashPattern} required />
+                <FormField disabled={Boolean(foundation.basis)} hint={hashHint} label="定义包哈希" name="definition_bundle_hash" pattern={hashPattern} required />
+                <FormField disabled={Boolean(foundation.basis)} hint={hashHint} label="解析器包哈希" name="parser_bundle_hash" pattern={hashPattern} required />
               </div>
             </fieldset>
             {selectedSecurities.map((security) => {
@@ -633,13 +667,13 @@ export default function NewResearchPage() {
                 <fieldset className="ir-fieldset" disabled={Boolean(foundation.prices[key])} key={`price:${key}`}>
                   <legend>{label} 市场价格</legend>
                   <div className="ir-form-grid">
-                    <FormField label={`${label} 价格`} name={`price_${key}`} required inputMode="decimal" />
+                    <FormField hint={`单位：${security.trading_currency ?? "身份未提供"}`} label={`${label} 价格`} name={`price_${key}`} pattern={positiveDecimalPattern} required inputMode="decimal" />
                     <label className="ir-field"><span>{label} 价格类型</span><select name={`price_type_${key}`}><option value="close">收盘价</option><option value="official_close">官方收盘价</option></select></label>
                     <label className="ir-field"><span>{label} 调整口径</span><select name={`adjustment_basis_${key}`}><option value="unadjusted">未复权</option><option value="split_adjusted">拆分调整</option></select></label>
                     <FormField label={`${label} 市场时间`} name={`price_market_at_${key}`} required type="datetime-local" />
                     <FormField label={`${label} 可用时间`} name={`price_available_at_${key}`} required type="datetime-local" />
                     <FormField label={`${label} 价格来源`} name={`price_source_${key}`} required />
-                    <FormField label={`${label} 价格原文哈希`} name={`price_raw_hash_${key}`} pattern={hashPattern} required />
+                    <FormField hint={hashHint} label={`${label} 价格原文哈希`} name={`price_raw_hash_${key}`} pattern={hashPattern} required />
                   </div>
                 </fieldset>
               );
@@ -648,32 +682,33 @@ export default function NewResearchPage() {
               <fieldset className="ir-fieldset" key={`fx:${currency}`}>
                 <legend>{currency}/{baseCurrency} 汇率</legend>
                 <div className="ir-form-grid">
-                  <FormField disabled={Boolean(foundation.fxRates[currency])} label={`${currency}/${baseCurrency} 汇率`} name={`fx_rate_${currency}`} required inputMode="decimal" />
+                  <FormField disabled={Boolean(foundation.fxRates[currency])} hint={`1 ${currency} = 输入值 ${baseCurrency}`} label={`${currency}/${baseCurrency} 汇率`} name={`fx_rate_${currency}`} pattern={positiveDecimalPattern} required inputMode="decimal" />
                   <FormField disabled={Boolean(foundation.fxRates[currency])} label={`${currency}/${baseCurrency} 市场时间`} name={`fx_market_at_${currency}`} required type="datetime-local" />
                   <FormField disabled={Boolean(foundation.fxRates[currency])} label={`${currency}/${baseCurrency} 可用时间`} name={`fx_available_at_${currency}`} required type="datetime-local" />
                   <FormField disabled={Boolean(foundation.fxRates[currency])} label={`${currency}/${baseCurrency} 来源`} name={`fx_source_${currency}`} required />
-                  <FormField disabled={Boolean(foundation.fxRates[currency])} label={`${currency}/${baseCurrency} 原文哈希`} name={`fx_raw_hash_${currency}`} pattern={hashPattern} required />
+                  <FormField disabled={Boolean(foundation.fxRates[currency])} hint={hashHint} label={`${currency}/${baseCurrency} 原文哈希`} name={`fx_raw_hash_${currency}`} pattern={hashPattern} required />
                 </div>
               </fieldset>
             ))}
             <fieldset className="ir-fieldset" disabled={Boolean(foundation.capital)}>
               <legend>资本结构（{baseCurrency}）</legend>
+              <p className="ir-field-help">金额与股数沿用原始来源单位；同组字段必须保持一致。</p>
               <div className="ir-form-grid">
-                <FormField label="现金" name="cash" required inputMode="decimal" />
-                <FormField label="债务" name="debt" required inputMode="decimal" />
-                <FormField label="少数股东权益" name="minority_interest" required inputMode="decimal" />
-                <FormField label="投资资产" name="investments" required inputMode="decimal" />
-                <FormField label="养老金负债" name="pension_liabilities" required inputMode="decimal" />
+                <FormField label="现金" name="cash" pattern={nonNegativeDecimalPattern} required inputMode="decimal" />
+                <FormField label="债务" name="debt" pattern={nonNegativeDecimalPattern} required inputMode="decimal" />
+                <FormField label="少数股东权益" name="minority_interest" pattern={nonNegativeDecimalPattern} required inputMode="decimal" />
+                <FormField label="投资资产" name="investments" pattern={nonNegativeDecimalPattern} required inputMode="decimal" />
+                <FormField label="养老金负债" name="pension_liabilities" pattern={nonNegativeDecimalPattern} required inputMode="decimal" />
                 <FormField label="其他调整" name="other_adjustments" required inputMode="decimal" />
-                <FormField label="基本股数" name="basic_shares" required inputMode="decimal" />
-                <FormField label="稀释股数" name="diluted_shares" required inputMode="decimal" />
+                <FormField label="基本股数" name="basic_shares" pattern={positiveDecimalPattern} required inputMode="decimal" />
+                <FormField label="稀释股数" name="diluted_shares" pattern={positiveDecimalPattern} required inputMode="decimal" />
                 <FormField label="潜在稀释说明（可选）" name="potential_dilution_descriptors" />
                 <FormField label="报告期开始" name="report_period_start" required type="datetime-local" />
                 <FormField label="报告期结束" name="report_period_end" required type="datetime-local" />
                 <FormField label="资本结构市场时间" name="capital_market_at" required type="datetime-local" />
                 <FormField label="资本结构可用时间" name="capital_available_at" required type="datetime-local" />
                 <FormField label="资本结构来源" name="capital_source_id" required />
-                <FormField label="资本结构原文哈希" name="capital_raw_hash" pattern={hashPattern} required />
+                <FormField hint={hashHint} label="资本结构原文哈希" name="capital_raw_hash" pattern={hashPattern} required />
               </div>
             </fieldset>
             {selectedSecurities.map((security) => {
@@ -683,15 +718,15 @@ export default function NewResearchPage() {
                 <fieldset className="ir-fieldset" disabled={Boolean(foundation.rights[key])} key={`rights:${key}`}>
                   <legend>{label} 证券权利</legend>
                   <div className="ir-form-grid">
-                    <FormField label={`${label} 经济单位`} name={`economic_units_${key}`} required inputMode="decimal" />
-                    <FormField label={`${label} 每单位投票权`} name={`votes_per_unit_${key}`} required inputMode="decimal" />
-                    <FormField label={`${label} 转换比例`} name={`conversion_ratio_${key}`} required inputMode="decimal" />
-                    <FormField label={`${label} ADR 比例`} name={`adr_ratio_${key}`} required inputMode="decimal" />
-                    <FormField label={`${label} 每单位分红权`} name={`dividend_rights_${key}`} required inputMode="decimal" />
+                    <FormField label={`${label} 经济单位`} name={`economic_units_${key}`} pattern={positiveDecimalPattern} required inputMode="decimal" />
+                    <FormField label={`${label} 每单位投票权`} name={`votes_per_unit_${key}`} pattern={nonNegativeDecimalPattern} required inputMode="decimal" />
+                    <FormField label={`${label} 转换比例`} name={`conversion_ratio_${key}`} pattern={positiveDecimalPattern} required inputMode="decimal" />
+                    <FormField label={`${label} ADR 比例`} name={`adr_ratio_${key}`} pattern={positiveDecimalPattern} required inputMode="decimal" />
+                    <FormField label={`${label} 每单位分红权`} name={`dividend_rights_${key}`} pattern={nonNegativeDecimalPattern} required inputMode="decimal" />
                     <FormField label={`${label} 权利生效时间`} name={`rights_effective_from_${key}`} required type="datetime-local" />
                     <FormField label={`${label} 权利结束时间（可选）`} name={`rights_effective_to_${key}`} type="datetime-local" />
                     <FormField label={`${label} 权利来源`} name={`rights_source_${key}`} required />
-                    <FormField label={`${label} 权利原文哈希`} name={`rights_raw_hash_${key}`} pattern={hashPattern} required />
+                    <FormField hint={hashHint} label={`${label} 权利原文哈希`} name={`rights_raw_hash_${key}`} pattern={hashPattern} required />
                   </div>
                 </fieldset>
               );
