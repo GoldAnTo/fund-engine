@@ -278,10 +278,9 @@ describe("InvestmentResearchApi", () => {
       .resolves.toMatchObject({ expected_parent_id: ids.rightsA });
   });
 
-  it("accepts a historical effective version followed by a time-consistent current head", async () => {
+  it("accepts an open-ended historical version shadowed by a later current head", async () => {
     const effective = rightsBody();
     effective.effective_from = "2026-08-20T00:00:00Z";
-    Reflect.set(effective, "effective_to", "2026-08-22T00:00:00Z");
     const body = {
       ...effectiveRightsBody(effective),
       as_of: "2026-08-21T00:00:00Z",
@@ -322,6 +321,40 @@ describe("InvestmentResearchApi", () => {
         return {
           ...effectiveRightsBody(effective),
           as_of: "2026-08-21T00:00:00Z",
+          head: {
+            schema_version: "underwriting.v1",
+            id: ids.rightsB,
+            effective_from: "2026-08-22T00:00:00Z",
+            effective_to: null,
+          },
+        };
+      })(),
+    },
+    {
+      name: "different head whose start does not advance the effective version",
+      body: (() => {
+        const effective = rightsBody();
+        effective.effective_from = "2026-08-20T00:00:00Z";
+        return {
+          ...effectiveRightsBody(effective),
+          as_of: "2026-08-20T00:00:00Z",
+          head: {
+            schema_version: "underwriting.v1",
+            id: ids.rightsB,
+            effective_from: "2026-08-20T00:00:00Z",
+            effective_to: null,
+          },
+        };
+      })(),
+    },
+    {
+      name: "historical effective version at the later head start",
+      body: (() => {
+        const effective = rightsBody();
+        effective.effective_from = "2026-08-20T00:00:00Z";
+        return {
+          ...effectiveRightsBody(effective),
+          as_of: "2026-08-22T00:00:00Z",
           head: {
             schema_version: "underwriting.v1",
             id: ids.rightsB,

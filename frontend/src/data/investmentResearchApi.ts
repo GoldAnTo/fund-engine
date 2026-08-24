@@ -469,8 +469,11 @@ function isEffectiveRights(value: unknown): value is EffectiveSecurityRights {
       return sameInstant(value.head.effective_from, value.effective.effective_from)
         && sameNullableInstant(value.head.effective_to, value.effective.effective_to);
     }
-    return value.effective.effective_to !== null
-      && isAtOrBefore(value.effective.effective_to, value.head.effective_from);
+    const headFrom = Date.parse(String(value.head.effective_from));
+    return headFrom > Date.parse(String(value.effective.effective_from))
+      && Date.parse(value.as_of) < headFrom
+      && (value.effective.effective_to === null
+        || isAtOrBefore(value.effective.effective_to, value.head.effective_from));
   }
   if (state === "no_history:create_initial") {
     return value.effective === null && value.head === null && value.append_allowed
