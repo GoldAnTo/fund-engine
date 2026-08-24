@@ -240,13 +240,13 @@ two persisted identities rather than a mock or a current-data fallback.
 
 The fresh Increment A gate produced these results:
 
-- backend: 334 passed, 2 skipped, 1 existing Pydantic field-shadow warning;
+- backend: 335 passed, 2 skipped, 1 existing Pydantic field-shadow warning;
   the two skips are the PostgreSQL concurrency variants guarded by
   `TEST_DATABASE_URL` in the workspace-draft and publisher tests;
 - frontend: 75 passed across the product shell, setup flow, strict API reader,
   accessibility contract and deterministic foundation helpers;
 - TypeScript typecheck, Vite production build and Python `compileall`: passed;
-- full repository regression: backend 3,076 passed / 33 skipped / 3 warnings;
+- full repository regression: backend 3,077 passed / 33 skipped / 3 warnings;
   frontend 537 passed across 25 files;
 - legacy compatibility: 5 passed; the stored CATL evidence-only response and
   hash replayed deterministically before and after product rows were present.
