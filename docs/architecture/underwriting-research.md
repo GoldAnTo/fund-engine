@@ -240,13 +240,13 @@ two persisted identities rather than a mock or a current-data fallback.
 
 The fresh Increment A gate produced these results:
 
-- backend: 335 passed, 2 skipped, 1 existing Pydantic field-shadow warning;
+- backend: 341 passed, 2 skipped, 1 existing Pydantic field-shadow warning;
   the two skips are the PostgreSQL concurrency variants guarded by
   `TEST_DATABASE_URL` in the workspace-draft and publisher tests;
 - frontend: 75 passed across the product shell, setup flow, strict API reader,
   accessibility contract and deterministic foundation helpers;
 - TypeScript typecheck, Vite production build and Python `compileall`: passed;
-- full repository regression: backend 3,077 passed / 33 skipped / 3 warnings;
+- full repository regression: backend 3,083 passed / 33 skipped / 3 warnings;
   frontend 537 passed across 25 files;
 - legacy compatibility: 5 passed; the stored CATL evidence-only response and
   hash replayed deterministically before and after product rows were present.
@@ -287,3 +287,17 @@ volume-name resolution, stdin-only bearer header delivery, zero leftover
 restore databases or volumes, and a healthy restart; the project, its uniquely
 named volumes and images were then removed without touching either existing
 runtime.
+
+A third disposable `codex-task11-quality-20260825` run first placed an
+unlabelled foreign volume at the rendered research-files name. Backup refused
+it before reading files and left it intact. After that isolated test volume was
+removed, Compose created a correctly labelled replacement and the runtime
+again passed revision `0065`, CATL, backup, restore, persisted-file and restart
+checks. Restore operation volumes carried exact project, operation and purpose
+labels and no staging or rollback volume remained. Unit-level failure injection
+also replaced the source bundle after validation: restore continued from its
+private `0700`, no-follow snapshot rather than the changed source. Streaming
+tar validation enforces compressed-size, member-count, single-file, total-size
+and compression-ratio limits. The third project, network, volumes and unique
+images were removed; its temporary backup and generated environment file were
+moved to Trash, and existing Docker runtimes remained unchanged.
