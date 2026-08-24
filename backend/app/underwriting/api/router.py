@@ -3,18 +3,14 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import UTC, datetime
-from typing import Callable, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.errors import ConflictError as HttpConflictError
 from app.errors import ValidationFailedError
-from app.models.ledger import ConflictError as DomainConflictError
 from app.models.ledger import ValidationError
 from app.underwriting.api.schemas import (
     AnswerabilityCreate,
@@ -57,6 +53,8 @@ from app.underwriting.api.schemas import (
     CandidateEvidenceReviewResponse,
 )
 from app.errors import NotFoundError
+from app.underwriting.api.product_router import router as product_router
+from app.underwriting.api.transactions import commit_write
 from app.underwriting.persistence.models import UnderwritingAnswerabilityEvaluation, UnderwritingHistoricalBasis, UnderwritingResearchVersion, UnderwritingLedgerEntry, UnderwritingObjectRelation
 from app.underwriting.persistence.research_models import UnderwritingMechanismPackVersion, UnderwritingMetricDefinitionVersion, UnderwritingMetricObservation, UnderwritingSourceManifestVersion
 from app.underwriting.domain.types import (
@@ -68,7 +66,6 @@ from app.underwriting.domain.types import (
     ResearchObjectKind,
     EligibleAction,
 )
-from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.services.kernel import UnderwritingKernelService
 from app.underwriting.services.research_revision_diff import (
     ResearchRevisionDiffService,
@@ -84,7 +81,7 @@ from app.underwriting.services.research_revision_diff import (
 
 
 router = APIRouter(prefix="/api/underwriting/v1", tags=["underwriting-v1"])
-T = TypeVar("T")
+router.include_router(product_router)
 WRITE_ERROR_RESPONSES = {
     409: {"model": UnderwritingErrorEnvelope},
     422: {"model": UnderwritingErrorEnvelope},
@@ -94,26 +91,6 @@ READ_ERROR_RESPONSES = {404: {"model": UnderwritingErrorEnvelope}, 422: {"model"
 
 def _service(db: Session) -> UnderwritingKernelService:
     return UnderwritingKernelService(db, now=lambda: datetime.now(UTC))
-
-
-def _write(db: Session, operation: Callable[[], T]) -> T:
-    """Commit only a successful service operation and normalize kernel errors."""
-    try:
-        value = operation()
-        db.commit()
-        return value
-    except ValidationError as exc:
-        db.rollback()
-        raise ValidationFailedError(str(exc)) from exc
-    except IntegrityError as exc:
-        db.rollback()
-        raise HttpConflictError("underwriting write conflicts") from exc
-    except (DomainConflictError, StaleParentError) as exc:
-        db.rollback()
-        raise HttpConflictError(str(exc)) from exc
-    except Exception:
-        db.rollback()
-        raise
 
 
 def _object_response(value) -> ResearchObjectResponse:
@@ -421,7 +398,7 @@ def _require_research_family(db: Session, object_id: UUID, version_kind: str) ->
     responses=WRITE_ERROR_RESPONSES,
 )
 def create_object(payload: ResearchObjectCreate, db: Session = Depends(get_db)) -> ResearchObjectResponse:
-    value = _write(db, lambda: _service(db).add_object(ResearchObjectKind(payload.kind), payload.external_key, payload.canonical_name))
+    value = commit_write(db, lambda: _service(db).add_object(ResearchObjectKind(payload.kind), payload.external_key, payload.canonical_name))
     return _object_response(value)
 
 
@@ -432,7 +409,7 @@ def create_object(payload: ResearchObjectCreate, db: Session = Depends(get_db)) 
     responses=WRITE_ERROR_RESPONSES,
 )
 def create_object_relation(payload: ObjectRelationCreate, db: Session = Depends(get_db)) -> ObjectRelationResponse:
-    value = _write(db, lambda: _service(db).link_objects(payload.parent_id, payload.child_id, payload.relation_type))
+    value = commit_write(db, lambda: _service(db).link_objects(payload.parent_id, payload.child_id, payload.relation_type))
     return _relation_response(value)
 
 
@@ -443,7 +420,7 @@ def create_object_relation(payload: ObjectRelationCreate, db: Session = Depends(
     responses=WRITE_ERROR_RESPONSES,
 )
 def create_basis(payload: BasisCreate, db: Session = Depends(get_db)) -> BasisResponse:
-    value = _write(db, lambda: _service(db).add_basis(HistoricalBasisInput(payload.cutoff, payload.price_as_of, payload.source_manifest_hash)))
+    value = commit_write(db, lambda: _service(db).add_basis(HistoricalBasisInput(payload.cutoff, payload.price_as_of, payload.source_manifest_hash)))
     return _basis_response(value)
 
 
@@ -454,7 +431,7 @@ def create_basis(payload: BasisCreate, db: Session = Depends(get_db)) -> BasisRe
     responses=WRITE_ERROR_RESPONSES,
 )
 def create_mandate(payload: MandateCreate, db: Session = Depends(get_db)) -> MandateResponse:
-    value = _write(db, lambda: _service(db).append_mandate(InvestmentMandateInput(payload.mandate_key, payload.horizon_years, payload.base_currency, payload.required_return, payload.permanent_loss_limit, tuple(payload.comparison_set)), payload.expected_parent_id))
+    value = commit_write(db, lambda: _service(db).append_mandate(InvestmentMandateInput(payload.mandate_key, payload.horizon_years, payload.base_currency, payload.required_return, payload.permanent_loss_limit, tuple(payload.comparison_set)), payload.expected_parent_id))
     return _mandate_response(value)
 
 
@@ -465,7 +442,7 @@ def create_mandate(payload: MandateCreate, db: Session = Depends(get_db)) -> Man
     responses=WRITE_ERROR_RESPONSES,
 )
 def create_ledger_entry(object_id: UUID, payload: LedgerEntryCreate, db: Session = Depends(get_db)) -> LedgerEntryResponse:
-    value = _write(db, lambda: _service(db).append_ledger_entry(object_id, payload.basis_id, LedgerEntryInput(LedgerKind(payload.ledger_kind), payload.family_key, payload.entry_type, payload.payload, payload.effective_at, payload.available_at, payload.source_boundary), payload.expected_parent_id))
+    value = commit_write(db, lambda: _service(db).append_ledger_entry(object_id, payload.basis_id, LedgerEntryInput(LedgerKind(payload.ledger_kind), payload.family_key, payload.entry_type, payload.payload, payload.effective_at, payload.available_at, payload.source_boundary), payload.expected_parent_id))
     return _ledger_response(value)
 
 
@@ -476,7 +453,7 @@ def create_ledger_entry(object_id: UUID, payload: LedgerEntryCreate, db: Session
     responses=WRITE_ERROR_RESPONSES,
 )
 def create_answerability(object_id: UUID, payload: AnswerabilityCreate, db: Session = Depends(get_db)) -> AnswerabilityResponse:
-    value = _write(db, lambda: _service(db).record_answerability(object_id, payload.basis_id, tuple(BlockerCode(value) for value in payload.hard_blockers), tuple(payload.research_debt_keys), payload.resolvable_within_mandate, EligibleAction(payload.requested_action), tuple(payload.resolution_requirements), payload.expected_parent_id))
+    value = commit_write(db, lambda: _service(db).record_answerability(object_id, payload.basis_id, tuple(BlockerCode(value) for value in payload.hard_blockers), tuple(payload.research_debt_keys), payload.resolvable_within_mandate, EligibleAction(payload.requested_action), tuple(payload.resolution_requirements), payload.expected_parent_id))
     return _answerability_response(value)
 
 

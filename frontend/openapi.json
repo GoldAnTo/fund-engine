@@ -9002,6 +9002,991 @@
         }
       }
     },
+    "/api/underwriting/v1/product/objects": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Search Product Objects",
+        "operationId": "search_product_objects_api_underwriting_v1_product_objects_get",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "title": "Query"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductObjectSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "List Research Projects",
+        "operationId": "list_research_projects_api_underwriting_v1_product_projects_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchProjectListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Research Project",
+        "operationId": "create_research_project_api_underwriting_v1_product_projects_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResearchProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchProjectResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Get Research Project",
+        "operationId": "get_research_project_api_underwriting_v1_product_projects__project_id__get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchProjectResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}/mandates": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Product Mandate",
+        "operationId": "create_product_mandate_api_underwriting_v1_product_projects__project_id__mandates_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProductMandateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductMandateResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}/scopes": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Research Scope",
+        "operationId": "create_research_scope_api_underwriting_v1_product_projects__project_id__scopes_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResearchScopeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchScopeResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}/agendas": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Research Agenda",
+        "operationId": "create_research_agenda_api_underwriting_v1_product_projects__project_id__agendas_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResearchAgendaRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchAgendaResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/historical-bases": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Product Historical Basis",
+        "operationId": "create_product_historical_basis_api_underwriting_v1_product_historical_bases_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProductHistoricalBasisRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductHistoricalBasisResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/market/price-snapshots": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Price Snapshot",
+        "operationId": "create_price_snapshot_api_underwriting_v1_product_market_price_snapshots_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePriceSnapshotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceSnapshotResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/market/fx-snapshots": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Fx Snapshot",
+        "operationId": "create_fx_snapshot_api_underwriting_v1_product_market_fx_snapshots_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFXSnapshotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FXSnapshotResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/market/capital-structure-snapshots": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Capital Structure Snapshot",
+        "operationId": "create_capital_structure_snapshot_api_underwriting_v1_product_market_capital_structure_snapshots_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCapitalStructureSnapshotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapitalStructureSnapshotResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/market/security-rights": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Security Rights",
+        "operationId": "create_security_rights_api_underwriting_v1_product_market_security_rights_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSecurityRightsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecurityRightsResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}/draft": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Get Workspace Draft",
+        "operationId": "get_workspace_draft_api_underwriting_v1_product_projects__project_id__draft_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceDraftResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Patch Workspace Draft",
+        "operationId": "patch_workspace_draft_api_underwriting_v1_product_projects__project_id__draft_patch",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchWorkspaceDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceDraftResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}/publication-preview": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Preview Product Revision",
+        "operationId": "preview_product_revision_api_underwriting_v1_product_projects__project_id__publication_preview_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewProductRevisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicationPreviewResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}/publish": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Publish Product Revision",
+        "operationId": "publish_product_revision_api_underwriting_v1_product_projects__project_id__publish_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishProductRevisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductRevisionResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/revisions/{revision_id}": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Get Product Revision",
+        "operationId": "get_product_revision_api_underwriting_v1_product_revisions__revision_id__get",
+        "parameters": [
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Revision Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductRevisionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
     "/api/underwriting/v1/objects": {
       "post": {
         "tags": [
@@ -10819,6 +11804,190 @@
         ],
         "title": "ActualMetricObservationDTO"
       },
+      "AgendaGeneratorRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "deterministic_template",
+              "ai_generated"
+            ],
+            "title": "Method"
+          },
+          "template_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Key"
+          },
+          "template_version": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Version"
+          },
+          "model_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 160,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name"
+          },
+          "prompt_template_version": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Template Version"
+          },
+          "input_summary_hash": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Summary Hash"
+          },
+          "output_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Output Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "method",
+          "output_hash"
+        ],
+        "title": "AgendaGeneratorRequest"
+      },
+      "AgendaGeneratorResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "deterministic_template",
+              "ai_generated"
+            ],
+            "title": "Method"
+          },
+          "template_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Key"
+          },
+          "template_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Version"
+          },
+          "model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name"
+          },
+          "prompt_template_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Template Version"
+          },
+          "input_summary_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Summary Hash"
+          },
+          "output_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Output Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "method",
+          "template_key",
+          "template_version",
+          "model_name",
+          "prompt_template_version",
+          "input_summary_hash",
+          "output_hash"
+        ],
+        "title": "AgendaGeneratorResponse"
+      },
       "AnswerabilityCreate": {
         "properties": {
           "schema_version": {
@@ -11122,6 +12291,122 @@
           "review"
         ],
         "title": "AssessmentDTO"
+      },
+      "AssessmentPreviewResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "answerability": {
+            "type": "string",
+            "enum": [
+              "answerable",
+              "partially_answerable",
+              "not_answerable"
+            ],
+            "title": "Answerability"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "provisional_bullish",
+                  "provisional_neutral",
+                  "provisional_cautious"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "publication_status": {
+            "type": "string",
+            "enum": [
+              "user_frozen",
+              "superseded"
+            ],
+            "title": "Publication Status"
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blockers"
+          },
+          "resolution_requirements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Resolution Requirements"
+          },
+          "next_review_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Review At"
+          },
+          "parent_assessment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Assessment Id"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "answerability",
+          "direction",
+          "confidence",
+          "publication_status",
+          "blockers",
+          "resolution_requirements",
+          "next_review_at",
+          "parent_assessment_id",
+          "content_hash"
+        ],
+        "title": "AssessmentPreviewResponse"
       },
       "AssessmentReviewRequest": {
         "properties": {
@@ -13126,6 +14411,145 @@
         ],
         "title": "CandidateMechanismResponse"
       },
+      "CapitalStructureSnapshotResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Company Id"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "CNY",
+              "USD"
+            ],
+            "title": "Currency"
+          },
+          "cash": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Cash"
+          },
+          "debt": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Debt"
+          },
+          "minority_interest": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Minority Interest"
+          },
+          "investments": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Investments"
+          },
+          "pension_liabilities": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Pension Liabilities"
+          },
+          "other_adjustments": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Other Adjustments"
+          },
+          "basic_shares": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Basic Shares"
+          },
+          "diluted_shares": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Diluted Shares"
+          },
+          "potential_dilution_descriptors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Potential Dilution Descriptors"
+          },
+          "report_period_start": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Report Period Start"
+          },
+          "report_period_end": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Report Period End"
+          },
+          "market_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Market At"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "raw_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Hash"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "company_id",
+          "currency",
+          "cash",
+          "debt",
+          "minority_interest",
+          "investments",
+          "pension_liabilities",
+          "other_adjustments",
+          "basic_shares",
+          "diluted_shares",
+          "potential_dilution_descriptors",
+          "report_period_start",
+          "report_period_end",
+          "market_at",
+          "available_at",
+          "source_id",
+          "raw_hash",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "CapitalStructureSnapshotResponse"
+      },
       "CaseCompareResponse": {
         "properties": {
           "case_id": {
@@ -14871,6 +16295,186 @@
         "title": "CreateAtomicClaimCandidateRequest",
         "description": "A researcher-proposed, review-gated claim from one frozen span.\n\nThe server derives the quote and offsets from ``source_span_id`` so the\nbrowser cannot silently alter the cited wording or location."
       },
+      "CreateCapitalStructureSnapshotRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Company Id"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "CNY",
+              "USD"
+            ],
+            "title": "Currency"
+          },
+          "cash": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Cash"
+          },
+          "debt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Debt"
+          },
+          "minority_interest": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Minority Interest"
+          },
+          "investments": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Investments"
+          },
+          "pension_liabilities": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Pension Liabilities"
+          },
+          "other_adjustments": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Other Adjustments"
+          },
+          "basic_shares": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Basic Shares"
+          },
+          "diluted_shares": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Diluted Shares"
+          },
+          "potential_dilution_descriptors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Potential Dilution Descriptors",
+            "default": []
+          },
+          "report_period_start": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Report Period Start"
+          },
+          "report_period_end": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Report Period End"
+          },
+          "market_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Market At"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "source_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Source Id"
+          },
+          "raw_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "company_id",
+          "currency",
+          "cash",
+          "debt",
+          "minority_interest",
+          "investments",
+          "pension_liabilities",
+          "other_adjustments",
+          "basic_shares",
+          "diluted_shares",
+          "report_period_start",
+          "report_period_end",
+          "market_at",
+          "available_at",
+          "source_id",
+          "raw_hash"
+        ],
+        "title": "CreateCapitalStructureSnapshotRequest"
+      },
       "CreateCaseRequest": {
         "properties": {
           "title": {
@@ -15283,6 +16887,83 @@
         ],
         "title": "CreateEventResearchResponse"
       },
+      "CreateFXSnapshotRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "base_currency": {
+            "type": "string",
+            "enum": [
+              "CNY",
+              "USD"
+            ],
+            "title": "Base Currency"
+          },
+          "quote_currency": {
+            "type": "string",
+            "enum": [
+              "CNY",
+              "USD"
+            ],
+            "title": "Quote Currency"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Rate"
+          },
+          "quote_direction": {
+            "type": "string",
+            "const": "quote_per_base",
+            "title": "Quote Direction"
+          },
+          "market_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Market At"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "source_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Source Id"
+          },
+          "raw_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "base_currency",
+          "quote_currency",
+          "rate",
+          "quote_direction",
+          "market_at",
+          "available_at",
+          "source_id",
+          "raw_hash"
+        ],
+        "title": "CreateFXSnapshotRequest"
+      },
       "CreateForecastTargetRequest": {
         "properties": {
           "key_factor_id": {
@@ -15637,6 +17318,545 @@
           "source"
         ],
         "title": "CreateHoldingDisclosureRequest"
+      },
+      "CreatePriceSnapshotRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "security_identity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Security Identity Id"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Price"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "CNY",
+              "USD"
+            ],
+            "title": "Currency"
+          },
+          "price_type": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Price Type"
+          },
+          "adjustment_basis": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Adjustment Basis"
+          },
+          "market_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Market At"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "source_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Source Id"
+          },
+          "raw_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "security_identity_id",
+          "price",
+          "currency",
+          "price_type",
+          "adjustment_basis",
+          "market_at",
+          "available_at",
+          "source_id",
+          "raw_hash"
+        ],
+        "title": "CreatePriceSnapshotRequest"
+      },
+      "CreateProductHistoricalBasisRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "cutoff_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff At"
+          },
+          "source_manifest_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Manifest Hash"
+          },
+          "definition_bundle_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Definition Bundle Hash"
+          },
+          "parser_bundle_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Parser Bundle Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cutoff_at",
+          "source_manifest_hash",
+          "definition_bundle_hash",
+          "parser_bundle_hash"
+        ],
+        "title": "CreateProductHistoricalBasisRequest"
+      },
+      "CreateProductMandateRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "horizon_years": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 3.0,
+            "title": "Horizon Years"
+          },
+          "base_currency": {
+            "type": "string",
+            "enum": [
+              "CNY",
+              "USD"
+            ],
+            "title": "Base Currency"
+          },
+          "required_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Required Return"
+          },
+          "permanent_loss_limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Permanent Loss Limit"
+          },
+          "comparison_set": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Comparison Set"
+          },
+          "benchmark_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Key"
+          },
+          "required_excess_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Excess Return"
+          },
+          "effective_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Effective At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "expected_parent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Parent Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "horizon_years",
+          "base_currency",
+          "required_return",
+          "permanent_loss_limit",
+          "comparison_set",
+          "effective_at"
+        ],
+        "title": "CreateProductMandateRequest"
+      },
+      "CreateResearchAgendaRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "scope_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Scope Id"
+          },
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Items"
+          },
+          "generator": {
+            "$ref": "#/components/schemas/AgendaGeneratorRequest"
+          },
+          "expected_parent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Parent Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scope_id",
+          "items",
+          "generator"
+        ],
+        "title": "CreateResearchAgendaRequest"
+      },
+      "CreateResearchProjectRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "primary_company_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Primary Company Id"
+          },
+          "target_security_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Target Security Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "primary_company_id",
+          "target_security_ids"
+        ],
+        "title": "CreateResearchProjectRequest"
+      },
+      "CreateResearchScopeRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "primary_company_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Primary Company Id"
+          },
+          "target_security_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Target Security Ids"
+          },
+          "industry_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Industry Ids",
+            "default": []
+          },
+          "covered_segments": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Covered Segments",
+            "default": []
+          },
+          "user_focus": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Focus"
+          },
+          "exclusions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Exclusions",
+            "default": []
+          },
+          "expected_parent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Parent Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "primary_company_id",
+          "target_security_ids"
+        ],
+        "title": "CreateResearchScopeRequest"
+      },
+      "CreateSecurityRightsRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "security_identity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Security Identity Id"
+          },
+          "economic_units": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Economic Units"
+          },
+          "votes_per_unit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Votes Per Unit"
+          },
+          "conversion_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Conversion Ratio"
+          },
+          "adr_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Adr Ratio"
+          },
+          "dividend_rights_per_unit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Dividend Rights Per Unit"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Effective From"
+          },
+          "effective_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective To"
+          },
+          "source_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Source Id"
+          },
+          "raw_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Hash"
+          },
+          "expected_parent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Parent Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "security_identity_id",
+          "economic_units",
+          "votes_per_unit",
+          "conversion_ratio",
+          "adr_ratio",
+          "dividend_rights_per_unit",
+          "effective_from",
+          "source_id",
+          "raw_hash"
+        ],
+        "title": "CreateSecurityRightsRequest"
       },
       "CreateStockRequest": {
         "properties": {
@@ -18675,6 +20895,92 @@
         ],
         "title": "ExtractResponse",
         "description": "Result of running review-gated extraction over one document version.\n\nThe extractor never writes formal SourceStatements. Every returned item\nhas a continuous source quote and stays in ``awaiting_review`` until a\nhuman confirms, modifies, or rejects it. ``reason`` explains a zero\ncandidate result without pretending that extraction succeeded silently."
+      },
+      "FXSnapshotResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "base_currency": {
+            "type": "string",
+            "enum": [
+              "CNY",
+              "USD"
+            ],
+            "title": "Base Currency"
+          },
+          "quote_currency": {
+            "type": "string",
+            "enum": [
+              "CNY",
+              "USD"
+            ],
+            "title": "Quote Currency"
+          },
+          "rate": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Rate"
+          },
+          "quote_direction": {
+            "type": "string",
+            "const": "quote_per_base",
+            "title": "Quote Direction"
+          },
+          "market_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Market At"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "raw_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Hash"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "base_currency",
+          "quote_currency",
+          "rate",
+          "quote_direction",
+          "market_at",
+          "available_at",
+          "source_id",
+          "raw_hash",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "FXSnapshotResponse"
       },
       "ForecastEvaluationCandidateDTO": {
         "properties": {
@@ -23528,6 +25834,148 @@
         ],
         "title": "OverviewTotalsDTO"
       },
+      "PatchWorkspaceDraftRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "expected_lock_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Lock Version"
+          },
+          "mandate_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mandate Id"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "agenda_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agenda Id"
+          },
+          "historical_basis_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Historical Basis Id"
+          },
+          "price_snapshot_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array",
+                "maxItems": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Snapshot Ids"
+          },
+          "fx_snapshot_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array",
+                "maxItems": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fx Snapshot Ids"
+          },
+          "capital_structure_snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capital Structure Snapshot Id"
+          },
+          "security_rights_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array",
+                "maxItems": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Security Rights Ids"
+          },
+          "user_focus": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Focus"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_lock_version"
+        ],
+        "title": "PatchWorkspaceDraftRequest"
+      },
       "PendingAssessmentDTO": {
         "properties": {
           "assessment_id": {
@@ -23766,6 +26214,637 @@
         ],
         "title": "PreparationStepDTO"
       },
+      "PreviewProductRevisionRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "expected_lock_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Lock Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_lock_version"
+        ],
+        "title": "PreviewProductRevisionRequest"
+      },
+      "PriceSnapshotResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "security_identity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Security Identity Id"
+          },
+          "price": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Price"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "CNY",
+              "USD"
+            ],
+            "title": "Currency"
+          },
+          "price_type": {
+            "type": "string",
+            "title": "Price Type"
+          },
+          "adjustment_basis": {
+            "type": "string",
+            "title": "Adjustment Basis"
+          },
+          "market_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Market At"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "raw_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Hash"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "security_identity_id",
+          "price",
+          "currency",
+          "price_type",
+          "adjustment_basis",
+          "market_at",
+          "available_at",
+          "source_id",
+          "raw_hash",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "PriceSnapshotResponse"
+      },
+      "ProductHistoricalBasisResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "cutoff_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff At"
+          },
+          "price_as_of": {
+            "type": "null",
+            "title": "Price As Of"
+          },
+          "source_manifest_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Manifest Hash"
+          },
+          "definition_bundle_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Definition Bundle Hash"
+          },
+          "parser_bundle_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Parser Bundle Hash"
+          },
+          "boundary_schema_version": {
+            "type": "string",
+            "const": "product.historical-basis.v1",
+            "title": "Boundary Schema Version"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "cutoff_at",
+          "source_manifest_hash",
+          "definition_bundle_hash",
+          "parser_bundle_hash",
+          "boundary_schema_version",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "ProductHistoricalBasisResponse"
+      },
+      "ProductMandateResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "mandate_key": {
+            "type": "string",
+            "title": "Mandate Key"
+          },
+          "horizon_years": {
+            "type": "integer",
+            "title": "Horizon Years"
+          },
+          "base_currency": {
+            "type": "string",
+            "enum": [
+              "CNY",
+              "USD"
+            ],
+            "title": "Base Currency"
+          },
+          "required_return": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Required Return"
+          },
+          "permanent_loss_limit": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Permanent Loss Limit"
+          },
+          "comparison_set": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Comparison Set"
+          },
+          "benchmark_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Key"
+          },
+          "required_excess_return": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Excess Return"
+          },
+          "effective_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Effective At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "supersedes_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Id"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "mandate_key",
+          "horizon_years",
+          "base_currency",
+          "required_return",
+          "permanent_loss_limit",
+          "comparison_set",
+          "benchmark_key",
+          "required_excess_return",
+          "effective_at",
+          "expires_at",
+          "version",
+          "supersedes_id",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "ProductMandateResponse"
+      },
+      "ProductObjectSearchItemResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "identity_version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Identity Version Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "industry",
+              "company",
+              "security"
+            ],
+            "title": "Kind"
+          },
+          "external_key": {
+            "type": "string",
+            "title": "External Key"
+          },
+          "canonical_name": {
+            "type": "string",
+            "title": "Canonical Name"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          },
+          "exchange": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
+          },
+          "share_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share Class"
+          },
+          "trading_currency": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "CNY",
+                  "USD"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trading Currency"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "object_id",
+          "identity_version_id",
+          "kind",
+          "external_key",
+          "canonical_name",
+          "symbol",
+          "exchange",
+          "share_class",
+          "trading_currency"
+        ],
+        "title": "ProductObjectSearchItemResponse"
+      },
+      "ProductObjectSearchResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProductObjectSearchItemResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ProductObjectSearchResponse"
+      },
+      "ProductRevisionResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "basis_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Basis Id"
+          },
+          "boundary_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Boundary Id"
+          },
+          "manifest_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Manifest Id"
+          },
+          "version_kind": {
+            "type": "string",
+            "const": "independent_research",
+            "title": "Version Kind"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "cutoff": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff"
+          },
+          "source_manifest_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Manifest Hash"
+          },
+          "manifest_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Manifest Hash"
+          },
+          "parent_revision_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Revision Id"
+          },
+          "price_snapshot_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Price Snapshot Ids"
+          },
+          "fx_snapshot_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Fx Snapshot Ids"
+          },
+          "capital_structure_snapshot_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Capital Structure Snapshot Id"
+          },
+          "security_rights_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Security Rights Ids"
+          },
+          "market_snapshot_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Market Snapshot Ids"
+          },
+          "answerability": {
+            "type": "string",
+            "enum": [
+              "answerable",
+              "partially_answerable",
+              "not_answerable"
+            ],
+            "title": "Answerability"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "provisional_bullish",
+                  "provisional_neutral",
+                  "provisional_cautious"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "publication_status": {
+            "type": "string",
+            "enum": [
+              "user_frozen",
+              "superseded"
+            ],
+            "title": "Publication Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "object_id",
+          "basis_id",
+          "boundary_id",
+          "manifest_id",
+          "version_kind",
+          "sequence",
+          "content_hash",
+          "cutoff",
+          "source_manifest_hash",
+          "manifest_hash",
+          "parent_revision_id",
+          "price_snapshot_ids",
+          "fx_snapshot_ids",
+          "capital_structure_snapshot_id",
+          "security_rights_ids",
+          "market_snapshot_ids",
+          "answerability",
+          "direction",
+          "confidence",
+          "publication_status"
+        ],
+        "title": "ProductRevisionResponse"
+      },
       "ProposeResponse": {
         "properties": {
           "thesis_id": {
@@ -23900,6 +26979,64 @@
         ],
         "title": "ProviderRecordDTO"
       },
+      "PublicationPreviewResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "expected_lock_version": {
+            "type": "integer",
+            "title": "Expected Lock Version"
+          },
+          "boundary_as_of": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Boundary As Of"
+          },
+          "assessment": {
+            "$ref": "#/components/schemas/AssessmentPreviewResponse"
+          },
+          "boundary": {
+            "$ref": "#/components/schemas/RevisionBoundaryResponse"
+          },
+          "boundary_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Boundary Hash"
+          },
+          "manifest": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Manifest"
+          },
+          "manifest_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Manifest Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "project_id",
+          "expected_lock_version",
+          "boundary_as_of",
+          "assessment",
+          "boundary",
+          "boundary_hash",
+          "manifest",
+          "manifest_hash"
+        ],
+        "title": "PublicationPreviewResponse"
+      },
       "PublishEventConclusionRequest": {
         "properties": {
           "text": {
@@ -23939,6 +27076,27 @@
           "state"
         ],
         "title": "PublishEventConclusionResponse"
+      },
+      "PublishProductRevisionRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "expected_lock_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Lock Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_lock_version"
+        ],
+        "title": "PublishProductRevisionRequest"
       },
       "PublishedMaterialDecisionRequest": {
         "properties": {
@@ -24816,6 +27974,100 @@
         "title": "RerunResponse",
         "description": "Result of re-running the assess step for one thesis.\n\nA rerun freezes a NEW snapshot and appends a NEW provisional assessment;\nprior snapshots/assessments are never touched, and the difference shows\nup in the snapshot-compare view.  ``mode`` is ``mock`` only when\n``APP_ENV=test`` and no LLM key is configured; every non-test runtime\nrequires a live provider."
       },
+      "ResearchAgendaPayloadResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ResearchAgendaPayloadResponse"
+      },
+      "ResearchAgendaResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "scope_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Scope Id"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ResearchAgendaPayloadResponse"
+          },
+          "generator_provenance": {
+            "$ref": "#/components/schemas/AgendaGeneratorResponse"
+          },
+          "supersedes_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Id"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "version",
+          "scope_id",
+          "payload",
+          "generator_provenance",
+          "supersedes_id",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "ResearchAgendaResponse"
+      },
       "ResearchArchiveItemResponse": {
         "properties": {
           "schema_version": {
@@ -25330,6 +28582,77 @@
           "items"
         ],
         "title": "ResearchPreparationEventsResponse"
+      },
+      "ResearchProjectListResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchProjectResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ResearchProjectListResponse"
+      },
+      "ResearchProjectResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "primary_company_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Primary Company Id"
+          },
+          "target_security_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Target Security Ids"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "primary_company_id",
+          "target_security_ids",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "ResearchProjectResponse"
       },
       "ResearchRevisionArtifactResponse": {
         "properties": {
@@ -26145,6 +29468,134 @@
         ],
         "title": "ResearchRunResponse"
       },
+      "ResearchScopePayloadResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "primary_company_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Primary Company Id"
+          },
+          "target_security_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Target Security Ids"
+          },
+          "industry_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Industry Ids"
+          },
+          "covered_segments": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Covered Segments"
+          },
+          "user_focus": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Focus"
+          },
+          "exclusions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exclusions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "primary_company_id",
+          "target_security_ids",
+          "industry_ids",
+          "covered_segments",
+          "user_focus",
+          "exclusions"
+        ],
+        "title": "ResearchScopePayloadResponse"
+      },
+      "ResearchScopeResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ResearchScopePayloadResponse"
+          },
+          "supersedes_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Id"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "version",
+          "payload",
+          "supersedes_id",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "ResearchScopeResponse"
+      },
       "ResearchSessionDTO": {
         "properties": {
           "tenant_id": {
@@ -26613,6 +30064,91 @@
         "title": "ReviewThroughputDTO",
         "description": "审核吞吐: review output vs the pending machine-generated queue."
       },
+      "RevisionBoundaryResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "historical_basis_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Historical Basis Id"
+          },
+          "mandate_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Mandate Id"
+          },
+          "scope_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Scope Id"
+          },
+          "agenda_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agenda Id"
+          },
+          "price_snapshot_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Price Snapshot Ids"
+          },
+          "fx_snapshot_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Fx Snapshot Ids"
+          },
+          "capital_structure_snapshot_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Capital Structure Snapshot Id"
+          },
+          "security_rights_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Security Rights Ids"
+          },
+          "parent_revision_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Revision Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "historical_basis_id",
+          "mandate_id",
+          "scope_id",
+          "agenda_id",
+          "price_snapshot_ids",
+          "fx_snapshot_ids",
+          "capital_structure_snapshot_id",
+          "security_rights_ids",
+          "parent_revision_id"
+        ],
+        "title": "RevisionBoundaryResponse"
+      },
       "RoleReviewDTO": {
         "properties": {
           "outcome": {
@@ -26965,6 +30501,123 @@
           "page"
         ],
         "title": "SearchResponse"
+      },
+      "SecurityRightsResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "security_identity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Security Identity Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "economic_units": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Economic Units"
+          },
+          "votes_per_unit": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Votes Per Unit"
+          },
+          "conversion_ratio": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Conversion Ratio"
+          },
+          "adr_ratio": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Adr Ratio"
+          },
+          "dividend_rights_per_unit": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Dividend Rights Per Unit"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Effective From"
+          },
+          "effective_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective To"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "raw_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Hash"
+          },
+          "supersedes_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Id"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "security_identity_id",
+          "version",
+          "economic_units",
+          "votes_per_unit",
+          "conversion_ratio",
+          "adr_ratio",
+          "dividend_rights_per_unit",
+          "effective_from",
+          "effective_to",
+          "source_id",
+          "raw_hash",
+          "supersedes_id",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "SecurityRightsResponse"
       },
       "SelectMechanismTemplateRequest": {
         "properties": {
@@ -29624,6 +33277,192 @@
           "reason"
         ],
         "title": "VerificationRuleRequest"
+      },
+      "WorkspaceDraftContentResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "publication_status": {
+            "type": "string",
+            "const": "draft",
+            "title": "Publication Status"
+          },
+          "mandate_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mandate Id"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "agenda_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agenda Id"
+          },
+          "historical_basis_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Historical Basis Id"
+          },
+          "price_snapshot_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Price Snapshot Ids"
+          },
+          "fx_snapshot_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Fx Snapshot Ids"
+          },
+          "capital_structure_snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capital Structure Snapshot Id"
+          },
+          "security_rights_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Security Rights Ids"
+          },
+          "user_focus": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Focus"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "publication_status",
+          "mandate_id",
+          "scope_id",
+          "agenda_id",
+          "historical_basis_id",
+          "price_snapshot_ids",
+          "fx_snapshot_ids",
+          "capital_structure_snapshot_id",
+          "security_rights_ids",
+          "user_focus"
+        ],
+        "title": "WorkspaceDraftContentResponse"
+      },
+      "WorkspaceDraftResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "base_revision_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Revision Id"
+          },
+          "lock_version": {
+            "type": "integer",
+            "title": "Lock Version"
+          },
+          "content": {
+            "$ref": "#/components/schemas/WorkspaceDraftContentResponse"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "base_revision_id",
+          "lock_version",
+          "content",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "WorkspaceDraftResponse"
       },
       "app__schemas__v1__cases__CausalStepDTO": {
         "properties": {

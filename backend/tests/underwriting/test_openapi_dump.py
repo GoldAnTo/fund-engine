@@ -53,6 +53,41 @@ FORBIDDEN_BOUNDARY_FIELD_NAMES = {
 FORBIDDEN_BOUNDARY_ENUMS = {
     "eligible_for_probe_entry", "eligible_for_staged_entry", "do_not_enter",
 }
+PRODUCT_OPERATIONS = {
+    "/api/underwriting/v1/product/objects": {"get"},
+    "/api/underwriting/v1/product/projects": {"get", "post"},
+    "/api/underwriting/v1/product/projects/{project_id}": {"get"},
+    "/api/underwriting/v1/product/projects/{project_id}/mandates": {"post"},
+    "/api/underwriting/v1/product/projects/{project_id}/scopes": {"post"},
+    "/api/underwriting/v1/product/projects/{project_id}/agendas": {"post"},
+    "/api/underwriting/v1/product/historical-bases": {"post"},
+    "/api/underwriting/v1/product/market/price-snapshots": {"post"},
+    "/api/underwriting/v1/product/market/fx-snapshots": {"post"},
+    "/api/underwriting/v1/product/market/capital-structure-snapshots": {"post"},
+    "/api/underwriting/v1/product/market/security-rights": {"post"},
+    "/api/underwriting/v1/product/projects/{project_id}/draft": {"get", "patch"},
+    "/api/underwriting/v1/product/projects/{project_id}/publication-preview": {"post"},
+    "/api/underwriting/v1/product/projects/{project_id}/publish": {"post"},
+    "/api/underwriting/v1/product/revisions/{revision_id}": {"get"},
+}
+PRODUCT_REQUEST_SCHEMAS = {
+    "CreateResearchProjectRequest",
+    "CreateProductMandateRequest",
+    "CreateResearchScopeRequest",
+    "CreateResearchAgendaRequest",
+    "CreateProductHistoricalBasisRequest",
+    "CreatePriceSnapshotRequest",
+    "CreateFXSnapshotRequest",
+    "CreateCapitalStructureSnapshotRequest",
+    "CreateSecurityRightsRequest",
+    "PatchWorkspaceDraftRequest",
+    "PreviewProductRevisionRequest",
+    "PublishProductRevisionRequest",
+}
+FORBIDDEN_PRODUCT_DECISION_FIELDS = {
+    "target_price", "target", "action", "position", "recommendation", "recommend",
+    "buy", "sell", "stop",
+}
 
 
 def _property_names(schema: object, schemas: dict[str, object], seen: set[str] | None = None) -> set[str]:
@@ -115,6 +150,44 @@ def test_dump_openapi_includes_underwriting_routes() -> None:
     openapi = json.loads((backend.parent / "frontend" / "openapi.json").read_text())
     assert "/api/underwriting/v1/objects" in openapi["paths"]
     assert "UnderwritingErrorEnvelope" in openapi["components"]["schemas"]
+
+
+def test_product_openapi_is_exact_strict_and_has_idempotency_header() -> None:
+    openapi = app.openapi()
+    schemas = openapi["components"]["schemas"]
+
+    for path, methods in PRODUCT_OPERATIONS.items():
+        assert path in openapi["paths"]
+        assert set(openapi["paths"][path]) == methods
+    for name in PRODUCT_REQUEST_SCHEMAS:
+        assert schemas[name]["additionalProperties"] is False
+
+    publish = openapi["paths"][
+        "/api/underwriting/v1/product/projects/{project_id}/publish"
+    ]["post"]
+    idempotency = next(
+        parameter
+        for parameter in publish["parameters"]
+        if parameter["name"] == "Idempotency-Key"
+    )
+    assert idempotency["in"] == "header"
+    assert idempotency["required"] is True
+    assert idempotency["schema"]["minLength"] == 1
+    assert idempotency["schema"]["maxLength"] == 120
+
+    names: set[str] = set()
+    for name in PRODUCT_REQUEST_SCHEMAS | {
+        "PublicationPreviewResponse",
+        "ProductRevisionResponse",
+    }:
+        names.update(_property_names(schemas[name], schemas))
+    assert not ({name.lower() for name in names} & FORBIDDEN_PRODUCT_DECISION_FIELDS)
+    assert {
+        "price_snapshot_ids",
+        "fx_snapshot_ids",
+        "capital_structure_snapshot_id",
+        "security_rights_ids",
+    } <= set(schemas["ProductRevisionResponse"]["properties"])
 
 
 def test_revision_read_contract_has_only_get_operations_and_no_decision_fields() -> None:
