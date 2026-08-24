@@ -759,7 +759,7 @@ git commit -m "feat: atomically publish investment research revisions"
 - Modify/generated: `frontend/openapi.json`
 - Modify/generated: `frontend/src/contracts/v1.ts`
 
-- [ ] **Step 1: Write RED HTTP tests for the foundation path.** Cover object search, project list/create/detail, mandate/scope/agenda writes, product basis, four market snapshot types, draft GET/PATCH, publication preview/publish and selected revision read. Require strict extra-field rejection, 409 stale lock, idempotency and no target-price/action fields.
+- [x] **Step 1: Write RED HTTP tests for the foundation path.** Cover object search, project list/create/detail, mandate/scope/agenda writes, product basis, four market snapshot types, draft GET/PATCH, publication preview/publish and selected revision read. Require strict extra-field rejection, 409 stale lock, idempotency and no target-price/action fields.
 
 ```text
 GET  /api/underwriting/v1/product/objects?query=CATL
@@ -781,13 +781,13 @@ POST /api/underwriting/v1/product/projects/{id}/publish
 GET  /api/underwriting/v1/product/revisions/{id}
 ```
 
-- [ ] **Step 2: Confirm RED.**
+- [x] **Step 2: Confirm RED.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_product_api.py`
 
 Expected: 404 for all product routes.
 
-- [ ] **Step 3: Implement strict DTOs and thin handlers.** Every DTO extends `UnderwritingModel(extra="forbid")`; handlers delegate to one service and use existing 404/409/422 envelopes. `PATCH draft` requires `expected_lock_version`; publish requires both expected lock and `Idempotency-Key` header.
+- [x] **Step 3: Implement strict DTOs and thin handlers.** Every DTO extends `UnderwritingModel(extra="forbid")`; handlers delegate to one service and use existing 404/409/422 envelopes. `PATCH draft` requires `expected_lock_version`; publish requires both expected lock and `Idempotency-Key` header.
 
 ```python
 from app.underwriting.api.transactions import commit_write
@@ -832,7 +832,7 @@ def publish_product_revision(
     return _product_revision_response(revision)
 ```
 
-- [ ] **Step 4: Include the router without growing the legacy handler file.** Move the existing `_write` body unchanged into `api/transactions.py` as `commit_write`, import it from both routers, and add `router.include_router(product_router)` after existing router construction.
+- [x] **Step 4: Include the router without growing the legacy handler file.** Move the existing `_write` body unchanged into `api/transactions.py` as `commit_write`, import it from both routers, and add `router.include_router(product_router)` after existing router construction.
 
 ```python
 from app.underwriting.api.product_router import router as product_router
@@ -841,7 +841,7 @@ from app.underwriting.api.transactions import commit_write
 router.include_router(product_router)
 ```
 
-- [ ] **Step 5: Safely regenerate contracts.** First fingerprint the existing unstaged `frontend/openapi.json` patch. Generate to a temporary path, apply only the produced schema change, regenerate TypeScript, and restore the user's pre-existing hunk outside the staged feature diff.
+- [x] **Step 5: Safely regenerate contracts.** First fingerprint the existing unstaged `frontend/openapi.json` patch. Generate to a temporary path, apply only the produced schema change, regenerate TypeScript, and restore the user's pre-existing hunk outside the staged feature diff.
 
 Run:
 
@@ -862,7 +862,7 @@ git diff --check -- frontend/openapi.json
 
 Expected: generated product operations exist; the pre-existing unstaged OpenAPI hunk remains unstaged.
 
-- [ ] **Step 6: Run GREEN and commit.**
+- [x] **Step 6: Run GREEN and commit.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_product_api.py tests/underwriting/test_openapi_dump.py tests/underwriting/test_kernel_api.py`
 
