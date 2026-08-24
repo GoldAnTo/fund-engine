@@ -657,8 +657,7 @@ class ProductRepository:
         for project_id, security_id in self._session.execute(statement):
             memberships_by_project[project_id].append(security_id)
         return [
-            (project, tuple(memberships_by_project[project.id]))
-            for project in projects
+            (project, tuple(memberships_by_project[project.id])) for project in projects
         ]
 
     def mandate_head(self, project_id: UUID) -> UnderwritingMandateVersion | None:
