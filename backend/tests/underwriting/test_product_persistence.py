@@ -496,6 +496,7 @@ def test_product_constraints_cover_intervals_currencies_numbers_and_states() -> 
     assert "basic_shares > 0" in checks["uw_capital_structure_snapshots"]
     assert "votes_per_unit >= 0" in checks["uw_security_rights_versions"]
     assert "economic_units > 0" in checks["uw_security_rights_versions"]
+    assert "effective_to > effective_from" in checks["uw_security_rights_versions"]
     assert "publication_status IN ('user_frozen', 'superseded')" in checks[
         "uw_research_assessment_versions"
     ]
@@ -1013,6 +1014,28 @@ def test_0065_migrated_representative_constraints_reject_invalid_rows(
                     "effective_to": datetime(2026, 8, 24, tzinfo=UTC),
                     "content_hash": "a" * 64,
                     "created_at": datetime(2026, 8, 24, tzinfo=UTC),
+                },
+            )
+    with pytest.raises(IntegrityError):
+        with migrated_0065_engine.begin() as connection:
+            instant = datetime(2026, 8, 24, tzinfo=UTC)
+            connection.execute(
+                Base.metadata.tables["uw_security_rights_versions"].insert(),
+                {
+                    "id": uuid.uuid4(),
+                    "security_identity_id": ids["security"],
+                    "version": 1,
+                    "economic_units": Decimal("1"),
+                    "votes_per_unit": Decimal("1"),
+                    "conversion_ratio": Decimal("1"),
+                    "adr_ratio": Decimal("1"),
+                    "dividend_rights_per_unit": Decimal("1"),
+                    "effective_from": instant,
+                    "effective_to": instant,
+                    "source_id": "listing-rules",
+                    "raw_hash": "a" * 64,
+                    "content_hash": "b" * 64,
+                    "created_at": instant,
                 },
             )
     with pytest.raises(IntegrityError):

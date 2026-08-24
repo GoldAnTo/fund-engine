@@ -682,7 +682,7 @@ def upgrade() -> None:
             name="ck_uw_security_rights_nonnegative",
         ),
         sa.CheckConstraint(
-            "effective_to IS NULL OR effective_to >= effective_from",
+            "effective_to IS NULL OR effective_to > effective_from",
             name="ck_uw_security_rights_effective_interval",
         ),
         sa.CheckConstraint(

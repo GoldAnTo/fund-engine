@@ -619,6 +619,13 @@ def test_security_rights_reject_wrong_kind_overlap_and_excess_precision(
             _rights(security.id, votes_per_unit=Decimal("1.00000000001")),
             expected_parent_id=None,
         )
+    forged_zero_length = _rights(security.id)
+    object.__setattr__(forged_zero_length, "effective_to", EFFECTIVE)
+    with pytest.raises(ValidationError, match="effective_to.*later"):
+        services.market.freeze_security_rights(
+            forged_zero_length,
+            expected_parent_id=None,
+        )
     first = services.market.freeze_security_rights(
         _rights(security.id, effective_to=MARKET), expected_parent_id=None
     )

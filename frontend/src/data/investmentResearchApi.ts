@@ -432,7 +432,7 @@ function isRights(value: unknown): value is ProductSecurityRights {
     && isNonNegativeDecimal(value.conversion_ratio, true) && isNonNegativeDecimal(value.adr_ratio, true)
     && isNonNegativeDecimal(value.dividend_rights_per_unit)
     && isDateTime(value.effective_from) && isNullableDateTime(value.effective_to)
-    && (value.effective_to === null || isAtOrBefore(value.effective_from, value.effective_to))
+    && (value.effective_to === null || Date.parse(value.effective_from) < Date.parse(value.effective_to))
     && typeof value.source_id === "string" && value.source_id.trim() !== ""
     && isHash(value.raw_hash) && isNullableUuid(value.supersedes_id)
     && isHash(value.content_hash) && isDateTime(value.created_at);
@@ -447,7 +447,8 @@ function isEffectiveRights(value: unknown): value is EffectiveSecurityRights {
       && hasExactKeys(value.head, ["schema_version", "id", "effective_from", "effective_to"])
       && isUuid(value.head.id) && isDateTime(value.head.effective_from)
       && isNullableDateTime(value.head.effective_to)
-      && (value.head.effective_to === null || isAtOrBefore(value.head.effective_from, value.head.effective_to))))
+      && (value.head.effective_to === null
+        || Date.parse(String(value.head.effective_from)) < Date.parse(String(value.head.effective_to)))))
     || typeof value.append_allowed !== "boolean"
     || !isNullableUuid(value.expected_parent_id)
     || !isNullableDateTime(value.minimum_effective_from)

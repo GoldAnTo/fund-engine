@@ -55,6 +55,31 @@ def test_agenda_generator_response_rejects_invalid_input_summary_hash() -> None:
         )
 
 
+def test_security_rights_http_rejects_a_zero_length_effective_interval(
+    api_client, session
+) -> None:
+    catalog = _seed_catalog(session, suffix="zero-rights-interval")
+    response = api_client.post(
+        f"{BASE}/market/security-rights",
+        json={
+            "security_identity_id": str(catalog["security"].id),
+            "economic_units": "1",
+            "votes_per_unit": "1",
+            "conversion_ratio": "1",
+            "adr_ratio": "1",
+            "dividend_rights_per_unit": "1",
+            "effective_from": EFFECTIVE.isoformat(),
+            "effective_to": EFFECTIVE.isoformat(),
+            "source_id": "listing-rules",
+            "raw_hash": D64,
+            "expected_parent_id": None,
+        },
+    )
+
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
+
+
 def _seed_object(session, kind: str, key: str, name: str):
     row = UnderwritingResearchObject(
         kind=kind,

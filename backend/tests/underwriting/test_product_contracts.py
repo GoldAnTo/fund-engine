@@ -280,6 +280,9 @@ def test_security_rights_requires_positive_economic_rights_and_valid_interval() 
     with pytest.raises(ValueError, match="effective interval is invalid"):
         _rights(effective_to=datetime(2025, 12, 31, tzinfo=UTC))
 
+    with pytest.raises(ValueError, match="effective interval is invalid"):
+        _rights(effective_to=datetime(2026, 1, 1, tzinfo=UTC))
+
 
 def test_security_rights_allows_zero_vote_and_dividend_entitlements_but_rejects_negative_votes() -> (
     None

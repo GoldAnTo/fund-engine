@@ -485,6 +485,12 @@ class CreateSecurityRightsRequest(UnderwritingModel):
     def aware_effective_to(cls, value: datetime | None) -> datetime | None:
         return value if value is None else _require_aware(value, "effective_to")
 
+    @model_validator(mode="after")
+    def strict_effective_interval(self):
+        if self.effective_to is not None and self.effective_to <= self.effective_from:
+            raise ValueError("effective_to must be later than effective_from")
+        return self
+
 
 class SecurityRightsResponse(UnderwritingModel):
     id: UUID

@@ -484,6 +484,8 @@ class MarketSnapshotService:
             if value.effective_to is not None
             else None
         )
+        if effective_to is not None and effective_to <= effective_from:
+            raise ValidationError("effective_to must be later than effective_from")
         head = self._repository.rights_head(value.security_identity_id)
         if head is not None and head.id == expected_parent_id:
             if effective_from <= _stored_utc(head.effective_from):

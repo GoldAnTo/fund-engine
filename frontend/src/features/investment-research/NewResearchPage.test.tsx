@@ -286,12 +286,32 @@ describe("new independent investment research setup", () => {
   it("appends an explicit successor with the server-provided parent when the boundary follows the rights head", async () => {
     const user = userEvent.setup(); const product = server({ appendableRightsHead: true }); vi.stubGlobal("fetch", product.fetch); renderPage();
     await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
+    for (const symbol of ["300750", "03750"]) {
+      const control = screen.getByLabelText(`${symbol} 权利生效时间`);
+      await user.clear(control);
+      await user.type(control, "2026-08-23T08:00");
+    }
     await user.click(screen.getByRole("button", { name: "预览模板议程" }));
     await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" }));
     await screen.findByRole("heading", { name: "研究工作台" });
     const writes = product.requests.filter((request) => request.url.endsWith("/security-rights") && request.method === "POST");
     expect(writes).toHaveLength(2);
     expect(writes.map((request) => request.body?.expected_parent_id)).toEqual([ids.rightsA, ids.rightsB]);
+    expect(writes.map((request) => request.body?.effective_from)).toEqual([
+      "2026-08-23T00:00:00.000Z",
+      "2026-08-23T00:00:00.000Z",
+    ]);
+  }, setupFlowTimeout);
+
+  it("rejects a rights end equal to its start before writing", async () => {
+    const user = userEvent.setup(); const product = server(); vi.stubGlobal("fetch", product.fetch); renderPage();
+    await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
+    const end = screen.getByLabelText("300750 权利结束时间（可选）");
+    await user.type(end, "2026-08-24T08:00");
+    await user.click(screen.getByRole("button", { name: "预览模板议程" }));
+    await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("权利结束时间必须晚于生效时间");
+    expect(product.requests.filter((request) => request.url.endsWith("/security-rights") && request.method === "POST")).toHaveLength(0);
   }, setupFlowTimeout);
 
   it("does not restore a stale agenda preview after its inputs change", async () => {

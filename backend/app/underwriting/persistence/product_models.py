@@ -358,7 +358,7 @@ class UnderwritingSecurityRightsVersion(Base):
             name="ck_uw_security_rights_nonnegative",
         ),
         CheckConstraint(
-            "effective_to IS NULL OR effective_to >= effective_from",
+            "effective_to IS NULL OR effective_to > effective_from",
             name="ck_uw_security_rights_effective_interval",
         ),
         CheckConstraint("length(raw_hash) = 64", name="ck_uw_security_rights_raw_hash"),

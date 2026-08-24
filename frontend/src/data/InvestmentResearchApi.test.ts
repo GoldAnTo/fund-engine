@@ -253,6 +253,28 @@ describe("InvestmentResearchApi", () => {
       .rejects.toMatchObject({ code: "invalid_response" });
   });
 
+  it("rejects a zero-length rights interval from the service", async () => {
+    const invalid = rightsBody();
+    Reflect.set(invalid, "effective_to", invalid.effective_from);
+    vi.stubGlobal("fetch", vi.fn(async () => response(effectiveRightsBody(invalid))));
+
+    await expect(new InvestmentResearchApi().effectiveSecurityRights(ids.securityA, now))
+      .rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects a zero-length rights response on the create path", async () => {
+    const request = {
+      ...rightsRequest,
+      effective_to: rightsRequest.effective_from,
+    };
+    const invalid = rightsBody();
+    Reflect.set(invalid, "effective_to", invalid.effective_from);
+    vi.stubGlobal("fetch", vi.fn(async () => response(invalid, 201)));
+
+    await expect(new InvestmentResearchApi().createSecurityRights(request))
+      .rejects.toMatchObject({ code: "invalid_response" });
+  });
+
   it("rejects an appendable rights response without the explicit head parent", async () => {
     const invalid = {
       ...effectiveRightsBody(),

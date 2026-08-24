@@ -389,7 +389,7 @@ class SecurityRightsInput:
         _require_aware_datetime(self.effective_from, "effective_from")
         if self.effective_to is not None:
             _require_aware_datetime(self.effective_to, "effective_to")
-            if _is_later(self.effective_from, self.effective_to):
+            if not _is_later(self.effective_to, self.effective_from):
                 raise ValueError("effective interval is invalid")
         _require_text(self.source_id, "source_id")
         _require_sha256(self.raw_hash, "raw_hash")

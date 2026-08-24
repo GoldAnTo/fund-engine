@@ -499,6 +499,9 @@ export default function NewResearchPage() {
         }
         const effectiveFrom = frozen(`rights_effective_from_${key}`);
         const effectiveTo = optionalField(form, `rights_effective_to_${key}`) ? frozen(`rights_effective_to_${key}`) : null;
+        if (effectiveTo && Date.parse(effectiveTo) <= Date.parse(effectiveFrom)) {
+          throw new Error(`${security.symbol ?? security.external_key} 权利结束时间必须晚于生效时间`);
+        }
         if (result.minimum_effective_from && Date.parse(effectiveFrom) < Date.parse(result.minimum_effective_from)) {
           throw new Error(`${security.symbol ?? security.external_key} successor 生效时间不得早于 ${result.minimum_effective_from}`);
         }
