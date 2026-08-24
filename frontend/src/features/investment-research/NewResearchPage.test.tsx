@@ -46,7 +46,7 @@ function parseBody(init?: RequestInit): Record<string, unknown> {
 }
 
 type Captured = { url: string; method: string; body: Record<string, unknown> | null };
-function server(options: { draftFailures?: number; scopeFailures?: number; mandateFailures?: number; searchItems?: object[]; existingRights?: boolean } = {}) {
+function server(options: { draftFailures?: number; scopeFailures?: number; mandateFailures?: number; searchItems?: object[]; existingRights?: boolean; rightsHeadWithoutEffective?: boolean } = {}) {
   const requests: Captured[] = [];
   let draftFailures = options.draftFailures ?? 0;
   let scopeFailures = options.scopeFailures ?? 0;
@@ -93,7 +93,7 @@ function server(options: { draftFailures?: number; scopeFailures?: number; manda
     if (url.includes("/security-rights/effective?") && method === "GET") {
       const parsed = new URL(url, "http://test"); const securityId = parsed.searchParams.get("security_identity_id") ?? ""; const asOf = parsed.searchParams.get("as_of") ?? now;
       const effective = options.existingRights ? { ...dto, id: securityId === ids.securityA ? ids.rightsA : ids.rightsB, security_identity_id: securityId, version: 1, economic_units: "1", votes_per_unit: "1", conversion_ratio: "1", adr_ratio: "1", dividend_rights_per_unit: "1", effective_from: now, effective_to: null, source_id: "listing-rules", raw_hash: hash, supersedes_id: null, content_hash: hash, created_at: now } : null;
-      return json({ ...dto, security_identity_id: securityId, as_of: asOf, effective, head_id: effective?.id ?? null });
+      return json({ ...dto, security_identity_id: securityId, as_of: asOf, effective, head_id: effective?.id ?? (options.rightsHeadWithoutEffective ? (securityId === ids.securityA ? ids.rightsA : ids.rightsB) : null) });
     }
     if (url.endsWith("/security-rights") && body) {
       const securityId = String(body.security_identity_id);
@@ -169,6 +169,9 @@ describe("new independent investment research setup", () => {
     await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
     expect(screen.getByLabelText("研究焦点（可选）")).not.toBeRequired(); expect(screen.getByLabelText("冻结时区 / UTC offset")).toHaveValue("+08:00");
     expect(screen.getByLabelText("必要回报率")).toHaveAttribute("pattern", "0(?:\\.\\d+)?");
+    await user.clear(screen.getByLabelText("永久损失上限")); await user.type(screen.getByLabelText("永久损失上限"), "1");
+    expect(screen.getByLabelText("永久损失上限")).toBeValid();
+    await user.clear(screen.getByLabelText("永久损失上限")); await user.type(screen.getByLabelText("永久损失上限"), "0.25");
     expect(screen.getByText("小数格式：0.15 = 15%")).toBeVisible();
     expect(screen.getAllByText("64 位小写十六进制 SHA-256").length).toBeGreaterThan(0);
     expect(screen.getByText("金额与股数沿用原始来源单位；同组字段必须保持一致。")).toBeVisible();
@@ -238,12 +241,30 @@ describe("new independent investment research setup", () => {
   it("reuses distinct effective rights for each Security without appending new versions", async () => {
     const user = userEvent.setup(); const product = server({ existingRights: true }); vi.stubGlobal("fetch", product.fetch); renderPage();
     await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
+    await user.clear(screen.getByLabelText("300750 市场时间")); await user.type(screen.getByLabelText("300750 市场时间"), "2026-08-24T09:00");
+    await user.clear(screen.getByLabelText("300750 可用时间")); await user.type(screen.getByLabelText("300750 可用时间"), "2026-08-24T09:05");
+    await user.clear(screen.getByLabelText("03750 市场时间")); await user.type(screen.getByLabelText("03750 市场时间"), "2026-08-24T10:00");
+    await user.clear(screen.getByLabelText("03750 可用时间")); await user.type(screen.getByLabelText("03750 可用时间"), "2026-08-24T10:05");
     await user.click(screen.getByRole("button", { name: "预览模板议程" }));
     await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" }));
     await screen.findByRole("heading", { name: "研究工作台" });
     expect(product.requests.filter((request) => request.url.includes("/security-rights/effective?"))).toHaveLength(2);
+    for (const request of product.requests.filter((item) => item.url.includes("/security-rights/effective?"))) {
+      expect(new URL(request.url, "http://test").searchParams.get("as_of")).toBe("2026-08-24T02:00:00.000Z");
+    }
     expect(product.requests.filter((request) => request.url.endsWith("/security-rights") && request.method === "POST")).toHaveLength(0);
     expect(product.requests.find((request) => request.url.endsWith("/draft") && request.method === "PATCH")?.body?.security_rights_ids).toEqual([ids.rightsA, ids.rightsB]);
+  });
+
+  it("stops with an actionable resolution when the boundary has a rights head but no effective version", async () => {
+    const user = userEvent.setup(); const product = server({ rightsHeadWithoutEffective: true }); vi.stubGlobal("fetch", product.fetch); renderPage();
+    await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
+    await user.click(screen.getByRole("button", { name: "预览模板议程" }));
+    await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("调整价格市场时间至已有权利有效期");
+    expect(alert).toHaveTextContent("以该 head 为父版本");
+    expect(product.requests.filter((request) => request.url.endsWith("/mandates"))).toHaveLength(0);
   });
 
   it("does not restore a stale agenda preview after its inputs change", async () => {
@@ -272,5 +293,26 @@ describe("new independent investment research setup", () => {
     fireEvent.submit(form!);
     expect(await screen.findByRole("alert")).toHaveTextContent("范围保存失败");
     expect(product.requests.filter((request) => request.url.endsWith("/mandates"))).toHaveLength(1);
+  });
+
+  it("does not continue identity setup after the user leaves the page", async () => {
+    const user = userEvent.setup();
+    let resolveProject!: (response: Response) => void;
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input); requests.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.includes("/product/objects?")) return json(searchBody());
+      if (url.endsWith("/product/projects") && init?.method === "POST") return new Promise<Response>((resolve) => { resolveProject = resolve; });
+      if (url.includes("/product/projects?")) return json({ ...dto, items: [] });
+      if (url.endsWith("/draft")) return json(draftBody());
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    renderPage(); await choose(user);
+    fireEvent.click(screen.getByRole("button", { name: "提交身份账本校验" }));
+    await user.click(screen.getByRole("link", { name: "研究目录" }));
+    expect(await screen.findByRole("heading", { name: "独立投资研究" })).toBeVisible();
+    await act(async () => resolveProject(json(projectBody(), 201)));
+    await Promise.resolve();
+    expect(requests.some((request) => request.endsWith("/draft"))).toBe(false);
   });
 });

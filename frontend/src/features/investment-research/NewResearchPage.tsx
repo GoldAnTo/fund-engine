@@ -34,6 +34,7 @@ import {
 const schemaVersion = "underwriting.v1" as const;
 const hashPattern = "[0-9a-f]{64}";
 const fractionPattern = "0(?:\\.\\d+)?";
+const inclusiveFractionPattern = "(?:0(?:\\.\\d+)?|1(?:\\.0+)?)";
 const positiveDecimalPattern = "(?:0\\.\\d*[1-9]\\d*|[1-9]\\d*(?:\\.\\d+)?)";
 const nonNegativeDecimalPattern = "(?:0|[1-9]\\d*)(?:\\.\\d+)?";
 const hashHint = "64 位小写十六进制 SHA-256";
@@ -53,6 +54,17 @@ function optionalField(form: FormData, name: string): string | null {
 
 function lines(value: string): string[] {
   return value.split(/\n|，|,/).map((item) => item.trim()).filter(Boolean);
+}
+
+function intervalContains(effectiveFrom: string, effectiveTo: string | null | undefined, instant: string): boolean {
+  const target = Date.parse(instant);
+  return Date.parse(effectiveFrom) <= target && (effectiveTo == null || target < Date.parse(effectiveTo));
+}
+
+function latestInstant(instants: string[]): string {
+  const latest = Math.max(...instants.map((instant) => Date.parse(instant)));
+  if (!Number.isFinite(latest)) throw new Error("价格市场时间无法识别");
+  return new Date(latest).toISOString();
 }
 
 function FormField({ label, name, children, hint, ...props }: {
@@ -118,6 +130,7 @@ export default function NewResearchPage() {
   const identityLockRef = useRef(false);
   const submitLockRef = useRef(false);
   const operationEpochRef = useRef(0);
+  const identityEpochRef = useRef(0);
   const agendaEpochRef = useRef(0);
   const identityAlertRef = useRef<HTMLParagraphElement>(null);
   const setupAlertRef = useRef<HTMLParagraphElement>(null);
@@ -171,6 +184,7 @@ export default function NewResearchPage() {
     return () => {
       mountedRef.current = false;
       operationEpochRef.current += 1;
+      identityEpochRef.current += 1;
       agendaEpochRef.current += 1;
     };
   }, []);
@@ -233,6 +247,8 @@ export default function NewResearchPage() {
   async function confirmIdentity() {
     if (identityLockRef.current || ((!selectedCompany || selectedSecurities.length === 0) && !project)) return;
     identityLockRef.current = true;
+    const identityEpoch = ++identityEpochRef.current;
+    const currentIdentityOperation = () => mountedRef.current && identityEpochRef.current === identityEpoch;
     setConfirming(true);
     setIdentityError(null);
     try {
@@ -241,10 +257,12 @@ export default function NewResearchPage() {
         primary_company_id: selectedCompany!.object_id,
         target_security_ids: selectedSecurities.map((item) => item.object_id),
       });
+      if (!currentIdentityOperation()) return;
       setProject(confirmedProject);
       const initialDraft = await investmentResearchApi.draft(confirmedProject.id);
-      setDraft(initialDraft);
+      if (currentIdentityOperation()) setDraft(initialDraft);
     } catch (error) {
+      if (!currentIdentityOperation()) return;
       setIdentityError(error instanceof Error ? error.message : "身份关系校验失败");
       requestAnimationFrame(() => {
         identityAlertRef.current?.focus();
@@ -253,8 +271,8 @@ export default function NewResearchPage() {
         }
       });
     } finally {
-      identityLockRef.current = false;
-      if (mountedRef.current) setConfirming(false);
+      if (identityEpochRef.current === identityEpoch) identityLockRef.current = false;
+      if (currentIdentityOperation()) setConfirming(false);
     }
   }
 
@@ -398,19 +416,6 @@ export default function NewResearchPage() {
         definition_bundle_hash: field(form, "definition_bundle_hash"),
         parser_bundle_hash: field(form, "parser_bundle_hash"),
       };
-      const unresolvedRights = selectedSecurities.filter((security) => !next.rights[security.object_id]);
-      const effectiveRights = await Promise.all(unresolvedRights.map(async (security) => ({
-        security,
-        result: await investmentResearchApi.effectiveSecurityRights(
-          security.object_id,
-          frozen(`rights_effective_from_${security.object_id}`),
-        ),
-      })));
-      if (!currentOperation()) return;
-      for (const { security, result } of effectiveRights) {
-        if (result.effective) next.rights[security.object_id] = result.effective;
-        else if (result.head_id) throw new Error(`${security.symbol ?? security.external_key} 在所选时点无有效权利版本，但存在 head ${result.head_id}；请先明确 successor 父版本`);
-      }
       const priceInputs: Record<string, CreatePriceSnapshotRequest> = {};
       const rightsInputs: Record<string, CreateSecurityRightsRequest> = {};
       for (const security of selectedSecurities) {
@@ -428,20 +433,6 @@ export default function NewResearchPage() {
           available_at: frozen(`price_available_at_${key}`),
           source_id: field(form, `price_source_${key}`),
           raw_hash: field(form, `price_raw_hash_${key}`),
-        };
-        if (!next.rights[key]) rightsInputs[key] = {
-          schema_version: schemaVersion,
-          security_identity_id: security.object_id,
-          economic_units: field(form, `economic_units_${key}`),
-          votes_per_unit: field(form, `votes_per_unit_${key}`),
-          conversion_ratio: field(form, `conversion_ratio_${key}`),
-          adr_ratio: field(form, `adr_ratio_${key}`),
-          dividend_rights_per_unit: field(form, `dividend_rights_${key}`),
-          effective_from: frozen(`rights_effective_from_${key}`),
-          effective_to: optionalField(form, `rights_effective_to_${key}`) ? frozen(`rights_effective_to_${key}`) : null,
-          source_id: field(form, `rights_source_${key}`),
-          raw_hash: field(form, `rights_raw_hash_${key}`),
-          expected_parent_id: null,
         };
       }
       const fxInputs: Record<string, CreateFxSnapshotRequest> = {};
@@ -471,6 +462,58 @@ export default function NewResearchPage() {
         market_at: frozen("capital_market_at"), available_at: frozen("capital_available_at"),
         source_id: field(form, "capital_source_id"), raw_hash: field(form, "capital_raw_hash"),
       };
+
+      // Publication freezes every market input at the latest price observation. Resolve
+      // mandate and rights validity at that same instant, not at an independent form time.
+      const marketBoundaryAt = latestInstant(selectedSecurities.map((security) => {
+        const key = security.object_id;
+        return next.prices[key]?.market_at ?? priceInputs[key]?.market_at;
+      }));
+      const mandateWindow = next.mandate ?? mandateInput;
+      if (!mandateWindow || !intervalContains(mandateWindow.effective_at, mandateWindow.expires_at, marketBoundaryAt)) {
+        throw new Error(`研究任务在价格市场边界 ${marketBoundaryAt} 未生效；请调整任务有效期或价格市场时间`);
+      }
+      for (const security of selectedSecurities) {
+        const savedRights = next.rights[security.object_id];
+        if (savedRights && !intervalContains(savedRights.effective_from, savedRights.effective_to, marketBoundaryAt)) {
+          throw new Error(`${security.symbol ?? security.external_key} 已保存的权利版本在价格市场边界 ${marketBoundaryAt} 无效；请调整价格市场时间至该权利有效期，或先在权利账本追加 successor`);
+        }
+      }
+      const unresolvedRights = selectedSecurities.filter((security) => !next.rights[security.object_id]);
+      const effectiveRights = await Promise.all(unresolvedRights.map(async (security) => ({
+        security,
+        result: await investmentResearchApi.effectiveSecurityRights(security.object_id, marketBoundaryAt),
+      })));
+      if (!currentOperation()) return;
+      for (const { security, result } of effectiveRights) {
+        const key = security.object_id;
+        if (result.effective) {
+          next.rights[key] = result.effective;
+          continue;
+        }
+        if (result.head_id) {
+          throw new Error(`${security.symbol ?? security.external_key} 在价格市场边界 ${marketBoundaryAt} 无有效权利版本，但存在 head ${result.head_id}；请调整价格市场时间至已有权利有效期，或先在权利账本追加以该 head 为父版本的 successor；本页不会回填历史权利`);
+        }
+        const effectiveFrom = frozen(`rights_effective_from_${key}`);
+        const effectiveTo = optionalField(form, `rights_effective_to_${key}`) ? frozen(`rights_effective_to_${key}`) : null;
+        if (!intervalContains(effectiveFrom, effectiveTo, marketBoundaryAt)) {
+          throw new Error(`${security.symbol ?? security.external_key} 新建权利版本必须覆盖价格市场边界 ${marketBoundaryAt}；请调整权利有效期或价格市场时间`);
+        }
+        rightsInputs[key] = {
+          schema_version: schemaVersion,
+          security_identity_id: security.object_id,
+          economic_units: field(form, `economic_units_${key}`),
+          votes_per_unit: field(form, `votes_per_unit_${key}`),
+          conversion_ratio: field(form, `conversion_ratio_${key}`),
+          adr_ratio: field(form, `adr_ratio_${key}`),
+          dividend_rights_per_unit: field(form, `dividend_rights_${key}`),
+          effective_from: effectiveFrom,
+          effective_to: effectiveTo,
+          source_id: field(form, `rights_source_${key}`),
+          raw_hash: field(form, `rights_raw_hash_${key}`),
+          expected_parent_id: null,
+        };
+      }
 
       const attempts: Promise<void>[] = [];
       if (mandateInput) attempts.push(investmentResearchApi.createMandate(project.id, mandateInput).then((value) => { next.mandate = value; next.inputs.mandate = mandateInput; }));
@@ -613,7 +656,7 @@ export default function NewResearchPage() {
               <FormField disabled={Boolean(foundation.mandate)} label="研究期限（年）" name="horizon_years" min="3" max="5" required type="number" />
               <label className="ir-field"><span>基础货币</span><select disabled={Boolean(foundation.mandate || foundation.capital || Object.keys(foundation.fxRates).length)} name="base_currency" value={baseCurrency} onChange={(event) => setBaseCurrency(event.target.value === "USD" ? "USD" : "CNY")}><option value="CNY">CNY</option><option value="USD">USD</option></select></label>
               <FormField disabled={Boolean(foundation.mandate)} hint="小数格式：0.15 = 15%" label="必要回报率" name="required_return" pattern={fractionPattern} required inputMode="decimal" />
-              <FormField disabled={Boolean(foundation.mandate)} hint="填写 0 到 1 之间的小数" label="永久损失上限" name="permanent_loss_limit" pattern={fractionPattern} required inputMode="decimal" />
+              <FormField disabled={Boolean(foundation.mandate)} hint="填写 0 到 1（含边界）之间的小数" label="永久损失上限" name="permanent_loss_limit" pattern={inclusiveFractionPattern} required inputMode="decimal" />
               <FormField disabled={Boolean(foundation.mandate)} label="比较集合" name="comparison_set" required />
               <FormField disabled={Boolean(foundation.mandate)} label="生效时间" name="effective_at" required type="datetime-local" />
               <label className="ir-field"><span>冻结时区 / UTC offset</span><select disabled={foundationStarted} name="frozen_timezone" value={timezone} onChange={(event) => setTimezone(event.target.value === "Z" ? "Z" : "+08:00")}><option value="+08:00">+08:00（中国标准时间）</option><option value="Z">Z（UTC）</option></select></label>

@@ -444,7 +444,12 @@ function isEffectiveRights(value: unknown): value is EffectiveSecurityRights {
     && isUuid(value.security_identity_id) && isDateTime(value.as_of)
     && (value.effective === null || isRights(value.effective))
     && isNullableUuid(value.head_id)
-    && (value.effective === null || value.effective.security_identity_id === value.security_identity_id);
+    && (value.effective === null || (
+      value.effective.security_identity_id === value.security_identity_id
+      && isAtOrBefore(value.effective.effective_from, value.as_of)
+      && (value.effective.effective_to === null
+        || Date.parse(value.as_of) < Date.parse(value.effective.effective_to))
+    ));
 }
 
 function isDraftContent(value: unknown): boolean {

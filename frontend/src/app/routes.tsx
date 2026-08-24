@@ -13,7 +13,7 @@ const ResearchWorkbenchPage = lazy(() => import("../features/investment-research
 
 function ProductRoute({ children }: { children: ReactNode }) {
   return (
-    <ProductRouteErrorBoundary>
+    <ProductRouteErrorBoundary onRetry={() => { window.location.reload(); return false; }}>
       <Suspense fallback={<main className="ir-page" aria-busy="true"><div className="ir-workbench-skeleton"><span /><span /><span /></div></main>}>
         {children}
       </Suspense>

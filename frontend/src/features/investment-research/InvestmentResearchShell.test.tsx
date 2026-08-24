@@ -91,6 +91,7 @@ describe("independent investment research shell", () => {
     const entryGraph = `${routeEntrySource}\n${mainEntrySource}`;
     expect(entryGraph).not.toMatch(/import\s+[^;]*(AppShell|UnderwritingArchiveShell|researchClient|researchOsApi|mockResearchOsApi|AutomaticResearch)/);
     expect(routeEntrySource).toMatch(/lazy\(\(\) => import\("\.\/LegacyResearchRoutes"\)\)/);
+    expect(routeEntrySource).toContain("window.location.reload()");
   });
 
   it("searches all three identity kinds and orders recent projects newest first", async () => {
@@ -320,10 +321,11 @@ describe("independent investment research shell", () => {
       return <h1>页面已恢复</h1>;
     }
     const user = userEvent.setup();
-    render(<ProductRouteErrorBoundary><FragilePage /></ProductRouteErrorBoundary>);
+    const retry = vi.fn(() => { shouldThrow = false; return true; });
+    render(<ProductRouteErrorBoundary onRetry={retry}><FragilePage /></ProductRouteErrorBoundary>);
     expect(await screen.findByRole("alert")).toHaveTextContent("产品页面载入失败");
-    shouldThrow = false;
     await user.click(screen.getByRole("button", { name: "重试载入产品页面" }));
+    expect(retry).toHaveBeenCalledOnce();
     expect(screen.getByRole("heading", { name: "页面已恢复" })).toBeVisible();
   });
 

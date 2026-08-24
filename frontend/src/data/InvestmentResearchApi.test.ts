@@ -200,6 +200,21 @@ describe("InvestmentResearchApi", () => {
     await expect(new InvestmentResearchApi().projects()).rejects.toMatchObject({ code: "unexpected_status", status: 201 });
   });
 
+  it("rejects an effective-rights response whose version does not cover as_of", async () => {
+    const invalid = rightsBody();
+    invalid.effective_from = "2026-08-25T00:00:00Z";
+    vi.stubGlobal("fetch", vi.fn(async () => response({
+      schema_version: "underwriting.v1",
+      security_identity_id: ids.securityA,
+      as_of: now,
+      effective: invalid,
+      head_id: ids.rightsA,
+    })));
+
+    await expect(new InvestmentResearchApi().effectiveSecurityRights(ids.securityA, now))
+      .rejects.toMatchObject({ code: "invalid_response" });
+  });
+
   it("rejects missing required response fields and inconsistent answerability", async () => {
     const invalidProject = projectBody();
     Reflect.deleteProperty(invalidProject, "content_hash");

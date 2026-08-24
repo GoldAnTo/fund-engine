@@ -92,6 +92,7 @@ def _ready_graph(
     security_ids: tuple[UUID, ...] | None = None,
     price_ids: tuple[UUID, ...] | None = None,
     rights_ids: tuple[UUID, ...] | None = None,
+    price_market_ats: tuple[datetime, ...] | None = None,
 ) -> dict[str, object]:
     projects = ResearchProjectService(session, now=lambda: NOW)
     market = MarketSnapshotService(session, now=lambda: NOW)
@@ -186,6 +187,7 @@ def _ready_graph(
     )
     prices = []
     for index, security in enumerate(securities):
+        market_at = price_market_ats[index] if price_market_ats else MARKET
         if price_ids is None:
             price = market.freeze_price(
                 PriceSnapshotInput(
@@ -194,8 +196,8 @@ def _ready_graph(
                     "CNY",
                     "close",
                     "unadjusted",
-                    MARKET,
-                    MARKET + timedelta(minutes=5),
+                    market_at,
+                    market_at + timedelta(minutes=5),
                     "exchange",
                     A64,
                 )
@@ -208,8 +210,8 @@ def _ready_graph(
                 currency="CNY",
                 price_type="close",
                 adjustment_basis="unadjusted",
-                market_at=MARKET,
-                available_at=MARKET + timedelta(minutes=5),
+                market_at=market_at,
+                available_at=market_at + timedelta(minutes=5),
                 source_id="exchange",
                 raw_hash=A64,
                 content_hash=A64,
@@ -392,6 +394,34 @@ def test_preview_uses_frozen_market_instant_for_rights(session) -> None:
         RevisionPublisher(session, now=lambda: NOW + timedelta(days=300)).preview(
             graph["project"].id, graph["draft"].lock_version
         )
+
+
+def test_preview_uses_latest_multi_security_price_as_rights_boundary(session) -> None:
+    security_ids = (uuid4(), uuid4())
+    later_market = MARKET + timedelta(days=1)
+    expired = _ready_graph(
+        session,
+        suffix="multi-expired",
+        security_ids=security_ids,
+        price_market_ats=(MARKET, later_market),
+        rights_effective_to=MARKET + timedelta(hours=12),
+    )
+
+    with pytest.raises(ValidationError, match="effective rights"):
+        RevisionPublisher(session, now=lambda: NOW).preview(
+            expired["project"].id, expired["draft"].lock_version
+        )
+
+    valid = _ready_graph(
+        session,
+        suffix="multi-valid",
+        security_ids=(uuid4(), uuid4()),
+        price_market_ats=(MARKET, later_market),
+    )
+    preview = RevisionPublisher(session, now=lambda: NOW).preview(
+        valid["project"].id, valid["draft"].lock_version
+    )
+    assert preview.boundary_as_of == later_market
 
 
 def test_preview_requires_company_and_security_identity_at_frozen_market_instant(
