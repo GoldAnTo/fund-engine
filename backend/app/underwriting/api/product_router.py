@@ -124,13 +124,17 @@ def _read_value(operation: Callable[[], T]) -> T:
 
 
 def _project_response(value) -> ResearchProjectResponse:
-    if value.company_identity is None or len(value.security_identities) != len(value.target_security_ids):
+    if value.company_identity is None or len(value.security_identities) != len(
+        value.target_security_ids
+    ):
         raise ValidationError("project identity snapshot is incomplete")
     return ResearchProjectResponse(
         id=value.id,
         primary_company_id=value.primary_company_id,
         target_security_ids=value.target_security_ids,
-        company_identity=ProjectCompanyIdentityResponse(**asdict(value.company_identity)),
+        company_identity=ProjectCompanyIdentityResponse(
+            **asdict(value.company_identity)
+        ),
         security_identities=tuple(
             ProjectSecurityIdentityResponse(**asdict(item))
             for item in value.security_identities

@@ -333,7 +333,9 @@ def test_product_http_foundation_round_trip_is_exact_and_idempotent(
     assert [item["id"] for item in listed.json()["items"]] == [project_id]
     detail = api_client.get(f"{BASE}/projects/{project_id}")
     assert detail.status_code == 200 and detail.json() == project
-    ResearchProjectService(session, now=lambda: NOW + timedelta(days=2)).append_identity_version(
+    ResearchProjectService(
+        session, now=lambda: NOW + timedelta(days=2)
+    ).append_identity_version(
         object_id=catalog["security"].id,
         canonical_name="300750.SZ renamed",
         symbol="300750",
@@ -346,7 +348,10 @@ def test_product_http_foundation_round_trip_is_exact_and_idempotent(
     )
     historical_detail = api_client.get(f"{BASE}/projects/{project_id}")
     assert historical_detail.status_code == 200
-    assert historical_detail.json()["security_identities"][0]["canonical_name"] == "300750.SZ"
+    assert (
+        historical_detail.json()["security_identities"][0]["canonical_name"]
+        == "300750.SZ"
+    )
 
     draft = api_client.get(f"{BASE}/projects/{project_id}/draft")
     assert draft.status_code == 200, draft.text
