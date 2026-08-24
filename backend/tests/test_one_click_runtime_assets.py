@@ -42,8 +42,8 @@ def test_compose_has_separate_data_and_automatic_services() -> None:
         "frontend:",
     ):
         assert name in compose
-    assert "127.0.0.1:8000:8000" in compose
-    assert "127.0.0.1:8080:8080" in compose
+    assert "127.0.0.1:${ONE_CLICK_API_PORT:-8000}:8000" in compose
+    assert "127.0.0.1:${ONE_CLICK_FRONTEND_PORT:-8080}:8080" in compose
     assert "alembic upgrade head" in compose
     assert "condition: service_completed_successfully" in compose
     assert "postgresql+psycopg://${ONE_CLICK_POSTGRES_USER:?}:${ONE_CLICK_POSTGRES_PASSWORD:?}@postgres:5432/${ONE_CLICK_POSTGRES_DB:?}" in compose
@@ -54,7 +54,7 @@ def test_compose_has_separate_data_and_automatic_services() -> None:
     assert "scheduler:" not in compose
     assert "fund-engine-event" not in compose
     assert "RESEARCH_TENANT_TOKENS" in environment
-    assert "ACQUISITION_ENABLED_ADAPTERS=sse,szse,gildata" in environment
+    assert "ACQUISITION_ENABLED_ADAPTERS=sse,szse" in environment
     assert ".env.one-click.local" in ignore
 
 

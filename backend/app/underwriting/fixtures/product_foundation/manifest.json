@@ -1,10 +1,10 @@
 {
   "schema_version": "product.foundation-identities.v1",
-  "content_hash": "49b7ab24adeb6892fbcbb6c7795bad54d89a41e1f4d17814f1e61994ede2df11",
+  "content_hash": "bcf4fe19ec98a28ea249bcb6a8bfbdbb3ac77af9d1d0cca8fb26e8b5d71aca55",
   "companies": [
     {
       "external_key": "CN:300750:COMPANY",
-      "canonical_name": "宁德时代新能源科技股份有限公司",
+      "canonical_name": "宁德时代新能源科技股份有限公司（CATL）",
       "effective_from": "2011-12-16T00:00:00+08:00"
     },
     {
@@ -17,7 +17,7 @@
     {
       "external_key": "SZSE:300750",
       "company_key": "CN:300750:COMPANY",
-      "canonical_name": "宁德时代 A 股",
+      "canonical_name": "宁德时代（CATL）A 股",
       "symbol": "300750",
       "exchange": "SZSE",
       "currency": "CNY",

@@ -20,7 +20,7 @@ _ROOT = Path(__file__).resolve().parent
 _SCHEMA_VERSION = "product.foundation-identities.v1"
 # SHA-256 over the exact bundled UTF-8 bytes, independent of its self-declared hash.
 BUNDLED_MANIFEST_CONTENT_SHA256 = (
-    "dc772d7f2b57c4f7583547424299714b2e030f4e5b01241921b19803d0451164"
+    "97cfba971bfbc995dfead4e76c4f2eacb1b76bdd2de18d2c51039c46324b8add"
 )
 _TOP_LEVEL_KEYS = frozenset(
     {"schema_version", "content_hash", "companies", "securities", "rights"}

@@ -1092,10 +1092,25 @@ def test_configured_adapter_initialization_failure_closes_prior_adapters(
 def test_production_worker_rejects_a_mock_llm(monkeypatch):
     worker = importlib.import_module("app.scripts.run_acquisition_worker")
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("LLM_API_KEY", "configured-for-test")
     monkeypatch.setattr(worker.LLMClient, "from_env", FakeExtractionClient)
 
     with pytest.raises(RuntimeError, match="real LLM"):
         worker.build_llm_client()
+
+
+def test_production_worker_starts_without_optional_llm_and_fails_provider_calls_closed(
+    monkeypatch,
+):
+    worker = importlib.import_module("app.scripts.run_acquisition_worker")
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    client = worker.build_llm_client()
+
+    assert client.model_version == "unconfigured"
+    with pytest.raises(worker.LLMProviderError, match="not configured"):
+        client.chat_json([], "extract")
 
 
 @pytest.mark.parametrize(

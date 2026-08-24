@@ -18,7 +18,7 @@ from collections.abc import Mapping, Sequence
 from datetime import timedelta
 
 from app.acquisition.sources import SourceAdapter
-from app.ai.client import LLMClient
+from app.ai.client import LLMClient, LLMProviderError
 from app.datasources.exchanges.sse import SSEAnnouncementSource
 from app.datasources.exchanges.szse import SZSEAnnouncementSource
 from app.datasources.gildata.client import GildataMCPClient
@@ -92,8 +92,21 @@ def build_adapters_from_env() -> dict[str, SourceAdapter]:
     return adapters
 
 
+class _UnconfiguredLLMClient(LLMClient):
+    """Keep an idle worker healthy while failing any AI operation closed."""
+
+    def __init__(self) -> None:
+        super().__init__(model_version="unconfigured")
+
+    def chat_json(self, messages: list[dict], schema_hint: str = "") -> dict:
+        del messages, schema_hint
+        raise LLMProviderError("LLM provider is not configured")
+
+
 def build_llm_client() -> LLMClient:
-    """Build the extraction client and forbid mock identity in production."""
+    """Build a live extraction client or a fail-closed unconfigured boundary."""
+    if not os.getenv("LLM_API_KEY", "").strip():
+        return _UnconfiguredLLMClient()
     client = LLMClient.from_env()
     if _production() and (
         bool(getattr(client, "_mock", False))

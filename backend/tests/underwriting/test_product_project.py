@@ -1318,6 +1318,10 @@ def test_foundation_fixture_loads_exact_temporal_identities_relations_and_rights
         "CN:300750:COMPANY",
         "SZSE:300750",
     }
+    assert {item.external_key for item in projects.search_objects("CATL", NOW)} == {
+        "CN:300750:COMPANY",
+        "SZSE:300750",
+    }
 
     relations = set(
         session.execute(
@@ -1370,7 +1374,7 @@ def test_foundation_fixture_is_idempotent_content_checked_and_contains_no_resear
     }
     assert (
         second.identities["CN:300750:COMPANY"].canonical_name
-        == "宁德时代新能源科技股份有限公司"
+        == "宁德时代新能源科技股份有限公司（CATL）"
     )
     assert second.rights["SZSE:300750"].id == first.rights["SZSE:300750"].id
     assert (
@@ -1638,7 +1642,7 @@ def test_foundation_fixture_adopts_existing_catl_objects_and_reuses_rights(
         session,
         "security",
         "SZSE:300750",
-        "宁德时代 A 股",
+        "宁德时代（CATL）A 股",
     )
     _relation(session, company.id, security.id, "company_has_security")
 
@@ -1653,7 +1657,7 @@ def test_foundation_fixture_adopts_existing_catl_objects_and_reuses_rights(
     assert loaded.objects["SZSE:300750"].id == security.id
     assert (
         loaded.identities["CN:300750:COMPANY"].canonical_name
-        == "宁德时代新能源科技股份有限公司"
+        == "宁德时代新能源科技股份有限公司（CATL）"
     )
     assert loaded.rights["SZSE:300750"].id == repeated.rights["SZSE:300750"].id
 
