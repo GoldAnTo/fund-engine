@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
@@ -32,6 +32,7 @@ _COMPANY_SECURITY_RELATION = "company_has_security"
 # Product returns are fractions. A required excess return in [0, 1) permits
 # ordinary hurdle rates while rejecting percentages accidentally supplied as 3.
 _MAX_REQUIRED_EXCESS_RETURN = Decimal("1")
+_MANDATE_NUMERIC_QUANTUM = Decimal("0.00000001")
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +97,17 @@ class ResearchProjectService:
         if not isinstance(value, Decimal) or not value.is_finite():
             raise ValidationError(f"{field} must be a finite Decimal")
         return value
+
+    @classmethod
+    def _mandate_decimal(cls, value: object, field: str) -> Decimal:
+        decimal_value = cls._finite_decimal(value, field)
+        try:
+            normalized = decimal_value.quantize(_MANDATE_NUMERIC_QUANTUM)
+        except InvalidOperation as exc:
+            raise ValidationError(f"{field} must fit 8 decimal places") from exc
+        if normalized != decimal_value:
+            raise ValidationError(f"{field} must fit 8 decimal places without rounding")
+        return normalized
 
     def _created_at(self) -> datetime:
         return self._utc(self._now(), "clock")
@@ -375,10 +387,12 @@ class ResearchProjectService:
         base_currency = self._text(value.base_currency, "base_currency").upper()
         if base_currency not in _SUPPORTED_PRODUCT_CURRENCIES:
             raise ValidationError("base_currency must be a supported CNY/USD currency")
-        required_return = self._finite_decimal(value.required_return, "required_return")
+        required_return = self._mandate_decimal(
+            value.required_return, "required_return"
+        )
         if not Decimal("0") <= required_return < Decimal("1"):
             raise ValidationError("required_return must be in [0, 1)")
-        permanent_loss_limit = self._finite_decimal(
+        permanent_loss_limit = self._mandate_decimal(
             value.permanent_loss_limit, "permanent_loss_limit"
         )
         if not Decimal("0") <= permanent_loss_limit <= Decimal("1"):
@@ -400,7 +414,7 @@ class ResearchProjectService:
         )
         normalized_excess = None
         if required_excess_return is not None:
-            normalized_excess = self._finite_decimal(
+            normalized_excess = self._mandate_decimal(
                 required_excess_return, "required_excess_return"
             )
             if not Decimal("0") <= normalized_excess < _MAX_REQUIRED_EXCESS_RETURN:
@@ -427,12 +441,14 @@ class ResearchProjectService:
             "mandate_key": mandate_key,
             "horizon_years": value.horizon_years,
             "base_currency": base_currency,
-            "required_return": str(required_return),
-            "permanent_loss_limit": str(permanent_loss_limit),
+            "required_return": format(required_return, ".8f"),
+            "permanent_loss_limit": format(permanent_loss_limit, ".8f"),
             "comparison_set": list(comparison_set),
             "benchmark_key": normalized_benchmark,
             "required_excess_return": (
-                str(normalized_excess) if normalized_excess is not None else None
+                format(normalized_excess, ".8f")
+                if normalized_excess is not None
+                else None
             ),
             "effective_at": normalized_effective.isoformat(),
             "expires_at": (

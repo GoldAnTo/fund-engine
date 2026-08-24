@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.models.ledger import ConflictError, ValidationError
 from app.underwriting.domain.product_contracts import (
@@ -249,6 +250,84 @@ def test_identity_successors_reject_overlap_regression_and_stale_parent(
             expected_parent_id=first.id,
             created_at=NOW,
         )
+
+
+def test_version_flush_does_not_misclassify_check_failure_and_keeps_session_usable(
+    session,
+) -> None:
+    company = _object(session, "company", "company:bad-hash", "Bad Hash")
+    repository = ProductRepository(session)
+
+    with pytest.raises(IntegrityError) as caught:
+        repository.append_identity_version(
+            object_id=company.id,
+            canonical_name="Bad Hash",
+            symbol=None,
+            exchange=None,
+            share_class=None,
+            trading_currency=None,
+            effective_from=OLD_FROM,
+            effective_to=None,
+            content_hash="not-a-sha256",
+            expected_parent_id=None,
+            created_at=NOW,
+        )
+
+    assert not isinstance(caught.value, StaleParentError)
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingObjectIdentityVersion)
+        )
+        == 0
+    )
+    assert session.get(UnderwritingResearchObject, company.id) is company
+
+
+def test_version_flush_maps_sqlite_cas_unique_and_keeps_session_usable(
+    session, service
+) -> None:
+    security = _object(session, "security", "RACE.TEST", "Race Security")
+    parent = _identity(
+        service,
+        security,
+        symbol="RACE",
+        effective_from=OLD_FROM,
+        effective_to=OLD_TO,
+        currency="USD",
+    )
+    winner = _identity(
+        service,
+        security,
+        symbol="WIN",
+        effective_from=OLD_TO,
+        expected_parent_id=parent.id,
+        currency="USD",
+    )
+    loser = UnderwritingObjectIdentityVersion(
+        object_id=security.id,
+        version=winner.version,
+        canonical_name="Loser",
+        symbol="LOSE",
+        exchange="TEST",
+        share_class="ordinary",
+        trading_currency="USD",
+        effective_from=OLD_TO,
+        effective_to=None,
+        supersedes_id=parent.id,
+        content_hash=A64,
+        created_at=NOW,
+    )
+
+    with pytest.raises(StaleParentError):
+        ProductRepository(session)._flush_version(loser)
+
+    assert session.get(UnderwritingObjectIdentityVersion, winner.id) is winner
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingObjectIdentityVersion)
+        )
+        == 2
+    )
 
 
 def test_open_ended_identity_head_can_be_superseded_by_a_later_version(
@@ -579,11 +658,11 @@ def test_product_mandate_chain_hashes_every_field_and_has_no_market_cutoff(
             "mandate_key": f"product.project:{project.id}",
             "horizon_years": 5,
             "base_currency": "USD",
-            "required_return": "0.12",
-            "permanent_loss_limit": "0.30",
+            "required_return": "0.12000000",
+            "permanent_loss_limit": "0.30000000",
             "comparison_set": ["broad-index", "cash"],
             "benchmark_key": "broad-index",
-            "required_excess_return": "0.03",
+            "required_excess_return": "0.03000000",
             "effective_at": OLD_FROM.isoformat(),
             "expires_at": OLD_TO.isoformat(),
         }
@@ -641,6 +720,97 @@ def test_product_mandate_reads_exact_id_with_project_ownership(
     assert service.product_mandate(project.id, second.id) is second
     assert service.product_mandate(other_project.id, first.id) is None
     assert service.product_mandate(project.id, uuid4()) is None
+
+
+def test_product_mandate_normalizes_numeric_scale_before_hashing(
+    session, service
+) -> None:
+    graph, project = _project(session, service)
+    session.commit()
+    first = service.append_product_mandate(
+        project_id=project.id,
+        value=InvestmentMandateInput(
+            mandate_key="ignored",
+            horizon_years=5,
+            base_currency="USD",
+            required_return=Decimal("0.12"),
+            permanent_loss_limit=Decimal("0.3"),
+            comparison_set=("cash",),
+        ),
+        benchmark_key="index",
+        required_excess_return=Decimal("0.03"),
+        effective_at=OLD_FROM,
+        expires_at=None,
+        expected_parent_id=None,
+    )
+    first_hash = first.content_hash
+    session.rollback()
+
+    equivalent = service.append_product_mandate(
+        project_id=project.id,
+        value=InvestmentMandateInput(
+            mandate_key="ignored-again",
+            horizon_years=5,
+            base_currency="USD",
+            required_return=Decimal("0.12000000"),
+            permanent_loss_limit=Decimal("0.300000000"),
+            comparison_set=("cash",),
+        ),
+        benchmark_key="index",
+        required_excess_return=Decimal("0.030000000"),
+        effective_at=OLD_FROM,
+        expires_at=None,
+        expected_parent_id=None,
+    )
+
+    assert equivalent.content_hash == first_hash
+    session.commit()
+    session.expire_all()
+    persisted = service.product_mandate(project.id, equivalent.id)
+    assert persisted is not None
+    assert persisted.required_return.as_tuple().exponent == -8
+    assert persisted.permanent_loss_limit.as_tuple().exponent == -8
+    assert persisted.required_excess_return.as_tuple().exponent == -8
+    persisted_hash = canonical_hash(
+        {
+            "schema_version": "product.investment-mandate.v1",
+            "project_id": str(project.id),
+            "mandate_key": persisted.mandate_key,
+            "horizon_years": persisted.horizon_years,
+            "base_currency": persisted.base_currency,
+            "required_return": format(persisted.required_return, ".8f"),
+            "permanent_loss_limit": format(persisted.permanent_loss_limit, ".8f"),
+            "comparison_set": persisted.comparison_set,
+            "benchmark_key": persisted.benchmark_key,
+            "required_excess_return": format(persisted.required_excess_return, ".8f"),
+            "effective_at": persisted.effective_at.replace(tzinfo=UTC).isoformat(),
+            "expires_at": None,
+        }
+    )
+    assert persisted.content_hash == persisted_hash
+
+
+def test_product_mandate_rejects_meaningful_precision_beyond_storage_scale(
+    session, service
+) -> None:
+    _graph, project = _project(session, service)
+    with pytest.raises(ValidationError, match="8 decimal places"):
+        service.append_product_mandate(
+            project_id=project.id,
+            value=InvestmentMandateInput(
+                mandate_key="ignored",
+                horizon_years=5,
+                base_currency="USD",
+                required_return=Decimal("0.123456789"),
+                permanent_loss_limit=Decimal("0.30"),
+                comparison_set=("cash",),
+            ),
+            benchmark_key=None,
+            required_excess_return=None,
+            effective_at=OLD_FROM,
+            expires_at=None,
+            expected_parent_id=None,
+        )
 
 
 @pytest.mark.parametrize(

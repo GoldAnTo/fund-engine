@@ -29,6 +29,62 @@ from app.underwriting.persistence.repository import StaleParentError
 
 
 _STALE_MESSAGE = "expected parent is not the version family head"
+_CAS_CONSTRAINTS = {
+    "uw_object_identity_versions": frozenset(
+        {
+            "uq_uw_object_identity_version",
+            "uq_uw_object_identity_successor",
+        }
+    ),
+    "uw_research_scope_versions": frozenset(
+        {
+            "uq_uw_research_scope_version",
+            "uq_uw_research_scope_successor",
+        }
+    ),
+    "uw_research_agenda_versions": frozenset(
+        {
+            "uq_uw_research_agenda_version",
+            "uq_uw_research_agenda_successor",
+        }
+    ),
+    "uw_mandate_versions": frozenset(
+        {
+            "uq_uw_mandate_version",
+            "uq_uw_product_mandate_project_version",
+            "uq_uw_product_mandate_successor",
+            "uq_uw_mandate_product_project_version",
+            "uq_uw_mandate_product_successor",
+        }
+    ),
+}
+_SQLITE_CAS_COLUMNS = {
+    "uw_object_identity_versions": frozenset(
+        {
+            frozenset({"object_id", "version"}),
+            frozenset({"supersedes_id"}),
+        }
+    ),
+    "uw_research_scope_versions": frozenset(
+        {
+            frozenset({"project_id", "version"}),
+            frozenset({"supersedes_id"}),
+        }
+    ),
+    "uw_research_agenda_versions": frozenset(
+        {
+            frozenset({"project_id", "version"}),
+            frozenset({"supersedes_id"}),
+        }
+    ),
+    "uw_mandate_versions": frozenset(
+        {
+            frozenset({"mandate_key", "version"}),
+            frozenset({"project_id", "version"}),
+            frozenset({"supersedes_id"}),
+        }
+    ),
+}
 
 
 class ProductRepository:
@@ -45,13 +101,64 @@ class ProductRepository:
         if actual_parent_id != expected_parent_id:
             raise StaleParentError(_STALE_MESSAGE)
 
+    @staticmethod
+    def _is_cas_integrity_error(row: Any, exc: IntegrityError) -> bool:
+        table_name = getattr(row, "__tablename__", "")
+        if table_name not in _CAS_CONSTRAINTS:
+            return False
+        if table_name == "uw_mandate_versions" and row.project_id is None:
+            return False
+
+        diagnostic = getattr(getattr(exc, "orig", None), "diag", None)
+        constraint_name = getattr(diagnostic, "constraint_name", None)
+        if isinstance(constraint_name, str):
+            if constraint_name in _CAS_CONSTRAINTS[table_name]:
+                return True
+            normalized_name = constraint_name.casefold()
+            return (
+                table_name == "uw_mandate_versions"
+                and "mandate" in normalized_name
+                and (
+                    "successor" in normalized_name
+                    or ("project" in normalized_name and "version" in normalized_name)
+                )
+            )
+
+        detail = str(getattr(exc, "orig", exc)).casefold().replace('"', "")
+        marker = "unique constraint failed:"
+        if marker not in detail:
+            return False
+        raw_columns = detail.split(marker, 1)[1].splitlines()[0]
+        columns = frozenset(
+            column.strip().removeprefix("main.").split(".")[-1]
+            for column in raw_columns.split(",")
+        )
+        return columns in _SQLITE_CAS_COLUMNS[table_name]
+
     def _flush_version(self, row: Any) -> Any:
-        """Flush a CAS append and translate the DB uniqueness race defense."""
-        self._session.add(row)
+        """Flush one CAS append inside a savepoint and classify only CAS races."""
         try:
-            self._session.flush()
+            connection = self._session.connection()
+            if connection.dialect.name == "sqlite":
+                dbapi_connection = getattr(
+                    connection.connection,
+                    "driver_connection",
+                    connection.connection,
+                )
+                if not dbapi_connection.in_transaction:
+                    # In sqlite3 legacy transaction mode, a top-level SAVEPOINT
+                    # is committed when released. Start the caller transaction
+                    # explicitly so releasing our savepoint cannot commit it.
+                    connection.exec_driver_sql("BEGIN")
+            # ``begin_nested`` flushes existing pending state before opening the
+            # savepoint, so this row must not be added until the savepoint exists.
+            with self._session.begin_nested():
+                self._session.add(row)
+                self._session.flush([row])
         except IntegrityError as exc:
-            raise StaleParentError(_STALE_MESSAGE) from exc
+            if self._is_cas_integrity_error(row, exc):
+                raise StaleParentError(_STALE_MESSAGE) from exc
+            raise
         return row
 
     def object(self, object_id: UUID) -> UnderwritingResearchObject | None:
