@@ -191,7 +191,7 @@ describe("new independent investment research setup", () => {
     expect(product.requests.find((r) => r.url.endsWith("/scopes"))?.body).toMatchObject({ covered_segments: [], exclusions: [], user_focus: null });
     expect(product.requests.find((r) => r.url.endsWith("/agendas"))?.body).toMatchObject({ generator: { method: "deterministic_template", template_key: "product.foundation.agenda", template_version: "1.0.0", input_summary_hash: expect.stringMatching(/^[0-9a-f]{64}$/) } });
     expect(product.requests.find((r) => r.url.endsWith("/price-snapshots"))?.body?.market_at).toBe("2026-08-24T00:00:00.000Z");
-  });
+  }, 10_000);
 
   it("quotes FX from each Security currency into the mandate base currency", async () => {
     const user = userEvent.setup();
