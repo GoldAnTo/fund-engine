@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import sqlite3
 from threading import Barrier
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -35,13 +36,19 @@ from app.underwriting.persistence.models import (
 )
 from app.underwriting.persistence.product_models import (
     UnderwritingResearchAssessmentVersion,
+    UnderwritingPriceSnapshot,
     UnderwritingResearchProjectSecurity,
     UnderwritingRevisionBoundary,
     UnderwritingRevisionManifest,
+    UnderwritingSecurityRightsVersion,
     UnderwritingWorkspaceDraft,
 )
 from app.underwriting.services.kernel import canonical_hash
-from app.underwriting.services.market_snapshots import MarketSnapshotService
+from app.underwriting.services.market_snapshots import (
+    MarketSnapshotService,
+    price_snapshot_hash,
+    security_rights_hash,
+)
 from app.underwriting.services.product_project import ResearchProjectService
 from app.underwriting.services.research_revision_diff import (
     ProductResearchRevisionSummary,
@@ -63,8 +70,9 @@ C64 = "c" * 64
 D64 = "d" * 64
 
 
-def _object(session, kind: str, key: str):
+def _object(session, kind: str, key: str, *, object_id: UUID | None = None):
     row = UnderwritingResearchObject(
+        id=object_id,
         kind=kind,
         external_key=f"{key}:{uuid4()}",
         canonical_name=key,
@@ -81,19 +89,32 @@ def _ready_graph(
     suffix: str = "main",
     rights_effective_to: datetime | None = None,
     company_identity_effective_from: datetime = EFFECTIVE,
+    security_ids: tuple[UUID, ...] | None = None,
+    price_ids: tuple[UUID, ...] | None = None,
+    rights_ids: tuple[UUID, ...] | None = None,
 ) -> dict[str, object]:
     projects = ResearchProjectService(session, now=lambda: NOW)
     market = MarketSnapshotService(session, now=lambda: NOW)
     drafts = WorkspaceDraftService(session, now=lambda: NOW)
     company = _object(session, "company", f"Company-{suffix}")
-    security = _object(session, "security", f"SEC-{suffix}")
-    session.add(
+    requested_security_ids = security_ids or (None,)
+    securities = tuple(
+        _object(
+            session,
+            "security",
+            f"SEC-{suffix}-{index}",
+            object_id=security_id,
+        )
+        for index, security_id in enumerate(requested_security_ids, start=1)
+    )
+    session.add_all(
         UnderwritingObjectRelation(
             parent_id=company.id,
             child_id=security.id,
             relation_type="company_has_security",
             created_at=NOW,
         )
+        for security in securities
     )
     session.flush()
     projects.append_identity_version(
@@ -107,18 +128,20 @@ def _ready_graph(
         effective_to=None,
         expected_parent_id=None,
     )
-    projects.append_identity_version(
-        object_id=security.id,
-        canonical_name=security.canonical_name,
-        symbol="TEST",
-        exchange="TEST",
-        share_class="ordinary",
-        trading_currency="CNY",
-        effective_from=EFFECTIVE,
-        effective_to=None,
-        expected_parent_id=None,
-    )
-    project = projects.create_project(company.id, (security.id,))
+    for index, security in enumerate(securities, start=1):
+        projects.append_identity_version(
+            object_id=security.id,
+            canonical_name=security.canonical_name,
+            symbol=f"TEST{index}",
+            exchange="TEST",
+            share_class="ordinary",
+            trading_currency="CNY",
+            effective_from=EFFECTIVE,
+            effective_to=None,
+            expected_parent_id=None,
+        )
+    target_security_ids = tuple(sorted((item.id for item in securities), key=str))
+    project = projects.create_project(company.id, target_security_ids)
     mandate = projects.append_product_mandate(
         project_id=project.id,
         value=InvestmentMandateInput(
@@ -137,7 +160,7 @@ def _ready_graph(
     )
     scope = projects.append_scope(
         project.id,
-        ResearchScopeInput(company.id, (security.id,), (), ("core",), None, ()),
+        ResearchScopeInput(company.id, target_security_ids, (), ("core",), None, ()),
         None,
     )
     items = ("business baseline", "valuation gaps")
@@ -161,19 +184,41 @@ def _ready_graph(
     basis = projects.create_historical_basis(
         ProductHistoricalBasisInput(datetime(2026, 8, 19, tzinfo=UTC), A64, B64, C64)
     )
-    price = market.freeze_price(
-        PriceSnapshotInput(
-            security.id,
-            Decimal("100.0000000000"),
-            "CNY",
-            "close",
-            "unadjusted",
-            MARKET,
-            MARKET + timedelta(minutes=5),
-            "exchange",
-            A64,
-        )
-    )
+    prices = []
+    for index, security in enumerate(securities):
+        if price_ids is None:
+            price = market.freeze_price(
+                PriceSnapshotInput(
+                    security.id,
+                    Decimal("100.0000000000"),
+                    "CNY",
+                    "close",
+                    "unadjusted",
+                    MARKET,
+                    MARKET + timedelta(minutes=5),
+                    "exchange",
+                    A64,
+                )
+            )
+        else:
+            price = UnderwritingPriceSnapshot(
+                id=price_ids[index],
+                security_identity_id=security.id,
+                price=Decimal("100.0000000000"),
+                currency="CNY",
+                price_type="close",
+                adjustment_basis="unadjusted",
+                market_at=MARKET,
+                available_at=MARKET + timedelta(minutes=5),
+                source_id="exchange",
+                raw_hash=A64,
+                content_hash=A64,
+                created_at=NOW,
+            )
+            price.content_hash = price_snapshot_hash(price)
+            session.add(price)
+            session.flush()
+        prices.append(price)
     capital = market.freeze_capital_structure(
         CapitalStructureSnapshotInput(
             company.id,
@@ -195,21 +240,49 @@ def _ready_graph(
             C64,
         )
     )
-    rights = market.freeze_security_rights(
-        SecurityRightsInput(
-            security.id,
-            Decimal("1.0000000000"),
-            Decimal("1.0000000000"),
-            Decimal("1.0000000000"),
-            Decimal("1.0000000000"),
-            Decimal("1.0000000000"),
-            EFFECTIVE,
-            rights_effective_to,
-            "listing-rules",
-            D64,
-        ),
-        expected_parent_id=None,
-    )
+    rights_versions = []
+    for index, security in enumerate(securities):
+        if rights_ids is None:
+            rights = market.freeze_security_rights(
+                SecurityRightsInput(
+                    security.id,
+                    Decimal("1.0000000000"),
+                    Decimal("1.0000000000"),
+                    Decimal("1.0000000000"),
+                    Decimal("1.0000000000"),
+                    Decimal("1.0000000000"),
+                    EFFECTIVE,
+                    rights_effective_to,
+                    "listing-rules",
+                    D64,
+                ),
+                expected_parent_id=None,
+            )
+        else:
+            rights = UnderwritingSecurityRightsVersion(
+                id=rights_ids[index],
+                security_identity_id=security.id,
+                version=1,
+                economic_units=Decimal("1.0000000000"),
+                votes_per_unit=Decimal("1.0000000000"),
+                conversion_ratio=Decimal("1.0000000000"),
+                adr_ratio=Decimal("1.0000000000"),
+                dividend_rights_per_unit=Decimal("1.0000000000"),
+                effective_from=EFFECTIVE,
+                effective_to=rights_effective_to,
+                source_id="listing-rules",
+                raw_hash=D64,
+                supersedes_id=None,
+                content_hash=A64,
+                created_at=NOW,
+            )
+            rights.content_hash = security_rights_hash(rights)
+            session.add(rights)
+            session.flush()
+        rights_versions.append(rights)
+    security = securities[0]
+    price = prices[0]
+    rights = rights_versions[0]
     draft = drafts.create(project.id)
     draft = drafts.save(
         project.id,
@@ -219,9 +292,9 @@ def _ready_graph(
             "scope_id": scope.id,
             "agenda_id": agenda.id,
             "historical_basis_id": basis.id,
-            "price_snapshot_ids": (price.id,),
+            "price_snapshot_ids": tuple(item.id for item in prices),
             "capital_structure_snapshot_id": capital.id,
-            "security_rights_ids": (rights.id,),
+            "security_rights_ids": tuple(item.id for item in rights_versions),
             "user_focus": "durable cash returns",
         },
     )
@@ -377,6 +450,49 @@ def test_publish_freezes_exact_graph_and_reader_replays_without_latest_queries(
     assert (
         ResearchRevisionDiffService(session).revision_summary(published.id) == summary
     )
+
+
+def test_two_security_publication_ignores_crossed_snapshot_uuid_order(session) -> None:
+    security_ids = (UUID(int=10), UUID(int=20))
+    price_ids = (UUID(int=400), UUID(int=100))
+    rights_ids = (UUID(int=200), UUID(int=300))
+    graph = _ready_graph(
+        session,
+        suffix="two-security",
+        security_ids=security_ids,
+        price_ids=price_ids,
+        rights_ids=rights_ids,
+    )
+    publisher = RevisionPublisher(session, now=lambda: NOW)
+    preview = publisher.preview(graph["project"].id, graph["draft"].lock_version)
+
+    assert tuple(
+        item.security_identity_id
+        for item in sorted(graph["prices"], key=lambda item: str(item.id))
+    ) == tuple(reversed(security_ids))
+    assert (
+        tuple(
+            item.security_identity_id
+            for item in sorted(graph["rights_versions"], key=lambda item: str(item.id))
+        )
+        == security_ids
+    )
+    assert preview.boundary.price_snapshot_ids == tuple(sorted(price_ids, key=str))
+    published = publisher.publish(
+        graph["project"].id,
+        graph["draft"].lock_version,
+        idempotency_key="publish-two-security",
+    )
+    repeated = publisher.publish(
+        graph["project"].id,
+        graph["draft"].lock_version,
+        idempotency_key="publish-two-security",
+    )
+    summary = ResearchRevisionDiffService(session).revision_summary(published.id)
+
+    assert repeated == published
+    assert summary.price_snapshot_ids == tuple(sorted(price_ids, key=str))
+    assert summary.security_rights_ids == tuple(sorted(rights_ids, key=str))
 
 
 def test_same_idempotency_key_returns_verified_revision_before_stale_lock_check(
@@ -737,6 +853,143 @@ def test_real_sqlite_concurrent_different_keys_has_one_winner(tmp_path) -> None:
     finally:
         Base.metadata.drop_all(engine)
         engine.dispose()
+
+
+def test_real_sqlite_deferred_read_transactions_never_leak_locked_errors(
+    tmp_path,
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'revision-publication-deferred.sqlite'}",
+        future=True,
+        connect_args={"timeout": 10},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    seed = sessions()
+    graph = _ready_graph(seed, suffix="deferred")
+    project_id = graph["project"].id
+    expected_lock = graph["draft"].lock_version
+    seed.commit()
+    seed.close()
+    barrier = Barrier(2)
+
+    def publish_from_deferred_transaction():
+        worker = sessions()
+        try:
+            worker.connection().exec_driver_sql("BEGIN")
+            WorkspaceDraftService(worker, now=lambda: NOW).read(project_id)
+            barrier.wait(timeout=5)
+            result = RevisionPublisher(worker, now=lambda: NOW).publish(
+                project_id, expected_lock, idempotency_key="deferred-same-key"
+            )
+            worker.commit()
+            return result
+        except Exception as exc:
+            worker.rollback()
+            return exc
+        finally:
+            worker.close()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(publish_from_deferred_transaction) for _ in range(2)]
+            results = tuple(future.result(timeout=20) for future in futures)
+        assert sum(not isinstance(result, Exception) for result in results) == 1
+        errors = tuple(result for result in results if isinstance(result, Exception))
+        assert len(errors) == 1
+        assert isinstance(errors[0], ConflictError)
+        assert "locked" not in type(errors[0]).__name__.lower()
+
+        retry = sessions()
+        try:
+            recovered = RevisionPublisher(retry, now=lambda: NOW).publish(
+                project_id, expected_lock, idempotency_key="deferred-same-key"
+            )
+            winner = next(
+                result for result in results if not isinstance(result, Exception)
+            )
+            assert recovered.id == winner.id
+            retry.rollback()
+        finally:
+            retry.close()
+        observer = sessions()
+        try:
+            assert _formal_counts(observer) == (1, 1, 1, 1)
+        finally:
+            observer.close()
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+def test_public_product_read_walks_1200_parents_once_without_recursion(
+    session, monkeypatch
+) -> None:
+    nodes = []
+    for index in range(1200):
+        nodes.append(
+            SimpleNamespace(
+                id=UUID(int=index + 1),
+                supersedes_id=nodes[-1].id if nodes else None,
+                manifest_schema=PRODUCT_MANIFEST_SCHEMA,
+            )
+        )
+    by_id = {node.id: node for node in nodes}
+    service = ResearchRevisionDiffService(session)
+    original_get = session.get
+    verified = []
+    revision_gets = 0
+
+    def fake_get(model, identity, *args, **kwargs):
+        nonlocal revision_gets
+        if model is UnderwritingResearchVersion:
+            revision_gets += 1
+            return by_id.get(identity)
+        return original_get(model, identity, *args, **kwargs)
+
+    def verify_row(revision, parent_summary, parent_assessment):
+        assert parent_summary is (verified[-1] if verified else None)
+        assert parent_assessment is (verified[-1] if verified else None)
+        verified.append(revision)
+        return revision, revision
+
+    monkeypatch.setattr(service, "_revision", lambda revision_id: by_id[revision_id])
+    monkeypatch.setattr(session, "get", fake_get)
+    monkeypatch.setattr(
+        service, "_product_revision_summary_row", verify_row, raising=False
+    )
+
+    assert service.revision_summary(nodes[-1].id) is nodes[-1]
+    assert verified == nodes
+    assert revision_gets == len(nodes) - 1
+
+
+def test_public_product_read_detects_parent_cycle_before_replay(
+    session, monkeypatch
+) -> None:
+    first = SimpleNamespace(
+        id=UUID(int=1),
+        supersedes_id=UUID(int=2),
+        manifest_schema=PRODUCT_MANIFEST_SCHEMA,
+    )
+    second = SimpleNamespace(
+        id=UUID(int=2),
+        supersedes_id=first.id,
+        manifest_schema=PRODUCT_MANIFEST_SCHEMA,
+    )
+    by_id = {first.id: first, second.id: second}
+    service = ResearchRevisionDiffService(session)
+    monkeypatch.setattr(service, "_revision", lambda _revision_id: first)
+    monkeypatch.setattr(
+        session,
+        "get",
+        lambda model, identity: (
+            by_id.get(identity) if model is UnderwritingResearchVersion else None
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="cycle"):
+        service.revision_summary(first.id)
 
 
 def test_real_sqlite_two_sessions_converge_same_key_and_reject_other_key(

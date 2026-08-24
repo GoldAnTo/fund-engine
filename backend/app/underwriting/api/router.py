@@ -78,6 +78,7 @@ from app.underwriting.services.research_revision_diff import (
     FrozenUnknownEvidenceGap,
     ResearchRevisionBoundary,
     ResearchRevisionSummary,
+    ProductResearchRevisionSummary,
     CandidateEvidenceRead,
 )
 
@@ -211,7 +212,13 @@ def _revision_artifact_response(value: RevisionArtifactRef) -> ResearchRevisionA
     )
 
 
-def _revision_response(value: ResearchRevisionSummary) -> ResearchRevisionResponse:
+def _revision_response(
+    value: ResearchRevisionSummary | ProductResearchRevisionSummary,
+) -> ResearchRevisionResponse:
+    if isinstance(value, ProductResearchRevisionSummary):
+        raise ValidationError(
+            "product research revision requires the product endpoint"
+        )
     return ResearchRevisionResponse(
         id=value.id,
         object_id=value.object_id,
@@ -269,8 +276,12 @@ def _frozen_unknown_evidence_gap_response(
 
 
 def _revision_boundary_response(
-    value: ResearchRevisionBoundary,
+    value: ResearchRevisionBoundary | ProductResearchRevisionSummary,
 ) -> ResearchRevisionBoundaryResponse:
+    if isinstance(value, ProductResearchRevisionSummary):
+        raise ValidationError(
+            "product research revision requires the product endpoint"
+        )
     revision = value.revision
     return ResearchRevisionBoundaryResponse(
         revision_id=revision.id,

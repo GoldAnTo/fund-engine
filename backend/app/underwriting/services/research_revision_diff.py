@@ -1668,10 +1668,16 @@ class ResearchRevisionDiffService:
             raise ValidationError("product research project identity is invalid")
         return canonical_security_ids
 
-    def _product_revision_summary(self, revision: UnderwritingResearchVersion) -> ProductResearchRevisionSummary:
+    def _product_revision_summary_row(
+        self,
+        revision: UnderwritingResearchVersion,
+        parent_summary: ProductResearchRevisionSummary | None,
+        parent_assessment: UnderwritingResearchAssessmentVersion | None,
+    ) -> tuple[ProductResearchRevisionSummary, UnderwritingResearchAssessmentVersion]:
         if (
             revision.project_id is None or revision.boundary_id is None
             or revision.manifest_id is None or revision.version_kind != PRODUCT_REVISION_KIND
+            or revision.manifest_schema != PRODUCT_MANIFEST_SCHEMA
             or revision.publication_status != PublicationStatus.USER_FROZEN.value
         ):
             raise ValidationError("product research revision columns are incomplete")
@@ -1799,11 +1805,15 @@ class ResearchRevisionDiffService:
             raise ValidationError("product market snapshot content hash mismatch")
         raw_targets = scope.payload.get("target_security_ids")
         target_ids = self._product_uuid_list(raw_targets, "scope target_security_ids", nonempty=True)
+        price_security_ids = tuple(item.security_identity_id for item in prices)
+        rights_security_ids = tuple(item.security_identity_id for item in rights)
         if (
             scope.payload.get("primary_company_id") != str(primary_object_id)
             or not set(target_ids).issubset(project_security_ids)
-            or tuple(item.security_identity_id for item in prices) != target_ids
-            or tuple(item.security_identity_id for item in rights) != target_ids
+            or len(price_security_ids) != len(target_ids)
+            or set(price_security_ids) != set(target_ids)
+            or len(rights_security_ids) != len(target_ids)
+            or set(rights_security_ids) != set(target_ids)
             or capital.company_id != primary_object_id
         ):
             raise ValidationError("product market snapshot ownership is invalid")
@@ -1840,40 +1850,68 @@ class ResearchRevisionDiffService:
             raise ValidationError("product research assessment is malformed")
         if parent_id is None:
             if (
-                revision.sequence != 1 or revision.supersedes_id is not None or revision.parent_ids != []
+                parent_summary is not None or parent_assessment is not None
+                or revision.sequence != 1 or revision.supersedes_id is not None
+                or revision.parent_ids != []
                 or assessment.version != 1 or assessment.supersedes_id is not None
             ):
                 raise ValidationError("product research initial lineage is malformed")
         else:
-            parent = self._session.get(UnderwritingResearchVersion, parent_id)
             if (
-                parent is None or parent.project_id != project_id
-                or parent.manifest_schema != PRODUCT_MANIFEST_SCHEMA or parent.version_kind != PRODUCT_REVISION_KIND
-                or revision.sequence != parent.sequence + 1 or revision.supersedes_id != parent.id
-                or revision.parent_ids != [str(parent.id)]
+                parent_summary is None or parent_assessment is None
+                or parent_summary.id != parent_id or parent_summary.project_id != project_id
+                or parent_summary.version_kind != PRODUCT_REVISION_KIND
+                or revision.sequence != parent_summary.sequence + 1
+                or revision.supersedes_id != parent_summary.id
+                or revision.parent_ids != [str(parent_summary.id)]
             ):
                 raise ValidationError("product research successor lineage is malformed")
-            self._product_revision_summary(parent)
-            parent_manifest = self._session.get(UnderwritingRevisionManifest, parent.manifest_id)
-            if parent_manifest is None or not isinstance(parent_manifest.manifest, Mapping):
-                raise ValidationError("product assessment successor lineage is malformed")
-            parent_assessment_id = self._product_uuid(parent_manifest.manifest.get("assessment_ref"), "parent assessment_ref")
-            parent_assessment = self._session.get(UnderwritingResearchAssessmentVersion, parent_assessment_id)
             if (
-                parent_assessment is None or assessment.supersedes_id != parent_assessment.id
+                assessment.supersedes_id != parent_assessment.id
                 or assessment.version != parent_assessment.version + 1
             ):
                 raise ValidationError("product assessment successor lineage is malformed")
         if revision.content_hash != canonical_hash(_product_revision_payload(revision, manifest.content_hash, assessment.id)):
             raise ValidationError("product research revision content hash mismatch")
-        return ProductResearchRevisionSummary(
-            revision.id, project_id, primary_object_id, basis_id, boundary.id, manifest.id,
-            revision.version_kind, revision.sequence, revision.content_hash,
-            self._stored_datetime(basis.cutoff), basis.source_manifest_hash, manifest.content_hash,
-            parent_id, price_ids, fx_ids, capital_id, rights_ids,
-            (*price_ids, *fx_ids, capital_id, *rights_ids), AnswerabilityState.NOT_ANSWERABLE,
-            None, None, PublicationStatus.USER_FROZEN,
+        return (
+            ProductResearchRevisionSummary(
+                revision.id, project_id, primary_object_id, basis_id, boundary.id, manifest.id,
+                revision.version_kind, revision.sequence, revision.content_hash,
+                self._stored_datetime(basis.cutoff), basis.source_manifest_hash, manifest.content_hash,
+                parent_id, price_ids, fx_ids, capital_id, rights_ids,
+                (*price_ids, *fx_ids, capital_id, *rights_ids), AnswerabilityState.NOT_ANSWERABLE,
+                None, None, PublicationStatus.USER_FROZEN,
+            ),
+            assessment,
         )
+
+    def _product_revision_summary(
+        self, revision: UnderwritingResearchVersion
+    ) -> ProductResearchRevisionSummary:
+        chain: list[UnderwritingResearchVersion] = []
+        seen: set[UUID] = set()
+        current = revision
+        while True:
+            if current.id in seen:
+                raise ValidationError("product research revision parent cycle detected")
+            seen.add(current.id)
+            chain.append(current)
+            if current.supersedes_id is None:
+                break
+            parent = self._session.get(UnderwritingResearchVersion, current.supersedes_id)
+            if parent is None:
+                raise ValidationError("product research successor lineage is malformed")
+            current = parent
+
+        summary: ProductResearchRevisionSummary | None = None
+        assessment: UnderwritingResearchAssessmentVersion | None = None
+        for row in reversed(chain):
+            summary, assessment = self._product_revision_summary_row(
+                row, summary, assessment
+            )
+        if summary is None:  # The supplied revision always seeds one chain row.
+            raise ValidationError("product research revision chain is empty")
+        return summary
 
     def revision_summary(self, revision_id: UUID) -> ResearchRevisionSummary | ProductResearchRevisionSummary:
         """Describe only parents explicitly frozen into ``revision_id``."""
@@ -2439,13 +2477,21 @@ class ResearchRevisionDiffService:
         with self._session.no_autoflush:
             rows = self._family_rows(object_id, version_kind)
             object_kind, canonical_name, external_key = self._history_object(object_id)
+            revisions: list[ResearchRevisionSummary] = []
+            for row in rows:
+                summary = self.revision_summary(row.id)
+                if isinstance(summary, ProductResearchRevisionSummary):
+                    raise ValidationError(
+                        "product research revision requires the product endpoint"
+                    )
+                revisions.append(summary)
             return RevisionHistory(
                 object_id,
                 object_kind,
                 canonical_name,
                 external_key,
                 version_kind,
-                tuple(self.revision_summary(row.id) for row in rows),
+                tuple(revisions),
             )
 
     def effective_revision(self, object_id: UUID, version_kind: str) -> ResearchRevisionSummary:
@@ -2722,6 +2768,12 @@ class ResearchRevisionDiffService:
             self._strict_ancestor(from_revision, to_revision)
             before_summary = self.revision_summary(from_revision.id)
             after_summary = self.revision_summary(to_revision.id)
+            if isinstance(
+                before_summary, ProductResearchRevisionSummary
+            ) or isinstance(after_summary, ProductResearchRevisionSummary):
+                raise ValidationError(
+                    "product research revision requires the product endpoint"
+                )
             before = self._index_refs(before_summary.parent_refs)
             after = self._index_refs(after_summary.parent_refs)
             changes: list[RevisionChange] = []

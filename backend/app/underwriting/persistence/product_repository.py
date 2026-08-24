@@ -1155,16 +1155,23 @@ class ProductRepository:
         connection = self._session.connection()
         if connection.dialect.name == "sqlite":
             driver_connection = connection.connection.driver_connection
-            if not driver_connection.in_transaction:
-                try:
+            try:
+                if not driver_connection.in_transaction:
                     connection.exec_driver_sql("BEGIN IMMEDIATE")
-                except OperationalError as exc:
-                    message = str(getattr(exc, "orig", exc)).lower()
-                    if "locked" in message or "busy" in message:
-                        raise ConflictError(
-                            "research project publication lock is busy; retry"
-                        ) from exc
-                    raise
+                else:
+                    self._session.execute(
+                        update(UnderwritingWorkspaceDraft)
+                        .where(UnderwritingWorkspaceDraft.project_id == project_id)
+                        .values(lock_version=UnderwritingWorkspaceDraft.lock_version)
+                        .execution_options(synchronize_session=False)
+                    )
+            except OperationalError as exc:
+                message = str(getattr(exc, "orig", exc)).lower()
+                if "locked" in message or "busy" in message:
+                    raise ConflictError(
+                        "research project publication lock is busy; retry"
+                    ) from exc
+                raise
         row = self._session.scalar(
             select(UnderwritingResearchProject)
             .where(UnderwritingResearchProject.id == project_id)

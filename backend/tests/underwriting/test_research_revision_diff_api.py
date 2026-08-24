@@ -32,6 +32,8 @@ from app.underwriting.services.catl_baseline import CatlBaselineService
 from app.underwriting.services.kernel import UnderwritingKernelService, canonical_hash
 from app.underwriting.services.candidate_evidence import CandidateEvidenceService
 from app.underwriting.services.source_freeze import freeze_manifest
+from app.underwriting.services.revision_publisher import RevisionPublisher
+from app.underwriting.services.workspace_draft import WorkspaceDraftService
 from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
 from app.underwriting.services.revision_parent_seal import (
     CATL_PARENT_SET_ENTRY_TYPE,
@@ -41,6 +43,10 @@ from app.underwriting.services.revision_parent_seal import (
     catl_parent_set_seal_payload,
     catl_revision_content_hash,
     parent_set_semantic_hash,
+)
+from tests.underwriting.test_revision_publisher import (
+    NOW as PRODUCT_NOW,
+    _ready_graph,
 )
 
 
@@ -513,6 +519,42 @@ def test_revision_history_detail_and_diff_are_read_only_and_historical(api_clien
     assert "valuation" not in diff.json()
     assert "price" not in diff.json()
     assert api_client.post(diff.request.url.path).status_code == 405
+
+
+def test_legacy_revision_endpoints_reject_product_revisions_without_500(
+    api_client, session
+) -> None:
+    graph = _ready_graph(session, suffix="legacy-api-product")
+    publisher = RevisionPublisher(session, now=lambda: PRODUCT_NOW)
+    first = publisher.publish(
+        graph["project"].id,
+        graph["draft"].lock_version,
+        idempotency_key="legacy-api-product-1",
+    )
+    draft = WorkspaceDraftService(session, now=lambda: PRODUCT_NOW).read(
+        graph["project"].id
+    )
+    second = publisher.publish(
+        graph["project"].id,
+        draft.lock_version,
+        idempotency_key="legacy-api-product-2",
+    )
+
+    responses = (
+        api_client.get(f"{BASE}/research-versions/{first.id}"),
+        api_client.get(f"{BASE}/research-versions/{first.id}/boundary"),
+        api_client.get(
+            f"{BASE}/objects/{graph['company'].id}/research-versions/independent_research"
+        ),
+        api_client.get(f"{BASE}/research-versions/{first.id}/diff/{second.id}"),
+    )
+
+    for response in responses:
+        assert response.status_code == 422, response.text
+        payload = response.json()
+        assert payload["error"]["code"] == "validation_failed"
+        assert "product" in payload["error"]["message"].lower()
+        assert "endpoint" in payload["error"]["message"].lower()
 
 
 def test_revision_read_missing_and_non_ancestor_errors_use_underwriting_envelopes(api_client, session) -> None:
