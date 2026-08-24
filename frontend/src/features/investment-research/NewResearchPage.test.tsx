@@ -34,7 +34,7 @@ const basisBody = () => ({ ...dto, id: ids.basis, cutoff_at: now, price_as_of: n
 
 function previewBody() {
   const boundary = { ...dto, historical_basis_id: ids.basis, mandate_id: ids.mandate, scope_id: ids.scope, agenda_id: ids.agenda, price_snapshot_ids: [ids.priceA, ids.priceB], fx_snapshot_ids: [], capital_structure_snapshot_id: ids.capital, security_rights_ids: [ids.rightsA, ids.rightsB], parent_revision_id: null };
-  return { ...dto, project_id: ids.project, expected_lock_version: 2, boundary_as_of: now, assessment: { ...dto, answerability: "not_answerable", direction: null, confidence: null, publication_status: "user_frozen", blockers: ["missing_key_baseline"], resolution_requirements: ["补齐关键基线证据"], next_review_at: null, parent_assessment_id: null, content_hash: hash }, boundary, boundary_hash: hash, manifest: { schema_version: "underwriting.research-revision-manifest.v1", project_id: ids.project, project_ref: { project_id: ids.project, content_hash: hash }, project_membership_refs: [{ membership_id: ids.membershipA, security_id: ids.securityA, content_hash: hash }, { membership_id: ids.membershipB, security_id: ids.securityB, content_hash: hash }], primary_object_id: ids.company, boundary_ref: "$boundary", mandate_id: ids.mandate, scope_id: ids.scope, agenda_id: ids.agenda, historical_basis_id: ids.basis, price_snapshot_ids: [ids.priceB, ids.priceA], fx_snapshot_ids: [], capital_structure_snapshot_id: ids.capital, security_rights_ids: [ids.rightsB, ids.rightsA], market_snapshot_refs: [`price:${ids.priceA}`, `capital_structure:${ids.capital}`, `security_rights:${ids.rightsA}`], model_refs: [], assessment_ref: "$assessment", memo_ref: null, parent_revision_id: null }, manifest_hash: hash };
+  return { ...dto, project_id: ids.project, expected_lock_version: 2, boundary_as_of: now, assessment: { ...dto, answerability: "not_answerable", direction: null, confidence: null, publication_status: "user_frozen", blockers: ["missing_key_baseline"], resolution_requirements: ["补齐关键基线证据"], next_review_at: null, parent_assessment_id: null, content_hash: hash }, boundary, boundary_hash: hash, manifest: { schema_version: "underwriting.research-revision-manifest.v1", project_id: ids.project, project_ref: { project_id: ids.project, content_hash: hash }, project_membership_refs: [{ membership_id: ids.membershipA, security_id: ids.securityA, content_hash: hash }, { membership_id: ids.membershipB, security_id: ids.securityB, content_hash: hash }], primary_object_id: ids.company, boundary_ref: "$boundary", mandate_id: ids.mandate, scope_id: ids.scope, agenda_id: ids.agenda, historical_basis_id: ids.basis, price_snapshot_ids: [ids.priceB, ids.priceA], fx_snapshot_ids: [], capital_structure_snapshot_id: ids.capital, security_rights_ids: [ids.rightsB, ids.rightsA], market_snapshot_refs: [`security_rights:${ids.rightsB}`, `price:${ids.priceA}`, `capital_structure:${ids.capital}`, `price:${ids.priceB}`, `security_rights:${ids.rightsA}`], model_refs: [], assessment_ref: "$assessment", memo_ref: null, parent_revision_id: null }, manifest_hash: hash };
 }
 
 function parseBody(init?: RequestInit): Record<string, unknown> {
@@ -128,6 +128,18 @@ describe("new independent investment research setup", () => {
     await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await user.click(await screen.findByRole("button", { name: "重试读取草稿" }));
     expect(await screen.findByRole("heading", { name: /研究任务与边界/ })).toBeVisible();
     expect(product.requests.filter((r) => r.url.endsWith("/product/projects") && r.method === "POST")).toHaveLength(1); expect(product.requests.filter((r) => r.url.endsWith("/draft") && r.method === "GET")).toHaveLength(2);
+  });
+
+  it("validates required fields before generating or submitting an agenda", async () => {
+    const user = userEvent.setup(); const product = server(); vi.stubGlobal("fetch", product.fetch); renderPage();
+    await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ });
+    const firstRequired = screen.getByLabelText("研究期限（年）");
+    await user.click(screen.getByRole("button", { name: "预览模板议程" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("请先完成所有必填字段");
+    expect(firstRequired).toHaveFocus();
+    expect(screen.queryByRole("region", { name: "模板议程预览" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "建立版本边界并进入工作台" })).toBeDisabled();
+    expect(product.requests.some((request) => request.url.endsWith("/agendas") || request.url.endsWith("/mandates"))).toBe(false);
   });
 
   it("uses Security object IDs, optional scope, deterministic agenda, timezone, and resumes missing work", async () => {

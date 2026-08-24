@@ -98,6 +98,10 @@ function isNonEmptyStrings(value: unknown): value is string[] {
   return isStringArray(value) && value.every((item) => item.trim() !== "");
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
 function isUuidArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(isUuid);
 }
@@ -212,16 +216,58 @@ function isAgenda(value: unknown): value is ProductAgenda {
   return isNonNegativeInteger(value.version)
     && isUuid(value.scope_id)
     && isNonEmptyStrings(value.payload.items)
-    && (generator.method === "deterministic_template" || generator.method === "ai_generated")
-    && isNullableString(generator.template_key)
-    && isNullableString(generator.template_version)
-    && isNullableString(generator.model_name)
-    && isNullableString(generator.prompt_template_version)
-    && (generator.input_summary_hash === null || isHash(generator.input_summary_hash))
-    && isHash(generator.output_hash)
+    && isAgendaGenerator(generator)
     && isNullableUuid(value.supersedes_id)
     && isHash(value.content_hash)
     && isDateTime(value.created_at);
+}
+
+function isAgendaGenerator(generator: Record<string, unknown>): boolean {
+  if (!isHash(generator.output_hash)) return false;
+  if (generator.method === "deterministic_template") {
+    return isNonEmptyString(generator.template_key)
+      && isNonEmptyString(generator.template_version)
+      && generator.model_name === null
+      && generator.prompt_template_version === null
+      && generator.input_summary_hash === null;
+  }
+  if (generator.method === "ai_generated") {
+    return generator.template_key === null
+      && generator.template_version === null
+      && isNonEmptyString(generator.model_name)
+      && isNonEmptyString(generator.prompt_template_version)
+      && isHash(generator.input_summary_hash);
+  }
+  return false;
+}
+
+function hasExactPreviewSnapshotRefs(manifestRefs: unknown, boundary: Record<string, unknown>): boolean {
+  if (!isStringArray(manifestRefs)
+    || !isStringArray(boundary.price_snapshot_ids)
+    || !isStringArray(boundary.fx_snapshot_ids)
+    || !isStringArray(boundary.security_rights_ids)
+    || typeof boundary.capital_structure_snapshot_id !== "string") return false;
+  const expected = [
+    ...boundary.price_snapshot_ids.map((id) => `price:${id}`),
+    ...boundary.fx_snapshot_ids.map((id) => `fx:${id}`),
+    `capital_structure:${boundary.capital_structure_snapshot_id}`,
+    ...boundary.security_rights_ids.map((id) => `security_rights:${id}`),
+  ];
+  return sameStringSets(manifestRefs, expected);
+}
+
+function hasExactRevisionSnapshotIds(value: Record<string, unknown>): boolean {
+  if (!isStringArray(value.market_snapshot_ids)
+    || !isStringArray(value.price_snapshot_ids)
+    || !isStringArray(value.fx_snapshot_ids)
+    || !isStringArray(value.security_rights_ids)
+    || typeof value.capital_structure_snapshot_id !== "string") return false;
+  return sameStringSets(value.market_snapshot_ids, [
+    ...value.price_snapshot_ids,
+    ...value.fx_snapshot_ids,
+    value.capital_structure_snapshot_id,
+    ...value.security_rights_ids,
+  ]);
 }
 
 function isIdentifiedRecord(value: unknown): value is Record<string, unknown> & {
@@ -366,6 +412,7 @@ function isPreview(value: unknown): value is ProductPreview {
     && value.manifest.capital_structure_snapshot_id === value.boundary.capital_structure_snapshot_id
     && sameStringSets(value.manifest.security_rights_ids, value.boundary.security_rights_ids)
     && isMarketSnapshotRefs(value.manifest.market_snapshot_refs)
+    && hasExactPreviewSnapshotRefs(value.manifest.market_snapshot_refs, value.boundary)
     && Array.isArray(value.manifest.model_refs) && value.manifest.model_refs.length === 0
     && value.manifest.assessment_ref === "$assessment"
     && value.manifest.memo_ref === null
@@ -386,6 +433,7 @@ function isRevision(value: unknown): value is ProductRevision {
     && isUniqueUuidArray(value.price_snapshot_ids, true) && isUniqueUuidArray(value.fx_snapshot_ids)
     && isUuid(value.capital_structure_snapshot_id) && isUniqueUuidArray(value.security_rights_ids, true)
     && isUniqueUuidArray(value.market_snapshot_ids, true)
+    && hasExactRevisionSnapshotIds(value)
     && hasConsistentAssessment(value)
     && (value.publication_status === "user_frozen" || value.publication_status === "superseded");
 }
@@ -484,6 +532,31 @@ function sameStringSets(actual: unknown, expected: unknown): boolean {
   return [...actual].sort().every((item, index) => item === [...expected].sort()[index]);
 }
 
+function sameOrderedStrings(actual: string[], expected: string[]): boolean {
+  return actual.length === expected.length && actual.every((item, index) => item === expected[index]);
+}
+
+async function agendaItemsHash(items: string[]): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(JSON.stringify(items)),
+  );
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function sameAgendaGenerator(
+  actual: ProductAgenda["generator_provenance"],
+  expected: CreateAgendaRequest["generator"],
+): boolean {
+  return actual.method === expected.method
+    && actual.template_key === (expected.template_key ?? null)
+    && actual.template_version === (expected.template_version ?? null)
+    && actual.model_name === (expected.model_name ?? null)
+    && actual.prompt_template_version === (expected.prompt_template_version ?? null)
+    && actual.input_summary_hash === (expected.input_summary_hash ?? null)
+    && actual.output_hash === expected.output_hash;
+}
+
 function jsonInit(method: "POST" | "PATCH", body: object, headers?: HeadersInit): RequestInit {
   return {
     method,
@@ -547,7 +620,16 @@ export class InvestmentResearchApi {
 
   async createAgenda(projectId: string, body: CreateAgendaRequest): Promise<ProductAgenda> {
     const value = await requestJson(`${this.root}/projects/${encodeURIComponent(projectId)}/agendas`, isAgenda, 201, jsonInit("POST", body));
-    if (value.project_id !== projectId || value.scope_id !== body.scope_id) mismatch("agenda scope identity mismatch");
+    if (value.project_id !== projectId
+      || value.scope_id !== body.scope_id
+      || !sameOrderedStrings(value.payload.items, body.items)
+      || !sameAgendaGenerator(value.generator_provenance, body.generator)) {
+      mismatch("agenda scope or provenance identity mismatch");
+    }
+    const expectedHash = await agendaItemsHash(body.items);
+    if (body.generator.output_hash !== expectedHash || value.generator_provenance.output_hash !== expectedHash) {
+      mismatch("agenda output hash mismatch");
+    }
     return value;
   }
 

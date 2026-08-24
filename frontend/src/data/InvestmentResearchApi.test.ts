@@ -28,6 +28,7 @@ const ids = {
   membershipB: "00000000-0000-4000-8000-000000000020",
 };
 const hash = "a".repeat(64);
+const agendaHash = "57e7c6fda6962645939bf3b4ac9ece70be170d1170a2571252593c42a50ece73";
 const now = "2026-08-24T00:00:00Z";
 
 function response(body: object, status = 200, requestId = "req-product"): Response {
@@ -63,7 +64,7 @@ function agendaBody() {
   return {
     schema_version: "underwriting.v1", id: ids.agenda, project_id: ids.project, version: 1,
     scope_id: ids.scope, payload: { schema_version: "underwriting.v1", items: ["核验公司边界"] },
-    generator_provenance: { schema_version: "underwriting.v1", method: "deterministic_template", template_key: "product.foundation.agenda", template_version: "1.0.0", model_name: null, prompt_template_version: null, input_summary_hash: hash, output_hash: hash },
+    generator_provenance: { schema_version: "underwriting.v1", method: "deterministic_template", template_key: "product.foundation.agenda", template_version: "1.0.0", model_name: null, prompt_template_version: null, input_summary_hash: null, output_hash: agendaHash },
     supersedes_id: null, content_hash: hash, created_at: now,
   };
 }
@@ -110,20 +111,21 @@ function previewBody() {
         { membership_id: ids.membershipB, security_id: ids.securityB, content_hash: hash },
       ],
       primary_object_id: ids.company, boundary_ref: "$boundary", mandate_id: ids.mandate, scope_id: ids.scope, agenda_id: ids.agenda, historical_basis_id: ids.basis,
-      price_snapshot_ids: [ids.priceA, ids.priceB], fx_snapshot_ids: [ids.fx], capital_structure_snapshot_id: ids.capital, security_rights_ids: [ids.rightsA, ids.rightsB], market_snapshot_refs: [`price:${ids.priceA}`, `capital_structure:${ids.capital}`, `security_rights:${ids.rightsA}`], model_refs: [], assessment_ref: "$assessment", memo_ref: null, parent_revision_id: null,
+      price_snapshot_ids: [ids.priceA, ids.priceB], fx_snapshot_ids: [ids.fx], capital_structure_snapshot_id: ids.capital, security_rights_ids: [ids.rightsA, ids.rightsB], market_snapshot_refs: [`price:${ids.priceA}`, `price:${ids.priceB}`, `fx:${ids.fx}`, `capital_structure:${ids.capital}`, `security_rights:${ids.rightsA}`, `security_rights:${ids.rightsB}`], model_refs: [], assessment_ref: "$assessment", memo_ref: null, parent_revision_id: null,
     },
     manifest_hash: hash,
   };
 }
 
 function revisionBody() {
-  return { schema_version: "underwriting.v1", id: ids.revision, project_id: ids.project, object_id: ids.company, basis_id: ids.basis, boundary_id: ids.boundary, manifest_id: ids.manifest, version_kind: "independent_research", sequence: 1, content_hash: hash, cutoff: now, source_manifest_hash: hash, manifest_hash: hash, parent_revision_id: null, price_snapshot_ids: [ids.priceA, ids.priceB], fx_snapshot_ids: [ids.fx], capital_structure_snapshot_id: ids.capital, security_rights_ids: [ids.rightsA, ids.rightsB], market_snapshot_ids: [ids.priceA, ids.capital, ids.rightsA], answerability: "not_answerable", direction: null, confidence: null, publication_status: "user_frozen" };
+  return { schema_version: "underwriting.v1", id: ids.revision, project_id: ids.project, object_id: ids.company, basis_id: ids.basis, boundary_id: ids.boundary, manifest_id: ids.manifest, version_kind: "independent_research", sequence: 1, content_hash: hash, cutoff: now, source_manifest_hash: hash, manifest_hash: hash, parent_revision_id: null, price_snapshot_ids: [ids.priceA, ids.priceB], fx_snapshot_ids: [ids.fx], capital_structure_snapshot_id: ids.capital, security_rights_ids: [ids.rightsA, ids.rightsB], market_snapshot_ids: [ids.priceB, ids.rightsA, ids.fx, ids.priceA, ids.capital, ids.rightsB], answerability: "not_answerable", direction: null, confidence: null, publication_status: "user_frozen" };
 }
 
 const projectRequest = { schema_version: "underwriting.v1" as const, primary_company_id: ids.company, target_security_ids: [ids.securityA, ids.securityB] };
 const mandateRequest = { schema_version: "underwriting.v1" as const, horizon_years: 3, base_currency: "CNY" as const, required_return: "0.12", permanent_loss_limit: "0.25", comparison_set: ["peer"], benchmark_key: null, required_excess_return: null, effective_at: now, expires_at: null, expected_parent_id: null };
 const scopeRequest = { schema_version: "underwriting.v1" as const, primary_company_id: ids.company, target_security_ids: [ids.securityA, ids.securityB], industry_ids: [], covered_segments: [], user_focus: null, exclusions: [], expected_parent_id: null };
-const agendaRequest = { schema_version: "underwriting.v1" as const, scope_id: ids.scope, items: ["核验公司边界"], generator: { schema_version: "underwriting.v1" as const, method: "deterministic_template" as const, template_key: "product.foundation.agenda", template_version: "1.0.0", model_name: null, prompt_template_version: null, input_summary_hash: hash, output_hash: hash }, expected_parent_id: null };
+const agendaRequest = { schema_version: "underwriting.v1" as const, scope_id: ids.scope, items: ["核验公司边界"], generator: { schema_version: "underwriting.v1" as const, method: "deterministic_template" as const, template_key: "product.foundation.agenda", template_version: "1.0.0", model_name: null, prompt_template_version: null, input_summary_hash: null, output_hash: agendaHash }, expected_parent_id: null };
+const aiAgendaRequest = { schema_version: "underwriting.v1" as const, scope_id: ids.scope, items: ["核验公司边界"], generator: { schema_version: "underwriting.v1" as const, method: "ai_generated" as const, template_key: null, template_version: null, model_name: "agenda-model", prompt_template_version: "prompt-v1", input_summary_hash: hash, output_hash: agendaHash }, expected_parent_id: null };
 const basisRequest = { schema_version: "underwriting.v1" as const, cutoff_at: now, source_manifest_hash: hash, definition_bundle_hash: hash, parser_bundle_hash: hash };
 const priceRequest = { schema_version: "underwriting.v1" as const, security_identity_id: ids.securityA, price: "100", currency: "CNY" as const, price_type: "close", adjustment_basis: "unadjusted", market_at: now, available_at: now, source_id: "source", raw_hash: hash };
 const fxRequest = { schema_version: "underwriting.v1" as const, base_currency: "CNY" as const, quote_currency: "USD" as const, rate: "0.14", quote_direction: "quote_per_base" as const, market_at: now, available_at: now, source_id: "source", raw_hash: hash };
@@ -215,17 +217,85 @@ describe("InvestmentResearchApi", () => {
   });
 
   it("rejects impossible preview and revision reference collections", async () => {
-    const invalidPreview = previewBody();
-    Reflect.set(invalidPreview.manifest, "model_refs", ["model:forbidden"]);
-    const invalidRevision = revisionBody();
-    invalidRevision.market_snapshot_ids = [ids.priceA, ids.priceA];
+    const missingPreview = previewBody();
+    missingPreview.manifest.market_snapshot_refs.pop();
+    const extraPreview = previewBody();
+    extraPreview.manifest.market_snapshot_refs.push(`price:${ids.membershipA}`);
+    const wrongPrefixPreview = previewBody();
+    wrongPrefixPreview.manifest.market_snapshot_refs[0] = `fx:${ids.priceA}`;
+    const duplicatePreview = previewBody();
+    duplicatePreview.manifest.market_snapshot_refs[1] = duplicatePreview.manifest.market_snapshot_refs[0];
+    const forbiddenModelPreview = previewBody();
+    Reflect.set(forbiddenModelPreview.manifest, "model_refs", ["model:forbidden"]);
+    const missingRevision = revisionBody();
+    missingRevision.market_snapshot_ids.pop();
+    const extraRevision = revisionBody();
+    extraRevision.market_snapshot_ids.push(ids.membershipA);
+    const duplicateRevision = revisionBody();
+    duplicateRevision.market_snapshot_ids[1] = duplicateRevision.market_snapshot_ids[0];
     const fetchSpy = vi.fn()
-      .mockResolvedValueOnce(response(invalidPreview))
-      .mockResolvedValueOnce(response(invalidRevision));
+      .mockResolvedValueOnce(response(missingPreview))
+      .mockResolvedValueOnce(response(extraPreview))
+      .mockResolvedValueOnce(response(wrongPrefixPreview))
+      .mockResolvedValueOnce(response(duplicatePreview))
+      .mockResolvedValueOnce(response(forbiddenModelPreview))
+      .mockResolvedValueOnce(response(missingRevision))
+      .mockResolvedValueOnce(response(extraRevision))
+      .mockResolvedValueOnce(response(duplicateRevision));
     vi.stubGlobal("fetch", fetchSpy);
     const api = new InvestmentResearchApi();
-    await expect(api.preview(ids.project, { schema_version: "underwriting.v1", expected_lock_version: 2 })).rejects.toMatchObject({ code: "invalid_response" });
-    await expect(api.revision(ids.revision)).rejects.toMatchObject({ code: "invalid_response" });
+    for (let index = 0; index < 5; index += 1) {
+      await expect(api.preview(ids.project, { schema_version: "underwriting.v1", expected_lock_version: 2 })).rejects.toMatchObject({ code: "invalid_response" });
+    }
+    for (let index = 0; index < 3; index += 1) {
+      await expect(api.revision(ids.revision)).rejects.toMatchObject({ code: "invalid_response" });
+    }
+  });
+
+  it("rejects agenda provenance, item, and output-hash mismatches", async () => {
+    const missingProvenance = agendaBody();
+    Reflect.deleteProperty(missingProvenance.generator_provenance, "template_version");
+    const invalidProvenance = agendaBody();
+    Reflect.set(invalidProvenance.generator_provenance, "input_summary_hash", hash);
+    const changedItems = agendaBody();
+    changedItems.payload.items = ["核验风险"];
+    const changedHash = agendaBody();
+    changedHash.generator_provenance.output_hash = hash;
+    const invalidAi = agendaBody();
+    Object.assign(invalidAi.generator_provenance, { method: "ai_generated", template_key: null, template_version: null, model_name: null, prompt_template_version: "prompt-v1", input_summary_hash: hash });
+    const validAi = agendaBody();
+    Object.assign(validAi.generator_provenance, aiAgendaRequest.generator);
+    const invalidAiHash = agendaBody();
+    Object.assign(invalidAiHash.generator_provenance, aiAgendaRequest.generator, { output_hash: hash });
+    const optionalNullRequest = {
+      ...agendaRequest,
+      generator: {
+        schema_version: "underwriting.v1" as const,
+        method: "deterministic_template" as const,
+        template_key: "product.foundation.agenda",
+        template_version: "1.0.0",
+        output_hash: agendaHash,
+      },
+    };
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(response(missingProvenance, 201))
+      .mockResolvedValueOnce(response(invalidProvenance, 201))
+      .mockResolvedValueOnce(response(changedItems, 201))
+      .mockResolvedValueOnce(response(changedHash, 201))
+      .mockResolvedValueOnce(response(invalidAi, 201))
+      .mockResolvedValueOnce(response(validAi, 201))
+      .mockResolvedValueOnce(response(invalidAiHash, 201))
+      .mockResolvedValueOnce(response(agendaBody(), 201));
+    vi.stubGlobal("fetch", fetchSpy);
+    const api = new InvestmentResearchApi();
+    await expect(api.createAgenda(ids.project, agendaRequest)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.createAgenda(ids.project, agendaRequest)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.createAgenda(ids.project, agendaRequest)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.createAgenda(ids.project, agendaRequest)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.createAgenda(ids.project, aiAgendaRequest)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.createAgenda(ids.project, aiAgendaRequest)).resolves.toMatchObject({ id: ids.agenda });
+    await expect(api.createAgenda(ids.project, { ...aiAgendaRequest, generator: { ...aiAgendaRequest.generator, output_hash: hash } })).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.createAgenda(ids.project, optionalNullRequest)).resolves.toMatchObject({ id: ids.agenda });
   });
 
   it("validates the complete error envelope and rejects header/body request identity mismatch", async () => {

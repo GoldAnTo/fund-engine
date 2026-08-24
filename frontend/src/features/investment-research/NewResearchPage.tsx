@@ -215,14 +215,30 @@ export default function NewResearchPage() {
     };
   }
 
+  function focusSetupAlert() {
+    requestAnimationFrame(() => {
+      setupAlertRef.current?.focus();
+      if (typeof setupAlertRef.current?.scrollIntoView === "function") {
+        setupAlertRef.current.scrollIntoView({ block: "center" });
+      }
+    });
+  }
+
   async function previewGeneratedAgenda() {
-    if (!boundaryFormRef.current) return;
+    const formElement = boundaryFormRef.current;
+    if (!formElement) return;
     setSetupError(null);
+    if (!formElement.reportValidity()) {
+      setSetupError("请先完成所有必填字段，再生成研究议程。");
+      formElement.querySelector<HTMLElement>(":invalid")?.focus();
+      return;
+    }
     try {
-      const preview = await generateFoundationAgenda(agendaInput(new FormData(boundaryFormRef.current)));
+      const preview = await generateFoundationAgenda(agendaInput(new FormData(formElement)));
       setAgendaPreview(preview);
     } catch (error) {
       setSetupError(error instanceof Error ? error.message : "议程预览失败");
+      focusSetupAlert();
     }
   }
 
@@ -390,12 +406,7 @@ export default function NewResearchPage() {
         ? error.message
         : "版本边界建立失败";
       setSetupError(message);
-      requestAnimationFrame(() => {
-        setupAlertRef.current?.focus();
-        if (typeof setupAlertRef.current?.scrollIntoView === "function") {
-          setupAlertRef.current.scrollIntoView({ block: "center" });
-        }
-      });
+      focusSetupAlert();
     } finally {
       setSubmitting(false);
     }
