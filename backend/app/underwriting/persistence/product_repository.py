@@ -18,12 +18,17 @@ from app.underwriting.persistence.models import (
     UnderwritingObjectRelation,
     UnderwritingResearchObject,
 )
+from app.models.ledger import ConflictError
 from app.underwriting.persistence.product_models import (
+    UnderwritingCapitalStructureSnapshot,
+    UnderwritingFXSnapshot,
     UnderwritingObjectIdentityVersion,
+    UnderwritingPriceSnapshot,
     UnderwritingResearchAgendaVersion,
     UnderwritingResearchProject,
     UnderwritingResearchProjectSecurity,
     UnderwritingResearchScopeVersion,
+    UnderwritingSecurityRightsVersion,
 )
 from app.underwriting.persistence.repository import StaleParentError
 
@@ -57,6 +62,12 @@ _CAS_CONSTRAINTS = {
             "uq_uw_mandate_product_successor",
         }
     ),
+    "uw_security_rights_versions": frozenset(
+        {
+            "uq_uw_security_rights_version",
+            "uq_uw_security_rights_successor",
+        }
+    ),
 }
 _SQLITE_CAS_COLUMNS = {
     "uw_object_identity_versions": frozenset(
@@ -82,6 +93,50 @@ _SQLITE_CAS_COLUMNS = {
             frozenset({"mandate_key", "version"}),
             frozenset({"project_id", "version"}),
             frozenset({"supersedes_id"}),
+        }
+    ),
+    "uw_security_rights_versions": frozenset(
+        {
+            frozenset({"security_identity_id", "version"}),
+            frozenset({"supersedes_id"}),
+        }
+    ),
+}
+
+_SNAPSHOT_IDENTITY_CONSTRAINTS = {
+    "uw_price_snapshots": "uq_uw_price_snapshot_identity",
+    "uw_fx_snapshots": "uq_uw_fx_snapshot_identity",
+    "uw_capital_structure_snapshots": "uq_uw_capital_structure_identity",
+}
+_SQLITE_SNAPSHOT_IDENTITY_COLUMNS = {
+    "uw_price_snapshots": frozenset(
+        {
+            "security_identity_id",
+            "price_type",
+            "adjustment_basis",
+            "market_at",
+            "source_id",
+            "raw_hash",
+        }
+    ),
+    "uw_fx_snapshots": frozenset(
+        {
+            "base_currency",
+            "quote_currency",
+            "quote_direction",
+            "market_at",
+            "source_id",
+            "raw_hash",
+        }
+    ),
+    "uw_capital_structure_snapshots": frozenset(
+        {
+            "company_id",
+            "report_period_start",
+            "report_period_end",
+            "market_at",
+            "source_id",
+            "raw_hash",
         }
     ),
 }
@@ -160,6 +215,53 @@ class ProductRepository:
                 raise StaleParentError(_STALE_MESSAGE) from exc
             raise
         return row
+
+    @staticmethod
+    def _is_snapshot_identity_error(row: Any, exc: IntegrityError) -> bool:
+        table_name = getattr(row, "__tablename__", "")
+        constraint = _SNAPSHOT_IDENTITY_CONSTRAINTS.get(table_name)
+        if constraint is None:
+            return False
+        diagnostic = getattr(getattr(exc, "orig", None), "diag", None)
+        constraint_name = getattr(diagnostic, "constraint_name", None)
+        if isinstance(constraint_name, str):
+            return constraint_name == constraint
+        detail = str(getattr(exc, "orig", exc)).casefold().replace('"', "")
+        marker = "unique constraint failed:"
+        if marker not in detail:
+            return False
+        raw_columns = detail.split(marker, 1)[1].splitlines()[0]
+        columns = frozenset(
+            column.strip().removeprefix("main.").split(".")[-1]
+            for column in raw_columns.split(",")
+        )
+        return columns == _SQLITE_SNAPSHOT_IDENTITY_COLUMNS[table_name]
+
+    def _flush_snapshot(self, row: Any, existing_statement: Any) -> Any:
+        """Insert an immutable snapshot, recovering exact natural-key retries."""
+        try:
+            connection = self._session.connection()
+            if connection.dialect.name == "sqlite":
+                dbapi_connection = getattr(
+                    connection.connection,
+                    "driver_connection",
+                    connection.connection,
+                )
+                if not dbapi_connection.in_transaction:
+                    connection.exec_driver_sql("BEGIN")
+            with self._session.begin_nested():
+                self._session.add(row)
+                self._session.flush([row])
+            return row
+        except IntegrityError as exc:
+            if not self._is_snapshot_identity_error(row, exc):
+                raise
+        existing = self._session.scalar(existing_statement.limit(1))
+        if existing is None:
+            raise ConflictError("snapshot natural identity conflicted concurrently")
+        if existing.content_hash != row.content_hash:
+            raise ConflictError("snapshot natural identity has conflicting content")
+        return existing
 
     def object(self, object_id: UUID) -> UnderwritingResearchObject | None:
         return self._session.get(UnderwritingResearchObject, object_id)
@@ -611,6 +713,295 @@ class ProductRepository:
                 UnderwritingHistoricalBasis.boundary_schema_version
                 == "product.historical-basis.v1",
                 UnderwritingHistoricalBasis.price_as_of.is_(None),
+            )
+            .limit(1)
+        )
+
+    def freeze_price(
+        self,
+        *,
+        security_identity_id: UUID,
+        price: Decimal,
+        currency: str,
+        price_type: str,
+        adjustment_basis: str,
+        market_at: datetime,
+        available_at: datetime,
+        source_id: str,
+        raw_hash: str,
+        content_hash: str,
+        created_at: datetime,
+    ) -> UnderwritingPriceSnapshot:
+        row = UnderwritingPriceSnapshot(
+            security_identity_id=security_identity_id,
+            price=price,
+            currency=currency,
+            price_type=price_type,
+            adjustment_basis=adjustment_basis,
+            market_at=market_at,
+            available_at=available_at,
+            source_id=source_id,
+            raw_hash=raw_hash,
+            content_hash=content_hash,
+            created_at=created_at,
+        )
+        existing = select(UnderwritingPriceSnapshot).where(
+            UnderwritingPriceSnapshot.security_identity_id == security_identity_id,
+            UnderwritingPriceSnapshot.price_type == price_type,
+            UnderwritingPriceSnapshot.adjustment_basis == adjustment_basis,
+            UnderwritingPriceSnapshot.market_at == market_at,
+            UnderwritingPriceSnapshot.source_id == source_id,
+            UnderwritingPriceSnapshot.raw_hash == raw_hash,
+        )
+        return self._flush_snapshot(row, existing)
+
+    def price(self, snapshot_id: UUID) -> UnderwritingPriceSnapshot | None:
+        return self._session.get(UnderwritingPriceSnapshot, snapshot_id)
+
+    def prices(self, snapshot_ids: tuple[UUID, ...]) -> list[UnderwritingPriceSnapshot]:
+        if not snapshot_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(UnderwritingPriceSnapshot).where(
+                    UnderwritingPriceSnapshot.id.in_(snapshot_ids)
+                )
+            )
+        )
+
+    def freeze_fx(
+        self,
+        *,
+        base_currency: str,
+        quote_currency: str,
+        rate: Decimal,
+        quote_direction: str,
+        market_at: datetime,
+        available_at: datetime,
+        source_id: str,
+        raw_hash: str,
+        content_hash: str,
+        created_at: datetime,
+    ) -> UnderwritingFXSnapshot:
+        row = UnderwritingFXSnapshot(
+            base_currency=base_currency,
+            quote_currency=quote_currency,
+            rate=rate,
+            quote_direction=quote_direction,
+            market_at=market_at,
+            available_at=available_at,
+            source_id=source_id,
+            raw_hash=raw_hash,
+            content_hash=content_hash,
+            created_at=created_at,
+        )
+        existing = select(UnderwritingFXSnapshot).where(
+            UnderwritingFXSnapshot.base_currency == base_currency,
+            UnderwritingFXSnapshot.quote_currency == quote_currency,
+            UnderwritingFXSnapshot.quote_direction == quote_direction,
+            UnderwritingFXSnapshot.market_at == market_at,
+            UnderwritingFXSnapshot.source_id == source_id,
+            UnderwritingFXSnapshot.raw_hash == raw_hash,
+        )
+        return self._flush_snapshot(row, existing)
+
+    def fx(self, snapshot_id: UUID) -> UnderwritingFXSnapshot | None:
+        return self._session.get(UnderwritingFXSnapshot, snapshot_id)
+
+    def fxs(self, snapshot_ids: tuple[UUID, ...]) -> list[UnderwritingFXSnapshot]:
+        if not snapshot_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(UnderwritingFXSnapshot).where(
+                    UnderwritingFXSnapshot.id.in_(snapshot_ids)
+                )
+            )
+        )
+
+    def fx_for_pair(
+        self, base_currency: str, quote_currency: str, market_at: datetime
+    ) -> UnderwritingFXSnapshot | None:
+        return self._session.scalar(
+            select(UnderwritingFXSnapshot)
+            .where(
+                UnderwritingFXSnapshot.base_currency == base_currency,
+                UnderwritingFXSnapshot.quote_currency == quote_currency,
+                UnderwritingFXSnapshot.quote_direction == "quote_per_base",
+                UnderwritingFXSnapshot.market_at == market_at,
+            )
+            .order_by(UnderwritingFXSnapshot.id)
+            .limit(1)
+        )
+
+    def freeze_capital_structure(
+        self,
+        *,
+        company_id: UUID,
+        currency: str,
+        cash: Decimal,
+        debt: Decimal,
+        minority_interest: Decimal,
+        investments: Decimal,
+        pension_liabilities: Decimal,
+        other_adjustments: Decimal,
+        basic_shares: Decimal,
+        diluted_shares: Decimal,
+        potential_dilution_descriptors: list[str],
+        report_period_start: datetime,
+        report_period_end: datetime,
+        market_at: datetime,
+        available_at: datetime,
+        source_id: str,
+        raw_hash: str,
+        content_hash: str,
+        created_at: datetime,
+    ) -> UnderwritingCapitalStructureSnapshot:
+        row = UnderwritingCapitalStructureSnapshot(
+            company_id=company_id,
+            currency=currency,
+            cash=cash,
+            debt=debt,
+            minority_interest=minority_interest,
+            investments=investments,
+            pension_liabilities=pension_liabilities,
+            other_adjustments=other_adjustments,
+            basic_shares=basic_shares,
+            diluted_shares=diluted_shares,
+            potential_dilution_descriptors=deepcopy(potential_dilution_descriptors),
+            report_period_start=report_period_start,
+            report_period_end=report_period_end,
+            market_at=market_at,
+            available_at=available_at,
+            source_id=source_id,
+            raw_hash=raw_hash,
+            content_hash=content_hash,
+            created_at=created_at,
+        )
+        existing = select(UnderwritingCapitalStructureSnapshot).where(
+            UnderwritingCapitalStructureSnapshot.company_id == company_id,
+            UnderwritingCapitalStructureSnapshot.report_period_start
+            == report_period_start,
+            UnderwritingCapitalStructureSnapshot.report_period_end == report_period_end,
+            UnderwritingCapitalStructureSnapshot.market_at == market_at,
+            UnderwritingCapitalStructureSnapshot.source_id == source_id,
+            UnderwritingCapitalStructureSnapshot.raw_hash == raw_hash,
+        )
+        return self._flush_snapshot(row, existing)
+
+    def capital_structure(
+        self, snapshot_id: UUID
+    ) -> UnderwritingCapitalStructureSnapshot | None:
+        return self._session.get(UnderwritingCapitalStructureSnapshot, snapshot_id)
+
+    def rights_head(
+        self, security_identity_id: UUID
+    ) -> UnderwritingSecurityRightsVersion | None:
+        return self._session.scalar(
+            select(UnderwritingSecurityRightsVersion)
+            .where(
+                UnderwritingSecurityRightsVersion.security_identity_id
+                == security_identity_id
+            )
+            .order_by(
+                UnderwritingSecurityRightsVersion.version.desc(),
+                UnderwritingSecurityRightsVersion.id.desc(),
+            )
+            .limit(1)
+        )
+
+    def append_security_rights(
+        self,
+        *,
+        security_identity_id: UUID,
+        economic_units: Decimal,
+        votes_per_unit: Decimal,
+        conversion_ratio: Decimal,
+        adr_ratio: Decimal,
+        dividend_rights_per_unit: Decimal,
+        effective_from: datetime,
+        effective_to: datetime | None,
+        source_id: str,
+        raw_hash: str,
+        content_hash: str,
+        expected_parent_id: UUID | None,
+        created_at: datetime,
+    ) -> UnderwritingSecurityRightsVersion:
+        head = self._session.scalar(
+            select(UnderwritingSecurityRightsVersion)
+            .where(
+                UnderwritingSecurityRightsVersion.security_identity_id
+                == security_identity_id
+            )
+            .order_by(
+                UnderwritingSecurityRightsVersion.version.desc(),
+                UnderwritingSecurityRightsVersion.id.desc(),
+            )
+            .limit(1)
+            .with_for_update()
+        )
+        if (
+            head is not None
+            and head.supersedes_id == expected_parent_id
+            and head.content_hash == content_hash
+        ):
+            return head
+        actual_parent_id = head.id if head is not None else None
+        self._require_expected_parent(actual_parent_id, expected_parent_id)
+        return self._flush_version(
+            UnderwritingSecurityRightsVersion(
+                security_identity_id=security_identity_id,
+                version=1 if head is None else head.version + 1,
+                economic_units=economic_units,
+                votes_per_unit=votes_per_unit,
+                conversion_ratio=conversion_ratio,
+                adr_ratio=adr_ratio,
+                dividend_rights_per_unit=dividend_rights_per_unit,
+                effective_from=effective_from,
+                effective_to=effective_to,
+                source_id=source_id,
+                raw_hash=raw_hash,
+                supersedes_id=actual_parent_id,
+                content_hash=content_hash,
+                created_at=created_at,
+            )
+        )
+
+    def security_rights(
+        self, rights_id: UUID
+    ) -> UnderwritingSecurityRightsVersion | None:
+        return self._session.get(UnderwritingSecurityRightsVersion, rights_id)
+
+    def security_rights_many(
+        self, rights_ids: tuple[UUID, ...]
+    ) -> list[UnderwritingSecurityRightsVersion]:
+        if not rights_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(UnderwritingSecurityRightsVersion).where(
+                    UnderwritingSecurityRightsVersion.id.in_(rights_ids)
+                )
+            )
+        )
+
+    def effective_security_rights(
+        self, security_identity_id: UUID, as_of: datetime
+    ) -> UnderwritingSecurityRightsVersion | None:
+        return self._session.scalar(
+            select(UnderwritingSecurityRightsVersion)
+            .where(
+                UnderwritingSecurityRightsVersion.security_identity_id
+                == security_identity_id,
+                UnderwritingSecurityRightsVersion.effective_from <= as_of,
+                or_(
+                    UnderwritingSecurityRightsVersion.effective_to.is_(None),
+                    UnderwritingSecurityRightsVersion.effective_to > as_of,
+                ),
+            )
+            .order_by(
+                UnderwritingSecurityRightsVersion.version.desc(),
+                UnderwritingSecurityRightsVersion.id.desc(),
             )
             .limit(1)
         )
