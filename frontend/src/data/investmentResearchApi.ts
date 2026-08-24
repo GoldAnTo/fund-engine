@@ -49,6 +49,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).length === keys.length && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
@@ -86,8 +90,58 @@ function isNullableDateTime(value: unknown): value is string | null {
   return value === null || isDateTime(value);
 }
 
+function canonicalDecimal(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = /^([+-]?)(\d+)(?:\.(\d*))?$/.exec(value.trim());
+  if (!match) return null;
+  const integer = match[2].replace(/^0+(?=\d)/, "");
+  const fraction = (match[3] ?? "").replace(/0+$/, "");
+  const zero = integer === "0" && fraction === "";
+  return `${match[1] === "-" && !zero ? "-" : ""}${integer}${fraction ? `.${fraction}` : ""}`;
+}
+
 function isDecimal(value: unknown): value is string {
-  return typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value));
+  return canonicalDecimal(value) !== null;
+}
+
+function sameDecimal(actual: unknown, expected: unknown): boolean {
+  const left = canonicalDecimal(actual);
+  const right = canonicalDecimal(expected == null ? expected : String(expected));
+  return left !== null && left === right;
+}
+
+function isNonNegativeDecimal(value: unknown, positive = false): value is string {
+  const normalized = canonicalDecimal(value);
+  return normalized !== null && !normalized.startsWith("-") && (!positive || normalized !== "0");
+}
+
+function decimalAtMostOne(value: unknown, allowOne = true): boolean {
+  const normalized = canonicalDecimal(value);
+  if (normalized === null || normalized.startsWith("-")) return false;
+  if (normalized === "1") return allowOne;
+  return normalized === "0" || normalized.startsWith("0.");
+}
+
+function compareNonNegativeDecimals(left: unknown, right: unknown): number {
+  const leftValue = canonicalDecimal(left);
+  const rightValue = canonicalDecimal(right);
+  if (leftValue === null || rightValue === null || leftValue.startsWith("-") || rightValue.startsWith("-")) return -1;
+  const [leftInteger, leftFraction = ""] = leftValue.split(".");
+  const [rightInteger, rightFraction = ""] = rightValue.split(".");
+  if (leftInteger.length !== rightInteger.length) return leftInteger.length > rightInteger.length ? 1 : -1;
+  if (leftInteger !== rightInteger) return leftInteger > rightInteger ? 1 : -1;
+  const length = Math.max(leftFraction.length, rightFraction.length);
+  const paddedLeft = leftFraction.padEnd(length, "0");
+  const paddedRight = rightFraction.padEnd(length, "0");
+  return paddedLeft === paddedRight ? 0 : paddedLeft > paddedRight ? 1 : -1;
+}
+
+function sameInstant(actual: unknown, expected: unknown): boolean {
+  return isDateTime(actual) && isDateTime(expected) && Date.parse(actual) === Date.parse(expected);
+}
+
+function isAtOrBefore(left: unknown, right: unknown): boolean {
+  return isDateTime(left) && isDateTime(right) && Date.parse(left) <= Date.parse(right);
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -139,6 +193,7 @@ function isProductDto(value: unknown): value is Record<string, unknown> & {
 
 function isObjectItem(value: unknown): value is ProductObjectSearchItem {
   return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "object_id", "identity_version_id", "kind", "external_key", "canonical_name", "symbol", "exchange", "share_class", "trading_currency"])
     && isUuid(value.object_id)
     && isUuid(value.identity_version_id)
     && ["industry", "company", "security"].includes(String(value.kind))
@@ -151,11 +206,12 @@ function isObjectItem(value: unknown): value is ProductObjectSearchItem {
 }
 
 function isObjectSearch(value: unknown): value is ProductObjectSearch {
-  return isProductDto(value) && Array.isArray(value.items) && value.items.every(isObjectItem);
+  return isProductDto(value) && hasExactKeys(value, ["schema_version", "items"]) && Array.isArray(value.items) && value.items.every(isObjectItem);
 }
 
 function isProject(value: unknown): value is ProductProject {
   return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "id", "primary_company_id", "target_security_ids", "content_hash", "created_at"])
     && isUuid(value.id)
     && isUuid(value.primary_company_id)
     && isUuidArray(value.target_security_ids)
@@ -165,7 +221,7 @@ function isProject(value: unknown): value is ProductProject {
 }
 
 function isProjectList(value: unknown): value is ProductProjectList {
-  return isProductDto(value) && Array.isArray(value.items) && value.items.every(isProject);
+  return isProductDto(value) && hasExactKeys(value, ["schema_version", "items"]) && Array.isArray(value.items) && value.items.every(isProject);
 }
 
 function isProjectChildRecord(value: unknown): value is Record<string, unknown> & {
@@ -178,16 +234,19 @@ function isProjectChildRecord(value: unknown): value is Record<string, unknown> 
 
 function isMandate(value: unknown): value is ProductMandate {
   return isProjectChildRecord(value)
+    && hasExactKeys(value, ["schema_version", "id", "project_id", "mandate_key", "horizon_years", "base_currency", "required_return", "permanent_loss_limit", "comparison_set", "benchmark_key", "required_excess_return", "effective_at", "expires_at", "version", "supersedes_id", "content_hash", "created_at"])
     && typeof value.mandate_key === "string" && value.mandate_key.trim() !== ""
-    && isNonNegativeInteger(value.horizon_years)
+    && typeof value.horizon_years === "number" && Number.isInteger(value.horizon_years) && value.horizon_years >= 3 && value.horizon_years <= 5
     && (value.base_currency === "CNY" || value.base_currency === "USD")
-    && isDecimal(value.required_return)
-    && isDecimal(value.permanent_loss_limit)
+    && decimalAtMostOne(value.required_return, false)
+    && decimalAtMostOne(value.permanent_loss_limit)
     && isNonEmptyStrings(value.comparison_set)
     && isNullableString(value.benchmark_key)
-    && (value.required_excess_return === null || isDecimal(value.required_excess_return))
+    && (value.required_excess_return === null || decimalAtMostOne(value.required_excess_return, false))
+    && ((value.benchmark_key === null) === (value.required_excess_return === null))
     && isDateTime(value.effective_at)
     && isNullableDateTime(value.expires_at)
+    && (value.expires_at === null || isAtOrBefore(value.effective_at, value.expires_at))
     && isNonNegativeInteger(value.version)
     && isNullableUuid(value.supersedes_id)
     && isHash(value.content_hash)
@@ -196,8 +255,10 @@ function isMandate(value: unknown): value is ProductMandate {
 
 function isScope(value: unknown): value is ProductScope {
   return isProjectChildRecord(value)
+    && hasExactKeys(value, ["schema_version", "id", "project_id", "version", "payload", "supersedes_id", "content_hash", "created_at"])
     && isNonNegativeInteger(value.version)
     && isProductDto(value.payload)
+    && hasExactKeys(value.payload, ["schema_version", "primary_company_id", "target_security_ids", "industry_ids", "covered_segments", "user_focus", "exclusions"])
     && isUuid(value.payload.primary_company_id)
     && isUuidArray(value.payload.target_security_ids)
     && new Set(value.payload.target_security_ids).size === value.payload.target_security_ids.length
@@ -213,7 +274,10 @@ function isScope(value: unknown): value is ProductScope {
 function isAgenda(value: unknown): value is ProductAgenda {
   if (!isProjectChildRecord(value) || !isProductDto(value.payload) || !isProductDto(value.generator_provenance)) return false;
   const generator = value.generator_provenance;
-  return isNonNegativeInteger(value.version)
+  return hasExactKeys(value, ["schema_version", "id", "project_id", "version", "scope_id", "payload", "generator_provenance", "supersedes_id", "content_hash", "created_at"])
+    && hasExactKeys(value.payload, ["schema_version", "items"])
+    && hasExactKeys(generator, ["schema_version", "method", "template_key", "template_version", "model_name", "prompt_template_version", "input_summary_hash", "output_hash"])
+    && isNonNegativeInteger(value.version)
     && isUuid(value.scope_id)
     && isNonEmptyStrings(value.payload.items)
     && isAgendaGenerator(generator)
@@ -279,6 +343,7 @@ function isIdentifiedRecord(value: unknown): value is Record<string, unknown> & 
 
 function isHistoricalBasis(value: unknown): value is ProductHistoricalBasis {
   return isIdentifiedRecord(value)
+    && hasExactKeys(value, ["schema_version", "id", "cutoff_at", "price_as_of", "source_manifest_hash", "definition_bundle_hash", "parser_bundle_hash", "boundary_schema_version", "content_hash", "created_at"])
     && isDateTime(value.cutoff_at)
     && (value.price_as_of === undefined || value.price_as_of === null)
     && isHash(value.source_manifest_hash)
@@ -291,49 +356,56 @@ function isHistoricalBasis(value: unknown): value is ProductHistoricalBasis {
 
 function isPrice(value: unknown): value is ProductPriceSnapshot {
   return isIdentifiedRecord(value)
+    && hasExactKeys(value, ["schema_version", "id", "security_identity_id", "price", "currency", "price_type", "adjustment_basis", "market_at", "available_at", "source_id", "raw_hash", "content_hash", "created_at"])
     && isUuid(value.security_identity_id)
-    && isDecimal(value.price)
+    && isNonNegativeDecimal(value.price, true)
     && (value.currency === "CNY" || value.currency === "USD")
     && typeof value.price_type === "string" && value.price_type.trim() !== ""
     && typeof value.adjustment_basis === "string" && value.adjustment_basis.trim() !== ""
-    && isDateTime(value.market_at) && isDateTime(value.available_at)
+    && isDateTime(value.market_at) && isDateTime(value.available_at) && isAtOrBefore(value.market_at, value.available_at)
     && typeof value.source_id === "string" && value.source_id.trim() !== ""
     && isHash(value.raw_hash) && isHash(value.content_hash) && isDateTime(value.created_at);
 }
 
 function isFx(value: unknown): value is ProductFxSnapshot {
   return isIdentifiedRecord(value)
+    && hasExactKeys(value, ["schema_version", "id", "base_currency", "quote_currency", "rate", "quote_direction", "market_at", "available_at", "source_id", "raw_hash", "content_hash", "created_at"])
     && (value.base_currency === "CNY" || value.base_currency === "USD")
     && (value.quote_currency === "CNY" || value.quote_currency === "USD")
-    && isDecimal(value.rate)
+    && value.base_currency !== value.quote_currency
+    && isNonNegativeDecimal(value.rate, true)
     && value.quote_direction === "quote_per_base"
-    && isDateTime(value.market_at) && isDateTime(value.available_at)
+    && isDateTime(value.market_at) && isDateTime(value.available_at) && isAtOrBefore(value.market_at, value.available_at)
     && typeof value.source_id === "string" && value.source_id.trim() !== ""
     && isHash(value.raw_hash) && isHash(value.content_hash) && isDateTime(value.created_at);
 }
 
 function isCapital(value: unknown): value is ProductCapitalStructure {
   return isIdentifiedRecord(value)
+    && hasExactKeys(value, ["schema_version", "id", "company_id", "currency", "cash", "debt", "minority_interest", "investments", "pension_liabilities", "other_adjustments", "basic_shares", "diluted_shares", "potential_dilution_descriptors", "report_period_start", "report_period_end", "market_at", "available_at", "source_id", "raw_hash", "content_hash", "created_at"])
     && isUuid(value.company_id)
     && (value.currency === "CNY" || value.currency === "USD")
-    && isDecimal(value.cash) && isDecimal(value.debt) && isDecimal(value.minority_interest)
-    && isDecimal(value.investments) && isDecimal(value.pension_liabilities)
-    && isDecimal(value.other_adjustments) && isDecimal(value.basic_shares) && isDecimal(value.diluted_shares)
+    && isNonNegativeDecimal(value.cash) && isNonNegativeDecimal(value.debt) && isNonNegativeDecimal(value.minority_interest)
+    && isNonNegativeDecimal(value.investments) && isNonNegativeDecimal(value.pension_liabilities)
+    && isDecimal(value.other_adjustments) && isNonNegativeDecimal(value.basic_shares, true) && isNonNegativeDecimal(value.diluted_shares, true)
+    && compareNonNegativeDecimals(value.diluted_shares, value.basic_shares) >= 0
     && isStringArray(value.potential_dilution_descriptors)
-    && isDateTime(value.report_period_start) && isDateTime(value.report_period_end)
-    && isDateTime(value.market_at) && isDateTime(value.available_at)
+    && isDateTime(value.report_period_start) && isDateTime(value.report_period_end) && isAtOrBefore(value.report_period_start, value.report_period_end)
+    && isDateTime(value.market_at) && isDateTime(value.available_at) && isAtOrBefore(value.market_at, value.available_at)
     && typeof value.source_id === "string" && value.source_id.trim() !== ""
     && isHash(value.raw_hash) && isHash(value.content_hash) && isDateTime(value.created_at);
 }
 
 function isRights(value: unknown): value is ProductSecurityRights {
   return isIdentifiedRecord(value)
+    && hasExactKeys(value, ["schema_version", "id", "security_identity_id", "version", "economic_units", "votes_per_unit", "conversion_ratio", "adr_ratio", "dividend_rights_per_unit", "effective_from", "effective_to", "source_id", "raw_hash", "supersedes_id", "content_hash", "created_at"])
     && isUuid(value.security_identity_id)
     && isNonNegativeInteger(value.version)
-    && isDecimal(value.economic_units) && isDecimal(value.votes_per_unit)
-    && isDecimal(value.conversion_ratio) && isDecimal(value.adr_ratio)
-    && isDecimal(value.dividend_rights_per_unit)
+    && isNonNegativeDecimal(value.economic_units, true) && isNonNegativeDecimal(value.votes_per_unit)
+    && isNonNegativeDecimal(value.conversion_ratio, true) && isNonNegativeDecimal(value.adr_ratio, true)
+    && isNonNegativeDecimal(value.dividend_rights_per_unit)
     && isDateTime(value.effective_from) && isNullableDateTime(value.effective_to)
+    && (value.effective_to === null || isAtOrBefore(value.effective_from, value.effective_to))
     && typeof value.source_id === "string" && value.source_id.trim() !== ""
     && isHash(value.raw_hash) && isNullableUuid(value.supersedes_id)
     && isHash(value.content_hash) && isDateTime(value.created_at);
@@ -569,6 +641,14 @@ function mismatch(message: string): never {
   throw new InvestmentResearchRequestError(message, 502, "identity_mismatch", null);
 }
 
+function sameNullableDecimal(actual: unknown, expected: unknown): boolean {
+  return actual == null && expected == null || sameDecimal(actual, expected);
+}
+
+function sameNullableInstant(actual: unknown, expected: unknown): boolean {
+  return actual == null && expected == null || sameInstant(actual, expected);
+}
+
 export class InvestmentResearchApi {
   private readonly root: string;
 
@@ -604,7 +684,17 @@ export class InvestmentResearchApi {
 
   async createMandate(projectId: string, body: CreateMandateRequest): Promise<ProductMandate> {
     const value = await requestJson(`${this.root}/projects/${encodeURIComponent(projectId)}/mandates`, isMandate, 201, jsonInit("POST", body));
-    if (value.project_id !== projectId) mismatch("mandate project identity mismatch");
+    if (value.project_id !== projectId
+      || value.mandate_key !== `product.project:${projectId}`
+      || value.horizon_years !== body.horizon_years
+      || value.base_currency !== body.base_currency
+      || !sameDecimal(value.required_return, body.required_return)
+      || !sameDecimal(value.permanent_loss_limit, body.permanent_loss_limit)
+      || !sameStringSets(value.comparison_set, body.comparison_set)
+      || value.benchmark_key !== (body.benchmark_key ?? null)
+      || !sameNullableDecimal(value.required_excess_return, body.required_excess_return)
+      || !sameInstant(value.effective_at, body.effective_at)
+      || !sameNullableInstant(value.expires_at, body.expires_at)) mismatch("mandate request identity mismatch");
     return value;
   }
 
@@ -612,7 +702,11 @@ export class InvestmentResearchApi {
     const value = await requestJson(`${this.root}/projects/${encodeURIComponent(projectId)}/scopes`, isScope, 201, jsonInit("POST", body));
     if (value.project_id !== projectId
       || value.payload.primary_company_id !== body.primary_company_id
-      || !sameStringSets(value.payload.target_security_ids, body.target_security_ids)) {
+      || !sameStringSets(value.payload.target_security_ids, body.target_security_ids)
+      || !sameStringSets(value.payload.industry_ids, body.industry_ids ?? [])
+      || !sameStringSets(value.payload.covered_segments, body.covered_segments ?? [])
+      || value.payload.user_focus !== (body.user_focus ?? null)
+      || !sameStringSets(value.payload.exclusions, body.exclusions ?? [])) {
       mismatch("scope project identity mismatch");
     }
     return value;
@@ -633,31 +727,55 @@ export class InvestmentResearchApi {
     return value;
   }
 
-  createHistoricalBasis(body: CreateHistoricalBasisRequest): Promise<ProductHistoricalBasis> {
-    return requestJson(`${this.root}/historical-bases`, isHistoricalBasis, 201, jsonInit("POST", body));
+  async createHistoricalBasis(body: CreateHistoricalBasisRequest): Promise<ProductHistoricalBasis> {
+    const value = await requestJson(`${this.root}/historical-bases`, isHistoricalBasis, 201, jsonInit("POST", body));
+    if (!sameInstant(value.cutoff_at, body.cutoff_at)
+      || value.price_as_of !== null
+      || value.source_manifest_hash !== body.source_manifest_hash
+      || value.definition_bundle_hash !== body.definition_bundle_hash
+      || value.parser_bundle_hash !== body.parser_bundle_hash) mismatch("historical basis request identity mismatch");
+    return value;
   }
 
   async createPriceSnapshot(body: CreatePriceSnapshotRequest): Promise<ProductPriceSnapshot> {
     const value = await requestJson(`${this.root}/market/price-snapshots`, isPrice, 201, jsonInit("POST", body));
-    if (value.security_identity_id !== body.security_identity_id) mismatch("price security identity mismatch");
+    if (value.security_identity_id !== body.security_identity_id
+      || !sameDecimal(value.price, body.price) || value.currency !== body.currency
+      || value.price_type !== body.price_type || value.adjustment_basis !== body.adjustment_basis
+      || !sameInstant(value.market_at, body.market_at) || !sameInstant(value.available_at, body.available_at)
+      || value.source_id !== body.source_id || value.raw_hash !== body.raw_hash) mismatch("price snapshot request identity mismatch");
     return value;
   }
 
   async createFxSnapshot(body: CreateFxSnapshotRequest): Promise<ProductFxSnapshot> {
     const value = await requestJson(`${this.root}/market/fx-snapshots`, isFx, 201, jsonInit("POST", body));
-    if (value.base_currency !== body.base_currency || value.quote_currency !== body.quote_currency) mismatch("FX currency identity mismatch");
+    if (value.base_currency !== body.base_currency || value.quote_currency !== body.quote_currency
+      || !sameDecimal(value.rate, body.rate) || value.quote_direction !== body.quote_direction
+      || !sameInstant(value.market_at, body.market_at) || !sameInstant(value.available_at, body.available_at)
+      || value.source_id !== body.source_id || value.raw_hash !== body.raw_hash) mismatch("FX snapshot request identity mismatch");
     return value;
   }
 
   async createCapitalStructure(body: CreateCapitalStructureRequest): Promise<ProductCapitalStructure> {
     const value = await requestJson(`${this.root}/market/capital-structure-snapshots`, isCapital, 201, jsonInit("POST", body));
-    if (value.company_id !== body.company_id) mismatch("capital structure company identity mismatch");
+    const decimalKeys = ["cash", "debt", "minority_interest", "investments", "pension_liabilities", "other_adjustments", "basic_shares", "diluted_shares"] as const;
+    if (value.company_id !== body.company_id || value.currency !== body.currency
+      || decimalKeys.some((key) => !sameDecimal(value[key], body[key]))
+      || !sameOrderedStrings(value.potential_dilution_descriptors, body.potential_dilution_descriptors ?? [])
+      || !sameInstant(value.report_period_start, body.report_period_start) || !sameInstant(value.report_period_end, body.report_period_end)
+      || !sameInstant(value.market_at, body.market_at) || !sameInstant(value.available_at, body.available_at)
+      || value.source_id !== body.source_id || value.raw_hash !== body.raw_hash) mismatch("capital structure request identity mismatch");
     return value;
   }
 
   async createSecurityRights(body: CreateSecurityRightsRequest): Promise<ProductSecurityRights> {
     const value = await requestJson(`${this.root}/market/security-rights`, isRights, 201, jsonInit("POST", body));
-    if (value.security_identity_id !== body.security_identity_id) mismatch("security rights identity mismatch");
+    const decimalKeys = ["economic_units", "votes_per_unit", "conversion_ratio", "adr_ratio", "dividend_rights_per_unit"] as const;
+    if (value.security_identity_id !== body.security_identity_id
+      || decimalKeys.some((key) => !sameDecimal(value[key], body[key]))
+      || !sameInstant(value.effective_from, body.effective_from) || !sameNullableInstant(value.effective_to, body.effective_to)
+      || value.source_id !== body.source_id || value.raw_hash !== body.raw_hash
+      || value.supersedes_id !== (body.expected_parent_id ?? null)) mismatch("security rights request identity mismatch");
     return value;
   }
 
@@ -684,7 +802,8 @@ export class InvestmentResearchApi {
 
   async preview(projectId: string, body: PreviewRevisionRequest): Promise<ProductPreview> {
     const value = await requestJson(`${this.root}/projects/${encodeURIComponent(projectId)}/publication-preview`, isPreview, 200, jsonInit("POST", body));
-    if (value.project_id !== projectId || value.manifest.project_id !== projectId) mismatch("preview project identity mismatch");
+    if (value.project_id !== projectId || value.manifest.project_id !== projectId
+      || value.expected_lock_version !== body.expected_lock_version) mismatch("preview project identity mismatch");
     return value;
   }
 

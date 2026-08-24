@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -16,6 +16,13 @@ import {
   type ProductProject,
   type ProductScope,
   type ProductSecurityRights,
+  type CreateMandateRequest,
+  type CreateScopeRequest,
+  type CreateHistoricalBasisRequest,
+  type CreatePriceSnapshotRequest,
+  type CreateFxSnapshotRequest,
+  type CreateCapitalStructureRequest,
+  type CreateSecurityRightsRequest,
 } from "../../data/investmentResearchApi";
 import {
   generateFoundationAgenda,
@@ -69,7 +76,7 @@ function identityDetail(item: ProductObjectSearchItem): string {
 export default function NewResearchPage() {
   const navigate = useNavigate();
   const boundaryFormRef = useRef<HTMLFormElement>(null);
-  const frozenFoundationFormRef = useRef<FormData | null>(null);
+  const mountedRef = useRef(true);
   const identityAlertRef = useRef<HTMLParagraphElement>(null);
   const setupAlertRef = useRef<HTMLParagraphElement>(null);
   const [query, setQuery] = useState("");
@@ -100,7 +107,18 @@ export default function NewResearchPage() {
     rights: Record<string, ProductSecurityRights>;
     savedDraft?: ProductDraft;
     publicationPreview?: ProductPreview;
-  }>({ prices: {}, fxRates: {}, rights: {} });
+    inputs: {
+      mandate?: CreateMandateRequest;
+      scope?: CreateScopeRequest;
+      basis?: CreateHistoricalBasisRequest;
+      prices: Record<string, CreatePriceSnapshotRequest>;
+      fxRates: Record<string, CreateFxSnapshotRequest>;
+      capital?: CreateCapitalStructureRequest;
+      rights: Record<string, CreateSecurityRightsRequest>;
+    };
+  }>({ prices: {}, fxRates: {}, rights: {}, inputs: { prices: {}, fxRates: {}, rights: {} } });
+
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   const selectedCompany = results.find((item) => item.kind === "company" && item.object_id === companyId) ?? null;
   const selectedSecurities = securityIds.flatMap((id) => {
@@ -185,6 +203,8 @@ export default function NewResearchPage() {
 
   function agendaInput(form: FormData) {
     if (!selectedCompany) throw new Error("缺少 Company 身份");
+    const savedMandate = foundation.inputs.mandate;
+    const savedScope = foundation.inputs.scope;
     return {
       company: {
         objectId: selectedCompany.object_id,
@@ -198,19 +218,19 @@ export default function NewResearchPage() {
         symbol: security.symbol,
       })),
       mandate: {
-        horizonYears: Number(field(form, "horizon_years")),
-        baseCurrency,
-        requiredReturn: field(form, "required_return"),
-        permanentLossLimit: field(form, "permanent_loss_limit"),
-        comparisonSet: lines(field(form, "comparison_set")),
-        benchmarkKey: optionalField(form, "benchmark_key"),
-        requiredExcessReturn: optionalField(form, "required_excess_return"),
+        horizonYears: savedMandate?.horizon_years ?? Number(field(form, "horizon_years")),
+        baseCurrency: savedMandate?.base_currency ?? baseCurrency,
+        requiredReturn: String(savedMandate?.required_return ?? field(form, "required_return")),
+        permanentLossLimit: String(savedMandate?.permanent_loss_limit ?? field(form, "permanent_loss_limit")),
+        comparisonSet: savedMandate?.comparison_set ?? lines(field(form, "comparison_set")),
+        benchmarkKey: savedMandate ? (savedMandate.benchmark_key ?? null) : optionalField(form, "benchmark_key"),
+        requiredExcessReturn: savedMandate ? (savedMandate.required_excess_return == null ? null : String(savedMandate.required_excess_return)) : optionalField(form, "required_excess_return"),
       },
       scope: {
         industryNames: selectedIndustries.map((industry) => industry.canonical_name),
-        coveredSegments: lines(optionalField(form, "covered_segments") ?? ""),
-        userFocus: optionalField(form, "user_focus"),
-        exclusions: lines(optionalField(form, "exclusions") ?? ""),
+        coveredSegments: savedScope ? (savedScope.covered_segments ?? []) : lines(optionalField(form, "covered_segments") ?? ""),
+        userFocus: savedScope ? (savedScope.user_focus ?? null) : optionalField(form, "user_focus"),
+        exclusions: savedScope ? (savedScope.exclusions ?? []) : lines(optionalField(form, "exclusions") ?? ""),
       },
     };
   }
@@ -245,38 +265,47 @@ export default function NewResearchPage() {
   async function establishBoundary(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!project || !draft || !selectedCompany) return;
-    const formElement = event.currentTarget;
-    const submittedForm = new FormData(formElement);
-    const form = frozenFoundationFormRef.current ?? submittedForm;
-    if (!frozenFoundationFormRef.current) frozenFoundationFormRef.current = submittedForm;
-    let retainFrozenInput = false;
+    const form = new FormData(event.currentTarget);
     setSubmitting(true);
     setSetupError(null);
     try {
       if (!agendaPreview) throw new Error("请先预览由固定模板生成的研究议程");
       const frozen = (name: string) => toFrozenIso(field(form, name), timezone);
-      const focus = optionalField(form, "user_focus");
+      for (const security of selectedSecurities) {
+        if (!security.trading_currency) throw new Error(`${security.symbol ?? security.external_key} 缺少交易货币身份`);
+      }
+      const benchmarkKey = foundation.inputs.mandate ? foundation.inputs.mandate.benchmark_key : optionalField(form, "benchmark_key");
+      const requiredExcessReturn = foundation.inputs.mandate ? foundation.inputs.mandate.required_excess_return : optionalField(form, "required_excess_return");
+      if ((benchmarkKey === null) !== (requiredExcessReturn === null)) {
+        throw new Error("基准标识与必要超额回报必须同时填写或同时留空");
+      }
+      const focus = foundation.inputs.scope ? foundation.inputs.scope.user_focus : optionalField(form, "user_focus");
       const next = {
         ...foundation,
         prices: { ...foundation.prices },
         fxRates: { ...foundation.fxRates },
         rights: { ...foundation.rights },
+        inputs: {
+          ...foundation.inputs,
+          prices: { ...foundation.inputs.prices },
+          fxRates: { ...foundation.inputs.fxRates },
+          rights: { ...foundation.inputs.rights },
+        },
       };
-      const attempts: Promise<void>[] = [];
-      if (!next.mandate) attempts.push(investmentResearchApi.createMandate(project.id, {
+      const mandateInput: CreateMandateRequest | undefined = next.mandate ? undefined : {
         schema_version: schemaVersion,
         horizon_years: Number(field(form, "horizon_years")),
         base_currency: baseCurrency,
         required_return: field(form, "required_return"),
         permanent_loss_limit: field(form, "permanent_loss_limit"),
         comparison_set: lines(field(form, "comparison_set")),
-        benchmark_key: optionalField(form, "benchmark_key"),
-        required_excess_return: optionalField(form, "required_excess_return"),
+        benchmark_key: benchmarkKey,
+        required_excess_return: requiredExcessReturn,
         effective_at: frozen("effective_at"),
         expires_at: optionalField(form, "expires_at") ? frozen("expires_at") : null,
         expected_parent_id: null,
-      }).then((value) => { next.mandate = value; }));
-      if (!next.scope) attempts.push(investmentResearchApi.createScope(project.id, {
+      };
+      const scopeInput: CreateScopeRequest | undefined = next.scope ? undefined : {
         schema_version: schemaVersion,
         primary_company_id: selectedCompany.object_id,
         target_security_ids: selectedSecurities.map((item) => item.object_id),
@@ -285,30 +314,33 @@ export default function NewResearchPage() {
         user_focus: focus,
         exclusions: lines(optionalField(form, "exclusions") ?? ""),
         expected_parent_id: null,
-      }).then((value) => { next.scope = value; }));
-      if (!next.basis) attempts.push(investmentResearchApi.createHistoricalBasis({
+      };
+      const basisInput: CreateHistoricalBasisRequest | undefined = next.basis ? undefined : {
         schema_version: schemaVersion,
         cutoff_at: frozen("cutoff_at"),
         source_manifest_hash: field(form, "source_manifest_hash"),
         definition_bundle_hash: field(form, "definition_bundle_hash"),
         parser_bundle_hash: field(form, "parser_bundle_hash"),
-      }).then((value) => { next.basis = value; }));
+      };
+      const priceInputs: Record<string, CreatePriceSnapshotRequest> = {};
+      const rightsInputs: Record<string, CreateSecurityRightsRequest> = {};
       for (const security of selectedSecurities) {
         const key = security.object_id;
-        if (!security.trading_currency) throw new Error(`${security.symbol ?? security.external_key} 缺少交易货币身份`);
-        if (!next.prices[key]) attempts.push(investmentResearchApi.createPriceSnapshot({
+        const tradingCurrency = security.trading_currency;
+        if (!tradingCurrency) throw new Error(`${security.symbol ?? security.external_key} 缺少交易货币身份`);
+        if (!next.prices[key]) priceInputs[key] = {
           schema_version: schemaVersion,
           security_identity_id: security.object_id,
           price: field(form, `price_${key}`),
-          currency: security.trading_currency,
+          currency: tradingCurrency,
           price_type: field(form, `price_type_${key}`),
           adjustment_basis: field(form, `adjustment_basis_${key}`),
           market_at: frozen(`price_market_at_${key}`),
           available_at: frozen(`price_available_at_${key}`),
           source_id: field(form, `price_source_${key}`),
           raw_hash: field(form, `price_raw_hash_${key}`),
-        }).then((value) => { next.prices[key] = value; }));
-        if (!next.rights[key]) attempts.push(investmentResearchApi.createSecurityRights({
+        };
+        if (!next.rights[key]) rightsInputs[key] = {
           schema_version: schemaVersion,
           security_identity_id: security.object_id,
           economic_units: field(form, `economic_units_${key}`),
@@ -321,22 +353,23 @@ export default function NewResearchPage() {
           source_id: field(form, `rights_source_${key}`),
           raw_hash: field(form, `rights_raw_hash_${key}`),
           expected_parent_id: null,
-        }).then((value) => { next.rights[key] = value; }));
+        };
       }
+      const fxInputs: Record<string, CreateFxSnapshotRequest> = {};
       for (const currency of foreignCurrencies) {
-        if (!next.fxRates[currency]) attempts.push(investmentResearchApi.createFxSnapshot({
+        if (!next.fxRates[currency]) fxInputs[currency] = {
           schema_version: schemaVersion,
-          base_currency: baseCurrency,
-          quote_currency: currency,
+          base_currency: currency,
+          quote_currency: baseCurrency,
           rate: field(form, `fx_rate_${currency}`),
           quote_direction: "quote_per_base",
           market_at: frozen(`fx_market_at_${currency}`),
           available_at: frozen(`fx_available_at_${currency}`),
           source_id: field(form, `fx_source_${currency}`),
           raw_hash: field(form, `fx_raw_hash_${currency}`),
-        }).then((value) => { next.fxRates[currency] = value; }));
+        };
       }
-      if (!next.capital) attempts.push(investmentResearchApi.createCapitalStructure({
+      const capitalInput: CreateCapitalStructureRequest | undefined = next.capital ? undefined : {
         schema_version: schemaVersion,
         company_id: selectedCompany.object_id,
         currency: baseCurrency,
@@ -348,24 +381,23 @@ export default function NewResearchPage() {
         report_period_start: frozen("report_period_start"), report_period_end: frozen("report_period_end"),
         market_at: frozen("capital_market_at"), available_at: frozen("capital_available_at"),
         source_id: field(form, "capital_source_id"), raw_hash: field(form, "capital_raw_hash"),
-      }).then((value) => { next.capital = value; }));
+      };
+
+      const attempts: Promise<void>[] = [];
+      if (mandateInput) attempts.push(investmentResearchApi.createMandate(project.id, mandateInput).then((value) => { next.mandate = value; next.inputs.mandate = mandateInput; }));
+      if (scopeInput) attempts.push(investmentResearchApi.createScope(project.id, scopeInput).then((value) => { next.scope = value; next.inputs.scope = scopeInput; }));
+      if (basisInput) attempts.push(investmentResearchApi.createHistoricalBasis(basisInput).then((value) => { next.basis = value; next.inputs.basis = basisInput; }));
+      for (const [key, input] of Object.entries(priceInputs)) attempts.push(investmentResearchApi.createPriceSnapshot(input).then((value) => { next.prices[key] = value; next.inputs.prices[key] = input; }));
+      for (const [key, input] of Object.entries(rightsInputs)) attempts.push(investmentResearchApi.createSecurityRights(input).then((value) => { next.rights[key] = value; next.inputs.rights[key] = input; }));
+      for (const [key, input] of Object.entries(fxInputs)) attempts.push(investmentResearchApi.createFxSnapshot(input).then((value) => { next.fxRates[key] = value; next.inputs.fxRates[key] = input; }));
+      if (capitalInput) attempts.push(investmentResearchApi.createCapitalStructure(capitalInput).then((value) => { next.capital = value; next.inputs.capital = capitalInput; }));
 
       const results = await Promise.allSettled(attempts);
+      if (!mountedRef.current) return;
       setFoundation(next);
-      retainFrozenInput = Boolean(next.mandate || next.scope || next.basis || next.capital
-        || Object.keys(next.prices).length > 0 || Object.keys(next.fxRates).length > 0
-        || Object.keys(next.rights).length > 0);
-      if (retainFrozenInput) {
-        for (const control of formElement.querySelectorAll("input, select, textarea")) {
-          if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement || control instanceof HTMLTextAreaElement) {
-            control.disabled = true;
-          }
-        }
-      }
       const failed = results.find((result) => result.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;
       if (!next.scope || !next.mandate || !next.basis || !next.capital) throw new Error("基础步骤尚未完整保存，请重试");
-      retainFrozenInput = true;
       if (!next.agenda) {
         next.agenda = await investmentResearchApi.createAgenda(project.id, {
           schema_version: schemaVersion,
@@ -399,9 +431,9 @@ export default function NewResearchPage() {
         });
         setFoundation(next);
       }
-      navigate(`/research/projects/${encodeURIComponent(project.id)}`);
+      if (mountedRef.current) navigate(`/research/projects/${encodeURIComponent(project.id)}`);
     } catch (error) {
-      if (!retainFrozenInput) frozenFoundationFormRef.current = null;
+      if (!mountedRef.current) return;
       const message = error instanceof InvestmentResearchRequestError || error instanceof Error
         ? error.message
         : "版本边界建立失败";
@@ -488,25 +520,25 @@ export default function NewResearchPage() {
           <section className="ir-step" aria-labelledby="mandate-step-title">
             <header><span>02</span><div><h2 id="mandate-step-title">研究任务与边界</h2><p>记录 InvestmentMandate 与 ResearchScope，不要求预先写出研究问题。</p></div></header>
             <div className="ir-form-grid">
-              <FormField label="研究期限（年）" name="horizon_years" min="3" max="5" required type="number" />
-              <label className="ir-field"><span>基础货币</span><select name="base_currency" value={baseCurrency} onChange={(event) => setBaseCurrency(event.target.value === "USD" ? "USD" : "CNY")}><option value="CNY">CNY</option><option value="USD">USD</option></select></label>
-              <FormField label="必要回报率" name="required_return" required inputMode="decimal" />
-              <FormField label="永久损失上限" name="permanent_loss_limit" required inputMode="decimal" />
-              <FormField label="比较集合" name="comparison_set" required />
-              <FormField label="生效时间" name="effective_at" required type="datetime-local" />
-              <label className="ir-field"><span>冻结时区 / UTC offset</span><select name="frozen_timezone" value={timezone} onChange={(event) => setTimezone(event.target.value === "Z" ? "Z" : "+08:00")}><option value="+08:00">+08:00（中国标准时间）</option><option value="Z">Z（UTC）</option></select></label>
-              <FormField label="基准标识（可选）" name="benchmark_key" />
-              <FormField label="必要超额回报（与基准同时填写）" name="required_excess_return" inputMode="decimal" />
-              <FormField label="到期时间（可选）" name="expires_at" type="datetime-local" />
-              <FormField label="覆盖业务分部（可选）" name="covered_segments" />
-              <FormField label="研究焦点（可选）" name="user_focus" />
-              <FormField label="排除范围（可选）" name="exclusions" />
+              <FormField disabled={Boolean(foundation.mandate)} label="研究期限（年）" name="horizon_years" min="3" max="5" required type="number" />
+              <label className="ir-field"><span>基础货币</span><select disabled={Boolean(foundation.mandate || foundation.capital || Object.keys(foundation.fxRates).length)} name="base_currency" value={baseCurrency} onChange={(event) => setBaseCurrency(event.target.value === "USD" ? "USD" : "CNY")}><option value="CNY">CNY</option><option value="USD">USD</option></select></label>
+              <FormField disabled={Boolean(foundation.mandate)} label="必要回报率" name="required_return" required inputMode="decimal" />
+              <FormField disabled={Boolean(foundation.mandate)} label="永久损失上限" name="permanent_loss_limit" required inputMode="decimal" />
+              <FormField disabled={Boolean(foundation.mandate)} label="比较集合" name="comparison_set" required />
+              <FormField disabled={Boolean(foundation.mandate)} label="生效时间" name="effective_at" required type="datetime-local" />
+              <label className="ir-field"><span>冻结时区 / UTC offset</span><select disabled={foundationStarted} name="frozen_timezone" value={timezone} onChange={(event) => setTimezone(event.target.value === "Z" ? "Z" : "+08:00")}><option value="+08:00">+08:00（中国标准时间）</option><option value="Z">Z（UTC）</option></select></label>
+              <FormField disabled={Boolean(foundation.mandate)} label="基准标识（可选）" name="benchmark_key" />
+              <FormField disabled={Boolean(foundation.mandate)} label="必要超额回报（与基准同时填写）" name="required_excess_return" inputMode="decimal" />
+              <FormField disabled={Boolean(foundation.mandate)} label="到期时间（可选）" name="expires_at" type="datetime-local" />
+              <FormField disabled={Boolean(foundation.scope)} label="覆盖业务分部（可选）" name="covered_segments" />
+              <FormField disabled={Boolean(foundation.scope)} label="研究焦点（可选）" name="user_focus" />
+              <FormField disabled={Boolean(foundation.scope)} label="排除范围（可选）" name="exclusions" />
             </div>
           </section>
 
           <section className="ir-step" aria-labelledby="agenda-step-title">
             <header><span>03</span><div><h2 id="agenda-step-title">研究议程</h2><p>议程由固定版本的通用模板根据已选对象和上方约束确定性生成；它只列出待核验事项，不代表研究完成。</p></div></header>
-            <button className="ir-button" disabled={foundationStarted} onClick={previewGeneratedAgenda} type="button">预览模板议程</button>
+            <button className="ir-button" disabled={submitting} onClick={previewGeneratedAgenda} type="button">预览模板议程</button>
             {agendaPreview ? (
               <div className="ir-agenda-preview" role="region" aria-label="模板议程预览">
                 <ol>{agendaPreview.items.map((item) => <li key={item}>{item}</li>)}</ol>
@@ -520,17 +552,17 @@ export default function NewResearchPage() {
             <fieldset className="ir-fieldset">
               <legend>历史口径</legend>
               <div className="ir-form-grid">
-                <FormField label="历史截止时间" name="cutoff_at" required type="datetime-local" />
-                <FormField label="来源清单哈希" name="source_manifest_hash" pattern={hashPattern} required />
-                <FormField label="定义包哈希" name="definition_bundle_hash" pattern={hashPattern} required />
-                <FormField label="解析器包哈希" name="parser_bundle_hash" pattern={hashPattern} required />
+                <FormField disabled={Boolean(foundation.basis)} label="历史截止时间" name="cutoff_at" required type="datetime-local" />
+                <FormField disabled={Boolean(foundation.basis)} label="来源清单哈希" name="source_manifest_hash" pattern={hashPattern} required />
+                <FormField disabled={Boolean(foundation.basis)} label="定义包哈希" name="definition_bundle_hash" pattern={hashPattern} required />
+                <FormField disabled={Boolean(foundation.basis)} label="解析器包哈希" name="parser_bundle_hash" pattern={hashPattern} required />
               </div>
             </fieldset>
             {selectedSecurities.map((security) => {
               const key = security.object_id;
               const label = security.symbol ?? security.external_key;
               return (
-                <fieldset className="ir-fieldset" key={`price:${key}`}>
+                <fieldset className="ir-fieldset" disabled={Boolean(foundation.prices[key])} key={`price:${key}`}>
                   <legend>{label} 市场价格</legend>
                   <div className="ir-form-grid">
                     <FormField label={`${label} 价格`} name={`price_${key}`} required inputMode="decimal" />
@@ -546,17 +578,17 @@ export default function NewResearchPage() {
             })}
             {foreignCurrencies.map((currency) => (
               <fieldset className="ir-fieldset" key={`fx:${currency}`}>
-                <legend>{baseCurrency}/{currency} 汇率</legend>
+                <legend>{currency}/{baseCurrency} 汇率</legend>
                 <div className="ir-form-grid">
-                  <FormField label={`${baseCurrency}/${currency} 汇率`} name={`fx_rate_${currency}`} required inputMode="decimal" />
-                  <FormField label={`${baseCurrency}/${currency} 市场时间`} name={`fx_market_at_${currency}`} required type="datetime-local" />
-                  <FormField label={`${baseCurrency}/${currency} 可用时间`} name={`fx_available_at_${currency}`} required type="datetime-local" />
-                  <FormField label={`${baseCurrency}/${currency} 来源`} name={`fx_source_${currency}`} required />
-                  <FormField label={`${baseCurrency}/${currency} 原文哈希`} name={`fx_raw_hash_${currency}`} pattern={hashPattern} required />
+                  <FormField disabled={Boolean(foundation.fxRates[currency])} label={`${currency}/${baseCurrency} 汇率`} name={`fx_rate_${currency}`} required inputMode="decimal" />
+                  <FormField disabled={Boolean(foundation.fxRates[currency])} label={`${currency}/${baseCurrency} 市场时间`} name={`fx_market_at_${currency}`} required type="datetime-local" />
+                  <FormField disabled={Boolean(foundation.fxRates[currency])} label={`${currency}/${baseCurrency} 可用时间`} name={`fx_available_at_${currency}`} required type="datetime-local" />
+                  <FormField disabled={Boolean(foundation.fxRates[currency])} label={`${currency}/${baseCurrency} 来源`} name={`fx_source_${currency}`} required />
+                  <FormField disabled={Boolean(foundation.fxRates[currency])} label={`${currency}/${baseCurrency} 原文哈希`} name={`fx_raw_hash_${currency}`} pattern={hashPattern} required />
                 </div>
               </fieldset>
             ))}
-            <fieldset className="ir-fieldset">
+            <fieldset className="ir-fieldset" disabled={Boolean(foundation.capital)}>
               <legend>资本结构（{baseCurrency}）</legend>
               <div className="ir-form-grid">
                 <FormField label="现金" name="cash" required inputMode="decimal" />
@@ -580,7 +612,7 @@ export default function NewResearchPage() {
               const key = security.object_id;
               const label = security.symbol ?? security.external_key;
               return (
-                <fieldset className="ir-fieldset" key={`rights:${key}`}>
+                <fieldset className="ir-fieldset" disabled={Boolean(foundation.rights[key])} key={`rights:${key}`}>
                   <legend>{label} 证券权利</legend>
                   <div className="ir-form-grid">
                     <FormField label={`${label} 经济单位`} name={`economic_units_${key}`} required inputMode="decimal" />

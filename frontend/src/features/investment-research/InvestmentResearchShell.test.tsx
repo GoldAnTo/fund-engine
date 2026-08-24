@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ResearchOsRoutes } from "../../app/routes";
@@ -33,6 +33,11 @@ function json(body: object, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function ProjectSwitcher({ projectId }: { projectId: string }) {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate(`/research/projects/${projectId}`)} type="button">切换项目</button>;
 }
 
 describe("independent investment research shell", () => {
@@ -264,5 +269,30 @@ describe("independent investment research shell", () => {
     await user.click(screen.getByRole("button", { name: /版本与变化/ }));
     expect(screen.getByText(/当前草稿版本 4/)).toBeVisible();
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(3));
+  });
+
+  it("never carries preview or revision state across project route changes", async () => {
+    const projectB = shellIds.newer;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith(`/projects/${shellIds.project}`)) return json(shellProject());
+      if (url.endsWith(`/projects/${shellIds.project}/draft`)) return json(shellDraft());
+      if (url.endsWith(`/projects/${shellIds.project}/publication-preview`)) return json(shellPreview());
+      if (url.endsWith(`/projects/${projectB}`)) return json(shellProject(projectB));
+      if (url.endsWith(`/projects/${projectB}/draft`)) return json({ ...shellDraft(), project_id: projectB, base_revision_id: null });
+      if (url.endsWith(`/projects/${projectB}/publication-preview`)) return json({ schema_version: "underwriting.v1", error: { code: "preview_failed", message: "B 项目预览读取失败", request_id: "req-b", details: null } }, 503);
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={[`/research/projects/${shellIds.project}`]}>
+        <ProjectSwitcher projectId={projectB} />
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("missing_key_baseline")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "切换项目" }));
+    expect(await screen.findByText("B 项目预览读取失败")).toBeVisible();
+    expect(screen.queryByText("missing_key_baseline")).not.toBeInTheDocument();
   });
 });

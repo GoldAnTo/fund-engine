@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import {
@@ -39,38 +39,46 @@ export default function ResearchWorkbenchPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const loadEpochRef = useRef(0);
 
   useEffect(() => {
+    const epoch = ++loadEpochRef.current;
     let active = true;
+    const current = () => active && loadEpochRef.current === epoch;
     async function load() {
       setLoading(true);
       setLoadError(null);
+      setPreviewError(null);
+      setProject(null);
+      setDraft(null);
+      setPreview(null);
+      setRevision(null);
       try {
         const [loadedProject, loadedDraft] = await Promise.all([
           investmentResearchApi.project(projectId),
           investmentResearchApi.draft(projectId),
         ]);
-        if (!active) return;
+        if (!current()) return;
         setProject(loadedProject);
         setDraft(loadedDraft);
         const previewPromise = investmentResearchApi.preview(projectId, {
           schema_version: "underwriting.v1",
           expected_lock_version: loadedDraft.lock_version,
         }).then((value) => {
-          if (active) setPreview(value);
+          if (current() && value.project_id === projectId) setPreview(value);
         }).catch((error: Error) => {
-          if (active) setPreviewError(error.message);
+          if (current()) setPreviewError(error.message);
         });
         const revisionPromise = loadedDraft.base_revision_id
           ? investmentResearchApi.revision(loadedDraft.base_revision_id).then((value) => {
-            if (active) setRevision(value);
+            if (current() && value.project_id === projectId) setRevision(value);
           })
           : Promise.resolve();
         await Promise.all([previewPromise, revisionPromise]);
       } catch (error) {
-        if (active) setLoadError(error instanceof Error ? error.message : "研究项目无法读取");
+        if (current()) setLoadError(error instanceof Error ? error.message : "研究项目无法读取");
       } finally {
-        if (active) setLoading(false);
+        if (current()) setLoading(false);
       }
     }
     void load();

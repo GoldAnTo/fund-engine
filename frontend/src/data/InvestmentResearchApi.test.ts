@@ -298,6 +298,69 @@ describe("InvestmentResearchApi", () => {
     await expect(api.createAgenda(ids.project, optionalNullRequest)).resolves.toMatchObject({ id: ids.agenda });
   });
 
+  it("binds every echoed immutable request field using contract semantics", async () => {
+    const mandateMismatch = mandateBody(); mandateMismatch.required_return = "0.13";
+    const scopeMismatch = scopeBody(); Reflect.set(scopeMismatch.payload, "industry_ids", [ids.membershipA]);
+    const basisMismatch = basisBody(); basisMismatch.source_manifest_hash = "b".repeat(64);
+    const priceMismatch = priceBody(); priceMismatch.source_id = "other-source";
+    const fxMismatch = fxBody(); fxMismatch.rate = "0.15";
+    const capitalMismatch = capitalBody(); capitalMismatch.diluted_shares = "1011";
+    const rightsMismatch = rightsBody(); rightsMismatch.effective_from = "2026-08-25T00:00:00Z";
+    const previewMismatch = previewBody(); previewMismatch.expected_lock_version = 3;
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(response(mandateMismatch, 201))
+      .mockResolvedValueOnce(response(scopeMismatch, 201))
+      .mockResolvedValueOnce(response(basisMismatch, 201))
+      .mockResolvedValueOnce(response(priceMismatch, 201))
+      .mockResolvedValueOnce(response(fxMismatch, 201))
+      .mockResolvedValueOnce(response(capitalMismatch, 201))
+      .mockResolvedValueOnce(response(rightsMismatch, 201))
+      .mockResolvedValueOnce(response(previewMismatch));
+    vi.stubGlobal("fetch", fetchSpy);
+    const api = new InvestmentResearchApi();
+    await expect(api.createMandate(ids.project, mandateRequest)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.createScope(ids.project, scopeRequest)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.createHistoricalBasis(basisRequest)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.createPriceSnapshot(priceRequest)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.createFxSnapshot(fxRequest)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.createCapitalStructure(capitalRequest)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.createSecurityRights(rightsRequest)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.preview(ids.project, { schema_version: "underwriting.v1", expected_lock_version: 2 })).rejects.toMatchObject({ code: "identity_mismatch" });
+  });
+
+  it("accepts decimal and instant equivalence without floating point coercion", async () => {
+    const equivalentMandate = mandateBody(); equivalentMandate.required_return = "0.12000000"; equivalentMandate.effective_at = "2026-08-24T08:00:00+08:00";
+    const equivalentPrice = priceBody(); equivalentPrice.price = "100.000"; equivalentPrice.market_at = "2026-08-24T08:00:00+08:00";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response(equivalentMandate, 201)).mockResolvedValueOnce(response(equivalentPrice, 201)));
+    const api = new InvestmentResearchApi();
+    await expect(api.createMandate(ids.project, mandateRequest)).resolves.toMatchObject({ id: ids.mandate });
+    await expect(api.createPriceSnapshot(priceRequest)).resolves.toMatchObject({ id: ids.priceA });
+  });
+
+  it("fails closed on extra keys and impossible domain values", async () => {
+    const extraProject = projectBody(); Reflect.set(extraProject, "unexpected", true);
+    const negativePrice = priceBody(); negativePrice.price = "-1";
+    const sameCurrencyFx = fxBody(); sameCurrencyFx.quote_currency = "CNY";
+    const invalidCapital = capitalBody(); invalidCapital.basic_shares = "1011"; invalidCapital.diluted_shares = "1010";
+    const negativeRights = rightsBody(); negativeRights.economic_units = "-1";
+    const invalidMandate = mandateBody(); invalidMandate.horizon_years = 2;
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(response(extraProject))
+      .mockResolvedValueOnce(response(negativePrice, 201))
+      .mockResolvedValueOnce(response(sameCurrencyFx, 201))
+      .mockResolvedValueOnce(response(invalidCapital, 201))
+      .mockResolvedValueOnce(response(negativeRights, 201))
+      .mockResolvedValueOnce(response(invalidMandate, 201));
+    vi.stubGlobal("fetch", fetchSpy);
+    const api = new InvestmentResearchApi();
+    await expect(api.project(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.createPriceSnapshot(priceRequest)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.createFxSnapshot(fxRequest)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.createCapitalStructure(capitalRequest)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.createSecurityRights(rightsRequest)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.createMandate(ids.project, mandateRequest)).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
   it("validates the complete error envelope and rejects header/body request identity mismatch", async () => {
     const validError = { schema_version: "underwriting.v1", error: { code: "validation_failed", message: "security relation failed", request_id: "req-body", details: { field: "target_security_ids" } } };
     const fetchSpy = vi.fn()

@@ -24,7 +24,7 @@ function objectItems(): object[] {
   ];
 }
 const searchBody = (items = objectItems()) => ({ ...dto, items });
-const projectBody = () => ({ ...dto, id: ids.project, primary_company_id: ids.company, target_security_ids: [ids.securityB, ids.securityA], content_hash: hash, created_at: now });
+const projectBody = (targets = [ids.securityB, ids.securityA]) => ({ ...dto, id: ids.project, primary_company_id: ids.company, target_security_ids: targets, content_hash: hash, created_at: now });
 function draftBody(complete = false) {
   return { ...dto, id: ids.draft, project_id: ids.project, base_revision_id: null, lock_version: complete ? 2 : 1, content: { ...dto, publication_status: "draft", mandate_id: complete ? ids.mandate : null, scope_id: complete ? ids.scope : null, agenda_id: complete ? ids.agenda : null, historical_basis_id: complete ? ids.basis : null, price_snapshot_ids: complete ? [ids.priceB, ids.priceA] : [], fx_snapshot_ids: [], capital_structure_snapshot_id: complete ? ids.capital : null, security_rights_ids: complete ? [ids.rightsB, ids.rightsA] : [], user_focus: null }, created_at: now, updated_at: now };
 }
@@ -45,23 +45,38 @@ function parseBody(init?: RequestInit): Record<string, unknown> {
 }
 
 type Captured = { url: string; method: string; body: Record<string, unknown> | null };
-function server(options: { draftFailures?: number; scopeFailures?: number } = {}) {
+function server(options: { draftFailures?: number; scopeFailures?: number; mandateFailures?: number; searchItems?: object[] } = {}) {
   const requests: Captured[] = [];
   let draftFailures = options.draftFailures ?? 0;
   let scopeFailures = options.scopeFailures ?? 0;
+  let mandateFailures = options.mandateFailures ?? 0;
   const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
     const url = String(input);
     const method = init?.method ?? "GET";
     const body = method === "GET" ? null : parseBody(init);
     requests.push({ url, method, body });
-    if (url.includes("/product/objects?")) return json(searchBody());
-    if (url.endsWith("/product/projects") && method === "POST") return json(projectBody(), 201);
+    if (url.includes("/product/objects?")) return json(searchBody(options.searchItems ?? objectItems()));
+    if (url.endsWith("/product/projects") && method === "POST") return json(projectBody(body?.target_security_ids as string[] | undefined), 201);
     if (url.endsWith(`/projects/${ids.project}`) && method === "GET") return json(projectBody());
     if (url.endsWith("/draft") && method === "GET") {
       if (draftFailures-- > 0) return json({ ...dto, error: { code: "temporary", message: "草稿读取失败", request_id: "req-setup", details: null } }, 503);
       return json(draftBody());
     }
-    if (url.endsWith("/mandates")) return json(mandateBody(), 201);
+    if (url.endsWith("/mandates")) {
+      if (mandateFailures-- > 0) return json({ ...dto, error: { code: "validation_failed", message: "必要回报率超出允许范围", request_id: "req-setup", details: null } }, 422);
+      return json({
+        ...mandateBody(),
+        horizon_years: body?.horizon_years,
+        base_currency: body?.base_currency,
+        required_return: body?.required_return,
+        permanent_loss_limit: body?.permanent_loss_limit,
+        comparison_set: body?.comparison_set,
+        benchmark_key: body?.benchmark_key,
+        required_excess_return: body?.required_excess_return,
+        effective_at: body?.effective_at,
+        expires_at: body?.expires_at,
+      }, 201);
+    }
     if (url.endsWith("/scopes")) {
       if (scopeFailures-- > 0) return json({ ...dto, error: { code: "temporary", message: "范围保存失败", request_id: "req-setup", details: null } }, 503);
       return json(scopeBody(), 201);
@@ -72,6 +87,7 @@ function server(options: { draftFailures?: number; scopeFailures?: number } = {}
       const securityId = String(body.security_identity_id);
       return json({ ...dto, id: securityId === ids.securityA ? ids.priceA : ids.priceB, security_identity_id: securityId, price: body.price, currency: body.currency, price_type: body.price_type, adjustment_basis: body.adjustment_basis, market_at: body.market_at, available_at: body.available_at, source_id: body.source_id, raw_hash: body.raw_hash, content_hash: hash, created_at: now }, 201);
     }
+    if (url.endsWith("/fx-snapshots") && body) return json({ ...dto, id: uuid(22), ...body, content_hash: hash, created_at: now }, 201);
     if (url.endsWith("/capital-structure-snapshots") && body) return json({ ...dto, id: ids.capital, company_id: ids.company, currency: body.currency, cash: body.cash, debt: body.debt, minority_interest: body.minority_interest, investments: body.investments, pension_liabilities: body.pension_liabilities, other_adjustments: body.other_adjustments, basic_shares: body.basic_shares, diluted_shares: body.diluted_shares, potential_dilution_descriptors: body.potential_dilution_descriptors, report_period_start: body.report_period_start, report_period_end: body.report_period_end, market_at: body.market_at, available_at: body.available_at, source_id: body.source_id, raw_hash: body.raw_hash, content_hash: hash, created_at: now }, 201);
     if (url.endsWith("/security-rights") && body) {
       const securityId = String(body.security_identity_id);
@@ -156,5 +172,50 @@ describe("new independent investment research setup", () => {
     expect(product.requests.find((r) => r.url.endsWith("/scopes"))?.body).toMatchObject({ covered_segments: [], exclusions: [], user_focus: null });
     expect(product.requests.find((r) => r.url.endsWith("/agendas"))?.body).toMatchObject({ generator: { method: "deterministic_template", template_key: "product.foundation.agenda", template_version: "1.0.0", input_summary_hash: null } });
     expect(product.requests.find((r) => r.url.endsWith("/price-snapshots"))?.body?.market_at).toBe("2026-08-24T00:00:00.000Z");
+  });
+
+  it("quotes FX from each Security currency into the mandate base currency", async () => {
+    const user = userEvent.setup();
+    const items = objectItems();
+    Object.assign(items[2], { trading_currency: "USD" });
+    const product = server({ searchItems: items, scopeFailures: 1 });
+    vi.stubGlobal("fetch", product.fetch); renderPage();
+    await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" }));
+    await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
+    for (const [label, value] of [["USD/CNY 汇率", "7.2"], ["USD/CNY 市场时间", "2026-08-24T08:00"], ["USD/CNY 可用时间", "2026-08-24T08:05"], ["USD/CNY 来源", "central-bank"], ["USD/CNY 原文哈希", hash]] as const) {
+      const control = screen.getByLabelText(label); await user.clear(control); await user.type(control, value);
+    }
+    await user.click(screen.getByRole("button", { name: "预览模板议程" }));
+    await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("范围保存失败");
+    expect(product.requests.find((request) => request.url.endsWith("/fx-snapshots"))?.body).toMatchObject({
+      base_currency: "USD", quote_currency: "CNY", quote_direction: "quote_per_base", rate: "7.2",
+    });
+  });
+
+  it("keeps a failed mandate editable and retries only that failed step", async () => {
+    const user = userEvent.setup(); const product = server({ mandateFailures: 1 }); vi.stubGlobal("fetch", product.fetch); renderPage();
+    await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
+    await user.click(screen.getByRole("button", { name: "预览模板议程" }));
+    await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("必要回报率超出允许范围");
+    expect(screen.getByLabelText("必要回报率")).toBeEnabled();
+    const counts = Object.fromEntries(["/scopes", "/historical-bases", "/price-snapshots", "/capital-structure-snapshots", "/security-rights"].map((suffix) => [suffix, product.requests.filter((request) => request.url.endsWith(suffix)).length]));
+    await user.clear(screen.getByLabelText("必要回报率")); await user.type(screen.getByLabelText("必要回报率"), "0.15");
+    await user.click(screen.getByRole("button", { name: "预览模板议程" }));
+    await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" }));
+    await screen.findByRole("heading", { name: "研究工作台" });
+    for (const [suffix, count] of Object.entries(counts)) expect(product.requests.filter((request) => request.url.endsWith(suffix))).toHaveLength(count);
+    expect(product.requests.filter((request) => request.url.endsWith("/mandates"))).toHaveLength(2);
+  });
+
+  it("performs no writes when a Security lacks trading currency", async () => {
+    const user = userEvent.setup(); const items = objectItems(); Object.assign(items[1], { trading_currency: null });
+    const product = server({ searchItems: items }); vi.stubGlobal("fetch", product.fetch); renderPage();
+    await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
+    await user.click(screen.getByRole("button", { name: "预览模板议程" }));
+    await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("缺少交易货币身份");
+    expect(product.requests.filter((request) => request.method !== "GET")).toHaveLength(1);
   });
 });
