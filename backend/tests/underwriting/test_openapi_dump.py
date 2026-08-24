@@ -167,14 +167,25 @@ def _enum_values(
     return values
 
 
-def test_dump_openapi_includes_underwriting_routes() -> None:
+def test_dump_openapi_includes_underwriting_routes_without_touching_default(
+    tmp_path: Path,
+) -> None:
     backend = Path(__file__).parents[2]
+    default_output = backend.parent / "frontend" / "openapi.json"
+    default_before = default_output.read_bytes()
+    output = tmp_path / "explicit-output" / "openapi.json"
     subprocess.run(
-        [sys.executable, "scripts/dump_openapi.py"],
+        [
+            sys.executable,
+            "scripts/dump_openapi.py",
+            "--output",
+            str(output),
+        ],
         cwd=backend,
         check=True,
     )
-    openapi = json.loads((backend.parent / "frontend" / "openapi.json").read_text())
+    assert default_output.read_bytes() == default_before
+    openapi = json.loads(output.read_text())
     assert "/api/underwriting/v1/objects" in openapi["paths"]
     assert "UnderwritingErrorEnvelope" in openapi["components"]["schemas"]
 
