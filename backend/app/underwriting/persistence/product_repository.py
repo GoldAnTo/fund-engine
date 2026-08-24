@@ -628,14 +628,36 @@ class ProductRepository:
             self._session.scalars(
                 select(UnderwritingResearchProject)
                 .order_by(
-                    UnderwritingResearchProject.created_at,
-                    UnderwritingResearchProject.id,
+                    UnderwritingResearchProject.created_at.desc(),
+                    UnderwritingResearchProject.id.desc(),
                 )
                 .limit(limit)
             )
         )
+        if not projects:
+            return []
+        memberships_by_project: dict[UUID, list[UUID]] = {
+            project.id: [] for project in projects
+        }
+        statement = (
+            select(
+                UnderwritingResearchProjectSecurity.project_id,
+                UnderwritingResearchProjectSecurity.security_id,
+            )
+            .where(
+                UnderwritingResearchProjectSecurity.project_id.in_(
+                    tuple(memberships_by_project)
+                )
+            )
+            .order_by(
+                UnderwritingResearchProjectSecurity.project_id,
+                UnderwritingResearchProjectSecurity.security_id,
+            )
+        )
+        for project_id, security_id in self._session.execute(statement):
+            memberships_by_project[project_id].append(security_id)
         return [
-            (project, self.project(project.id)[1])  # type: ignore[index]
+            (project, tuple(memberships_by_project[project.id]))
             for project in projects
         ]
 

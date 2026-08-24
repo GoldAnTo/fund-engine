@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import Field, StrictInt, StrictStr, field_validator, model_validator
@@ -23,6 +23,16 @@ AssessmentConfidence = Literal["low", "medium", "high"]
 PublicationStatus = Literal["user_frozen", "superseded"]
 AgendaGenerationMethod = Literal["deterministic_template", "ai_generated"]
 FxQuoteDirection = Literal["quote_per_base"]
+MarketSnapshotRef = Annotated[
+    StrictStr,
+    Field(
+        pattern=(
+            r"^(?:price|fx|capital_structure|security_rights):"
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+            r"[0-9a-f]{4}-[0-9a-f]{12}$"
+        )
+    ),
+]
 
 
 def _require_aware(value: datetime, field_name: str) -> datetime:
@@ -552,6 +562,68 @@ class RevisionBoundaryResponse(UnderwritingModel):
     parent_revision_id: UUID | None
 
 
+class ProductManifestProjectRefResponse(UnderwritingModel):
+    schema_version: Literal["underwriting.v1"] = Field(
+        default="underwriting.v1", exclude=True
+    )
+    project_id: UUID
+    content_hash: str = Field(pattern=SHA256_PATTERN)
+
+
+class ProductManifestMembershipRefResponse(UnderwritingModel):
+    schema_version: Literal["underwriting.v1"] = Field(
+        default="underwriting.v1", exclude=True
+    )
+    membership_id: UUID
+    security_id: UUID
+    content_hash: str = Field(pattern=SHA256_PATTERN)
+
+
+class ProductManifestPreviewResponse(UnderwritingModel):
+    schema_version: Literal["underwriting.research-revision-manifest.v1"]
+    project_id: UUID
+    project_ref: ProductManifestProjectRefResponse
+    project_membership_refs: tuple[ProductManifestMembershipRefResponse, ...] = Field(
+        min_length=1
+    )
+    primary_object_id: UUID
+    boundary_ref: Literal["$boundary"]
+    mandate_id: UUID
+    scope_id: UUID
+    agenda_id: UUID
+    historical_basis_id: UUID
+    price_snapshot_ids: tuple[UUID, ...] = Field(min_length=1)
+    fx_snapshot_ids: tuple[UUID, ...]
+    capital_structure_snapshot_id: UUID
+    security_rights_ids: tuple[UUID, ...] = Field(min_length=1)
+    market_snapshot_refs: tuple[MarketSnapshotRef, ...] = Field(min_length=3)
+    model_refs: tuple[StrictStr, ...] = Field(max_length=0)
+    assessment_ref: Literal["$assessment"]
+    memo_ref: None
+    parent_revision_id: UUID | None
+
+    @field_validator(
+        "price_snapshot_ids",
+        "fx_snapshot_ids",
+        "security_rights_ids",
+        "market_snapshot_refs",
+    )
+    @classmethod
+    def unique_manifest_references(cls, value: tuple[object, ...], info):
+        return _require_unique(value, info.field_name)
+
+    @field_validator("project_membership_refs")
+    @classmethod
+    def unique_manifest_memberships(
+        cls, value: tuple[ProductManifestMembershipRefResponse, ...]
+    ) -> tuple[ProductManifestMembershipRefResponse, ...]:
+        membership_ids = tuple(item.membership_id for item in value)
+        security_ids = tuple(item.security_id for item in value)
+        _require_unique(membership_ids, "project_membership_refs.membership_id")
+        _require_unique(security_ids, "project_membership_refs.security_id")
+        return value
+
+
 class PublicationPreviewResponse(UnderwritingModel):
     project_id: UUID
     expected_lock_version: int
@@ -559,7 +631,7 @@ class PublicationPreviewResponse(UnderwritingModel):
     assessment: AssessmentPreviewResponse
     boundary: RevisionBoundaryResponse
     boundary_hash: str = Field(pattern=SHA256_PATTERN)
-    manifest: dict[str, Any]
+    manifest: ProductManifestPreviewResponse
     manifest_hash: str = Field(pattern=SHA256_PATTERN)
 
 

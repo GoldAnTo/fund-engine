@@ -81,7 +81,6 @@ from app.underwriting.services.research_revision_diff import (
 
 
 router = APIRouter(prefix="/api/underwriting/v1", tags=["underwriting-v1"])
-router.include_router(product_router)
 WRITE_ERROR_RESPONSES = {
     409: {"model": UnderwritingErrorEnvelope},
     422: {"model": UnderwritingErrorEnvelope},
@@ -656,3 +655,6 @@ def get_evidence_only_economic_model(object_id: UUID, basis_id: UUID, db: Sessio
         observations=response_observations, candidate_mechanisms=candidates, formal_mechanisms=[],
         answerability=_answerability_response(answerability), eligible_action="wait_for_validation", valuation=None,
     )
+
+
+router.include_router(product_router)

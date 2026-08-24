@@ -9002,991 +9002,6 @@
         }
       }
     },
-    "/api/underwriting/v1/product/objects": {
-      "get": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Search Product Objects",
-        "operationId": "search_product_objects_api_underwriting_v1_product_objects_get",
-        "parameters": [
-          {
-            "name": "query",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 160,
-              "title": "Query"
-            }
-          },
-          {
-            "name": "as_of",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "date-time"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "As Of"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "default": 20,
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProductObjectSearchResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/projects": {
-      "get": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "List Research Projects",
-        "operationId": "list_research_projects_api_underwriting_v1_product_projects_get",
-        "parameters": [
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "default": 20,
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResearchProjectListResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Create Research Project",
-        "operationId": "create_research_project_api_underwriting_v1_product_projects_post",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateResearchProjectRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResearchProjectResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Conflict"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/projects/{project_id}": {
-      "get": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Get Research Project",
-        "operationId": "get_research_project_api_underwriting_v1_product_projects__project_id__get",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Project Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResearchProjectResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/projects/{project_id}/mandates": {
-      "post": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Create Product Mandate",
-        "operationId": "create_product_mandate_api_underwriting_v1_product_projects__project_id__mandates_post",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Project Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateProductMandateRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProductMandateResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Conflict"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/projects/{project_id}/scopes": {
-      "post": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Create Research Scope",
-        "operationId": "create_research_scope_api_underwriting_v1_product_projects__project_id__scopes_post",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Project Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateResearchScopeRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResearchScopeResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Conflict"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/projects/{project_id}/agendas": {
-      "post": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Create Research Agenda",
-        "operationId": "create_research_agenda_api_underwriting_v1_product_projects__project_id__agendas_post",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Project Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateResearchAgendaRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResearchAgendaResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Conflict"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/historical-bases": {
-      "post": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Create Product Historical Basis",
-        "operationId": "create_product_historical_basis_api_underwriting_v1_product_historical_bases_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateProductHistoricalBasisRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProductHistoricalBasisResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Content",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/market/price-snapshots": {
-      "post": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Create Price Snapshot",
-        "operationId": "create_price_snapshot_api_underwriting_v1_product_market_price_snapshots_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreatePriceSnapshotRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PriceSnapshotResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Content",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/market/fx-snapshots": {
-      "post": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Create Fx Snapshot",
-        "operationId": "create_fx_snapshot_api_underwriting_v1_product_market_fx_snapshots_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateFXSnapshotRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FXSnapshotResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Content",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/market/capital-structure-snapshots": {
-      "post": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Create Capital Structure Snapshot",
-        "operationId": "create_capital_structure_snapshot_api_underwriting_v1_product_market_capital_structure_snapshots_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateCapitalStructureSnapshotRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CapitalStructureSnapshotResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Content",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/market/security-rights": {
-      "post": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Create Security Rights",
-        "operationId": "create_security_rights_api_underwriting_v1_product_market_security_rights_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateSecurityRightsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SecurityRightsResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Content",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/projects/{project_id}/draft": {
-      "get": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Get Workspace Draft",
-        "operationId": "get_workspace_draft_api_underwriting_v1_product_projects__project_id__draft_get",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Project Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceDraftResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        }
-      },
-      "patch": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Patch Workspace Draft",
-        "operationId": "patch_workspace_draft_api_underwriting_v1_product_projects__project_id__draft_patch",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Project Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PatchWorkspaceDraftRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceDraftResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Conflict"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/projects/{project_id}/publication-preview": {
-      "post": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Preview Product Revision",
-        "operationId": "preview_product_revision_api_underwriting_v1_product_projects__project_id__publication_preview_post",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Project Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PreviewProductRevisionRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PublicationPreviewResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Conflict"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/projects/{project_id}/publish": {
-      "post": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Publish Product Revision",
-        "operationId": "publish_product_revision_api_underwriting_v1_product_projects__project_id__publish_post",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Project Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 120,
-              "title": "Idempotency-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PublishProductRevisionRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProductRevisionResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Conflict"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        }
-      }
-    },
-    "/api/underwriting/v1/product/revisions/{revision_id}": {
-      "get": {
-        "tags": [
-          "underwriting-v1",
-          "investment-research-product-v1"
-        ],
-        "summary": "Get Product Revision",
-        "operationId": "get_product_revision_api_underwriting_v1_product_revisions__revision_id__get",
-        "parameters": [
-          {
-            "name": "revision_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Revision Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProductRevisionResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        }
-      }
-    },
     "/api/underwriting/v1/objects": {
       "post": {
         "tags": [
@@ -10795,6 +9810,991 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EvidenceOnlyEconomicModelResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/objects": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Search Product Objects",
+        "operationId": "search_product_objects_api_underwriting_v1_product_objects_get",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "title": "Query"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductObjectSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "List Research Projects",
+        "operationId": "list_research_projects_api_underwriting_v1_product_projects_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchProjectListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Research Project",
+        "operationId": "create_research_project_api_underwriting_v1_product_projects_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResearchProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchProjectResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Get Research Project",
+        "operationId": "get_research_project_api_underwriting_v1_product_projects__project_id__get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchProjectResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}/mandates": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Product Mandate",
+        "operationId": "create_product_mandate_api_underwriting_v1_product_projects__project_id__mandates_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProductMandateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductMandateResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}/scopes": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Research Scope",
+        "operationId": "create_research_scope_api_underwriting_v1_product_projects__project_id__scopes_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResearchScopeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchScopeResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}/agendas": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Research Agenda",
+        "operationId": "create_research_agenda_api_underwriting_v1_product_projects__project_id__agendas_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResearchAgendaRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchAgendaResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/historical-bases": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Product Historical Basis",
+        "operationId": "create_product_historical_basis_api_underwriting_v1_product_historical_bases_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProductHistoricalBasisRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductHistoricalBasisResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/market/price-snapshots": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Price Snapshot",
+        "operationId": "create_price_snapshot_api_underwriting_v1_product_market_price_snapshots_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePriceSnapshotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceSnapshotResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/market/fx-snapshots": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Fx Snapshot",
+        "operationId": "create_fx_snapshot_api_underwriting_v1_product_market_fx_snapshots_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFXSnapshotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FXSnapshotResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/market/capital-structure-snapshots": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Capital Structure Snapshot",
+        "operationId": "create_capital_structure_snapshot_api_underwriting_v1_product_market_capital_structure_snapshots_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCapitalStructureSnapshotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapitalStructureSnapshotResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/market/security-rights": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Create Security Rights",
+        "operationId": "create_security_rights_api_underwriting_v1_product_market_security_rights_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSecurityRightsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecurityRightsResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}/draft": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Get Workspace Draft",
+        "operationId": "get_workspace_draft_api_underwriting_v1_product_projects__project_id__draft_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceDraftResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Patch Workspace Draft",
+        "operationId": "patch_workspace_draft_api_underwriting_v1_product_projects__project_id__draft_patch",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchWorkspaceDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceDraftResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}/publication-preview": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Preview Product Revision",
+        "operationId": "preview_product_revision_api_underwriting_v1_product_projects__project_id__publication_preview_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewProductRevisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicationPreviewResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/projects/{project_id}/publish": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Publish Product Revision",
+        "operationId": "publish_product_revision_api_underwriting_v1_product_projects__project_id__publish_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishProductRevisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductRevisionResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/revisions/{revision_id}": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Get Product Revision",
+        "operationId": "get_product_revision_api_underwriting_v1_product_revisions__revision_id__get",
+        "parameters": [
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Revision Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductRevisionResponse"
                 }
               }
             }
@@ -26530,6 +26530,202 @@
         ],
         "title": "ProductMandateResponse"
       },
+      "ProductManifestMembershipRefResponse": {
+        "properties": {
+          "membership_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Membership Id"
+          },
+          "security_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Security Id"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "membership_id",
+          "security_id",
+          "content_hash"
+        ],
+        "title": "ProductManifestMembershipRefResponse"
+      },
+      "ProductManifestPreviewResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.research-revision-manifest.v1",
+            "title": "Schema Version"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "project_ref": {
+            "$ref": "#/components/schemas/ProductManifestProjectRefResponse"
+          },
+          "project_membership_refs": {
+            "items": {
+              "$ref": "#/components/schemas/ProductManifestMembershipRefResponse"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Project Membership Refs"
+          },
+          "primary_object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Primary Object Id"
+          },
+          "boundary_ref": {
+            "type": "string",
+            "const": "$boundary",
+            "title": "Boundary Ref"
+          },
+          "mandate_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Mandate Id"
+          },
+          "scope_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Scope Id"
+          },
+          "agenda_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agenda Id"
+          },
+          "historical_basis_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Historical Basis Id"
+          },
+          "price_snapshot_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Price Snapshot Ids"
+          },
+          "fx_snapshot_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Fx Snapshot Ids"
+          },
+          "capital_structure_snapshot_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Capital Structure Snapshot Id"
+          },
+          "security_rights_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Security Rights Ids"
+          },
+          "market_snapshot_refs": {
+            "items": {
+              "type": "string",
+              "pattern": "^(?:price|fx|capital_structure|security_rights):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "type": "array",
+            "minItems": 3,
+            "title": "Market Snapshot Refs"
+          },
+          "model_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 0,
+            "title": "Model Refs"
+          },
+          "assessment_ref": {
+            "type": "string",
+            "const": "$assessment",
+            "title": "Assessment Ref"
+          },
+          "memo_ref": {
+            "type": "null",
+            "title": "Memo Ref"
+          },
+          "parent_revision_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Revision Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema_version",
+          "project_id",
+          "project_ref",
+          "project_membership_refs",
+          "primary_object_id",
+          "boundary_ref",
+          "mandate_id",
+          "scope_id",
+          "agenda_id",
+          "historical_basis_id",
+          "price_snapshot_ids",
+          "fx_snapshot_ids",
+          "capital_structure_snapshot_id",
+          "security_rights_ids",
+          "market_snapshot_refs",
+          "model_refs",
+          "assessment_ref",
+          "memo_ref",
+          "parent_revision_id"
+        ],
+        "title": "ProductManifestPreviewResponse"
+      },
+      "ProductManifestProjectRefResponse": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "project_id",
+          "content_hash"
+        ],
+        "title": "ProductManifestProjectRefResponse"
+      },
       "ProductObjectSearchItemResponse": {
         "properties": {
           "schema_version": {
@@ -27014,9 +27210,7 @@
             "title": "Boundary Hash"
           },
           "manifest": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Manifest"
+            "$ref": "#/components/schemas/ProductManifestPreviewResponse"
           },
           "manifest_hash": {
             "type": "string",

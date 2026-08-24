@@ -593,9 +593,32 @@ def test_valid_single_and_multi_security_projects_read_and_list_deterministicall
     assert second_alphabet.primary_company_id == alphabet_project.primary_company_id
     projects = service.list_projects(limit=10)
     assert projects == tuple(
-        sorted(projects, key=lambda item: (item.created_at, str(item.id)))
+        sorted(
+            projects,
+            key=lambda item: (item.created_at, str(item.id)),
+            reverse=True,
+        )
     )
     assert service.list_projects(limit=2) == projects[:2]
+
+
+def test_list_projects_batches_memberships_without_project_lookup(
+    session, service, monkeypatch
+) -> None:
+    graph = _seed_project_graph(session, service)
+    service.create_project(graph["catl"].id, (graph["catl_security"].id,))
+    service.create_project(graph["alphabet"].id, (graph["googl"].id, graph["goog"].id))
+    service.create_project(graph["alphabet"].id, (graph["goog"].id,))
+
+    def reject_project_lookup(*_args, **_kwargs):
+        raise AssertionError("list_projects must batch memberships")
+
+    monkeypatch.setattr(service._repository, "project", reject_project_lookup)
+
+    projects = service.list_projects(limit=2)
+
+    assert len(projects) == 2
+    assert all(project.target_security_ids for project in projects)
 
 
 def test_project_creation_is_caller_transactional_and_rollback_removes_links(

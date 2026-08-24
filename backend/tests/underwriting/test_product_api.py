@@ -9,13 +9,17 @@ import pytest
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import func, select
 
-from app.underwriting.api.product_schemas import AgendaGeneratorResponse
+from app.underwriting.api.product_schemas import (
+    AgendaGeneratorResponse,
+    PublicationPreviewResponse,
+)
 from app.underwriting.persistence.models import (
     UnderwritingObjectRelation,
     UnderwritingResearchObject,
     UnderwritingResearchVersion,
 )
 from app.underwriting.persistence.product_models import (
+    UnderwritingResearchAssessmentVersion,
     UnderwritingResearchProject,
     UnderwritingRevisionBoundary,
     UnderwritingRevisionManifest,
@@ -402,6 +406,106 @@ def test_product_http_foundation_round_trip_is_exact_and_idempotent(
     ).isoformat().replace("+00:00", "Z")
 
 
+def test_publication_preview_never_commits_or_rolls_back_caller_transaction(
+    api_client, session, monkeypatch
+) -> None:
+    catalog = _seed_catalog(session, suffix="preview-transaction")
+    project = _create_project(api_client, catalog)
+    foundation = _write_foundation(api_client, project, catalog)
+    draft = api_client.get(f"{BASE}/projects/{project['id']}/draft").json()
+    patched = api_client.patch(
+        f"{BASE}/projects/{project['id']}/draft",
+        json={
+            "expected_lock_version": draft["lock_version"],
+            "mandate_id": foundation["mandate"]["id"],
+            "scope_id": foundation["scope"]["id"],
+            "agenda_id": foundation["agenda"]["id"],
+            "historical_basis_id": foundation["basis"]["id"],
+            "price_snapshot_ids": [foundation["price"]["id"]],
+            "capital_structure_snapshot_id": foundation["capital"]["id"],
+            "security_rights_ids": [foundation["rights"]["id"]],
+        },
+    ).json()
+    formal_models = (
+        UnderwritingResearchAssessmentVersion,
+        UnderwritingRevisionBoundary,
+        UnderwritingRevisionManifest,
+        UnderwritingResearchVersion,
+    )
+    before = tuple(
+        session.scalar(select(func.count()).select_from(model))
+        for model in formal_models
+    )
+    transaction_calls = {"commit": 0, "rollback": 0}
+
+    def commit_spy() -> None:
+        transaction_calls["commit"] += 1
+
+    def rollback_spy() -> None:
+        transaction_calls["rollback"] += 1
+
+    monkeypatch.setattr(session, "commit", commit_spy)
+    monkeypatch.setattr(session, "rollback", rollback_spy)
+
+    preview = api_client.post(
+        f"{BASE}/projects/{project['id']}/publication-preview",
+        json={"expected_lock_version": patched["lock_version"]},
+    )
+    assert preview.status_code == 200, preview.text
+    stale = api_client.post(
+        f"{BASE}/projects/{project['id']}/publication-preview",
+        json={"expected_lock_version": patched["lock_version"] - 1},
+    )
+    assert stale.status_code == 409, stale.text
+    assert _error_code(stale) == "conflict"
+    assert transaction_calls == {"commit": 0, "rollback": 0}
+    assert (
+        tuple(
+            session.scalar(select(func.count()).select_from(model))
+            for model in formal_models
+        )
+        == before
+        == (0, 0, 0, 0)
+    )
+
+
+@pytest.mark.parametrize("location", ("top", "nested"))
+def test_publication_preview_manifest_rejects_unknown_decision_fields(
+    api_client, session, location
+) -> None:
+    catalog = _seed_catalog(session, suffix=f"closed-manifest-{location}")
+    project = _create_project(api_client, catalog)
+    foundation = _write_foundation(api_client, project, catalog)
+    draft = api_client.get(f"{BASE}/projects/{project['id']}/draft").json()
+    patched = api_client.patch(
+        f"{BASE}/projects/{project['id']}/draft",
+        json={
+            "expected_lock_version": draft["lock_version"],
+            "mandate_id": foundation["mandate"]["id"],
+            "scope_id": foundation["scope"]["id"],
+            "agenda_id": foundation["agenda"]["id"],
+            "historical_basis_id": foundation["basis"]["id"],
+            "price_snapshot_ids": [foundation["price"]["id"]],
+            "capital_structure_snapshot_id": foundation["capital"]["id"],
+            "security_rights_ids": [foundation["rights"]["id"]],
+        },
+    ).json()
+    preview = api_client.post(
+        f"{BASE}/projects/{project['id']}/publication-preview",
+        json={"expected_lock_version": patched["lock_version"]},
+    )
+    assert preview.status_code == 200, preview.text
+    payload = preview.json()
+    PublicationPreviewResponse.model_validate(payload)
+    if location == "top":
+        payload["manifest"]["target_price"] = "999"
+    else:
+        payload["manifest"]["project_ref"]["action"] = "buy"
+
+    with pytest.raises(PydanticValidationError):
+        PublicationPreviewResponse.model_validate(payload)
+
+
 def test_product_api_uses_404_409_and_validation_envelopes(api_client, session) -> None:
     catalog = _seed_catalog(session)
     missing = uuid4()
@@ -458,6 +562,79 @@ def test_product_api_uses_404_409_and_validation_envelopes(api_client, session) 
     )
     assert industry_project.status_code == 422
     assert _error_code(industry_project) == "validation_failed"
+
+
+def test_historical_product_revision_corruption_is_an_internal_error(
+    api_client, session
+) -> None:
+    catalog = _seed_catalog(session, suffix="corrupt-revision")
+    project = _create_project(api_client, catalog)
+    foundation = _write_foundation(api_client, project, catalog)
+    draft = api_client.get(f"{BASE}/projects/{project['id']}/draft").json()
+    patched = api_client.patch(
+        f"{BASE}/projects/{project['id']}/draft",
+        json={
+            "expected_lock_version": draft["lock_version"],
+            "mandate_id": foundation["mandate"]["id"],
+            "scope_id": foundation["scope"]["id"],
+            "agenda_id": foundation["agenda"]["id"],
+            "historical_basis_id": foundation["basis"]["id"],
+            "price_snapshot_ids": [foundation["price"]["id"]],
+            "capital_structure_snapshot_id": foundation["capital"]["id"],
+            "security_rights_ids": [foundation["rights"]["id"]],
+        },
+    ).json()
+    published = api_client.post(
+        f"{BASE}/projects/{project['id']}/publish",
+        headers={"Idempotency-Key": "corrupt-revision"},
+        json={"expected_lock_version": patched["lock_version"]},
+    )
+    assert published.status_code == 201, published.text
+    revision = published.json()
+    manifest = session.get(UnderwritingRevisionManifest, UUID(revision["manifest_id"]))
+    assert manifest is not None
+    session.connection().exec_driver_sql(
+        "UPDATE uw_revision_manifests SET content_hash = ? WHERE id = ?",
+        (B64, manifest.id.hex),
+    )
+    session.expire_all()
+
+    selected = api_client.get(f"{BASE}/revisions/{revision['id']}")
+
+    assert selected.status_code == 500, selected.text
+    assert selected.json()["error"] == {
+        "code": "internal_error",
+        "message": "internal error",
+        "request_id": selected.json()["error"]["request_id"],
+        "details": {},
+    }
+
+
+def test_project_list_returns_most_recent_projects_without_per_project_reads(
+    api_client, session, monkeypatch
+) -> None:
+    catalog = _seed_catalog(session, suffix="recent-list")
+    timestamps = (
+        NOW - timedelta(days=2),
+        NOW - timedelta(days=2),
+        NOW - timedelta(days=1),
+        NOW - timedelta(days=1),
+        NOW,
+        NOW,
+    )
+    values = iter(timestamps)
+    monkeypatch.setattr(
+        "app.underwriting.api.product_router._now", lambda: next(values)
+    )
+    projects = tuple(_create_project(api_client, catalog) for _ in range(3))
+
+    response = api_client.get(f"{BASE}/projects", params={"limit": 2})
+
+    assert response.status_code == 200, response.text
+    assert [item["id"] for item in response.json()["items"]] == [
+        projects[2]["id"],
+        projects[1]["id"],
+    ]
 
 
 def test_product_preview_rejects_cross_project_references(api_client, session) -> None:

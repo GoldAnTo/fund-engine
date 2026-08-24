@@ -12,7 +12,9 @@ from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.errors import ConflictError as HttpConflictError
 from app.errors import NotFoundError, ValidationFailedError
+from app.models.ledger import ConflictError as DomainConflictError
 from app.models.ledger import ValidationError
 from app.underwriting.api.product_schemas import (
     AgendaGeneratorRequest,
@@ -76,6 +78,7 @@ from app.underwriting.services.workspace_draft import (
     WorkspaceDraftPatch,
     WorkspaceDraftService,
 )
+from app.underwriting.persistence.repository import StaleParentError
 
 
 router = APIRouter(prefix="/product", tags=["investment-research-product-v1"])
@@ -113,6 +116,8 @@ def _read_value(operation: Callable[[], T]) -> T:
         return operation()
     except ValidationError as exc:
         raise ValidationFailedError(str(exc)) from exc
+    except (DomainConflictError, StaleParentError) as exc:
+        raise HttpConflictError(str(exc)) from exc
 
 
 def _project_response(value) -> ResearchProjectResponse:
@@ -736,8 +741,7 @@ def preview_product_revision(
     payload: PreviewProductRevisionRequest,
     db: Session = Depends(get_db),
 ) -> PublicationPreviewResponse:
-    value = commit_write(
-        db,
+    value = _read_value(
         lambda: RevisionPublisher(db, now=_now).preview(
             project_id, payload.expected_lock_version
         ),
@@ -768,11 +772,9 @@ def publish_product_revision(
             idempotency_key=idempotency_key,
         ),
     )
-    summary = _read_value(
-        lambda: ResearchRevisionDiffService(db).revision_summary(view.id)
-    )
+    summary = ResearchRevisionDiffService(db).revision_summary(view.id)
     if not isinstance(summary, ProductResearchRevisionSummary):
-        raise ValidationFailedError("published revision is not a product revision")
+        raise ValidationError("published revision is not a product revision")
     return _revision_response(summary)
 
 
@@ -788,9 +790,7 @@ def get_product_revision(
 
     if db.get(UnderwritingResearchVersion, revision_id) is None:
         raise NotFoundError("product research revision not found")
-    summary = _read_value(
-        lambda: ResearchRevisionDiffService(db).revision_summary(revision_id)
-    )
+    summary = ResearchRevisionDiffService(db).revision_summary(revision_id)
     if not isinstance(summary, ProductResearchRevisionSummary):
         raise NotFoundError("product research revision not found")
     return _revision_response(summary)
