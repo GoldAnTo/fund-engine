@@ -69,7 +69,7 @@
 - Create: `backend/tests/underwriting/test_product_legacy_compatibility.py`
 - Modify: `docs/architecture/underwriting-research.md`
 
-- [ ] **Step 1: Write the legacy replay tests before adding product tables.** Seed the existing CATL evidence-only fixture, read its revision summary, boundary and diff twice, then assert the current v3 content hash and serialized response are deterministic. Task 7 extends this same test after product rows exist.
+- [x] **Step 1: Write the legacy replay tests before adding product tables.** Seed the existing CATL evidence-only fixture, read its revision summary, boundary and diff twice, then assert the current v3 content hash and serialized response are deterministic. Task 7 extends this same test after product rows exist.
 
 ```python
 def test_legacy_v3_revision_ignores_product_boundaries(session, catl_revision) -> None:
@@ -83,15 +83,15 @@ def test_legacy_v3_revision_ignores_product_boundaries(session, catl_revision) -
     )
 ```
 
-- [ ] **Step 2: Run the focused baseline and record GREEN.**
+- [x] **Step 2: Run the focused baseline and record GREEN.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_product_legacy_compatibility.py tests/underwriting/test_historical_replay.py tests/underwriting/test_research_revision_diff.py`
 
 Expected: PASS before product implementation; this is the non-regression baseline.
 
-- [ ] **Step 3: Add explicit architecture invariants.** Document that legacy v1-v3 revision hashes continue to include the stored legacy basis fields, while new product revisions use `underwriting.research-revision-manifest.v1` and never reinterpret or backfill a legacy hash.
+- [x] **Step 3: Add explicit architecture invariants.** Document that legacy v1-v3 revision hashes continue to include the stored legacy basis fields, while new product revisions use `underwriting.research-revision-manifest.v1` and never reinterpret or backfill a legacy hash.
 
-- [ ] **Step 4: Add a forbidden compatibility dependency assertion.** Reject imports from the future product service modules in the legacy hash and reader modules. The migration-specific no-backfill assertion is added in Task 3 after migration 0065 exists.
+- [x] **Step 4: Add a forbidden compatibility dependency assertion.** Reject imports from the future product service modules in the legacy hash and reader modules. The migration-specific no-backfill assertion is added in Task 3 after migration 0065 exists.
 
 ```python
 kernel_source = Path("app/underwriting/services/kernel.py").read_text()
@@ -99,7 +99,7 @@ assert "revision_publisher" not in kernel_source
 assert "workspace_draft" not in kernel_source
 ```
 
-- [ ] **Step 5: Commit the compatibility guard.**
+- [x] **Step 5: Commit the compatibility guard.**
 
 ```bash
 git add backend/tests/underwriting/test_product_legacy_compatibility.py docs/architecture/underwriting-research.md
@@ -114,7 +114,7 @@ git commit -m "test: freeze legacy underwriting revision compatibility"
 - Create: `backend/tests/underwriting/test_product_contracts.py`
 - Modify: `backend/app/underwriting/domain/__init__.py`
 
-- [ ] **Step 1: Write RED tests for controlled values and cross-field rules.** Cover enum rejection, timezone requirements, ISO currency, Security-bound price, nonzero FX, positive diluted shares, mutually valid periods and `not_answerable` having null direction/confidence.
+- [x] **Step 1: Write RED tests for controlled values and cross-field rules.** Cover enum rejection, timezone requirements, ISO currency, Security-bound price, nonzero FX, positive diluted shares, mutually valid periods and `not_answerable` having null direction/confidence.
 
 ```python
 def test_not_answerable_cannot_carry_direction_or_confidence() -> None:
@@ -127,13 +127,13 @@ def test_not_answerable_cannot_carry_direction_or_confidence() -> None:
         )
 ```
 
-- [ ] **Step 2: Confirm RED.**
+- [x] **Step 2: Confirm RED.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_product_contracts.py`
 
 Expected: import failure for `app.underwriting.domain.product_contracts`.
 
-- [ ] **Step 3: Implement the controlled enums.**
+- [x] **Step 3: Implement the controlled enums.**
 
 ```python
 class ValueNature(StrEnum):
@@ -184,7 +184,7 @@ class PublicationStatus(StrEnum):
     SUPERSEDED = "superseded"
 ```
 
-- [ ] **Step 4: Implement frozen value objects.** Define `ResearchScopeInput`, `ResearchAgendaInput`, `ProductHistoricalBasisInput`, `PriceSnapshotInput`, `FXSnapshotInput`, `CapitalStructureSnapshotInput`, `SecurityRightsInput`, `AssessmentState`, `RevisionBoundaryInput` and `ProductRevisionView`. Normalize datetimes to UTC only in services; domain objects reject naive values.
+- [x] **Step 4: Implement frozen value objects.** Define `ResearchScopeInput`, `ResearchAgendaInput`, `ProductHistoricalBasisInput`, `PriceSnapshotInput`, `FXSnapshotInput`, `CapitalStructureSnapshotInput`, `SecurityRightsInput`, `AssessmentState`, `RevisionBoundaryInput` and `ProductRevisionView`. Normalize datetimes to UTC only in services; domain objects reject naive values.
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -231,7 +231,7 @@ class AssessmentState:
             raise ValueError("direction and confidence must be null when not_answerable")
 ```
 
-- [ ] **Step 5: Confirm GREEN and commit.**
+- [x] **Step 5: Confirm GREEN and commit.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_product_contracts.py tests/underwriting/test_domain_types.py`
 
@@ -253,9 +253,10 @@ git commit -m "feat: define investment research product contracts"
 - Modify: `backend/app/models/ledger.py`
 - Modify: `backend/tests/underwriting/test_kernel_persistence.py`
 - Modify: `backend/tests/underwriting/test_kernel_postgres.py`
+- Modify: `backend/tests/test_sqlite_migration_bootstrap.py`
 - Create: `backend/tests/underwriting/test_product_persistence.py`
 
-- [ ] **Step 1: Write RED metadata and migration tests.** Require these tables:
+- [x] **Step 1: Write RED metadata and migration tests.** Require these tables:
 
 ```python
 PRODUCT_TABLES = {
@@ -277,13 +278,13 @@ PRODUCT_TABLES = {
 
 Assert every table except `uw_workspace_drafts` is registered in `IMMUTABLE_TABLES`; register drafts in a separate delete-protected set so controlled optimistic-lock UPDATE remains possible but application and PostgreSQL paths reject DELETE.
 
-- [ ] **Step 2: Confirm RED.**
+- [x] **Step 2: Confirm RED.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_product_persistence.py tests/underwriting/test_kernel_persistence.py`
 
 Expected: FAIL because the product tables are absent.
 
-- [ ] **Step 3: Write migration 0065.** Create the thirteen tables with UUID primary keys, explicit foreign keys, hashes, timestamps and checks. `uw_object_identity_versions` freezes symbol, exchange, share class, trading currency and effective interval for a Company/Security identity; `uw_research_project_securities` has a unique `(project_id, security_id)` pair and makes multi-Security project membership relational rather than opaque JSON. `uw_research_assessment_versions` stores the immutable answerability/direction/confidence/publication tuple; Increment A permits only the fail-closed `not_answerable` shape, while Increment C adds the gates that can produce provisional directions. Add nullable compatibility columns to existing tables without backfilling existing rows:
+- [x] **Step 3: Write migration 0065.** Create the thirteen tables with UUID primary keys, explicit foreign keys, hashes, timestamps and checks. `uw_object_identity_versions` freezes symbol, exchange, share class, trading currency and effective interval for a Company/Security identity; `uw_research_project_securities` has a unique `(project_id, security_id)` pair and makes multi-Security project membership relational rather than opaque JSON. `uw_research_assessment_versions` stores the immutable answerability/direction/confidence/publication tuple; Increment A permits only the fail-closed `not_answerable` shape, while Increment C adds the gates that can produce provisional directions. Add nullable compatibility columns to existing tables without backfilling existing rows:
 
 ```text
 uw_mandate_versions:
@@ -361,7 +362,7 @@ op.create_table(
 )
 ```
 
-- [ ] **Step 4: Implement ORM rows and checks.** `UnderwritingWorkspaceDraft` has `lock_version`, `content`, `base_revision_id`, `created_at`, `updated_at`; all other new rows have `content_hash` and are append-only. Add unique constraints for snapshot natural identities and one successor per versioned family.
+- [x] **Step 4: Implement ORM rows and checks.** `UnderwritingWorkspaceDraft` has `lock_version`, `content`, `base_revision_id`, `created_at`, `updated_at`; all other new rows have `content_hash` and are append-only. Add unique constraints for snapshot natural identities and one successor per versioned family.
 
 ```python
 class UnderwritingWorkspaceDraft(Base):
@@ -385,7 +386,7 @@ for statement in ("UPDATE uw_historical_bases", "DELETE FROM uw_research_version
     assert statement not in sql
 ```
 
-- [ ] **Step 5: Verify SQLite/PostgreSQL migration and commit.**
+- [x] **Step 5: Verify SQLite/PostgreSQL migration and commit.**
 
 Run:
 
