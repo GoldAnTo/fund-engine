@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from types import MappingProxyType
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
@@ -21,8 +21,16 @@ from app.underwriting.persistence.models import (
     UnderwritingObjectRelation,
     UnderwritingResearchObject,
 )
+from app.underwriting.persistence.product_models import (
+    UnderwritingObjectIdentityVersion,
+    UnderwritingSecurityRightsVersion,
+)
 from app.underwriting.persistence.product_repository import ProductRepository
-from app.underwriting.services.market_snapshots import MarketSnapshotService
+from app.underwriting.services.kernel import canonical_hash
+from app.underwriting.services.market_snapshots import (
+    MarketSnapshotService,
+    security_rights_hash,
+)
 from app.underwriting.services.product_project import ResearchProjectService
 
 
@@ -47,6 +55,49 @@ class ProductFoundationFixtureService:
         self._projects = ResearchProjectService(session, now=now)
         self._market = MarketSnapshotService(session, now=now)
         self._repository = ProductRepository(session)
+
+    @staticmethod
+    def _validate_successor_chain(rows: tuple[object, ...], label: str) -> None:
+        previous = None
+        for expected_version, row in enumerate(rows, start=1):
+            if row.version != expected_version or row.supersedes_id != (
+                previous.id if previous is not None else None
+            ):
+                raise ValidationError(f"product foundation {label} chain conflict")
+            if previous is not None:
+                row_from = _stored_utc(row.effective_from)
+                previous_from = _stored_utc(previous.effective_from)
+                previous_to = (
+                    _stored_utc(previous.effective_to)
+                    if previous.effective_to is not None
+                    else None
+                )
+                if row_from <= previous_from or (
+                    previous_to is not None and row_from < previous_to
+                ):
+                    raise ValidationError(f"product foundation {label} chain conflict")
+            previous = row
+
+    @staticmethod
+    def _identity_hash(row, research_object: UnderwritingResearchObject) -> str:
+        return canonical_hash(
+            {
+                "schema_version": "product.object-identity.v1",
+                "object_id": str(research_object.id),
+                "kind": research_object.kind,
+                "canonical_name": row.canonical_name,
+                "symbol": row.symbol,
+                "exchange": row.exchange,
+                "share_class": row.share_class,
+                "trading_currency": row.trading_currency,
+                "effective_from": _stored_utc(row.effective_from).isoformat(),
+                "effective_to": (
+                    _stored_utc(row.effective_to).isoformat()
+                    if row.effective_to is not None
+                    else None
+                ),
+            }
+        )
 
     def _object(
         self, *, kind: str, external_key: str, canonical_name: str
@@ -90,8 +141,19 @@ class ProductFoundationFixtureService:
         currency: str | None,
         effective_from: datetime,
     ):
-        head = self._repository.identity_head(research_object.id)
-        if head is None:
+        versions = tuple(
+            self._session.scalars(
+                select(UnderwritingObjectIdentityVersion)
+                .where(
+                    UnderwritingObjectIdentityVersion.object_id == research_object.id
+                )
+                .order_by(
+                    UnderwritingObjectIdentityVersion.version,
+                    UnderwritingObjectIdentityVersion.id,
+                )
+            )
+        )
+        if not versions:
             return self._projects.append_identity_version(
                 object_id=research_object.id,
                 canonical_name=canonical_name,
@@ -103,16 +165,23 @@ class ProductFoundationFixtureService:
                 effective_to=None,
                 expected_parent_id=None,
             )
+        self._validate_successor_chain(versions, "identity")
+        if any(
+            row.content_hash != self._identity_hash(row, research_object)
+            for row in versions
+        ):
+            raise ValidationError("product foundation identity chain conflict")
+        root = versions[0]
         actual = (
-            head.version,
-            head.canonical_name,
-            head.symbol,
-            head.exchange,
-            head.share_class,
-            head.trading_currency,
-            _stored_utc(head.effective_from),
-            head.effective_to,
-            head.supersedes_id,
+            root.version,
+            root.canonical_name,
+            root.symbol,
+            root.exchange,
+            root.share_class,
+            root.trading_currency,
+            _stored_utc(root.effective_from),
+            root.effective_to,
+            root.supersedes_id,
         )
         expected = (
             1,
@@ -129,11 +198,23 @@ class ProductFoundationFixtureService:
             raise ValidationError(
                 f"product foundation identity conflict for {research_object.external_key}"
             )
-        return head
+        return root
 
     def _rights(self, fixture_rights, security: UnderwritingResearchObject):
-        head = self._repository.rights_head(security.id)
-        if head is None:
+        versions = tuple(
+            self._session.scalars(
+                select(UnderwritingSecurityRightsVersion)
+                .where(
+                    UnderwritingSecurityRightsVersion.security_identity_id
+                    == security.id
+                )
+                .order_by(
+                    UnderwritingSecurityRightsVersion.version,
+                    UnderwritingSecurityRightsVersion.id,
+                )
+            )
+        )
+        if not versions:
             return self._market.freeze_security_rights(
                 SecurityRightsInput(
                     security_identity_id=security.id,
@@ -149,18 +230,22 @@ class ProductFoundationFixtureService:
                 ),
                 expected_parent_id=None,
             )
+        self._validate_successor_chain(versions, "rights")
+        if any(row.content_hash != security_rights_hash(row) for row in versions):
+            raise ValidationError("product foundation rights chain conflict")
+        root = versions[0]
         actual = (
-            head.version,
-            head.economic_units,
-            head.votes_per_unit,
-            head.conversion_ratio,
-            head.adr_ratio,
-            head.dividend_rights_per_unit,
-            _stored_utc(head.effective_from),
-            head.effective_to,
-            head.source_id,
-            head.raw_hash,
-            head.supersedes_id,
+            root.version,
+            root.economic_units,
+            root.votes_per_unit,
+            root.conversion_ratio,
+            root.adr_ratio,
+            root.dividend_rights_per_unit,
+            _stored_utc(root.effective_from),
+            root.effective_to,
+            root.source_id,
+            root.raw_hash,
+            root.supersedes_id,
         )
         expected = (
             1,
@@ -179,7 +264,7 @@ class ProductFoundationFixtureService:
             raise ValidationError(
                 f"product foundation rights conflict for {security.external_key}"
             )
-        return head
+        return root
 
     def load(self, fixture: ProductFoundationFixture) -> ProductFoundationImport:
         validate_product_foundation_fixture(fixture)
@@ -230,14 +315,22 @@ class ProductFoundationFixtureService:
                         UnderwritingObjectRelation.parent_id,
                         UnderwritingObjectRelation.child_id,
                     ).where(
-                        UnderwritingObjectRelation.parent_id.in_(
-                            [
-                                objects[item.external_key].id
-                                for item in fixture.companies
-                            ]
-                        ),
                         UnderwritingObjectRelation.relation_type
                         == "company_has_security",
+                        or_(
+                            UnderwritingObjectRelation.parent_id.in_(
+                                [
+                                    objects[item.external_key].id
+                                    for item in fixture.companies
+                                ]
+                            ),
+                            UnderwritingObjectRelation.child_id.in_(
+                                [
+                                    objects[item.external_key].id
+                                    for item in fixture.securities
+                                ]
+                            ),
+                        ),
                     )
                 )
             )

@@ -18,6 +18,7 @@ from app.underwriting.domain.product_contracts import (
     ProductHistoricalBasisInput,
     ResearchAgendaInput,
     ResearchScopeInput,
+    SecurityRightsInput,
     agenda_items_hash,
 )
 from app.underwriting.domain.types import InvestmentMandateInput, ResearchObjectKind
@@ -43,6 +44,7 @@ from app.underwriting.services.product_foundation_fixture import (
 from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.services.kernel import canonical_hash
+from app.underwriting.services.market_snapshots import MarketSnapshotService
 from app.underwriting.services.product_project import ResearchProjectService
 
 
@@ -1452,6 +1454,123 @@ def test_foundation_fixture_adopts_existing_catl_objects_and_reuses_rights(
     assert loaded.rights["SZSE:300750"].id == repeated.rights["SZSE:300750"].id
 
 
+def test_foundation_fixture_reuses_roots_after_legal_identity_and_rights_successors(
+    session,
+) -> None:
+    fixture = load_product_foundation_fixture()
+    service = ProductFoundationFixtureService(session, now=lambda: NOW)
+    first = service.load(fixture)
+    security = first.objects["SZSE:300750"]
+    identity_root = first.identities["SZSE:300750"]
+    rights_root = first.rights["SZSE:300750"]
+    successor_at = datetime(2030, 1, 1, tzinfo=UTC)
+    identity_successor = ResearchProjectService(
+        session, now=lambda: NOW
+    ).append_identity_version(
+        object_id=security.id,
+        canonical_name="宁德时代 A 股（后继名称）",
+        symbol="300750",
+        exchange="SZSE",
+        share_class="A",
+        trading_currency="CNY",
+        effective_from=successor_at,
+        effective_to=None,
+        expected_parent_id=identity_root.id,
+    )
+    rights_successor = MarketSnapshotService(
+        session, now=lambda: NOW
+    ).freeze_security_rights(
+        SecurityRightsInput(
+            security_identity_id=security.id,
+            economic_units=Decimal("1"),
+            votes_per_unit=Decimal("1"),
+            conversion_ratio=Decimal("1"),
+            adr_ratio=Decimal("1"),
+            dividend_rights_per_unit=Decimal("1"),
+            effective_from=successor_at,
+            effective_to=None,
+            source_id="successor-test",
+            raw_hash=B64,
+        ),
+        expected_parent_id=rights_root.id,
+    )
+    before = {
+        "identities": session.scalar(
+            select(func.count()).select_from(UnderwritingObjectIdentityVersion)
+        ),
+        "rights": session.scalar(
+            select(func.count()).select_from(UnderwritingSecurityRightsVersion)
+        ),
+    }
+
+    repeated = service.load(load_product_foundation_fixture())
+
+    assert repeated.identities["SZSE:300750"].id == identity_root.id
+    assert repeated.rights["SZSE:300750"].id == rights_root.id
+    assert (
+        ProductRepository(session).identity_head(security.id).id
+        == identity_successor.id
+    )
+    assert ProductRepository(session).rights_head(security.id).id == rights_successor.id
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingObjectIdentityVersion)
+        )
+        == before["identities"]
+    )
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingSecurityRightsVersion)
+        )
+        == before["rights"]
+    )
+
+
+def test_foundation_fixture_rejects_a_non_contiguous_successor_chain(session) -> None:
+    loaded = ProductFoundationFixtureService(session, now=lambda: NOW).load(
+        load_product_foundation_fixture()
+    )
+    root = loaded.identities["SZSE:300750"]
+    session.add(
+        UnderwritingObjectIdentityVersion(
+            object_id=loaded.objects["SZSE:300750"].id,
+            version=3,
+            canonical_name="Malformed successor",
+            symbol="300750",
+            exchange="SZSE",
+            share_class="A",
+            trading_currency="CNY",
+            effective_from=datetime(2030, 1, 1, tzinfo=UTC),
+            effective_to=None,
+            supersedes_id=root.id,
+            content_hash=A64,
+            created_at=NOW,
+        )
+    )
+    session.flush()
+
+    with pytest.raises(ValidationError, match="identity chain conflict"):
+        ProductFoundationFixtureService(session, now=lambda: NOW).load(
+            load_product_foundation_fixture()
+        )
+
+
+def test_foundation_fixture_rejects_a_tampered_fixture_root(session) -> None:
+    loaded = ProductFoundationFixtureService(session, now=lambda: NOW).load(
+        load_product_foundation_fixture()
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_object_identity_versions SET canonical_name = ? WHERE id = ?",
+        ("Tampered root", loaded.identities["SZSE:300750"].id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="identity chain conflict"):
+        ProductFoundationFixtureService(session, now=lambda: NOW).load(
+            load_product_foundation_fixture()
+        )
+
+
 def test_foundation_fixture_conflict_fails_closed_and_rolls_back_partial_import(
     session,
 ) -> None:
@@ -1493,6 +1612,82 @@ def test_foundation_fixture_conflict_fails_closed_and_rolls_back_partial_import(
             select(func.count()).select_from(UnderwritingSecurityRightsVersion)
         )
         == 0
+    )
+
+
+def test_foundation_fixture_rejects_non_manifest_company_parent_for_fixture_security(
+    session,
+) -> None:
+    other_company = _object(session, "company", "OTHER:COMPANY", "Other Company")
+    catl_security = _object(session, "security", "SZSE:300750", "宁德时代 A 股")
+    _relation(
+        session,
+        other_company.id,
+        catl_security.id,
+        "company_has_security",
+    )
+
+    with pytest.raises(ValidationError, match="relation conflict"):
+        ProductFoundationFixtureService(session, now=lambda: NOW).load(
+            load_product_foundation_fixture()
+        )
+
+    assert {
+        row.external_key for row in session.scalars(select(UnderwritingResearchObject))
+    } == {"OTHER:COMPANY", "SZSE:300750"}
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingObjectIdentityVersion)
+        )
+        == 0
+    )
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingSecurityRightsVersion)
+        )
+        == 0
+    )
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingObjectRelation))
+        == 1
+    )
+
+
+def test_foundation_fixture_rejects_fixture_company_relation_to_extra_security(
+    session,
+) -> None:
+    catl_company = _object(session, "company", "CN:300750:COMPANY", "宁德时代")
+    extra_security = _object(session, "security", "OTHER:SECURITY", "Other Security")
+    _relation(
+        session,
+        catl_company.id,
+        extra_security.id,
+        "company_has_security",
+    )
+
+    with pytest.raises(ValidationError, match="relation conflict"):
+        ProductFoundationFixtureService(session, now=lambda: NOW).load(
+            load_product_foundation_fixture()
+        )
+
+    assert {
+        row.external_key for row in session.scalars(select(UnderwritingResearchObject))
+    } == {"CN:300750:COMPANY", "OTHER:SECURITY"}
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingObjectIdentityVersion)
+        )
+        == 0
+    )
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingSecurityRightsVersion)
+        )
+        == 0
+    )
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingObjectRelation))
+        == 1
     )
 
 
