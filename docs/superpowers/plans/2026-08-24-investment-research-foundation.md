@@ -973,15 +973,15 @@ git commit -m "feat: add independent investment research entry flow"
 - Modify: `backend/tests/underwriting/test_revision_publisher.py`
 - Modify: `frontend/src/features/investment-research/NewResearchPage.test.tsx`
 
-- [ ] **Step 1: Write RED fixture tests.** Require CATL Company + 300750.SZ and Alphabet Company + GOOGL/GOOG, effective identity-version lookup, exact company_has_security relations, currencies, exchanges, multi-Security project membership and distinct SecurityRightsVersion rows. Fixture loading must be idempotent and content-hash checked.
+- [x] **Step 1: Write RED fixture tests.** Require CATL Company + 300750.SZ and Alphabet Company + GOOGL/GOOG, effective identity-version lookup, exact company_has_security relations, currencies, exchanges, multi-Security project membership and distinct SecurityRightsVersion rows. Fixture loading must be idempotent and content-hash checked.
 
-- [ ] **Step 2: Confirm RED.**
+- [x] **Step 2: Confirm RED.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_product_project.py -k foundation_fixture`
 
 Expected: fixture loader missing.
 
-- [ ] **Step 3: Implement the minimal identity manifest and loader.** Include no financials, price, valuation, assessment or generated research content. GOOGL and GOOG remain different Securities even if their initial economic-rights payloads are equal.
+- [x] **Step 3: Implement the minimal identity manifest and loader.** Include no financials, price, valuation, assessment or generated research content. GOOGL and GOOG remain different Securities even if their initial economic-rights payloads are equal.
 
 ```json
 {
@@ -1003,7 +1003,7 @@ Expected: fixture loader missing.
 }
 ```
 
-- [ ] **Step 4: Add the foundation golden path.** Create a CATL project and a foundation `insufficient_evidence` revision; verify Alphabet object search and multi-Security setup preview without publishing an Alphabet research conclusion.
+- [x] **Step 4: Add the foundation golden path.** Create a CATL project and a foundation `insufficient_evidence` revision; verify Alphabet object search and multi-Security setup preview without publishing an Alphabet research conclusion.
 
 Use explicit synthetic snapshot values only inside tests; do not ship them in the identity manifest or present them as CATL facts.
 
@@ -1017,7 +1017,7 @@ def test_foundation_golden_path_publishes_only_insufficient_evidence(product_sta
     assert revision.confidence is None
 ```
 
-- [ ] **Step 5: Run GREEN and commit.**
+- [x] **Step 5: Run GREEN and commit.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_product_project.py tests/underwriting/test_revision_publisher.py -k 'fixture or foundation'`
 
