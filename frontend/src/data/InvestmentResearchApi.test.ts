@@ -96,6 +96,27 @@ function effectiveRightsBody(effective = rightsBody()) {
   };
 }
 
+function successorRightsBody() {
+  return {
+    ...effectiveRightsBody(),
+    effective: null,
+    head: {
+      schema_version: "underwriting.v1",
+      id: ids.rightsA,
+      effective_from: "2026-08-20T00:00:00Z",
+      effective_to: "2026-08-23T00:00:00Z",
+    },
+    append_allowed: true,
+    expected_parent_id: ids.rightsA,
+    minimum_effective_from: "2026-08-23T00:00:00Z",
+    reason: {
+      schema_version: "underwriting.v1",
+      code: "successor_required",
+      action: "append_successor",
+    },
+  };
+}
+
 function priceBody(id = ids.priceA, securityId = ids.securityA) {
   return { schema_version: "underwriting.v1", id, security_identity_id: securityId, price: "100", currency: "CNY", price_type: "close", adjustment_basis: "unadjusted", market_at: now, available_at: now, source_id: "source", raw_hash: hash, content_hash: hash, created_at: now };
 }
@@ -247,6 +268,122 @@ describe("InvestmentResearchApi", () => {
     vi.stubGlobal("fetch", vi.fn(async () => response(invalid)));
 
     await expect(new InvestmentResearchApi().effectiveSecurityRights(ids.securityA, now))
+      .rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("accepts a successor resolution with a closed head and its exact append boundary", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => response(successorRightsBody())));
+
+    await expect(new InvestmentResearchApi().effectiveSecurityRights(ids.securityA, now))
+      .resolves.toMatchObject({ expected_parent_id: ids.rightsA });
+  });
+
+  it("accepts a historical effective version followed by a time-consistent current head", async () => {
+    const effective = rightsBody();
+    effective.effective_from = "2026-08-20T00:00:00Z";
+    Reflect.set(effective, "effective_to", "2026-08-22T00:00:00Z");
+    const body = {
+      ...effectiveRightsBody(effective),
+      as_of: "2026-08-21T00:00:00Z",
+      head: {
+        schema_version: "underwriting.v1",
+        id: ids.rightsB,
+        effective_from: "2026-08-22T00:00:00Z",
+        effective_to: null,
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => response(body)));
+
+    await expect(new InvestmentResearchApi().effectiveSecurityRights(ids.securityA, body.as_of))
+      .resolves.toMatchObject({ effective: { id: ids.rightsA }, head: { id: ids.rightsB } });
+  });
+
+  it.each([
+    {
+      name: "effective version without the current head",
+      body: { ...effectiveRightsBody(), head: null },
+    },
+    {
+      name: "effective version whose same-id head has a different interval",
+      body: {
+        ...effectiveRightsBody(),
+        head: {
+          ...effectiveRightsBody().head,
+          effective_from: "2026-08-22T00:00:00Z",
+        },
+      },
+    },
+    {
+      name: "historical effective version overlapping a different current head",
+      body: (() => {
+        const effective = rightsBody();
+        effective.effective_from = "2026-08-20T00:00:00Z";
+        Reflect.set(effective, "effective_to", "2026-08-23T00:00:00Z");
+        return {
+          ...effectiveRightsBody(effective),
+          as_of: "2026-08-21T00:00:00Z",
+          head: {
+            schema_version: "underwriting.v1",
+            id: ids.rightsB,
+            effective_from: "2026-08-22T00:00:00Z",
+            effective_to: null,
+          },
+        };
+      })(),
+    },
+    {
+      name: "successor resolution with an open-ended head",
+      body: {
+        ...successorRightsBody(),
+        head: { ...successorRightsBody().head, effective_to: null },
+      },
+    },
+    {
+      name: "successor resolution whose minimum differs from the head end",
+      body: {
+        ...successorRightsBody(),
+        minimum_effective_from: "2026-08-22T00:00:00Z",
+      },
+    },
+    {
+      name: "successor resolution before the head end",
+      body: {
+        ...successorRightsBody(),
+        as_of: "2026-08-22T00:00:00Z",
+      },
+    },
+    {
+      name: "initial resolution with a head",
+      body: {
+        ...successorRightsBody(),
+        expected_parent_id: null,
+        minimum_effective_from: null,
+        reason: {
+          schema_version: "underwriting.v1",
+          code: "no_history",
+          action: "create_initial",
+        },
+      },
+    },
+    {
+      name: "before-head resolution at the head start",
+      body: {
+        ...successorRightsBody(),
+        as_of: "2026-08-20T00:00:00Z",
+        append_allowed: false,
+        expected_parent_id: null,
+        minimum_effective_from: null,
+        reason: {
+          schema_version: "underwriting.v1",
+          code: "before_head",
+          action: "adjust_market_at",
+        },
+      },
+    },
+  ])("rejects an impossible rights resolution: $name", async ({ body }) => {
+    vi.stubGlobal("fetch", vi.fn(async () => response(body)));
+
+    await expect(new InvestmentResearchApi().effectiveSecurityRights(ids.securityA, String(body.as_of)))
       .rejects.toMatchObject({ code: "invalid_response" });
   });
 

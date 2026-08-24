@@ -463,8 +463,14 @@ function isEffectiveRights(value: unknown): value is EffectiveSecurityRights {
 
   const state = `${String(value.reason.code)}:${String(value.reason.action)}`;
   if (state === "effective_version_found:reuse_effective") {
-    return value.effective !== null && !value.append_allowed
-      && value.expected_parent_id === null && value.minimum_effective_from === null;
+    if (value.effective === null || value.head === null || value.append_allowed
+      || value.expected_parent_id !== null || value.minimum_effective_from !== null) return false;
+    if (value.head.id === value.effective.id) {
+      return sameInstant(value.head.effective_from, value.effective.effective_from)
+        && sameNullableInstant(value.head.effective_to, value.effective.effective_to);
+    }
+    return value.effective.effective_to !== null
+      && isAtOrBefore(value.effective.effective_to, value.head.effective_from);
   }
   if (state === "no_history:create_initial") {
     return value.effective === null && value.head === null && value.append_allowed
@@ -477,7 +483,9 @@ function isEffectiveRights(value: unknown): value is EffectiveSecurityRights {
   }
   if (state === "successor_required:append_successor") {
     return value.effective === null && value.head !== null && value.append_allowed
+      && value.head.effective_to !== null
       && value.expected_parent_id === value.head.id && value.minimum_effective_from !== null
+      && sameInstant(value.minimum_effective_from, value.head.effective_to)
       && isAtOrBefore(value.minimum_effective_from, value.as_of);
   }
   return false;
