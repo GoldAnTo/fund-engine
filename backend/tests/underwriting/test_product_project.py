@@ -31,6 +31,13 @@ from app.underwriting.persistence.product_models import (
     UnderwritingResearchProject,
     UnderwritingResearchProjectSecurity,
     UnderwritingResearchScopeVersion,
+    UnderwritingSecurityRightsVersion,
+)
+from app.underwriting.fixtures.product_foundation import (
+    load_product_foundation_fixture,
+)
+from app.underwriting.services.product_foundation_fixture import (
+    ProductFoundationFixtureService,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.persistence.repository import StaleParentError
@@ -1263,3 +1270,239 @@ def test_product_project_modules_stay_isolated_and_only_borrow_hash_helper() -> 
     ]
     assert len(kernel_imports) == 1
     assert [alias.name for alias in kernel_imports[0].names] == ["canonical_hash"]
+
+
+def test_foundation_fixture_loads_exact_temporal_identities_relations_and_rights(
+    session,
+) -> None:
+    fixture = load_product_foundation_fixture()
+    loaded = ProductFoundationFixtureService(session, now=lambda: NOW).load(fixture)
+    projects = ResearchProjectService(session, now=lambda: NOW)
+
+    assert fixture.schema_version == "product.foundation-identities.v1"
+    assert set(loaded.objects) == {
+        "CN:300750:COMPANY",
+        "US:ALPHABET:COMPANY",
+        "SZSE:300750",
+        "NASDAQ:GOOGL",
+        "NASDAQ:GOOG",
+    }
+    assert loaded.objects["CN:300750:COMPANY"].kind == "company"
+    assert loaded.objects["US:ALPHABET:COMPANY"].kind == "company"
+    assert loaded.objects["SZSE:300750"].kind == "security"
+
+    before_listing = datetime(2018, 6, 10, 15, 59, 59, tzinfo=UTC)
+    at_listing = datetime(2018, 6, 10, 16, tzinfo=UTC)
+    assert (
+        projects.effective_identity(loaded.objects["SZSE:300750"].id, before_listing)
+        is None
+    )
+    catl_identity = projects.effective_identity(
+        loaded.objects["SZSE:300750"].id, at_listing
+    )
+    assert (catl_identity.symbol, catl_identity.exchange) == ("300750", "SZSE")
+    assert (catl_identity.share_class, catl_identity.trading_currency) == ("A", "CNY")
+    assert loaded.identities["NASDAQ:GOOGL"].share_class == "Class A"
+    assert loaded.identities["NASDAQ:GOOG"].share_class == "Class C"
+    assert loaded.identities["NASDAQ:GOOGL"].trading_currency == "USD"
+    assert loaded.identities["NASDAQ:GOOG"].trading_currency == "USD"
+    assert {item.external_key for item in projects.search_objects("300750", NOW)} == {
+        "CN:300750:COMPANY",
+        "SZSE:300750",
+    }
+
+    relations = set(
+        session.execute(
+            select(
+                UnderwritingObjectRelation.parent_id,
+                UnderwritingObjectRelation.child_id,
+                UnderwritingObjectRelation.relation_type,
+            )
+        )
+    )
+    assert relations == {
+        (
+            loaded.objects["CN:300750:COMPANY"].id,
+            loaded.objects["SZSE:300750"].id,
+            "company_has_security",
+        ),
+        (
+            loaded.objects["US:ALPHABET:COMPANY"].id,
+            loaded.objects["NASDAQ:GOOGL"].id,
+            "company_has_security",
+        ),
+        (
+            loaded.objects["US:ALPHABET:COMPANY"].id,
+            loaded.objects["NASDAQ:GOOG"].id,
+            "company_has_security",
+        ),
+    }
+    assert len({rights.id for rights in loaded.rights.values()}) == 3
+    assert loaded.rights["NASDAQ:GOOGL"].id != loaded.rights["NASDAQ:GOOG"].id
+    assert loaded.rights["NASDAQ:GOOGL"].votes_per_unit == Decimal("1.0000000000")
+    assert loaded.rights["NASDAQ:GOOG"].votes_per_unit == Decimal("0E-10")
+
+
+def test_foundation_fixture_is_idempotent_content_checked_and_contains_no_research_facts(
+    session, tmp_path
+) -> None:
+    fixture = load_product_foundation_fixture()
+    service = ProductFoundationFixtureService(session, now=lambda: NOW)
+    first = service.load(fixture)
+    second = service.load(load_product_foundation_fixture())
+
+    assert {key: row.id for key, row in first.objects.items()} == {
+        key: row.id for key, row in second.objects.items()
+    }
+    assert {key: row.id for key, row in first.identities.items()} == {
+        key: row.id for key, row in second.identities.items()
+    }
+    assert {key: row.id for key, row in first.rights.items()} == {
+        key: row.id for key, row in second.rights.items()
+    }
+    assert (
+        second.identities["CN:300750:COMPANY"].canonical_name
+        == "宁德时代新能源科技股份有限公司"
+    )
+    assert second.rights["SZSE:300750"].id == first.rights["SZSE:300750"].id
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingResearchObject))
+        == 5
+    )
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingObjectIdentityVersion)
+        )
+        == 5
+    )
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingObjectRelation))
+        == 3
+    )
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingSecurityRightsVersion)
+        )
+        == 3
+    )
+    forbidden = {
+        "financials",
+        "prices",
+        "valuations",
+        "assessments",
+        "research",
+        "generated_research",
+    }
+    assert forbidden.isdisjoint(fixture.raw.keys())
+
+    manifest_path = tmp_path / "manifest.json"
+    original = fixture.manifest_path.read_text(encoding="utf-8")
+    manifest_path.write_text(original.replace("Class C", "Class B"), encoding="utf-8")
+    with pytest.raises(ValidationError, match="content hash"):
+        load_product_foundation_fixture(manifest_path)
+
+    forged = load_product_foundation_fixture()
+    object.__setattr__(forged, "content_hash", "b" * 64)
+    with pytest.raises(ValidationError, match="content hash"):
+        ProductFoundationFixtureService(session, now=lambda: NOW).load(forged)
+
+
+def test_foundation_fixture_adopts_existing_catl_objects_and_reuses_rights(
+    session,
+) -> None:
+    company = _object(
+        session,
+        "company",
+        "CN:300750:COMPANY",
+        "宁德时代",
+    )
+    security = _object(
+        session,
+        "security",
+        "SZSE:300750",
+        "宁德时代 A 股",
+    )
+    _relation(session, company.id, security.id, "company_has_security")
+
+    loaded = ProductFoundationFixtureService(session, now=lambda: NOW).load(
+        load_product_foundation_fixture()
+    )
+    repeated = ProductFoundationFixtureService(session, now=lambda: NOW).load(
+        load_product_foundation_fixture()
+    )
+
+    assert loaded.objects["CN:300750:COMPANY"].id == company.id
+    assert loaded.objects["SZSE:300750"].id == security.id
+    assert (
+        loaded.identities["CN:300750:COMPANY"].canonical_name
+        == "宁德时代新能源科技股份有限公司"
+    )
+    assert loaded.rights["SZSE:300750"].id == repeated.rights["SZSE:300750"].id
+
+
+def test_foundation_fixture_conflict_fails_closed_and_rolls_back_partial_import(
+    session,
+) -> None:
+    session.add(
+        UnderwritingResearchObject(
+            kind="industry",
+            external_key="US:ALPHABET:COMPANY",
+            canonical_name="Conflicting row",
+            created_at=NOW,
+        )
+    )
+    session.flush()
+
+    with pytest.raises(ValidationError, match="conflict"):
+        ProductFoundationFixtureService(session, now=lambda: NOW).load(
+            load_product_foundation_fixture()
+        )
+
+    assert (
+        session.scalar(
+            select(func.count())
+            .select_from(UnderwritingResearchObject)
+            .where(UnderwritingResearchObject.external_key == "CN:300750:COMPANY")
+        )
+        == 0
+    )
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingObjectIdentityVersion)
+        )
+        == 0
+    )
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingObjectRelation))
+        == 0
+    )
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingSecurityRightsVersion)
+        )
+        == 0
+    )
+
+
+def test_foundation_fixture_supports_alphabet_multi_security_project_membership(
+    session,
+) -> None:
+    loaded = ProductFoundationFixtureService(session, now=lambda: NOW).load(
+        load_product_foundation_fixture()
+    )
+    project = ResearchProjectService(session, now=lambda: NOW).create_project(
+        loaded.objects["US:ALPHABET:COMPANY"].id,
+        (
+            loaded.objects["NASDAQ:GOOGL"].id,
+            loaded.objects["NASDAQ:GOOG"].id,
+        ),
+    )
+
+    assert set(project.target_security_ids) == {
+        loaded.objects["NASDAQ:GOOGL"].id,
+        loaded.objects["NASDAQ:GOOG"].id,
+    }
+    assert {identity.symbol for identity in project.security_identities} == {
+        "GOOGL",
+        "GOOG",
+    }

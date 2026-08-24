@@ -20,6 +20,8 @@ from app.underwriting.domain.product_contracts import (
     AgendaGenerationMethod,
     AgendaGeneratorInput,
     CapitalStructureSnapshotInput,
+    FXSnapshotInput,
+    FxQuoteDirection,
     PriceSnapshotInput,
     ProductHistoricalBasisInput,
     PublicationStatus,
@@ -44,12 +46,18 @@ from app.underwriting.persistence.product_models import (
     UnderwritingWorkspaceDraft,
 )
 from app.underwriting.services.kernel import canonical_hash
+from app.underwriting.fixtures.product_foundation import (
+    load_product_foundation_fixture,
+)
 from app.underwriting.services.market_snapshots import (
     MarketSnapshotService,
     price_snapshot_hash,
     security_rights_hash,
 )
 from app.underwriting.services.product_project import ResearchProjectService
+from app.underwriting.services.product_foundation_fixture import (
+    ProductFoundationFixtureService,
+)
 from app.underwriting.services.research_revision_diff import (
     ProductResearchRevisionSummary,
     ResearchRevisionDiffService,
@@ -313,6 +321,198 @@ def _formal_counts(session) -> tuple[int, int, int, int]:
             UnderwritingResearchVersion,
         )
     )  # type: ignore[return-value]
+
+
+def _foundation_ready_graph(
+    session, *, company_key: str, security_keys: tuple[str, ...]
+) -> dict[str, object]:
+    loaded = ProductFoundationFixtureService(session, now=lambda: NOW).load(
+        load_product_foundation_fixture()
+    )
+    projects = ResearchProjectService(session, now=lambda: NOW)
+    market = MarketSnapshotService(session, now=lambda: NOW)
+    drafts = WorkspaceDraftService(session, now=lambda: NOW)
+    company = loaded.objects[company_key]
+    securities = tuple(loaded.objects[key] for key in security_keys)
+    project = projects.create_project(
+        company.id, tuple(security.id for security in securities)
+    )
+    mandate = projects.append_product_mandate(
+        project_id=project.id,
+        value=InvestmentMandateInput(
+            "foundation-fixture",
+            3,
+            "CNY",
+            Decimal("0.10000000"),
+            Decimal("0.30000000"),
+            ("cash",),
+        ),
+        benchmark_key=None,
+        required_excess_return=None,
+        effective_at=EFFECTIVE,
+        expires_at=None,
+        expected_parent_id=None,
+    )
+    scope = projects.append_scope(
+        project.id,
+        ResearchScopeInput(
+            company.id,
+            tuple(security.id for security in securities),
+            (),
+            (),
+            None,
+            (),
+        ),
+        None,
+    )
+    agenda_items = ("核验公司经营基线", "识别关键证据缺口")
+    agenda = projects.append_agenda(
+        project.id,
+        ResearchAgendaInput(
+            scope.id,
+            agenda_items,
+            AgendaGeneratorInput(
+                AgendaGenerationMethod.DETERMINISTIC_TEMPLATE,
+                "product.foundation.agenda",
+                "1.0.0",
+                None,
+                None,
+                A64,
+                agenda_items_hash(agenda_items),
+            ),
+        ),
+        None,
+    )
+    basis = projects.create_historical_basis(
+        ProductHistoricalBasisInput(datetime(2026, 8, 19, tzinfo=UTC), A64, B64, C64)
+    )
+    prices = tuple(
+        market.freeze_price(
+            PriceSnapshotInput(
+                security.id,
+                Decimal("100.0000000000") + index,
+                loaded.identities[key].trading_currency,
+                "synthetic_test_close",
+                "unadjusted",
+                MARKET + timedelta(hours=index),
+                MARKET + timedelta(hours=index, minutes=5),
+                "synthetic-test-only",
+                canonical_hash({"synthetic_test_price": key}),
+            )
+        )
+        for index, (key, security) in enumerate(zip(security_keys, securities))
+    )
+    boundary_at = max(price.market_at for price in prices)
+    foreign_currencies = {price.currency for price in prices if price.currency != "CNY"}
+    fxs = tuple(
+        market.freeze_fx(
+            FXSnapshotInput(
+                currency,
+                "CNY",
+                Decimal("7.100000000000"),
+                FxQuoteDirection.QUOTE_PER_BASE,
+                boundary_at,
+                boundary_at + timedelta(minutes=5),
+                "synthetic-test-only",
+                canonical_hash({"synthetic_test_fx": f"{currency}/CNY"}),
+            )
+        )
+        for currency in sorted(foreign_currencies)
+    )
+    capital = market.freeze_capital_structure(
+        CapitalStructureSnapshotInput(
+            company.id,
+            "CNY",
+            Decimal("10"),
+            Decimal("2"),
+            Decimal("0"),
+            Decimal("0"),
+            Decimal("0"),
+            Decimal("0"),
+            Decimal("100"),
+            Decimal("100"),
+            (),
+            datetime(2026, 1, 1, tzinfo=UTC),
+            datetime(2026, 6, 30, tzinfo=UTC),
+            boundary_at,
+            boundary_at + timedelta(minutes=5),
+            "synthetic-test-only",
+            canonical_hash({"synthetic_test_capital": company_key}),
+        )
+    )
+    rights = tuple(loaded.rights[key] for key in security_keys)
+    draft = drafts.create(project.id)
+    draft = drafts.save(
+        project.id,
+        expected_lock_version=draft.lock_version,
+        patch={
+            "mandate_id": mandate.id,
+            "scope_id": scope.id,
+            "agenda_id": agenda.id,
+            "historical_basis_id": basis.id,
+            "price_snapshot_ids": tuple(price.id for price in prices),
+            "fx_snapshot_ids": tuple(fx.id for fx in fxs),
+            "capital_structure_snapshot_id": capital.id,
+            "security_rights_ids": tuple(item.id for item in rights),
+            "user_focus": None,
+        },
+    )
+    return locals()
+
+
+def test_foundation_golden_path_publishes_only_insufficient_evidence(session) -> None:
+    graph = _foundation_ready_graph(
+        session,
+        company_key="CN:300750:COMPANY",
+        security_keys=("SZSE:300750",),
+    )
+    publisher = RevisionPublisher(session, now=lambda: NOW)
+    preview = publisher.preview(graph["project"].id, graph["draft"].lock_version)
+    revision = publisher.publish(
+        graph["project"].id,
+        graph["draft"].lock_version,
+        idempotency_key="catl-foundation-1",
+    )
+    summary = ResearchRevisionDiffService(session).revision_summary(revision.id)
+
+    assert preview.assessment.answerability is AnswerabilityState.NOT_ANSWERABLE
+    assert preview.assessment.direction is None
+    assert preview.assessment.confidence is None
+    assert summary.answerability is AnswerabilityState.NOT_ANSWERABLE
+    assert summary.direction is None
+    assert summary.confidence is None
+    assert summary.publication_status is PublicationStatus.USER_FROZEN
+
+
+def test_alphabet_foundation_searches_and_previews_two_securities_without_publication(
+    session,
+) -> None:
+    graph = _foundation_ready_graph(
+        session,
+        company_key="US:ALPHABET:COMPANY",
+        security_keys=("NASDAQ:GOOGL", "NASDAQ:GOOG"),
+    )
+    projects = ResearchProjectService(session, now=lambda: NOW)
+    search = projects.search_objects("Alphabet", NOW)
+    before = _formal_counts(session)
+    preview = RevisionPublisher(session, now=lambda: NOW).preview(
+        graph["project"].id, graph["draft"].lock_version
+    )
+
+    assert {(item.kind.value, item.external_key) for item in search} == {
+        ("company", "US:ALPHABET:COMPANY"),
+        ("security", "NASDAQ:GOOGL"),
+        ("security", "NASDAQ:GOOG"),
+    }
+    assert len(graph["project"].target_security_ids) == 2
+    assert len({item.id for item in graph["rights"]}) == 2
+    assert [(fx.base_currency, fx.quote_currency) for fx in graph["fxs"]] == [
+        ("USD", "CNY")
+    ]
+    assert graph["fxs"][0].market_at == graph["boundary_at"]
+    assert preview.boundary_as_of == graph["boundary_at"]
+    assert preview.assessment.answerability is AnswerabilityState.NOT_ANSWERABLE
+    assert _formal_counts(session) == before == (0, 0, 0, 0)
 
 
 def test_preview_is_deterministic_fail_closed_and_has_zero_writes(session) -> None:
