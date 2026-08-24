@@ -2,6 +2,7 @@ import { lazy, Suspense, type ReactNode } from "react";
 import { Route, Routes } from "react-router-dom";
 
 import { InvestmentResearchShell } from "./InvestmentResearchShell";
+import { ProductRouteErrorBoundary } from "./ProductRouteErrorBoundary";
 
 export { ResearchArchiveLoadErrorBoundary } from "./ResearchArchiveLoadErrorBoundary";
 
@@ -12,9 +13,23 @@ const ResearchWorkbenchPage = lazy(() => import("../features/investment-research
 
 function ProductRoute({ children }: { children: ReactNode }) {
   return (
-    <Suspense fallback={<main className="ir-page" aria-busy="true"><div className="ir-workbench-skeleton"><span /><span /><span /></div></main>}>
-      {children}
-    </Suspense>
+    <ProductRouteErrorBoundary>
+      <Suspense fallback={<main className="ir-page" aria-busy="true"><div className="ir-workbench-skeleton"><span /><span /><span /></div></main>}>
+        {children}
+      </Suspense>
+    </ProductRouteErrorBoundary>
+  );
+}
+
+function ProductNotFound() {
+  return (
+    <main className="ir-page">
+      <div className="ir-empty">
+        <h1>研究页面不存在</h1>
+        <p>该地址不属于独立投资研究产品，或页面已经移动。</p>
+        <a href="/research">返回研究目录</a>
+      </div>
+    </main>
   );
 }
 
@@ -25,6 +40,7 @@ export function ResearchOsRoutes() {
         <Route index element={<ProductRoute><ResearchHomePage /></ProductRoute>} />
         <Route path="new" element={<ProductRoute><NewResearchPage /></ProductRoute>} />
         <Route path="projects/:projectId" element={<ProductRoute><ResearchWorkbenchPage /></ProductRoute>} />
+        <Route path="*" element={<ProductNotFound />} />
       </Route>
       <Route path="*" element={<Suspense fallback={<main className="ros-page" aria-busy="true"><p>正在载入研究系统…</p></main>}><LegacyResearchRoutes /></Suspense>} />
     </Routes>

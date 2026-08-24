@@ -1,9 +1,10 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ResearchOsRoutes } from "../../app/routes";
+import * as researchFoundation from "./researchFoundation";
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const ids = { project: uuid(1), company: uuid(2), securityA: uuid(3), securityB: uuid(4), industry: uuid(5), companyVersion: uuid(6), securityVersionA: uuid(7), securityVersionB: uuid(8), industryVersion: uuid(9), draft: uuid(10), mandate: uuid(11), scope: uuid(12), agenda: uuid(13), basis: uuid(14), priceA: uuid(15), priceB: uuid(16), capital: uuid(17), rightsA: uuid(18), rightsB: uuid(19), membershipA: uuid(20), membershipB: uuid(21) };
@@ -233,5 +234,33 @@ describe("new independent investment research setup", () => {
     expect(product.requests.filter((request) => request.url.includes("/security-rights/effective?"))).toHaveLength(2);
     expect(product.requests.filter((request) => request.url.endsWith("/security-rights") && request.method === "POST")).toHaveLength(0);
     expect(product.requests.find((request) => request.url.endsWith("/draft") && request.method === "PATCH")?.body?.security_rights_ids).toEqual([ids.rightsA, ids.rightsB]);
+  });
+
+  it("does not restore a stale agenda preview after its inputs change", async () => {
+    const user = userEvent.setup(); const product = server(); vi.stubGlobal("fetch", product.fetch); renderPage();
+    await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
+    let resolveAgenda!: (value: researchFoundation.GeneratedFoundationAgenda) => void;
+    vi.spyOn(researchFoundation, "generateFoundationAgenda").mockImplementationOnce(() => new Promise((resolve) => { resolveAgenda = resolve; }));
+    fireEvent.click(screen.getByRole("button", { name: "预览模板议程" }));
+    expect(researchFoundation.generateFoundationAgenda).toHaveBeenCalledTimes(1);
+    fireEvent.input(screen.getByLabelText("研究焦点（可选）"), { target: { value: "新的焦点" } });
+    await act(async () => resolveAgenda({
+      items: ["旧议程"],
+      inputSummaryHash: hash,
+      generator: { schema_version: "underwriting.v1", method: "deterministic_template", template_key: "product.foundation.agenda", template_version: "1.0.0", model_name: null, prompt_template_version: null, input_summary_hash: hash, output_hash: hash },
+    }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "模板议程预览" })).not.toBeInTheDocument());
+  });
+
+  it("uses a synchronous submission lock to prevent duplicate writes", async () => {
+    const user = userEvent.setup(); const product = server({ scopeFailures: 2 }); vi.stubGlobal("fetch", product.fetch); renderPage();
+    await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
+    await user.click(screen.getByRole("button", { name: "预览模板议程" }));
+    const form = screen.getByRole("button", { name: "建立版本边界并进入工作台" }).closest("form");
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
+    fireEvent.submit(form!);
+    expect(await screen.findByRole("alert")).toHaveTextContent("范围保存失败");
+    expect(product.requests.filter((request) => request.url.endsWith("/mandates"))).toHaveLength(1);
   });
 });

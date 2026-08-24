@@ -4,6 +4,7 @@ import { MemoryRouter, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ResearchOsRoutes } from "../../app/routes";
+import { ProductRouteErrorBoundary } from "../../app/ProductRouteErrorBoundary";
 import routeEntrySource from "../../app/routes.tsx?raw";
 import mainEntrySource from "../../main.tsx?raw";
 import shellSource from "../../app/InvestmentResearchShell.tsx?raw";
@@ -298,5 +299,91 @@ describe("independent investment research shell", () => {
     await user.click(screen.getByRole("button", { name: "切换项目" }));
     expect(await screen.findByText("B 项目预览读取失败")).toBeVisible();
     expect(screen.queryByText("missing_key_baseline")).not.toBeInTheDocument();
+  });
+
+  it("keeps unknown research URLs inside the product shell", async () => {
+    render(
+      <MemoryRouter initialEntries={["/research/not-a-product-route"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "研究页面不存在" })).toBeVisible();
+    expect(screen.getByRole("navigation", { name: "投资研究导航" })).toBeVisible();
+    expect(screen.queryByRole("navigation", { name: "研究系统主导航" })).not.toBeInTheDocument();
+  });
+
+  it("lets a product lazy-load failure recover in place", async () => {
+    let shouldThrow = true;
+    function FragilePage() {
+      if (shouldThrow) throw new Error("chunk unavailable");
+      return <h1>页面已恢复</h1>;
+    }
+    const user = userEvent.setup();
+    render(<ProductRouteErrorBoundary><FragilePage /></ProductRouteErrorBoundary>);
+    expect(await screen.findByRole("alert")).toHaveTextContent("产品页面载入失败");
+    shouldThrow = false;
+    await user.click(screen.getByRole("button", { name: "重试载入产品页面" }));
+    expect(screen.getByRole("heading", { name: "页面已恢复" })).toBeVisible();
+  });
+
+  it("retries project and search reads, then carries a validated object into setup", async () => {
+    let projectAttempts = 0;
+    let searchAttempts = 0;
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/product/projects?")) {
+        projectAttempts += 1;
+        if (projectAttempts === 1) return json({ schema_version: "underwriting.v1", error: { code: "temporary", message: "目录读取失败", request_id: "req-home", details: null } }, 503);
+        return json({ schema_version: "underwriting.v1", items: [] });
+      }
+      if (url.includes("/product/objects?")) {
+        searchAttempts += 1;
+        if (searchAttempts === 1) return json({ schema_version: "underwriting.v1", error: { code: "temporary", message: "搜索读取失败", request_id: "req-search", details: null } }, 503);
+        return json({ schema_version: "underwriting.v1", items: [{ schema_version: "underwriting.v1", object_id: shellIds.company, identity_version_id: shellIds.companyVersion, kind: "company", external_key: "CATL:COMPANY", canonical_name: "宁德时代", symbol: null, exchange: null, share_class: null, trading_currency: null }] });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    render(<MemoryRouter initialEntries={["/research"]}><ResearchOsRoutes /></MemoryRouter>);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("目录读取失败");
+    await user.click(screen.getByRole("button", { name: "重试读取项目目录" }));
+    expect(await screen.findByText("尚无独立研究项目")).toBeVisible();
+    await user.type(screen.getByLabelText("搜索 Company、Security 或 Industry"), "CATL");
+    await user.click(screen.getByRole("button", { name: "搜索对象" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("搜索读取失败");
+    await user.click(screen.getByRole("button", { name: "重试对象搜索" }));
+    await user.click(await screen.findByRole("link", { name: /带入建项.*宁德时代/ }));
+    expect(await screen.findByRole("heading", { name: "建立研究项目" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: /Company.*宁德时代/ })).toBeChecked();
+  });
+
+  it("retries workbench and publication preview reads in place", async () => {
+    let projectAttempts = 0;
+    let previewAttempts = 0;
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith(`/projects/${shellIds.project}`)) {
+        projectAttempts += 1;
+        if (projectAttempts === 1) return json({ schema_version: "underwriting.v1", error: { code: "temporary", message: "项目读取失败", request_id: "req-project", details: null } }, 503);
+        return json(shellProject());
+      }
+      if (url.endsWith(`/projects/${shellIds.project}/draft`)) return json(shellDraft());
+      if (url.endsWith(`/projects/${shellIds.project}/publication-preview`)) {
+        previewAttempts += 1;
+        if (previewAttempts === 1) return json({ schema_version: "underwriting.v1", error: { code: "temporary", message: "预览读取失败", request_id: "req-preview", details: null } }, 503);
+        return json(shellPreview());
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    render(<MemoryRouter initialEntries={[`/research/projects/${shellIds.project}`]}><ResearchOsRoutes /></MemoryRouter>);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("项目读取失败");
+    await user.click(screen.getByRole("button", { name: "重试读取研究项目" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("预览读取失败");
+    await user.click(screen.getByRole("button", { name: "重试读取 publication preview" }));
+    expect(await screen.findByText("missing_key_baseline")).toBeVisible();
   });
 });

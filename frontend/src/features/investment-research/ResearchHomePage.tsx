@@ -31,6 +31,7 @@ export default function ResearchHomePage() {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchCompleted, setSearchCompleted] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -47,14 +48,13 @@ export default function ResearchHomePage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [loadAttempt]);
 
   const recentProjects = projects
     .slice()
     .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
 
-  async function search(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function runSearch() {
     const normalized = query.trim();
     if (!normalized) return;
     setSearching(true);
@@ -73,6 +73,11 @@ export default function ResearchHomePage() {
     }
   }
 
+  function search(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void runSearch();
+  }
+
   return (
     <main className="ir-page ir-home">
       <header className="ir-page-head">
@@ -84,7 +89,7 @@ export default function ResearchHomePage() {
         <Link className="ir-button ir-button--primary" to="/research/new">建立研究项目</Link>
       </header>
 
-      <section className="ir-search-section" aria-labelledby="ir-object-search-title">
+      <section className="ir-search-section" aria-busy={searching} aria-labelledby="ir-object-search-title" aria-live="polite">
         <div>
           <p className="ir-eyebrow">Object search</p>
           <h2 id="ir-object-search-title">查找研究对象</h2>
@@ -98,7 +103,7 @@ export default function ResearchHomePage() {
             {searching ? "搜索中" : "搜索对象"}
           </button>
         </form>
-        {searchError ? <p className="ir-alert" role="alert">{searchError}</p> : null}
+        {searchError ? <div className="ir-alert" role="alert"><p>{searchError}</p><button className="ir-button" disabled={searching} onClick={() => void runSearch()} type="button">重试对象搜索</button></div> : null}
         {results.length > 0 ? (
           <ul className="ir-object-list" aria-label="对象搜索结果">
             {results.map((item) => (
@@ -108,7 +113,9 @@ export default function ResearchHomePage() {
                   <strong>{item.canonical_name}</strong>
                   <small>{identityLine(item)}</small>
                 </div>
-                <span>{item.kind === "industry" ? "仅浏览" : "可用于建项"}</span>
+                {item.kind === "industry"
+                  ? <span>仅浏览</span>
+                  : <Link aria-label={`带入建项 ${item.canonical_name}`} state={{ seedObject: item }} to="/research/new">带入建项</Link>}
               </li>
             ))}
           </ul>
@@ -118,7 +125,7 @@ export default function ResearchHomePage() {
         ) : null}
       </section>
 
-      <section className="ir-projects" aria-labelledby="ir-recent-title">
+      <section className="ir-projects" aria-busy={loading} aria-labelledby="ir-recent-title" aria-live="polite">
         <div className="ir-section-head">
           <div>
             <p className="ir-eyebrow">Recent projects</p>
@@ -131,7 +138,7 @@ export default function ResearchHomePage() {
             <span /><span /><span />
           </div>
         ) : null}
-        {loadError ? <p className="ir-alert" role="alert">{loadError}</p> : null}
+        {loadError ? <div className="ir-alert" role="alert"><p>{loadError}</p><button className="ir-button" onClick={() => { setLoading(true); setLoadError(null); setLoadAttempt((value) => value + 1); }} type="button">重试读取项目目录</button></div> : null}
         {!loading && !loadError && recentProjects.length === 0 ? (
           <div className="ir-empty">
             <strong>尚无独立研究项目</strong>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import {
   InvestmentResearchRequestError,
@@ -73,20 +73,55 @@ function identityDetail(item: ProductObjectSearchItem): string {
   return item.external_key;
 }
 
+function seededObject(state: unknown): ProductObjectSearchItem | null {
+  if (typeof state !== "object" || state === null || !("seedObject" in state)) return null;
+  const value = state.seedObject;
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const nullableString = (key: string) => record[key] === null || typeof record[key] === "string";
+  if (record.schema_version !== "underwriting.v1"
+    || !["company", "security", "industry"].includes(String(record.kind))
+    || typeof record.object_id !== "string"
+    || typeof record.identity_version_id !== "string"
+    || typeof record.external_key !== "string"
+    || typeof record.canonical_name !== "string"
+    || !nullableString("symbol") || !nullableString("exchange")
+    || !nullableString("share_class") || !nullableString("trading_currency")) return null;
+  if (record.trading_currency !== null && record.trading_currency !== "CNY" && record.trading_currency !== "USD") return null;
+  return {
+    schema_version: "underwriting.v1",
+    object_id: record.object_id,
+    identity_version_id: record.identity_version_id,
+    kind: record.kind as ProductObjectSearchItem["kind"],
+    external_key: record.external_key,
+    canonical_name: record.canonical_name,
+    symbol: record.symbol as string | null,
+    exchange: record.exchange as string | null,
+    share_class: record.share_class as string | null,
+    trading_currency: record.trading_currency as "CNY" | "USD" | null,
+  };
+}
+
 export default function NewResearchPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const seed = seededObject(location.state);
   const boundaryFormRef = useRef<HTMLFormElement>(null);
   const mountedRef = useRef(true);
+  const identityLockRef = useRef(false);
+  const submitLockRef = useRef(false);
+  const operationEpochRef = useRef(0);
+  const agendaEpochRef = useRef(0);
   const identityAlertRef = useRef<HTMLParagraphElement>(null);
   const setupAlertRef = useRef<HTMLParagraphElement>(null);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<ProductObjectSearchItem[]>([]);
+  const [results, setResults] = useState<ProductObjectSearchItem[]>(seed ? [seed] : []);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
-  const [searchCompleted, setSearchCompleted] = useState(false);
-  const [companyId, setCompanyId] = useState<string | null>(null);
-  const [securityIds, setSecurityIds] = useState<string[]>([]);
-  const [industryIds, setIndustryIds] = useState<string[]>([]);
+  const [searchCompleted, setSearchCompleted] = useState(Boolean(seed));
+  const [companyId, setCompanyId] = useState<string | null>(seed?.kind === "company" ? seed.object_id : null);
+  const [securityIds, setSecurityIds] = useState<string[]>(seed?.kind === "security" ? [seed.object_id] : []);
+  const [industryIds, setIndustryIds] = useState<string[]>(seed?.kind === "industry" ? [seed.object_id] : []);
   const [project, setProject] = useState<ProductProject | null>(null);
   const [draft, setDraft] = useState<ProductDraft | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -118,7 +153,14 @@ export default function NewResearchPage() {
     };
   }>({ prices: {}, fxRates: {}, rights: {}, inputs: { prices: {}, fxRates: {}, rights: {} } });
 
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      operationEpochRef.current += 1;
+      agendaEpochRef.current += 1;
+    };
+  }, []);
 
   const selectedCompany = results.find((item) => item.kind === "company" && item.object_id === companyId) ?? null;
   const selectedSecurities = securityIds.flatMap((id) => {
@@ -176,7 +218,8 @@ export default function NewResearchPage() {
   }
 
   async function confirmIdentity() {
-    if ((!selectedCompany || selectedSecurities.length === 0) && !project) return;
+    if (identityLockRef.current || ((!selectedCompany || selectedSecurities.length === 0) && !project)) return;
+    identityLockRef.current = true;
     setConfirming(true);
     setIdentityError(null);
     try {
@@ -197,7 +240,8 @@ export default function NewResearchPage() {
         }
       });
     } finally {
-      setConfirming(false);
+      identityLockRef.current = false;
+      if (mountedRef.current) setConfirming(false);
     }
   }
 
@@ -253,10 +297,12 @@ export default function NewResearchPage() {
       formElement.querySelector<HTMLElement>(":invalid")?.focus();
       return;
     }
+    const epoch = ++agendaEpochRef.current;
     try {
       const preview = await generateFoundationAgenda(agendaInput(new FormData(formElement)));
-      setAgendaPreview(preview);
+      if (mountedRef.current && agendaEpochRef.current === epoch) setAgendaPreview(preview);
     } catch (error) {
+      if (!mountedRef.current || agendaEpochRef.current !== epoch) return;
       setSetupError(error instanceof Error ? error.message : "议程预览失败");
       focusSetupAlert();
     }
@@ -264,12 +310,20 @@ export default function NewResearchPage() {
 
   async function establishBoundary(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!project || !draft || !selectedCompany) return;
+    if (submitLockRef.current || !project || !draft || !selectedCompany) return;
+    submitLockRef.current = true;
+    const operationEpoch = ++operationEpochRef.current;
+    const currentOperation = () => mountedRef.current && operationEpochRef.current === operationEpoch;
     const form = new FormData(event.currentTarget);
     setSubmitting(true);
     setSetupError(null);
     try {
       if (!agendaPreview) throw new Error("请先预览由固定模板生成的研究议程");
+      const currentAgenda = await generateFoundationAgenda(agendaInput(form));
+      if (currentAgenda.inputSummaryHash !== agendaPreview.inputSummaryHash) {
+        throw new Error("研究约束已变化，请重新预览议程");
+      }
+      if (!currentOperation()) return;
       const frozen = (name: string) => toFrozenIso(field(form, name), timezone);
       for (const security of selectedSecurities) {
         if (!security.trading_currency) throw new Error(`${security.symbol ?? security.external_key} 缺少交易货币身份`);
@@ -330,7 +384,7 @@ export default function NewResearchPage() {
           frozen(`rights_effective_from_${security.object_id}`),
         ),
       })));
-      if (!mountedRef.current) return;
+      if (!currentOperation()) return;
       for (const { security, result } of effectiveRights) {
         if (result.effective) next.rights[security.object_id] = result.effective;
         else if (result.head_id) throw new Error(`${security.symbol ?? security.external_key} 在所选时点无有效权利版本，但存在 head ${result.head_id}；请先明确 successor 父版本`);
@@ -406,7 +460,7 @@ export default function NewResearchPage() {
       if (capitalInput) attempts.push(investmentResearchApi.createCapitalStructure(capitalInput).then((value) => { next.capital = value; next.inputs.capital = capitalInput; }));
 
       const results = await Promise.allSettled(attempts);
-      if (!mountedRef.current) return;
+      if (!currentOperation()) return;
       setFoundation(next);
       const failed = results.find((result) => result.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;
@@ -444,16 +498,17 @@ export default function NewResearchPage() {
         });
         setFoundation(next);
       }
-      if (mountedRef.current) navigate(`/research/projects/${encodeURIComponent(project.id)}`);
+      if (currentOperation()) navigate(`/research/projects/${encodeURIComponent(project.id)}`);
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (!currentOperation()) return;
       const message = error instanceof InvestmentResearchRequestError || error instanceof Error
         ? error.message
         : "版本边界建立失败";
       setSetupError(message);
       focusSetupAlert();
     } finally {
-      setSubmitting(false);
+      if (operationEpochRef.current === operationEpoch) submitLockRef.current = false;
+      if (currentOperation()) setSubmitting(false);
     }
   }
 
@@ -467,7 +522,7 @@ export default function NewResearchPage() {
         </div>
       </header>
 
-      <section className="ir-step" aria-labelledby="identity-step-title">
+      <section className="ir-step" aria-busy={searching || confirming} aria-labelledby="identity-step-title" aria-live="polite">
         <header>
           <span>01</span>
           <div>
@@ -529,7 +584,7 @@ export default function NewResearchPage() {
       </section>
 
       {project && draft ? (
-        <form ref={boundaryFormRef} onInput={() => setAgendaPreview(null)} onSubmit={establishBoundary}>
+        <form ref={boundaryFormRef} aria-busy={submitting} onInput={() => { agendaEpochRef.current += 1; setAgendaPreview(null); }} onSubmit={establishBoundary}>
           <section className="ir-step" aria-labelledby="mandate-step-title">
             <header><span>02</span><div><h2 id="mandate-step-title">研究任务与边界</h2><p>记录 InvestmentMandate 与 ResearchScope，不要求预先写出研究问题。</p></div></header>
             <div className="ir-form-grid">

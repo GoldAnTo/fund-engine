@@ -39,6 +39,8 @@ export default function ResearchWorkbenchPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [reloadAttempt, setReloadAttempt] = useState(0);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const loadEpochRef = useRef(0);
 
   useEffect(() => {
@@ -85,7 +87,25 @@ export default function ResearchWorkbenchPage() {
     return () => {
       active = false;
     };
-  }, [projectId]);
+  }, [projectId, reloadAttempt]);
+
+  async function retryPreview() {
+    if (!draft || previewLoading) return;
+    const epoch = loadEpochRef.current;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const value = await investmentResearchApi.preview(projectId, {
+        schema_version: "underwriting.v1",
+        expected_lock_version: draft.lock_version,
+      });
+      if (loadEpochRef.current === epoch && value.project_id === projectId) setPreview(value);
+    } catch (error) {
+      if (loadEpochRef.current === epoch) setPreviewError(error instanceof Error ? error.message : "publication preview 无法读取");
+    } finally {
+      if (loadEpochRef.current === epoch) setPreviewLoading(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -101,6 +121,7 @@ export default function ResearchWorkbenchPage() {
         <div className="ir-alert" role="alert">
           <h1>研究项目无法读取</h1>
           <p>{loadError ?? "项目响应不完整"}</p>
+          <button className="ir-button" onClick={() => setReloadAttempt((value) => value + 1)} type="button">重试读取研究项目</button>
           <Link to="/research">返回研究目录</Link>
         </div>
       </main>
@@ -138,7 +159,7 @@ export default function ResearchWorkbenchPage() {
           })}
         </nav>
 
-        <section className="ir-module-content" aria-live="polite">
+        <section className="ir-module-content" aria-busy={previewLoading} aria-live="polite">
           {activeModule === "概览" ? (
             <>
               <header>
@@ -170,7 +191,12 @@ export default function ResearchWorkbenchPage() {
                   </section>
                 </div>
               ) : (
-                <p className="ir-alert" role="alert">{previewError ?? "publication preview 尚未建立"}</p>
+                <div className="ir-alert" role="alert">
+                  <p>{previewError ?? "publication preview 尚未建立"}</p>
+                  <button className="ir-button" disabled={previewLoading} onClick={() => void retryPreview()} type="button">
+                    {previewLoading ? "正在读取 publication preview" : "重试读取 publication preview"}
+                  </button>
+                </div>
               )}
             </>
           ) : (
