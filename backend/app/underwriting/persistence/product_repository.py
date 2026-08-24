@@ -822,17 +822,26 @@ class ProductRepository:
     def fx_for_pair(
         self, base_currency: str, quote_currency: str, market_at: datetime
     ) -> UnderwritingFXSnapshot | None:
-        return self._session.scalar(
-            select(UnderwritingFXSnapshot)
-            .where(
-                UnderwritingFXSnapshot.base_currency == base_currency,
-                UnderwritingFXSnapshot.quote_currency == quote_currency,
-                UnderwritingFXSnapshot.quote_direction == "quote_per_base",
-                UnderwritingFXSnapshot.market_at == market_at,
+        candidates = list(
+            self._session.scalars(
+                select(UnderwritingFXSnapshot)
+                .where(
+                    UnderwritingFXSnapshot.base_currency == base_currency,
+                    UnderwritingFXSnapshot.quote_currency == quote_currency,
+                    UnderwritingFXSnapshot.quote_direction == "quote_per_base",
+                    UnderwritingFXSnapshot.market_at == market_at,
+                )
+                .order_by(UnderwritingFXSnapshot.id)
+                .limit(2)
             )
-            .order_by(UnderwritingFXSnapshot.id)
-            .limit(1)
         )
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            raise ConflictError(
+                "multiple FX sources match; select an exact snapshot ID or source"
+            )
+        return candidates[0]
 
     def freeze_capital_structure(
         self,

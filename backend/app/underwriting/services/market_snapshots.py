@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation, localcontext
 from uuid import UUID
 
+from sqlalchemy import Numeric
+from sqlalchemy.dialects.sqlite import dialect as sqlite_dialect
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ConflictError, ValidationError
@@ -28,6 +30,11 @@ from app.underwriting.services.kernel import canonical_hash
 _SCALE_10 = Decimal("0.0000000001")
 _SCALE_12 = Decimal("0.000000000001")
 _SUPPORTED_CURRENCIES = frozenset({"CNY", "USD"})
+_SQLITE_DIALECT = sqlite_dialect()
+_SQLITE_NUMERIC_TYPES = {
+    10: Numeric(28, 10, asdecimal=True),
+    12: Numeric(28, 12, asdecimal=True),
+}
 
 
 def _utc(value: datetime, field: str) -> datetime:
@@ -58,6 +65,13 @@ def _text(value: object, field: str) -> str:
     return normalized
 
 
+def _bounded_text(value: object, field: str, maximum: int) -> str:
+    normalized = _text(value, field)
+    if len(normalized) > maximum:
+        raise ValidationError(f"{field} must be at most {maximum} characters")
+    return normalized
+
+
 def _currency(value: object, field: str) -> str:
     normalized = _text(value, field)
     if normalized not in _SUPPORTED_CURRENCIES:
@@ -85,7 +99,15 @@ def _decimal_at_scale(value: Decimal, field: str, scale: int) -> Decimal:
     if integer_digits + scale > 28:
         raise ValidationError(f"{field} must fit Numeric(28, {scale})")
     if normalized.is_zero():
-        return abs(normalized)
+        normalized = abs(normalized)
+
+    numeric_type = _SQLITE_NUMERIC_TYPES[scale]
+    bind_processor = numeric_type.bind_processor(_SQLITE_DIALECT)
+    result_processor = numeric_type.result_processor(_SQLITE_DIALECT, None)
+    bound = bind_processor(normalized) if bind_processor is not None else normalized
+    round_tripped = result_processor(bound) if result_processor is not None else bound
+    if round_tripped != normalized:
+        raise ValidationError(f"{field} exceeds the SQLite/local precision boundary")
     return normalized
 
 
@@ -291,11 +313,11 @@ class MarketSnapshotService:
             value.security_identity_id,
             price,
             currency,
-            _text(value.price_type, "price_type"),
-            _text(value.adjustment_basis, "adjustment_basis"),
+            _bounded_text(value.price_type, "price_type", 64),
+            _bounded_text(value.adjustment_basis, "adjustment_basis", 64),
             market_at,
             available_at,
-            _text(value.source_id, "source_id"),
+            _bounded_text(value.source_id, "source_id", 256),
             value.raw_hash,
         )
         return self._repository.freeze_price(
@@ -327,7 +349,7 @@ class MarketSnapshotService:
             FxQuoteDirection.QUOTE_PER_BASE,
             _utc(value.market_at, "market_at"),
             _utc(value.available_at, "available_at"),
-            _text(value.source_id, "source_id"),
+            _bounded_text(value.source_id, "source_id", 256),
             value.raw_hash,
         )
         return self._repository.freeze_fx(
@@ -370,10 +392,16 @@ class MarketSnapshotService:
                 "diluted_shares",
             )
         }
+        if not isinstance(value.potential_dilution_descriptors, tuple):
+            raise ValidationError("potential_dilution_descriptors must be a tuple")
         descriptors = tuple(
             _text(item, "potential_dilution_descriptors item")
             for item in value.potential_dilution_descriptors
         )
+        if len(descriptors) != len(set(descriptors)):
+            raise ValidationError(
+                "potential_dilution_descriptors must not contain duplicates"
+            )
         normalized = CapitalStructureSnapshotInput(
             value.company_id,
             _currency(value.currency, "currency"),
@@ -390,7 +418,7 @@ class MarketSnapshotService:
             _utc(value.report_period_end, "report_period_end"),
             _utc(value.market_at, "market_at"),
             _utc(value.available_at, "available_at"),
-            _text(value.source_id, "source_id"),
+            _bounded_text(value.source_id, "source_id", 256),
             value.raw_hash,
         )
         return self._repository.freeze_capital_structure(
@@ -462,7 +490,7 @@ class MarketSnapshotService:
             numbers["dividend_rights_per_unit"],
             effective_from,
             effective_to,
-            _text(value.source_id, "source_id"),
+            _bounded_text(value.source_id, "source_id", 256),
             value.raw_hash,
         )
         try:

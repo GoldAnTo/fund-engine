@@ -252,6 +252,131 @@ def test_price_rejects_meaningful_precision_beyond_database_scale(
         )
 
 
+def test_every_accepted_decimal_survives_real_sqlite_commit_reload(
+    session, services
+) -> None:
+    _, security, _ = _seed_project(session, services)
+    dangerous = Decimal("1000000000000.1234567890")
+
+    try:
+        row = services.market.freeze_price(_price(security.id, price=dangerous))
+    except ValidationError as exc:
+        assert "SQLite" in str(exc) and "precision boundary" in str(exc)
+        return
+
+    original_hash = row.content_hash
+    session.commit()
+    session.expire_all()
+    reloaded = services.market.price(row.id)
+
+    assert reloaded.price == dangerous
+    assert reloaded.content_hash == price_snapshot_hash(reloaded) == original_hash
+
+
+@pytest.mark.parametrize(
+    ("snapshot_kind", "field_name"),
+    [
+        ("price", "price"),
+        ("fx", "rate"),
+        ("capital", "cash"),
+        ("capital", "debt"),
+        ("capital", "minority_interest"),
+        ("capital", "investments"),
+        ("capital", "pension_liabilities"),
+        ("capital", "other_adjustments"),
+        ("capital", "basic_shares"),
+        ("capital", "diluted_shares"),
+        ("rights", "economic_units"),
+        ("rights", "votes_per_unit"),
+        ("rights", "conversion_ratio"),
+        ("rights", "adr_ratio"),
+        ("rights", "dividend_rights_per_unit"),
+    ],
+)
+def test_freeze_rejects_decimal_that_sqlite_numeric_round_trip_would_change(
+    session, services, snapshot_kind, field_name
+) -> None:
+    company, security, _project = _seed_project(session, services)
+    scale = 12 if snapshot_kind == "fx" else 10
+    dangerous = Decimal(
+        "1000000000000.123456789012" if scale == 12 else "1000000000000.1234567890"
+    )
+
+    with pytest.raises(ValidationError, match="SQLite.*precision boundary"):
+        if snapshot_kind == "price":
+            services.market.freeze_price(_price(security.id, price=dangerous))
+        elif snapshot_kind == "fx":
+            services.market.freeze_fx(_fx(rate=dangerous))
+        elif snapshot_kind == "capital":
+            overrides = {field_name: dangerous}
+            if field_name == "basic_shares":
+                overrides["diluted_shares"] = dangerous + Decimal("1")
+            services.market.freeze_capital_structure(_capital(company.id, **overrides))
+        else:
+            services.market.freeze_security_rights(
+                _rights(security.id, **{field_name: dangerous}),
+                expected_parent_id=None,
+            )
+
+
+@pytest.mark.parametrize(
+    ("snapshot_kind", "field_name", "maximum"),
+    [
+        ("price", "price_type", 64),
+        ("price", "adjustment_basis", 64),
+        ("price", "source_id", 256),
+        ("fx", "source_id", 256),
+        ("capital", "source_id", 256),
+        ("rights", "source_id", 256),
+    ],
+)
+def test_snapshot_text_columns_reject_trimmed_values_over_declared_width(
+    session, services, snapshot_kind, field_name, maximum
+) -> None:
+    company, security, _ = _seed_project(session, services)
+    value = f" {'x' * (maximum + 1)} "
+
+    with pytest.raises(ValidationError, match=field_name):
+        if snapshot_kind == "price":
+            services.market.freeze_price(_price(security.id, **{field_name: value}))
+        elif snapshot_kind == "fx":
+            services.market.freeze_fx(_fx(**{field_name: value}))
+        elif snapshot_kind == "capital":
+            services.market.freeze_capital_structure(
+                _capital(company.id, **{field_name: value})
+            )
+        else:
+            services.market.freeze_security_rights(
+                _rights(security.id, **{field_name: value}),
+                expected_parent_id=None,
+            )
+
+
+def test_snapshot_text_columns_accept_declared_width_boundaries(
+    session, services
+) -> None:
+    company, security, _ = _seed_project(session, services)
+
+    price = services.market.freeze_price(
+        _price(
+            security.id,
+            price_type="p" * 64,
+            adjustment_basis="a" * 64,
+            source_id="s" * 256,
+        )
+    )
+    fx = services.market.freeze_fx(_fx(source_id="s" * 256))
+    capital = services.market.freeze_capital_structure(
+        _capital(company.id, source_id="s" * 256)
+    )
+    rights = services.market.freeze_security_rights(
+        _rights(security.id, source_id="s" * 256), expected_parent_id=None
+    )
+
+    assert len(price.price_type) == len(price.adjustment_basis) == 64
+    assert all(len(row.source_id) == 256 for row in (price, fx, capital, rights))
+
+
 def test_natural_identity_conflict_does_not_reuse_row_and_session_remains_usable(
     session, services
 ) -> None:
@@ -291,6 +416,16 @@ def test_fx_rejects_inverse_inference_and_excess_precision(session, services) ->
         services.market.freeze_fx(_fx(rate=Decimal("7.2000000000001")))
     with pytest.raises(ValueError, match="quote direction"):
         _fx(quote_direction="base_per_quote")
+
+
+def test_fx_for_pair_fails_closed_when_pair_and_time_have_multiple_sources(
+    session, services
+) -> None:
+    services.market.freeze_fx(_fx())
+    services.market.freeze_fx(_fx(source_id="second-feed", raw_hash="e" * 64))
+
+    with pytest.raises(ConflictError, match="exact snapshot ID|source"):
+        services.market.fx_for_pair("USD", "CNY", MARKET)
 
 
 def test_freeze_capital_structure_requires_company_and_recomputable_hash(
@@ -333,6 +468,27 @@ def test_capital_structure_rejects_share_and_numeric_boundary_errors(
             report_period_start=datetime(2026, 7, 1, tzinfo=UTC),
             report_period_end=datetime(2026, 6, 30, tzinfo=UTC),
         )
+
+
+def test_capital_structure_descriptors_are_unique_after_trim_and_fail_consistently(
+    session, services
+) -> None:
+    company, _, _ = _seed_project(session, services)
+    with pytest.raises(ValidationError, match="descriptors.*duplicates"):
+        services.market.freeze_capital_structure(
+            _capital(
+                company.id,
+                potential_dilution_descriptors=(
+                    " employee options ",
+                    "employee options",
+                ),
+            )
+        )
+
+    malformed = _capital(company.id)
+    object.__setattr__(malformed, "potential_dilution_descriptors", ["options"])
+    with pytest.raises(ValidationError, match="descriptors.*tuple"):
+        services.market.freeze_capital_structure(malformed)
 
 
 def test_security_rights_are_versioned_with_exact_parent_and_effective_lookup(
