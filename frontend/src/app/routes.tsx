@@ -2,6 +2,7 @@ import { Component, lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { AppShell } from "./AppShell";
+import { InvestmentResearchShell } from "./InvestmentResearchShell";
 import { UnderwritingArchiveShell } from "./UnderwritingArchiveShell";
 import {
   CaseConclusionHistoryPage,
@@ -28,6 +29,9 @@ import { ResearchNetworkPage } from "../features/events/ResearchNetworkPage";
 import { LegacyAdmissionPage } from "../features/events/LegacyAdmissionPage";
 
 const ResearchArchivePage = lazy(() => import("../features/underwriting/ResearchArchivePage"));
+const ResearchHomePage = lazy(() => import("../features/investment-research/ResearchHomePage"));
+const NewResearchPage = lazy(() => import("../features/investment-research/NewResearchPage"));
+const ResearchWorkbenchPage = lazy(() => import("../features/investment-research/ResearchWorkbenchPage"));
 
 type ResearchArchiveLoadErrorBoundaryProps = {
   children: ReactNode;
@@ -90,9 +94,29 @@ function ResearchArchiveRoute() {
   );
 }
 
+function InvestmentResearchRoute({ children }: { children: ReactNode }) {
+  return (
+    <Suspense fallback={(
+      <main className="ir-page" aria-busy="true">
+        <div className="ir-workbench-skeleton"><span /><span /><span /></div>
+      </main>
+    )}>
+      {children}
+    </Suspense>
+  );
+}
+
 export function ResearchOsRoutes() {
   return (
     <Routes>
+      <Route path="research" element={<InvestmentResearchShell />}>
+        <Route index element={<InvestmentResearchRoute><ResearchHomePage /></InvestmentResearchRoute>} />
+        <Route path="new" element={<InvestmentResearchRoute><NewResearchPage /></InvestmentResearchRoute>} />
+        <Route
+          path="projects/:projectId"
+          element={<InvestmentResearchRoute><ResearchWorkbenchPage /></InvestmentResearchRoute>}
+        />
+      </Route>
       <Route element={<UnderwritingArchiveShell />}>
         <Route path="underwriting/research" element={<ResearchArchiveRoute />} />
         <Route
