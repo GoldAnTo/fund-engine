@@ -117,6 +117,11 @@ scripts/one-click-runtime.sh backup /absolute/path/to/new-backup
 scripts/one-click-runtime.sh restore /absolute/path/to/backup
 ```
 
+`up` 也会在启动 PostgreSQL 或 migrate 前核对数据库卷的 Compose project 和 logical
+volume 标签；新环境先只执行 `compose create postgres`，标签复核通过后才启动服务。
+恢复暂存库和原库快照名使用独立的 128-bit operation UUID。若 `createdb` 因同名库而
+失败，清理逻辑不会删除那个既有数据库。
+
 tar 校验默认限制为：压缩文件 1 GiB、100,000 个成员、单文件 512 MiB、解压总量
 2 GiB、最大压缩比 200；同时只接受普通文件和零负载目录组成的简单 USTAR，不接受
 PAX/GNU 扩展头、链接或特殊文件。checksum manifest 上限为 64 KiB，PostgreSQL dump

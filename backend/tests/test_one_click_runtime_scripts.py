@@ -28,7 +28,16 @@ def test_runtime_control_script_keeps_credentials_local_and_switches_only_app_se
 
 def test_rollback_restarts_only_legacy_application_containers() -> None:
     script = (ROOT / "scripts" / "one-click-runtime.sh").read_text()
-    rollback = script[script.index("restore_legacy_application_services"): script.index("validate_research_archive")]
+    legacy_restore = script[
+        script.index("restore_legacy_application_services") : script.index(
+            "start_one_click_runtime"
+        )
+    ]
+    rollback = script[
+        script.index("restore_legacy_application_services") : script.index(
+            "validate_research_archive"
+        )
+    ]
 
     assert "rollback_runtime" in rollback
     assert "stop_one_click_runtime" in rollback
@@ -38,8 +47,8 @@ def test_rollback_restarts_only_legacy_application_containers() -> None:
     allowed_services = script[script.index("legacy_service_is_allowed"): script.index("begin_legacy_stop_state")]
     for service in ("api", "frontend", "research-worker", "acquisition-worker", "scheduler"):
         assert service in allowed_services
-    assert "postgres" not in rollback
-    assert "keycloak" not in rollback
+    assert "postgres" not in legacy_restore
+    assert "keycloak" not in legacy_restore
 
 
 def test_up_builds_before_cutover_and_restores_only_recorded_containers_on_failure(tmp_path: Path) -> None:
@@ -64,9 +73,14 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
 case "$1" in
   compose)
+    [[ "$*" == *" config --format json"* ]] && {{ printf '%s' '{{"name":"test-project","volumes":{{"fund-engine-one-click-data":{{"name":"test-db"}}}}}}'; exit 0; }}
     [[ "$*" == *" config -q"* || "$*" == *" build"* ]] && exit 0
+    [[ "$*" == *" create postgres"* ]] && exit 0
     [[ "$*" == *" up -d --no-build"* ]] && exit 1
     [[ "$*" == *" down"* ]] && {{ [[ "${{FAIL_DOWN:-0}}" == 1 ]] && exit 39 || exit 0; }}
+    ;;
+  volume)
+    [[ "$2" == "inspect" && "${{!#}}" == "test-db" ]] && {{ printf '%s\n' 'test-db|test-project|fund-engine-one-click-data|||'; exit 0; }}
     ;;
   ps)
     [[ "$*" == *"service=api"* ]] && printf '{api_short}\\n'
@@ -151,8 +165,13 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
 case "$1" in
   compose)
+    [[ "$*" == *" config --format json"* ]] && {{ printf '%s' '{{"name":"test-project","volumes":{{"fund-engine-one-click-data":{{"name":"test-db"}}}}}}'; exit 0; }}
     [[ "$*" == *" config -q"* || "$*" == *" build"* ]] && exit 0
+    [[ "$*" == *" create postgres"* ]] && exit 0
     [[ "$*" == *" down"* ]] && exit 0
+    ;;
+  volume)
+    [[ "$2" == "inspect" && "${{!#}}" == "test-db" ]] && {{ printf '%s\n' 'test-db|test-project|fund-engine-one-click-data|||'; exit 0; }}
     ;;
   ps)
     [[ "$*" == *"service=api"* ]] && printf '{api_short}\\n'

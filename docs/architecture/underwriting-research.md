@@ -240,13 +240,13 @@ two persisted identities rather than a mock or a current-data fallback.
 
 The fresh Increment A gate produced these results:
 
-- backend: 352 passed, 2 skipped, 1 existing Pydantic field-shadow warning;
+- backend: 356 passed, 2 skipped, 1 existing Pydantic field-shadow warning;
   the two skips are the PostgreSQL concurrency variants guarded by
   `TEST_DATABASE_URL` in the workspace-draft and publisher tests;
 - frontend: 75 passed across the product shell, setup flow, strict API reader,
   accessibility contract and deterministic foundation helpers;
 - TypeScript typecheck, Vite production build and Python `compileall`: passed;
-- full repository regression: backend 3,094 passed / 33 skipped / 3 warnings;
+- full repository regression: backend 3,098 passed / 33 skipped / 3 warnings;
   frontend 537 passed across 25 files;
 - legacy compatibility: 5 passed; the stored CATL evidence-only response and
   hash replayed deterministically before and after product rows were present.
@@ -315,3 +315,25 @@ container, network, two uniquely named persistent volumes and unique backend
 image were then removed; the temporary backup was moved to Trash and the test
 environment file was removed. Existing Docker projects and volumes were not
 changed.
+
+The startup boundary also resolves the rendered PostgreSQL volume and requires
+the exact Compose project and `fund-engine-one-click-data` logical-volume
+labels before PostgreSQL or migrate may start. For a fresh volume, Compose may
+create the stopped PostgreSQL service first, but ownership is revalidated
+before full startup. Restore database names use the same 128-bit operation
+entropy while separately tracking whether `createdb` and the original-database
+rename actually succeeded; a name collision therefore cannot make cleanup
+drop a pre-existing database.
+
+A fifth disposable `codex-task11-dbguard-20260825` project exercised both
+database guards against Docker and PostgreSQL. An unlabelled volume placed at
+the rendered database-volume name was rejected before any container started
+and remained intact. After removing only that isolated test volume, fresh
+startup created and validated the correctly labelled database volume, reached
+Alembic `0065` and became healthy. A deliberately pre-created
+`restore_0123456789abcdef0123456789abcdef` database then made restore fail at
+`createdb`; the database remained present and no cleanup drop ran. Removing
+that test database allowed normal backup/restore, file verification and a
+healthy restart. The uniquely named containers, network, volumes and images
+were removed, the temporary backup was moved to Trash, and existing Docker
+projects remained running throughout.

@@ -63,7 +63,7 @@ def _stateful_volume_docker(extra_cases: str = "") -> str:
 set -euo pipefail
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
 case "$*" in
-  *' config --format json'*) printf '%s' '{{"name":"test-project","volumes":{{"fund-engine-one-click-files":{{"name":"fund-engine-one-click-files"}}}}}}'; exit 0 ;;
+  *' config --format json'*) printf '%s' '{{"name":"test-project","volumes":{{"fund-engine-one-click-data":{{"name":"fund-engine-one-click-data"}},"fund-engine-one-click-files":{{"name":"fund-engine-one-click-files"}}}}}}'; exit 0 ;;
 {extra_cases}
   *' ps --status running --services'*) printf 'postgres\\n'; exit 0 ;;
 esac
@@ -71,6 +71,8 @@ if [[ "$1 $2" == "volume inspect" ]]; then
   name="${{!#}}"
   if [[ "$name" == "fund-engine-one-click-files" ]]; then
     printf '%s\\n' 'fund-engine-one-click-files|test-project|fund-engine-one-click-files|||'
+  elif [[ "$name" == "fund-engine-one-click-data" ]]; then
+    printf '%s\\n' 'fund-engine-one-click-data|test-project|fund-engine-one-click-data|||'
   elif [[ -f "$VOLUME_STATE/$name" ]]; then
     cat "$VOLUME_STATE/$name"
   else
@@ -603,8 +605,9 @@ def test_restore_refuses_foreign_live_files_volume_before_mutation(
         "#!/bin/sh\n"
         'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
         'case "$*" in\n'
-        "  *' config --format json'*) printf '%s' '{\"name\":\"expected-project\",\"volumes\":{\"fund-engine-one-click-files\":{\"name\":\"expected-files\"}}}' ;;\n"
+        "  *' config --format json'*) printf '%s' '{\"name\":\"expected-project\",\"volumes\":{\"fund-engine-one-click-data\":{\"name\":\"expected-db\"},\"fund-engine-one-click-files\":{\"name\":\"expected-files\"}}}' ;;\n"
         "  *' ps --status running --services'*) printf 'postgres\\n' ;;\n"
+        "  *'volume inspect --format'*' expected-db'*) printf '%s\\n' 'expected-db|expected-project|fund-engine-one-click-data|||' ;;\n"
         "  *'volume inspect --format'*' expected-files'*) printf '%s\\n' 'expected-files|foreign-project|foreign-logical|||' ;;\n"
         "esac\n"
     )
@@ -627,6 +630,186 @@ def test_restore_refuses_foreign_live_files_volume_before_mutation(
     assert "createdb" not in commands
     assert "docker run" not in commands
     assert "volume rm" not in commands
+
+
+def test_up_refuses_foreign_postgres_volume_before_start_or_legacy_stop(
+    tmp_path: Path,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "docker.log"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
+        'case "$*" in\n'
+        "  *' config --format json'*) printf '%s' '{\"name\":\"expected-project\",\"volumes\":{\"fund-engine-one-click-data\":{\"name\":\"expected-db\"},\"fund-engine-one-click-files\":{\"name\":\"expected-files\"}}}'; exit 0 ;;\n"
+        "  *' config -q'*) exit 0 ;;\n"
+        "  *' build'*) exit 0 ;;\n"
+        "esac\n"
+        'if [[ "$1 $2" == "volume inspect" && "${!#}" == "expected-db" ]]; then\n'
+        "  printf '%s\\n' 'expected-db|foreign-project|fund-engine-one-click-data|||'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "up"],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(log),
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "postgres volume identity" in completed.stderr
+    commands = log.read_text()
+    assert " up -d --no-build" not in commands
+    assert " create postgres" not in commands
+    assert not any(line.startswith("stop ") for line in commands.splitlines())
+
+
+def test_up_creates_and_validates_fresh_postgres_volume_before_full_start(
+    tmp_path: Path,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "docker.log"
+    state = tmp_path / "postgres-volume-created"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
+        'case "$*" in\n'
+        "  *' config --format json'*) printf '%s' '{\"name\":\"fresh-project\",\"volumes\":{\"fund-engine-one-click-data\":{\"name\":\"fresh-db\"},\"fund-engine-one-click-files\":{\"name\":\"fresh-files\"}}}'; exit 0 ;;\n"
+        "  *' config -q'*) exit 0 ;;\n"
+        "  *' build'*) exit 0 ;;\n"
+        "  *' create postgres'*) : > \"$VOLUME_STATE\"; exit 0 ;;\n"
+        "  *' up -d --no-build'*) exit 0 ;;\n"
+        "esac\n"
+        'if [[ "$1 $2" == "volume inspect" && "${!#}" == "fresh-db" ]]; then\n'
+        '  if [[ ! -e "$VOLUME_STATE" ]]; then printf \'No such volume: fresh-db\\n\' >&2; exit 1; fi\n'
+        "  printf '%s\\n' 'fresh-db|fresh-project|fund-engine-one-click-data|||'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "up"],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(log),
+            "VOLUME_STATE": str(state),
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    commands = log.read_text().splitlines()
+    create_index = next(i for i, value in enumerate(commands) if " create postgres" in value)
+    validate_index = next(
+        i
+        for i, value in enumerate(commands)
+        if value.startswith("volume inspect --format") and value.endswith(" fresh-db")
+    )
+    up_index = next(i for i, value in enumerate(commands) if " up -d --no-build" in value)
+    assert create_index < validate_index < up_index
+
+
+def test_up_fails_closed_when_postgres_volume_inspection_is_uncertain(
+    tmp_path: Path,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "docker.log"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
+        'case "$*" in\n'
+        "  *' config --format json'*) printf '%s' '{\"name\":\"test-project\",\"volumes\":{\"fund-engine-one-click-data\":{\"name\":\"test-db\"}}}'; exit 0 ;;\n"
+        "  *' config -q'*) exit 0 ;;\n"
+        "  *' build'*) exit 0 ;;\n"
+        "esac\n"
+        'if [[ "$1 ${2:-}" == "volume inspect" ]]; then printf \'daemon timeout\\n\' >&2; exit 71; fi\n'
+        'if [[ "$1" == "info" ]]; then exit 0; fi\n'
+        "exit 0\n"
+    )
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "up"],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(log),
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "determine whether postgres volume exists safely" in completed.stderr
+    commands = log.read_text()
+    assert " create postgres" not in commands
+    assert " up -d --no-build" not in commands
+
+
+def test_restore_createdb_collision_never_drops_preexisting_database(
+    tmp_path: Path,
+) -> None:
+    script = _runtime_copy(tmp_path)
+    backup = tmp_path / "backup"
+    _write_backup_bundle(backup)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "docker.log"
+    volume_state = tmp_path / "volumes"
+    volume_state.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        _stateful_volume_docker(
+            "  *' exec -T postgres createdb -U one_click '*) exit 48 ;;"
+        )
+    )
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+    openssl = fake_bin / "openssl"
+    operation = "0123456789abcdef0123456789abcdef"
+    openssl.write_text(f"#!/bin/sh\nprintf '%s\\n' '{operation}'\n")
+    openssl.chmod(openssl.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "restore", str(backup)],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DOCKER_LOG": str(log),
+            "VOLUME_STATE": str(volume_state),
+        },
+    )
+
+    assert completed.returncode != 0
+    commands = log.read_text()
+    staging_database = f"restore_{operation}"
+    assert f"createdb -U one_click {staging_database}" in commands
+    assert f"dropdb --if-exists -U one_click {staging_database}" not in commands
 
 
 def test_restore_uses_docker_generated_operation_volumes(
@@ -782,8 +965,9 @@ def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
         "#!/bin/sh\n"
         'printf \'<%s>\\n\' "$@" >> "$DOCKER_LOG"\n'
         'case "$*" in\n'
-        "  *' config --format json'*) printf '%s' '{\"name\":\"test-project\",\"volumes\":{\"fund-engine-one-click-files\":{\"name\":\"custom-task11-files\"}}}' ;;\n"
+        "  *' config --format json'*) printf '%s' '{\"name\":\"test-project\",\"volumes\":{\"fund-engine-one-click-data\":{\"name\":\"custom-task11-db\"},\"fund-engine-one-click-files\":{\"name\":\"custom-task11-files\"}}}' ;;\n"
         "  *' ps --status running --services'*) printf 'postgres\\n' ;;\n"
+        "  *'volume inspect --format'*' custom-task11-db'*) printf '%s\\n' 'custom-task11-db|test-project|fund-engine-one-click-data|||' ;;\n"
         "  *'volume inspect --format'*' custom-task11-files'*) printf '%s\\n' 'custom-task11-files|test-project|fund-engine-one-click-files|||' ;;\n"
         "  *' pg_dump -Fc '*) if [ \"${FAIL_DUMP:-0}\" = 1 ]; then exit 17; else printf 'custom-dump'; fi ;;\n"
         "  *' alpine sh -eu -c '*) tar -czf - --files-from /dev/null ;;\n"
@@ -894,7 +1078,7 @@ def test_restore_finalization_uncertainty_prints_inventory_only(
     docker = fake_bin / "docker"
     docker.write_text(
         _stateful_volume_docker(
-            "  *' exec -T postgres dropdb -U one_click fund_engine_one_click_before_'*) exit 44 ;;"
+            "  *' exec -T postgres dropdb -U one_click before_'*) exit 44 ;;"
         )
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)

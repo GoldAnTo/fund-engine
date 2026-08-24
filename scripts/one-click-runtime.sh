@@ -9,6 +9,7 @@ readonly RUNTIME_ENV_FILE="$REPO_ROOT/.env.one-click.local"
 readonly LEGACY_PROJECT="fund-engine-event"
 readonly LEGACY_STOPPED_STATE_DIR="$REPO_ROOT/.one-click-runtime"
 readonly LEGACY_STOPPED_STATE_FILE="$LEGACY_STOPPED_STATE_DIR/legacy-stopped-containers"
+readonly POSTGRES_VOLUME_LOGICAL_NAME="fund-engine-one-click-data"
 readonly FILES_VOLUME_LOGICAL_NAME="fund-engine-one-click-files"
 readonly OPERATION_PROJECT_LABEL="com.fund-engine.one-click.project"
 readonly OPERATION_ID_LABEL="com.fund-engine.one-click.operation"
@@ -141,6 +142,25 @@ print(name, end="")
   printf '%s' "$value"
 }
 
+postgres_volume_name() {
+  local value
+  if ! value="$(compose config --format json | python3 -c '
+import json
+import sys
+
+config = json.load(sys.stdin)
+name = config.get("volumes", {}).get("fund-engine-one-click-data", {}).get("name")
+if not isinstance(name, str) or not name:
+    raise SystemExit("rendered Compose config has no postgres volume name")
+print(name, end="")
+')"; then
+    die "unable to resolve one-click postgres volume from rendered Compose config"
+  fi
+  [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] \
+    || die "invalid one-click postgres volume name"
+  printf '%s' "$value"
+}
+
 compose_project_name() {
   local value
   if ! value="$(compose config --format json | python3 -c '
@@ -176,6 +196,42 @@ validate_live_files_volume() {
     || die "unable to inspect one-click files volume identity"
   [[ "$actual" == "$expected" ]] \
     || die "one-click files volume identity does not match rendered Compose ownership"
+}
+
+validate_live_postgres_volume() {
+  local volume_name="$1"
+  local project_name="$2"
+  local actual expected
+  expected="${volume_name}|${project_name}|${POSTGRES_VOLUME_LOGICAL_NAME}|||"
+  actual="$(volume_identity "$volume_name")" \
+    || die "unable to inspect one-click postgres volume identity"
+  [[ "$actual" == "$expected" ]] \
+    || die "one-click postgres volume identity does not match rendered Compose ownership"
+}
+
+volume_exists() {
+  local volume_name="$1"
+  local error_file message volume_names listed_volume
+  error_file="$(mktemp "${TMPDIR:-/tmp}/one-click-volume-inspect.XXXXXX")" \
+    || die "unable to create volume inspection error file"
+  if docker volume inspect "$volume_name" >/dev/null 2>"$error_file"; then
+    rm -f -- "$error_file"
+    return 0
+  fi
+  message="$(<"$error_file")"
+  rm -f -- "$error_file"
+  if printf '%s\n' "$message" | grep -qi 'no such volume'; then
+    volume_names="$(docker volume ls --quiet)" \
+      || die "unable to confirm postgres volume absence"
+    while IFS= read -r listed_volume; do
+      [[ "$listed_volume" != "$volume_name" ]] \
+        || die "postgres volume inspection returned inconsistent absence"
+    done <<< "$volume_names"
+    return 1
+  fi
+  docker info >/dev/null 2>&1 \
+    || die "unable to reach Docker while inspecting postgres volume"
+  die "unable to determine whether postgres volume exists safely"
 }
 
 validate_operation_volume() {
@@ -499,6 +555,7 @@ restore_legacy_application_services() {
 
 start_one_click_runtime() (
   local rollback_required="false"
+  local project_name="" postgres_volume=""
   cleanup_start() {
     local status="$?"
     trap - EXIT INT TERM
@@ -522,7 +579,16 @@ start_one_click_runtime() (
   require_runtime_files
   compose config -q
   compose build
+  project_name="$(compose_project_name)"
+  postgres_volume="$(postgres_volume_name)"
+  if volume_exists "$postgres_volume"; then
+    validate_live_postgres_volume "$postgres_volume" "$project_name"
+  fi
   rollback_required="true"
+  compose create postgres || die "unable to create one-click postgres service safely"
+  # The stopped container pins the named volume against replacement. Validate
+  # again before any legacy service is stopped or PostgreSQL is started.
+  validate_live_postgres_volume "$postgres_volume" "$project_name"
   prepare_legacy_stop_state || die "failed to prerecord legacy application containers"
   stop_legacy_application_services || die "failed to stop legacy application containers"
   compose up -d --no-build --scale acquisition-worker=3 \
@@ -887,7 +953,7 @@ PY
 backup_runtime() (
   set -euo pipefail
   local output_dir="$1"
-  local parent temporary_dir volume_name project_name
+  local parent temporary_dir volume_name postgres_volume project_name
   validate_new_backup_path "$output_dir"
   require_command docker
   require_command python3
@@ -898,8 +964,10 @@ backup_runtime() (
   temporary_dir="$(mktemp -d "$parent/.one-click-backup.XXXXXX")"
   trap 'rm -rf -- "$temporary_dir"' EXIT
   volume_name="$(files_volume_name)"
+  postgres_volume="$(postgres_volume_name)"
   project_name="$(compose_project_name)"
   validate_live_files_volume "$volume_name" "$project_name"
+  validate_live_postgres_volume "$postgres_volume" "$project_name"
 
   compose exec -T postgres pg_dump -Fc \
     -U "$(runtime_env_value ONE_CLICK_POSTGRES_USER)" \
@@ -1016,9 +1084,11 @@ restore_runtime() (
   set -euo pipefail
   local backup_dir="$1"
   local private_backup="" private_backup_parent=""
-  local database_user="" database_name="" suffix="" operation_id="" staging_database="" old_database=""
-  local project_name="" files_volume="" staging_volume="" rollback_volume=""
+  local database_user="" database_name="" operation_id="" staging_database="" old_database=""
+  local project_name="" files_volume="" postgres_volume="" staging_volume="" rollback_volume=""
   local database_swapped="false"
+  local staging_database_created="false"
+  local old_database_created="false"
   local preserve_recovery_state="false"
   local database_state="pre_cutover"
 
@@ -1039,7 +1109,9 @@ restore_runtime() (
       remove_operation_volumes \
         "$project_name" "$operation_id" restore-rollback || true
     fi
-    if [[ "$database_swapped" != "true" && -n "$staging_database" ]]; then
+    if [[ "$database_swapped" != "true" \
+      && "$staging_database_created" == "true" \
+      && -n "$staging_database" ]]; then
       compose exec -T postgres dropdb --if-exists -U "$database_user" "$staging_database" >/dev/null 2>&1 || true
     fi
   }
@@ -1062,15 +1134,19 @@ restore_runtime() (
   database_name="$(runtime_env_value ONE_CLICK_POSTGRES_DB)"
   [[ "$database_name" =~ ^[A-Za-z_][A-Za-z0-9_]{0,39}$ ]] \
     || die "one-click database name is unsafe for restore"
-  suffix="$(openssl rand -hex 4)"
   operation_id="$(openssl rand -hex 16)"
-  staging_database="${database_name}_restore_${suffix}"
-  old_database="${database_name}_before_${suffix}"
+  [[ "$operation_id" =~ ^[0-9a-f]{32}$ ]] \
+    || die "generated restore operation ID is invalid"
+  staging_database="restore_${operation_id}"
+  old_database="before_${operation_id}"
   files_volume="$(files_volume_name)"
+  postgres_volume="$(postgres_volume_name)"
   project_name="$(compose_project_name)"
   validate_live_files_volume "$files_volume" "$project_name"
+  validate_live_postgres_volume "$postgres_volume" "$project_name"
 
   compose exec -T postgres createdb -U "$database_user" "$staging_database"
+  staging_database_created="true"
   compose exec -T postgres pg_restore --exit-on-error --no-owner --no-privileges \
     -U "$database_user" -d "$staging_database" < "$private_backup/postgres.dump"
   staging_volume="$(create_operation_volume \
@@ -1101,6 +1177,7 @@ restore_runtime() (
   database_state="cutover_uncertain"
   compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
     -c "ALTER DATABASE \"$database_name\" RENAME TO \"$old_database\";"
+  old_database_created="true"
   database_state="original_renamed"
   # Set uncertainty before every destructive rename so an asynchronous EXIT
   # never reports a stale database topology.
@@ -1111,10 +1188,12 @@ restore_runtime() (
       -c "ALTER DATABASE \"$old_database\" RENAME TO \"$database_name\";"; then
       die "automatic restore rollback failed; preserved recovery artifacts and kept application services stopped"
     fi
+    old_database_created="false"
     database_state="rolled_back"
     preserve_recovery_state="false"
     die "failed to activate restored database"
   fi
+  staging_database_created="false"
   database_state="restored_active"
   database_swapped="true"
   validate_live_files_volume "$files_volume" "$project_name"
@@ -1135,6 +1214,7 @@ restore_runtime() (
       -c "ALTER DATABASE \"$database_name\" RENAME TO \"$staging_database\";"; then
       database_rollback_succeeded="false"
     else
+      staging_database_created="true"
       database_state="original_renamed"
       # The next rename can be interrupted after PostgreSQL commits it but
       # before this shell observes success.
@@ -1144,9 +1224,11 @@ restore_runtime() (
         database_rollback_succeeded="false"
         if compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
           -c "ALTER DATABASE \"$staging_database\" RENAME TO \"$database_name\";"; then
+          staging_database_created="false"
           database_state="restored_active"
         fi
       else
+        old_database_created="false"
         database_state="rolled_back"
       fi
     fi
@@ -1161,7 +1243,10 @@ restore_runtime() (
     die "restored runtime failed final verification; preserved recovery artifacts and kept application services stopped"
   fi
   database_state="finalizing_uncertain"
+  [[ "$old_database_created" == "true" ]] \
+    || die "restore database finalization state is inconsistent"
   compose exec -T postgres dropdb -U "$database_user" "$old_database"
+  old_database_created="false"
   preserve_recovery_state="false"
   printf 'Restored and verified one-click backup from %s.\n' "$backup_dir"
 )
