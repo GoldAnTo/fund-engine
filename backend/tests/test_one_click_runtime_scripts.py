@@ -184,14 +184,30 @@ def test_init_upgrades_the_previous_default_gildata_adapter_without_exposing_sec
     script = scripts_dir / "one-click-runtime.sh"
     shutil.copy(ROOT / "scripts" / "one-click-runtime.sh", script)
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    (tmp_path / ".env").touch()
+    (tmp_path / "docker-compose.one-click.yml").touch()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        "printf '{\"services\":{\"acquisition-worker\":{\"environment\":{\"GILDATA_TOKEN\":\"%s\"}}}}' \"${GILDATA_TOKEN:-}\"\n"
+    )
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+    command_env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
     runtime_env = tmp_path / ".env.one-click.local"
     runtime_env.write_text(
         "ONE_CLICK_POSTGRES_PASSWORD=do-not-print-me\n"
+        'GILDATA_TOKEN=""\n'
         "ACQUISITION_ENABLED_ADAPTERS=sse,szse,gildata\n"
     )
 
     completed = subprocess.run(
-        [script, "init"], check=True, capture_output=True, text=True
+        [script, "init"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=command_env,
     )
 
     assert "ACQUISITION_ENABLED_ADAPTERS=sse,szse\n" in runtime_env.read_text()
@@ -207,6 +223,6 @@ def test_init_upgrades_the_previous_default_gildata_adapter_without_exposing_sec
         check=True,
         capture_output=True,
         text=True,
-        env={**os.environ, "GILDATA_TOKEN": "explicitly-configured"},
+        env={**command_env, "GILDATA_TOKEN": "explicitly-configured"},
     )
     assert "ACQUISITION_ENABLED_ADAPTERS=sse,szse,gildata\n" in runtime_env.read_text()

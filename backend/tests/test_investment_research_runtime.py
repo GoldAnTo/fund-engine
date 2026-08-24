@@ -148,9 +148,21 @@ def test_runtime_backup_restore_contract_is_fail_closed() -> None:
     assert "require_application_services_stopped backup" in script
     assert "require_application_services_stopped restore" in script
     assert 'preserve_recovery_state="true"' in script
+    cutover_start = script.index(
+        'copy_volume_contents "$files_volume" "$rollback_volume"'
+    )
+    first_destructive_rename = script.index(
+        "compose exec -T postgres psql", cutover_start
+    )
+    assert script.index('preserve_recovery_state="true"', cutover_start) < (
+        first_destructive_rename
+    )
     assert "automatic restore rollback failed; preserved" in script
     assert "manual recovery required; keep application services stopped" in script
     assert "docker volume inspect" in script
+    assert "database rollback step 1" in script
+    assert "database rollback step 2" in script
+    assert "file recovery command" in script
     assert "compose config --format json" in script
     assert "postgres.dump" in script and "research-files.tar.gz" in script
     assert "--volumes" not in script
@@ -308,7 +320,7 @@ def test_backup_checks_stopped_services_before_dump(tmp_path: Path) -> None:
         "#!/bin/sh\n"
         'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
         'case "$*" in\n'
-        "  *' ps --status running --services'*) printf 'api\\npostgres\\n' ;;\n"
+        "  *' ps --status running --services'*) printf 'migrate\\npostgres\\n' ;;\n"
         "esac\n"
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
@@ -428,6 +440,7 @@ def test_restore_preserves_recovery_artifacts_when_compensation_fails(
     assert "automatic restore rollback failed; preserved" in completed.stderr
     assert "manual recovery required; keep application services stopped" in completed.stderr
     assert "docker volume inspect" in completed.stderr
+    assert "recovery command" in completed.stderr
     assert "volume rm" not in commands
     assert "dropdb" not in commands
 

@@ -9,7 +9,6 @@ readonly RUNTIME_ENV_FILE="$REPO_ROOT/.env.one-click.local"
 readonly LEGACY_PROJECT="fund-engine-event"
 readonly LEGACY_STOPPED_STATE_DIR="$REPO_ROOT/.one-click-runtime"
 readonly LEGACY_STOPPED_STATE_FILE="$LEGACY_STOPPED_STATE_DIR/legacy-stopped-containers"
-ENV_FILE_VALUE=""
 
 die() {
   printf 'one-click runtime: %s\n' "$*" >&2
@@ -37,18 +36,6 @@ runtime_env_value() {
   printf '%s' "$value"
 }
 
-env_file_value() {
-  local file="$1"
-  local key="$2"
-  local matches
-  [[ -f "$file" ]] || return 1
-  matches="$(grep -E "^${key}=" "$file" || true)"
-  [[ -n "$matches" ]] || return 1
-  [[ "$(printf '%s\n' "$matches" | wc -l | tr -d ' ')" == "1" ]] \
-    || die "duplicate ${key} in ${file}"
-  ENV_FILE_VALUE="${matches#*=}"
-}
-
 files_volume_name() {
   local value
   if ! value="$(compose config --format json | python3 -c '
@@ -70,14 +57,19 @@ print(name, end="")
 
 gildata_token_is_configured() {
   local value
-  if [[ "${GILDATA_TOKEN+x}" == "x" ]]; then
-    value="$GILDATA_TOKEN"
-  elif env_file_value "$RUNTIME_ENV_FILE" GILDATA_TOKEN; then
-    value="$ENV_FILE_VALUE"
-  elif env_file_value "$BASE_ENV_FILE" GILDATA_TOKEN; then
-    value="$ENV_FILE_VALUE"
-  else
-    value=""
+  if ! value="$(compose config --format json | python3 -c '
+import json
+import sys
+
+config = json.load(sys.stdin)
+value = config.get("services", {}).get("acquisition-worker", {}).get("environment", {}).get("GILDATA_TOKEN", "")
+if value is None:
+    value = ""
+if not isinstance(value, str):
+    raise SystemExit("rendered Compose GILDATA_TOKEN is not text")
+print(value, end="")
+')"; then
+    die "unable to resolve GILDATA_TOKEN from rendered Compose config"
   fi
   [[ -n "$value" ]]
 }
@@ -125,6 +117,10 @@ upgrade_legacy_runtime_defaults() {
   local temporary_file
   grep -Fxq 'ACQUISITION_ENABLED_ADAPTERS=sse,szse,gildata' "$RUNTIME_ENV_FILE" \
     || return 0
+  require_command docker
+  require_command python3
+  [[ -f "$COMPOSE_FILE" && -f "$BASE_ENV_FILE" ]] \
+    || die "cannot inspect rendered Compose environment for legacy runtime upgrade"
   gildata_token_is_configured && return 0
   temporary_file="$(mktemp "${RUNTIME_ENV_FILE}.XXXXXX")"
   (
@@ -358,7 +354,7 @@ require_application_services_stopped() {
   if ! all_running_services="$(compose ps --status running --services)"; then
     die "unable to inspect one-click services before ${action}"
   fi
-  running_services="$(printf '%s\n' "$all_running_services" | grep -Ev '^(postgres|migrate)$' || true)"
+  running_services="$(printf '%s\n' "$all_running_services" | grep -Ev '^postgres$' || true)"
   [[ -z "$running_services" ]] || die "stop application services before ${action}"
   printf '%s\n' "$all_running_services" | grep -Fxq postgres \
     || die "one-click postgres must be running for ${action}"
@@ -431,18 +427,49 @@ copy_volume_contents() {
 
 print_restore_recovery_instructions() {
   local database_user="$1"
-  local staging_database="$2"
-  local old_database="$3"
-  local files_volume="$4"
-  local staging_volume="$5"
-  local rollback_volume="$6"
+  local database_name="$2"
+  local staging_database="$3"
+  local old_database="$4"
+  local database_state="$5"
+  local files_volume="$6"
+  local staging_volume="$7"
+  local rollback_volume="$8"
+  local sql
   printf 'one-click runtime: manual recovery required; keep application services stopped and do not rerun restore.\n' >&2
   printf 'one-click runtime: inspect databases with: docker compose -f %q --env-file %q --env-file %q exec -T postgres psql -U %q -d postgres -lqt\n' \
     "$COMPOSE_FILE" "$BASE_ENV_FILE" "$RUNTIME_ENV_FILE" "$database_user" >&2
-  printf 'one-click runtime: preserved database names: %q %q\n' \
-    "$staging_database" "$old_database" >&2
+  case "$database_state" in
+    original_renamed)
+      printf 'one-click runtime: preserved database names: %q %q\n' \
+        "$staging_database" "$old_database" >&2
+      sql="ALTER DATABASE \"$old_database\" RENAME TO \"$database_name\";"
+      printf 'one-click runtime: database recovery command: docker compose -f %q --env-file %q --env-file %q exec -T postgres psql -v ON_ERROR_STOP=1 -U %q -d postgres -c %q\n' \
+        "$COMPOSE_FILE" "$BASE_ENV_FILE" "$RUNTIME_ENV_FILE" "$database_user" "$sql" >&2
+      ;;
+    restored_active)
+      printf 'one-click runtime: preserved database names: %q %q\n' \
+        "$database_name" "$old_database" >&2
+      sql="ALTER DATABASE \"$database_name\" RENAME TO \"$staging_database\";"
+      printf 'one-click runtime: database rollback step 1: docker compose -f %q --env-file %q --env-file %q exec -T postgres psql -v ON_ERROR_STOP=1 -U %q -d postgres -c %q\n' \
+        "$COMPOSE_FILE" "$BASE_ENV_FILE" "$RUNTIME_ENV_FILE" "$database_user" "$sql" >&2
+      sql="ALTER DATABASE \"$old_database\" RENAME TO \"$database_name\";"
+      printf 'one-click runtime: database rollback step 2: docker compose -f %q --env-file %q --env-file %q exec -T postgres psql -v ON_ERROR_STOP=1 -U %q -d postgres -c %q\n' \
+        "$COMPOSE_FILE" "$BASE_ENV_FILE" "$RUNTIME_ENV_FILE" "$database_user" "$sql" >&2
+      ;;
+    rolled_back)
+      printf 'one-click runtime: preserved database names: %q %q\n' \
+        "$database_name" "$staging_database" >&2
+      ;;
+    *)
+      printf 'one-click runtime: database cutover state is uncertain; inspect possible names: %q %q %q\n' \
+        "$database_name" "$staging_database" "$old_database" >&2
+      ;;
+  esac
   printf 'one-click runtime: inspect volumes with: docker volume inspect %q %q %q\n' \
     "$files_volume" "$staging_volume" "$rollback_volume" >&2
+  printf 'one-click runtime: file recovery command: docker run --rm -v %q:/source:ro -v %q:/target alpine sh -eu -c %q\n' \
+    "$rollback_volume" "$files_volume" \
+    'find /target -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; cp -a /source/. /target/' >&2
 }
 
 restore_runtime() (
@@ -452,6 +479,7 @@ restore_runtime() (
   local files_volume staging_volume rollback_volume
   local database_swapped="false"
   local preserve_recovery_state="false"
+  local database_state="pre_cutover"
 
   validate_existing_backup_path "$backup_dir"
   require_command docker
@@ -476,7 +504,8 @@ restore_runtime() (
   cleanup_restore() {
     if [[ "$preserve_recovery_state" == "true" ]]; then
       print_restore_recovery_instructions \
-        "$database_user" "$staging_database" "$old_database" \
+        "$database_user" "$database_name" "$staging_database" "$old_database" \
+        "$database_state" \
         "$files_volume" "$staging_volume" "$rollback_volume"
       return 0
     fi
@@ -505,44 +534,63 @@ restore_runtime() (
 
   docker volume create "$rollback_volume" >/dev/null
   copy_volume_contents "$files_volume" "$rollback_volume"
+  preserve_recovery_state="true"
+  database_state="cutover_uncertain"
   compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
     -c "ALTER DATABASE \"$database_name\" RENAME TO \"$old_database\";"
+  database_state="original_renamed"
+  # Set uncertainty before every destructive rename so an asynchronous EXIT
+  # never reports a stale database topology.
+  database_state="cutover_uncertain"
   if ! compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
     -c "ALTER DATABASE \"$staging_database\" RENAME TO \"$database_name\";"; then
     if ! compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
       -c "ALTER DATABASE \"$old_database\" RENAME TO \"$database_name\";"; then
-      preserve_recovery_state="true"
       die "automatic restore rollback failed; preserved recovery artifacts and kept application services stopped"
     fi
+    database_state="rolled_back"
+    preserve_recovery_state="false"
     die "failed to activate restored database"
   fi
+  database_state="restored_active"
   database_swapped="true"
   if ! copy_volume_contents "$staging_volume" "$files_volume"; then
     local files_rollback_succeeded="true"
     local database_rollback_succeeded="true"
     copy_volume_contents "$rollback_volume" "$files_volume" \
       || files_rollback_succeeded="false"
+    database_state="cutover_uncertain"
     if ! compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
       -c "ALTER DATABASE \"$database_name\" RENAME TO \"$staging_database\";"; then
       database_rollback_succeeded="false"
-    elif ! compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
-      -c "ALTER DATABASE \"$old_database\" RENAME TO \"$database_name\";"; then
-      database_rollback_succeeded="false"
-      compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
-        -c "ALTER DATABASE \"$staging_database\" RENAME TO \"$database_name\";" || true
+    else
+      database_state="original_renamed"
+      # The next rename can be interrupted after PostgreSQL commits it but
+      # before this shell observes success.
+      database_state="cutover_uncertain"
+      if ! compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
+        -c "ALTER DATABASE \"$old_database\" RENAME TO \"$database_name\";"; then
+        database_rollback_succeeded="false"
+        if compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$database_user" -d postgres \
+          -c "ALTER DATABASE \"$staging_database\" RENAME TO \"$database_name\";"; then
+          database_state="restored_active"
+        fi
+      else
+        database_state="rolled_back"
+      fi
     fi
     if [[ "$files_rollback_succeeded" != "true" || "$database_rollback_succeeded" != "true" ]]; then
-      preserve_recovery_state="true"
       die "automatic restore rollback failed; preserved recovery artifacts and kept application services stopped"
     fi
     database_swapped="false"
+    preserve_recovery_state="false"
     die "failed to activate restored research files"
   fi
   if ! compose run --rm --no-deps api python -m app.scripts.verify_underwriting_revision_manifests; then
-    preserve_recovery_state="true"
     die "restored runtime failed final verification; preserved recovery artifacts and kept application services stopped"
   fi
   compose exec -T postgres dropdb -U "$database_user" "$old_database"
+  preserve_recovery_state="false"
   printf 'Restored and verified one-click backup from %s.\n' "$backup_dir"
 )
 
