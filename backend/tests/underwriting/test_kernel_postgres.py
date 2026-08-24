@@ -33,6 +33,24 @@ TABLES = {
     "uw_evidence_candidate_review_versions",
 }
 
+PRODUCT_TABLES = {
+    "uw_object_identity_versions",
+    "uw_research_projects",
+    "uw_research_project_securities",
+    "uw_research_scope_versions",
+    "uw_research_agenda_versions",
+    "uw_price_snapshots",
+    "uw_fx_snapshots",
+    "uw_capital_structure_snapshots",
+    "uw_security_rights_versions",
+    "uw_research_assessment_versions",
+    "uw_workspace_drafts",
+    "uw_revision_boundaries",
+    "uw_revision_manifests",
+}
+
+IMMUTABLE_PRODUCT_TABLES = PRODUCT_TABLES - {"uw_workspace_drafts"}
+
 
 def _schema_url(database_url: str, schema: str) -> str:
     separator = "&" if "?" in database_url else "?"
@@ -242,6 +260,239 @@ def test_0064_candidate_review_trigger_rejects_only_new_stale_inserts() -> None:
             trigger_definitions = dict(trigger_rows)
             assert {"no_update_uw_evidence_candidate_review_versions", "no_delete_uw_evidence_candidate_review_versions", "trg_uw_candidate_review_reject_superseded"}.issubset(trigger_definitions)
             assert "BEFORE INSERT" in trigger_definitions["trg_uw_candidate_review_reject_superseded"]
+    finally:
+        isolated.dispose()
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin.dispose()
+
+
+@pytest.mark.pg_only
+def test_0065_product_tables_install_precise_immutable_and_draft_delete_triggers() -> None:
+    database_url = os.environ["TEST_DATABASE_URL"]
+    schema = f"underwriting_0065_{uuid.uuid4().hex}"
+    migration_url = _schema_url(database_url, schema)
+    admin = sa.create_engine(database_url, future=True)
+    isolated = sa.create_engine(migration_url, future=True)
+    backend = Path(__file__).parents[2]
+    ids = {
+        name: uuid.uuid4()
+        for name in (
+            "company",
+            "security",
+            "identity",
+            "project",
+            "project_security",
+            "scope",
+            "agenda",
+            "price",
+            "fx",
+            "capital",
+            "rights",
+            "assessment",
+            "draft",
+            "mandate",
+            "basis",
+            "boundary",
+            "manifest",
+        )
+    }
+    digest = "a" * 64
+    try:
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+        migrated = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "0065"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert migrated.returncode == 0, migrated.stderr
+
+        with isolated.begin() as connection:
+            assert PRODUCT_TABLES <= set(sa.inspect(connection).get_table_names())
+            trigger_rows = connection.execute(
+                sa.text(
+                    """
+                    SELECT c.relname, t.tgname
+                    FROM pg_trigger AS t
+                    JOIN pg_class AS c ON c.oid = t.tgrelid
+                    WHERE NOT t.tgisinternal AND c.relname LIKE 'uw_%'
+                    """
+                )
+            ).all()
+            actual_triggers: dict[str, set[str]] = {
+                table_name: set() for table_name in PRODUCT_TABLES
+            }
+            for table_name, trigger_name in trigger_rows:
+                if table_name in actual_triggers:
+                    actual_triggers[table_name].add(trigger_name)
+            for table_name in IMMUTABLE_PRODUCT_TABLES:
+                assert actual_triggers[table_name] == {
+                    f"no_update_{table_name}",
+                    f"no_delete_{table_name}",
+                }
+            assert actual_triggers["uw_workspace_drafts"] == {
+                "no_delete_uw_workspace_drafts"
+            }
+
+            connection.execute(sa.text("""
+                INSERT INTO uw_research_objects
+                  (id, kind, external_key, canonical_name, created_at) VALUES
+                  (:company, 'company', '0065-company', 'Company', CURRENT_TIMESTAMP),
+                  (:security, 'security', '0065-security', 'Security', CURRENT_TIMESTAMP)
+            """), ids)
+            connection.execute(sa.text("""
+                INSERT INTO uw_object_identity_versions
+                  (id, object_id, version, canonical_name, symbol, exchange, share_class,
+                   trading_currency, effective_from, content_hash, created_at)
+                VALUES (:identity, :security, 1, 'Security', 'SEC', 'TEST', 'ordinary',
+                        'CNY', CURRENT_TIMESTAMP, :digest, CURRENT_TIMESTAMP)
+            """), {**ids, "digest": digest})
+            connection.execute(sa.text("""
+                INSERT INTO uw_research_projects
+                  (id, primary_company_id, content_hash, created_at)
+                VALUES (:project, :company, :digest, CURRENT_TIMESTAMP)
+            """), {**ids, "digest": digest})
+            connection.execute(sa.text("""
+                INSERT INTO uw_research_project_securities
+                  (id, project_id, security_id, content_hash, created_at)
+                VALUES (:project_security, :project, :security, :digest, CURRENT_TIMESTAMP)
+            """), {**ids, "digest": digest})
+            connection.execute(sa.text("""
+                INSERT INTO uw_research_scope_versions
+                  (id, project_id, version, payload, content_hash, created_at)
+                VALUES (:scope, :project, 1, '{}', :digest, CURRENT_TIMESTAMP)
+            """), {**ids, "digest": digest})
+            connection.execute(sa.text("""
+                INSERT INTO uw_research_agenda_versions
+                  (id, project_id, version, scope_id, payload, generator_provenance,
+                   content_hash, created_at)
+                VALUES (:agenda, :project, 1, :scope, '{}', '{}', :digest, CURRENT_TIMESTAMP)
+            """), {**ids, "digest": digest})
+            connection.execute(sa.text("""
+                INSERT INTO uw_price_snapshots
+                  (id, security_identity_id, price, currency, price_type, adjustment_basis,
+                   market_at, available_at, source_id, raw_hash, content_hash, created_at)
+                VALUES (:price, :security, 10, 'CNY', 'close', 'unadjusted',
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'test', :digest, :digest,
+                        CURRENT_TIMESTAMP)
+            """), {**ids, "digest": digest})
+            connection.execute(sa.text("""
+                INSERT INTO uw_fx_snapshots
+                  (id, base_currency, quote_currency, rate, quote_direction, market_at,
+                   available_at, source_id, raw_hash, content_hash, created_at)
+                VALUES (:fx, 'USD', 'CNY', 7, 'quote_per_base', CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP, 'test', :digest, :digest, CURRENT_TIMESTAMP)
+            """), {**ids, "digest": digest})
+            connection.execute(sa.text("""
+                INSERT INTO uw_capital_structure_snapshots
+                  (id, company_id, currency, cash, debt, minority_interest, investments,
+                   pension_liabilities, other_adjustments, basic_shares, diluted_shares,
+                   potential_dilution_descriptors, report_period_start, report_period_end,
+                   market_at, available_at, source_id, raw_hash, content_hash, created_at)
+                VALUES (:capital, :company, 'CNY', 1, 1, 0, 0, 0, 0, 10, 11, '[]',
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP, 'test', :digest, :digest, CURRENT_TIMESTAMP)
+            """), {**ids, "digest": digest})
+            connection.execute(sa.text("""
+                INSERT INTO uw_security_rights_versions
+                  (id, security_identity_id, version, economic_units, votes_per_unit,
+                   conversion_ratio, adr_ratio, dividend_rights_per_unit, effective_from,
+                   source_id, raw_hash, content_hash, created_at)
+                VALUES (:rights, :security, 1, 1, 0, 1, 1, 0, CURRENT_TIMESTAMP,
+                        'test', :digest, :digest, CURRENT_TIMESTAMP)
+            """), {**ids, "digest": digest})
+            connection.execute(sa.text("""
+                INSERT INTO uw_research_assessment_versions
+                  (id, project_id, version, answerability, direction, confidence,
+                   publication_status, blockers, resolution_requirements, content_hash,
+                   created_at)
+                VALUES (:assessment, :project, 1, 'not_answerable', NULL, NULL,
+                        'user_frozen', '[]', '[]', :digest, CURRENT_TIMESTAMP)
+            """), {**ids, "digest": digest})
+            connection.execute(sa.text("""
+                INSERT INTO uw_workspace_drafts
+                  (id, project_id, lock_version, content, created_at, updated_at)
+                VALUES (:draft, :project, 1, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """), ids)
+            connection.execute(sa.text("""
+                INSERT INTO uw_mandate_versions
+                  (id, mandate_key, version, horizon_years, base_currency, required_return,
+                   permanent_loss_limit, comparison_set, created_at)
+                VALUES (:mandate, '0065', 1, 3, 'CNY', 0.1, 0.2, '[]', CURRENT_TIMESTAMP)
+            """), ids)
+            connection.execute(sa.text("""
+                INSERT INTO uw_historical_bases
+                  (id, cutoff, source_manifest_hash, created_at)
+                VALUES (:basis, CURRENT_TIMESTAMP, :digest, CURRENT_TIMESTAMP)
+            """), {**ids, "digest": digest})
+            connection.execute(sa.text("""
+                INSERT INTO uw_revision_boundaries
+                  (id, project_id, historical_basis_id, mandate_id, scope_id, agenda_id,
+                   price_snapshot_ids, fx_snapshot_ids, capital_structure_snapshot_id,
+                   security_rights_ids, schema_version, content_hash, created_at)
+                VALUES (:boundary, :project, :basis, :mandate, :scope, :agenda, '[]', '[]',
+                        :capital, '[]', '1', :digest, CURRENT_TIMESTAMP)
+            """), {**ids, "digest": digest})
+            connection.execute(sa.text("""
+                INSERT INTO uw_revision_manifests
+                  (id, project_id, boundary_id, idempotency_key, manifest, content_hash,
+                   created_at)
+                VALUES (:manifest, :project, :boundary, '0065-retry', '{}', :digest,
+                        CURRENT_TIMESTAMP)
+            """), {**ids, "digest": digest})
+
+        immutable_ids = {
+            "uw_object_identity_versions": ids["identity"],
+            "uw_research_projects": ids["project"],
+            "uw_research_project_securities": ids["project_security"],
+            "uw_research_scope_versions": ids["scope"],
+            "uw_research_agenda_versions": ids["agenda"],
+            "uw_price_snapshots": ids["price"],
+            "uw_fx_snapshots": ids["fx"],
+            "uw_capital_structure_snapshots": ids["capital"],
+            "uw_security_rights_versions": ids["rights"],
+            "uw_research_assessment_versions": ids["assessment"],
+            "uw_revision_boundaries": ids["boundary"],
+            "uw_revision_manifests": ids["manifest"],
+        }
+        assert set(immutable_ids) == IMMUTABLE_PRODUCT_TABLES
+        for table_name, row_id in immutable_ids.items():
+            with pytest.raises(sa.exc.DBAPIError, match="append-only|immutable"):
+                with isolated.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            f"UPDATE {table_name} SET content_hash = :digest WHERE id = :id"
+                        ),
+                        {"digest": "b" * 64, "id": row_id},
+                    )
+            with pytest.raises(sa.exc.DBAPIError, match="append-only|immutable"):
+                with isolated.begin() as connection:
+                    connection.execute(
+                        sa.text(f"DELETE FROM {table_name} WHERE id = :id"),
+                        {"id": row_id},
+                    )
+
+        with isolated.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "UPDATE uw_workspace_drafts SET lock_version = 2 WHERE id = :id"
+                ),
+                {"id": ids["draft"]},
+            )
+            assert connection.execute(
+                sa.text("SELECT lock_version FROM uw_workspace_drafts WHERE id = :id"),
+                {"id": ids["draft"]},
+            ).scalar_one() == 2
+        with pytest.raises(sa.exc.DBAPIError, match="append-only|immutable"):
+            with isolated.begin() as connection:
+                connection.execute(
+                    sa.text("DELETE FROM uw_workspace_drafts WHERE id = :id"),
+                    {"id": ids["draft"]},
+                )
     finally:
         isolated.dispose()
         with admin.begin() as connection:

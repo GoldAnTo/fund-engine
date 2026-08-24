@@ -36,6 +36,22 @@ CANDIDATE_EVIDENCE_TABLES = {
     "uw_evidence_candidate_review_versions",
 }
 
+PRODUCT_TABLES = {
+    "uw_object_identity_versions",
+    "uw_research_projects",
+    "uw_research_project_securities",
+    "uw_research_scope_versions",
+    "uw_research_agenda_versions",
+    "uw_price_snapshots",
+    "uw_fx_snapshots",
+    "uw_capital_structure_snapshots",
+    "uw_security_rights_versions",
+    "uw_research_assessment_versions",
+    "uw_workspace_drafts",
+    "uw_revision_boundaries",
+    "uw_revision_manifests",
+}
+
 
 def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
     database_path = tmp_path / "research-demo.db"
@@ -53,7 +69,12 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
     assert result.returncode == 0, result.stderr
     engine = sa.create_engine(f"sqlite:///{database_path}")
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0064"
+        assert (
+            connection.execute(
+                sa.text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            == "0065"
+        )
         assessment_columns = {
             column["name"]
             for column in sa.inspect(connection).get_columns("ai_assessments")
@@ -78,6 +99,37 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
         }.issubset(sa.inspect(connection).get_table_names())
         assert WAVE2_TABLES.issubset(sa.inspect(connection).get_table_names())
         assert CANDIDATE_EVIDENCE_TABLES.issubset(sa.inspect(connection).get_table_names())
+        assert PRODUCT_TABLES.issubset(sa.inspect(connection).get_table_names())
+        compatibility_columns = {
+            "uw_mandate_versions": {
+                "project_id",
+                "benchmark_key",
+                "required_excess_return",
+                "effective_at",
+                "expires_at",
+                "content_hash",
+            },
+            "uw_historical_bases": {
+                "definition_bundle_hash",
+                "parser_bundle_hash",
+                "boundary_schema_version",
+                "content_hash",
+            },
+            "uw_research_versions": {
+                "project_id",
+                "boundary_id",
+                "manifest_id",
+                "manifest_schema",
+                "publication_status",
+            },
+        }
+        for table_name, expected_columns in compatibility_columns.items():
+            reflected = {
+                column["name"]: column
+                for column in sa.inspect(connection).get_columns(table_name)
+            }
+            assert expected_columns <= set(reflected)
+            assert all(reflected[name]["nullable"] for name in expected_columns)
         research_source_type = {
             column["name"]: column
             for column in sa.inspect(connection).get_columns("source_contracts")
@@ -669,7 +721,7 @@ with SessionLocal() as session:
 
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0064"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0065"
         assert {
             "research_preparations",
             "research_preparation_artifacts",
@@ -1433,7 +1485,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0064"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0065"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -1487,7 +1539,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0064"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0065"
 
 
 def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> None:
@@ -1544,7 +1596,7 @@ def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> 
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == "0064"
+        ).scalar_one() == "0065"
         assert connection.execute(
             sa.text(
                 "SELECT research_source_type FROM source_contracts WHERE id = :id"

@@ -97,6 +97,20 @@ class UnderwritingMandateVersion(Base):
     supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("uw_mandate_versions.id"), nullable=True
     )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("uw_research_projects.id"), nullable=True
+    )
+    benchmark_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    required_excess_return: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 8), nullable=True
+    )
+    effective_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -109,6 +123,12 @@ class UnderwritingHistoricalBasis(Base):
         DateTime(timezone=True), nullable=True
     )
     source_manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    definition_bundle_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    parser_bundle_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    boundary_schema_version: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -191,6 +211,29 @@ class UnderwritingResearchVersion(Base):
     supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("uw_research_versions.id"), nullable=True
     )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("uw_research_projects.id"), nullable=True
+    )
+    boundary_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "uw_revision_boundaries.id",
+            name="fk_uw_research_version_boundary",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
+    manifest_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "uw_revision_manifests.id",
+            name="fk_uw_research_version_manifest",
+            use_alter=True,
+        ),
+        nullable=True,
+    )
+    manifest_schema: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    publication_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

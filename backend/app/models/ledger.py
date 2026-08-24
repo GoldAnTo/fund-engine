@@ -147,8 +147,22 @@ IMMUTABLE_TABLES = frozenset(
         "uw_falsifier_versions",
         "uw_evidence_candidate_dossier_versions",
         "uw_evidence_candidate_review_versions",
+        "uw_object_identity_versions",
+        "uw_research_projects",
+        "uw_research_project_securities",
+        "uw_research_scope_versions",
+        "uw_research_agenda_versions",
+        "uw_price_snapshots",
+        "uw_fx_snapshots",
+        "uw_capital_structure_snapshots",
+        "uw_security_rights_versions",
+        "uw_research_assessment_versions",
+        "uw_revision_boundaries",
+        "uw_revision_manifests",
     }
 )
+
+DELETE_PROTECTED_TABLES = frozenset({"uw_workspace_drafts"})
 
 
 class ImmutableLedgerError(Exception):
@@ -199,6 +213,10 @@ def _guard_immutable_tables(*args: Any, **kwargs: Any) -> None:
         if name in IMMUTABLE_TABLES:
             raise ImmutableLedgerError(
                 f"table '{name}' is append-only: UPDATE/DELETE is not allowed"
+            )
+        if isinstance(statement, Delete) and name in DELETE_PROTECTED_TABLES:
+            raise ImmutableLedgerError(
+                f"table '{name}' is delete-protected: DELETE is not allowed"
             )
 
 

@@ -9,7 +9,11 @@ from sqlalchemy import create_engine, delete, inspect, update
 from sqlalchemy.orm import Session
 
 from app.models import Base
-from app.models.ledger import IMMUTABLE_TABLES, ImmutableLedgerError
+from app.models.ledger import (
+    DELETE_PROTECTED_TABLES,
+    IMMUTABLE_TABLES,
+    ImmutableLedgerError,
+)
 from app.underwriting.domain.types import HistoricalBasisInput
 from app.underwriting.persistence.models import UnderwritingResearchObject
 from app.underwriting.persistence.repository import (
@@ -37,6 +41,7 @@ UNDERWRITING_TABLES = frozenset(
 def test_underwriting_kernel_tables_are_registered_with_metadata_and_immutable_guard():
     assert UNDERWRITING_TABLES <= set(Base.metadata.tables)
     assert UNDERWRITING_TABLES <= IMMUTABLE_TABLES
+    assert "uw_workspace_drafts" in DELETE_PROTECTED_TABLES
 
 
 def test_underwriting_research_objects_reject_update_and_delete():
