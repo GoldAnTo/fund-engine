@@ -1,13 +1,28 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
   InvestmentResearchRequestError,
   investmentResearchApi,
   type ProductDraft,
+  type ProductAgenda,
+  type ProductCapitalStructure,
+  type ProductFxSnapshot,
+  type ProductHistoricalBasis,
+  type ProductMandate,
   type ProductObjectSearchItem,
+  type ProductPriceSnapshot,
+  type ProductPreview,
   type ProductProject,
+  type ProductScope,
+  type ProductSecurityRights,
 } from "../../data/investmentResearchApi";
+import {
+  generateFoundationAgenda,
+  toFrozenIso,
+  type FrozenTimezone,
+  type GeneratedFoundationAgenda,
+} from "./researchFoundation";
 
 const schemaVersion = "underwriting.v1" as const;
 const hashPattern = "[0-9a-f]{64}";
@@ -27,12 +42,6 @@ function optionalField(form: FormData, name: string): string | null {
 
 function lines(value: string): string[] {
   return value.split(/\n|，|,/).map((item) => item.trim()).filter(Boolean);
-}
-
-function aware(value: string): string {
-  const timestamp = new Date(value);
-  if (Number.isNaN(timestamp.getTime())) throw new Error("时间格式无法识别");
-  return timestamp.toISOString();
 }
 
 function FormField({ label, name, children, ...props }: {
@@ -59,10 +68,15 @@ function identityDetail(item: ProductObjectSearchItem): string {
 
 export default function NewResearchPage() {
   const navigate = useNavigate();
+  const boundaryFormRef = useRef<HTMLFormElement>(null);
+  const frozenFoundationFormRef = useRef<FormData | null>(null);
+  const identityAlertRef = useRef<HTMLParagraphElement>(null);
+  const setupAlertRef = useRef<HTMLParagraphElement>(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ProductObjectSearchItem[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchCompleted, setSearchCompleted] = useState(false);
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [securityIds, setSecurityIds] = useState<string[]>([]);
   const [industryIds, setIndustryIds] = useState<string[]>([]);
@@ -73,6 +87,20 @@ export default function NewResearchPage() {
   const [submitting, setSubmitting] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [baseCurrency, setBaseCurrency] = useState<"CNY" | "USD">("CNY");
+  const [timezone, setTimezone] = useState<FrozenTimezone>("+08:00");
+  const [agendaPreview, setAgendaPreview] = useState<GeneratedFoundationAgenda | null>(null);
+  const [foundation, setFoundation] = useState<{
+    mandate?: ProductMandate;
+    scope?: ProductScope;
+    agenda?: ProductAgenda;
+    basis?: ProductHistoricalBasis;
+    prices: Record<string, ProductPriceSnapshot>;
+    fxRates: Record<string, ProductFxSnapshot>;
+    capital?: ProductCapitalStructure;
+    rights: Record<string, ProductSecurityRights>;
+    savedDraft?: ProductDraft;
+    publicationPreview?: ProductPreview;
+  }>({ prices: {}, fxRates: {}, rights: {} });
 
   const selectedCompany = results.find((item) => item.kind === "company" && item.object_id === companyId) ?? null;
   const selectedSecurities = securityIds.flatMap((id) => {
@@ -87,16 +115,22 @@ export default function NewResearchPage() {
     .map((item) => item.trading_currency)
     .filter((currency): currency is "CNY" | "USD" => Boolean(currency) && currency !== baseCurrency))];
   const canConfirm = Boolean(selectedCompany) && selectedSecurities.length > 0 && !project;
+  const foundationStarted = Boolean(foundation.mandate || foundation.scope || foundation.agenda || foundation.basis
+    || foundation.capital || foundation.savedDraft || foundation.publicationPreview
+    || Object.keys(foundation.prices).length > 0 || Object.keys(foundation.fxRates).length > 0
+    || Object.keys(foundation.rights).length > 0);
 
   async function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const normalized = query.trim();
     if (!normalized) return;
     setSearching(true);
+    setSearchCompleted(false);
     setSearchError(null);
     try {
       const response = await investmentResearchApi.searchObjects(normalized);
       setResults(response.items);
+      setSearchCompleted(true);
       setCompanyId(null);
       setSecurityIds([]);
       setIndustryIds([]);
@@ -104,6 +138,7 @@ export default function NewResearchPage() {
       setDraft(null);
     } catch (error) {
       setResults([]);
+      setSearchCompleted(true);
       setSearchError(error instanceof Error ? error.message : "对象搜索失败");
     } finally {
       setSearching(false);
@@ -123,35 +158,96 @@ export default function NewResearchPage() {
   }
 
   async function confirmIdentity() {
-    if (!selectedCompany || selectedSecurities.length === 0) return;
+    if ((!selectedCompany || selectedSecurities.length === 0) && !project) return;
     setConfirming(true);
     setIdentityError(null);
     try {
-      const confirmedProject = await investmentResearchApi.createProject({
+      const confirmedProject = project ?? await investmentResearchApi.createProject({
         schema_version: schemaVersion,
-        primary_company_id: selectedCompany.object_id,
+        primary_company_id: selectedCompany!.object_id,
         target_security_ids: selectedSecurities.map((item) => item.object_id),
       });
-      const initialDraft = await investmentResearchApi.draft(confirmedProject.id);
       setProject(confirmedProject);
+      const initialDraft = await investmentResearchApi.draft(confirmedProject.id);
       setDraft(initialDraft);
     } catch (error) {
       setIdentityError(error instanceof Error ? error.message : "身份关系校验失败");
+      requestAnimationFrame(() => {
+        identityAlertRef.current?.focus();
+        if (typeof identityAlertRef.current?.scrollIntoView === "function") {
+          identityAlertRef.current.scrollIntoView({ block: "center" });
+        }
+      });
     } finally {
       setConfirming(false);
+    }
+  }
+
+  function agendaInput(form: FormData) {
+    if (!selectedCompany) throw new Error("缺少 Company 身份");
+    return {
+      company: {
+        objectId: selectedCompany.object_id,
+        canonicalName: selectedCompany.canonical_name,
+        externalKey: selectedCompany.external_key,
+      },
+      securities: selectedSecurities.map((security) => ({
+        objectId: security.object_id,
+        canonicalName: security.canonical_name,
+        externalKey: security.external_key,
+        symbol: security.symbol,
+      })),
+      mandate: {
+        horizonYears: Number(field(form, "horizon_years")),
+        baseCurrency,
+        requiredReturn: field(form, "required_return"),
+        permanentLossLimit: field(form, "permanent_loss_limit"),
+        comparisonSet: lines(field(form, "comparison_set")),
+        benchmarkKey: optionalField(form, "benchmark_key"),
+        requiredExcessReturn: optionalField(form, "required_excess_return"),
+      },
+      scope: {
+        industryNames: selectedIndustries.map((industry) => industry.canonical_name),
+        coveredSegments: lines(optionalField(form, "covered_segments") ?? ""),
+        userFocus: optionalField(form, "user_focus"),
+        exclusions: lines(optionalField(form, "exclusions") ?? ""),
+      },
+    };
+  }
+
+  async function previewGeneratedAgenda() {
+    if (!boundaryFormRef.current) return;
+    setSetupError(null);
+    try {
+      const preview = await generateFoundationAgenda(agendaInput(new FormData(boundaryFormRef.current)));
+      setAgendaPreview(preview);
+    } catch (error) {
+      setSetupError(error instanceof Error ? error.message : "议程预览失败");
     }
   }
 
   async function establishBoundary(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!project || !draft || !selectedCompany) return;
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const submittedForm = new FormData(formElement);
+    const form = frozenFoundationFormRef.current ?? submittedForm;
+    if (!frozenFoundationFormRef.current) frozenFoundationFormRef.current = submittedForm;
+    let retainFrozenInput = false;
     setSubmitting(true);
     setSetupError(null);
     try {
-      const effectiveAt = aware(field(form, "effective_at"));
-      const commonMarketAt = (name: string) => aware(field(form, name));
-      const mandatePromise = investmentResearchApi.createMandate(project.id, {
+      if (!agendaPreview) throw new Error("请先预览由固定模板生成的研究议程");
+      const frozen = (name: string) => toFrozenIso(field(form, name), timezone);
+      const focus = optionalField(form, "user_focus");
+      const next = {
+        ...foundation,
+        prices: { ...foundation.prices },
+        fxRates: { ...foundation.fxRates },
+        rights: { ...foundation.rights },
+      };
+      const attempts: Promise<void>[] = [];
+      if (!next.mandate) attempts.push(investmentResearchApi.createMandate(project.id, {
         schema_version: schemaVersion,
         horizon_years: Number(field(form, "horizon_years")),
         base_currency: baseCurrency,
@@ -160,145 +256,146 @@ export default function NewResearchPage() {
         comparison_set: lines(field(form, "comparison_set")),
         benchmark_key: optionalField(form, "benchmark_key"),
         required_excess_return: optionalField(form, "required_excess_return"),
-        effective_at: effectiveAt,
-        expires_at: optionalField(form, "expires_at")
-          ? aware(field(form, "expires_at"))
-          : null,
+        effective_at: frozen("effective_at"),
+        expires_at: optionalField(form, "expires_at") ? frozen("expires_at") : null,
         expected_parent_id: null,
-      });
-      const focus = field(form, "user_focus");
-      const scopePromise = investmentResearchApi.createScope(project.id, {
+      }).then((value) => { next.mandate = value; }));
+      if (!next.scope) attempts.push(investmentResearchApi.createScope(project.id, {
         schema_version: schemaVersion,
         primary_company_id: selectedCompany.object_id,
         target_security_ids: selectedSecurities.map((item) => item.object_id),
         industry_ids: selectedIndustries.map((item) => item.object_id),
-        covered_segments: lines(field(form, "covered_segments")),
+        covered_segments: lines(optionalField(form, "covered_segments") ?? ""),
         user_focus: focus,
-        exclusions: lines(field(form, "exclusions")),
+        exclusions: lines(optionalField(form, "exclusions") ?? ""),
         expected_parent_id: null,
-      });
-      const basisPromise = investmentResearchApi.createHistoricalBasis({
+      }).then((value) => { next.scope = value; }));
+      if (!next.basis) attempts.push(investmentResearchApi.createHistoricalBasis({
         schema_version: schemaVersion,
-        cutoff_at: aware(field(form, "cutoff_at")),
+        cutoff_at: frozen("cutoff_at"),
         source_manifest_hash: field(form, "source_manifest_hash"),
         definition_bundle_hash: field(form, "definition_bundle_hash"),
         parser_bundle_hash: field(form, "parser_bundle_hash"),
-      });
-      const pricePromise = Promise.all(selectedSecurities.map((security) => {
+      }).then((value) => { next.basis = value; }));
+      for (const security of selectedSecurities) {
         const key = security.object_id;
         if (!security.trading_currency) throw new Error(`${security.symbol ?? security.external_key} 缺少交易货币身份`);
-        return investmentResearchApi.createPriceSnapshot({
+        if (!next.prices[key]) attempts.push(investmentResearchApi.createPriceSnapshot({
           schema_version: schemaVersion,
-          security_identity_id: security.identity_version_id,
+          security_identity_id: security.object_id,
           price: field(form, `price_${key}`),
           currency: security.trading_currency,
           price_type: field(form, `price_type_${key}`),
           adjustment_basis: field(form, `adjustment_basis_${key}`),
-          market_at: commonMarketAt(`price_market_at_${key}`),
-          available_at: commonMarketAt(`price_available_at_${key}`),
+          market_at: frozen(`price_market_at_${key}`),
+          available_at: frozen(`price_available_at_${key}`),
           source_id: field(form, `price_source_${key}`),
           raw_hash: field(form, `price_raw_hash_${key}`),
-        });
-      }));
-      const fxPromise = Promise.all(foreignCurrencies.map((currency) => investmentResearchApi.createFxSnapshot({
-        schema_version: schemaVersion,
-        base_currency: baseCurrency,
-        quote_currency: currency,
-        rate: field(form, `fx_rate_${currency}`),
-        quote_direction: "quote_per_base",
-        market_at: commonMarketAt(`fx_market_at_${currency}`),
-        available_at: commonMarketAt(`fx_available_at_${currency}`),
-        source_id: field(form, `fx_source_${currency}`),
-        raw_hash: field(form, `fx_raw_hash_${currency}`),
-      })));
-      const capitalPromise = investmentResearchApi.createCapitalStructure({
-        schema_version: schemaVersion,
-        company_id: selectedCompany.object_id,
-        currency: baseCurrency,
-        cash: field(form, "cash"),
-        debt: field(form, "debt"),
-        minority_interest: field(form, "minority_interest"),
-        investments: field(form, "investments"),
-        pension_liabilities: field(form, "pension_liabilities"),
-        other_adjustments: field(form, "other_adjustments"),
-        basic_shares: field(form, "basic_shares"),
-        diluted_shares: field(form, "diluted_shares"),
-        potential_dilution_descriptors: lines(optionalField(form, "potential_dilution_descriptors") ?? ""),
-        report_period_start: aware(field(form, "report_period_start")),
-        report_period_end: aware(field(form, "report_period_end")),
-        market_at: aware(field(form, "capital_market_at")),
-        available_at: aware(field(form, "capital_available_at")),
-        source_id: field(form, "capital_source_id"),
-        raw_hash: field(form, "capital_raw_hash"),
-      });
-      const rightsPromise = Promise.all(selectedSecurities.map((security) => {
-        const key = security.object_id;
-        return investmentResearchApi.createSecurityRights({
+        }).then((value) => { next.prices[key] = value; }));
+        if (!next.rights[key]) attempts.push(investmentResearchApi.createSecurityRights({
           schema_version: schemaVersion,
-          security_identity_id: security.identity_version_id,
+          security_identity_id: security.object_id,
           economic_units: field(form, `economic_units_${key}`),
           votes_per_unit: field(form, `votes_per_unit_${key}`),
           conversion_ratio: field(form, `conversion_ratio_${key}`),
           adr_ratio: field(form, `adr_ratio_${key}`),
           dividend_rights_per_unit: field(form, `dividend_rights_${key}`),
-          effective_from: aware(field(form, `rights_effective_from_${key}`)),
-          effective_to: optionalField(form, `rights_effective_to_${key}`)
-            ? aware(field(form, `rights_effective_to_${key}`))
-            : null,
+          effective_from: frozen(`rights_effective_from_${key}`),
+          effective_to: optionalField(form, `rights_effective_to_${key}`) ? frozen(`rights_effective_to_${key}`) : null,
           source_id: field(form, `rights_source_${key}`),
           raw_hash: field(form, `rights_raw_hash_${key}`),
           expected_parent_id: null,
-        });
-      }));
-
-      const [mandate, scope, basis, prices, fxRates, capital, rights] = await Promise.all([
-        mandatePromise,
-        scopePromise,
-        basisPromise,
-        pricePromise,
-        fxPromise,
-        capitalPromise,
-        rightsPromise,
-      ]);
-      const agenda = await investmentResearchApi.createAgenda(project.id, {
-        schema_version: schemaVersion,
-        scope_id: scope.id,
-        items: lines(field(form, "agenda_items")),
-        generator: {
+        }).then((value) => { next.rights[key] = value; }));
+      }
+      for (const currency of foreignCurrencies) {
+        if (!next.fxRates[currency]) attempts.push(investmentResearchApi.createFxSnapshot({
           schema_version: schemaVersion,
-          method: "deterministic_template",
-          template_key: field(form, "template_key"),
-          template_version: field(form, "template_version"),
-          model_name: null,
-          prompt_template_version: null,
-          input_summary_hash: optionalField(form, "agenda_input_hash"),
-          output_hash: field(form, "agenda_output_hash"),
-        },
-        expected_parent_id: null,
-      });
-      const savedDraft = await investmentResearchApi.saveDraft(project.id, {
+          base_currency: baseCurrency,
+          quote_currency: currency,
+          rate: field(form, `fx_rate_${currency}`),
+          quote_direction: "quote_per_base",
+          market_at: frozen(`fx_market_at_${currency}`),
+          available_at: frozen(`fx_available_at_${currency}`),
+          source_id: field(form, `fx_source_${currency}`),
+          raw_hash: field(form, `fx_raw_hash_${currency}`),
+        }).then((value) => { next.fxRates[currency] = value; }));
+      }
+      if (!next.capital) attempts.push(investmentResearchApi.createCapitalStructure({
         schema_version: schemaVersion,
-        expected_lock_version: draft.lock_version,
-        mandate_id: mandate.id,
-        scope_id: scope.id,
-        agenda_id: agenda.id,
-        historical_basis_id: basis.id,
-        price_snapshot_ids: prices.map((item) => item.id),
-        fx_snapshot_ids: fxRates.map((item) => item.id),
-        capital_structure_snapshot_id: capital.id,
-        security_rights_ids: rights.map((item) => item.id),
-        user_focus: focus,
-      });
-      await investmentResearchApi.preview(project.id, {
-        schema_version: schemaVersion,
-        expected_lock_version: savedDraft.lock_version,
-      });
+        company_id: selectedCompany.object_id,
+        currency: baseCurrency,
+        cash: field(form, "cash"), debt: field(form, "debt"), minority_interest: field(form, "minority_interest"),
+        investments: field(form, "investments"), pension_liabilities: field(form, "pension_liabilities"),
+        other_adjustments: field(form, "other_adjustments"), basic_shares: field(form, "basic_shares"),
+        diluted_shares: field(form, "diluted_shares"),
+        potential_dilution_descriptors: lines(optionalField(form, "potential_dilution_descriptors") ?? ""),
+        report_period_start: frozen("report_period_start"), report_period_end: frozen("report_period_end"),
+        market_at: frozen("capital_market_at"), available_at: frozen("capital_available_at"),
+        source_id: field(form, "capital_source_id"), raw_hash: field(form, "capital_raw_hash"),
+      }).then((value) => { next.capital = value; }));
+
+      const results = await Promise.allSettled(attempts);
+      setFoundation(next);
+      retainFrozenInput = Boolean(next.mandate || next.scope || next.basis || next.capital
+        || Object.keys(next.prices).length > 0 || Object.keys(next.fxRates).length > 0
+        || Object.keys(next.rights).length > 0);
+      if (retainFrozenInput) {
+        for (const control of formElement.querySelectorAll("input, select, textarea")) {
+          if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement || control instanceof HTMLTextAreaElement) {
+            control.disabled = true;
+          }
+        }
+      }
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
+      if (!next.scope || !next.mandate || !next.basis || !next.capital) throw new Error("基础步骤尚未完整保存，请重试");
+      retainFrozenInput = true;
+      if (!next.agenda) {
+        next.agenda = await investmentResearchApi.createAgenda(project.id, {
+          schema_version: schemaVersion,
+          scope_id: next.scope.id,
+          items: agendaPreview.items,
+          generator: agendaPreview.generator,
+          expected_parent_id: null,
+        });
+        setFoundation(next);
+      }
+      if (!next.savedDraft) {
+        next.savedDraft = await investmentResearchApi.saveDraft(project.id, {
+          schema_version: schemaVersion,
+          expected_lock_version: draft.lock_version,
+          mandate_id: next.mandate.id,
+          scope_id: next.scope.id,
+          agenda_id: next.agenda.id,
+          historical_basis_id: next.basis.id,
+          price_snapshot_ids: selectedSecurities.map((item) => next.prices[item.object_id]?.id).filter((id): id is string => Boolean(id)),
+          fx_snapshot_ids: foreignCurrencies.map((currency) => next.fxRates[currency]?.id).filter((id): id is string => Boolean(id)),
+          capital_structure_snapshot_id: next.capital.id,
+          security_rights_ids: selectedSecurities.map((item) => next.rights[item.object_id]?.id).filter((id): id is string => Boolean(id)),
+          user_focus: focus,
+        });
+        setFoundation(next);
+      }
+      if (!next.publicationPreview) {
+        next.publicationPreview = await investmentResearchApi.preview(project.id, {
+          schema_version: schemaVersion,
+          expected_lock_version: next.savedDraft.lock_version,
+        });
+        setFoundation(next);
+      }
       navigate(`/research/projects/${encodeURIComponent(project.id)}`);
     } catch (error) {
+      if (!retainFrozenInput) frozenFoundationFormRef.current = null;
       const message = error instanceof InvestmentResearchRequestError || error instanceof Error
         ? error.message
         : "版本边界建立失败";
       setSetupError(message);
+      requestAnimationFrame(() => {
+        setupAlertRef.current?.focus();
+        if (typeof setupAlertRef.current?.scrollIntoView === "function") {
+          setupAlertRef.current.scrollIntoView({ block: "center" });
+        }
+      });
     } finally {
       setSubmitting(false);
     }
@@ -325,7 +422,7 @@ export default function NewResearchPage() {
         <form className="ir-search-form" onSubmit={search}>
           <label>
             <span>搜索公司、证券或行业</span>
-            <input disabled={Boolean(project)} value={query} onChange={(event) => setQuery(event.target.value)} />
+            <input autoComplete="off" disabled={Boolean(project)} name="research_object_query" value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>
           <button className="ir-button" disabled={searching || Boolean(project) || !query.trim()} type="submit">
             {searching ? "搜索中" : "搜索对象"}
@@ -353,6 +450,9 @@ export default function NewResearchPage() {
             ))}
           </div>
         ) : null}
+        {searchCompleted && !searching && !searchError && results.length === 0 ? (
+          <p className="ir-empty" role="status">没有找到匹配的 Company、Security 或 Industry。请检查名称、代码或身份标识。</p>
+        ) : null}
         {!project ? (
           <div className="ir-step-action">
             <p>{canConfirm ? "提交后由身份账本校验关系；提交前不声称 Company 与 Security 已关联。" : "必须选择一家公司和至少一只证券；Industry 不能替代其中任一身份。"}</p>
@@ -360,14 +460,20 @@ export default function NewResearchPage() {
               {confirming ? "校验中" : "提交身份账本校验"}
             </button>
           </div>
-        ) : (
-          <p className="ir-confirmed" role="status">关系已确认：身份账本已接受所选 Company 与 Security 组合。</p>
-        )}
-        {identityError ? <p className="ir-alert" role="alert">{identityError}</p> : null}
+        ) : <p className="ir-confirmed" role="status">关系已确认：身份账本已接受所选 Company 与 Security 组合。</p>}
+        {identityError ? <p className="ir-alert" ref={identityAlertRef} role="alert" tabIndex={-1}>{identityError}</p> : null}
+        {project && !draft ? (
+          <div className="ir-step-action">
+            <p>项目身份已保存，草稿尚未读取；重试不会再次创建项目。</p>
+            <button className="ir-button" disabled={confirming} onClick={confirmIdentity} type="button">
+              {confirming ? "读取中" : "重试读取草稿"}
+            </button>
+          </div>
+        ) : null}
       </section>
 
       {project && draft ? (
-        <form onSubmit={establishBoundary}>
+        <form ref={boundaryFormRef} onInput={() => setAgendaPreview(null)} onSubmit={establishBoundary}>
           <section className="ir-step" aria-labelledby="mandate-step-title">
             <header><span>02</span><div><h2 id="mandate-step-title">研究任务与边界</h2><p>记录 InvestmentMandate 与 ResearchScope，不要求预先写出研究问题。</p></div></header>
             <div className="ir-form-grid">
@@ -377,24 +483,25 @@ export default function NewResearchPage() {
               <FormField label="永久损失上限" name="permanent_loss_limit" required inputMode="decimal" />
               <FormField label="比较集合" name="comparison_set" required />
               <FormField label="生效时间" name="effective_at" required type="datetime-local" />
+              <label className="ir-field"><span>冻结时区 / UTC offset</span><select name="frozen_timezone" value={timezone} onChange={(event) => setTimezone(event.target.value === "Z" ? "Z" : "+08:00")}><option value="+08:00">+08:00（中国标准时间）</option><option value="Z">Z（UTC）</option></select></label>
               <FormField label="基准标识（可选）" name="benchmark_key" />
               <FormField label="必要超额回报（与基准同时填写）" name="required_excess_return" inputMode="decimal" />
               <FormField label="到期时间（可选）" name="expires_at" type="datetime-local" />
-              <FormField label="覆盖业务分部" name="covered_segments" required />
-              <FormField label="研究焦点" name="user_focus" required />
-              <FormField label="排除范围" name="exclusions" required />
+              <FormField label="覆盖业务分部（可选）" name="covered_segments" />
+              <FormField label="研究焦点（可选）" name="user_focus" />
+              <FormField label="排除范围（可选）" name="exclusions" />
             </div>
           </section>
 
           <section className="ir-step" aria-labelledby="agenda-step-title">
-            <header><span>03</span><div><h2 id="agenda-step-title">研究议程</h2><p>议程是待核验事项，不代表系统会自动完成。</p></div></header>
-            <div className="ir-form-grid">
-              <label className="ir-field ir-field--wide"><span>议程事项</span><textarea name="agenda_items" required /></label>
-              <FormField label="模板标识" name="template_key" required />
-              <FormField label="模板版本" name="template_version" required />
-              <FormField label="议程输入哈希（可选）" name="agenda_input_hash" pattern={hashPattern} />
-              <FormField label="议程输出哈希" name="agenda_output_hash" pattern={hashPattern} required />
-            </div>
+            <header><span>03</span><div><h2 id="agenda-step-title">研究议程</h2><p>议程由固定版本的通用模板根据已选对象和上方约束确定性生成；它只列出待核验事项，不代表研究完成。</p></div></header>
+            <button className="ir-button" disabled={foundationStarted} onClick={previewGeneratedAgenda} type="button">预览模板议程</button>
+            {agendaPreview ? (
+              <div className="ir-agenda-preview" role="region" aria-label="模板议程预览">
+                <ol>{agendaPreview.items.map((item) => <li key={item}>{item}</li>)}</ol>
+                <p>模板 product.foundation.agenda / 1.0.0 · 输入与输出 SHA-256 已由浏览器计算。</p>
+              </div>
+            ) : <p className="ir-empty">填写研究约束后预览；预览后才能提交。</p>}
           </section>
 
           <section className="ir-step" aria-labelledby="boundary-step-title">
@@ -478,10 +585,13 @@ export default function NewResearchPage() {
                 </fieldset>
               );
             })}
-            {setupError ? <p className="ir-alert" role="alert">{setupError}</p> : null}
+            {foundationStarted
+              ? <p className="ir-confirmed" role="status">已保存步骤会在重试时保留；仅待重试步骤会再次请求。本页不承诺跨进程 exactly-once。</p>
+              : null}
+            {setupError ? <p className="ir-alert" ref={setupAlertRef} role="alert" tabIndex={-1}>{setupError}</p> : null}
             <div className="ir-boundary-submit">
               <p>提交后建立草稿边界并生成 publication preview；未满足证据门槛时会明确保持不可回答。</p>
-              <button className="ir-button ir-button--primary" disabled={submitting} type="submit">
+              <button className="ir-button ir-button--primary" disabled={submitting || !agendaPreview} type="submit">
                 {submitting ? "正在建立边界" : "建立版本边界并进入工作台"}
               </button>
             </div>

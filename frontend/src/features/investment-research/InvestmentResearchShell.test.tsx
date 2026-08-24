@@ -4,6 +4,8 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ResearchOsRoutes } from "../../app/routes";
+import routeEntrySource from "../../app/routes.tsx?raw";
+import mainEntrySource from "../../main.tsx?raw";
 import shellSource from "../../app/InvestmentResearchShell.tsx?raw";
 import apiSource from "../../data/investmentResearchApi.ts?raw";
 import homeSource from "./ResearchHomePage.tsx?raw";
@@ -11,6 +13,20 @@ import setupSource from "./NewResearchPage.tsx?raw";
 import workbenchSource from "./ResearchWorkbenchPage.tsx?raw";
 
 const hash = "a".repeat(64);
+const uid = (value: number) => `10000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
+const shellIds = { older: uid(1), newer: uid(2), project: uid(3), company: uid(4), security: uid(5), companyVersion: uid(6), securityVersion: uid(7), industry: uid(8), industryVersion: uid(9), draft: uid(10), mandate: uid(11), scope: uid(12), agenda: uid(13), basis: uid(14), price: uid(15), capital: uid(16), rights: uid(17), membership: uid(18) };
+
+function shellProject(id = shellIds.project, createdAt = "2026-08-24T08:00:00Z") {
+  return { schema_version: "underwriting.v1", id, primary_company_id: shellIds.company, target_security_ids: [shellIds.security], content_hash: hash, created_at: createdAt };
+}
+
+function shellDraft() {
+  return { schema_version: "underwriting.v1", id: shellIds.draft, project_id: shellIds.project, base_revision_id: null, lock_version: 4, content: { schema_version: "underwriting.v1", publication_status: "draft", mandate_id: shellIds.mandate, scope_id: shellIds.scope, agenda_id: shellIds.agenda, historical_basis_id: shellIds.basis, price_snapshot_ids: [shellIds.price], fx_snapshot_ids: [], capital_structure_snapshot_id: shellIds.capital, security_rights_ids: [shellIds.rights], user_focus: "验证长期竞争力" }, created_at: "2026-08-24T08:00:00Z", updated_at: "2026-08-24T08:05:00Z" };
+}
+
+function shellPreview() {
+  return { schema_version: "underwriting.v1", project_id: shellIds.project, expected_lock_version: 4, boundary_as_of: "2026-08-24T08:05:00Z", assessment: { schema_version: "underwriting.v1", answerability: "not_answerable", direction: null, confidence: null, publication_status: "user_frozen", blockers: ["missing_key_baseline"], resolution_requirements: ["核验行业有效产能与利用率口径"], next_review_at: null, parent_assessment_id: null, content_hash: hash }, boundary: { schema_version: "underwriting.v1", historical_basis_id: shellIds.basis, mandate_id: shellIds.mandate, scope_id: shellIds.scope, agenda_id: shellIds.agenda, price_snapshot_ids: [shellIds.price], fx_snapshot_ids: [], capital_structure_snapshot_id: shellIds.capital, security_rights_ids: [shellIds.rights], parent_revision_id: null }, boundary_hash: hash, manifest: { schema_version: "underwriting.research-revision-manifest.v1", project_id: shellIds.project, project_ref: { project_id: shellIds.project, content_hash: hash }, project_membership_refs: [{ membership_id: shellIds.membership, security_id: shellIds.security, content_hash: hash }], primary_object_id: shellIds.company, boundary_ref: "$boundary", mandate_id: shellIds.mandate, scope_id: shellIds.scope, agenda_id: shellIds.agenda, historical_basis_id: shellIds.basis, price_snapshot_ids: [shellIds.price], fx_snapshot_ids: [], capital_structure_snapshot_id: shellIds.capital, security_rights_ids: [shellIds.rights], market_snapshot_refs: [`price:${shellIds.price}`, `capital_structure:${shellIds.capital}`, `security_rights:${shellIds.rights}`], model_refs: [], assessment_ref: "$assessment", memo_ref: null, parent_revision_id: null }, manifest_hash: hash };
+}
 
 function json(body: object, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -65,6 +81,12 @@ describe("independent investment research shell", () => {
     ]));
   });
 
+  it("keeps the product route entry disconnected from legacy shells, clients, and automatic research", () => {
+    const entryGraph = `${routeEntrySource}\n${mainEntrySource}`;
+    expect(entryGraph).not.toMatch(/import\s+[^;]*(AppShell|UnderwritingArchiveShell|researchClient|researchOsApi|mockResearchOsApi|AutomaticResearch)/);
+    expect(routeEntrySource).toMatch(/lazy\(\(\) => import\("\.\/LegacyResearchRoutes"\)\)/);
+  });
+
   it("searches all three identity kinds and orders recent projects newest first", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
@@ -73,8 +95,8 @@ describe("independent investment research shell", () => {
         return json({
           schema_version: "underwriting.v1",
           items: [
-            { schema_version: "underwriting.v1", id: "older", primary_company_id: "company-old", target_security_ids: ["security-old"], content_hash: hash, created_at: "2026-08-22T08:00:00Z" },
-            { schema_version: "underwriting.v1", id: "newer", primary_company_id: "company-new", target_security_ids: ["security-new"], content_hash: hash, created_at: "2026-08-24T08:00:00Z" },
+            shellProject(shellIds.older, "2026-08-22T08:00:00Z"),
+            shellProject(shellIds.newer, "2026-08-24T08:00:00Z"),
           ],
         });
       }
@@ -82,9 +104,9 @@ describe("independent investment research shell", () => {
         return json({
           schema_version: "underwriting.v1",
           items: [
-            { schema_version: "underwriting.v1", object_id: "company-1", identity_version_id: "company-v1", kind: "company", external_key: "CATL:COMPANY", canonical_name: "宁德时代", symbol: null, exchange: null, share_class: null, trading_currency: null },
-            { schema_version: "underwriting.v1", object_id: "security-1", identity_version_id: "security-v1", kind: "security", external_key: "SZSE:300750", canonical_name: "宁德时代 A 股", symbol: "300750", exchange: "SZSE", share_class: "A", trading_currency: "CNY" },
-            { schema_version: "underwriting.v1", object_id: "industry-1", identity_version_id: "industry-v1", kind: "industry", external_key: "INDUSTRY:BATTERY", canonical_name: "动力电池", symbol: null, exchange: null, share_class: null, trading_currency: null },
+            { schema_version: "underwriting.v1", object_id: shellIds.company, identity_version_id: shellIds.companyVersion, kind: "company", external_key: "CATL:COMPANY", canonical_name: "宁德时代", symbol: null, exchange: null, share_class: null, trading_currency: null },
+            { schema_version: "underwriting.v1", object_id: shellIds.security, identity_version_id: shellIds.securityVersion, kind: "security", external_key: "SZSE:300750", canonical_name: "宁德时代 A 股", symbol: "300750", exchange: "SZSE", share_class: "A", trading_currency: "CNY" },
+            { schema_version: "underwriting.v1", object_id: shellIds.industry, identity_version_id: shellIds.industryVersion, kind: "industry", external_key: "INDUSTRY:BATTERY", canonical_name: "动力电池", symbol: null, exchange: null, share_class: null, trading_currency: null },
           ],
         });
       }
@@ -101,8 +123,8 @@ describe("independent investment research shell", () => {
     expect(list).not.toBeNull();
     const projectLinks = await within(list as HTMLElement).findAllByRole("link");
     expect(projectLinks.map((link) => link.getAttribute("href"))).toEqual([
-      "/research/projects/newer",
-      "/research/projects/older",
+      `/research/projects/${shellIds.newer}`,
+      `/research/projects/${shellIds.older}`,
     ]);
 
     await user.type(screen.getByLabelText("搜索 Company、Security 或 Industry"), "CATL");
@@ -118,6 +140,9 @@ describe("independent investment research shell", () => {
     const user = userEvent.setup();
     const fetchSpy = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
+      if (url.endsWith(`/product/projects/${shellIds.project}`)) return json(shellProject());
+      if (url.endsWith(`/product/projects/${shellIds.project}/draft`)) return json(shellDraft());
+      if (url.endsWith(`/product/projects/${shellIds.project}/publication-preview`)) return json(shellPreview());
       if (url.endsWith("/product/projects/project-1")) {
         return json({
           schema_version: "underwriting.v1",
@@ -212,7 +237,7 @@ describe("independent investment research shell", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     render(
-      <MemoryRouter initialEntries={["/research/projects/project-1"]}>
+      <MemoryRouter initialEntries={[`/research/projects/${shellIds.project}`]}>
         <ResearchOsRoutes />
       </MemoryRouter>,
     );

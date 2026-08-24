@@ -30,6 +30,7 @@ export default function ResearchHomePage() {
   const [results, setResults] = useState<ProductObjectSearchItem[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchCompleted, setSearchCompleted] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -57,12 +58,15 @@ export default function ResearchHomePage() {
     const normalized = query.trim();
     if (!normalized) return;
     setSearching(true);
+    setSearchCompleted(false);
     setSearchError(null);
     try {
       const response = await investmentResearchApi.searchObjects(normalized);
       setResults(response.items);
+      setSearchCompleted(true);
     } catch (error) {
       setResults([]);
+      setSearchCompleted(true);
       setSearchError(error instanceof Error ? error.message : "对象搜索失败");
     } finally {
       setSearching(false);
@@ -88,7 +92,7 @@ export default function ResearchHomePage() {
         <form className="ir-search-form" onSubmit={search}>
           <label>
             <span>搜索 Company、Security 或 Industry</span>
-            <input value={query} onChange={(event) => setQuery(event.target.value)} />
+            <input autoComplete="off" name="research_object_query" value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>
           <button className="ir-button" disabled={searching || !query.trim()} type="submit">
             {searching ? "搜索中" : "搜索对象"}
@@ -108,6 +112,9 @@ export default function ResearchHomePage() {
               </li>
             ))}
           </ul>
+        ) : null}
+        {searchCompleted && !searching && !searchError && results.length === 0 ? (
+          <p className="ir-empty" role="status">没有找到匹配的 Company、Security 或 Industry。请检查名称、代码或身份标识。</p>
         ) : null}
       </section>
 
