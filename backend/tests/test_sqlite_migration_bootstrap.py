@@ -36,22 +36,6 @@ CANDIDATE_EVIDENCE_TABLES = {
     "uw_evidence_candidate_review_versions",
 }
 
-PRODUCT_TABLES = {
-    "uw_object_identity_versions",
-    "uw_research_projects",
-    "uw_research_project_securities",
-    "uw_research_scope_versions",
-    "uw_research_agenda_versions",
-    "uw_price_snapshots",
-    "uw_fx_snapshots",
-    "uw_capital_structure_snapshots",
-    "uw_security_rights_versions",
-    "uw_research_assessment_versions",
-    "uw_workspace_drafts",
-    "uw_revision_boundaries",
-    "uw_revision_manifests",
-}
-
 
 def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
     database_path = tmp_path / "research-demo.db"
@@ -99,37 +83,6 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
         }.issubset(sa.inspect(connection).get_table_names())
         assert WAVE2_TABLES.issubset(sa.inspect(connection).get_table_names())
         assert CANDIDATE_EVIDENCE_TABLES.issubset(sa.inspect(connection).get_table_names())
-        assert PRODUCT_TABLES.issubset(sa.inspect(connection).get_table_names())
-        compatibility_columns = {
-            "uw_mandate_versions": {
-                "project_id",
-                "benchmark_key",
-                "required_excess_return",
-                "effective_at",
-                "expires_at",
-                "content_hash",
-            },
-            "uw_historical_bases": {
-                "definition_bundle_hash",
-                "parser_bundle_hash",
-                "boundary_schema_version",
-                "content_hash",
-            },
-            "uw_research_versions": {
-                "project_id",
-                "boundary_id",
-                "manifest_id",
-                "manifest_schema",
-                "publication_status",
-            },
-        }
-        for table_name, expected_columns in compatibility_columns.items():
-            reflected = {
-                column["name"]: column
-                for column in sa.inspect(connection).get_columns(table_name)
-            }
-            assert expected_columns <= set(reflected)
-            assert all(reflected[name]["nullable"] for name in expected_columns)
         research_source_type = {
             column["name"]: column
             for column in sa.inspect(connection).get_columns("source_contracts")

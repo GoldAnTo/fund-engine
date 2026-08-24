@@ -5,10 +5,13 @@ from pathlib import Path
 import subprocess
 import sys
 import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy import create_engine, delete, inspect, update
+from sqlalchemy.exc import IntegrityError
 
 from app.models import Base
 import app.underwriting.persistence as persistence
@@ -51,6 +54,30 @@ PRODUCT_MODEL_NAMES = {
     "UnderwritingWorkspaceDraft",
     "UnderwritingRevisionBoundary",
     "UnderwritingRevisionManifest",
+}
+
+COMPATIBILITY_COLUMNS = {
+    "uw_mandate_versions": {
+        "project_id",
+        "benchmark_key",
+        "required_excess_return",
+        "effective_at",
+        "expires_at",
+        "content_hash",
+    },
+    "uw_historical_bases": {
+        "definition_bundle_hash",
+        "parser_bundle_hash",
+        "boundary_schema_version",
+        "content_hash",
+    },
+    "uw_research_versions": {
+        "project_id",
+        "boundary_id",
+        "manifest_id",
+        "manifest_schema",
+        "publication_status",
+    },
 }
 
 
@@ -145,6 +172,189 @@ def test_versioned_product_families_prevent_duplicate_versions_and_successors() 
         assert required <= _unique_columns(table_name)
 
 
+def _product_constraint_tables() -> list[sa.Table]:
+    return [
+        Base.metadata.tables[name]
+        for name in (
+            "uw_research_objects",
+            "uw_research_projects",
+            "uw_object_identity_versions",
+            "uw_research_scope_versions",
+            "uw_research_agenda_versions",
+            "uw_price_snapshots",
+            "uw_fx_snapshots",
+            "uw_capital_structure_snapshots",
+            "uw_security_rights_versions",
+            "uw_research_assessment_versions",
+        )
+    ]
+
+
+def _seed_constraint_roots(connection: sa.Connection) -> dict[str, uuid.UUID]:
+    ids = {
+        name: uuid.uuid4()
+        for name in ("company", "security", "project")
+    }
+    now = datetime(2026, 8, 24, tzinfo=UTC)
+    connection.execute(
+        Base.metadata.tables["uw_research_objects"].insert(),
+        [
+            {
+                "id": ids["company"],
+                "kind": "company",
+                "external_key": f"company:{ids['company']}",
+                "canonical_name": "Company",
+                "created_at": now,
+            },
+            {
+                "id": ids["security"],
+                "kind": "security",
+                "external_key": f"security:{ids['security']}",
+                "canonical_name": "Security",
+                "created_at": now,
+            },
+        ],
+    )
+    connection.execute(
+        Base.metadata.tables["uw_research_projects"].insert(),
+        {
+            "id": ids["project"],
+            "primary_company_id": ids["company"],
+            "content_hash": "a" * 64,
+            "created_at": now,
+        },
+    )
+    return ids
+
+
+def _successor_rows(
+    table_name: str,
+    ids: dict[str, uuid.UUID],
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    now = datetime(2026, 8, 24, tzinfo=UTC)
+    parent_id = uuid.uuid4()
+    common: dict[str, object] = {
+        "content_hash": "a" * 64,
+        "created_at": now,
+    }
+    family_rows: dict[str, dict[str, object]] = {
+        "uw_object_identity_versions": {
+            "object_id": ids["security"],
+            "canonical_name": "Security",
+            "effective_from": now,
+        },
+        "uw_research_scope_versions": {
+            "project_id": ids["project"],
+            "payload": {},
+        },
+        "uw_security_rights_versions": {
+            "security_identity_id": ids["security"],
+            "economic_units": Decimal("1"),
+            "votes_per_unit": Decimal("0"),
+            "conversion_ratio": Decimal("1"),
+            "adr_ratio": Decimal("1"),
+            "dividend_rights_per_unit": Decimal("0"),
+            "effective_from": now,
+            "source_id": "test",
+            "raw_hash": "b" * 64,
+        },
+        "uw_research_assessment_versions": {
+            "project_id": ids["project"],
+            "answerability": "not_answerable",
+            "direction": None,
+            "confidence": None,
+            "publication_status": "user_frozen",
+            "blockers": [],
+            "resolution_requirements": [],
+        },
+    }
+    payload = family_rows[table_name]
+    parent = {**common, **payload, "id": parent_id, "version": 1}
+    first_successor = {
+        **common,
+        **payload,
+        "id": uuid.uuid4(),
+        "version": 2,
+        "supersedes_id": parent_id,
+    }
+    duplicate_successor = {
+        **common,
+        **payload,
+        "id": uuid.uuid4(),
+        "version": 3,
+        "supersedes_id": parent_id,
+    }
+    return parent, first_successor, duplicate_successor
+
+
+@pytest.mark.parametrize(
+    "table_name",
+    [
+        "uw_object_identity_versions",
+        "uw_research_scope_versions",
+        "uw_research_agenda_versions",
+        "uw_security_rights_versions",
+        "uw_research_assessment_versions",
+    ],
+)
+def test_versioned_product_family_rejects_a_second_successor(
+    table_name: str,
+) -> None:
+    engine = create_engine("sqlite://")
+    tables = _product_constraint_tables()
+    Base.metadata.create_all(engine, tables=tables)
+    try:
+        with engine.begin() as connection:
+            ids = _seed_constraint_roots(connection)
+            if table_name == "uw_research_agenda_versions":
+                scope_id = uuid.uuid4()
+                connection.execute(
+                    Base.metadata.tables["uw_research_scope_versions"].insert(),
+                    {
+                        "id": scope_id,
+                        "project_id": ids["project"],
+                        "version": 1,
+                        "payload": {},
+                        "content_hash": "a" * 64,
+                        "created_at": datetime(2026, 8, 24, tzinfo=UTC),
+                    },
+                )
+                now = datetime(2026, 8, 24, tzinfo=UTC)
+                parent_id = uuid.uuid4()
+                base = {
+                    "project_id": ids["project"],
+                    "scope_id": scope_id,
+                    "payload": {},
+                    "generator_provenance": {},
+                    "content_hash": "a" * 64,
+                    "created_at": now,
+                }
+                rows = (
+                    {**base, "id": parent_id, "version": 1},
+                    {
+                        **base,
+                        "id": uuid.uuid4(),
+                        "version": 2,
+                        "supersedes_id": parent_id,
+                    },
+                    {
+                        **base,
+                        "id": uuid.uuid4(),
+                        "version": 3,
+                        "supersedes_id": parent_id,
+                    },
+                )
+            else:
+                rows = _successor_rows(table_name, ids)
+            table = Base.metadata.tables[table_name]
+            connection.execute(table.insert(), rows[0])
+            connection.execute(table.insert(), rows[1])
+            with pytest.raises(IntegrityError):
+                connection.execute(table.insert(), rows[2])
+    finally:
+        Base.metadata.drop_all(engine, tables=tables)
+
+
 def test_product_natural_identities_and_revision_retry_identity_are_unique() -> None:
     assert ("project_id", "security_id") in _unique_columns(
         "uw_research_project_securities"
@@ -154,12 +364,105 @@ def test_product_natural_identities_and_revision_retry_identity_are_unique() -> 
         "uw_revision_manifests"
     )
     assert ("boundary_id",) in _unique_columns("uw_revision_manifests")
-    for table_name in (
-        "uw_price_snapshots",
-        "uw_fx_snapshots",
-        "uw_capital_structure_snapshots",
-    ):
-        assert _unique_columns(table_name), table_name
+    assert (
+        "security_identity_id",
+        "price_type",
+        "adjustment_basis",
+        "market_at",
+        "source_id",
+        "raw_hash",
+    ) in _unique_columns("uw_price_snapshots")
+    assert (
+        "base_currency",
+        "quote_currency",
+        "quote_direction",
+        "market_at",
+        "source_id",
+        "raw_hash",
+    ) in _unique_columns("uw_fx_snapshots")
+    assert (
+        "company_id",
+        "report_period_start",
+        "report_period_end",
+        "market_at",
+        "source_id",
+        "raw_hash",
+    ) in _unique_columns("uw_capital_structure_snapshots")
+
+
+@pytest.mark.parametrize(
+    ("table_name", "changed_value"),
+    [
+        ("uw_price_snapshots", {"price": Decimal("11")}),
+        ("uw_fx_snapshots", {"rate": Decimal("8")}),
+        ("uw_capital_structure_snapshots", {"cash": Decimal("2")}),
+    ],
+)
+def test_snapshot_rejects_duplicate_natural_identity_when_value_changes(
+    table_name: str,
+    changed_value: dict[str, object],
+) -> None:
+    engine = create_engine("sqlite://")
+    tables = _product_constraint_tables()
+    Base.metadata.create_all(engine, tables=tables)
+    try:
+        with engine.begin() as connection:
+            ids = _seed_constraint_roots(connection)
+            now = datetime(2026, 8, 24, tzinfo=UTC)
+            common = {
+                "market_at": now,
+                "available_at": now,
+                "source_id": "test",
+                "raw_hash": "b" * 64,
+                "content_hash": "a" * 64,
+                "created_at": now,
+            }
+            rows = {
+                "uw_price_snapshots": {
+                    **common,
+                    "security_identity_id": ids["security"],
+                    "price": Decimal("10"),
+                    "currency": "CNY",
+                    "price_type": "close",
+                    "adjustment_basis": "unadjusted",
+                },
+                "uw_fx_snapshots": {
+                    **common,
+                    "base_currency": "USD",
+                    "quote_currency": "CNY",
+                    "rate": Decimal("7"),
+                    "quote_direction": "quote_per_base",
+                },
+                "uw_capital_structure_snapshots": {
+                    **common,
+                    "company_id": ids["company"],
+                    "currency": "CNY",
+                    "cash": Decimal("1"),
+                    "debt": Decimal("1"),
+                    "minority_interest": Decimal("0"),
+                    "investments": Decimal("0"),
+                    "pension_liabilities": Decimal("0"),
+                    "other_adjustments": Decimal("0"),
+                    "basic_shares": Decimal("10"),
+                    "diluted_shares": Decimal("11"),
+                    "potential_dilution_descriptors": [],
+                    "report_period_start": now,
+                    "report_period_end": now,
+                },
+            }
+            first = {**rows[table_name], "id": uuid.uuid4()}
+            duplicate = {
+                **rows[table_name],
+                **changed_value,
+                "id": uuid.uuid4(),
+                "content_hash": "c" * 64,
+            }
+            table = Base.metadata.tables[table_name]
+            connection.execute(table.insert(), first)
+            with pytest.raises(IntegrityError):
+                connection.execute(table.insert(), duplicate)
+    finally:
+        Base.metadata.drop_all(engine, tables=tables)
 
 
 def test_product_tables_expose_content_hash_except_mutable_draft() -> None:
@@ -197,30 +500,7 @@ def test_product_constraints_cover_intervals_currencies_numbers_and_states() -> 
 
 
 def test_compatibility_columns_are_nullable_and_have_required_foreign_keys() -> None:
-    expected_columns = {
-        "uw_mandate_versions": {
-            "project_id",
-            "benchmark_key",
-            "required_excess_return",
-            "effective_at",
-            "expires_at",
-            "content_hash",
-        },
-        "uw_historical_bases": {
-            "definition_bundle_hash",
-            "parser_bundle_hash",
-            "boundary_schema_version",
-            "content_hash",
-        },
-        "uw_research_versions": {
-            "project_id",
-            "boundary_id",
-            "manifest_id",
-            "manifest_schema",
-            "publication_status",
-        },
-    }
-    for table_name, columns in expected_columns.items():
+    for table_name, columns in COMPATIBILITY_COLUMNS.items():
         table = Base.metadata.tables[table_name]
         assert columns <= set(table.c.keys())
         assert all(table.c[column].nullable for column in columns)
@@ -332,6 +612,16 @@ def test_0064_to_0065_sqlite_upgrade_preserves_legacy_rows_and_nulls_new_columns
     assert migrated.returncode == 0, migrated.stderr
 
     with engine.connect() as connection:
+        inspector = sa.inspect(connection)
+        assert PRODUCT_TABLES <= set(inspector.get_table_names())
+        for table_name, expected_columns in COMPATIBILITY_COLUMNS.items():
+            reflected = {
+                column["name"]: column
+                for column in inspector.get_columns(table_name)
+            }
+            assert expected_columns <= set(reflected)
+            assert all(reflected[name]["nullable"] for name in expected_columns)
+
         mandate = connection.execute(
             sa.text(
                 "SELECT mandate_key, project_id, benchmark_key, required_excess_return, "

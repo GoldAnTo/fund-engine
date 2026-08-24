@@ -57,6 +57,131 @@ def _schema_url(database_url: str, schema: str) -> str:
     return f"{database_url}{separator}options=-csearch_path={schema}"
 
 
+def _assert_0065_product_uniqueness(
+    engine: sa.Engine,
+    ids: dict[str, uuid.UUID],
+) -> None:
+    digest = "c" * 64
+    successor_inserts = {
+        "uw_object_identity_versions": sa.text("""
+            INSERT INTO uw_object_identity_versions
+              (id, object_id, version, canonical_name, symbol, exchange, share_class,
+               trading_currency, effective_from, effective_to, supersedes_id,
+               content_hash, created_at)
+            SELECT :new_id, object_id, :version, canonical_name, symbol, exchange,
+                   share_class, trading_currency, effective_from, effective_to, id,
+                   :digest, created_at
+            FROM uw_object_identity_versions WHERE id = :parent_id
+        """),
+        "uw_research_scope_versions": sa.text("""
+            INSERT INTO uw_research_scope_versions
+              (id, project_id, version, payload, supersedes_id, content_hash, created_at)
+            SELECT :new_id, project_id, :version, payload, id, :digest, created_at
+            FROM uw_research_scope_versions WHERE id = :parent_id
+        """),
+        "uw_research_agenda_versions": sa.text("""
+            INSERT INTO uw_research_agenda_versions
+              (id, project_id, version, scope_id, payload, generator_provenance,
+               supersedes_id, content_hash, created_at)
+            SELECT :new_id, project_id, :version, scope_id, payload,
+                   generator_provenance, id, :digest, created_at
+            FROM uw_research_agenda_versions WHERE id = :parent_id
+        """),
+        "uw_security_rights_versions": sa.text("""
+            INSERT INTO uw_security_rights_versions
+              (id, security_identity_id, version, economic_units, votes_per_unit,
+               conversion_ratio, adr_ratio, dividend_rights_per_unit, effective_from,
+               effective_to, source_id, raw_hash, supersedes_id, content_hash, created_at)
+            SELECT :new_id, security_identity_id, :version, economic_units,
+                   votes_per_unit, conversion_ratio, adr_ratio,
+                   dividend_rights_per_unit, effective_from, effective_to, source_id,
+                   raw_hash, id, :digest, created_at
+            FROM uw_security_rights_versions WHERE id = :parent_id
+        """),
+        "uw_research_assessment_versions": sa.text("""
+            INSERT INTO uw_research_assessment_versions
+              (id, project_id, version, supersedes_id, answerability, direction,
+               confidence, publication_status, blockers, resolution_requirements,
+               next_review_at, content_hash, created_at)
+            SELECT :new_id, project_id, :version, id, answerability, direction,
+                   confidence, publication_status, blockers, resolution_requirements,
+                   next_review_at, :digest, created_at
+            FROM uw_research_assessment_versions WHERE id = :parent_id
+        """),
+    }
+    parent_ids = {
+        "uw_object_identity_versions": ids["identity"],
+        "uw_research_scope_versions": ids["scope"],
+        "uw_research_agenda_versions": ids["agenda"],
+        "uw_security_rights_versions": ids["rights"],
+        "uw_research_assessment_versions": ids["assessment"],
+    }
+    for table_name, statement in successor_inserts.items():
+        parameters = {
+            "new_id": uuid.uuid4(),
+            "parent_id": parent_ids[table_name],
+            "version": 2,
+            "digest": digest,
+        }
+        with engine.begin() as connection:
+            connection.execute(statement, parameters)
+        with pytest.raises(sa.exc.DBAPIError):
+            with engine.begin() as connection:
+                connection.execute(
+                    statement,
+                    {**parameters, "new_id": uuid.uuid4(), "version": 3},
+                )
+
+    snapshot_duplicates = {
+        "uw_price_snapshots": sa.text("""
+            INSERT INTO uw_price_snapshots
+              (id, security_identity_id, price, currency, price_type, adjustment_basis,
+               market_at, available_at, source_id, raw_hash, content_hash, created_at)
+            SELECT :new_id, security_identity_id, price + 1, currency, price_type,
+                   adjustment_basis, market_at, available_at, source_id, raw_hash,
+                   :digest, created_at
+            FROM uw_price_snapshots WHERE id = :existing_id
+        """),
+        "uw_fx_snapshots": sa.text("""
+            INSERT INTO uw_fx_snapshots
+              (id, base_currency, quote_currency, rate, quote_direction, market_at,
+               available_at, source_id, raw_hash, content_hash, created_at)
+            SELECT :new_id, base_currency, quote_currency, rate + 1, quote_direction,
+                   market_at, available_at, source_id, raw_hash, :digest, created_at
+            FROM uw_fx_snapshots WHERE id = :existing_id
+        """),
+        "uw_capital_structure_snapshots": sa.text("""
+            INSERT INTO uw_capital_structure_snapshots
+              (id, company_id, currency, cash, debt, minority_interest, investments,
+               pension_liabilities, other_adjustments, basic_shares, diluted_shares,
+               potential_dilution_descriptors, report_period_start, report_period_end,
+               market_at, available_at, source_id, raw_hash, content_hash, created_at)
+            SELECT :new_id, company_id, currency, cash + 1, debt, minority_interest,
+                   investments, pension_liabilities, other_adjustments, basic_shares,
+                   diluted_shares, potential_dilution_descriptors, report_period_start,
+                   report_period_end, market_at, available_at, source_id, raw_hash,
+                   :digest, created_at
+            FROM uw_capital_structure_snapshots WHERE id = :existing_id
+        """),
+    }
+    snapshot_ids = {
+        "uw_price_snapshots": ids["price"],
+        "uw_fx_snapshots": ids["fx"],
+        "uw_capital_structure_snapshots": ids["capital"],
+    }
+    for table_name, statement in snapshot_duplicates.items():
+        with pytest.raises(sa.exc.DBAPIError):
+            with engine.begin() as connection:
+                connection.execute(
+                    statement,
+                    {
+                        "new_id": uuid.uuid4(),
+                        "existing_id": snapshot_ids[table_name],
+                        "digest": digest,
+                    },
+                )
+
+
 def _insert_immutable_records(connection: sa.Connection) -> dict[str, tuple[uuid.UUID, str, object]]:
     """Insert one valid dependency graph so every immutable table can be attacked."""
     ids = {name: uuid.uuid4() for name in (
@@ -444,6 +569,8 @@ def test_0065_product_tables_install_precise_immutable_and_draft_delete_triggers
                 VALUES (:manifest, :project, :boundary, '0065-retry', '{}', :digest,
                         CURRENT_TIMESTAMP)
             """), {**ids, "digest": digest})
+
+        _assert_0065_product_uniqueness(isolated, ids)
 
         immutable_ids = {
             "uw_object_identity_versions": ids["identity"],
