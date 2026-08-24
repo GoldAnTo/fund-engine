@@ -333,13 +333,19 @@ describe("InvestmentResearchApi", () => {
     const invalidCapital = capitalBody(); invalidCapital.basic_shares = "1011"; invalidCapital.diluted_shares = "1010";
     const negativeRights = rightsBody(); negativeRights.economic_units = "-1";
     const invalidMandate = mandateBody(); invalidMandate.horizon_years = 2;
+    const extraDraft = draftBody(); Reflect.set(extraDraft.content, "unexpected", true);
+    const extraPreview = previewBody(); Reflect.set(extraPreview.assessment, "unexpected", true);
+    const extraRevision = revisionBody(); Reflect.set(extraRevision, "unexpected", true);
     const fetchSpy = vi.fn()
       .mockResolvedValueOnce(response(extraProject))
       .mockResolvedValueOnce(response(negativePrice, 201))
       .mockResolvedValueOnce(response(sameCurrencyFx, 201))
       .mockResolvedValueOnce(response(invalidCapital, 201))
       .mockResolvedValueOnce(response(negativeRights, 201))
-      .mockResolvedValueOnce(response(invalidMandate, 201));
+      .mockResolvedValueOnce(response(invalidMandate, 201))
+      .mockResolvedValueOnce(response(extraDraft))
+      .mockResolvedValueOnce(response(extraPreview))
+      .mockResolvedValueOnce(response(extraRevision));
     vi.stubGlobal("fetch", fetchSpy);
     const api = new InvestmentResearchApi();
     await expect(api.project(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
@@ -348,20 +354,26 @@ describe("InvestmentResearchApi", () => {
     await expect(api.createCapitalStructure(capitalRequest)).rejects.toMatchObject({ code: "invalid_response" });
     await expect(api.createSecurityRights(rightsRequest)).rejects.toMatchObject({ code: "invalid_response" });
     await expect(api.createMandate(ids.project, mandateRequest)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.draft(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.preview(ids.project, { schema_version: "underwriting.v1", expected_lock_version: 2 })).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.revision(ids.revision)).rejects.toMatchObject({ code: "invalid_response" });
   });
 
   it("validates the complete error envelope and rejects header/body request identity mismatch", async () => {
     const validError = { schema_version: "underwriting.v1", error: { code: "validation_failed", message: "security relation failed", request_id: "req-body", details: { field: "target_security_ids" } } };
+    const extraError = { ...validError, unexpected: true };
     const fetchSpy = vi.fn()
       .mockResolvedValueOnce(response(validError, 422, "req-body"))
       .mockResolvedValueOnce(response(validError, 422, "req-header"))
-      .mockResolvedValueOnce(response({ schema_version: "underwriting.v1", error: { code: "validation_failed", message: "missing request identity" } }, 422));
+      .mockResolvedValueOnce(response({ schema_version: "underwriting.v1", error: { code: "validation_failed", message: "missing request identity" } }, 422))
+      .mockResolvedValueOnce(response(extraError, 422, "req-body"));
     vi.stubGlobal("fetch", fetchSpy);
     const api = new InvestmentResearchApi();
     const valid = await api.createProject(projectRequest).catch((error: unknown) => error);
     expect(valid).toBeInstanceOf(InvestmentResearchRequestError);
     expect(valid).toMatchObject({ status: 422, code: "validation_failed", message: "security relation failed", requestId: "req-body", details: { field: "target_security_ids" } });
     await expect(api.createProject(projectRequest)).rejects.toMatchObject({ code: "invalid_error_response", message: "投资研究服务暂时无法完成请求" });
+    await expect(api.createProject(projectRequest)).rejects.toMatchObject({ code: "invalid_error_response" });
     await expect(api.createProject(projectRequest)).rejects.toMatchObject({ code: "invalid_error_response" });
   });
 

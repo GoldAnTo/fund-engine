@@ -149,6 +149,10 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
 function isNonEmptyStrings(value: unknown): value is string[] {
   return isStringArray(value) && value.every((item) => item.trim() !== "");
 }
@@ -176,7 +180,9 @@ function isMarketSnapshotRefs(value: unknown): value is string[] {
 
 function isMembershipRefs(value: unknown): boolean {
   if (!Array.isArray(value) || value.length === 0) return false;
-  if (!value.every((ref) => isRecord(ref) && isUuid(ref.membership_id) && isUuid(ref.security_id) && isHash(ref.content_hash))) return false;
+  if (!value.every((ref) => isRecord(ref)
+    && hasExactKeys(ref, ["membership_id", "security_id", "content_hash"])
+    && isUuid(ref.membership_id) && isUuid(ref.security_id) && isHash(ref.content_hash))) return false;
   const membershipIds = value.map((ref) => isRecord(ref) ? ref.membership_id : null);
   const securityIds = value.map((ref) => isRecord(ref) ? ref.security_id : null);
   return new Set(membershipIds).size === value.length && new Set(securityIds).size === value.length;
@@ -215,11 +221,12 @@ function isProject(value: unknown): value is ProductProject {
     && hasExactKeys(value, ["schema_version", "id", "primary_company_id", "target_security_ids", "company_identity", "security_identities", "content_hash", "created_at"])
     && isUuid(value.id)
     && isUuid(value.primary_company_id)
-    && isUuidArray(value.target_security_ids)
-    && new Set(value.target_security_ids).size === value.target_security_ids.length
+    && isUniqueUuidArray(value.target_security_ids, true)
     && isProjectCompanyIdentity(value.company_identity)
+    && value.company_identity.object_id === value.primary_company_id
     && Array.isArray(value.security_identities)
     && value.security_identities.every(isProjectSecurityIdentity)
+    && new Set(value.security_identities.map((item) => item.identity_version_id)).size === value.security_identities.length
     && sameStringSets(value.security_identities.map((item) => item.object_id), value.target_security_ids)
     && isHash(value.content_hash)
     && isDateTime(value.created_at);
@@ -267,7 +274,7 @@ function isMandate(value: unknown): value is ProductMandate {
     && isDateTime(value.effective_at)
     && isNullableDateTime(value.expires_at)
     && (value.expires_at === null || isAtOrBefore(value.effective_at, value.expires_at))
-    && isNonNegativeInteger(value.version)
+    && isPositiveInteger(value.version)
     && isNullableUuid(value.supersedes_id)
     && isHash(value.content_hash)
     && isDateTime(value.created_at);
@@ -276,7 +283,7 @@ function isMandate(value: unknown): value is ProductMandate {
 function isScope(value: unknown): value is ProductScope {
   return isProjectChildRecord(value)
     && hasExactKeys(value, ["schema_version", "id", "project_id", "version", "payload", "supersedes_id", "content_hash", "created_at"])
-    && isNonNegativeInteger(value.version)
+    && isPositiveInteger(value.version)
     && isProductDto(value.payload)
     && hasExactKeys(value.payload, ["schema_version", "primary_company_id", "target_security_ids", "industry_ids", "covered_segments", "user_focus", "exclusions"])
     && isUuid(value.payload.primary_company_id)
@@ -297,7 +304,7 @@ function isAgenda(value: unknown): value is ProductAgenda {
   return hasExactKeys(value, ["schema_version", "id", "project_id", "version", "scope_id", "payload", "generator_provenance", "supersedes_id", "content_hash", "created_at"])
     && hasExactKeys(value.payload, ["schema_version", "items"])
     && hasExactKeys(generator, ["schema_version", "method", "template_key", "template_version", "model_name", "prompt_template_version", "input_summary_hash", "output_hash"])
-    && isNonNegativeInteger(value.version)
+    && isPositiveInteger(value.version)
     && isUuid(value.scope_id)
     && isNonEmptyStrings(value.payload.items)
     && isAgendaGenerator(generator)
@@ -420,7 +427,7 @@ function isRights(value: unknown): value is ProductSecurityRights {
   return isIdentifiedRecord(value)
     && hasExactKeys(value, ["schema_version", "id", "security_identity_id", "version", "economic_units", "votes_per_unit", "conversion_ratio", "adr_ratio", "dividend_rights_per_unit", "effective_from", "effective_to", "source_id", "raw_hash", "supersedes_id", "content_hash", "created_at"])
     && isUuid(value.security_identity_id)
-    && isNonNegativeInteger(value.version)
+    && isPositiveInteger(value.version)
     && isNonNegativeDecimal(value.economic_units, true) && isNonNegativeDecimal(value.votes_per_unit)
     && isNonNegativeDecimal(value.conversion_ratio, true) && isNonNegativeDecimal(value.adr_ratio, true)
     && isNonNegativeDecimal(value.dividend_rights_per_unit)
@@ -442,20 +449,22 @@ function isEffectiveRights(value: unknown): value is EffectiveSecurityRights {
 
 function isDraftContent(value: unknown): boolean {
   return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "publication_status", "mandate_id", "scope_id", "agenda_id", "historical_basis_id", "price_snapshot_ids", "fx_snapshot_ids", "capital_structure_snapshot_id", "security_rights_ids", "user_focus"])
     && value.publication_status === "draft"
     && isNullableUuid(value.mandate_id)
     && isNullableUuid(value.scope_id)
     && isNullableUuid(value.agenda_id)
     && isNullableUuid(value.historical_basis_id)
-    && isUuidArray(value.price_snapshot_ids)
-    && isUuidArray(value.fx_snapshot_ids)
+    && isUniqueUuidArray(value.price_snapshot_ids)
+    && isUniqueUuidArray(value.fx_snapshot_ids)
     && isNullableUuid(value.capital_structure_snapshot_id)
-    && isUuidArray(value.security_rights_ids)
+    && isUniqueUuidArray(value.security_rights_ids)
     && isNullableString(value.user_focus);
 }
 
 function isDraft(value: unknown): value is ProductDraft {
   return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "id", "project_id", "base_revision_id", "lock_version", "content", "created_at", "updated_at"])
     && isUuid(value.id)
     && isUuid(value.project_id)
     && isNullableUuid(value.base_revision_id)
@@ -477,10 +486,12 @@ function hasConsistentAssessment(value: Record<string, unknown>): boolean {
 
 function isPreview(value: unknown): value is ProductPreview {
   return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "project_id", "expected_lock_version", "boundary_as_of", "assessment", "boundary", "boundary_hash", "manifest", "manifest_hash"])
     && isUuid(value.project_id)
     && isNonNegativeInteger(value.expected_lock_version)
     && isDateTime(value.boundary_as_of)
     && isProductDto(value.assessment)
+    && hasExactKeys(value.assessment, ["schema_version", "answerability", "direction", "confidence", "publication_status", "blockers", "resolution_requirements", "next_review_at", "parent_assessment_id", "content_hash"])
     && hasConsistentAssessment(value.assessment)
     && (value.assessment.publication_status === "user_frozen" || value.assessment.publication_status === "superseded")
     && isStringArray(value.assessment.blockers)
@@ -489,6 +500,7 @@ function isPreview(value: unknown): value is ProductPreview {
     && isNullableUuid(value.assessment.parent_assessment_id)
     && isHash(value.assessment.content_hash)
     && isProductDto(value.boundary)
+    && hasExactKeys(value.boundary, ["schema_version", "historical_basis_id", "mandate_id", "scope_id", "agenda_id", "price_snapshot_ids", "fx_snapshot_ids", "capital_structure_snapshot_id", "security_rights_ids", "parent_revision_id"])
     && isUuid(value.boundary.historical_basis_id)
     && isUuid(value.boundary.mandate_id) && isUuid(value.boundary.scope_id) && isUuid(value.boundary.agenda_id)
     && isUniqueUuidArray(value.boundary.price_snapshot_ids, true) && isUniqueUuidArray(value.boundary.fx_snapshot_ids)
@@ -496,9 +508,11 @@ function isPreview(value: unknown): value is ProductPreview {
     && isNullableUuid(value.boundary.parent_revision_id)
     && isHash(value.boundary_hash)
     && isRecord(value.manifest)
+    && hasExactKeys(value.manifest, ["schema_version", "project_id", "project_ref", "project_membership_refs", "primary_object_id", "boundary_ref", "mandate_id", "scope_id", "agenda_id", "historical_basis_id", "price_snapshot_ids", "fx_snapshot_ids", "capital_structure_snapshot_id", "security_rights_ids", "market_snapshot_refs", "model_refs", "assessment_ref", "memo_ref", "parent_revision_id"])
     && value.manifest.schema_version === "underwriting.research-revision-manifest.v1"
     && value.manifest.project_id === value.project_id
     && isRecord(value.manifest.project_ref)
+    && hasExactKeys(value.manifest.project_ref, ["project_id", "content_hash"])
     && value.manifest.project_ref.project_id === value.project_id
     && isHash(value.manifest.project_ref.content_hash)
     && isMembershipRefs(value.manifest.project_membership_refs)
@@ -523,11 +537,12 @@ function isPreview(value: unknown): value is ProductPreview {
 
 function isRevision(value: unknown): value is ProductRevision {
   return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "id", "project_id", "object_id", "basis_id", "boundary_id", "manifest_id", "version_kind", "sequence", "content_hash", "cutoff", "source_manifest_hash", "manifest_hash", "parent_revision_id", "price_snapshot_ids", "fx_snapshot_ids", "capital_structure_snapshot_id", "security_rights_ids", "market_snapshot_ids", "answerability", "direction", "confidence", "publication_status"])
     && isUuid(value.id)
     && isUuid(value.project_id)
     && isUuid(value.object_id) && isUuid(value.basis_id) && isUuid(value.boundary_id) && isUuid(value.manifest_id)
     && value.version_kind === "independent_research"
-    && isNonNegativeInteger(value.sequence)
+    && isPositiveInteger(value.sequence)
     && isHash(value.content_hash) && isDateTime(value.cutoff)
     && isHash(value.source_manifest_hash) && isHash(value.manifest_hash)
     && isNullableUuid(value.parent_revision_id)
@@ -555,7 +570,8 @@ function validatedError(value: unknown, headerRequestId: string | null): {
   requestId: string;
   details: ErrorDetails | null;
 } | null {
-  if (!isProductDto(value) || !isRecord(value.error)) return null;
+  if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "error"])
+    || !isRecord(value.error) || !hasExactKeys(value.error, ["code", "message", "request_id", "details"])) return null;
   if (typeof value.error.code !== "string" || typeof value.error.message !== "string" || typeof value.error.request_id !== "string") return null;
   const message = value.error.message.trim();
   const requestId = value.error.request_id.trim();
