@@ -287,6 +287,7 @@ describe("new independent investment research setup", () => {
     const user = userEvent.setup(); const product = server({ scopeFailures: 2 }); vi.stubGlobal("fetch", product.fetch); renderPage();
     await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
     await user.click(screen.getByRole("button", { name: "预览模板议程" }));
+    await screen.findByRole("region", { name: "模板议程预览" });
     const form = screen.getByRole("button", { name: "建立版本边界并进入工作台" }).closest("form");
     expect(form).not.toBeNull();
     fireEvent.submit(form!);
