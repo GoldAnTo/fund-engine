@@ -50,6 +50,7 @@ PRODUCT_TABLES = {
 }
 
 IMMUTABLE_PRODUCT_TABLES = PRODUCT_TABLES - {"uw_workspace_drafts"}
+MANIFEST_SCHEMA = "underwriting.research-revision-manifest.v1"
 
 
 def _schema_url(database_url: str, schema: str) -> str:
@@ -131,6 +132,153 @@ def _assert_0065_product_uniqueness(
                     statement,
                     {**parameters, "new_id": uuid.uuid4(), "version": 3},
                 )
+
+
+def _assert_0065_revision_and_constraint_contracts(
+    engine: sa.Engine,
+    ids: dict[str, uuid.UUID],
+) -> None:
+    digest = "a" * 64
+    first_revision = uuid.uuid4()
+    with engine.begin() as connection:
+        connection.execute(sa.text("""
+            INSERT INTO uw_research_versions
+              (id, object_id, basis_id, version_kind, sequence, content_hash, parent_ids,
+               project_id, boundary_id, manifest_id, manifest_schema,
+               publication_status, created_at)
+            VALUES (:id, :company, :basis, 'independent_research', 1, :digest, '[]',
+                    :project, :boundary, :manifest, :manifest_schema, 'user_frozen',
+                    CURRENT_TIMESTAMP)
+        """), {
+            **ids,
+            "id": first_revision,
+            "digest": digest,
+            "manifest_schema": MANIFEST_SCHEMA,
+        })
+        assert connection.execute(
+            sa.text("SELECT manifest_schema FROM uw_research_versions WHERE id = :id"),
+            {"id": first_revision},
+        ).scalar_one() == MANIFEST_SCHEMA
+
+    second_project = uuid.uuid4()
+    with engine.begin() as connection:
+        connection.execute(sa.text("""
+            INSERT INTO uw_research_projects
+              (id, primary_company_id, content_hash, created_at)
+            VALUES (:id, :company, :digest, CURRENT_TIMESTAMP)
+        """), {"id": second_project, "company": ids["company"], "digest": digest})
+        connection.execute(sa.text("""
+            INSERT INTO uw_research_versions
+              (id, object_id, basis_id, version_kind, sequence, content_hash, parent_ids,
+               project_id, manifest_schema, publication_status, created_at)
+            VALUES (:id, :company, :basis, 'independent_research', 1, :digest, '[]',
+                    :project, :schema, 'user_frozen', CURRENT_TIMESTAMP)
+        """), {
+            "id": uuid.uuid4(), "company": ids["company"], "basis": ids["basis"],
+            "digest": digest, "project": second_project, "schema": MANIFEST_SCHEMA,
+        })
+    with pytest.raises(sa.exc.DBAPIError):
+        with engine.begin() as connection:
+            connection.execute(sa.text("""
+                INSERT INTO uw_research_versions
+                  (id, object_id, basis_id, version_kind, sequence, content_hash,
+                   parent_ids, project_id, created_at)
+                VALUES (:id, :company, :basis, 'independent_research', 1, :digest,
+                        '[]', :project, CURRENT_TIMESTAMP)
+            """), {
+                "id": uuid.uuid4(), "company": ids["company"], "basis": ids["basis"],
+                "digest": digest, "project": second_project,
+            })
+
+    with engine.begin() as connection:
+        connection.execute(sa.text("""
+            INSERT INTO uw_research_versions
+              (id, object_id, basis_id, version_kind, sequence, content_hash, parent_ids,
+               created_at)
+            VALUES (:id, :company, :basis, 'legacy-guard', 1, :digest, '[]',
+                    CURRENT_TIMESTAMP)
+        """), {"id": uuid.uuid4(), "company": ids["company"], "basis": ids["basis"], "digest": digest})
+    with pytest.raises(sa.exc.DBAPIError):
+        with engine.begin() as connection:
+            connection.execute(sa.text("""
+                INSERT INTO uw_research_versions
+                  (id, object_id, basis_id, version_kind, sequence, content_hash,
+                   parent_ids, created_at)
+                VALUES (:id, :company, :basis, 'legacy-guard', 1, :digest, '[]',
+                        CURRENT_TIMESTAMP)
+            """), {"id": uuid.uuid4(), "company": ids["company"], "basis": ids["basis"], "digest": digest})
+
+    for invalid in (None, "null", "1", "{}"):
+        with pytest.raises(sa.exc.DBAPIError):
+            with engine.begin() as connection:
+                connection.execute(sa.text("""
+                    INSERT INTO uw_revision_boundaries
+                      (id, project_id, historical_basis_id, mandate_id, scope_id,
+                       agenda_id, price_snapshot_ids, fx_snapshot_ids,
+                       capital_structure_snapshot_id, security_rights_ids,
+                       schema_version, content_hash, created_at)
+                    SELECT :id, project_id, historical_basis_id, mandate_id, scope_id,
+                           agenda_id, CAST(:invalid AS JSON), fx_snapshot_ids,
+                           capital_structure_snapshot_id, security_rights_ids,
+                           schema_version, :digest, created_at
+                    FROM uw_revision_boundaries WHERE id = :boundary
+                """), {
+                    "id": uuid.uuid4(), "invalid": invalid, "digest": "b" * 64,
+                    "boundary": ids["boundary"],
+                })
+
+    cloned_boundary = uuid.uuid4()
+    with engine.begin() as connection:
+        connection.execute(sa.text("""
+            INSERT INTO uw_revision_boundaries
+              (id, project_id, historical_basis_id, mandate_id, scope_id, agenda_id,
+               price_snapshot_ids, fx_snapshot_ids, capital_structure_snapshot_id,
+               security_rights_ids, schema_version, content_hash, created_at)
+            SELECT :id, project_id, historical_basis_id, mandate_id, scope_id, agenda_id,
+                   price_snapshot_ids, fx_snapshot_ids, capital_structure_snapshot_id,
+                   security_rights_ids, schema_version, :digest, created_at
+            FROM uw_revision_boundaries WHERE id = :boundary
+        """), {"id": cloned_boundary, "digest": "b" * 64, "boundary": ids["boundary"]})
+    with pytest.raises(sa.exc.DBAPIError):
+        with engine.begin() as connection:
+            connection.execute(sa.text("""
+                INSERT INTO uw_revision_manifests
+                  (id, project_id, boundary_id, idempotency_key, manifest, content_hash,
+                   created_at)
+                VALUES (:id, :project, :boundary, :key, CAST('[]' AS JSON), :digest,
+                        CURRENT_TIMESTAMP)
+            """), {
+                "id": uuid.uuid4(), "project": ids["project"],
+                "boundary": cloned_boundary, "key": uuid.uuid4().hex, "digest": digest,
+            })
+
+    with pytest.raises(sa.exc.DBAPIError):
+        with engine.begin() as connection:
+            connection.execute(sa.text("""
+                INSERT INTO uw_research_projects
+                  (id, primary_company_id, content_hash, created_at)
+                VALUES (:id, :company, 'short', CURRENT_TIMESTAMP)
+            """), {"id": uuid.uuid4(), "company": ids["company"]})
+
+    with pytest.raises(sa.exc.DBAPIError):
+        with engine.begin() as connection:
+            connection.execute(sa.text("""
+                INSERT INTO uw_object_identity_versions
+                  (id, object_id, version, canonical_name, effective_from, effective_to,
+                   content_hash, created_at)
+                VALUES (:id, :security, 99, 'bad', CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP - INTERVAL '1 day', :digest, CURRENT_TIMESTAMP)
+            """), {"id": uuid.uuid4(), "security": ids["security"], "digest": digest})
+    with pytest.raises(sa.exc.DBAPIError):
+        with engine.begin() as connection:
+            connection.execute(sa.text("""
+                INSERT INTO uw_research_assessment_versions
+                  (id, project_id, version, answerability, direction, confidence,
+                   publication_status, blockers, resolution_requirements, content_hash,
+                   created_at)
+                VALUES (:id, :project, 99, 'not_answerable', 'provisional_bullish',
+                        'high', 'user_frozen', '[]', '[]', :digest, CURRENT_TIMESTAMP)
+            """), {"id": uuid.uuid4(), "project": ids["project"], "digest": digest})
 
     snapshot_duplicates = {
         "uw_price_snapshots": sa.text("""
@@ -571,6 +719,7 @@ def test_0065_product_tables_install_precise_immutable_and_draft_delete_triggers
             """), {**ids, "digest": digest})
 
         _assert_0065_product_uniqueness(isolated, ids)
+        _assert_0065_revision_and_constraint_contracts(isolated, ids)
 
         immutable_ids = {
             "uw_object_identity_versions": ids["identity"],
@@ -620,6 +769,96 @@ def test_0065_product_tables_install_precise_immutable_and_draft_delete_triggers
                     sa.text("DELETE FROM uw_workspace_drafts WHERE id = :id"),
                     {"id": ids["draft"]},
                 )
+    finally:
+        isolated.dispose()
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin.dispose()
+
+
+@pytest.mark.pg_only
+def test_0065_downgrade_removes_only_product_foundation_and_restores_legacy_unique() -> None:
+    database_url = os.environ["TEST_DATABASE_URL"]
+    schema = f"underwriting_0065_down_{uuid.uuid4().hex}"
+    migration_url = _schema_url(database_url, schema)
+    admin = sa.create_engine(database_url, future=True)
+    isolated = sa.create_engine(migration_url, future=True)
+    backend = Path(__file__).parents[2]
+    company, basis, revision = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    digest = "a" * 64
+    try:
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+        migrated = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "0065"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert migrated.returncode == 0, migrated.stderr
+        with isolated.begin() as connection:
+            connection.execute(sa.text("""
+                INSERT INTO uw_research_objects
+                  (id, kind, external_key, canonical_name, created_at)
+                VALUES (:company, 'company', 'downgrade-company', 'Company',
+                        CURRENT_TIMESTAMP)
+            """), {"company": company})
+            connection.execute(sa.text("""
+                INSERT INTO uw_historical_bases
+                  (id, cutoff, source_manifest_hash, created_at)
+                VALUES (:basis, CURRENT_TIMESTAMP, :digest, CURRENT_TIMESTAMP)
+            """), {"basis": basis, "digest": digest})
+            connection.execute(sa.text("""
+                INSERT INTO uw_research_versions
+                  (id, object_id, basis_id, version_kind, sequence, content_hash,
+                   parent_ids, created_at)
+                VALUES (:revision, :company, :basis, 'legacy', 1, :digest, '[]',
+                        CURRENT_TIMESTAMP)
+            """), {
+                "revision": revision, "company": company, "basis": basis, "digest": digest,
+            })
+        downgraded = subprocess.run(
+            [sys.executable, "-m", "alembic", "downgrade", "0064"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert downgraded.returncode == 0, downgraded.stderr
+        with isolated.connect() as connection:
+            inspector = sa.inspect(connection)
+            assert not PRODUCT_TABLES & set(inspector.get_table_names())
+            assert "project_id" not in {
+                column["name"]
+                for column in inspector.get_columns("uw_research_versions")
+            }
+            assert "uq_uw_research_version_sequence" in {
+                item["name"]
+                for item in inspector.get_unique_constraints("uw_research_versions")
+            }
+            assert not {
+                "uq_uw_research_version_legacy_sequence",
+                "uq_uw_research_version_project_sequence",
+                "ix_uw_research_versions_project",
+            } & {item["name"] for item in inspector.get_indexes("uw_research_versions")}
+            assert connection.execute(
+                sa.text("SELECT content_hash FROM uw_research_versions WHERE id = :id"),
+                {"id": revision},
+            ).scalar_one() == digest
+        with pytest.raises(sa.exc.DBAPIError):
+            with isolated.begin() as connection:
+                connection.execute(sa.text("""
+                    INSERT INTO uw_research_versions
+                      (id, object_id, basis_id, version_kind, sequence, content_hash,
+                       parent_ids, created_at)
+                    VALUES (:id, :company, :basis, 'legacy', 1, :digest, '[]',
+                            CURRENT_TIMESTAMP)
+                """), {
+                    "id": uuid.uuid4(), "company": company, "basis": basis, "digest": digest,
+                })
     finally:
         isolated.dispose()
         with admin.begin() as connection:

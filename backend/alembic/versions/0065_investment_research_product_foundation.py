@@ -32,6 +32,9 @@ IMMUTABLE_PRODUCT_TABLES = (
     "uw_revision_manifests",
 )
 
+LEGACY_REVISION_INDEX = "uq_uw_research_version_legacy_sequence"
+PRODUCT_REVISION_INDEX = "uq_uw_research_version_project_sequence"
+
 
 def _add_compatibility_columns() -> None:
     if op.get_bind().dialect.name == "sqlite":
@@ -74,10 +77,11 @@ def _add_compatibility_columns() -> None:
         with op.batch_alter_table(
             "uw_research_versions", recreate="always"
         ) as batch:
+            batch.drop_constraint("uq_uw_research_version_sequence", type_="unique")
             batch.add_column(sa.Column("project_id", sa.Uuid(), nullable=True))
             batch.add_column(sa.Column("boundary_id", sa.Uuid(), nullable=True))
             batch.add_column(sa.Column("manifest_id", sa.Uuid(), nullable=True))
-            batch.add_column(sa.Column("manifest_schema", sa.String(32), nullable=True))
+            batch.add_column(sa.Column("manifest_schema", sa.String(64), nullable=True))
             batch.add_column(
                 sa.Column("publication_status", sa.String(16), nullable=True)
             )
@@ -149,7 +153,7 @@ def _add_compatibility_columns() -> None:
     op.add_column("uw_research_versions", sa.Column("manifest_id", sa.Uuid(), nullable=True))
     op.add_column(
         "uw_research_versions",
-        sa.Column("manifest_schema", sa.String(32), nullable=True),
+        sa.Column("manifest_schema", sa.String(64), nullable=True),
     )
     op.add_column(
         "uw_research_versions",
@@ -176,6 +180,9 @@ def _add_compatibility_columns() -> None:
         ["manifest_id"],
         ["id"],
     )
+    op.drop_constraint(
+        "uq_uw_research_version_sequence", "uw_research_versions", type_="unique"
+    )
 
 
 def _drop_compatibility_columns() -> None:
@@ -191,6 +198,10 @@ def _drop_compatibility_columns() -> None:
             batch.drop_column("manifest_id")
             batch.drop_column("boundary_id")
             batch.drop_column("project_id")
+            batch.create_unique_constraint(
+                "uq_uw_research_version_sequence",
+                ["object_id", "version_kind", "sequence"],
+            )
         with op.batch_alter_table(
             "uw_historical_bases", recreate="always"
         ) as batch:
@@ -218,6 +229,11 @@ def _drop_compatibility_columns() -> None:
     )
     op.drop_constraint(
         "fk_uw_research_version_project", "uw_research_versions", type_="foreignkey"
+    )
+    op.create_unique_constraint(
+        "uq_uw_research_version_sequence",
+        "uw_research_versions",
+        ["object_id", "version_kind", "sequence"],
     )
     for column in (
         "publication_status",
@@ -249,6 +265,8 @@ def _drop_compatibility_columns() -> None:
 
 
 def upgrade() -> None:
+    dialect_name = op.get_bind().dialect.name
+    json_type = "json_type" if dialect_name == "sqlite" else "json_typeof"
     op.create_table(
         "uw_object_identity_versions",
         sa.Column("id", sa.Uuid(), primary_key=True),
@@ -345,6 +363,11 @@ def upgrade() -> None:
             name="uq_uw_project_security",
         ),
     )
+    op.create_index(
+        "ix_uw_project_securities_security",
+        "uw_research_project_securities",
+        ["security_id"],
+    )
     op.create_table(
         "uw_research_scope_versions",
         sa.Column("id", sa.Uuid(), primary_key=True),
@@ -355,7 +378,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("version", sa.Integer(), nullable=False),
-        sa.Column("payload", sa.JSON(), nullable=False),
+        sa.Column("payload", sa.JSON(none_as_null=True), nullable=False),
         sa.Column(
             "supersedes_id",
             sa.Uuid(),
@@ -391,8 +414,8 @@ def upgrade() -> None:
             sa.ForeignKey("uw_research_scope_versions.id"),
             nullable=False,
         ),
-        sa.Column("payload", sa.JSON(), nullable=False),
-        sa.Column("generator_provenance", sa.JSON(), nullable=False),
+        sa.Column("payload", sa.JSON(none_as_null=True), nullable=False),
+        sa.Column("generator_provenance", sa.JSON(none_as_null=True), nullable=False),
         sa.Column(
             "supersedes_id",
             sa.Uuid(),
@@ -527,7 +550,11 @@ def upgrade() -> None:
         sa.Column("other_adjustments", sa.Numeric(28, 10), nullable=False),
         sa.Column("basic_shares", sa.Numeric(28, 10), nullable=False),
         sa.Column("diluted_shares", sa.Numeric(28, 10), nullable=False),
-        sa.Column("potential_dilution_descriptors", sa.JSON(), nullable=False),
+        sa.Column(
+            "potential_dilution_descriptors",
+            sa.JSON(none_as_null=True),
+            nullable=False,
+        ),
         sa.Column("report_period_start", sa.DateTime(timezone=True), nullable=False),
         sa.Column("report_period_end", sa.DateTime(timezone=True), nullable=False),
         sa.Column("market_at", sa.DateTime(timezone=True), nullable=False),
@@ -650,8 +677,10 @@ def upgrade() -> None:
         sa.Column("direction", sa.String(32), nullable=True),
         sa.Column("confidence", sa.String(16), nullable=True),
         sa.Column("publication_status", sa.String(24), nullable=False),
-        sa.Column("blockers", sa.JSON(), nullable=False),
-        sa.Column("resolution_requirements", sa.JSON(), nullable=False),
+        sa.Column("blockers", sa.JSON(none_as_null=True), nullable=False),
+        sa.Column(
+            "resolution_requirements", sa.JSON(none_as_null=True), nullable=False
+        ),
         sa.Column("next_review_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("content_hash", sa.String(64), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -705,7 +734,7 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("lock_version", sa.Integer(), nullable=False),
-        sa.Column("content", sa.JSON(), nullable=False),
+        sa.Column("content", sa.JSON(none_as_null=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
@@ -746,15 +775,15 @@ def upgrade() -> None:
             sa.ForeignKey("uw_research_agenda_versions.id"),
             nullable=False,
         ),
-        sa.Column("price_snapshot_ids", sa.JSON(), nullable=False),
-        sa.Column("fx_snapshot_ids", sa.JSON(), nullable=False),
+        sa.Column("price_snapshot_ids", sa.JSON(none_as_null=True), nullable=False),
+        sa.Column("fx_snapshot_ids", sa.JSON(none_as_null=True), nullable=False),
         sa.Column(
             "capital_structure_snapshot_id",
             sa.Uuid(),
             sa.ForeignKey("uw_capital_structure_snapshots.id"),
             nullable=False,
         ),
-        sa.Column("security_rights_ids", sa.JSON(), nullable=False),
+        sa.Column("security_rights_ids", sa.JSON(none_as_null=True), nullable=False),
         sa.Column(
             "parent_revision_id",
             sa.Uuid(),
@@ -770,6 +799,18 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "length(content_hash) = 64", name="ck_uw_revision_boundary_content_hash"
+        ),
+        sa.CheckConstraint(
+            f"{json_type}(price_snapshot_ids) = 'array'",
+            name="ck_uw_revision_boundary_price_refs_array",
+        ),
+        sa.CheckConstraint(
+            f"{json_type}(fx_snapshot_ids) = 'array'",
+            name="ck_uw_revision_boundary_fx_refs_array",
+        ),
+        sa.CheckConstraint(
+            f"{json_type}(security_rights_ids) = 'array'",
+            name="ck_uw_revision_boundary_rights_refs_array",
         ),
     )
     op.create_index(
@@ -793,7 +834,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("idempotency_key", sa.String(120), nullable=False),
-        sa.Column("manifest", sa.JSON(), nullable=False),
+        sa.Column("manifest", sa.JSON(none_as_null=True), nullable=False),
         sa.Column("content_hash", sa.String(64), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
@@ -802,6 +843,10 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "length(content_hash) = 64", name="ck_uw_revision_manifest_content_hash"
+        ),
+        sa.CheckConstraint(
+            f"{json_type}(manifest) = 'object'",
+            name="ck_uw_revision_manifest_object",
         ),
         sa.UniqueConstraint(
             "project_id",
@@ -813,7 +858,56 @@ def upgrade() -> None:
 
     _add_compatibility_columns()
 
-    if op.get_bind().dialect.name != "postgresql":
+    op.create_index(
+        LEGACY_REVISION_INDEX,
+        "uw_research_versions",
+        ["object_id", "version_kind", "sequence"],
+        unique=True,
+        sqlite_where=sa.text("project_id IS NULL"),
+        postgresql_where=sa.text("project_id IS NULL"),
+    )
+    op.create_index(
+        PRODUCT_REVISION_INDEX,
+        "uw_research_versions",
+        ["project_id", "version_kind", "sequence"],
+        unique=True,
+        sqlite_where=sa.text("project_id IS NOT NULL"),
+        postgresql_where=sa.text("project_id IS NOT NULL"),
+    )
+    op.create_index(
+        "ix_uw_research_versions_project",
+        "uw_research_versions",
+        ["project_id"],
+    )
+    op.create_index(
+        "ix_uw_mandate_versions_project",
+        "uw_mandate_versions",
+        ["project_id"],
+    )
+
+    if dialect_name == "sqlite":
+        for table_name in IMMUTABLE_PRODUCT_TABLES:
+            op.execute(f"""
+                CREATE TRIGGER no_update_{table_name}
+                BEFORE UPDATE ON {table_name}
+                BEGIN
+                    SELECT RAISE(ABORT, 'immutable product table is append-only');
+                END;
+            """)
+            op.execute(f"""
+                CREATE TRIGGER no_delete_{table_name}
+                BEFORE DELETE ON {table_name}
+                BEGIN
+                    SELECT RAISE(ABORT, 'immutable product table is append-only');
+                END;
+            """)
+        op.execute("""
+            CREATE TRIGGER no_delete_uw_workspace_drafts
+            BEFORE DELETE ON uw_workspace_drafts
+            BEGIN
+                SELECT RAISE(ABORT, 'immutable product table is append-only');
+            END;
+        """)
         return
     for table_name in IMMUTABLE_PRODUCT_TABLES:
         op.execute(
@@ -832,7 +926,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    if op.get_bind().dialect.name == "postgresql":
+    dialect_name = op.get_bind().dialect.name
+    if dialect_name == "postgresql":
         op.execute(
             "DROP TRIGGER IF EXISTS no_delete_uw_workspace_drafts "
             "ON uw_workspace_drafts;"
@@ -844,6 +939,16 @@ def downgrade() -> None:
             op.execute(
                 f"DROP TRIGGER IF EXISTS no_update_{table_name} ON {table_name};"
             )
+    elif dialect_name == "sqlite":
+        op.execute("DROP TRIGGER IF EXISTS no_delete_uw_workspace_drafts;")
+        for table_name in reversed(IMMUTABLE_PRODUCT_TABLES):
+            op.execute(f"DROP TRIGGER IF EXISTS no_delete_{table_name};")
+            op.execute(f"DROP TRIGGER IF EXISTS no_update_{table_name};")
+
+    op.drop_index("ix_uw_mandate_versions_project", table_name="uw_mandate_versions")
+    op.drop_index("ix_uw_research_versions_project", table_name="uw_research_versions")
+    op.drop_index(PRODUCT_REVISION_INDEX, table_name="uw_research_versions")
+    op.drop_index(LEGACY_REVISION_INDEX, table_name="uw_research_versions")
 
     _drop_compatibility_columns()
 
@@ -876,6 +981,10 @@ def downgrade() -> None:
     )
     op.drop_table("uw_research_agenda_versions")
     op.drop_table("uw_research_scope_versions")
+    op.drop_index(
+        "ix_uw_project_securities_security",
+        table_name="uw_research_project_securities",
+    )
     op.drop_table("uw_research_project_securities")
     op.drop_index(
         "ix_uw_research_projects_company", table_name="uw_research_projects"

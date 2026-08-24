@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -82,6 +83,7 @@ class UnderwritingMandateVersion(Base):
         UniqueConstraint(
             "mandate_key", "version", name="uq_uw_mandate_version"
         ),
+        Index("ix_uw_mandate_versions_project", "project_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
@@ -183,11 +185,23 @@ class UnderwritingLedgerEntry(Base):
 class UnderwritingResearchVersion(Base):
     __tablename__ = "uw_research_versions"
     __table_args__ = (
-        UniqueConstraint(
+        Index(
+            "uq_uw_research_version_legacy_sequence",
             "object_id",
             "version_kind",
             "sequence",
-            name="uq_uw_research_version_sequence",
+            unique=True,
+            sqlite_where=text("project_id IS NULL"),
+            postgresql_where=text("project_id IS NULL"),
+        ),
+        Index(
+            "uq_uw_research_version_project_sequence",
+            "project_id",
+            "version_kind",
+            "sequence",
+            unique=True,
+            sqlite_where=text("project_id IS NOT NULL"),
+            postgresql_where=text("project_id IS NOT NULL"),
         ),
         Index(
             "ix_uw_research_versions_object_kind_sequence",
@@ -195,6 +209,7 @@ class UnderwritingResearchVersion(Base):
             "version_kind",
             "sequence",
         ),
+        Index("ix_uw_research_versions_project", "project_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
@@ -207,7 +222,9 @@ class UnderwritingResearchVersion(Base):
     version_kind: Mapped[str] = mapped_column(String(64), nullable=False)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    parent_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    parent_ids: Mapped[list[str]] = mapped_column(
+        JSON(none_as_null=True), nullable=False
+    )
     supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("uw_research_versions.id"), nullable=True
     )
@@ -232,7 +249,7 @@ class UnderwritingResearchVersion(Base):
         ),
         nullable=True,
     )
-    manifest_schema: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    manifest_schema: Mapped[str | None] = mapped_column(String(64), nullable=True)
     publication_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

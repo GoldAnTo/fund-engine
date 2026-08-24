@@ -101,6 +101,7 @@ class UnderwritingResearchProjectSecurity(Base):
             "security_id",
             name="uq_uw_project_security",
         ),
+        Index("ix_uw_project_securities_security", "security_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
@@ -132,7 +133,7 @@ class UnderwritingResearchScopeVersion(Base):
         Uuid, ForeignKey("uw_research_projects.id"), nullable=False
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON(none_as_null=True), nullable=False)
     supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("uw_research_scope_versions.id"), nullable=True
     )
@@ -162,8 +163,10 @@ class UnderwritingResearchAgendaVersion(Base):
     scope_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("uw_research_scope_versions.id"), nullable=False
     )
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
-    generator_provenance: Mapped[dict] = mapped_column(JSON, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON(none_as_null=True), nullable=False)
+    generator_provenance: Mapped[dict] = mapped_column(
+        JSON(none_as_null=True), nullable=False
+    )
     supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("uw_research_agenda_versions.id"), nullable=True
     )
@@ -307,7 +310,7 @@ class UnderwritingCapitalStructureSnapshot(Base):
     basic_shares: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
     diluted_shares: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
     potential_dilution_descriptors: Mapped[list[str]] = mapped_column(
-        JSON, nullable=False
+        JSON(none_as_null=True), nullable=False
     )
     report_period_start: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -432,8 +435,10 @@ class UnderwritingResearchAssessmentVersion(Base):
     direction: Mapped[str | None] = mapped_column(String(32), nullable=True)
     confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)
     publication_status: Mapped[str] = mapped_column(String(24), nullable=False)
-    blockers: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    resolution_requirements: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    blockers: Mapped[list[str]] = mapped_column(JSON(none_as_null=True), nullable=False)
+    resolution_requirements: Mapped[list[str]] = mapped_column(
+        JSON(none_as_null=True), nullable=False
+    )
     next_review_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -456,7 +461,7 @@ class UnderwritingWorkspaceDraft(Base):
         Uuid, ForeignKey("uw_research_versions.id"), nullable=True
     )
     lock_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    content: Mapped[dict] = mapped_column(JSON, nullable=False)
+    content: Mapped[dict] = mapped_column(JSON(none_as_null=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -488,12 +493,18 @@ class UnderwritingRevisionBoundary(Base):
     agenda_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("uw_research_agenda_versions.id"), nullable=False
     )
-    price_snapshot_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    fx_snapshot_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    price_snapshot_ids: Mapped[list[str]] = mapped_column(
+        JSON(none_as_null=True), nullable=False
+    )
+    fx_snapshot_ids: Mapped[list[str]] = mapped_column(
+        JSON(none_as_null=True), nullable=False
+    )
     capital_structure_snapshot_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("uw_capital_structure_snapshots.id"), nullable=False
     )
-    security_rights_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    security_rights_ids: Mapped[list[str]] = mapped_column(
+        JSON(none_as_null=True), nullable=False
+    )
     parent_revision_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("uw_research_versions.id"), nullable=True
     )
@@ -526,6 +537,6 @@ class UnderwritingRevisionManifest(Base):
         Uuid, ForeignKey("uw_revision_boundaries.id"), nullable=False
     )
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
-    manifest: Mapped[dict] = mapped_column(JSON, nullable=False)
+    manifest: Mapped[dict] = mapped_column(JSON(none_as_null=True), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

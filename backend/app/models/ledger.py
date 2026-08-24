@@ -6,8 +6,9 @@ Corrections append a successor record carrying ``supersedes_id``.
 Immutability is enforced at two layers:
 1. Application layer: a SQLAlchemy ``before_execute`` guard rejects any
    UPDATE/DELETE targeting an immutable table, raising ImmutableLedgerError.
-2. Database layer: PostgreSQL triggers (see Alembic migration 0001) raise on
-   UPDATE/DELETE as defence-in-depth against connections bypassing the app.
+2. Database layer: PostgreSQL triggers raise on UPDATE/DELETE. Migration 0065
+   also installs SQLite triggers for the product tables; older SQLite ledger
+   tables continue to rely on the application guard.
 """
 from __future__ import annotations
 

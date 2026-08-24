@@ -80,6 +80,10 @@ COMPATIBILITY_COLUMNS = {
     },
 }
 
+MANIFEST_SCHEMA = "underwriting.research-revision-manifest.v1"
+LEGACY_REVISION_INDEX = "uq_uw_research_version_legacy_sequence"
+PRODUCT_REVISION_INDEX = "uq_uw_research_version_project_sequence"
+
 
 def _unique_columns(table_name: str) -> set[tuple[str, ...]]:
     table = Base.metadata.tables[table_name]
@@ -511,6 +515,399 @@ def test_compatibility_columns_are_nullable_and_have_required_foreign_keys() -> 
         "uw_revision_boundaries.id",
         "uw_revision_manifests.id",
     } <= _foreign_key_targets("uw_research_versions")
+
+
+def test_product_revision_discriminator_indexes_and_json_types_are_registered() -> None:
+    revision = Base.metadata.tables["uw_research_versions"]
+    assert revision.c.manifest_schema.type.length == 64
+    indexes = {index.name: index for index in revision.indexes}
+    assert tuple(indexes[LEGACY_REVISION_INDEX].columns.keys()) == (
+        "object_id",
+        "version_kind",
+        "sequence",
+    )
+    assert tuple(indexes[PRODUCT_REVISION_INDEX].columns.keys()) == (
+        "project_id",
+        "version_kind",
+        "sequence",
+    )
+    assert indexes[LEGACY_REVISION_INDEX].unique
+    assert indexes[PRODUCT_REVISION_INDEX].unique
+    assert "project_id IS NULL" in str(
+        indexes[LEGACY_REVISION_INDEX].dialect_options["sqlite"]["where"]
+    )
+    assert "project_id IS NOT NULL" in str(
+        indexes[PRODUCT_REVISION_INDEX].dialect_options["postgresql"]["where"]
+    )
+
+    expected_indexes = {
+        "uw_research_versions": "ix_uw_research_versions_project",
+        "uw_mandate_versions": "ix_uw_mandate_versions_project",
+        "uw_research_project_securities": "ix_uw_project_securities_security",
+    }
+    for table_name, index_name in expected_indexes.items():
+        assert index_name in {
+            index.name for index in Base.metadata.tables[table_name].indexes
+        }
+
+    for table_name, column_names in {
+        "uw_revision_boundaries": (
+            "price_snapshot_ids",
+            "fx_snapshot_ids",
+            "security_rights_ids",
+        ),
+        "uw_revision_manifests": ("manifest",),
+    }.items():
+        table = Base.metadata.tables[table_name]
+        assert all(table.c[name].type.none_as_null for name in column_names)
+
+
+@pytest.fixture(scope="module")
+def migrated_0065_engine(tmp_path_factory: pytest.TempPathFactory):
+    database_path = tmp_path_factory.mktemp("product-0065") / "product.db"
+    backend = Path(__file__).parents[2]
+    database_url = f"sqlite:///{database_path}"
+    migrated = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0065"],
+        cwd=backend,
+        env={**os.environ, "DATABASE_URL": database_url},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert migrated.returncode == 0, migrated.stderr
+    engine = sa.create_engine(database_url)
+    yield engine
+    engine.dispose()
+
+
+def _seed_migrated_product_graph(
+    connection: sa.Connection,
+    suffix: str,
+    *,
+    company_id: uuid.UUID | None = None,
+) -> dict[str, uuid.UUID]:
+    ids = {
+        name: uuid.uuid4()
+        for name in (
+            "company",
+            "security",
+            "project",
+            "scope",
+            "agenda",
+            "capital",
+            "mandate",
+            "basis",
+            "boundary",
+            "manifest",
+            "draft",
+        )
+    }
+    if company_id is not None:
+        ids["company"] = company_id
+    values = {name: value.hex for name, value in ids.items()}
+    values.update({
+        "suffix": suffix,
+        "company_key": f"{suffix}:company",
+        "security_key": f"{suffix}:security",
+        "digest": "a" * 64,
+    })
+    if company_id is None:
+        connection.execute(sa.text("""
+            INSERT INTO uw_research_objects
+              (id, kind, external_key, canonical_name, created_at)
+            VALUES (:company, 'company', :company_key, 'Company', CURRENT_TIMESTAMP)
+        """), values)
+    connection.execute(sa.text("""
+        INSERT INTO uw_research_objects
+          (id, kind, external_key, canonical_name, created_at)
+        VALUES (:security, 'security', :security_key, 'Security', CURRENT_TIMESTAMP)
+    """), values)
+    connection.execute(sa.text("""
+        INSERT INTO uw_research_projects (id, primary_company_id, content_hash, created_at)
+        VALUES (:project, :company, :digest, CURRENT_TIMESTAMP)
+    """), values)
+    connection.execute(sa.text("""
+        INSERT INTO uw_research_scope_versions
+          (id, project_id, version, payload, content_hash, created_at)
+        VALUES (:scope, :project, 1, '{}', :digest, CURRENT_TIMESTAMP)
+    """), values)
+    connection.execute(sa.text("""
+        INSERT INTO uw_research_agenda_versions
+          (id, project_id, version, scope_id, payload, generator_provenance,
+           content_hash, created_at)
+        VALUES (:agenda, :project, 1, :scope, '{}', '{}', :digest, CURRENT_TIMESTAMP)
+    """), values)
+    connection.execute(sa.text("""
+        INSERT INTO uw_capital_structure_snapshots
+          (id, company_id, currency, cash, debt, minority_interest, investments,
+           pension_liabilities, other_adjustments, basic_shares, diluted_shares,
+           potential_dilution_descriptors, report_period_start, report_period_end,
+           market_at, available_at, source_id, raw_hash, content_hash, created_at)
+        VALUES (:capital, :company, 'CNY', 1, 1, 0, 0, 0, 0, 10, 10, '[]',
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP, :suffix, :digest, :digest, CURRENT_TIMESTAMP)
+    """), values)
+    connection.execute(sa.text("""
+        INSERT INTO uw_mandate_versions
+          (id, mandate_key, version, horizon_years, base_currency, required_return,
+           permanent_loss_limit, comparison_set, project_id, content_hash, created_at)
+        VALUES (:mandate, :suffix, 1, 3, 'CNY', 0.1, 0.2, '[]', :project,
+                :digest, CURRENT_TIMESTAMP)
+    """), values)
+    connection.execute(sa.text("""
+        INSERT INTO uw_historical_bases
+          (id, cutoff, source_manifest_hash, content_hash, created_at)
+        VALUES (:basis, CURRENT_TIMESTAMP, :digest, :digest, CURRENT_TIMESTAMP)
+    """), values)
+    connection.execute(sa.text("""
+        INSERT INTO uw_revision_boundaries
+          (id, project_id, historical_basis_id, mandate_id, scope_id, agenda_id,
+           price_snapshot_ids, fx_snapshot_ids, capital_structure_snapshot_id,
+           security_rights_ids, schema_version, content_hash, created_at)
+        VALUES (:boundary, :project, :basis, :mandate, :scope, :agenda, '[]', '[]',
+                :capital, '[]', '1', :digest, CURRENT_TIMESTAMP)
+    """), values)
+    connection.execute(sa.text("""
+        INSERT INTO uw_revision_manifests
+          (id, project_id, boundary_id, idempotency_key, manifest, content_hash, created_at)
+        VALUES (:manifest, :project, :boundary, :suffix, '{}', :digest, CURRENT_TIMESTAMP)
+    """), values)
+    connection.execute(sa.text("""
+        INSERT INTO uw_workspace_drafts
+          (id, project_id, lock_version, content, created_at, updated_at)
+        VALUES (:draft, :project, 1, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    """), values)
+    return ids
+
+
+def _insert_product_revision(
+    connection: sa.Connection,
+    ids: dict[str, uuid.UUID],
+    *,
+    revision_id: uuid.UUID,
+    sequence: int = 1,
+) -> None:
+    connection.execute(sa.text("""
+        INSERT INTO uw_research_versions
+          (id, object_id, basis_id, version_kind, sequence, content_hash, parent_ids,
+           project_id, boundary_id, manifest_id, manifest_schema, publication_status,
+           created_at)
+        VALUES (:id, :company, :basis, 'independent_research', :sequence, :digest,
+                '[]', :project, :boundary, :manifest, :manifest_schema, 'user_frozen',
+                CURRENT_TIMESTAMP)
+    """), {
+        "id": revision_id.hex,
+        "company": ids["company"].hex,
+        "basis": ids["basis"].hex,
+        "sequence": sequence,
+        "digest": "a" * 64,
+        "project": ids["project"].hex,
+        "boundary": ids["boundary"].hex,
+        "manifest": ids["manifest"].hex,
+        "manifest_schema": MANIFEST_SCHEMA,
+    })
+
+
+def test_0065_product_revision_round_trip_and_project_scoped_sequences(
+    migrated_0065_engine: sa.Engine,
+) -> None:
+    with migrated_0065_engine.begin() as connection:
+        manifest_schema = next(
+            column
+            for column in sa.inspect(connection).get_columns("uw_research_versions")
+            if column["name"] == "manifest_schema"
+        )
+        assert manifest_schema["type"].length == 64
+        first = _seed_migrated_product_graph(connection, "round-trip-1")
+        second = _seed_migrated_product_graph(
+            connection,
+            "round-trip-2",
+            company_id=first["company"],
+        )
+        first_revision = uuid.uuid4()
+        second_revision = uuid.uuid4()
+        _insert_product_revision(connection, first, revision_id=first_revision)
+        _insert_product_revision(connection, second, revision_id=second_revision)
+        assert connection.execute(
+            sa.text(
+                "SELECT manifest_schema FROM uw_research_versions WHERE id = :id"
+            ),
+            {"id": first_revision.hex},
+        ).scalar_one() == MANIFEST_SCHEMA
+        with pytest.raises(IntegrityError):
+            _insert_product_revision(
+                connection,
+                second,
+                revision_id=uuid.uuid4(),
+            )
+
+        legacy_id = uuid.uuid4().hex
+        connection.execute(sa.text("""
+            INSERT INTO uw_research_versions
+              (id, object_id, basis_id, version_kind, sequence, content_hash, parent_ids,
+               created_at)
+            VALUES (:id, :company, :basis, 'legacy-guard', 1, :digest, '[]',
+                    CURRENT_TIMESTAMP)
+        """), {
+            "id": legacy_id,
+            "company": first["company"].hex,
+            "basis": first["basis"].hex,
+            "digest": "a" * 64,
+        })
+        with pytest.raises(IntegrityError):
+            connection.execute(sa.text("""
+                INSERT INTO uw_research_versions
+                  (id, object_id, basis_id, version_kind, sequence, content_hash,
+                   parent_ids, created_at)
+                VALUES (:id, :company, :basis, 'legacy-guard', 1, :digest, '[]',
+                        CURRENT_TIMESTAMP)
+            """), {
+                "id": uuid.uuid4().hex,
+                "company": first["company"].hex,
+                "basis": first["basis"].hex,
+                "digest": "a" * 64,
+            })
+
+
+def test_0065_migrated_json_shapes_reject_nulls_and_wrong_containers(
+    migrated_0065_engine: sa.Engine,
+) -> None:
+    with migrated_0065_engine.begin() as connection:
+        ids = _seed_migrated_product_graph(connection, "json-shapes")
+    boundary = Base.metadata.tables["uw_revision_boundaries"]
+    common = {
+        "project_id": ids["project"],
+        "historical_basis_id": ids["basis"],
+        "mandate_id": ids["mandate"],
+        "scope_id": ids["scope"],
+        "agenda_id": ids["agenda"],
+        "price_snapshot_ids": [],
+        "fx_snapshot_ids": [],
+        "capital_structure_snapshot_id": ids["capital"],
+        "security_rights_ids": [],
+        "schema_version": "1",
+        "content_hash": "b" * 64,
+        "created_at": datetime(2026, 8, 24, tzinfo=UTC),
+    }
+    for column_name in (
+        "price_snapshot_ids",
+        "fx_snapshot_ids",
+        "security_rights_ids",
+    ):
+        for invalid in (None, sa.JSON.NULL, "scalar", {}):
+            with pytest.raises(IntegrityError):
+                with migrated_0065_engine.begin() as connection:
+                    connection.execute(
+                        boundary.insert(),
+                        {
+                            **common,
+                            "id": uuid.uuid4(),
+                            column_name: invalid,
+                        },
+                    )
+
+    manifest = Base.metadata.tables["uw_revision_manifests"]
+    for invalid in (None, sa.JSON.NULL, "scalar", []):
+        with pytest.raises(IntegrityError):
+            with migrated_0065_engine.begin() as connection:
+                connection.execute(
+                    manifest.insert(),
+                    {
+                        "id": uuid.uuid4(),
+                        "project_id": ids["project"],
+                        "boundary_id": uuid.uuid4(),
+                        "idempotency_key": uuid.uuid4().hex,
+                        "manifest": invalid,
+                        "content_hash": "b" * 64,
+                        "created_at": datetime(2026, 8, 24, tzinfo=UTC),
+                    },
+                )
+
+
+def test_0065_sqlite_database_guards_protect_persisted_draft_and_formal_rows(
+    migrated_0065_engine: sa.Engine,
+) -> None:
+    with migrated_0065_engine.begin() as connection:
+        ids = _seed_migrated_product_graph(connection, "sqlite-guards")
+        draft = Base.metadata.tables["uw_workspace_drafts"]
+        connection.execute(
+            update(draft)
+            .where(draft.c.id == ids["draft"])
+            .values(lock_version=2)
+        )
+        connection.exec_driver_sql(
+            "UPDATE uw_workspace_drafts SET lock_version = 3 WHERE id = ?",
+            (ids["draft"].hex,),
+        )
+        assert connection.execute(
+            sa.select(draft.c.lock_version).where(draft.c.id == ids["draft"])
+        ).scalar_one() == 3
+        with pytest.raises(ImmutableLedgerError):
+            connection.execute(delete(draft).where(draft.c.id == ids["draft"]))
+    with pytest.raises(sa.exc.DBAPIError, match="append-only|immutable"):
+        with migrated_0065_engine.begin() as connection:
+            connection.exec_driver_sql(
+                "DELETE FROM uw_workspace_drafts WHERE id = ?",
+                (ids["draft"].hex,),
+            )
+    with pytest.raises(sa.exc.DBAPIError, match="append-only|immutable"):
+        with migrated_0065_engine.begin() as connection:
+            connection.exec_driver_sql(
+                "UPDATE uw_research_projects SET content_hash = ? WHERE id = ?",
+                ("b" * 64, ids["project"].hex),
+            )
+
+
+def test_0065_migrated_representative_constraints_reject_invalid_rows(
+    migrated_0065_engine: sa.Engine,
+) -> None:
+    with migrated_0065_engine.begin() as connection:
+        ids = _seed_migrated_product_graph(connection, "representative-checks")
+    with pytest.raises(IntegrityError):
+        with migrated_0065_engine.begin() as connection:
+            connection.execute(
+                Base.metadata.tables["uw_research_projects"].insert(),
+                {
+                    "id": uuid.uuid4(),
+                    "primary_company_id": ids["company"],
+                    "content_hash": "short",
+                    "created_at": datetime(2026, 8, 24, tzinfo=UTC),
+                },
+            )
+    with pytest.raises(IntegrityError):
+        with migrated_0065_engine.begin() as connection:
+            connection.execute(
+                Base.metadata.tables["uw_object_identity_versions"].insert(),
+                {
+                    "id": uuid.uuid4(),
+                    "object_id": ids["security"],
+                    "version": 1,
+                    "canonical_name": "Security",
+                    "effective_from": datetime(2026, 8, 25, tzinfo=UTC),
+                    "effective_to": datetime(2026, 8, 24, tzinfo=UTC),
+                    "content_hash": "a" * 64,
+                    "created_at": datetime(2026, 8, 24, tzinfo=UTC),
+                },
+            )
+    with pytest.raises(IntegrityError):
+        with migrated_0065_engine.begin() as connection:
+            connection.execute(
+                Base.metadata.tables["uw_research_assessment_versions"].insert(),
+                {
+                    "id": uuid.uuid4(),
+                    "project_id": ids["project"],
+                    "version": 1,
+                    "answerability": "not_answerable",
+                    "direction": "provisional_bullish",
+                    "confidence": "high",
+                    "publication_status": "user_frozen",
+                    "blockers": [],
+                    "resolution_requirements": [],
+                    "content_hash": "a" * 64,
+                    "created_at": datetime(2026, 8, 24, tzinfo=UTC),
+                },
+            )
 
 
 def test_product_dependency_graph_can_create_and_drop_in_sqlite() -> None:
