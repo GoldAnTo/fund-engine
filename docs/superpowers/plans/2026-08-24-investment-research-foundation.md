@@ -517,7 +517,7 @@ git commit -m "feat: create investment research projects and scopes"
 - Create: `backend/tests/underwriting/test_market_snapshots.py`
 - Modify: `backend/app/underwriting/persistence/product_repository.py`
 
-- [ ] **Step 1: Write RED validation tests.** Cover target Security identity, timezone-aware market/available times, positive prices, ISO currency, FX quotation direction, positive diluted shares, company-action basis and rights effective intervals. Prove a price after the evidence cutoff is accepted without changing HistoricalBasis.
+- [x] **Step 1: Write RED validation tests.** Cover target Security identity, timezone-aware market/available times, positive prices, ISO currency, FX quotation direction, positive diluted shares, company-action basis and rights effective intervals. Prove a price after the evidence cutoff is accepted without changing HistoricalBasis.
 
 ```python
 def test_price_may_follow_evidence_cutoff_without_future_evidence(session, services) -> None:
@@ -527,13 +527,13 @@ def test_price_may_follow_evidence_cutoff_without_future_evidence(session, servi
     assert basis.price_as_of is None
 ```
 
-- [ ] **Step 2: Confirm RED.**
+- [x] **Step 2: Confirm RED.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_market_snapshots.py`
 
 Expected: import failure for `market_snapshots`.
 
-- [ ] **Step 3: Implement snapshot normalization.** Quantize decimal strings without float conversion, normalize currency codes, hash provider identity plus raw content hash, and deduplicate exact natural identities. Never silently convert currency or infer corporate-action adjustments.
+- [x] **Step 3: Implement snapshot normalization.** Quantize decimal strings without float conversion, normalize currency codes, hash provider identity plus raw content hash, and deduplicate exact natural identities. Never silently convert currency or infer corporate-action adjustments.
 
 ```python
 def normalized_decimal(value: Decimal, field: str) -> str:
@@ -553,7 +553,7 @@ content_hash = canonical_hash({
 })
 ```
 
-- [ ] **Step 4: Implement cross-snapshot checks.** A `RevisionBoundary` may reference only snapshots for its project Company/target Securities; FX is required when market or model currency differs from the mandate base currency; every target Security needs one effective SecurityRightsVersion.
+- [x] **Step 4: Implement cross-snapshot checks.** A `RevisionBoundary` may reference only snapshots for its project Company/target Securities; FX is required when market or model currency differs from the mandate base currency; every target Security needs one effective SecurityRightsVersion.
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -572,7 +572,7 @@ def validate_market_coverage(boundary: RevisionBoundaryInput, context: BoundaryC
         raise ValidationError("every target security requires effective rights")
 ```
 
-- [ ] **Step 5: Run GREEN and commit.**
+- [x] **Step 5: Run GREEN and commit.**
 
 Run: `cd backend && pytest -q tests/underwriting/test_market_snapshots.py tests/underwriting/test_historical_replay.py`
 
