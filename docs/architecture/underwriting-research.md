@@ -27,6 +27,16 @@ parent IDs. Older generic versions are checked against their historical
 snapshot reconstructed only from ledger IDs frozen on that revision; a reader
 does not query later effective ledger state to make them readable.
 
+## Legacy hash compatibility boundary
+
+Legacy v1-v3 revision hashes continue to include the stored legacy basis
+fields—cutoff, `price_as_of`, and `source_manifest_hash`—using the exact
+historical parent-descriptor and hash recipes that sealed those rows. New
+product revisions will use `underwriting.research-revision-manifest.v1` as a
+separate manifest contract. The product boundary must never reinterpret,
+replace, or backfill a legacy hash: a legacy row is verified only against the
+stored basis fields and its original seal semantics.
+
 ## Archive identity and runtime isolation
 
 A historical family identifies itself from the persisted `uw_research_objects`
