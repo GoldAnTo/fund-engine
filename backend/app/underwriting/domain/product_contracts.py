@@ -7,9 +7,11 @@ or external-system boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
+import hashlib
+import json
 import re
 from uuid import UUID
 
@@ -17,6 +19,8 @@ from .types import AnswerabilityState
 
 
 _CURRENCY_CODE = re.compile(r"[A-Z]{3}")
+_SUPPORTED_PRODUCT_CURRENCIES = frozenset({"CNY", "USD"})
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class ValueNature(StrEnum):
@@ -95,19 +99,43 @@ def _require_text(value: object, field_name: str) -> None:
         raise ValueError(f"{field_name} must not be empty")
 
 
+def _require_sha256(value: object, field_name: str) -> None:
+    if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+        raise ValueError(f"{field_name} must be a lowercase SHA-256")
+
+
+def agenda_items_hash(items: tuple[str, ...]) -> str:
+    """Return the stable digest of the agenda item sequence, preserving its order."""
+    return hashlib.sha256(
+        json.dumps(items, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _require_aware_datetime(value: object, field_name: str) -> None:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field_name} must be a timezone-aware datetime")
 
 
+def _is_later(left: datetime, right: datetime) -> bool:
+    """Compare aware datetimes as instants without mutating stored values."""
+    return left.astimezone(UTC) > right.astimezone(UTC)
+
+
 def _require_currency(value: object, field_name: str) -> None:
     if not isinstance(value, str) or _CURRENCY_CODE.fullmatch(value) is None:
         raise ValueError(f"{field_name} must be a three-letter uppercase currency code")
+    if value not in _SUPPORTED_PRODUCT_CURRENCIES:
+        raise ValueError(f"{field_name} must be a supported product currency")
 
 
 def _require_positive_decimal(value: object, field_name: str) -> None:
     if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
         raise ValueError(f"{field_name} must be a positive finite Decimal")
+
+
+def _require_nonnegative_decimal(value: object, field_name: str) -> None:
+    if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
+        raise ValueError(f"{field_name} must be a non-negative finite Decimal")
 
 
 def _require_finite_decimal(value: object, field_name: str) -> None:
@@ -143,7 +171,7 @@ def _require_uuid_tuple(value: object, field_name: str, *, nonempty: bool = Fals
 def _validate_market_times(market_at: datetime, available_at: datetime) -> None:
     _require_aware_datetime(market_at, "market_at")
     _require_aware_datetime(available_at, "available_at")
-    if market_at > available_at:
+    if _is_later(market_at, available_at):
         raise ValueError("market_at must not be later than available_at")
 
 
@@ -180,7 +208,7 @@ class AgendaGeneratorInput:
 
     def __post_init__(self) -> None:
         _require_enum(self.method, AgendaGenerationMethod, "agenda generation method")
-        _require_text(self.output_hash, "output_hash")
+        _require_sha256(self.output_hash, "output_hash")
         if self.method is AgendaGenerationMethod.DETERMINISTIC_TEMPLATE:
             _require_text(self.template_key, "template_key")
             _require_text(self.template_version, "template_version")
@@ -196,13 +224,10 @@ class AgendaGeneratorInput:
             return
         if any(
             value is None or not isinstance(value, str) or not value.strip()
-            for value in (
-                self.model_name,
-                self.prompt_template_version,
-                self.input_summary_hash,
-            )
+            for value in (self.model_name, self.prompt_template_version)
         ):
             raise ValueError("AI agenda provenance requires model, prompt, and input summary hashes")
+        _require_sha256(self.input_summary_hash, "input_summary_hash")
         if self.template_key is not None or self.template_version is not None:
             raise ValueError("AI agenda provenance must not include deterministic template fields")
 
@@ -218,6 +243,8 @@ class ResearchAgendaInput:
         _require_text_tuple(self.items, "agenda items", nonempty=True)
         if type(self.generator) is not AgendaGeneratorInput:
             raise ValueError("agenda generator is invalid")
+        if self.generator.output_hash != agenda_items_hash(self.items):
+            raise ValueError("output_hash must match agenda items hash")
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,9 +256,9 @@ class ProductHistoricalBasisInput:
 
     def __post_init__(self) -> None:
         _require_aware_datetime(self.cutoff_at, "cutoff_at")
-        _require_text(self.source_manifest_hash, "source_manifest_hash")
-        _require_text(self.definition_bundle_hash, "definition_bundle_hash")
-        _require_text(self.parser_bundle_hash, "parser_bundle_hash")
+        _require_sha256(self.source_manifest_hash, "source_manifest_hash")
+        _require_sha256(self.definition_bundle_hash, "definition_bundle_hash")
+        _require_sha256(self.parser_bundle_hash, "parser_bundle_hash")
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,7 +281,7 @@ class PriceSnapshotInput:
         _require_text(self.adjustment_basis, "adjustment_basis")
         _validate_market_times(self.market_at, self.available_at)
         _require_text(self.source_id, "source_id")
-        _require_text(self.raw_hash, "raw_hash")
+        _require_sha256(self.raw_hash, "raw_hash")
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,7 +304,7 @@ class FXSnapshotInput:
         _require_enum(self.quote_direction, FxQuoteDirection, "fx quote direction")
         _validate_market_times(self.market_at, self.available_at)
         _require_text(self.source_id, "source_id")
-        _require_text(self.raw_hash, "raw_hash")
+        _require_sha256(self.raw_hash, "raw_hash")
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,11 +349,11 @@ class CapitalStructureSnapshotInput:
         )
         _require_aware_datetime(self.report_period_start, "report_period_start")
         _require_aware_datetime(self.report_period_end, "report_period_end")
-        if self.report_period_start > self.report_period_end:
+        if _is_later(self.report_period_start, self.report_period_end):
             raise ValueError("report period is invalid")
         _validate_market_times(self.market_at, self.available_at)
         _require_text(self.source_id, "source_id")
-        _require_text(self.raw_hash, "raw_hash")
+        _require_sha256(self.raw_hash, "raw_hash")
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,21 +371,17 @@ class SecurityRightsInput:
 
     def __post_init__(self) -> None:
         _require_uuid(self.security_identity_id, "security_identity_id")
-        for field_name in (
-            "economic_units",
-            "votes_per_unit",
-            "conversion_ratio",
-            "adr_ratio",
-            "dividend_rights_per_unit",
-        ):
+        for field_name in ("economic_units", "conversion_ratio", "adr_ratio"):
             _require_positive_decimal(getattr(self, field_name), field_name)
+        for field_name in ("votes_per_unit", "dividend_rights_per_unit"):
+            _require_nonnegative_decimal(getattr(self, field_name), field_name)
         _require_aware_datetime(self.effective_from, "effective_from")
         if self.effective_to is not None:
             _require_aware_datetime(self.effective_to, "effective_to")
-            if self.effective_from > self.effective_to:
+            if _is_later(self.effective_from, self.effective_to):
                 raise ValueError("effective interval is invalid")
         _require_text(self.source_id, "source_id")
-        _require_text(self.raw_hash, "raw_hash")
+        _require_sha256(self.raw_hash, "raw_hash")
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,10 +447,12 @@ class ProductRevisionView:
         _require_uuid(self.id, "id")
         _require_uuid(self.project_id, "project_id")
         _require_uuid(self.boundary_id, "boundary_id")
-        _require_text(self.manifest_hash, "manifest_hash")
+        _require_sha256(self.manifest_hash, "manifest_hash")
         AssessmentState(
             answerability=self.answerability,
             direction=self.direction,
             confidence=self.confidence,
             publication_status=self.publication_status,
         )
+        if self.publication_status is PublicationStatus.DRAFT:
+            raise ValueError("formal product revision must not be draft")

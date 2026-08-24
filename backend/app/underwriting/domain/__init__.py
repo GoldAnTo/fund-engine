@@ -40,6 +40,7 @@ from .product_contracts import (
     ScenarioKey,
     SecurityRightsInput,
     ValueNature,
+    agenda_items_hash,
 )
 from .metrics import (
     AggregationRule,
@@ -126,6 +127,7 @@ __all__ = [
     "ScenarioKey",
     "SecurityRightsInput",
     "ValueNature",
+    "agenda_items_hash",
     "enforce_action_boundary",
     "evaluate_answerability",
     "AggregationRule",
