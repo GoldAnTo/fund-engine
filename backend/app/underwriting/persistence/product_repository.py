@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
@@ -29,6 +29,7 @@ from app.underwriting.persistence.product_models import (
     UnderwritingResearchProjectSecurity,
     UnderwritingResearchScopeVersion,
     UnderwritingSecurityRightsVersion,
+    UnderwritingWorkspaceDraft,
 )
 from app.underwriting.persistence.repository import StaleParentError
 
@@ -140,6 +141,8 @@ _SQLITE_SNAPSHOT_IDENTITY_COLUMNS = {
         }
     ),
 }
+_WORKSPACE_DRAFT_PROJECT_CONSTRAINT = "uq_uw_workspace_draft_project"
+_UNSET_BASE_REVISION = object()
 
 
 class ProductRepository:
@@ -478,6 +481,106 @@ class ProductRepository:
         )
         self._session.flush()
         return project
+
+    @staticmethod
+    def _is_workspace_draft_project_error(exc: IntegrityError) -> bool:
+        diagnostic = getattr(getattr(exc, "orig", None), "diag", None)
+        constraint_name = getattr(diagnostic, "constraint_name", None)
+        if isinstance(constraint_name, str):
+            return constraint_name == _WORKSPACE_DRAFT_PROJECT_CONSTRAINT
+
+        detail = str(getattr(exc, "orig", exc)).casefold().replace('"', "")
+        marker = "unique constraint failed:"
+        if marker not in detail:
+            return False
+        raw_columns = detail.split(marker, 1)[1].splitlines()[0]
+        columns = frozenset(
+            column.strip().removeprefix("main.") for column in raw_columns.split(",")
+        )
+        return columns == frozenset({"uw_workspace_drafts.project_id"})
+
+    def workspace_draft(self, project_id: UUID) -> UnderwritingWorkspaceDraft | None:
+        return self._session.scalar(
+            select(UnderwritingWorkspaceDraft)
+            .where(UnderwritingWorkspaceDraft.project_id == project_id)
+            .limit(1)
+            .execution_options(populate_existing=True)
+        )
+
+    def create_workspace_draft(
+        self,
+        *,
+        draft_id: UUID,
+        project_id: UUID,
+        content: dict[str, object],
+        created_at: datetime,
+    ) -> UnderwritingWorkspaceDraft:
+        """Create one draft, recovering only the per-project uniqueness race."""
+        row = UnderwritingWorkspaceDraft(
+            id=draft_id,
+            project_id=project_id,
+            base_revision_id=None,
+            lock_version=1,
+            content=deepcopy(content),
+            created_at=created_at,
+            updated_at=created_at,
+        )
+        try:
+            connection = self._session.connection()
+            if connection.dialect.name == "sqlite":
+                dbapi_connection = getattr(
+                    connection.connection,
+                    "driver_connection",
+                    connection.connection,
+                )
+                if not dbapi_connection.in_transaction:
+                    connection.exec_driver_sql("BEGIN")
+            with self._session.begin_nested():
+                self._session.add(row)
+                self._session.flush([row])
+        except IntegrityError as exc:
+            if not self._is_workspace_draft_project_error(exc):
+                raise
+            existing = self.workspace_draft(project_id)
+            if existing is None:
+                raise ConflictError(
+                    "workspace draft conflicted concurrently; retry creation"
+                ) from exc
+            return existing
+        return row
+
+    def compare_and_swap_workspace_draft(
+        self,
+        *,
+        project_id: UUID,
+        expected_lock_version: int,
+        content: dict[str, object],
+        updated_at: datetime,
+        base_revision_id: UUID | None | object = _UNSET_BASE_REVISION,
+    ) -> UnderwritingWorkspaceDraft:
+        """Atomically update a draft; publication may also reset its base."""
+        values: dict[str, object] = {
+            "content": deepcopy(content),
+            "lock_version": expected_lock_version + 1,
+            "updated_at": updated_at,
+        }
+        if base_revision_id is not _UNSET_BASE_REVISION:
+            values["base_revision_id"] = base_revision_id
+        result = self._session.execute(
+            update(UnderwritingWorkspaceDraft)
+            .where(
+                UnderwritingWorkspaceDraft.project_id == project_id,
+                UnderwritingWorkspaceDraft.lock_version == expected_lock_version,
+            )
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise ConflictError("workspace draft changed; reload before saving")
+        refreshed = self.workspace_draft(project_id)
+        if refreshed is None:  # Defensive: drafts are delete-protected.
+            raise ConflictError("workspace draft disappeared during saving")
+        return refreshed
 
     def project(
         self, project_id: UUID
