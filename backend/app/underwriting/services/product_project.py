@@ -50,10 +50,27 @@ class ObjectSearchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectCompanyIdentityView:
+    object_id: UUID
+    identity_version_id: UUID
+    canonical_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectSecurityIdentityView(ProjectCompanyIdentityView):
+    symbol: str
+    exchange: str
+    share_class: str
+    trading_currency: str
+
+
+@dataclass(frozen=True, slots=True)
 class ResearchProjectView:
     id: UUID
     primary_company_id: UUID
     target_security_ids: tuple[UUID, ...]
+    company_identity: ProjectCompanyIdentityView | None
+    security_identities: tuple[ProjectSecurityIdentityView, ...]
     content_hash: str
     created_at: datetime
 
@@ -266,12 +283,51 @@ class ResearchProjectService:
 
     def _project_view(self, record) -> ResearchProjectView:
         project, security_ids = record
+        created_at = self._stored_utc(project.created_at)
+        company_identity = self._repository.effective_identity(
+            project.primary_company_id, created_at
+        )
+        security_identities = tuple(
+            self._repository.effective_identity(security_id, created_at)
+            for security_id in sorted(security_ids, key=str)
+        )
+        if any(
+            not value.symbol
+            or not value.exchange
+            or not value.share_class
+            or not value.trading_currency
+            for value in security_identities
+            if value is not None
+        ):
+            raise ValidationError("project Security identity snapshot is incomplete")
         return ResearchProjectView(
             id=project.id,
             primary_company_id=project.primary_company_id,
             target_security_ids=tuple(sorted(security_ids, key=str)),
+            company_identity=(
+                ProjectCompanyIdentityView(
+                    object_id=company_identity.object_id,
+                    identity_version_id=company_identity.id,
+                    canonical_name=company_identity.canonical_name,
+                )
+                if company_identity is not None
+                else None
+            ),
+            security_identities=tuple(
+                ProjectSecurityIdentityView(
+                    object_id=value.object_id,
+                    identity_version_id=value.id,
+                    canonical_name=value.canonical_name,
+                    symbol=value.symbol,
+                    exchange=value.exchange,
+                    share_class=value.share_class,
+                    trading_currency=value.trading_currency,
+                )
+                for value in security_identities
+                if value is not None
+            ),
             content_hash=project.content_hash,
-            created_at=self._stored_utc(project.created_at),
+            created_at=created_at,
         )
 
     def create_project(
@@ -339,13 +395,7 @@ class ResearchProjectService:
             membership_hashes=membership_hashes,
             created_at=created_at,
         )
-        return ResearchProjectView(
-            id=project.id,
-            primary_company_id=project.primary_company_id,
-            target_security_ids=normalized_security_ids,
-            content_hash=project.content_hash,
-            created_at=created_at,
-        )
+        return self._project_view((project, normalized_security_ids))
 
     def project(self, project_id: UUID) -> ResearchProjectView | None:
         project_id = self._uuid(project_id, "project_id")

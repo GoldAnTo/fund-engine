@@ -214,23 +214,17 @@ class AgendaGeneratorInput:
     template_version: str | None
     model_name: str | None
     prompt_template_version: str | None
-    input_summary_hash: str | None
+    input_summary_hash: str
     output_hash: str
 
     def __post_init__(self) -> None:
         _require_enum(self.method, AgendaGenerationMethod, "agenda generation method")
+        _require_sha256(self.input_summary_hash, "input_summary_hash")
         _require_sha256(self.output_hash, "output_hash")
         if self.method is AgendaGenerationMethod.DETERMINISTIC_TEMPLATE:
             _require_text(self.template_key, "template_key")
             _require_text(self.template_version, "template_version")
-            if any(
-                value is not None
-                for value in (
-                    self.model_name,
-                    self.prompt_template_version,
-                    self.input_summary_hash,
-                )
-            ):
+            if self.model_name is not None or self.prompt_template_version is not None:
                 raise ValueError(
                     "deterministic agenda provenance must not include AI fields"
                 )

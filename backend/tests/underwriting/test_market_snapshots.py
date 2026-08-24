@@ -696,7 +696,7 @@ def _product_boundary(
                 "1",
                 None,
                 None,
-                None,
+                A64,
                 agenda_items_hash(items),
             ),
         ),

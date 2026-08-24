@@ -17,7 +17,7 @@ const uid = (value: number) => `10000000-0000-4000-8000-${String(value).padStart
 const shellIds = { older: uid(1), newer: uid(2), project: uid(3), company: uid(4), security: uid(5), companyVersion: uid(6), securityVersion: uid(7), industry: uid(8), industryVersion: uid(9), draft: uid(10), mandate: uid(11), scope: uid(12), agenda: uid(13), basis: uid(14), price: uid(15), capital: uid(16), rights: uid(17), membership: uid(18) };
 
 function shellProject(id = shellIds.project, createdAt = "2026-08-24T08:00:00Z") {
-  return { schema_version: "underwriting.v1", id, primary_company_id: shellIds.company, target_security_ids: [shellIds.security], content_hash: hash, created_at: createdAt };
+  return { schema_version: "underwriting.v1", id, primary_company_id: shellIds.company, target_security_ids: [shellIds.security], company_identity: { schema_version: "underwriting.v1", object_id: shellIds.company, identity_version_id: shellIds.companyVersion, canonical_name: "宁德时代" }, security_identities: [{ schema_version: "underwriting.v1", object_id: shellIds.security, identity_version_id: shellIds.securityVersion, canonical_name: "宁德时代 A 股", symbol: "300750", exchange: "SZSE", share_class: "A", trading_currency: "CNY" }], content_hash: hash, created_at: createdAt };
 }
 
 function shellDraft() {
@@ -131,6 +131,8 @@ describe("independent investment research shell", () => {
       `/research/projects/${shellIds.newer}`,
       `/research/projects/${shellIds.older}`,
     ]);
+    expect(within(list as HTMLElement).getAllByText("宁德时代")).toHaveLength(2);
+    expect(within(list as HTMLElement).getAllByText(/300750 · A/)).toHaveLength(2);
 
     await user.type(screen.getByLabelText("搜索 Company、Security 或 Industry"), "CATL");
     await user.click(screen.getByRole("button", { name: "搜索对象" }));
@@ -248,6 +250,8 @@ describe("independent investment research shell", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "研究工作台" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "宁德时代" })).toBeVisible();
+    expect(screen.getByText(/300750 · A · SZSE/)).toBeVisible();
     const modules = [
       "概览", "来源与证据", "行业", "公司模型", "预测与情景",
       "估值", "判断与反证", "版本与变化", "研究备忘录",

@@ -9906,7 +9906,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -10002,7 +10002,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -10056,7 +10056,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -10120,7 +10120,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -10184,7 +10184,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -10248,7 +10248,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -10293,7 +10293,7 @@
             }
           },
           "422": {
-            "description": "Unprocessable Entity",
+            "description": "Unprocessable Content",
             "content": {
               "application/json": {
                 "schema": {
@@ -10345,7 +10345,7 @@
             }
           },
           "422": {
-            "description": "Unprocessable Entity",
+            "description": "Unprocessable Content",
             "content": {
               "application/json": {
                 "schema": {
@@ -10397,7 +10397,7 @@
             }
           },
           "422": {
-            "description": "Unprocessable Entity",
+            "description": "Unprocessable Content",
             "content": {
               "application/json": {
                 "schema": {
@@ -10449,7 +10449,7 @@
             }
           },
           "422": {
-            "description": "Unprocessable Entity",
+            "description": "Unprocessable Content",
             "content": {
               "application/json": {
                 "schema": {
@@ -10457,6 +10457,70 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/market/security-rights/effective": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "investment-research-product-v1"
+        ],
+        "summary": "Get Effective Security Rights",
+        "operationId": "get_effective_security_rights_api_underwriting_v1_product_market_security_rights_effective_get",
+        "parameters": [
+          {
+            "name": "security_identity_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Security Identity Id"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "title": "As Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EffectiveSecurityRightsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -10624,7 +10688,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -10688,7 +10752,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -10763,7 +10827,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -10817,7 +10881,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -11873,15 +11937,8 @@
             "title": "Prompt Template Version"
           },
           "input_summary_hash": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^[0-9a-f]{64}$"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
             "title": "Input Summary Hash"
           },
           "output_hash": {
@@ -11894,6 +11951,7 @@
         "type": "object",
         "required": [
           "method",
+          "input_summary_hash",
           "output_hash"
         ],
         "title": "AgendaGeneratorRequest"
@@ -11959,15 +12017,8 @@
             "title": "Prompt Template Version"
           },
           "input_summary_hash": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^[0-9a-f]{64}$"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
             "title": "Input Summary Hash"
           },
           "output_hash": {
@@ -18907,6 +18958,57 @@
           "authority"
         ],
         "title": "EconomicSourceResponse"
+      },
+      "EffectiveSecurityRightsResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "security_identity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Security Identity Id"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "title": "As Of"
+          },
+          "effective": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecurityRightsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "head_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "security_identity_id",
+          "as_of",
+          "effective",
+          "head_id"
+        ],
+        "title": "EffectiveSecurityRightsResponse"
       },
       "ErrorBody": {
         "properties": {
@@ -27042,6 +27144,94 @@
         ],
         "title": "ProductRevisionResponse"
       },
+      "ProjectCompanyIdentityResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "identity_version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Identity Version Id"
+          },
+          "canonical_name": {
+            "type": "string",
+            "title": "Canonical Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "object_id",
+          "identity_version_id",
+          "canonical_name"
+        ],
+        "title": "ProjectCompanyIdentityResponse"
+      },
+      "ProjectSecurityIdentityResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "identity_version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Identity Version Id"
+          },
+          "canonical_name": {
+            "type": "string",
+            "title": "Canonical Name"
+          },
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "exchange": {
+            "type": "string",
+            "title": "Exchange"
+          },
+          "share_class": {
+            "type": "string",
+            "title": "Share Class"
+          },
+          "trading_currency": {
+            "type": "string",
+            "enum": [
+              "CNY",
+              "USD"
+            ],
+            "title": "Trading Currency"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "object_id",
+          "identity_version_id",
+          "canonical_name",
+          "symbol",
+          "exchange",
+          "share_class",
+          "trading_currency"
+        ],
+        "title": "ProjectSecurityIdentityResponse"
+      },
       "ProposeResponse": {
         "properties": {
           "thesis_id": {
@@ -28827,6 +29017,16 @@
             "type": "array",
             "title": "Target Security Ids"
           },
+          "company_identity": {
+            "$ref": "#/components/schemas/ProjectCompanyIdentityResponse"
+          },
+          "security_identities": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectSecurityIdentityResponse"
+            },
+            "type": "array",
+            "title": "Security Identities"
+          },
           "content_hash": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$",
@@ -28844,6 +29044,8 @@
           "id",
           "primary_company_id",
           "target_security_ids",
+          "company_identity",
+          "security_identities",
           "content_hash",
           "created_at"
         ],

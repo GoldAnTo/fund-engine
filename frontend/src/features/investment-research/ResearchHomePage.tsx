@@ -145,8 +145,8 @@ export default function ResearchHomePage() {
               <li key={project.id}>
                 <Link to={`/research/projects/${encodeURIComponent(project.id)}`}>
                   <div>
-                    <strong>项目 {project.id}</strong>
-                    <small>Company {project.primary_company_id}</small>
+                    <strong>{project.company_identity.canonical_name}</strong>
+                    <small>{project.security_identities.map((security) => `${security.symbol} · ${security.share_class}`).join("；")} · 项目 {project.id}</small>
                   </div>
                   <span>{project.target_security_ids.length} 只 Security</span>
                   <time dateTime={project.created_at}>{new Date(project.created_at).toLocaleString("zh-CN")}</time>

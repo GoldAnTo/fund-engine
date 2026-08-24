@@ -147,7 +147,7 @@ export async function generateFoundationAgenda(
       template_version: "1.0.0",
       model_name: null,
       prompt_template_version: null,
-      input_summary_hash: null,
+      input_summary_hash: inputHash,
       output_hash: outputHash,
     },
   };

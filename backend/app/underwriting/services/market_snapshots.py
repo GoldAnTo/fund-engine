@@ -521,6 +521,10 @@ class MarketSnapshotService:
             security_id, _utc(as_of, "as_of")
         )
 
+    def security_rights_head(self, security_id: UUID):
+        self._security(security_id)
+        return self._repository.rights_head(security_id)
+
     def boundary_context(
         self,
         project_id: UUID,

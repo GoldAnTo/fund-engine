@@ -1030,7 +1030,7 @@ def _deterministic_agenda(
             template_version="v1",
             model_name=None,
             prompt_template_version=None,
-            input_summary_hash=None,
+            input_summary_hash=A64,
             output_hash=agenda_items_hash(items),
         ),
     )
@@ -1061,7 +1061,7 @@ def test_agenda_preserves_deterministic_and_ai_provenance_and_hashes_it(
         "template_version": "v1",
         "model_name": None,
         "prompt_template_version": None,
-        "input_summary_hash": None,
+        "input_summary_hash": A64,
         "output_hash": agenda_items_hash(first_value.items),
     }
     assert first.content_hash == canonical_hash(

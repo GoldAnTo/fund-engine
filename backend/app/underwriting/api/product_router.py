@@ -30,6 +30,7 @@ from app.underwriting.api.product_schemas import (
     CreateResearchProjectRequest,
     CreateResearchScopeRequest,
     CreateSecurityRightsRequest,
+    EffectiveSecurityRightsResponse,
     FXSnapshotResponse,
     PatchWorkspaceDraftRequest,
     PreviewProductRevisionRequest,
@@ -39,6 +40,8 @@ from app.underwriting.api.product_schemas import (
     ProductObjectSearchItemResponse,
     ProductObjectSearchResponse,
     ProductRevisionResponse,
+    ProjectCompanyIdentityResponse,
+    ProjectSecurityIdentityResponse,
     PublicationPreviewResponse,
     PublishProductRevisionRequest,
     ResearchAgendaPayloadResponse,
@@ -121,10 +124,17 @@ def _read_value(operation: Callable[[], T]) -> T:
 
 
 def _project_response(value) -> ResearchProjectResponse:
+    if value.company_identity is None or len(value.security_identities) != len(value.target_security_ids):
+        raise ValidationError("project identity snapshot is incomplete")
     return ResearchProjectResponse(
         id=value.id,
         primary_company_id=value.primary_company_id,
         target_security_ids=value.target_security_ids,
+        company_identity=ProjectCompanyIdentityResponse(**asdict(value.company_identity)),
+        security_identities=tuple(
+            ProjectSecurityIdentityResponse(**asdict(item))
+            for item in value.security_identities
+        ),
         content_hash=value.content_hash,
         created_at=_stored_utc(value.created_at),
     )
@@ -656,6 +666,29 @@ def create_capital_structure_snapshot(
         ),
     )
     return _capital_response(value)
+
+
+@router.get(
+    "/market/security-rights/effective",
+    response_model=EffectiveSecurityRightsResponse,
+    responses=READ_ERROR_RESPONSES,
+)
+def get_effective_security_rights(
+    security_identity_id: UUID,
+    as_of: datetime,
+    db: Session = Depends(get_db),
+) -> EffectiveSecurityRightsResponse:
+    service = MarketSnapshotService(db, now=_now)
+    effective = _read_value(
+        lambda: service.effective_security_rights(security_identity_id, as_of)
+    )
+    head = _read_value(lambda: service.security_rights_head(security_identity_id))
+    return EffectiveSecurityRightsResponse(
+        security_identity_id=security_identity_id,
+        as_of=as_of,
+        effective=_rights_response(effective) if effective is not None else None,
+        head_id=head.id if head is not None else None,
+    )
 
 
 @router.post(

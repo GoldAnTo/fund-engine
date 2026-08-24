@@ -84,6 +84,7 @@ PRODUCT_OPERATIONS = {
     "/api/underwriting/v1/product/market/fx-snapshots": {"post"},
     "/api/underwriting/v1/product/market/capital-structure-snapshots": {"post"},
     "/api/underwriting/v1/product/market/security-rights": {"post"},
+    "/api/underwriting/v1/product/market/security-rights/effective": {"get"},
     "/api/underwriting/v1/product/projects/{project_id}/draft": {"get", "patch"},
     "/api/underwriting/v1/product/projects/{project_id}/publication-preview": {"post"},
     "/api/underwriting/v1/product/projects/{project_id}/publish": {"post"},
@@ -251,9 +252,8 @@ def test_agenda_generator_response_openapi_preserves_sha256_constraint() -> None
     response_schema = app.openapi()["components"]["schemas"]["AgendaGeneratorResponse"]
     input_summary_hash = response_schema["properties"]["input_summary_hash"]
 
-    assert {"type": "string", "pattern": r"^[0-9a-f]{64}$"} in input_summary_hash[
-        "anyOf"
-    ]
+    assert input_summary_hash["type"] == "string"
+    assert input_summary_hash["pattern"] == r"^[0-9a-f]{64}$"
     assert "input_summary_hash" in response_schema["required"]
 
 

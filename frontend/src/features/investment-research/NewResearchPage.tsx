@@ -322,6 +322,19 @@ export default function NewResearchPage() {
         definition_bundle_hash: field(form, "definition_bundle_hash"),
         parser_bundle_hash: field(form, "parser_bundle_hash"),
       };
+      const unresolvedRights = selectedSecurities.filter((security) => !next.rights[security.object_id]);
+      const effectiveRights = await Promise.all(unresolvedRights.map(async (security) => ({
+        security,
+        result: await investmentResearchApi.effectiveSecurityRights(
+          security.object_id,
+          frozen(`rights_effective_from_${security.object_id}`),
+        ),
+      })));
+      if (!mountedRef.current) return;
+      for (const { security, result } of effectiveRights) {
+        if (result.effective) next.rights[security.object_id] = result.effective;
+        else if (result.head_id) throw new Error(`${security.symbol ?? security.external_key} 在所选时点无有效权利版本，但存在 head ${result.head_id}；请先明确 successor 父版本`);
+      }
       const priceInputs: Record<string, CreatePriceSnapshotRequest> = {};
       const rightsInputs: Record<string, CreateSecurityRightsRequest> = {};
       for (const security of selectedSecurities) {

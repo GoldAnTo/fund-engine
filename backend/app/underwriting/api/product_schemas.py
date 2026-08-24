@@ -85,10 +85,25 @@ class CreateResearchProjectRequest(UnderwritingModel):
         return _require_unique(value, "target_security_ids")  # type: ignore[return-value]
 
 
+class ProjectCompanyIdentityResponse(UnderwritingModel):
+    object_id: UUID
+    identity_version_id: UUID
+    canonical_name: str
+
+
+class ProjectSecurityIdentityResponse(ProjectCompanyIdentityResponse):
+    symbol: str
+    exchange: str
+    share_class: str
+    trading_currency: Currency
+
+
 class ResearchProjectResponse(UnderwritingModel):
     id: UUID
     primary_company_id: UUID
     target_security_ids: tuple[UUID, ...]
+    company_identity: ProjectCompanyIdentityResponse
+    security_identities: tuple[ProjectSecurityIdentityResponse, ...]
     content_hash: str = Field(pattern=SHA256_PATTERN)
     created_at: datetime
 
@@ -219,7 +234,7 @@ class AgendaGeneratorRequest(UnderwritingModel):
     prompt_template_version: StrictStr | None = Field(
         default=None, min_length=1, max_length=120
     )
-    input_summary_hash: str | None = Field(default=None, pattern=SHA256_PATTERN)
+    input_summary_hash: str = Field(pattern=SHA256_PATTERN)
     output_hash: str = Field(pattern=SHA256_PATTERN)
 
 
@@ -243,7 +258,7 @@ class AgendaGeneratorResponse(UnderwritingModel):
     template_version: str | None
     model_name: str | None
     prompt_template_version: str | None
-    input_summary_hash: str | None = Field(pattern=SHA256_PATTERN)
+    input_summary_hash: str = Field(pattern=SHA256_PATTERN)
     output_hash: str = Field(pattern=SHA256_PATTERN)
 
 
@@ -487,6 +502,13 @@ class SecurityRightsResponse(UnderwritingModel):
     supersedes_id: UUID | None
     content_hash: str = Field(pattern=SHA256_PATTERN)
     created_at: datetime
+
+
+class EffectiveSecurityRightsResponse(UnderwritingModel):
+    security_identity_id: UUID
+    as_of: datetime
+    effective: SecurityRightsResponse | None
+    head_id: UUID | None
 
 
 class WorkspaceDraftContentResponse(UnderwritingModel):

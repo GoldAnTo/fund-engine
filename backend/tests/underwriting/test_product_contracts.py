@@ -320,12 +320,23 @@ def test_agenda_requires_explicit_deterministic_or_complete_ai_provenance() -> N
             template_version="1",
             model_name=None,
             prompt_template_version=None,
-            input_summary_hash=None,
+            input_summary_hash=HASH_A,
             output_hash=agenda_items_hash(("business model",)),
         ),
     )
     assert deterministic.items == ("business model",)
     assert scope.target_security_ids
+
+    with pytest.raises(ValueError, match="input_summary_hash"):
+        AgendaGeneratorInput(
+            method=AgendaGenerationMethod.DETERMINISTIC_TEMPLATE,
+            template_key="company-research-v1",
+            template_version="1",
+            model_name=None,
+            prompt_template_version=None,
+            input_summary_hash=None,
+            output_hash=HASH_B,
+        )
 
     with pytest.raises(ValueError, match="AI agenda provenance"):
         AgendaGeneratorInput(
@@ -515,7 +526,7 @@ def test_agenda_items_hash_is_deterministic_and_agenda_output_must_match() -> No
                 template_version="1",
                 model_name=None,
                 prompt_template_version=None,
-                input_summary_hash=None,
+                input_summary_hash=HASH_A,
                 output_hash=HASH_E,
             ),
         )
@@ -530,7 +541,7 @@ def test_hash_fields_require_lowercase_sha256(invalid_hash: str) -> None:
             template_version="1",
             model_name=None,
             prompt_template_version=None,
-            input_summary_hash=None,
+            input_summary_hash=HASH_A,
             output_hash=invalid_hash,
         ),
         lambda: AgendaGeneratorInput(

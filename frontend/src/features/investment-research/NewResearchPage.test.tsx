@@ -24,7 +24,7 @@ function objectItems(): object[] {
   ];
 }
 const searchBody = (items = objectItems()) => ({ ...dto, items });
-const projectBody = (targets = [ids.securityB, ids.securityA]) => ({ ...dto, id: ids.project, primary_company_id: ids.company, target_security_ids: targets, content_hash: hash, created_at: now });
+const projectBody = (targets = [ids.securityB, ids.securityA]) => ({ ...dto, id: ids.project, primary_company_id: ids.company, target_security_ids: targets, company_identity: { ...dto, object_id: ids.company, identity_version_id: ids.companyVersion, canonical_name: "宁德时代新能源科技股份有限公司" }, security_identities: targets.map((objectId) => { const item = objectItems().find((candidate) => Reflect.get(candidate, "object_id") === objectId) as Record<string, unknown>; return { ...dto, object_id: objectId, identity_version_id: item.identity_version_id, canonical_name: item.canonical_name, symbol: item.symbol, exchange: item.exchange, share_class: item.share_class, trading_currency: item.trading_currency }; }), content_hash: hash, created_at: now });
 function draftBody(complete = false) {
   return { ...dto, id: ids.draft, project_id: ids.project, base_revision_id: null, lock_version: complete ? 2 : 1, content: { ...dto, publication_status: "draft", mandate_id: complete ? ids.mandate : null, scope_id: complete ? ids.scope : null, agenda_id: complete ? ids.agenda : null, historical_basis_id: complete ? ids.basis : null, price_snapshot_ids: complete ? [ids.priceB, ids.priceA] : [], fx_snapshot_ids: [], capital_structure_snapshot_id: complete ? ids.capital : null, security_rights_ids: complete ? [ids.rightsB, ids.rightsA] : [], user_focus: null }, created_at: now, updated_at: now };
 }
@@ -45,7 +45,7 @@ function parseBody(init?: RequestInit): Record<string, unknown> {
 }
 
 type Captured = { url: string; method: string; body: Record<string, unknown> | null };
-function server(options: { draftFailures?: number; scopeFailures?: number; mandateFailures?: number; searchItems?: object[] } = {}) {
+function server(options: { draftFailures?: number; scopeFailures?: number; mandateFailures?: number; searchItems?: object[]; existingRights?: boolean } = {}) {
   const requests: Captured[] = [];
   let draftFailures = options.draftFailures ?? 0;
   let scopeFailures = options.scopeFailures ?? 0;
@@ -89,6 +89,11 @@ function server(options: { draftFailures?: number; scopeFailures?: number; manda
     }
     if (url.endsWith("/fx-snapshots") && body) return json({ ...dto, id: uuid(22), ...body, content_hash: hash, created_at: now }, 201);
     if (url.endsWith("/capital-structure-snapshots") && body) return json({ ...dto, id: ids.capital, company_id: ids.company, currency: body.currency, cash: body.cash, debt: body.debt, minority_interest: body.minority_interest, investments: body.investments, pension_liabilities: body.pension_liabilities, other_adjustments: body.other_adjustments, basic_shares: body.basic_shares, diluted_shares: body.diluted_shares, potential_dilution_descriptors: body.potential_dilution_descriptors, report_period_start: body.report_period_start, report_period_end: body.report_period_end, market_at: body.market_at, available_at: body.available_at, source_id: body.source_id, raw_hash: body.raw_hash, content_hash: hash, created_at: now }, 201);
+    if (url.includes("/security-rights/effective?") && method === "GET") {
+      const parsed = new URL(url, "http://test"); const securityId = parsed.searchParams.get("security_identity_id") ?? ""; const asOf = parsed.searchParams.get("as_of") ?? now;
+      const effective = options.existingRights ? { ...dto, id: securityId === ids.securityA ? ids.rightsA : ids.rightsB, security_identity_id: securityId, version: 1, economic_units: "1", votes_per_unit: "1", conversion_ratio: "1", adr_ratio: "1", dividend_rights_per_unit: "1", effective_from: now, effective_to: null, source_id: "listing-rules", raw_hash: hash, supersedes_id: null, content_hash: hash, created_at: now } : null;
+      return json({ ...dto, security_identity_id: securityId, as_of: asOf, effective, head_id: effective?.id ?? null });
+    }
     if (url.endsWith("/security-rights") && body) {
       const securityId = String(body.security_identity_id);
       return json({ ...dto, id: securityId === ids.securityA ? ids.rightsA : ids.rightsB, security_identity_id: securityId, version: 1, economic_units: body.economic_units, votes_per_unit: body.votes_per_unit, conversion_ratio: body.conversion_ratio, adr_ratio: body.adr_ratio, dividend_rights_per_unit: body.dividend_rights_per_unit, effective_from: body.effective_from, effective_to: body.effective_to, source_id: body.source_id, raw_hash: body.raw_hash, supersedes_id: null, content_hash: hash, created_at: now }, 201);
@@ -170,7 +175,7 @@ describe("new independent investment research setup", () => {
     const prices = product.requests.filter((r) => r.url.endsWith("/price-snapshots")).map((r) => r.body?.security_identity_id).sort(); const rights = product.requests.filter((r) => r.url.endsWith("/security-rights")).map((r) => r.body?.security_identity_id).sort();
     expect(prices).toEqual([ids.securityA, ids.securityB].sort()); expect(rights).toEqual([ids.securityA, ids.securityB].sort()); expect(prices).not.toContain(ids.securityVersionA);
     expect(product.requests.find((r) => r.url.endsWith("/scopes"))?.body).toMatchObject({ covered_segments: [], exclusions: [], user_focus: null });
-    expect(product.requests.find((r) => r.url.endsWith("/agendas"))?.body).toMatchObject({ generator: { method: "deterministic_template", template_key: "product.foundation.agenda", template_version: "1.0.0", input_summary_hash: null } });
+    expect(product.requests.find((r) => r.url.endsWith("/agendas"))?.body).toMatchObject({ generator: { method: "deterministic_template", template_key: "product.foundation.agenda", template_version: "1.0.0", input_summary_hash: expect.stringMatching(/^[0-9a-f]{64}$/) } });
     expect(product.requests.find((r) => r.url.endsWith("/price-snapshots"))?.body?.market_at).toBe("2026-08-24T00:00:00.000Z");
   });
 
@@ -217,5 +222,16 @@ describe("new independent investment research setup", () => {
     await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("缺少交易货币身份");
     expect(product.requests.filter((request) => request.method !== "GET")).toHaveLength(1);
+  });
+
+  it("reuses distinct effective rights for each Security without appending new versions", async () => {
+    const user = userEvent.setup(); const product = server({ existingRights: true }); vi.stubGlobal("fetch", product.fetch); renderPage();
+    await choose(user); await user.click(screen.getByRole("button", { name: "提交身份账本校验" })); await screen.findByRole("heading", { name: /研究任务与边界/ }); await fill(user);
+    await user.click(screen.getByRole("button", { name: "预览模板议程" }));
+    await user.click(screen.getByRole("button", { name: "建立版本边界并进入工作台" }));
+    await screen.findByRole("heading", { name: "研究工作台" });
+    expect(product.requests.filter((request) => request.url.includes("/security-rights/effective?"))).toHaveLength(2);
+    expect(product.requests.filter((request) => request.url.endsWith("/security-rights") && request.method === "POST")).toHaveLength(0);
+    expect(product.requests.find((request) => request.url.endsWith("/draft") && request.method === "PATCH")?.body?.security_rights_ids).toEqual([ids.rightsA, ids.rightsB]);
   });
 });

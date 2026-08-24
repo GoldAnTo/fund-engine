@@ -175,7 +175,7 @@ def _ready_graph(
                 "v1",
                 None,
                 None,
-                None,
+                A64,
                 agenda_items_hash(items),
             ),
         ),

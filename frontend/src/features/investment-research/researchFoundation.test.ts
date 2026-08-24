@@ -89,7 +89,7 @@ describe("investment research foundation helpers", () => {
       prompt_template_version: null,
     });
     expect(first.inputSummaryHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(first.generator.input_summary_hash).toBeNull();
+    expect(first.generator.input_summary_hash).toBe(first.inputSummaryHash);
     expect(first.generator.output_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 

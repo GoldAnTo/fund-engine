@@ -29,6 +29,7 @@ export type ProductPriceSnapshot = Schemas["PriceSnapshotResponse"];
 export type ProductFxSnapshot = Schemas["FXSnapshotResponse"];
 export type ProductCapitalStructure = Schemas["CapitalStructureSnapshotResponse"];
 export type ProductSecurityRights = Schemas["SecurityRightsResponse"];
+export type EffectiveSecurityRights = Schemas["EffectiveSecurityRightsResponse"];
 
 type ErrorDetails = NonNullable<Schemas["UnderwritingErrorBody"]["details"]>;
 
@@ -211,13 +212,32 @@ function isObjectSearch(value: unknown): value is ProductObjectSearch {
 
 function isProject(value: unknown): value is ProductProject {
   return isProductDto(value)
-    && hasExactKeys(value, ["schema_version", "id", "primary_company_id", "target_security_ids", "content_hash", "created_at"])
+    && hasExactKeys(value, ["schema_version", "id", "primary_company_id", "target_security_ids", "company_identity", "security_identities", "content_hash", "created_at"])
     && isUuid(value.id)
     && isUuid(value.primary_company_id)
     && isUuidArray(value.target_security_ids)
     && new Set(value.target_security_ids).size === value.target_security_ids.length
+    && isProjectCompanyIdentity(value.company_identity)
+    && Array.isArray(value.security_identities)
+    && value.security_identities.every(isProjectSecurityIdentity)
+    && sameStringSets(value.security_identities.map((item) => item.object_id), value.target_security_ids)
     && isHash(value.content_hash)
     && isDateTime(value.created_at);
+}
+
+function isProjectCompanyIdentity(value: unknown): value is ProductProject["company_identity"] {
+  return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "object_id", "identity_version_id", "canonical_name"])
+    && isUuid(value.object_id) && isUuid(value.identity_version_id) && isNonEmptyString(value.canonical_name);
+}
+
+function isProjectSecurityIdentity(value: unknown): value is ProductProject["security_identities"][number] {
+  return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "object_id", "identity_version_id", "canonical_name", "symbol", "exchange", "share_class", "trading_currency"])
+    && isUuid(value.object_id) && isUuid(value.identity_version_id)
+    && isNonEmptyString(value.canonical_name) && isNonEmptyString(value.symbol)
+    && isNonEmptyString(value.exchange) && isNonEmptyString(value.share_class)
+    && (value.trading_currency === "CNY" || value.trading_currency === "USD");
 }
 
 function isProjectList(value: unknown): value is ProductProjectList {
@@ -293,7 +313,7 @@ function isAgendaGenerator(generator: Record<string, unknown>): boolean {
       && isNonEmptyString(generator.template_version)
       && generator.model_name === null
       && generator.prompt_template_version === null
-      && generator.input_summary_hash === null;
+      && isHash(generator.input_summary_hash);
   }
   if (generator.method === "ai_generated") {
     return generator.template_key === null
@@ -409,6 +429,15 @@ function isRights(value: unknown): value is ProductSecurityRights {
     && typeof value.source_id === "string" && value.source_id.trim() !== ""
     && isHash(value.raw_hash) && isNullableUuid(value.supersedes_id)
     && isHash(value.content_hash) && isDateTime(value.created_at);
+}
+
+function isEffectiveRights(value: unknown): value is EffectiveSecurityRights {
+  return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "security_identity_id", "as_of", "effective", "head_id"])
+    && isUuid(value.security_identity_id) && isDateTime(value.as_of)
+    && (value.effective === null || isRights(value.effective))
+    && isNullableUuid(value.head_id)
+    && (value.effective === null || value.effective.security_identity_id === value.security_identity_id);
 }
 
 function isDraftContent(value: unknown): boolean {
@@ -776,6 +805,13 @@ export class InvestmentResearchApi {
       || !sameInstant(value.effective_from, body.effective_from) || !sameNullableInstant(value.effective_to, body.effective_to)
       || value.source_id !== body.source_id || value.raw_hash !== body.raw_hash
       || value.supersedes_id !== (body.expected_parent_id ?? null)) mismatch("security rights request identity mismatch");
+    return value;
+  }
+
+  async effectiveSecurityRights(securityIdentityId: string, asOf: string): Promise<EffectiveSecurityRights> {
+    const params = new URLSearchParams({ security_identity_id: securityIdentityId, as_of: asOf });
+    const value = await requestJson(`${this.root}/market/security-rights/effective?${params}`, isEffectiveRights, 200, { method: "GET" });
+    if (value.security_identity_id !== securityIdentityId || !sameInstant(value.as_of, asOf)) mismatch("effective rights request identity mismatch");
     return value;
   }
 

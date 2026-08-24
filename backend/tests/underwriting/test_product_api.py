@@ -182,7 +182,7 @@ def _write_foundation(api_client, project: dict, catalog: dict[str, object]) -> 
                 "template_version": "v1",
                 "model_name": None,
                 "prompt_template_version": None,
-                "input_summary_hash": None,
+                "input_summary_hash": A64,
                 "output_hash": agenda_items_hash(tuple(items)),
             },
             "expected_parent_id": None,
@@ -308,6 +308,24 @@ def test_product_http_foundation_round_trip_is_exact_and_idempotent(
     project = _create_project(api_client, catalog)
     assert project["primary_company_id"] == str(catalog["company"].id)
     assert project["target_security_ids"] == [str(catalog["security"].id)]
+    assert project["company_identity"] == {
+        "schema_version": "underwriting.v1",
+        "object_id": str(catalog["company"].id),
+        "identity_version_id": str(catalog["company_identity"].id),
+        "canonical_name": catalog["company"].canonical_name,
+    }
+    assert project["security_identities"] == [
+        {
+            "schema_version": "underwriting.v1",
+            "object_id": str(catalog["security"].id),
+            "identity_version_id": str(catalog["security_identity"].id),
+            "canonical_name": "300750.SZ",
+            "symbol": "300750",
+            "exchange": "SZSE",
+            "share_class": "ordinary",
+            "trading_currency": "CNY",
+        }
+    ]
     project_id = project["id"]
 
     listed = api_client.get(f"{BASE}/projects", params={"limit": 20})
@@ -315,6 +333,20 @@ def test_product_http_foundation_round_trip_is_exact_and_idempotent(
     assert [item["id"] for item in listed.json()["items"]] == [project_id]
     detail = api_client.get(f"{BASE}/projects/{project_id}")
     assert detail.status_code == 200 and detail.json() == project
+    ResearchProjectService(session, now=lambda: NOW + timedelta(days=2)).append_identity_version(
+        object_id=catalog["security"].id,
+        canonical_name="300750.SZ renamed",
+        symbol="300750",
+        exchange="SZSE",
+        share_class="ordinary",
+        trading_currency="CNY",
+        effective_from=NOW + timedelta(days=1),
+        effective_to=None,
+        expected_parent_id=catalog["security_identity"].id,
+    )
+    historical_detail = api_client.get(f"{BASE}/projects/{project_id}")
+    assert historical_detail.status_code == 200
+    assert historical_detail.json()["security_identities"][0]["canonical_name"] == "300750.SZ"
 
     draft = api_client.get(f"{BASE}/projects/{project_id}/draft")
     assert draft.status_code == 200, draft.text
@@ -330,6 +362,17 @@ def test_product_http_foundation_round_trip_is_exact_and_idempotent(
         "deterministic_template"
     )
     assert foundation["fx"]["quote_direction"] == "quote_per_base"
+
+    effective_rights = api_client.get(
+        f"{BASE}/market/security-rights/effective",
+        params={
+            "security_identity_id": str(catalog["security"].id),
+            "as_of": MARKET.isoformat(),
+        },
+    )
+    assert effective_rights.status_code == 200, effective_rights.text
+    assert effective_rights.json()["effective"]["id"] == foundation["rights"]["id"]
+    assert effective_rights.json()["head_id"] == foundation["rights"]["id"]
 
     patch = api_client.patch(
         f"{BASE}/projects/{project_id}/draft",
@@ -695,7 +738,7 @@ def test_product_agenda_nested_unknown_and_hash_mismatch_use_422(
             "template_version": "v1",
             "model_name": None,
             "prompt_template_version": None,
-            "input_summary_hash": None,
+            "input_summary_hash": A64,
             "output_hash": A64,
         },
         "expected_parent_id": None,

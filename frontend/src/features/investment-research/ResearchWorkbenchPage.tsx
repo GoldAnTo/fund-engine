@@ -113,7 +113,8 @@ export default function ResearchWorkbenchPage() {
         <div>
           <p className="ir-eyebrow">Independent research · {project.id}</p>
           <h1>研究工作台</h1>
-          <p>Company {project.primary_company_id} · {project.target_security_ids.length} 只 Security</p>
+          <h2>{project.company_identity.canonical_name}</h2>
+          <p>{project.security_identities.map((security) => `${security.symbol} · ${security.share_class} · ${security.exchange}`).join("；")}</p>
         </div>
         <span className="ir-draft-state">草稿版本 {draft.lock_version}</span>
       </header>
