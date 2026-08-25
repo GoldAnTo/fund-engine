@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from pathlib import Path
+import re
 from types import MappingProxyType
 from collections.abc import Mapping
 import unicodedata
@@ -20,10 +21,17 @@ _ROOT = Path(__file__).resolve().parent
 _SCHEMA_VERSION = "product.foundation-identities.v1"
 # SHA-256 over the exact bundled UTF-8 bytes, independent of its self-declared hash.
 BUNDLED_MANIFEST_CONTENT_SHA256 = (
-    "97cfba971bfbc995dfead4e76c4f2eacb1b76bdd2de18d2c51039c46324b8add"
+    "606016599f59796ff4d25732747f7d6e7d7a3b64b28cc6756d9b56771b740c5e"
 )
 _TOP_LEVEL_KEYS = frozenset(
-    {"schema_version", "content_hash", "companies", "securities", "rights"}
+    {
+        "schema_version",
+        "content_hash",
+        "companies",
+        "securities",
+        "aliases",
+        "rights",
+    }
 )
 _COMPANY_KEYS = frozenset({"external_key", "canonical_name", "effective_from"})
 _SECURITY_KEYS = frozenset(
@@ -41,6 +49,8 @@ _SECURITY_KEYS = frozenset(
 _RIGHTS_KEYS = frozenset(
     {"security_key", "economic_units", "votes_per_unit", "effective_from"}
 )
+_ALIAS_KEYS = frozenset({"object_key", "alias", "locale"})
+_LOCALE_PATTERN = re.compile(r"[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*")
 
 
 def _exact_object(value: object, keys: frozenset[str], field: str) -> dict:
@@ -127,11 +137,20 @@ class FoundationRights:
 
 
 @dataclass(frozen=True, slots=True)
+class FoundationAlias:
+    object_key: str
+    alias: str
+    normalized_alias: str
+    locale: str
+
+
+@dataclass(frozen=True, slots=True)
 class ProductFoundationFixture:
     schema_version: str
     content_hash: str
     companies: tuple[FoundationCompany, ...]
     securities: tuple[FoundationSecurity, ...]
+    aliases: tuple[FoundationAlias, ...]
     rights: tuple[FoundationRights, ...]
     raw: Mapping[str, object]
     manifest_path: Path
@@ -206,6 +225,35 @@ def load_product_foundation_fixture(
     if any(item.currency not in {"CNY", "USD"} for item in securities):
         raise ValidationError("product foundation Security currency is unsupported")
 
+    object_keys = company_keys | set(security_by_key)
+    aliases: list[FoundationAlias] = []
+    normalized_aliases: set[str] = set()
+    for raw_item in _sequence(raw["aliases"], "aliases"):
+        item = _exact_object(raw_item, _ALIAS_KEYS, "alias")
+        object_key = _text(item["object_key"], "alias.object_key")
+        if object_key not in object_keys:
+            raise ValidationError("product foundation alias references unknown object")
+        alias = _text(item["alias"], "alias.alias")
+        if len(alias) > 160:
+            raise ValidationError("product foundation alias.alias is too long")
+        locale = _text(item["locale"], "alias.locale")
+        if len(locale) > 16 or _LOCALE_PATTERN.fullmatch(locale) is None:
+            raise ValidationError("product foundation alias.locale is invalid")
+        normalized_alias = alias.lower()
+        if len(normalized_alias) > 160:
+            raise ValidationError("product foundation normalized alias is too long")
+        if normalized_alias in normalized_aliases:
+            raise ValidationError("product foundation contains duplicate alias")
+        normalized_aliases.add(normalized_alias)
+        aliases.append(
+            FoundationAlias(
+                object_key=object_key,
+                alias=alias,
+                normalized_alias=normalized_alias,
+                locale=locale,
+            )
+        )
+
     rights: list[FoundationRights] = []
     for raw_item in _sequence(raw["rights"], "rights"):
         item = _exact_object(raw_item, _RIGHTS_KEYS, "rights")
@@ -260,6 +308,7 @@ def load_product_foundation_fixture(
         content_hash=content_hash,
         companies=companies,
         securities=securities,
+        aliases=tuple(aliases),
         rights=tuple(rights),
         raw=MappingProxyType(raw),
         manifest_path=path,
@@ -279,12 +328,14 @@ def validate_product_foundation_fixture(value: ProductFoundationFixture) -> None
         value.content_hash,
         value.companies,
         value.securities,
+        value.aliases,
         value.rights,
     ) != (
         validated_import.schema_version,
         validated_import.content_hash,
         validated_import.companies,
         validated_import.securities,
+        validated_import.aliases,
         validated_import.rights,
     ):
         raise ValidationError(

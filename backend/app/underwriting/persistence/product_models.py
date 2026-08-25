@@ -92,6 +92,37 @@ class UnderwritingObjectIdentityVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class UnderwritingResearchObjectAlias(Base):
+    __tablename__ = "uw_research_object_aliases"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(alias)) > 0",
+            name="ck_uw_object_alias_text",
+        ),
+        CheckConstraint(
+            "normalized_alias = lower(trim(normalized_alias))",
+            name="ck_uw_object_alias_normalized",
+        ),
+        UniqueConstraint(
+            "object_id",
+            "normalized_alias",
+            name="uq_uw_object_alias_object_value",
+        ),
+        Index("ix_uw_object_alias_normalized", "normalized_alias"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    object_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("uw_research_objects.id"), nullable=False
+    )
+    alias: Mapped[str] = mapped_column(String(160), nullable=False)
+    normalized_alias: Mapped[str] = mapped_column(String(160), nullable=False)
+    locale: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class UnderwritingResearchProject(Base):
     __tablename__ = "uw_research_projects"
     __table_args__ = (

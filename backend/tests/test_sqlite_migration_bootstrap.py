@@ -57,7 +57,7 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             connection.execute(
                 sa.text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "0065"
+            == "0066"
         )
         assessment_columns = {
             column["name"]
@@ -104,6 +104,167 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             )
         ).scalar_one()
         assert trigger_count == 1
+
+
+def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "research-object-aliases.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0065"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    object_id = "11111111111111111111111111111111"
+    alias_id = "22222222222222222222222222222222"
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_research_objects "
+                "(id, kind, external_key, canonical_name, created_at) "
+                "VALUES (:id, 'company', 'US:TEST:COMPANY', 'Test Inc.', :now)"
+            ),
+            {"id": object_id, "now": datetime.now(UTC)},
+        )
+
+    migrated = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0066"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert migrated.returncode == 0, migrated.stderr
+
+    with engine.begin() as connection:
+        inspector = sa.inspect(connection)
+        assert "uw_research_object_aliases" in inspector.get_table_names()
+        assert {
+            column["name"]
+            for column in inspector.get_columns("uw_research_object_aliases")
+        } == {
+            "id",
+            "object_id",
+            "alias",
+            "normalized_alias",
+            "locale",
+            "created_at",
+        }
+        assert {
+            index["name"]
+            for index in inspector.get_indexes("uw_research_object_aliases")
+        } == {"ix_uw_object_alias_normalized"}
+        assert {
+            constraint["name"]
+            for constraint in inspector.get_unique_constraints(
+                "uw_research_object_aliases"
+            )
+        } == {"uq_uw_object_alias_object_value"}
+        assert {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints(
+                "uw_research_object_aliases"
+            )
+        } == {
+            "ck_uw_object_alias_text",
+            "ck_uw_object_alias_normalized",
+        }
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_research_object_aliases "
+                "(id, object_id, alias, normalized_alias, locale, created_at) "
+                "VALUES (:id, :object_id, 'Google', 'google', 'en', :now)"
+            ),
+            {"id": alias_id, "object_id": object_id, "now": datetime.now(UTC)},
+        )
+        assert connection.execute(
+            sa.text(
+                "SELECT alias, normalized_alias, locale "
+                "FROM uw_research_object_aliases WHERE id = :id"
+            ),
+            {"id": alias_id},
+        ).one() == ("Google", "google", "en")
+
+    with pytest.raises(sa.exc.IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_research_object_aliases "
+                    "(id, object_id, alias, normalized_alias, locale, created_at) "
+                    "VALUES (:id, :object_id, 'Bad', ' BAD ', 'en', :now)"
+                ),
+                {
+                    "id": "33333333333333333333333333333333",
+                    "object_id": object_id,
+                    "now": datetime.now(UTC),
+                },
+            )
+    for duplicate_id, alias, normalized_alias in (
+        ("44444444444444444444444444444444", "GOOGLE", "google"),
+        ("55555555555555555555555555555555", "   ", "empty"),
+    ):
+        with pytest.raises(sa.exc.IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO uw_research_object_aliases "
+                        "(id, object_id, alias, normalized_alias, locale, created_at) "
+                        "VALUES (:id, :object_id, :alias, :normalized_alias, 'en', :now)"
+                    ),
+                    {
+                        "id": duplicate_id,
+                        "object_id": object_id,
+                        "alias": alias,
+                        "normalized_alias": normalized_alias,
+                        "now": datetime.now(UTC),
+                    },
+                )
+    for mutation in (
+        "UPDATE uw_research_object_aliases SET alias = 'Changed' WHERE id = :id",
+        "DELETE FROM uw_research_object_aliases WHERE id = :id",
+    ):
+        with pytest.raises(sa.exc.DBAPIError, match="append-only|immutable"):
+            with engine.begin() as connection:
+                connection.execute(sa.text(mutation), {"id": alias_id})
+
+    downgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0065"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert downgraded.returncode == 0, downgraded.stderr
+    with engine.connect() as connection:
+        assert (
+            "uw_research_object_aliases" not in sa.inspect(connection).get_table_names()
+        )
+        assert (
+            connection.execute(
+                sa.text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            == "0065"
+        )
+        assert (
+            connection.execute(
+                sa.text(
+                    "SELECT canonical_name FROM uw_research_objects WHERE id = :id"
+                ),
+                {"id": object_id},
+            ).scalar_one()
+            == "Test Inc."
+        )
+    engine.dispose()
 
 
 def test_0061_downgrade_removes_only_wave2_economic_model_tables(tmp_path) -> None:
@@ -674,7 +835,7 @@ with SessionLocal() as session:
 
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0065"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0066"
         assert {
             "research_preparations",
             "research_preparation_artifacts",
@@ -1438,7 +1599,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0065"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0066"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -1492,7 +1653,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0065"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0066"
 
 
 def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> None:
@@ -1549,7 +1710,7 @@ def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> 
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == "0065"
+        ).scalar_one() == "0066"
         assert connection.execute(
             sa.text(
                 "SELECT research_source_type FROM source_contracts WHERE id = :id"

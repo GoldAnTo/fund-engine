@@ -1,6 +1,6 @@
 {
   "schema_version": "product.foundation-identities.v1",
-  "content_hash": "bcf4fe19ec98a28ea249bcb6a8bfbdbb3ac77af9d1d0cca8fb26e8b5d71aca55",
+  "content_hash": "17411ad3c1c65d8acd9be46db8bfab30a5d6fa04859fd1b406648eaf20719beb",
   "companies": [
     {
       "external_key": "CN:300750:COMPANY",
@@ -43,6 +43,18 @@
       "currency": "USD",
       "share_class": "Class C",
       "effective_from": "2015-10-02T00:00:00-04:00"
+    }
+  ],
+  "aliases": [
+    {
+      "object_key": "US:ALPHABET:COMPANY",
+      "alias": "Google",
+      "locale": "en"
+    },
+    {
+      "object_key": "US:ALPHABET:COMPANY",
+      "alias": "谷歌",
+      "locale": "zh-CN"
     }
   ],
   "rights": [

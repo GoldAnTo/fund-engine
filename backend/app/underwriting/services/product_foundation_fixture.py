@@ -25,6 +25,7 @@ from app.underwriting.persistence.models import (
 )
 from app.underwriting.persistence.product_models import (
     UnderwritingObjectIdentityVersion,
+    UnderwritingResearchObjectAlias,
     UnderwritingSecurityRightsVersion,
     UnderwritingWorkspaceDraft,
 )
@@ -48,6 +49,7 @@ _FOUNDATION_LOAD_LOCK_ID = int.from_bytes(
 class ProductFoundationImport:
     objects: Mapping[str, UnderwritingResearchObject]
     identities: Mapping[str, object]
+    aliases: Mapping[tuple[str, str], UnderwritingResearchObjectAlias]
     rights: Mapping[str, object]
     content_hash: str
 
@@ -320,11 +322,83 @@ class ProductFoundationFixtureService:
             )
         return root
 
+    def _aliases(
+        self,
+        fixture: ProductFoundationFixture,
+        objects: Mapping[str, UnderwritingResearchObject],
+    ) -> dict[tuple[str, str], UnderwritingResearchObjectAlias]:
+        expected_by_object = {key: [] for key in objects}
+        for item in fixture.aliases:
+            expected_by_object[item.object_key].append(item)
+
+        expected_normalized = {
+            item.normalized_alias: objects[item.object_key].id
+            for item in fixture.aliases
+        }
+        if expected_normalized:
+            conflicting_rows = tuple(
+                self._session.scalars(
+                    select(UnderwritingResearchObjectAlias).where(
+                        UnderwritingResearchObjectAlias.normalized_alias.in_(
+                            expected_normalized
+                        )
+                    )
+                )
+            )
+            if any(
+                row.object_id != expected_normalized[row.normalized_alias]
+                for row in conflicting_rows
+            ):
+                raise ValidationError("product foundation alias conflict")
+
+        aliases: dict[tuple[str, str], UnderwritingResearchObjectAlias] = {}
+        for object_key, research_object in objects.items():
+            expected = expected_by_object[object_key]
+            existing = tuple(
+                self._session.scalars(
+                    select(UnderwritingResearchObjectAlias)
+                    .where(
+                        UnderwritingResearchObjectAlias.object_id == research_object.id
+                    )
+                    .order_by(
+                        UnderwritingResearchObjectAlias.normalized_alias,
+                        UnderwritingResearchObjectAlias.id,
+                    )
+                )
+            )
+            expected_values = {
+                (item.alias, item.normalized_alias, item.locale) for item in expected
+            }
+            existing_values = {
+                (row.alias, row.normalized_alias, row.locale) for row in existing
+            }
+            if existing and existing_values != expected_values:
+                raise ValidationError(
+                    f"product foundation alias conflict for {object_key}"
+                )
+            if not existing:
+                for item in expected:
+                    row = UnderwritingResearchObjectAlias(
+                        object_id=research_object.id,
+                        alias=item.alias,
+                        normalized_alias=item.normalized_alias,
+                        locale=item.locale,
+                        created_at=self._now(),
+                    )
+                    self._session.add(row)
+                    existing += (row,)
+                self._session.flush()
+            aliases.update(
+                {(object_key, row.normalized_alias): row for row in existing}
+            )
+        return aliases
+
     def load(self, fixture: ProductFoundationFixture) -> ProductFoundationImport:
         validate_product_foundation_fixture(fixture)
         self._serialize_load()
         objects: dict[str, UnderwritingResearchObject] = {}
         identities: dict[str, object] = {}
+        aliases: dict[tuple[str, str], UnderwritingResearchObjectAlias] = {}
         rights: dict[str, object] = {}
         with self._session.begin_nested():
             for company in fixture.companies:
@@ -359,6 +433,8 @@ class ProductFoundationFixtureService:
                     currency=security.currency,
                     effective_from=security.effective_from,
                 )
+
+            aliases = self._aliases(fixture, objects)
 
             expected_relations = {
                 (objects[item.company_key].id, objects[item.external_key].id)
@@ -406,6 +482,7 @@ class ProductFoundationFixtureService:
         return ProductFoundationImport(
             objects=MappingProxyType(objects),
             identities=MappingProxyType(identities),
+            aliases=MappingProxyType(aliases),
             rights=MappingProxyType(rights),
             content_hash=fixture.content_hash,
         )

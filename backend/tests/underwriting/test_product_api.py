@@ -318,6 +318,18 @@ def test_product_http_foundation_round_trip_is_exact_and_idempotent(
     assert search.json()["items"] == [
         {
             "schema_version": "underwriting.v1",
+            "object_id": str(catalog["company"].id),
+            "identity_version_id": str(catalog["company_identity"].id),
+            "kind": "company",
+            "external_key": catalog["company"].external_key,
+            "canonical_name": catalog["company"].canonical_name,
+            "symbol": None,
+            "exchange": None,
+            "share_class": None,
+            "trading_currency": None,
+        },
+        {
+            "schema_version": "underwriting.v1",
             "object_id": str(catalog["security"].id),
             "identity_version_id": str(catalog["security_identity"].id),
             "kind": "security",
@@ -327,7 +339,7 @@ def test_product_http_foundation_round_trip_is_exact_and_idempotent(
             "exchange": "SZSE",
             "share_class": "ordinary",
             "trading_currency": "CNY",
-        }
+        },
     ]
 
     project = _create_project(api_client, catalog)

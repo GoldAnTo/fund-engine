@@ -34,6 +34,7 @@ from app.underwriting.persistence.models import (
 )
 from app.underwriting.persistence.product_models import (
     UnderwritingObjectIdentityVersion,
+    UnderwritingResearchObjectAlias,
     UnderwritingResearchAgendaVersion,
     UnderwritingResearchProject,
     UnderwritingResearchProjectSecurity,
@@ -1288,6 +1289,12 @@ def test_foundation_fixture_loads_exact_temporal_identities_relations_and_rights
     projects = ResearchProjectService(session, now=lambda: NOW)
 
     assert fixture.schema_version == "product.foundation-identities.v1"
+    assert {
+        (alias.object_key, alias.alias, alias.locale) for alias in fixture.aliases
+    } == {
+        ("US:ALPHABET:COMPANY", "Google", "en"),
+        ("US:ALPHABET:COMPANY", "谷歌", "zh-CN"),
+    }
     assert set(loaded.objects) == {
         "CN:300750:COMPANY",
         "US:ALPHABET:COMPANY",
@@ -1298,6 +1305,8 @@ def test_foundation_fixture_loads_exact_temporal_identities_relations_and_rights
     assert loaded.objects["CN:300750:COMPANY"].kind == "company"
     assert loaded.objects["US:ALPHABET:COMPANY"].kind == "company"
     assert loaded.objects["SZSE:300750"].kind == "security"
+    assert loaded.objects["US:ALPHABET:COMPANY"].canonical_name == "Alphabet Inc."
+    assert loaded.identities["US:ALPHABET:COMPANY"].canonical_name == "Alphabet Inc."
 
     before_listing = datetime(2018, 6, 10, 15, 59, 59, tzinfo=UTC)
     at_listing = datetime(2018, 6, 10, 16, tzinfo=UTC)
@@ -1322,7 +1331,6 @@ def test_foundation_fixture_loads_exact_temporal_identities_relations_and_rights
         "CN:300750:COMPANY",
         "SZSE:300750",
     }
-
     relations = set(
         session.execute(
             select(
@@ -1355,6 +1363,114 @@ def test_foundation_fixture_loads_exact_temporal_identities_relations_and_rights
     assert loaded.rights["NASDAQ:GOOG"].votes_per_unit == Decimal("0E-10")
 
 
+@pytest.mark.parametrize(
+    ("query", "expected_external_keys"),
+    [
+        (
+            "Alphabet",
+            {
+                "US:ALPHABET:COMPANY",
+                "NASDAQ:GOOGL",
+                "NASDAQ:GOOG",
+            },
+        ),
+        (
+            "Google",
+            {
+                "US:ALPHABET:COMPANY",
+                "NASDAQ:GOOGL",
+                "NASDAQ:GOOG",
+            },
+        ),
+        (
+            "谷歌",
+            {
+                "US:ALPHABET:COMPANY",
+                "NASDAQ:GOOGL",
+                "NASDAQ:GOOG",
+            },
+        ),
+        (
+            "GOOGL",
+            {
+                "US:ALPHABET:COMPANY",
+                "NASDAQ:GOOGL",
+                "NASDAQ:GOOG",
+            },
+        ),
+        (
+            "宁德时代公司",
+            {
+                "CN:300750:COMPANY",
+                "SZSE:300750",
+            },
+        ),
+    ],
+)
+def test_foundation_company_discovery_resolves_complete_company_groups(
+    session,
+    query,
+    expected_external_keys,
+) -> None:
+    ProductFoundationFixtureService(session, now=lambda: NOW).load(
+        load_product_foundation_fixture()
+    )
+    projects = ResearchProjectService(session, now=lambda: NOW)
+
+    assert {
+        item.external_key for item in projects.search_objects(query, NOW, 10)
+    } == expected_external_keys
+
+
+def test_company_discovery_keeps_groups_complete_stable_and_within_limit(
+    session,
+) -> None:
+    ProductFoundationFixtureService(session, now=lambda: NOW).load(
+        load_product_foundation_fixture()
+    )
+    projects = ResearchProjectService(session, now=lambda: NOW)
+
+    assert projects.search_objects("Alphabet", NOW, 2) == ()
+    assert projects.search_objects("GOOGL", NOW, 1) == ()
+    assert [
+        item.external_key for item in projects.search_objects("Google", NOW, 3)
+    ] == [
+        "US:ALPHABET:COMPANY",
+        "NASDAQ:GOOGL",
+        "NASDAQ:GOOG",
+    ]
+
+
+def test_company_discovery_expands_only_identities_effective_as_of(session) -> None:
+    ProductFoundationFixtureService(session, now=lambda: NOW).load(
+        load_product_foundation_fixture()
+    )
+    projects = ResearchProjectService(session, now=lambda: NOW)
+
+    before_alphabet = datetime(2015, 10, 2, 3, 59, 59, tzinfo=UTC)
+    assert projects.search_objects("Google", before_alphabet, 10) == ()
+
+    before_catl_listing = datetime(2018, 6, 10, 15, 59, 59, tzinfo=UTC)
+    assert [
+        item.external_key
+        for item in projects.search_objects("300750", before_catl_listing, 10)
+    ] == ["CN:300750:COMPANY"]
+
+
+def test_industry_matches_are_never_expanded_as_company_groups(
+    session, service
+) -> None:
+    industry = _object(session, "industry", "alpha-industry", "Alpha Industry")
+    security = _object(session, "security", "ALPHA", "Alpha Security")
+    _identity(service, industry)
+    _identity(service, security, currency="USD")
+    _relation(session, industry.id, security.id, "company_has_security")
+
+    assert [
+        item.external_key for item in service.search_objects("alpha-industry", NOW, 10)
+    ] == ["alpha-industry"]
+
+
 def test_foundation_fixture_is_idempotent_content_checked_and_contains_no_research_facts(
     session, tmp_path
 ) -> None:
@@ -1371,6 +1487,9 @@ def test_foundation_fixture_is_idempotent_content_checked_and_contains_no_resear
     }
     assert {key: row.id for key, row in first.rights.items()} == {
         key: row.id for key, row in second.rights.items()
+    }
+    assert {key: row.id for key, row in first.aliases.items()} == {
+        key: row.id for key, row in second.aliases.items()
     }
     assert (
         second.identities["CN:300750:COMPANY"].canonical_name
@@ -1396,6 +1515,12 @@ def test_foundation_fixture_is_idempotent_content_checked_and_contains_no_resear
             select(func.count()).select_from(UnderwritingSecurityRightsVersion)
         )
         == 3
+    )
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingResearchObjectAlias)
+        )
+        == 2
     )
     forbidden = {
         "financials",
@@ -1486,6 +1611,64 @@ def test_custom_foundation_manifest_rejects_noncanonical_text_and_dates(
         load_product_foundation_fixture(path)
 
 
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda raw: raw["aliases"][0].__setitem__("unexpected", True),
+            "invalid fields",
+        ),
+        (
+            lambda raw: raw["aliases"][0].__setitem__("object_key", "UNKNOWN"),
+            "unknown object",
+        ),
+        (
+            lambda raw: raw["aliases"].append(
+                {
+                    "object_key": "US:ALPHABET:COMPANY",
+                    "alias": "GOOGLE",
+                    "locale": "en-US",
+                }
+            ),
+            "duplicate alias",
+        ),
+        (
+            lambda raw: raw["aliases"][0].__setitem__("alias", " Google"),
+            "leading or trailing whitespace",
+        ),
+        (
+            lambda raw: raw["aliases"][0].__setitem__(
+                "alias", "Googl\N{COMBINING ACUTE ACCENT}e"
+            ),
+            "NFC",
+        ),
+        (
+            lambda raw: raw["aliases"][0].__setitem__("alias", "x" * 161),
+            "too long",
+        ),
+        (
+            lambda raw: raw["aliases"][0].__setitem__("alias", "İ" * 160),
+            "normalized alias is too long",
+        ),
+        (
+            lambda raw: raw["aliases"][0].__setitem__("locale", "english_US"),
+            "locale",
+        ),
+        (
+            lambda raw: raw["aliases"][0].__setitem__("locale", "zh-Hans-CN-toolong"),
+            "locale",
+        ),
+    ],
+)
+def test_custom_foundation_manifest_strictly_validates_aliases(
+    tmp_path, mutate, message
+) -> None:
+    path = _write_checksum_validated_manifest(tmp_path, mutate)
+
+    with pytest.raises(ValidationError, match=message):
+        load_product_foundation_fixture(path)
+
+
 def test_bundled_foundation_manifest_requires_a_fixed_trusted_content_digest(
     tmp_path, monkeypatch
 ) -> None:
@@ -1528,6 +1711,7 @@ def test_foundation_fixture_two_real_sqlite_sessions_converge_on_identical_roots
             ids = (
                 {key: row.id for key, row in loaded.objects.items()},
                 {key: row.id for key, row in loaded.identities.items()},
+                {key: row.id for key, row in loaded.aliases.items()},
                 {key: row.id for key, row in loaded.rights.items()},
             )
             worker.commit()
@@ -1570,6 +1754,12 @@ def test_foundation_fixture_two_real_sqlite_sessions_converge_on_identical_roots
                 )
                 == 3
             )
+            assert (
+                observer.scalar(
+                    select(func.count()).select_from(UnderwritingResearchObjectAlias)
+                )
+                == 2
+            )
         finally:
             observer.close()
     finally:
@@ -1604,6 +1794,12 @@ def test_foundation_fixture_load_never_commits_the_caller_transaction(tmp_path) 
             assert (
                 observer.scalar(
                     select(func.count()).select_from(UnderwritingSecurityRightsVersion)
+                )
+                == 0
+            )
+            assert (
+                observer.scalar(
+                    select(func.count()).select_from(UnderwritingResearchObjectAlias)
                 )
                 == 0
             )
@@ -1820,6 +2016,85 @@ def test_foundation_fixture_conflict_fails_closed_and_rolls_back_partial_import(
             select(func.count()).select_from(UnderwritingSecurityRightsVersion)
         )
         == 0
+    )
+
+
+def test_foundation_fixture_alias_conflict_fails_closed_without_partial_import(
+    session,
+) -> None:
+    alphabet = _object(
+        session,
+        "company",
+        "US:ALPHABET:COMPANY",
+        "Alphabet Inc.",
+    )
+    existing_alias = UnderwritingResearchObjectAlias(
+        object_id=alphabet.id,
+        alias="Alphabet Holdings",
+        normalized_alias="alphabet holdings",
+        locale="en",
+        created_at=NOW,
+    )
+    session.add(existing_alias)
+    session.flush()
+
+    with pytest.raises(ValidationError, match="alias conflict"):
+        ProductFoundationFixtureService(session, now=lambda: NOW).load(
+            load_product_foundation_fixture()
+        )
+
+    assert {
+        row.external_key for row in session.scalars(select(UnderwritingResearchObject))
+    } == {"US:ALPHABET:COMPANY"}
+    assert tuple(session.scalars(select(UnderwritingResearchObjectAlias))) == (
+        existing_alias,
+    )
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingObjectIdentityVersion)
+        )
+        == 0
+    )
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingObjectRelation))
+        == 0
+    )
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingSecurityRightsVersion)
+        )
+        == 0
+    )
+
+
+def test_foundation_fixture_rejects_alias_owned_by_another_object_atomically(
+    session,
+) -> None:
+    other = _object(session, "company", "US:OTHER:COMPANY", "Other Inc.")
+    session.add(
+        UnderwritingResearchObjectAlias(
+            object_id=other.id,
+            alias="Google",
+            normalized_alias="google",
+            locale="en",
+            created_at=NOW,
+        )
+    )
+    session.flush()
+
+    with pytest.raises(ValidationError, match="alias conflict"):
+        ProductFoundationFixtureService(session, now=lambda: NOW).load(
+            load_product_foundation_fixture()
+        )
+
+    assert {
+        row.external_key for row in session.scalars(select(UnderwritingResearchObject))
+    } == {"US:OTHER:COMPANY"}
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingResearchObjectAlias)
+        )
+        == 1
     )
 
 

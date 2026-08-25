@@ -262,6 +262,21 @@ class ResearchProjectService:
             or not 1 <= limit <= 100
         ):
             raise ValidationError("limit must be between 1 and 100")
+        matches = self._repository.search_objects(
+            normalized_query,
+            normalized_as_of,
+            limit,
+        )
+        if (
+            not matches
+            and normalized_query.endswith("公司")
+            and len(normalized_query) > len("公司")
+        ):
+            matches = self._repository.search_objects(
+                normalized_query[: -len("公司")].rstrip(),
+                normalized_as_of,
+                limit,
+            )
         return tuple(
             ObjectSearchResult(
                 object_id=research_object.id,
@@ -274,11 +289,7 @@ class ResearchProjectService:
                 share_class=identity.share_class,
                 trading_currency=identity.trading_currency,
             )
-            for research_object, identity in self._repository.search_objects(
-                normalized_query,
-                normalized_as_of,
-                limit,
-            )
+            for research_object, identity in matches
         )
 
     def _project_view(self, record) -> ResearchProjectView:

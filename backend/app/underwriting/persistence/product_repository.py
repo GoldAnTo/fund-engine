@@ -24,6 +24,7 @@ from app.underwriting.persistence.product_models import (
     UnderwritingCapitalStructureSnapshot,
     UnderwritingFXSnapshot,
     UnderwritingObjectIdentityVersion,
+    UnderwritingResearchObjectAlias,
     UnderwritingPriceSnapshot,
     UnderwritingResearchAgendaVersion,
     UnderwritingResearchAssessmentVersion,
@@ -402,65 +403,195 @@ class ProductRepository:
         as_of: datetime,
         limit: int,
     ) -> list[tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion]]:
-        pattern = query.casefold()
-        candidate = aliased(UnderwritingObjectIdentityVersion)
-        effective_identity_id = (
-            select(candidate.id)
-            .where(
-                candidate.object_id == UnderwritingResearchObject.id,
-                candidate.effective_from <= as_of,
+        pattern = query.lower()
+
+        def effective_statement():
+            candidate = aliased(UnderwritingObjectIdentityVersion)
+            effective_identity_id = (
+                select(candidate.id)
+                .where(
+                    candidate.object_id == UnderwritingResearchObject.id,
+                    candidate.effective_from <= as_of,
+                )
+                .order_by(candidate.version.desc(), candidate.id.desc())
+                .limit(1)
+                .correlate(UnderwritingResearchObject)
+                .scalar_subquery()
             )
-            .order_by(candidate.version.desc(), candidate.id.desc())
-            .limit(1)
+            return (
+                select(UnderwritingResearchObject, UnderwritingObjectIdentityVersion)
+                .join(
+                    UnderwritingObjectIdentityVersion,
+                    UnderwritingObjectIdentityVersion.id == effective_identity_id,
+                )
+                .where(
+                    UnderwritingResearchObject.kind.in_(
+                        ("industry", "company", "security")
+                    ),
+                    UnderwritingObjectIdentityVersion.effective_from <= as_of,
+                    or_(
+                        UnderwritingObjectIdentityVersion.effective_to.is_(None),
+                        UnderwritingObjectIdentityVersion.effective_to > as_of,
+                    ),
+                )
+            )
+
+        alias_match = (
+            select(UnderwritingResearchObjectAlias.id)
+            .where(
+                UnderwritingResearchObjectAlias.object_id
+                == UnderwritingResearchObject.id,
+                UnderwritingResearchObjectAlias.normalized_alias.contains(
+                    pattern, autoescape=True
+                ),
+            )
             .correlate(UnderwritingResearchObject)
-            .scalar_subquery()
+            .exists()
         )
-        statement = (
-            select(UnderwritingResearchObject, UnderwritingObjectIdentityVersion)
-            .join(
-                UnderwritingObjectIdentityVersion,
-                UnderwritingObjectIdentityVersion.id == effective_identity_id,
-            )
-            .where(
-                UnderwritingResearchObject.kind.in_(
-                    ("industry", "company", "security")
+        matches_statement = effective_statement().where(
+            or_(
+                func.lower(UnderwritingObjectIdentityVersion.canonical_name).contains(
+                    pattern, autoescape=True
                 ),
-                UnderwritingObjectIdentityVersion.effective_from <= as_of,
-                or_(
-                    UnderwritingObjectIdentityVersion.effective_to.is_(None),
-                    UnderwritingObjectIdentityVersion.effective_to > as_of,
+                func.lower(UnderwritingObjectIdentityVersion.symbol).contains(
+                    pattern, autoescape=True
                 ),
-                or_(
-                    func.lower(
-                        UnderwritingObjectIdentityVersion.canonical_name
-                    ).contains(pattern, autoescape=True),
-                    func.lower(UnderwritingObjectIdentityVersion.symbol).contains(
-                        pattern, autoescape=True
-                    ),
-                    func.lower(UnderwritingResearchObject.external_key).contains(
-                        pattern, autoescape=True
-                    ),
+                func.lower(UnderwritingResearchObject.external_key).contains(
+                    pattern, autoescape=True
                 ),
+                alias_match,
             )
-            .order_by(
-                UnderwritingResearchObject.kind,
-                func.lower(UnderwritingObjectIdentityVersion.canonical_name),
-                func.lower(UnderwritingResearchObject.external_key),
-                UnderwritingResearchObject.id,
-                UnderwritingObjectIdentityVersion.version.desc(),
-            )
-            .limit(limit)
         )
-        seen: set[UUID] = set()
+        matched = {
+            research_object.id: (research_object, identity)
+            for research_object, identity in self._session.execute(matches_statement)
+        }
+        if not matched:
+            return []
+
+        matched_security_ids = {
+            object_id
+            for object_id, (research_object, _) in matched.items()
+            if research_object.kind == "security"
+        }
+        parent_ids_by_security: dict[UUID, set[UUID]] = {
+            object_id: set() for object_id in matched_security_ids
+        }
+        if matched_security_ids:
+            for parent_id, child_id in self._session.execute(
+                select(
+                    UnderwritingObjectRelation.parent_id,
+                    UnderwritingObjectRelation.child_id,
+                ).where(
+                    UnderwritingObjectRelation.relation_type == "company_has_security",
+                    UnderwritingObjectRelation.child_id.in_(matched_security_ids),
+                )
+            ):
+                parent_ids_by_security[child_id].add(parent_id)
+
+        possible_parent_ids = {
+            parent_id
+            for parent_ids in parent_ids_by_security.values()
+            for parent_id in parent_ids
+        }
+        effective_parents = (
+            {
+                research_object.id: (research_object, identity)
+                for research_object, identity in self._session.execute(
+                    effective_statement().where(
+                        UnderwritingResearchObject.id.in_(possible_parent_ids)
+                    )
+                )
+                if research_object.kind == "company"
+            }
+            if possible_parent_ids
+            else {}
+        )
+
+        anchor_rows = {
+            object_id: row
+            for object_id, row in matched.items()
+            if row[0].kind in {"company", "industry"}
+        }
+        anchor_rows.update(effective_parents)
+        for security_id in matched_security_ids:
+            valid_parent_ids = parent_ids_by_security[security_id] & set(
+                effective_parents
+            )
+            if not valid_parent_ids:
+                anchor_rows[security_id] = matched[security_id]
+
+        company_anchor_ids = {
+            object_id
+            for object_id, (research_object, _) in anchor_rows.items()
+            if research_object.kind == "company"
+        }
+        children_by_company: dict[UUID, set[UUID]] = {
+            object_id: set() for object_id in company_anchor_ids
+        }
+        if company_anchor_ids:
+            for parent_id, child_id in self._session.execute(
+                select(
+                    UnderwritingObjectRelation.parent_id,
+                    UnderwritingObjectRelation.child_id,
+                ).where(
+                    UnderwritingObjectRelation.relation_type == "company_has_security",
+                    UnderwritingObjectRelation.parent_id.in_(company_anchor_ids),
+                )
+            ):
+                children_by_company[parent_id].add(child_id)
+        child_ids = {
+            child_id
+            for children in children_by_company.values()
+            for child_id in children
+        }
+        effective_children = (
+            {
+                research_object.id: (research_object, identity)
+                for research_object, identity in self._session.execute(
+                    effective_statement().where(
+                        UnderwritingResearchObject.id.in_(child_ids)
+                    )
+                )
+                if research_object.kind == "security"
+            }
+            if child_ids
+            else {}
+        )
+
+        def row_key(row):
+            research_object, identity = row
+            return (
+                research_object.kind,
+                identity.canonical_name.casefold(),
+                research_object.external_key.casefold(),
+                str(research_object.id),
+                -identity.version,
+            )
+
+        groups = []
+        for anchor_id, anchor_row in sorted(
+            anchor_rows.items(), key=lambda item: row_key(item[1])
+        ):
+            group = [anchor_row]
+            if anchor_row[0].kind == "company":
+                group.extend(
+                    effective_children[child_id]
+                    for child_id in children_by_company[anchor_id]
+                    if child_id in effective_children
+                )
+            groups.append(sorted(group, key=row_key))
+
         results: list[
             tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion]
         ] = []
-        for research_object, identity in self._session.execute(statement):
-            if research_object.id not in seen:
-                seen.add(research_object.id)
-                results.append((research_object, identity))
-                if len(results) == limit:
-                    break
+        seen: set[UUID] = set()
+        for group in groups:
+            group_ids = {row[0].id for row in group}
+            if group_ids & seen or len(results) + len(group) > limit:
+                continue
+            results.extend(group)
+            seen.update(group_ids)
         return results
 
     def create_project(

@@ -13,6 +13,7 @@ from app.underwriting.persistence.product_models import (
     UnderwritingCapitalStructureSnapshot,
     UnderwritingFXSnapshot,
     UnderwritingObjectIdentityVersion,
+    UnderwritingResearchObjectAlias,
     UnderwritingPriceSnapshot,
     UnderwritingResearchAgendaVersion,
     UnderwritingResearchAssessmentVersion,
@@ -42,7 +43,9 @@ from app.underwriting.persistence.repository import (
     StaleParentError,
     UnderwritingRepository,
 )
-from app.underwriting.persistence.research_repository import UnderwritingResearchRepository
+from app.underwriting.persistence.research_repository import (
+    UnderwritingResearchRepository,
+)
 
 __all__ = [
     "UnderwritingAnswerabilityEvaluation",
@@ -53,6 +56,7 @@ __all__ = [
     "UnderwritingResearchObject",
     "UnderwritingResearchVersion",
     "UnderwritingObjectIdentityVersion",
+    "UnderwritingResearchObjectAlias",
     "UnderwritingResearchProject",
     "UnderwritingResearchProjectSecurity",
     "UnderwritingResearchScopeVersion",

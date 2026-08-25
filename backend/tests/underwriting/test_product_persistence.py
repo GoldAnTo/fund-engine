@@ -24,6 +24,7 @@ from app.models.ledger import (
 
 
 PRODUCT_TABLES = {
+    "uw_research_object_aliases",
     "uw_object_identity_versions",
     "uw_research_projects",
     "uw_research_project_securities",
@@ -40,8 +41,10 @@ PRODUCT_TABLES = {
 }
 
 IMMUTABLE_PRODUCT_TABLES = PRODUCT_TABLES - {"uw_workspace_drafts"}
+PRODUCT_0065_TABLES = PRODUCT_TABLES - {"uw_research_object_aliases"}
 
 PRODUCT_MODEL_NAMES = {
+    "UnderwritingResearchObjectAlias",
     "UnderwritingObjectIdentityVersion",
     "UnderwritingResearchProject",
     "UnderwritingResearchProjectSecurity",
@@ -175,6 +178,28 @@ def test_versioned_product_families_prevent_duplicate_versions_and_successors() 
     }
     for table_name, required in expected_uniques.items():
         assert required <= _unique_columns(table_name)
+
+
+def test_research_object_alias_schema_contract() -> None:
+    table = Base.metadata.tables["uw_research_object_aliases"]
+
+    assert _unique_columns("uw_research_object_aliases") == {
+        ("object_id", "normalized_alias")
+    }
+    assert _foreign_key_targets("uw_research_object_aliases") == {
+        "uw_research_objects.id"
+    }
+    checks = {
+        str(constraint.sqltext)
+        for constraint in table.constraints
+        if isinstance(constraint, sa.CheckConstraint)
+    }
+    assert "length(trim(alias)) > 0" in checks
+    assert "normalized_alias = lower(trim(normalized_alias))" in checks
+    assert {index.name for index in table.indexes} == {"ix_uw_object_alias_normalized"}
+    assert table.c.alias.type.length == 160
+    assert table.c.normalized_alias.type.length == 160
+    assert table.c.locale.type.length == 16
 
 
 def _product_constraint_tables() -> list[sa.Table]:
@@ -471,7 +496,7 @@ def test_snapshot_rejects_duplicate_natural_identity_when_value_changes(
 
 
 def test_product_tables_expose_content_hash_except_mutable_draft() -> None:
-    for table_name in IMMUTABLE_PRODUCT_TABLES:
+    for table_name in IMMUTABLE_PRODUCT_TABLES - {"uw_research_object_aliases"}:
         column = Base.metadata.tables[table_name].c.content_hash
         assert column.nullable is False
         assert column.type.length == 64
@@ -1115,7 +1140,7 @@ def _refuse_sqlite_downgrade(
 def _assert_refused_sqlite_downgrade_state(connection: sa.Connection) -> None:
     inspector = sa.inspect(connection)
     table_names = set(inspector.get_table_names())
-    assert PRODUCT_TABLES <= table_names
+    assert PRODUCT_0065_TABLES <= table_names
     assert not {name for name in table_names if name.startswith("_alembic_tmp_")}
     assert connection.execute(
         sa.text("SELECT version_num FROM alembic_version")
@@ -1224,7 +1249,7 @@ def test_0065_sqlite_downgrade_refuses_populated_compatibility_column(
                     sa.text(f"SELECT count(*) FROM {table_name}")
                 ).scalar_one()
                 == 0
-                for table_name in PRODUCT_TABLES
+                for table_name in PRODUCT_0065_TABLES
             )
         _refuse_sqlite_downgrade(backend, environment)
         with engine.connect() as connection:
@@ -1321,7 +1346,7 @@ def test_0064_to_0065_sqlite_upgrade_preserves_legacy_rows_and_nulls_new_columns
 
     with engine.connect() as connection:
         inspector = sa.inspect(connection)
-        assert PRODUCT_TABLES <= set(inspector.get_table_names())
+        assert PRODUCT_0065_TABLES <= set(inspector.get_table_names())
         for table_name, expected_columns in COMPATIBILITY_COLUMNS.items():
             reflected = {
                 column["name"]: column
