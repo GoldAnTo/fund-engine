@@ -4,10 +4,12 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import event, select
+from sqlalchemy import create_engine, event, select, update
 from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import sessionmaker
 
-from app.models.ledger import ConflictError, ImmutableLedgerError, ValidationError
+from app.models.ledger import Base, ConflictError, ImmutableLedgerError, ValidationError
 from app.models.operational import Job
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
@@ -399,6 +401,184 @@ def test_attach_prepare_job_locks_the_preparation_it_mutates(session) -> None:
     assert len(statements) == 1
     assert "FOR UPDATE" in str(statements[0].compile(dialect=postgresql.dialect()))
     assert "FOR UPDATE" not in str(statements[0].compile(dialect=sqlite.dialect()))
+
+
+@pytest.mark.parametrize("operation", ("add", "attach"))
+def test_sqlite_job_ownership_binding_reserves_the_writer_before_its_read(
+    tmp_path, operation: str
+) -> None:
+    """A competing ownership rewrite cannot slip between the read and bind."""
+    engine = create_engine(
+        f"sqlite:///{tmp_path / f'company-research-{operation}.sqlite'}",
+        future=True,
+        connect_args={"timeout": 0.1},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    bootstrap = sessions()
+    try:
+        project = _project(bootstrap)
+        preparation_id = uuid.uuid4()
+        if operation == "attach":
+            preparation = CompanyResearchRepository(bootstrap).add_preparation(
+                project_id=project.id,
+                idempotency_key=f"prepare:{uuid.uuid4().hex}",
+                request_hash="d" * 64,
+                strategy_version="company-research-default.v1",
+                status="queued",
+                current_step="evidence_index",
+                progress=0,
+                attempt=1,
+                next_attempt_at=None,
+                last_error_code=None,
+                job_id=None,
+                created_at=NOW,
+                updated_at=NOW,
+            )
+            preparation_id = preparation.id
+        job = Job(
+            kind="prepare_company_research",
+            status="queued",
+            progress=0,
+            attempt=1,
+            target_type="company_research_preparation",
+            target_id=preparation_id,
+            research_case_id=None,
+            created_at=NOW,
+        )
+        bootstrap.add(job)
+        bootstrap.commit()
+        project_id = project.id
+        job_id = job.id
+    finally:
+        bootstrap.close()
+
+    worker = sessions()
+    rival = sessions()
+    primary_connection = worker.connection()
+    rival_errors: list[OperationalError] = []
+    job_read_seen = False
+
+    def rewrite_after_primary_job_read(
+        connection, _cursor, statement, *_args
+    ) -> None:
+        nonlocal job_read_seen
+        if connection is not primary_connection or job_read_seen:
+            return
+        if (
+            statement.lstrip().upper().startswith("SELECT")
+            and "FROM jobs" in statement
+        ):
+            job_read_seen = True
+            try:
+                rival.execute(
+                    update(Job)
+                    .where(Job.id == job_id)
+                    .values(kind="prepare_research")
+                )
+                rival.commit()
+            except OperationalError as exc:
+                rival.rollback()
+                rival_errors.append(exc)
+
+    event.listen(engine, "after_cursor_execute", rewrite_after_primary_job_read)
+    try:
+        repository = CompanyResearchRepository(worker)
+        if operation == "add":
+            result = repository.add_preparation(
+                project_id=project_id,
+                idempotency_key=f"prepare:{uuid.uuid4().hex}",
+                request_hash="e" * 64,
+                strategy_version="company-research-default.v1",
+                status="queued",
+                current_step="evidence_index",
+                progress=0,
+                attempt=1,
+                next_attempt_at=None,
+                last_error_code=None,
+                job_id=job_id,
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        else:
+            result = repository.attach_prepare_job(preparation_id, job_id)
+        worker.commit()
+    finally:
+        event.remove(engine, "after_cursor_execute", rewrite_after_primary_job_read)
+        worker.close()
+        rival.close()
+
+    try:
+        assert job_read_seen
+        assert len(rival_errors) == 1
+        observer = sessions()
+        try:
+            persisted_job = observer.get(Job, job_id)
+            persisted_preparation = observer.get(
+                CompanyResearchPreparation, result.id
+            )
+            assert persisted_job is not None
+            assert persisted_job.kind == "prepare_company_research"
+            assert persisted_preparation is not None
+            assert persisted_preparation.job_id == job_id
+        finally:
+            observer.close()
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+def test_sqlite_job_ownership_reservation_rolls_back_with_the_caller(
+    tmp_path,
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'company-research-rollback.sqlite'}", future=True
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    bootstrap = sessions()
+    try:
+        _, project, preparation = _repository_with_preparation(bootstrap)
+        job = Job(
+            kind="prepare_company_research",
+            status="queued",
+            progress=0,
+            attempt=1,
+            target_type="company_research_preparation",
+            target_id=preparation.id,
+            research_case_id=None,
+            created_at=NOW,
+        )
+        bootstrap.add(job)
+        bootstrap.commit()
+        preparation_id = preparation.id
+        job_id = job.id
+        project_id = project.id
+    finally:
+        bootstrap.close()
+
+    worker = sessions()
+    try:
+        result = CompanyResearchRepository(worker).attach_prepare_job(
+            preparation_id, job_id
+        )
+        assert result.job_id == job_id
+        worker.rollback()
+    finally:
+        worker.close()
+
+    try:
+        observer = sessions()
+        try:
+            preparation = observer.get(CompanyResearchPreparation, preparation_id)
+            assert preparation is not None
+            assert preparation.project_id == project_id
+            assert preparation.job_id is None
+        finally:
+            observer.close()
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
 
 
 @pytest.mark.parametrize("foreign_scope", ("kind", "project"))

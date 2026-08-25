@@ -40,6 +40,21 @@ class CompanyResearchRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
+    def _reserve_sqlite_writer_before_ownership_read(self) -> None:
+        """Serialize SQLite ownership validation without taking over caller work."""
+        connection = self._session.connection()
+        if connection.dialect.name != "sqlite":
+            return
+        dbapi_connection = getattr(
+            connection.connection, "driver_connection", connection.connection
+        )
+        # SQLAlchemy can expose a logical transaction before sqlite3 has opened
+        # a physical one.  In that state we can still reserve the sole writer
+        # before the Job/preparation read.  Once the caller owns a physical
+        # transaction, do not begin, commit, or replace it here.
+        if not dbapi_connection.in_transaction:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+
     def _job_for_update(self, job_id: UUID) -> Job | None:
         """Read a Job under the caller transaction's row lock when supported."""
         return self._session.scalar(
@@ -193,6 +208,7 @@ class CompanyResearchRepository:
         job: Job | None = None
         preparation_id: UUID | None = None
         if job_id is not None:
+            self._reserve_sqlite_writer_before_ownership_read()
             job = self._job_for_update(job_id)
             if (
                 job is None
@@ -518,6 +534,7 @@ class CompanyResearchRepository:
         self, preparation_id: UUID, job_id: UUID
     ) -> CompanyResearchPreparation:
         """Attach only a generic Job that is scoped to this preparation exactly."""
+        self._reserve_sqlite_writer_before_ownership_read()
         preparation = self._preparation_for_update(preparation_id)
         if preparation is None:
             raise ValidationError("company research preparation not found")
