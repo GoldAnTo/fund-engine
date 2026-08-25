@@ -23,7 +23,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.ledger import Base, _uuid
-from app.underwriting.domain.search_terms import normalize_search_term
+from app.underwriting.domain.search_terms import (
+    digest_search_term,
+    normalize_search_term,
+)
 
 
 _HASH_CHECK = "length(content_hash) = 64"
@@ -182,13 +185,18 @@ class UnderwritingResearchObjectSearchTerm(Base):
             "OR normalized_value = lower(btrim(raw_value))",
             name="ck_uw_search_term_normalized",
         ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "length(normalized_digest) = 64 "
+            "AND normalized_digest = lower(normalized_digest)",
+            name="ck_uw_search_term_digest",
+        ),
         UniqueConstraint(
             "identity_version_id",
             "term_kind",
             name="uq_uw_search_term_identity_kind",
         ),
         Index("ix_uw_search_term_identity", "identity_version_id"),
-        Index("ix_uw_search_term_normalized", "normalized_value"),
+        Index("ix_uw_search_term_normalized_digest", "normalized_digest"),
         Index(
             "uq_uw_search_term_external_object",
             "object_id",
@@ -208,6 +216,7 @@ class UnderwritingResearchObjectSearchTerm(Base):
     term_kind: Mapped[str] = mapped_column(String(24), nullable=False)
     raw_value: Mapped[str] = mapped_column(Text, nullable=False)
     normalized_value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -220,6 +229,8 @@ def _validate_research_object_search_term_normalization(
     expected = normalize_search_term(target.raw_value)
     if target.normalized_value != expected:
         raise ValueError("normalized_value must equal NFC(trim(raw_value)).lower()")
+    if target.normalized_digest != digest_search_term(expected):
+        raise ValueError("normalized_digest must equal SHA-256(normalized_value)")
 
 
 class UnderwritingResearchProject(Base):

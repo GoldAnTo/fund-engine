@@ -1,6 +1,8 @@
 """PostgreSQL migration and immutable-trigger coverage for underwriting."""
+
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -786,6 +788,12 @@ def test_0066_search_terms_backfill_unicode_and_install_immutable_triggers() -> 
     backend = Path(__file__).parents[2]
     object_id = uuid.uuid4()
     identity_id = uuid.uuid4()
+    long_object_id = uuid.uuid4()
+    long_identity_id = uuid.uuid4()
+    long_value = "".join(
+        hashlib.sha256(str(index).encode("ascii")).hexdigest() for index in range(256)
+    )
+    long_digest = hashlib.sha256(long_value.encode("utf-8")).hexdigest()
     try:
         with admin.begin() as connection:
             connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
@@ -828,13 +836,80 @@ def test_0066_search_terms_backfill_unicode_and_install_immutable_triggers() -> 
         with isolated.begin() as connection:
             assert connection.execute(
                 sa.text(
-                    "SELECT term_kind, normalized_value "
+                    "SELECT term_kind, normalized_value, normalized_digest "
                     "FROM uw_research_object_search_terms ORDER BY term_kind"
                 )
             ).all() == [
-                ("canonical_name", "école holdings"),
-                ("external_key", "fr:test:company"),
+                (
+                    "canonical_name",
+                    "école holdings",
+                    hashlib.sha256("école holdings".encode("utf-8")).hexdigest(),
+                ),
+                (
+                    "external_key",
+                    "fr:test:company",
+                    hashlib.sha256("fr:test:company".encode("utf-8")).hexdigest(),
+                ),
             ]
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_research_objects "
+                    "(id, kind, external_key, canonical_name, created_at) "
+                    "VALUES (:id, 'company', 'LONG:TEST:COMPANY', 'Long', now())"
+                ),
+                {"id": long_object_id},
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_object_identity_versions "
+                    "(id, object_id, version, canonical_name, effective_from, "
+                    "content_hash, created_at) VALUES "
+                    "(:id, :object_id, 1, :canonical_name, now(), :digest, now())"
+                ),
+                {
+                    "id": long_identity_id,
+                    "object_id": long_object_id,
+                    "canonical_name": long_value,
+                    "digest": "b" * 64,
+                },
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_research_object_search_terms "
+                    "(id, object_id, identity_version_id, term_kind, raw_value, "
+                    "normalized_value, normalized_digest, created_at) VALUES "
+                    "(:id, :object_id, :identity_id, 'canonical_name', "
+                    ":raw_value, :normalized_value, :normalized_digest, now())"
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "object_id": long_object_id,
+                    "identity_id": long_identity_id,
+                    "raw_value": long_value,
+                    "normalized_value": long_value,
+                    "normalized_digest": long_digest,
+                },
+            )
+            assert connection.execute(
+                sa.text(
+                    "SELECT length(normalized_value) "
+                    "FROM uw_research_object_search_terms "
+                    "WHERE normalized_digest = :digest "
+                    "AND normalized_value = :normalized_value"
+                ),
+                {"digest": long_digest, "normalized_value": long_value},
+            ).scalar_one() == len(long_value)
+            index_definitions = tuple(
+                connection.execute(
+                    sa.text(
+                        "SELECT indexdef FROM pg_indexes "
+                        "WHERE schemaname = current_schema() "
+                        "AND tablename = 'uw_research_object_search_terms'"
+                    )
+                ).scalars()
+            )
+            assert any("normalized_digest" in value for value in index_definitions)
+            assert all("normalized_value" not in value for value in index_definitions)
             connection.execute(
                 sa.text(
                     "INSERT INTO uw_research_object_aliases "

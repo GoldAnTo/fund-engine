@@ -255,7 +255,8 @@ class ResearchProjectService:
         as_of: datetime,
         limit: int = 20,
     ) -> tuple[ObjectSearchResult, ...]:
-        normalized_query = normalize_search_term(self._text(query, "query"))
+        raw_query = self._text(query, "query")
+        normalized_query = normalize_search_term(raw_query)
         normalized_as_of = self._utc(as_of, "as_of")
         if (
             not isinstance(limit, int)
@@ -264,7 +265,7 @@ class ResearchProjectService:
         ):
             raise ValidationError("limit must be between 1 and 100")
         outcome = self._repository.search_objects(
-            normalized_query,
+            raw_query,
             normalized_as_of,
             limit,
         )

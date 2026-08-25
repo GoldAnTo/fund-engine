@@ -6,14 +6,13 @@ Revises: 0065
 
 from __future__ import annotations
 
+import hashlib
+import unicodedata
 from typing import Union
 from uuid import uuid4
 
 from alembic import op
 import sqlalchemy as sa
-
-from app.underwriting.domain.search_terms import normalize_search_term
-
 
 revision: str = "0066"
 down_revision: Union[str, None] = "0065"
@@ -24,6 +23,16 @@ depends_on: Union[str, tuple[str, ...], None] = None
 _ALIAS_TABLE = "uw_research_object_aliases"
 _TERM_TABLE = "uw_research_object_search_terms"
 _BACKFILL_BATCH_SIZE = 500
+
+
+def _normalize_search_term(value: str) -> str:
+    """Frozen 0066 normalization; do not replace with an application import."""
+    return unicodedata.normalize("NFC", value.strip()).lower()
+
+
+def _digest_search_term(normalized_value: str) -> str:
+    """Frozen 0066 digest; do not replace with an application import."""
+    return hashlib.sha256(normalized_value.encode("utf-8")).hexdigest()
 
 
 def _ascii_normalization_check(
@@ -99,6 +108,7 @@ def _backfill_search_terms() -> None:
         raw_value: str,
         created_at: object,
     ) -> None:
+        normalized_value = _normalize_search_term(raw_value)
         batch.append(
             {
                 "id": (
@@ -108,7 +118,8 @@ def _backfill_search_terms() -> None:
                 "identity_version_id": identity_version_id,
                 "term_kind": term_kind,
                 "raw_value": raw_value,
-                "normalized_value": normalize_search_term(raw_value),
+                "normalized_value": normalized_value,
+                "normalized_digest": _digest_search_term(normalized_value),
                 "created_at": created_at,
             }
         )
@@ -204,6 +215,7 @@ def upgrade() -> None:
         sa.Column("term_kind", sa.String(length=24), nullable=False),
         sa.Column("raw_value", sa.Text(), nullable=False),
         sa.Column("normalized_value", sa.Text(), nullable=False),
+        sa.Column("normalized_digest", sa.String(length=64), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "term_kind IN ('external_key', 'canonical_name', 'symbol')",
@@ -228,6 +240,11 @@ def upgrade() -> None:
             _ascii_normalization_check(dialect_name, "raw_value", "normalized_value"),
             name="ck_uw_search_term_normalized",
         ),
+        sa.CheckConstraint(
+            "length(normalized_digest) = 64 "
+            "AND normalized_digest = lower(normalized_digest)",
+            name="ck_uw_search_term_digest",
+        ),
         sa.ForeignKeyConstraint(
             ["object_id"],
             ["uw_research_objects.id"],
@@ -246,7 +263,11 @@ def upgrade() -> None:
         ),
     )
     op.create_index("ix_uw_search_term_identity", _TERM_TABLE, ["identity_version_id"])
-    op.create_index("ix_uw_search_term_normalized", _TERM_TABLE, ["normalized_value"])
+    op.create_index(
+        "ix_uw_search_term_normalized_digest",
+        _TERM_TABLE,
+        ["normalized_digest"],
+    )
     op.create_index(
         "uq_uw_search_term_external_object",
         _TERM_TABLE,
@@ -265,7 +286,7 @@ def downgrade() -> None:
     _drop_immutable_triggers(_TERM_TABLE, dialect_name)
     _drop_immutable_triggers(_ALIAS_TABLE, dialect_name)
     op.drop_index("uq_uw_search_term_external_object", table_name=_TERM_TABLE)
-    op.drop_index("ix_uw_search_term_normalized", table_name=_TERM_TABLE)
+    op.drop_index("ix_uw_search_term_normalized_digest", table_name=_TERM_TABLE)
     op.drop_index("ix_uw_search_term_identity", table_name=_TERM_TABLE)
     op.drop_table(_TERM_TABLE)
     op.drop_index("ix_uw_object_alias_normalized", table_name=_ALIAS_TABLE)

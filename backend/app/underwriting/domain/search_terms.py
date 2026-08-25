@@ -9,6 +9,7 @@ and fails closed instead of accepting a corrupt projection.
 
 from __future__ import annotations
 
+import hashlib
 import unicodedata
 
 
@@ -21,9 +22,28 @@ def normalize_search_term(value: str) -> str:
     return unicodedata.normalize("NFC", value.strip()).lower()
 
 
-def require_valid_search_term(raw_value: str, normalized_value: str) -> None:
-    """Fail closed when a selected persisted projection is not canonical."""
+def digest_search_term(normalized_value: str) -> str:
+    """Return the fixed-width SHA-256 key for one normalized search value."""
+    return hashlib.sha256(normalized_value.encode("utf-8")).hexdigest()
+
+
+def require_valid_search_normalization(
+    raw_value: str,
+    normalized_value: str,
+) -> None:
+    """Fail closed when a selected alias normalization is not canonical."""
     if normalized_value != normalize_search_term(raw_value):
         raise SearchTermIntegrityError(
             "persisted research search term normalization conflict"
         )
+
+
+def require_valid_search_term(
+    raw_value: str,
+    normalized_value: str,
+    normalized_digest: str,
+) -> None:
+    """Fail closed when a selected derived search term is not canonical."""
+    require_valid_search_normalization(raw_value, normalized_value)
+    if normalized_digest != digest_search_term(normalized_value):
+        raise SearchTermIntegrityError("persisted research search term digest conflict")

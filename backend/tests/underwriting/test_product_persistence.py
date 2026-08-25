@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import os
 from pathlib import Path
@@ -260,6 +261,7 @@ def test_research_object_search_term_schema_contract() -> None:
         "term_kind",
         "raw_value",
         "normalized_value",
+        "normalized_digest",
         "created_at",
     }
     assert _foreign_key_targets(table.name) == {
@@ -276,9 +278,13 @@ def test_research_object_search_term_schema_contract() -> None:
         "(term_kind = 'external_key' AND identity_version_id IS NULL) OR "
         "(term_kind IN ('canonical_name', 'symbol') AND identity_version_id IS NOT NULL)"
     ) in checks
+    assert (
+        "length(normalized_digest) = 64 "
+        "AND normalized_digest = lower(normalized_digest)"
+    ) in checks
     assert {index.name for index in table.indexes} == {
         "ix_uw_search_term_identity",
-        "ix_uw_search_term_normalized",
+        "ix_uw_search_term_normalized_digest",
         "uq_uw_search_term_external_object",
     }
     assert _unique_columns(table.name) == {("identity_version_id", "term_kind")}
@@ -289,14 +295,44 @@ def test_research_object_search_term_schema_contract() -> None:
     assert "length(CAST(raw_value AS BLOB)) != length(raw_value)" in sqlite_ddl
     assert "octet_length(raw_value) != char_length(raw_value)" in postgres_ddl
     normalized_index = next(
-        index for index in table.indexes if index.name == "ix_uw_search_term_normalized"
+        index
+        for index in table.indexes
+        if index.name == "ix_uw_search_term_normalized_digest"
     )
-    assert "normalized_value" in str(
+    assert table.c.normalized_digest.type.length == 64
+    assert "normalized_digest" in str(
         sa.schema.CreateIndex(normalized_index).compile(dialect=sqlite.dialect())
     )
-    assert "normalized_value" in str(
+    assert "normalized_digest" in str(
         sa.schema.CreateIndex(normalized_index).compile(dialect=postgresql.dialect())
     )
+    indexed_or_unique_columns = {
+        column.name for index in table.indexes for column in index.columns
+    } | {
+        column.name
+        for constraint in table.constraints
+        if isinstance(constraint, sa.UniqueConstraint)
+        for column in constraint.columns
+    }
+    assert "normalized_value" not in indexed_or_unique_columns
+    assert all(
+        not isinstance(table.c[column_name].type, sa.Text)
+        for column_name in indexed_or_unique_columns
+    )
+
+
+def test_search_term_digest_is_fixed_width_and_validated_with_normalized_value() -> (
+    None
+):
+    search_terms = importlib.import_module("app.underwriting.domain.search_terms")
+    digest = getattr(search_terms, "digest_search_term", None)
+    validator = getattr(search_terms, "require_valid_search_term")
+
+    assert digest is not None
+    expected = hashlib.sha256("école".encode("utf-8")).hexdigest()
+    assert digest("école") == expected
+    with pytest.raises(RuntimeError, match="digest"):
+        validator("ÉCOLE", "école", hashlib.sha256(b"unrelated").hexdigest())
 
 
 def test_object_repository_writes_external_key_search_projection(session) -> None:
@@ -319,6 +355,10 @@ def test_object_repository_writes_external_key_search_projection(session) -> Non
         "external_key",
         "ÉCOLE:COMPANY",
         "école:company",
+    )
+    assert (
+        term.normalized_digest
+        == hashlib.sha256("école:company".encode("utf-8")).hexdigest()
     )
 
 

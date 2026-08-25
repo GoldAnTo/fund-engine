@@ -6,6 +6,7 @@ history used by the application and retain a durable revision marker.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -30,6 +31,39 @@ WAVE2_TABLES = {
     "uw_forecast_input_versions",
     "uw_falsifier_versions",
 }
+
+
+def _search_term_digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def test_0066_migration_freezes_search_normalization_without_app_imports() -> None:
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0066_research_object_aliases.py"
+    )
+    source = migration_path.read_text(encoding="utf-8")
+
+    assert "from app." not in source
+    assert "import app." not in source
+    assert "unicodedata.normalize" in source
+
+
+def test_0066_migration_freezes_search_digest_without_app_imports() -> None:
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0066_research_object_aliases.py"
+    )
+    source = migration_path.read_text(encoding="utf-8")
+
+    assert "from app." not in source
+    assert "import app." not in source
+    assert "hashlib.sha256" in source
+
 
 CANDIDATE_EVIDENCE_TABLES = {
     "uw_evidence_candidate_dossier_versions",
@@ -143,7 +177,7 @@ def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
                 "(id, object_id, version, canonical_name, symbol, exchange, "
                 "share_class, trading_currency, effective_from, effective_to, "
                 "supersedes_id, content_hash, created_at) VALUES "
-                "(:id, :object_id, 1, 'ÉCOLE Holdings', NULL, NULL, NULL, NULL, "
+                "(:id, :object_id, 1, '  ÉCOLE Holdings  ', NULL, NULL, NULL, NULL, "
                 ":now, NULL, NULL, :digest, :now)"
             ),
             {
@@ -233,28 +267,62 @@ def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
             "term_kind",
             "raw_value",
             "normalized_value",
+            "normalized_digest",
             "created_at",
         }
+        term_indexes = {
+            index["name"]: tuple(index["column_names"])
+            for index in inspector.get_indexes("uw_research_object_search_terms")
+        }
+        assert term_indexes["ix_uw_search_term_normalized_digest"] == (
+            "normalized_digest",
+        )
+        assert all(
+            "normalized_value" not in columns for columns in term_indexes.values()
+        )
         assert set(
             connection.execute(
                 sa.text(
-                    "SELECT term_kind, raw_value, normalized_value "
+                    "SELECT term_kind, raw_value, normalized_value, normalized_digest "
                     "FROM uw_research_object_search_terms ORDER BY term_kind"
                 )
             ).all()
         ) == {
-            ("canonical_name", "ÉCOLE Holdings", "école holdings"),
-            ("canonical_name", "Unrelated Share", "unrelated share"),
-            ("external_key", "US:TEST:COMPANY", "us:test:company"),
-            ("external_key", "FR:TEST:A", "fr:test:a"),
-            ("symbol", "ÉCOLE", "école"),
+            (
+                "canonical_name",
+                "  ÉCOLE Holdings  ",
+                "école holdings",
+                _search_term_digest("école holdings"),
+            ),
+            (
+                "canonical_name",
+                "Unrelated Share",
+                "unrelated share",
+                _search_term_digest("unrelated share"),
+            ),
+            (
+                "external_key",
+                "US:TEST:COMPANY",
+                "us:test:company",
+                _search_term_digest("us:test:company"),
+            ),
+            (
+                "external_key",
+                "FR:TEST:A",
+                "fr:test:a",
+                _search_term_digest("fr:test:a"),
+            ),
+            ("symbol", "ÉCOLE", "école", _search_term_digest("école")),
         }
         explain = connection.exec_driver_sql(
             "EXPLAIN QUERY PLAN SELECT object_id "
             "FROM uw_research_object_search_terms "
-            "WHERE normalized_value = 'école holdings'"
+            "WHERE normalized_digest = :digest AND normalized_value = 'école holdings'",
+            {"digest": _search_term_digest("école holdings")},
         ).all()
-        assert any("ix_uw_search_term_normalized" in str(detail) for detail in explain)
+        assert any(
+            "ix_uw_search_term_normalized_digest" in str(detail) for detail in explain
+        )
         connection.execute(
             sa.text(
                 "INSERT INTO uw_research_object_aliases "

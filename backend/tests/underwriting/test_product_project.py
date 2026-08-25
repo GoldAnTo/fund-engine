@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -1786,6 +1787,25 @@ def test_object_search_candidates_are_exact_first_and_bounded_in_sql(
         "substring",
     ]
     assert all(" LIMIT " in statement.upper() for _, statement in candidate_statements)
+    exact_sql = next(
+        statement for stage, statement in candidate_statements if stage == "exact"
+    )
+    assert "normalized_digest" in exact_sql
+    assert "normalized_value" in exact_sql
+
+
+def test_long_canonical_name_uses_fixed_digest_for_exact_discovery(
+    session, service
+) -> None:
+    long_name = "".join(
+        hashlib.sha256(str(index).encode("ascii")).hexdigest() for index in range(256)
+    )
+    company = _object(session, "company", "LONG:TEST:COMPANY", "Unrelated")
+    _identity(service, company, name=long_name)
+
+    results = service.search_objects(long_name, NOW, 1)
+
+    assert [result.object_id for result in results] == [company.id]
 
 
 def test_company_discovery_expands_only_identities_effective_as_of(session) -> None:
@@ -2314,7 +2334,10 @@ def test_foundation_fixture_repairs_only_missing_search_projection_rows(
     )
 
 
-@pytest.mark.parametrize("corruption", ["wrong", "extra"])
+@pytest.mark.parametrize(
+    "corruption",
+    ["wrong", "extra", "digest_mismatch", "digest_collision"],
+)
 def test_foundation_fixture_rejects_inconsistent_search_projection_atomically(
     session, corruption
 ) -> None:
@@ -2334,17 +2357,38 @@ def test_foundation_fixture_rejects_inconsistent_search_projection_atomically(
     if corruption == "wrong":
         session.connection().exec_driver_sql(
             "UPDATE uw_research_object_search_terms "
-            "SET raw_value = 'Unrelated', normalized_value = 'unrelated' "
+            "SET raw_value = 'Unrelated', normalized_value = 'unrelated', "
+            "normalized_digest = ? "
             "WHERE identity_version_id = ? AND term_kind = 'canonical_name'",
-            (identity.id.hex,),
+            (hashlib.sha256(b"unrelated").hexdigest(), identity.id.hex),
         )
-    else:
+    elif corruption == "extra":
         session.connection().exec_driver_sql(
             "INSERT INTO uw_research_object_search_terms "
             "(id, object_id, identity_version_id, term_kind, raw_value, "
-            "normalized_value, created_at) VALUES (?, ?, ?, 'symbol', "
-            "'EXTRA', 'extra', ?)",
-            (uuid4().hex, company.id.hex, identity.id.hex, NOW),
+            "normalized_value, normalized_digest, created_at) "
+            "VALUES (?, ?, ?, 'symbol', 'EXTRA', 'extra', ?, ?)",
+            (
+                uuid4().hex,
+                company.id.hex,
+                identity.id.hex,
+                hashlib.sha256(b"extra").hexdigest(),
+                NOW,
+            ),
+        )
+    elif corruption == "digest_mismatch":
+        session.connection().exec_driver_sql(
+            "UPDATE uw_research_object_search_terms "
+            "SET normalized_digest = ? "
+            "WHERE identity_version_id = ? AND term_kind = 'canonical_name'",
+            (hashlib.sha256(b"unrelated").hexdigest(), identity.id.hex),
+        )
+    else:
+        session.connection().exec_driver_sql(
+            "UPDATE uw_research_object_search_terms "
+            "SET raw_value = 'Unrelated', normalized_value = 'unrelated' "
+            "WHERE identity_version_id = ? AND term_kind = 'canonical_name'",
+            (identity.id.hex,),
         )
     session.expire_all()
 

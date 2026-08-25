@@ -17,7 +17,9 @@ from app.models.ledger import ConflictError, ValidationError
 from app.underwriting.domain.product_contracts import RevisionBoundaryInput
 from app.underwriting.domain.search_terms import (
     SearchTermIntegrityError,
+    digest_search_term,
     normalize_search_term,
+    require_valid_search_normalization,
     require_valid_search_term,
 )
 from app.underwriting.persistence.models import (
@@ -381,7 +383,11 @@ class ProductRepository:
                 raise SearchTermIntegrityError(
                     "persisted research search term source conflict"
                 )
-            require_valid_search_term(row.raw_value, row.normalized_value)
+            require_valid_search_term(
+                row.raw_value,
+                row.normalized_value,
+                row.normalized_digest,
+            )
             if key in actual:
                 raise SearchTermIntegrityError(
                     "persisted research search term duplicate conflict"
@@ -395,12 +401,14 @@ class ProductRepository:
         for key in sorted(missing, key=lambda item: (str(item[0]), item[1])):
             identity_version_id, term_kind = key
             raw_value = expected[key]
+            normalized_value = normalize_search_term(raw_value)
             row = UnderwritingResearchObjectSearchTerm(
                 object_id=research_object.id,
                 identity_version_id=identity_version_id,
                 term_kind=term_kind,
                 raw_value=raw_value,
-                normalized_value=normalize_search_term(raw_value),
+                normalized_value=normalized_value,
+                normalized_digest=digest_search_term(normalized_value),
                 created_at=(
                     research_object.created_at
                     if identity_version_id is None
@@ -551,11 +559,20 @@ class ProductRepository:
         )
 
     @staticmethod
-    def _candidate_match_predicate(pattern: str, *, exact: bool):
+    def _candidate_match_predicate(
+        pattern: str,
+        pattern_digest: str,
+        *,
+        exact: bool,
+    ):
         term_value = UnderwritingResearchObjectSearchTerm.normalized_value
         alias_value = UnderwritingResearchObjectAlias.normalized_alias
         term_matches = (
-            term_value == pattern
+            and_(
+                UnderwritingResearchObjectSearchTerm.normalized_digest
+                == pattern_digest,
+                term_value == pattern,
+            )
             if exact
             else term_value.contains(pattern, autoescape=True)
         )
@@ -598,7 +615,10 @@ class ProductRepository:
         return or_(projected_match, alias_match)
 
     def _search_candidate_rows(
-        self, pattern: str, as_of: datetime
+        self,
+        pattern: str,
+        pattern_digest: str,
+        as_of: datetime,
     ) -> tuple[
         tuple[
             tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion], ...
@@ -636,7 +656,13 @@ class ProductRepository:
         )
         exact_statement = (
             self._effective_object_statement(as_of)
-            .where(self._candidate_match_predicate(pattern, exact=True))
+            .where(
+                self._candidate_match_predicate(
+                    pattern,
+                    pattern_digest,
+                    exact=True,
+                )
+            )
             .order_by(*stable_order)
             .limit(_OBJECT_SEARCH_CANDIDATE_CAP)
             .execution_options(uw_search_candidate_stage="exact")
@@ -645,7 +671,11 @@ class ProductRepository:
         exact_ids = {row[0].id for row in exact_rows}
         remaining = _OBJECT_SEARCH_CANDIDATE_CAP - len(exact_rows)
         substring_statement = self._effective_object_statement(as_of).where(
-            self._candidate_match_predicate(pattern, exact=False)
+            self._candidate_match_predicate(
+                pattern,
+                pattern_digest,
+                exact=False,
+            )
         )
         if exact_ids:
             substring_statement = substring_statement.where(
@@ -709,7 +739,11 @@ class ProductRepository:
                 raise SearchTermIntegrityError(
                     "persisted research search term source conflict"
                 )
-            require_valid_search_term(term.raw_value, term.normalized_value)
+            require_valid_search_term(
+                term.raw_value,
+                term.normalized_value,
+                term.normalized_digest,
+            )
             actual.add(key)
         if actual != expected.keys():
             raise SearchTermIntegrityError(
@@ -733,7 +767,7 @@ class ProductRepository:
                 "research alias match set exceeds the validation bound"
             )
         for alias in aliases:
-            require_valid_search_term(alias.alias, alias.normalized_alias)
+            require_valid_search_normalization(alias.alias, alias.normalized_alias)
 
     def _search_anchor_rows(
         self,
@@ -960,7 +994,12 @@ class ProductRepository:
         limit: int,
     ) -> ObjectSearchOutcome:
         pattern = normalize_search_term(query)
-        candidate_rows, exact_object_ids = self._search_candidate_rows(pattern, as_of)
+        pattern_digest = digest_search_term(pattern)
+        candidate_rows, exact_object_ids = self._search_candidate_rows(
+            pattern,
+            pattern_digest,
+            as_of,
+        )
         if not candidate_rows:
             return ObjectSearchOutcome(rows=(), had_raw_match=False, candidate_count=0)
         self._validate_selected_search_terms(candidate_rows, pattern)
