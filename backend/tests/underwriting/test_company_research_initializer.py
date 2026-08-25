@@ -5,7 +5,6 @@ from datetime import UTC, datetime, timedelta
 from threading import Barrier
 
 import pytest
-
 from app.models.ledger import Base, ConflictError, ValidationError
 from app.models.operational import Job
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
