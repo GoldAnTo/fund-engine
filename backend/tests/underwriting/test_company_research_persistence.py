@@ -167,6 +167,7 @@ def test_artifact_reads_fail_closed_on_hash_tamper_and_duplicate_heads(session) 
         expected_parent_id=None,
         created_at=NOW,
     )
+    original_hash = artifact.content_hash
 
     session.connection().exec_driver_sql(
         "UPDATE uw_company_research_artifact_versions "
@@ -180,8 +181,9 @@ def test_artifact_reads_fail_closed_on_hash_tamper_and_duplicate_heads(session) 
     session.connection().exec_driver_sql(
         "UPDATE uw_company_research_artifact_versions "
         "SET content_hash = ? WHERE id = ?",
-        (artifact.content_hash, artifact.id.hex),
+        (original_hash, artifact.id.hex),
     )
+    session.expire_all()
     duplicate = CompanyResearchArtifactVersion(
         project_id=project.id,
         kind="driver_map",
@@ -236,6 +238,166 @@ def test_job_lookup_requires_exact_company_research_ownership(session) -> None:
     assert repository.attach_prepare_job(preparation.id, owned.id).job_id == owned.id
     with pytest.raises(ValidationError, match="job ownership"):
         repository.attach_prepare_job(preparation.id, legacy.id)
+
+
+def test_add_preparation_rejects_a_job_that_is_not_its_exact_owner(session) -> None:
+    project = _project(session)
+    repository = CompanyResearchRepository(session)
+    legacy = Job(
+        kind="prepare_research",
+        status="queued",
+        progress=0,
+        attempt=1,
+        target_type="company_research_preparation",
+        target_id=uuid.uuid4(),
+        research_case_id=None,
+        created_at=NOW,
+    )
+    session.add(legacy)
+    session.flush()
+
+    with pytest.raises(ValidationError, match="job ownership"):
+        repository.add_preparation(
+            project_id=project.id,
+            idempotency_key=f"prepare:{uuid.uuid4().hex}",
+            request_hash="c" * 64,
+            strategy_version="company-research-default.v1",
+            status="queued",
+            current_step="evidence_index",
+            progress=0,
+            attempt=1,
+            next_attempt_at=None,
+            last_error_code=None,
+            job_id=legacy.id,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+
+    assert session.scalar(select(CompanyResearchPreparation.id)) is None
+
+
+def test_add_preparation_binds_a_job_to_its_new_exact_target(session) -> None:
+    project = _project(session)
+    repository = CompanyResearchRepository(session)
+    preparation_id = uuid.uuid4()
+    owned = Job(
+        kind="prepare_company_research",
+        status="queued",
+        progress=0,
+        attempt=1,
+        target_type="company_research_preparation",
+        target_id=preparation_id,
+        research_case_id=None,
+        created_at=NOW,
+    )
+    session.add(owned)
+    session.flush()
+
+    preparation = repository.add_preparation(
+        project_id=project.id,
+        idempotency_key=f"prepare:{uuid.uuid4().hex}",
+        request_hash="c" * 64,
+        strategy_version="company-research-default.v1",
+        status="queued",
+        current_step="evidence_index",
+        progress=0,
+        attempt=1,
+        next_attempt_at=None,
+        last_error_code=None,
+        job_id=owned.id,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+
+    assert preparation.id == preparation_id
+    assert preparation.job_id == owned.id
+
+
+@pytest.mark.parametrize("foreign_scope", ("kind", "project"))
+def test_current_artifact_rejects_a_foreign_scope_successor(
+    session, foreign_scope: str
+) -> None:
+    repository, project, _ = _repository_with_preparation(session)
+    first = repository.append_artifact(
+        project_id=project.id,
+        kind="business_map",
+        input_hash="5" * 64,
+        payload={"segment": "search"},
+        source_refs=[],
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    foreign_project = _project(session) if foreign_scope == "project" else project
+    foreign_kind = "business_map" if foreign_scope == "project" else "driver_map"
+    foreign = repository.append_artifact(
+        project_id=foreign_project.id,
+        kind=foreign_kind,
+        input_hash="6" * 64,
+        payload={"segment": "cloud"},
+        source_refs=[],
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    foreign_hash = CompanyResearchRepository.artifact_content_hash(
+        project_id=foreign.project_id,
+        kind=foreign.kind,
+        version=foreign.version,
+        supersedes_id=first.id,
+        input_hash=foreign.input_hash,
+        payload=foreign.payload,
+        source_refs=foreign.source_refs,
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_company_research_artifact_versions "
+        "SET supersedes_id = ?, content_hash = ? WHERE id = ?",
+        (first.id.hex, foreign_hash, foreign.id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(CompanyResearchIntegrityError, match="successor"):
+        repository.current_artifact(project.id, "business_map")
+
+
+def test_current_artifact_rejects_a_cycle_instead_of_returning_no_current(
+    session,
+) -> None:
+    repository, project, _ = _repository_with_preparation(session)
+    first = repository.append_artifact(
+        project_id=project.id,
+        kind="business_map",
+        input_hash="7" * 64,
+        payload={"segment": "search"},
+        source_refs=[],
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    second = repository.append_artifact(
+        project_id=project.id,
+        kind="business_map",
+        input_hash="8" * 64,
+        payload={"segment": "cloud"},
+        source_refs=[],
+        expected_parent_id=first.id,
+        created_at=NOW,
+    )
+    cycle_hash = CompanyResearchRepository.artifact_content_hash(
+        project_id=first.project_id,
+        kind=first.kind,
+        version=first.version,
+        supersedes_id=second.id,
+        input_hash=first.input_hash,
+        payload=first.payload,
+        source_refs=first.source_refs,
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_company_research_artifact_versions "
+        "SET supersedes_id = ?, content_hash = ? WHERE id = ?",
+        (second.id.hex, cycle_hash, first.id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(CompanyResearchIntegrityError, match="cycle"):
+        repository.current_artifact(project.id, "business_map")
 
 
 def test_repository_writes_remain_owned_by_the_callers_transaction(session) -> None:

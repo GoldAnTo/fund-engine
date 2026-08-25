@@ -9,9 +9,9 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import exists, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session
 
 from app.models.ledger import ConflictError, ValidationError
 from app.models.operational import Job
@@ -174,7 +174,26 @@ class CompanyResearchRepository:
             last_error_code = self._require_nonempty_text(
                 last_error_code, "last_error_code", 96
             )
+        job: Job | None = None
+        preparation_id: UUID | None = None
+        if job_id is not None:
+            job = self._session.get(Job, job_id)
+            if (
+                job is None
+                or job.kind != _PREPARE_JOB_KIND
+                or job.target_type != _PREPARE_JOB_TARGET_TYPE
+                or job.target_id is None
+                or job.research_case_id is not None
+            ):
+                raise ValidationError(
+                    "company research preparation job ownership is invalid"
+                )
+            # The job is created first with the UUID it owns; persist the new
+            # preparation at that exact UUID so no later attachment can turn a
+            # legacy or unrelated job into an owner.
+            preparation_id = job.target_id
         row = CompanyResearchPreparation(
+            id=preparation_id,
             project_id=project_id,
             idempotency_key=self._require_nonempty_text(
                 idempotency_key, "idempotency_key", 255
@@ -352,17 +371,11 @@ class CompanyResearchRepository:
     ) -> CompanyResearchArtifactVersion | None:
         if kind not in COMPANY_RESEARCH_ARTIFACT_KINDS:
             raise ValidationError("company research artifact kind is invalid")
-        successor = aliased(CompanyResearchArtifactVersion)
         statement = (
             select(CompanyResearchArtifactVersion)
             .where(
                 CompanyResearchArtifactVersion.project_id == project_id,
                 CompanyResearchArtifactVersion.kind == kind,
-                ~exists(
-                    select(successor.id).where(
-                        successor.supersedes_id == CompanyResearchArtifactVersion.id
-                    )
-                ),
             )
             .order_by(
                 CompanyResearchArtifactVersion.version.desc(),
@@ -371,11 +384,63 @@ class CompanyResearchRepository:
         )
         if lock:
             statement = statement.with_for_update()
-        heads = tuple(self._session.scalars(statement))
+        rows = tuple(self._session.scalars(statement))
+        if not rows:
+            return None
+        rows_by_id = {row.id: row for row in rows}
+        for row in rows:
+            self._validate_artifact_row(row)
+
+        successors = tuple(
+            self._session.scalars(
+                select(CompanyResearchArtifactVersion).where(
+                    CompanyResearchArtifactVersion.supersedes_id.in_(rows_by_id)
+                )
+            )
+        )
+        parent_ids_with_successors: set[UUID] = set()
+        for successor in successors:
+            self._validate_artifact_row(successor)
+            parent = rows_by_id[successor.supersedes_id]
+            if (
+                successor.project_id != parent.project_id
+                or successor.kind != parent.kind
+            ):
+                raise CompanyResearchIntegrityError(
+                    "company research artifact successor crosses project or kind"
+                )
+            parent_ids_with_successors.add(parent.id)
+
+        for row in rows:
+            seen: set[UUID] = set()
+            current = row
+            while current.supersedes_id is not None:
+                if current.id in seen:
+                    raise CompanyResearchIntegrityError(
+                        "company research artifact chain contains a cycle"
+                    )
+                seen.add(current.id)
+                parent = rows_by_id.get(current.supersedes_id)
+                if parent is None:
+                    parent = self.artifact(current.supersedes_id)
+                    if parent is None:
+                        raise CompanyResearchIntegrityError(
+                            "company research artifact parent is missing"
+                        )
+                    raise CompanyResearchIntegrityError(
+                        "company research artifact parent crosses project or kind"
+                    )
+                current = parent
+
+        heads = tuple(
+            row for row in rows if row.id not in parent_ids_with_successors
+        )
+        if not heads:
+            raise CompanyResearchIntegrityError(
+                "company research artifact rows have no current leaf"
+            )
         if len(heads) > 1:
             raise ConflictError("multiple current artifact heads")
-        if not heads:
-            return None
         self.artifact_chain(heads[0].id)
         return heads[0]
 
