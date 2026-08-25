@@ -63,7 +63,7 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
 function isUuid(value: unknown): value is string {
   return typeof value === "string" && UUID_PATTERN.test(value);
@@ -1034,8 +1034,18 @@ export class InvestmentResearchApi {
     return value;
   }
 
-  previewCompanyResearch(body: CompanyResearchPreviewRequest): Promise<CompanyResearchPreview> {
-    return requestJson(`${this.root}/company-research/preview`, isCompanyResearchPreview, 200, jsonInit("POST", body));
+  async previewCompanyResearch(body: CompanyResearchPreviewRequest): Promise<CompanyResearchPreview> {
+    const value = await requestJson(
+      `${this.root}/company-research/preview`,
+      isCompanyResearchPreview,
+      200,
+      jsonInit("POST", body),
+    );
+    if (value.company.object_id !== body.company_id
+      || !sameInstant(value.cutoff_at, body.cutoff_at)) {
+      mismatch("company-research preview binding mismatch");
+    }
+    return value;
   }
 
   async initializeCompanyResearch(

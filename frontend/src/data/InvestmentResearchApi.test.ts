@@ -335,6 +335,52 @@ describe("InvestmentResearchApi", () => {
       .rejects.toMatchObject({ code: "invalid_response" });
   });
 
+  it("rejects a company-research preview for a different company", async () => {
+    const invalidPreview = companyResearchPreviewBody();
+    invalidPreview.company.object_id = ids.securityA;
+    vi.stubGlobal("fetch", vi.fn(async () => response(invalidPreview)));
+
+    await expect(new InvestmentResearchApi().previewCompanyResearch({
+      schema_version: "underwriting.v1",
+      company_id: ids.company,
+      cutoff_at: now,
+    })).rejects.toMatchObject({ code: "identity_mismatch" });
+  });
+
+  it("binds company-research preview cutoff to the requested instant", async () => {
+    const api = new InvestmentResearchApi();
+    const validPreview = companyResearchPreviewBody();
+    const invalidPreview = companyResearchPreviewBody();
+    invalidPreview.cutoff_at = "2026-08-24T00:00:01Z";
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(response(validPreview))
+      .mockResolvedValueOnce(response(invalidPreview));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(api.previewCompanyResearch({
+      schema_version: "underwriting.v1",
+      company_id: ids.company,
+      cutoff_at: "2026-08-24T08:00:00+08:00",
+    })).resolves.toMatchObject({ cutoff_at: now });
+    await expect(api.previewCompanyResearch({
+      schema_version: "underwriting.v1",
+      company_id: ids.company,
+      cutoff_at: now,
+    })).rejects.toMatchObject({ code: "identity_mismatch" });
+  });
+
+  it("rejects upper-case hashes in company-research preview output", async () => {
+    const invalidPreview = companyResearchPreviewBody();
+    invalidPreview.preview_hash = "C".repeat(64);
+    vi.stubGlobal("fetch", vi.fn(async () => response(invalidPreview)));
+
+    await expect(new InvestmentResearchApi().previewCompanyResearch({
+      schema_version: "underwriting.v1",
+      company_id: ids.company,
+      cutoff_at: now,
+    })).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
   it("rejects a zero-length rights interval from the service", async () => {
     const invalid = rightsBody();
     Reflect.set(invalid, "effective_to", invalid.effective_from);

@@ -18196,6 +18196,15 @@ export interface operations {
                     "application/json": components["schemas"]["CompanyResearchProjectResponse"];
                 };
             };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
             /** @description Conflict */
             409: {
                 headers: {

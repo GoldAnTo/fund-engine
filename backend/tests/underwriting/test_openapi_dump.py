@@ -280,6 +280,14 @@ def test_company_research_openapi_is_closed_and_hides_internal_foundation_ids() 
     assert schemas["CompanyResearchPreviewResponse"]["additionalProperties"] is False
     assert schemas["CompanyResearchProjectResponse"]["additionalProperties"] is False
 
+    retry = openapi["paths"][
+        "/api/underwriting/v1/product/company-research/projects/{project_id}/retry"
+    ]["post"]
+    assert set(retry["responses"]) == {"202", "404", "409", "422"}
+    assert retry["responses"]["404"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/UnderwritingErrorEnvelope")
+
 
 def test_product_openapi_paths_follow_all_legacy_underwriting_paths() -> None:
     paths = tuple(app.openapi()["paths"])

@@ -195,7 +195,7 @@ def get_company_research_project(
     "/projects/{project_id}/retry",
     response_model=CompanyResearchProjectResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    responses=WRITE_ERROR_RESPONSES,
+    responses={**READ_ERROR_RESPONSES, **WRITE_ERROR_RESPONSES},
 )
 def retry_company_research_project(
     project_id: UUID, db: DbSession
