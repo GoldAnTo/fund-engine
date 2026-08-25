@@ -15,6 +15,8 @@ from app.models import research_protocol  # noqa: F401
 from app.models import research_preparation  # noqa: F401
 from app.models import research_expression  # noqa: F401
 from app.models import source_governance  # noqa: F401
+from app.underwriting.persistence import models as underwriting  # noqa: F401
+from app.underwriting.persistence import research_models as underwriting_research  # noqa: F401
 from app.models import versions  # noqa: F401
 from app.models.ledger import Base  # noqa: F401
 
@@ -31,6 +33,8 @@ __all__ = [
     "research_preparation",
     "research_expression",
     "source_governance",
+    "underwriting",
+    "underwriting_research",
     "versions",
     "ledger",
 ]

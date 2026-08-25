@@ -1,5 +1,12 @@
 import "@testing-library/jest-dom";
 
+// Candidate-evidence integrity verification uses the browser Web Crypto API.
+// jsdom does not expose it, while Vitest runs on Node where it is available.
+if (!globalThis.crypto?.subtle) {
+  const { webcrypto } = await import(["node", "crypto"].join(":"));
+  Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
+}
+
 // @xyflow/react relies on ResizeObserver and DOMRect measurement when
 // rendered under jsdom. jsdom itself does not provide either, so we add
 // minimal polyfills so component-level tests can mount React Flow without

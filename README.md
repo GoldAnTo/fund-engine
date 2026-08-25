@@ -17,6 +17,21 @@
 2. **AI 与人工边界可见** — AI 草案永久标记为临时，人工复核独立追加、不覆盖
 3. **时点可回放** — 历史截止日之后的材料从所有视图中消失
 
+## 已审阅行业候选证据：发布边界
+
+行业候选证据是可审计的资料记录，不是行业结论或模型输入。一个候选 dossier 必须
+绑定冻结的来源清单和历史截止日：每个来源、精确 locator、可得时间、授权/留存边界
+与内容哈希都要通过检查。发布还需要两位不同、可审计身份的独立批准：
+`provenance` 审阅来源、授权、定位和时间；`methodology` 审阅范围、统计口径、图表
+转录误差、假设/Unknown 标签及禁止拼接规则。
+
+即使两项审阅均已批准，发布结果仍只是 `industry_evidence_candidate` 和
+`not_answerable` 研究债务。它不会写入正式机制、IndustryState、情景、敞口、Earnings
+或预测，也不会产生估值、价格或投资建议。以后若要形成正式 IndustryState，必须另行
+冻结独立的、可复核的指标定义与观察值，完成来源覆盖/口径核对，并由因果审阅明确
+传导方向、替代解释和 falsifier；候选本身不能自动满足其中任何一项。因而系统不把
+候选数值表述为实际利用率或价格机制。
+
 ## 架构
 
 ```
@@ -79,7 +94,8 @@ scripts/one-click-runtime.sh up
 scripts/verify-one-click-runtime.sh
 ```
 
-前端入口是 [http://127.0.0.1:8080/events/new](http://127.0.0.1:8080/events/new)，
+独立投资研究入口是 [http://127.0.0.1:8080/research](http://127.0.0.1:8080/research)；
+旧事件研究入口仍是 [http://127.0.0.1:8080/events/new](http://127.0.0.1:8080/events/new)。
 API 地址是 [http://127.0.0.1:8000](http://127.0.0.1:8000)。查看状态、停止新运行环境或
 恢复旧应用服务分别使用：
 
@@ -89,9 +105,38 @@ scripts/one-click-runtime.sh down
 scripts/one-click-runtime.sh rollback
 ```
 
+备份和恢复都要求 API、前端和 worker 已停止，但 PostgreSQL 保持运行，以保证数据库与
+文件处于同一个静止边界。备份目标必须是尚不存在的具体绝对目录。恢复会先校验精确的
+三件套、SHA-256 和 tar 路径，再在隔离的暂存数据库与文件卷中验证迁移、身份 fixture
+和研究版本回放，通过后才切换。恢复只会写入带有当前 Compose project/logical-volume
+标签的文件卷；临时卷由 Docker 随机命名，并以本次恢复的高熵 operation UUID 加上
+project、purpose 标签限定清理范围：
+
+```bash
+scripts/one-click-runtime.sh backup /absolute/path/to/new-backup
+scripts/one-click-runtime.sh restore /absolute/path/to/backup
+```
+
+`up` 也会在启动 PostgreSQL 或 migrate 前核对数据库卷的 Compose project 和 logical
+volume 标签；新环境先只执行 `compose create postgres`，标签复核通过后才启动服务。
+恢复暂存库和原库快照名使用独立的 128-bit operation UUID。若 `createdb` 因同名库而
+失败，清理逻辑不会删除那个既有数据库。
+
+tar 校验默认限制为：压缩文件 1 GiB、100,000 个成员、单文件 512 MiB、解压总量
+2 GiB、最大压缩比 200；同时只接受普通文件和零负载目录组成的简单 USTAR，不接受
+PAX/GNU 扩展头、链接或特殊文件。checksum manifest 上限为 64 KiB，PostgreSQL dump
+上限为 8 GiB。可用同名的 `ONE_CLICK_BACKUP_MAX_COMPRESSED_BYTES`、
+`ONE_CLICK_BACKUP_MAX_MEMBERS`、`ONE_CLICK_BACKUP_MAX_SINGLE_FILE_BYTES`、
+`ONE_CLICK_BACKUP_MAX_TOTAL_BYTES` 和 `ONE_CLICK_BACKUP_MAX_COMPRESSION_RATIO`
+环境变量设置其他正整数上限；manifest 和 dump 对应
+`ONE_CLICK_BACKUP_MAX_MANIFEST_BYTES`、`ONE_CLICK_BACKUP_MAX_POSTGRES_DUMP_BYTES`。
+
 `init` 生成的本地凭证保存在忽略的 `.env.one-click.local`，不会打印密钥；不要提交或
-手工分享该文件。`down` 保留一键运行环境的数据卷。`rollback` 停止一键运行环境后，只恢复
+手工分享该文件。脚本拒绝符号链接、非普通文件或非当前用户持有的运行环境文件，并将
+权限收紧为 `0600`。`down` 保留一键运行环境的数据卷。`rollback` 停止一键运行环境后，只恢复
 本工具此前停止的旧应用容器。旧版 PostgreSQL 和 Keycloak 始终保留，既有数据不会被迁移或删除。
+LLM 与 Gildata 凭证是可选的：未配置时产品壳、CATL/Alphabet 身份底座和 worker
+心跳仍可运行，但任何实际 AI 操作会失败关闭，不会回退为 mock 研究结果。
 
 ### 一键自动研究运行条件
 

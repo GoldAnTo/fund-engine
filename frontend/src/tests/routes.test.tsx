@@ -7,6 +7,12 @@ import { ResearchOsRoutes } from "../app/routes";
 import { MockResearchAdapter } from "../data/mockResearchAdapter";
 import { MockResearchOsApi } from "../data/mockResearchOsApi";
 import { resetResearchClient, setResearchClient } from "../data/researchClient";
+import {
+  resetUnderwritingResearchApi,
+  setUnderwritingResearchApi,
+  type ResearchRevisionBoundary,
+  type UnderwritingResearchApi,
+} from "../data/underwritingResearchApi";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -31,6 +37,7 @@ describe("Research OS route inventory", () => {
   beforeEach(() => {
     resetResearchClient();
     resetResearchOsApi();
+    resetUnderwritingResearchApi();
     fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -38,6 +45,7 @@ describe("Research OS route inventory", () => {
   afterEach(() => {
     resetResearchClient();
     resetResearchOsApi();
+    resetUnderwritingResearchApi();
     vi.unstubAllGlobals();
   });
 
@@ -154,5 +162,74 @@ describe("Research OS route inventory", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("backend_unavailable");
     expect(screen.getByRole("heading", { name: "无法读取研究准备" })).toBeVisible();
     expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("isolates a deep-linked archive and identifies it from its checked history", async () => {
+    const revision = {
+      schema_version: "underwriting.v1" as const,
+      id: "revision-identity",
+      object_id: "company-id",
+      basis_id: "basis-id",
+      version_kind: "frozen-company-research",
+      sequence: 1,
+      content_hash: "a".repeat(64),
+      cutoff: "2025-05-15T15:59:59Z",
+      source_manifest_hash: "b".repeat(64),
+      parent_refs: [],
+    };
+    const boundary: ResearchRevisionBoundary = {
+      schema_version: "underwriting.v1",
+      revision_id: revision.id,
+      object_id: revision.object_id,
+      basis_id: revision.basis_id,
+      version_kind: revision.version_kind,
+      content_hash: revision.content_hash,
+      cutoff: revision.cutoff,
+      source_manifest_hash: revision.source_manifest_hash,
+      answerability: {
+        schema_version: "underwriting.v1",
+        reference: "00000000-0000-4000-8000-000000000001",
+        content_hash: "c".repeat(64),
+        state: "not_answerable",
+        blockers: ["missing_key_baseline"],
+        research_debt_keys: ["industry_utilisation"],
+        resolvable_within_mandate: true,
+        resolution_requirements: ["核验行业有效产能与利用率口径"],
+      },
+      unknown_evidence_gaps: [],
+    };
+    setUnderwritingResearchApi({
+      listArchives: vi.fn(),
+      history: vi.fn().mockResolvedValue({
+        schema_version: "underwriting.v1",
+        object_id: "company-id",
+        version_kind: "frozen-company-research",
+        object_kind: "company",
+        canonical_name: "只从冻结历史返回的公司",
+        external_key: "IMMUTABLE.ONLY",
+        revisions: [revision],
+      }),
+      revision: vi.fn().mockResolvedValue(revision),
+      diff: vi.fn(),
+      boundary: vi.fn().mockResolvedValue(boundary),
+      candidateEvidence: vi.fn(),
+    } satisfies UnderwritingResearchApi);
+
+    render(
+      <MemoryRouter initialEntries={["/underwriting/research/company-id/frozen-company-research"]}>
+        <ResearchOsRoutes />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("navigation", { name: "不可变研究档案导航" })).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: "研究工作台导航" })).not.toBeInTheDocument();
+    const identityHeading = await screen.findByRole("heading", { name: "只从冻结历史返回的公司" });
+    expect(identityHeading).toBeVisible();
+    expect(identityHeading.parentElement).toHaveTextContent("IMMUTABLE.ONLY");
+    expect(identityHeading.parentElement).toHaveTextContent("公司");
+    expect(await screen.findByRole("complementary", { name: "研究边界" }))
+      .toHaveTextContent("研究尚需验证");
+    expect(screen.getByText("核验行业有效产能与利用率口径")).toBeVisible();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
