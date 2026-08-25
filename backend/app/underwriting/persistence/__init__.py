@@ -47,6 +47,17 @@ from app.underwriting.persistence.repository import (
 from app.underwriting.persistence.research_repository import (
     UnderwritingResearchRepository,
 )
+from app.underwriting.persistence.company_research_models import (
+    COMPANY_RESEARCH_ARTIFACT_KINDS,
+    COMPANY_RESEARCH_PREPARATION_STATUSES,
+    CompanyResearchArtifactVersion,
+    CompanyResearchEvent,
+    CompanyResearchPreparation,
+)
+from app.underwriting.persistence.company_research_repository import (
+    CompanyResearchIntegrityError,
+    CompanyResearchRepository,
+)
 
 __all__ = [
     "UnderwritingAnswerabilityEvaluation",
@@ -86,4 +97,11 @@ __all__ = [
     "StaleParentError",
     "UnderwritingRepository",
     "UnderwritingResearchRepository",
+    "COMPANY_RESEARCH_ARTIFACT_KINDS",
+    "COMPANY_RESEARCH_PREPARATION_STATUSES",
+    "CompanyResearchArtifactVersion",
+    "CompanyResearchEvent",
+    "CompanyResearchPreparation",
+    "CompanyResearchIntegrityError",
+    "CompanyResearchRepository",
 ]
