@@ -9,13 +9,23 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.models.ledger import Base, ConflictError, ValidationError
+from app.models.operational import Job
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchEvent,
     CompanyResearchPreparation,
 )
-from app.underwriting.persistence.models import UnderwritingResearchObject
-from app.underwriting.persistence.product_models import UnderwritingResearchProject
+from app.underwriting.persistence.models import (
+    UnderwritingMandateVersion,
+    UnderwritingResearchObject,
+)
+from app.underwriting.persistence.product_models import (
+    UnderwritingResearchAgendaVersion,
+    UnderwritingResearchProject,
+    UnderwritingResearchProjectSecurity,
+    UnderwritingResearchScopeVersion,
+    UnderwritingWorkspaceDraft,
+)
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchInitializer,
 )
@@ -59,6 +69,22 @@ def _fresh_initializer(session) -> tuple[CompanyResearchInitializer, object]:
     )
     assert alphabet is not None
     return CompanyResearchInitializer(session, now=lambda: NOW), alphabet
+
+
+def _assert_no_initialized_foundation(session) -> None:
+    """The initializer must leave no partial durable foundation on failure."""
+    for model in (
+        UnderwritingResearchProject,
+        UnderwritingResearchProjectSecurity,
+        UnderwritingMandateVersion,
+        UnderwritingResearchScopeVersion,
+        UnderwritingResearchAgendaVersion,
+        UnderwritingWorkspaceDraft,
+        CompanyResearchPreparation,
+        CompanyResearchEvent,
+        Job,
+    ):
+        assert session.scalar(select(func.count()).select_from(model)) == 0
 
 
 def test_preview_is_read_only_and_resolves_all_effective_alphabet_securities(
@@ -275,14 +301,53 @@ def test_caller_rollback_removes_every_initialized_product_row(session) -> None:
 
     session.rollback()
 
-    assert (
-        session.scalar(select(func.count()).select_from(UnderwritingResearchProject))
-        == 0
-    )
-    assert (
-        session.scalar(select(func.count()).select_from(CompanyResearchPreparation))
-        == 0
-    )
+    _assert_no_initialized_foundation(session)
+
+
+@pytest.mark.parametrize("failing_stage", ("project_creation", "job_add", "job_flush"))
+def test_initialize_rolls_back_a_partial_foundation_at_write_boundaries(
+    session, monkeypatch, failing_stage: str
+) -> None:
+    initializer, alphabet = _initializer(session)
+    preview = initializer.preview(company_id=alphabet.id, cutoff_at=NOW)
+
+    def fail_after_project_creation(*args, **kwargs):
+        original_create_project(*args, **kwargs)
+        raise RuntimeError("injected project creation failure")
+
+    def fail_after_job_add(instance, **kwargs):
+        original_add(instance, **kwargs)
+        if isinstance(instance, Job):
+            raise RuntimeError("injected job add failure")
+
+    def fail_after_job_flush(objects=None):
+        original_flush(objects)
+        if objects and any(isinstance(value, Job) for value in objects):
+            raise RuntimeError("injected job flush failure")
+
+    original_create_project = initializer._products.create_project
+    original_add = session.add
+    original_flush = session.flush
+    target, attribute, replacement = {
+        "project_creation": (
+            initializer._products,
+            "create_project",
+            fail_after_project_creation,
+        ),
+        "job_add": (session, "add", fail_after_job_add),
+        "job_flush": (session, "flush", fail_after_job_flush),
+    }[failing_stage]
+    monkeypatch.setattr(target, attribute, replacement)
+
+    with pytest.raises(RuntimeError, match="injected .* failure"):
+        initializer.initialize(
+            preview_hash=preview.input_hash,
+            company_id=alphabet.id,
+            cutoff_at=NOW,
+            idempotency_key=f"alphabet-write-boundary-{failing_stage}",
+        )
+
+    _assert_no_initialized_foundation(session)
 
 
 @pytest.mark.parametrize(
@@ -324,11 +389,4 @@ def test_initialize_rolls_back_all_prior_stages_when_one_stage_fails(
             idempotency_key=f"alphabet-stage-{failing_method}",
         )
 
-    assert (
-        session.scalar(select(func.count()).select_from(UnderwritingResearchProject))
-        == 0
-    )
-    assert (
-        session.scalar(select(func.count()).select_from(CompanyResearchPreparation))
-        == 0
-    )
+    _assert_no_initialized_foundation(session)
