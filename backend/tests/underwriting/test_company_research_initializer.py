@@ -318,7 +318,7 @@ def test_initialize_rolls_back_a_partial_foundation_at_write_boundaries(
     def fail_after_job_add(instance, **kwargs):
         original_add(instance, **kwargs)
         if isinstance(instance, Job):
-            raise RuntimeError("injected job add failure")
+            raise TypeError("injected job add failure")
 
     def fail_after_job_flush(objects=None):
         original_flush(objects)
@@ -339,7 +339,7 @@ def test_initialize_rolls_back_a_partial_foundation_at_write_boundaries(
     }[failing_stage]
     monkeypatch.setattr(target, attribute, replacement)
 
-    with pytest.raises(RuntimeError, match="injected .* failure"):
+    with pytest.raises((RuntimeError, TypeError), match="injected .* failure"):
         initializer.initialize(
             preview_hash=preview.input_hash,
             company_id=alphabet.id,
