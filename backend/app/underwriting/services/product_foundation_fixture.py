@@ -403,6 +403,44 @@ class ProductFoundationFixtureService:
             )
         return aliases
 
+    def _relations(
+        self,
+        *,
+        objects: Mapping[str, UnderwritingResearchObject],
+        relation_type: str,
+        expected_relations: set[tuple[object, object]],
+    ) -> None:
+        fixture_object_ids = [row.id for row in objects.values()]
+        existing_relations = set(
+            self._session.execute(
+                select(
+                    UnderwritingObjectRelation.parent_id,
+                    UnderwritingObjectRelation.child_id,
+                ).where(
+                    UnderwritingObjectRelation.relation_type == relation_type,
+                    or_(
+                        UnderwritingObjectRelation.parent_id.in_(fixture_object_ids),
+                        UnderwritingObjectRelation.child_id.in_(fixture_object_ids),
+                    ),
+                )
+            )
+        )
+        if not existing_relations.issubset(expected_relations):
+            raise ValidationError("product foundation relation conflict")
+        for parent_id, child_id in sorted(
+            expected_relations - existing_relations,
+            key=lambda pair: (str(pair[0]), str(pair[1])),
+        ):
+            self._session.add(
+                UnderwritingObjectRelation(
+                    parent_id=parent_id,
+                    child_id=child_id,
+                    relation_type=relation_type,
+                    created_at=self._now(),
+                )
+            )
+        self._session.flush()
+
     def load(self, fixture: ProductFoundationFixture) -> ProductFoundationImport:
         validate_product_foundation_fixture(fixture)
         self._serialize_load()
@@ -443,46 +481,41 @@ class ProductFoundationFixtureService:
                     currency=security.currency,
                     effective_from=security.effective_from,
                 )
+            for industry in fixture.industries:
+                row = self._object(
+                    kind="industry",
+                    external_key=industry.external_key,
+                    canonical_name=industry.canonical_name,
+                )
+                objects[industry.external_key] = row
+                identities[industry.external_key] = self._identity(
+                    research_object=row,
+                    canonical_name=industry.canonical_name,
+                    symbol=None,
+                    exchange=None,
+                    share_class=None,
+                    currency=None,
+                    effective_from=industry.effective_from,
+                )
 
             aliases = self._aliases(fixture, objects)
 
-            expected_relations = {
-                (objects[item.company_key].id, objects[item.external_key].id)
-                for item in fixture.securities
-            }
-            fixture_object_ids = [row.id for row in objects.values()]
-            existing_relations = set(
-                self._session.execute(
-                    select(
-                        UnderwritingObjectRelation.parent_id,
-                        UnderwritingObjectRelation.child_id,
-                    ).where(
-                        UnderwritingObjectRelation.relation_type
-                        == "company_has_security",
-                        or_(
-                            UnderwritingObjectRelation.parent_id.in_(
-                                fixture_object_ids
-                            ),
-                            UnderwritingObjectRelation.child_id.in_(fixture_object_ids),
-                        ),
-                    )
-                )
+            self._relations(
+                objects=objects,
+                relation_type="company_has_security",
+                expected_relations={
+                    (objects[item.company_key].id, objects[item.external_key].id)
+                    for item in fixture.securities
+                },
             )
-            if not existing_relations.issubset(expected_relations):
-                raise ValidationError("product foundation relation conflict")
-            for parent_id, child_id in sorted(
-                expected_relations - existing_relations,
-                key=lambda pair: (str(pair[0]), str(pair[1])),
-            ):
-                self._session.add(
-                    UnderwritingObjectRelation(
-                        parent_id=parent_id,
-                        child_id=child_id,
-                        relation_type="company_has_security",
-                        created_at=self._now(),
-                    )
-                )
-            self._session.flush()
+            self._relations(
+                objects=objects,
+                relation_type="industry_exposes_company",
+                expected_relations={
+                    (objects[item.industry_key].id, objects[item.company_key].id)
+                    for item in fixture.industry_company_relations
+                },
+            )
 
             for fixture_rights in fixture.rights:
                 rights[fixture_rights.security_key] = self._rights(

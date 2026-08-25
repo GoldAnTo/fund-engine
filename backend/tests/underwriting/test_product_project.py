@@ -1312,12 +1312,14 @@ def test_foundation_fixture_loads_exact_temporal_identities_relations_and_rights
     assert set(loaded.objects) == {
         "CN:300750:COMPANY",
         "US:ALPHABET:COMPANY",
+        "GLOBAL:INTERNET_SERVICES:INDUSTRY",
         "SZSE:300750",
         "NASDAQ:GOOGL",
         "NASDAQ:GOOG",
     }
     assert loaded.objects["CN:300750:COMPANY"].kind == "company"
     assert loaded.objects["US:ALPHABET:COMPANY"].kind == "company"
+    assert loaded.objects["GLOBAL:INTERNET_SERVICES:INDUSTRY"].kind == "industry"
     assert loaded.objects["SZSE:300750"].kind == "security"
     assert loaded.objects["US:ALPHABET:COMPANY"].canonical_name == "Alphabet Inc."
     assert loaded.identities["US:ALPHABET:COMPANY"].canonical_name == "Alphabet Inc."
@@ -1375,6 +1377,11 @@ def test_foundation_fixture_loads_exact_temporal_identities_relations_and_rights
             loaded.objects["US:ALPHABET:COMPANY"].id,
             loaded.objects["NASDAQ:GOOG"].id,
             "company_has_security",
+        ),
+        (
+            loaded.objects["GLOBAL:INTERNET_SERVICES:INDUSTRY"].id,
+            loaded.objects["US:ALPHABET:COMPANY"].id,
+            "industry_exposes_company",
         ),
     }
     assert len({rights.id for rights in loaded.rights.values()}) == 3
@@ -1865,17 +1872,17 @@ def test_foundation_fixture_is_idempotent_content_checked_and_contains_no_resear
     assert second.rights["SZSE:300750"].id == first.rights["SZSE:300750"].id
     assert (
         session.scalar(select(func.count()).select_from(UnderwritingResearchObject))
-        == 5
+        == 6
     )
     assert (
         session.scalar(
             select(func.count()).select_from(UnderwritingObjectIdentityVersion)
         )
-        == 5
+        == 6
     )
     assert (
         session.scalar(select(func.count()).select_from(UnderwritingObjectRelation))
-        == 3
+        == 4
     )
     assert (
         session.scalar(
@@ -2028,6 +2035,48 @@ def test_custom_foundation_manifest_rejects_noncanonical_text_and_dates(
     ],
 )
 def test_custom_foundation_manifest_strictly_validates_aliases(
+    tmp_path, mutate, message
+) -> None:
+    path = _write_checksum_validated_manifest(tmp_path, mutate)
+
+    with pytest.raises(ValidationError, match=message):
+        load_product_foundation_fixture(path)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda raw: raw.__setitem__("industries", []),
+            "industries must be a nonempty array",
+        ),
+        (
+            lambda raw: raw["industries"][0].__setitem__(
+                "external_key", "GLOBAL:INTERNET_SERVICES:COMPANY"
+            ),
+            "wrong object kind",
+        ),
+        (
+            lambda raw: raw["industry_company_relations"].append(
+                raw["industry_company_relations"][0].copy()
+            ),
+            "duplicate industry company relation",
+        ),
+        (
+            lambda raw: raw["industry_company_relations"][0].__setitem__(
+                "industry_key", "US:ALPHABET:COMPANY"
+            ),
+            "wrong object kind",
+        ),
+        (
+            lambda raw: raw["industry_company_relations"][0].__setitem__(
+                "company_key", "GLOBAL:INTERNET_SERVICES:INDUSTRY"
+            ),
+            "wrong object kind",
+        ),
+    ],
+)
+def test_custom_foundation_manifest_strictly_validates_industry_relations(
     tmp_path, mutate, message
 ) -> None:
     path = _write_checksum_validated_manifest(tmp_path, mutate)
@@ -2613,6 +2662,78 @@ def test_foundation_fixture_rejects_non_manifest_company_parent_for_fixture_secu
     assert (
         session.scalar(
             select(func.count()).select_from(UnderwritingSecurityRightsVersion)
+        )
+        == 0
+    )
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingObjectRelation))
+        == 1
+    )
+
+
+@pytest.mark.parametrize(
+    ("parent_key", "child_key", "relation_type"),
+    [
+        (
+            "GLOBAL:INTERNET_SERVICES:INDUSTRY",
+            "CN:300750:COMPANY",
+            "industry_exposes_company",
+        ),
+        (
+            "US:ALPHABET:COMPANY",
+            "GLOBAL:INTERNET_SERVICES:INDUSTRY",
+            "industry_exposes_company",
+        ),
+        (
+            "GLOBAL:INTERNET_SERVICES:INDUSTRY",
+            "US:ALPHABET:COMPANY",
+            "company_has_security",
+        ),
+    ],
+)
+def test_foundation_fixture_rejects_non_exact_industry_company_relations_atomically(
+    session, parent_key, child_key, relation_type
+) -> None:
+    industry = _object(
+        session,
+        "industry",
+        "GLOBAL:INTERNET_SERVICES:INDUSTRY",
+        "Internet Services",
+    )
+    alphabet = _object(
+        session,
+        "company",
+        "US:ALPHABET:COMPANY",
+        "Alphabet Inc.",
+    )
+    catl = _object(
+        session,
+        "company",
+        "CN:300750:COMPANY",
+        "宁德时代新能源科技股份有限公司（CATL）",
+    )
+    objects = {
+        industry.external_key: industry,
+        alphabet.external_key: alphabet,
+        catl.external_key: catl,
+    }
+    _relation(session, objects[parent_key].id, objects[child_key].id, relation_type)
+
+    with pytest.raises(ValidationError, match="relation conflict"):
+        ProductFoundationFixtureService(session, now=lambda: NOW).load(
+            load_product_foundation_fixture()
+        )
+
+    assert {
+        row.external_key for row in session.scalars(select(UnderwritingResearchObject))
+    } == {
+        "GLOBAL:INTERNET_SERVICES:INDUSTRY",
+        "US:ALPHABET:COMPANY",
+        "CN:300750:COMPANY",
+    }
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingObjectIdentityVersion)
         )
         == 0
     )
