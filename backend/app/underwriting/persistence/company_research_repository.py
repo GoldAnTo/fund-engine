@@ -40,6 +40,22 @@ class CompanyResearchRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
+    def _job_for_update(self, job_id: UUID) -> Job | None:
+        """Read a Job under the caller transaction's row lock when supported."""
+        return self._session.scalar(
+            select(Job).where(Job.id == job_id).with_for_update()
+        )
+
+    def _preparation_for_update(
+        self, preparation_id: UUID
+    ) -> CompanyResearchPreparation | None:
+        """Serialize competing attachments to the mutable preparation row."""
+        return self._session.scalar(
+            select(CompanyResearchPreparation)
+            .where(CompanyResearchPreparation.id == preparation_id)
+            .with_for_update()
+        )
+
     def _flush_in_savepoint(self, row: Any) -> Any:
         """Flush without committing or poisoning an outer SQLite transaction."""
         connection = self._session.connection()
@@ -177,7 +193,7 @@ class CompanyResearchRepository:
         job: Job | None = None
         preparation_id: UUID | None = None
         if job_id is not None:
-            job = self._session.get(Job, job_id)
+            job = self._job_for_update(job_id)
             if (
                 job is None
                 or job.kind != _PREPARE_JOB_KIND
@@ -502,10 +518,10 @@ class CompanyResearchRepository:
         self, preparation_id: UUID, job_id: UUID
     ) -> CompanyResearchPreparation:
         """Attach only a generic Job that is scoped to this preparation exactly."""
-        preparation = self.preparation(preparation_id)
+        preparation = self._preparation_for_update(preparation_id)
         if preparation is None:
             raise ValidationError("company research preparation not found")
-        job = self._session.get(Job, job_id)
+        job = self._job_for_update(job_id)
         if (
             job is None
             or job.kind != _PREPARE_JOB_KIND

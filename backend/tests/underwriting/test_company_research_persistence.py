@@ -4,7 +4,8 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
+from sqlalchemy.dialects import postgresql, sqlite
 
 from app.models.ledger import ConflictError, ImmutableLedgerError, ValidationError
 from app.models.operational import Job
@@ -311,6 +312,93 @@ def test_add_preparation_binds_a_job_to_its_new_exact_target(session) -> None:
 
     assert preparation.id == preparation_id
     assert preparation.job_id == owned.id
+
+
+@pytest.mark.parametrize("operation", ("add", "attach"))
+def test_job_ownership_binding_locks_the_job_before_validation(session, operation: str) -> None:
+    """The Job discriminator must remain stable through the binding decision."""
+    repository, _, preparation = _repository_with_preparation(session)
+    legacy = Job(
+        kind="prepare_research",
+        status="queued",
+        progress=0,
+        attempt=1,
+        target_type="company_research_preparation",
+        target_id=preparation.id,
+        research_case_id=None,
+        created_at=NOW,
+    )
+    session.add(legacy)
+    session.flush()
+    statements = []
+
+    def _capture_job_select(execute_state) -> None:
+        statement = execute_state.statement
+        if execute_state.is_select and "FROM jobs" in str(statement):
+            statements.append(statement)
+
+    event.listen(session, "do_orm_execute", _capture_job_select)
+    try:
+        with pytest.raises(ValidationError, match="job ownership"):
+            if operation == "add":
+                repository.add_preparation(
+                    project_id=uuid.uuid4(),
+                    idempotency_key=f"prepare:{uuid.uuid4().hex}",
+                    request_hash="d" * 64,
+                    strategy_version="company-research-default.v1",
+                    status="queued",
+                    current_step="evidence_index",
+                    progress=0,
+                    attempt=1,
+                    next_attempt_at=None,
+                    last_error_code=None,
+                    job_id=legacy.id,
+                    created_at=NOW,
+                    updated_at=NOW,
+                )
+            else:
+                repository.attach_prepare_job(preparation.id, legacy.id)
+    finally:
+        event.remove(session, "do_orm_execute", _capture_job_select)
+
+    assert len(statements) == 1
+    assert "FOR UPDATE" in str(statements[0].compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE" not in str(statements[0].compile(dialect=sqlite.dialect()))
+
+
+def test_attach_prepare_job_locks_the_preparation_it_mutates(session) -> None:
+    repository, _, preparation = _repository_with_preparation(session)
+    owned = Job(
+        kind="prepare_company_research",
+        status="queued",
+        progress=0,
+        attempt=1,
+        target_type="company_research_preparation",
+        target_id=preparation.id,
+        research_case_id=None,
+        created_at=NOW,
+    )
+    session.add(owned)
+    session.flush()
+    statements = []
+
+    def _capture_preparation_select(execute_state) -> None:
+        statement = execute_state.statement
+        if (
+            execute_state.is_select
+            and "FROM uw_company_research_preparations" in str(statement)
+        ):
+            statements.append(statement)
+
+    event.listen(session, "do_orm_execute", _capture_preparation_select)
+    try:
+        assert repository.attach_prepare_job(preparation.id, owned.id).job_id == owned.id
+    finally:
+        event.remove(session, "do_orm_execute", _capture_preparation_select)
+
+    assert len(statements) == 1
+    assert "FOR UPDATE" in str(statements[0].compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE" not in str(statements[0].compile(dialect=sqlite.dialect()))
 
 
 @pytest.mark.parametrize("foreign_scope", ("kind", "project"))
