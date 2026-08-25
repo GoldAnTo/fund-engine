@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models import Base
 import app.underwriting.persistence as persistence
+import app.underwriting.persistence.product_models as product_models
 from app.models.ledger import (
     DELETE_PROTECTED_TABLES,
     IMMUTABLE_TABLES,
@@ -195,11 +196,43 @@ def test_research_object_alias_schema_contract() -> None:
         if isinstance(constraint, sa.CheckConstraint)
     }
     assert "length(trim(alias)) > 0" in checks
-    assert "normalized_alias = lower(trim(normalized_alias))" in checks
+    assert "normalized_alias = lower(trim(alias))" in checks
     assert {index.name for index in table.indexes} == {"ix_uw_object_alias_normalized"}
     assert table.c.alias.type.length == 160
     assert table.c.normalized_alias.type.length == 160
     assert table.c.locale.type.length == 16
+
+
+def test_alias_orm_rejects_a_normalized_value_unrelated_to_alias(session) -> None:
+    research_object = persistence.UnderwritingResearchObject(
+        kind="company",
+        external_key=f"normalization:{uuid.uuid4()}",
+        canonical_name="Normalization Test",
+        created_at=datetime(2026, 8, 24, tzinfo=UTC),
+    )
+    session.add(research_object)
+    session.flush()
+    session.add(
+        persistence.UnderwritingResearchObjectAlias(
+            object_id=research_object.id,
+            alias="Google",
+            normalized_alias="unrelated",
+            locale="en",
+            created_at=datetime(2026, 8, 24, tzinfo=UTC),
+        )
+    )
+
+    with pytest.raises((ValueError, IntegrityError)):
+        session.flush()
+
+
+def test_alias_normalizer_uses_nfc_trim_and_lower_without_casefolding() -> None:
+    normalizer = getattr(product_models, "normalize_research_object_alias", None)
+
+    assert normalizer is not None
+    assert normalizer("  Straße  ") == "straße"
+    assert normalizer("Strasse") == "strasse"
+    assert normalizer("E\N{COMBINING ACUTE ACCENT}cole") == "école"
 
 
 def _product_constraint_tables() -> list[sa.Table]:

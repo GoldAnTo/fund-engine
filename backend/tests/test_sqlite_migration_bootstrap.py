@@ -211,6 +211,7 @@ def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
     for duplicate_id, alias, normalized_alias in (
         ("44444444444444444444444444444444", "GOOGLE", "google"),
         ("55555555555555555555555555555555", "   ", "empty"),
+        ("66666666666666666666666666666666", "Google", "unrelated"),
     ):
         with pytest.raises(sa.exc.IntegrityError):
             with engine.begin() as connection:
@@ -228,6 +229,19 @@ def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
                         "now": datetime.now(UTC),
                     },
                 )
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_research_object_aliases "
+                "(id, object_id, alias, normalized_alias, locale, created_at) "
+                "VALUES (:id, :object_id, 'Straße', 'straße', 'de', :now)"
+            ),
+            {
+                "id": "77777777777777777777777777777777",
+                "object_id": object_id,
+                "now": datetime.now(UTC),
+            },
+        )
     for mutation in (
         "UPDATE uw_research_object_aliases SET alias = 'Changed' WHERE id = :id",
         "DELETE FROM uw_research_object_aliases WHERE id = :id",

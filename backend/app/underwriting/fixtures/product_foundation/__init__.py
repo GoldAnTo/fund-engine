@@ -14,6 +14,9 @@ from collections.abc import Mapping
 import unicodedata
 
 from app.models.ledger import ValidationError
+from app.underwriting.persistence.product_models import (
+    normalize_research_object_alias,
+)
 from app.underwriting.services.kernel import canonical_hash
 
 
@@ -239,7 +242,7 @@ def load_product_foundation_fixture(
         locale = _text(item["locale"], "alias.locale")
         if len(locale) > 16 or _LOCALE_PATTERN.fullmatch(locale) is None:
             raise ValidationError("product foundation alias.locale is invalid")
-        normalized_alias = alias.lower()
+        normalized_alias = normalize_research_object_alias(alias)
         if len(normalized_alias) > 160:
             raise ValidationError("product foundation normalized alias is too long")
         if normalized_alias in normalized_aliases:

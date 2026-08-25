@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -35,6 +36,7 @@ from app.underwriting.persistence.product_models import (
     UnderwritingRevisionManifest,
     UnderwritingSecurityRightsVersion,
     UnderwritingWorkspaceDraft,
+    normalize_research_object_alias,
 )
 from app.underwriting.domain.product_contracts import RevisionBoundaryInput
 from app.underwriting.persistence.repository import StaleParentError
@@ -42,6 +44,16 @@ from app.underwriting.services.kernel import canonical_hash
 
 
 _STALE_MESSAGE = "expected parent is not the version family head"
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectSearchOutcome:
+    rows: tuple[
+        tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion], ...
+    ]
+    had_raw_match: bool
+
+
 _CAS_CONSTRAINTS = {
     "uw_object_identity_versions": frozenset(
         {
@@ -402,8 +414,8 @@ class ProductRepository:
         query: str,
         as_of: datetime,
         limit: int,
-    ) -> list[tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion]]:
-        pattern = query.lower()
+    ) -> ObjectSearchOutcome:
+        pattern = normalize_research_object_alias(query)
 
         def effective_statement():
             candidate = aliased(UnderwritingObjectIdentityVersion)
@@ -467,7 +479,31 @@ class ProductRepository:
             for research_object, identity in self._session.execute(matches_statement)
         }
         if not matched:
-            return []
+            return ObjectSearchOutcome(rows=(), had_raw_match=False)
+
+        exact_alias_object_ids = set(
+            self._session.scalars(
+                select(UnderwritingResearchObjectAlias.object_id).where(
+                    UnderwritingResearchObjectAlias.object_id.in_(matched),
+                    UnderwritingResearchObjectAlias.normalized_alias == pattern,
+                )
+            )
+        )
+        exact_object_ids = {
+            object_id
+            for object_id, (research_object, identity) in matched.items()
+            if object_id in exact_alias_object_ids
+            or pattern
+            in {
+                normalize_research_object_alias(value)
+                for value in (
+                    identity.canonical_name,
+                    identity.symbol,
+                    research_object.external_key,
+                )
+                if value is not None
+            }
+        }
 
         matched_security_ids = {
             object_id
@@ -513,13 +549,22 @@ class ProductRepository:
             for object_id, row in matched.items()
             if row[0].kind in {"company", "industry"}
         }
+        anchor_exact = {
+            object_id: object_id in exact_object_ids for object_id in anchor_rows
+        }
         anchor_rows.update(effective_parents)
         for security_id in matched_security_ids:
             valid_parent_ids = parent_ids_by_security[security_id] & set(
                 effective_parents
             )
+            for parent_id in valid_parent_ids:
+                anchor_exact[parent_id] = (
+                    anchor_exact.get(parent_id, False)
+                    or security_id in exact_object_ids
+                )
             if not valid_parent_ids:
                 anchor_rows[security_id] = matched[security_id]
+                anchor_exact[security_id] = security_id in exact_object_ids
 
         company_anchor_ids = {
             object_id
@@ -571,7 +616,8 @@ class ProductRepository:
 
         groups = []
         for anchor_id, anchor_row in sorted(
-            anchor_rows.items(), key=lambda item: row_key(item[1])
+            anchor_rows.items(),
+            key=lambda item: (not anchor_exact[item[0]], row_key(item[1])),
         ):
             group = [anchor_row]
             if anchor_row[0].kind == "company":
@@ -592,7 +638,7 @@ class ProductRepository:
                 continue
             results.extend(group)
             seen.update(group_ids)
-        return results
+        return ObjectSearchOutcome(rows=tuple(results), had_raw_match=True)
 
     def create_project(
         self,

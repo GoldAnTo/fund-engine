@@ -4,10 +4,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
+import unicodedata
 
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
+    event,
     ForeignKey,
     Index,
     Integer,
@@ -24,6 +26,11 @@ from app.models.ledger import Base, _uuid
 
 
 _HASH_CHECK = "length(content_hash) = 64"
+
+
+def normalize_research_object_alias(value: str) -> str:
+    """Return the auditable NFC + trim + lower alias lookup key."""
+    return unicodedata.normalize("NFC", value.strip()).lower()
 
 
 def _json_shape_constraints(
@@ -100,7 +107,7 @@ class UnderwritingResearchObjectAlias(Base):
             name="ck_uw_object_alias_text",
         ),
         CheckConstraint(
-            "normalized_alias = lower(trim(normalized_alias))",
+            "normalized_alias = lower(trim(alias))",
             name="ck_uw_object_alias_normalized",
         ),
         UniqueConstraint(
@@ -121,6 +128,15 @@ class UnderwritingResearchObjectAlias(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+
+
+@event.listens_for(UnderwritingResearchObjectAlias, "before_insert")
+def _validate_research_object_alias_normalization(
+    _mapper, _connection, target: UnderwritingResearchObjectAlias
+) -> None:
+    expected = normalize_research_object_alias(target.alias)
+    if target.normalized_alias != expected:
+        raise ValueError("normalized_alias must equal NFC(trim(alias)).lower()")
 
 
 class UnderwritingResearchProject(Base):

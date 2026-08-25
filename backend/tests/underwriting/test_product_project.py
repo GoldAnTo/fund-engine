@@ -123,6 +123,25 @@ def _identity(
     )
 
 
+def _company_group(
+    session,
+    service: ResearchProjectService,
+    *,
+    key: str,
+    company_name: str,
+    securities: tuple[tuple[str, str, str], ...],
+) -> tuple[UnderwritingResearchObject, ...]:
+    company = _object(session, "company", f"{key}:company", company_name)
+    _identity(service, company)
+    members = [company]
+    for security_key, security_name, symbol in securities:
+        security = _object(session, "security", security_key, security_name)
+        _identity(service, security, symbol=symbol, currency="USD")
+        _relation(session, company.id, security.id, "company_has_security")
+        members.append(security)
+    return tuple(members)
+
+
 def _seed_project_graph(session, service: ResearchProjectService) -> dict[str, object]:
     industry = _object(session, "industry", "battery", "Battery Industry")
     unrelated_industry = _object(session, "industry", "cloud", "Cloud Industry")
@@ -507,23 +526,15 @@ def test_search_uses_historical_name_and_symbol_with_stable_typed_results(
 
     historical = service.search_objects(" alpha ", datetime(2021, 1, 1, tzinfo=UTC), 20)
     assert [result.kind for result in historical] == [
+        ResearchObjectKind.SECURITY,
         ResearchObjectKind.COMPANY,
         ResearchObjectKind.INDUSTRY,
-        ResearchObjectKind.SECURITY,
     ]
-    assert [result.object_id for result in historical] == sorted(
-        (industry.id, company.id, security.id),
-        key=lambda object_id: next(
-            (
-                result.kind.value,
-                result.canonical_name.casefold(),
-                result.external_key.casefold(),
-                str(result.object_id),
-            )
-            for result in historical
-            if result.object_id == object_id
-        ),
-    )
+    assert [result.object_id for result in historical] == [
+        security.id,
+        company.id,
+        industry.id,
+    ]
     assert (
         next(result for result in historical if result.object_id == security.id).symbol
         == "ALPHA"
@@ -1307,6 +1318,12 @@ def test_foundation_fixture_loads_exact_temporal_identities_relations_and_rights
     assert loaded.objects["SZSE:300750"].kind == "security"
     assert loaded.objects["US:ALPHABET:COMPANY"].canonical_name == "Alphabet Inc."
     assert loaded.identities["US:ALPHABET:COMPANY"].canonical_name == "Alphabet Inc."
+    assert {
+        (row.alias, row.normalized_alias, row.locale) for row in loaded.aliases.values()
+    } == {
+        ("Google", "google", "en"),
+        ("谷歌", "谷歌", "zh-CN"),
+    }
 
     before_listing = datetime(2018, 6, 10, 15, 59, 59, tzinfo=UTC)
     at_listing = datetime(2018, 6, 10, 16, tzinfo=UTC)
@@ -1439,6 +1456,177 @@ def test_company_discovery_keeps_groups_complete_stable_and_within_limit(
         "NASDAQ:GOOGL",
         "NASDAQ:GOOG",
     ]
+
+
+def test_company_suffix_fallback_does_not_retry_a_raw_match_omitted_by_limit(
+    session, service
+) -> None:
+    _company_group(
+        session,
+        service,
+        key="alpha",
+        company_name="Alpha公司",
+        securities=(
+            ("ALPHA-A", "Alpha Class A", "ALPHA-A"),
+            ("ALPHA-B", "Alpha Class B", "ALPHA-B"),
+        ),
+    )
+    industry = _object(session, "industry", "alpha-mining", "Alpha Mining")
+    _identity(service, industry)
+
+    assert service.search_objects("Alpha公司", NOW, 2) == ()
+
+
+def test_exact_company_match_wins_before_substring_company_group(
+    session, service
+) -> None:
+    exact = _company_group(
+        session,
+        service,
+        key="target-exact",
+        company_name="Target",
+        securities=(
+            ("TARGET-EXACT-A", "Exact Class A", "TGA"),
+            ("TARGET-EXACT-B", "Exact Class B", "TGB"),
+        ),
+    )
+    _company_group(
+        session,
+        service,
+        key="target-substring",
+        company_name="A Target reseller",
+        securities=(
+            ("TARGET-SUB-A", "Reseller Class A", "RSA"),
+            ("TARGET-SUB-B", "Reseller Class B", "RSB"),
+        ),
+    )
+
+    assert {
+        result.object_id for result in service.search_objects("Target", NOW, 3)
+    } == {member.id for member in exact}
+
+
+def test_exact_security_symbol_wins_before_substring_security_group(
+    session, service
+) -> None:
+    exact = _company_group(
+        session,
+        service,
+        key="symbol-exact",
+        company_name="Zeta Exact Holdings",
+        securities=(
+            ("SYMBOL-EXACT-A", "Zeta Class A", "TARGET"),
+            ("SYMBOL-EXACT-B", "Zeta Class B", "ZTB"),
+        ),
+    )
+    _company_group(
+        session,
+        service,
+        key="symbol-substring",
+        company_name="A Holdings",
+        securities=(
+            ("SYMBOL-SUB-A", "A Target reseller share", "OTHER"),
+            ("SYMBOL-SUB-B", "A Other share", "OTHR"),
+        ),
+    )
+
+    assert {
+        result.object_id for result in service.search_objects("Target", NOW, 3)
+    } == {member.id for member in exact}
+
+
+def test_exact_security_alias_wins_before_substring_company_group(
+    session, service
+) -> None:
+    exact = _company_group(
+        session,
+        service,
+        key="alias-exact",
+        company_name="Zeta Alias Holdings",
+        securities=(
+            ("ALIAS-EXACT-A", "Zeta Alias Class A", "ZAA"),
+            ("ALIAS-EXACT-B", "Zeta Alias Class B", "ZAB"),
+        ),
+    )
+    session.add(
+        UnderwritingResearchObjectAlias(
+            object_id=exact[1].id,
+            alias="Target",
+            normalized_alias="target",
+            locale="en",
+            created_at=NOW,
+        )
+    )
+    _company_group(
+        session,
+        service,
+        key="alias-substring",
+        company_name="A Target reseller",
+        securities=(
+            ("ALIAS-SUB-A", "Alias Reseller A", "ARA"),
+            ("ALIAS-SUB-B", "Alias Reseller B", "ARB"),
+        ),
+    )
+    session.flush()
+
+    assert {
+        result.object_id for result in service.search_objects("Target", NOW, 3)
+    } == {member.id for member in exact}
+
+
+def test_exact_security_external_key_wins_before_substring_company_group(
+    session, service
+) -> None:
+    exact = _company_group(
+        session,
+        service,
+        key="external-exact",
+        company_name="Zeta External Holdings",
+        securities=(
+            ("Target", "Zeta External Class A", "ZEA"),
+            ("EXTERNAL-EXACT-B", "Zeta External Class B", "ZEB"),
+        ),
+    )
+    _company_group(
+        session,
+        service,
+        key="external-substring",
+        company_name="A Target reseller",
+        securities=(
+            ("EXTERNAL-SUB-A", "External Reseller A", "ERA"),
+            ("EXTERNAL-SUB-B", "External Reseller B", "ERB"),
+        ),
+    )
+
+    assert {
+        result.object_id for result in service.search_objects("Target", NOW, 3)
+    } == {member.id for member in exact}
+
+
+def test_unicode_alias_lower_queries_are_consistent(session, service) -> None:
+    group = _company_group(
+        session,
+        service,
+        key="strasse",
+        company_name="Street Holdings",
+        securities=(("STRASSE-A", "Street Class A", "STRA"),),
+    )
+    session.add(
+        UnderwritingResearchObjectAlias(
+            object_id=group[0].id,
+            alias="Straße",
+            normalized_alias="straße",
+            locale="de",
+            created_at=NOW,
+        )
+    )
+    session.flush()
+
+    expected_ids = {member.id for member in group}
+    for query in ("Straße", "straße"):
+        assert {
+            result.object_id for result in service.search_objects(query, NOW, 3)
+        } == expected_ids
 
 
 def test_company_discovery_expands_only_identities_effective_as_of(session) -> None:

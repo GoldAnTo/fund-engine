@@ -35,7 +35,7 @@ def upgrade() -> None:
             name="ck_uw_object_alias_text",
         ),
         sa.CheckConstraint(
-            "normalized_alias = lower(trim(normalized_alias))",
+            "normalized_alias = lower(trim(alias))",
             name="ck_uw_object_alias_normalized",
         ),
         sa.ForeignKeyConstraint(
