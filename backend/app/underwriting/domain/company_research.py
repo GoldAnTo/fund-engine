@@ -33,6 +33,7 @@ DEFAULT_REQUIRED_RETURN = Decimal("0.12")
 DEFAULT_PERMANENT_LOSS_LIMIT = Decimal("0.25")
 _MODULE_KEY = re.compile(r"[a-z][a-z0-9_]*")
 _GAP_CODE = re.compile(r"[a-z][a-z0-9_]*")
+_INPUT_HASH = re.compile(r"[0-9a-f]{64}")
 _IDENTITY_NAME_MAX_LENGTH = 512
 
 
@@ -72,6 +73,14 @@ def _require_canonical_name(value: object, field_name: str) -> str:
             f"{field_name} must not exceed {_IDENTITY_NAME_MAX_LENGTH} characters"
         )
     return text
+
+
+def _require_finite_decimal(value: object, field_name: str) -> Decimal:
+    if type(value) is not Decimal:
+        raise CompanyResearchValidationError(f"{field_name} must be a Decimal")
+    if not value.is_finite():
+        raise CompanyResearchValidationError(f"{field_name} must be finite")
+    return value
 
 
 def _utc(value: object, field_name: str) -> datetime:
@@ -233,12 +242,8 @@ class CompanyResearchDefaultPolicy:
     def __post_init__(self) -> None:
         if type(self.horizon_years) is not int:
             raise CompanyResearchValidationError("horizon_years must be an int")
-        if type(self.required_return) is not Decimal:
-            raise CompanyResearchValidationError("required_return must be a Decimal")
-        if type(self.permanent_loss_limit) is not Decimal:
-            raise CompanyResearchValidationError(
-                "permanent_loss_limit must be a Decimal"
-            )
+        _require_finite_decimal(self.required_return, "required_return")
+        _require_finite_decimal(self.permanent_loss_limit, "permanent_loss_limit")
         if self.strategy_version != DEFAULT_STRATEGY_VERSION:
             raise CompanyResearchValidationError(
                 "strategy_version is fixed by the default policy"
@@ -407,6 +412,12 @@ class CompanyResearchPreview:
         object.__setattr__(self, "permanent_loss_limit", policy.permanent_loss_limit)
         self.validate_research_gaps(self.research_gaps)
         calculated_hash = _canonical_hash(self.canonical_payload())
+        if type(self.input_hash) is not str:
+            raise CompanyResearchValidationError("input_hash must be a string")
+        if self.input_hash and _INPUT_HASH.fullmatch(self.input_hash) is None:
+            raise CompanyResearchValidationError(
+                "input_hash must be a lowercase SHA-256 hex digest"
+            )
         if self.input_hash and self.input_hash != calculated_hash:
             raise CompanyResearchValidationError(
                 "input_hash does not match canonical payload"

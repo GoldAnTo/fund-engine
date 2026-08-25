@@ -406,6 +406,54 @@ def test_equivalent_default_decimals_have_one_canonical_preview_hash(
     assert equivalent.canonical_payload()["strategy"]["permanent_loss_limit"] == "0.25"
 
 
+@pytest.mark.parametrize(
+    "field_name",
+    ["required_return", "permanent_loss_limit"],
+)
+@pytest.mark.parametrize(
+    "non_finite",
+    [Decimal("NaN"), Decimal("sNaN"), Decimal("Infinity"), Decimal("-Infinity")],
+)
+def test_default_policy_rejects_non_finite_decimal_inputs_with_domain_error(
+    field_name, non_finite
+) -> None:
+    with pytest.raises(CompanyResearchValidationError, match=field_name):
+        CompanyResearchDefaultPolicy(**{field_name: non_finite})
+
+
+@pytest.mark.parametrize(
+    "input_hash",
+    [None, False, 0, [], {}, "0" * 63, "0" * 64, "A" * 64, "g" * 64],
+)
+def test_preview_rejects_noncanonical_or_mismatched_input_hash(
+    alphabet_identity_set, input_hash
+) -> None:
+    preview = build_company_research_preview(
+        adapter=AlphabetCompanyResearchAdapter(),
+        identities=alphabet_identity_set,
+        cutoff_at=datetime(2026, 8, 25, 1, 30, tzinfo=UTC),
+    )
+
+    with pytest.raises(CompanyResearchValidationError, match="input_hash"):
+        replace(preview, input_hash=input_hash)
+
+
+def test_preview_accepts_only_empty_or_matching_canonical_input_hash(
+    alphabet_identity_set,
+) -> None:
+    preview = build_company_research_preview(
+        adapter=AlphabetCompanyResearchAdapter(),
+        identities=alphabet_identity_set,
+        cutoff_at=datetime(2026, 8, 25, 1, 30, tzinfo=UTC),
+    )
+
+    reconstructed = replace(preview, input_hash=preview.input_hash)
+    recomputed = replace(preview, input_hash="")
+
+    assert reconstructed == preview
+    assert recomputed == preview
+
+
 def test_preview_validates_gaps_against_its_generic_and_business_modules(
     alphabet_identity_set,
 ) -> None:
