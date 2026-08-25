@@ -30,6 +30,7 @@ const ids = {
 const hash = "a".repeat(64);
 const agendaHash = "57e7c6fda6962645939bf3b4ac9ece70be170d1170a2571252593c42a50ece73";
 const now = "2026-08-24T00:00:00Z";
+const companyResearchHash = "c".repeat(64);
 
 function response(body: object, status = 200, requestId = "req-product"): Response {
   return new Response(JSON.stringify(body), {
@@ -40,6 +41,46 @@ function response(body: object, status = 200, requestId = "req-product"): Respon
 
 function projectBody(targets = [ids.securityA, ids.securityB]) {
   return { schema_version: "underwriting.v1", id: ids.project, primary_company_id: ids.company, target_security_ids: targets, company_identity: { schema_version: "underwriting.v1", object_id: ids.company, identity_version_id: ids.membershipA, canonical_name: "Company" }, security_identities: targets.map((objectId, index) => ({ schema_version: "underwriting.v1", object_id: objectId, identity_version_id: index === 0 ? ids.priceA : ids.priceB, canonical_name: index === 0 ? "Security A" : "Security B", symbol: index === 0 ? "AAA" : "BBB", exchange: "EX", share_class: "ordinary", trading_currency: "CNY" })), content_hash: hash, created_at: now };
+}
+
+function companyResearchPreviewBody() {
+  return {
+    schema_version: "underwriting.v1",
+    company: { schema_version: "underwriting.v1", object_id: ids.company, external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc." },
+    securities: [
+      { schema_version: "underwriting.v1", object_id: ids.securityA, external_key: "NASDAQ:GOOG", canonical_name: "Alphabet Inc. Class C", symbol: "GOOG", exchange: "NASDAQ", share_class: "Class C", trading_currency: "USD" },
+      { schema_version: "underwriting.v1", object_id: ids.securityB, external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD" },
+    ],
+    strategy_version: "company-research-default.v1",
+    horizon_years: 5,
+    base_currency: "CNY",
+    required_return: "0.12",
+    permanent_loss_limit: "0.25",
+    cutoff_at: now,
+    agenda: ["overview", "business_map", "operating_drivers", "evidence_and_gaps", "industry_competition_regulation", "financials_cash_flow_capital_allocation", "scenarios_valuation_implied_expectations", "counterevidence_risks_next_checks", "versions_changes_memo"].map((key) => ({ schema_version: "underwriting.v1", key, label: key })),
+    preview_hash: companyResearchHash,
+  };
+}
+
+function companyResearchProjectBody(status = "queued", currentStep: string | null = "evidence_index") {
+  return {
+    schema_version: "underwriting.v1",
+    project_id: ids.project,
+    company_id: ids.company,
+    preparation: {
+      schema_version: "underwriting.v1",
+      id: ids.draft,
+      project_id: ids.project,
+      request_hash: companyResearchHash,
+      strategy_version: "company-research-default.v1",
+      status,
+      current_step: currentStep,
+      progress: 0,
+      attempt: 1,
+      next_attempt_at: null,
+      last_error_code: null,
+    },
+  };
 }
 
 function mandateBody() {
@@ -225,6 +266,47 @@ describe("InvestmentResearchApi", () => {
       expect(typeof init?.body).toBe("string");
     }
     if (operation.idempotencyKey) expect(init?.headers).toMatchObject({ "Idempotency-Key": operation.idempotencyKey });
+  });
+
+  it("uses only high-level company-research routes and binds initialization to its preview", async () => {
+    const api = new InvestmentResearchApi();
+    const previewRequest = { schema_version: "underwriting.v1" as const, company_id: ids.company, cutoff_at: now };
+    const preview = companyResearchPreviewBody();
+    const initializeRequest = { ...previewRequest, preview_hash: companyResearchHash };
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(response(preview))
+      .mockResolvedValueOnce(response(companyResearchProjectBody(), 201))
+      .mockResolvedValueOnce(response(companyResearchProjectBody(), 200))
+      .mockResolvedValueOnce(response(companyResearchProjectBody(), 202));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(api.previewCompanyResearch(previewRequest)).resolves.toMatchObject({ preview_hash: companyResearchHash });
+    await expect(api.initializeCompanyResearch(initializeRequest, "company-research-key")).resolves.toMatchObject({ project_id: ids.project });
+    await expect(api.companyResearchProject(ids.project)).resolves.toMatchObject({ project_id: ids.project });
+    await expect(api.retryCompanyResearchProject(ids.project)).resolves.toMatchObject({ project_id: ids.project });
+
+    expect(fetchSpy.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ["/api/underwriting/v1/product/company-research/preview", "POST"],
+      ["/api/underwriting/v1/product/company-research/initializations", "POST"],
+      [`/api/underwriting/v1/product/company-research/projects/${ids.project}`, "GET"],
+      [`/api/underwriting/v1/product/company-research/projects/${ids.project}/retry`, "POST"],
+    ]);
+    expect(fetchSpy.mock.calls[1][1]?.headers).toMatchObject({ "Idempotency-Key": "company-research-key" });
+  });
+
+  it("rejects company-research response identity and preparation-state drift", async () => {
+    const api = new InvestmentResearchApi();
+    const invalidPreview = companyResearchPreviewBody();
+    invalidPreview.securities.push({ ...invalidPreview.securities[0] });
+    const invalidStatus = companyResearchProjectBody("completed", "evidence_index");
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(response(invalidPreview))
+      .mockResolvedValueOnce(response(invalidStatus));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(api.previewCompanyResearch({ schema_version: "underwriting.v1", company_id: ids.company, cutoff_at: now }))
+      .rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.companyResearchProject(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
   });
 
   it("accepts canonical set equality but rejects missing and duplicate association IDs", async () => {

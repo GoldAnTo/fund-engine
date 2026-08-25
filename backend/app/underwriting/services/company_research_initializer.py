@@ -74,6 +74,14 @@ class CompanyResearchInitialization:
     job: Job
 
 
+@dataclass(frozen=True, slots=True)
+class CompanyResearchProjectStatus:
+    """The user-facing operational state attached to one project."""
+
+    project: ResearchProjectView
+    preparation: CompanyResearchPreparation
+
+
 class CompanyResearchInitializer:
     """Create one complete company-research foundation without exposing internals."""
 
@@ -401,4 +409,53 @@ class CompanyResearchInitializer:
             company_id=company_id,
             cutoff_at=cutoff_at,
             idempotency_key=idempotency_key,
+        )
+
+
+class CompanyResearchPreparationService:
+    """Read and recover the preparation created by the high-level initializer."""
+
+    def __init__(self, session: Session, *, now: Callable[[], datetime]) -> None:
+        self._session = session
+        self._now = now
+        self._products = ResearchProjectService(session, now=now)
+        self._company_repository = CompanyResearchRepository(session)
+
+    def _now_utc(self) -> datetime:
+        return CompanyResearchInitializer._utc(self._now(), "clock")
+
+    @staticmethod
+    def _stored_utc(value: datetime) -> datetime:
+        """SQLite returns timezone columns as naive values; they are stored UTC."""
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+    def status(self, *, project_id: UUID) -> CompanyResearchProjectStatus:
+        project_id = CompanyResearchInitializer._uuid(project_id, "project_id")
+        project = self._products.project(project_id)
+        if project is None:
+            raise ValidationError("company research project not found")
+        preparation = self._company_repository.preparation_for_project(project_id)
+        if preparation is None:
+            raise ValidationError("company research preparation not found")
+        return CompanyResearchProjectStatus(project=project, preparation=preparation)
+
+    def retry(self, *, project_id: UUID) -> CompanyResearchProjectStatus:
+        current = self.status(project_id=project_id)
+        if (
+            current.preparation.next_attempt_at is not None
+            and self._stored_utc(current.preparation.next_attempt_at) > self._now_utc()
+        ):
+            raise ValidationError("company research preparation is not ready to retry")
+        preparation = self._company_repository.requeue_recoverable_preparation(
+            current.preparation.id,
+            updated_at=self._now_utc(),
+        )
+        self._company_repository.append_event(
+            preparation_id=preparation.id,
+            event_type="retry_queued",
+            payload={"attempt": preparation.attempt},
+            created_at=self._now_utc(),
+        )
+        return CompanyResearchProjectStatus(
+            project=current.project, preparation=preparation
         )

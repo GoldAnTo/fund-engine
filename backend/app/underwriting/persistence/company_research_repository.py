@@ -302,6 +302,53 @@ class CompanyResearchRepository:
             .limit(1)
         )
 
+    def preparation_for_project(
+        self, project_id: UUID
+    ) -> CompanyResearchPreparation | None:
+        """Return the single preparation owned by a high-level project."""
+        return self._session.scalar(
+            select(CompanyResearchPreparation)
+            .where(CompanyResearchPreparation.project_id == project_id)
+            .limit(1)
+        )
+
+    def requeue_recoverable_preparation(
+        self, preparation_id: UUID, *, updated_at: datetime
+    ) -> CompanyResearchPreparation:
+        """Return one recoverable preparation to its initial queued step."""
+        preparation = self._preparation_for_update(preparation_id)
+        if preparation is None:
+            raise ValidationError("company research preparation not found")
+        if preparation.status != "recoverable_failure":
+            raise ValidationError(
+                "company research preparation is not recoverable"
+            )
+        job = self.prepare_job(preparation.id)
+        if job is None:
+            raise CompanyResearchIntegrityError(
+                "company research preparation job is missing"
+            )
+        preparation.status = "queued"
+        preparation.current_step = "evidence_index"
+        preparation.progress = 0
+        preparation.attempt += 1
+        preparation.next_attempt_at = None
+        preparation.last_error_code = None
+        preparation.updated_at = self._stored_datetime(updated_at, "updated_at")
+        job.status = "queued"
+        job.progress = 0
+        job.attempt += 1
+        job.step = "evidence_index"
+        job.error = None
+        job.started_at = None
+        job.finished_at = None
+        try:
+            with self._session.begin_nested():
+                self._session.flush([preparation, job])
+        except IntegrityError as exc:
+            raise ConflictError("company research preparation retry conflicts") from exc
+        return preparation
+
     @staticmethod
     def _validate_artifact_row(row: CompanyResearchArtifactVersion) -> None:
         expected_hash = CompanyResearchRepository.artifact_content_hash(

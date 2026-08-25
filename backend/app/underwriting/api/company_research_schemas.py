@@ -1,0 +1,91 @@
+"""Closed wire contracts for the high-level company-research entry flow."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal
+from typing import Literal
+from uuid import UUID
+
+from pydantic import Field, StrictInt, field_validator
+
+from app.underwriting.api.product_schemas import SHA256_PATTERN, _require_aware
+from app.underwriting.api.schemas import UnderwritingModel
+
+PreparationStatus = Literal[
+    "queued",
+    "preparing_sources",
+    "awaiting_evidence_review",
+    "building_model",
+    "awaiting_judgment_review",
+    "ready_to_freeze",
+    "recoverable_failure",
+    "blocked",
+    "completed",
+]
+
+
+class CompanyResearchPreviewRequest(UnderwritingModel):
+    company_id: UUID
+    cutoff_at: datetime
+
+    @field_validator("cutoff_at")
+    @classmethod
+    def aware_cutoff(cls, value: datetime) -> datetime:
+        return _require_aware(value, "cutoff_at")
+
+
+class InitializeCompanyResearchRequest(CompanyResearchPreviewRequest):
+    preview_hash: str = Field(pattern=SHA256_PATTERN)
+
+
+class CompanyResearchIdentityResponse(UnderwritingModel):
+    object_id: UUID
+    external_key: str
+    canonical_name: str
+
+
+class CompanyResearchSecurityIdentityResponse(CompanyResearchIdentityResponse):
+    symbol: str
+    exchange: str
+    share_class: str
+    trading_currency: Literal["CNY", "USD"]
+
+
+class CompanyResearchAgendaModuleResponse(UnderwritingModel):
+    key: str
+    label: str
+
+
+class CompanyResearchPreviewResponse(UnderwritingModel):
+    company: CompanyResearchIdentityResponse
+    securities: tuple[CompanyResearchSecurityIdentityResponse, ...]
+    strategy_version: str
+    horizon_years: StrictInt = Field(ge=5, le=5)
+    base_currency: Literal["CNY"]
+    required_return: Decimal
+    permanent_loss_limit: Decimal
+    cutoff_at: datetime
+    agenda: tuple[CompanyResearchAgendaModuleResponse, ...] = Field(
+        min_length=9, max_length=9
+    )
+    preview_hash: str = Field(pattern=SHA256_PATTERN)
+
+
+class CompanyResearchPreparationResponse(UnderwritingModel):
+    id: UUID
+    project_id: UUID
+    request_hash: str = Field(pattern=SHA256_PATTERN)
+    strategy_version: str
+    status: PreparationStatus
+    current_step: str | None
+    progress: StrictInt = Field(ge=0, le=100)
+    attempt: StrictInt = Field(ge=1)
+    next_attempt_at: datetime | None
+    last_error_code: str | None
+
+
+class CompanyResearchProjectResponse(UnderwritingModel):
+    project_id: UUID
+    company_id: UUID
+    preparation: CompanyResearchPreparationResponse

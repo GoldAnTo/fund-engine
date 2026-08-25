@@ -2791,6 +2791,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/underwriting/v1/product/company-research/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Company Research */
+        post: operations["preview_company_research_api_underwriting_v1_product_company_research_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/initializations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Initialize Company Research */
+        post: operations["initialize_company_research_api_underwriting_v1_product_company_research_initializations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Company Research Project */
+        get: operations["get_company_research_project_api_underwriting_v1_product_company_research_projects__project_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Company Research Project */
+        post: operations["retry_company_research_project_api_underwriting_v1_product_company_research_projects__project_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -4638,6 +4706,177 @@ export interface components {
             /** Items */
             items: components["schemas"]["CompanyListItemDTO"][];
             page: components["schemas"]["CursorPage"];
+        };
+        /** CompanyResearchAgendaModuleResponse */
+        CompanyResearchAgendaModuleResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+        };
+        /** CompanyResearchIdentityResponse */
+        CompanyResearchIdentityResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /** External Key */
+            external_key: string;
+            /** Canonical Name */
+            canonical_name: string;
+        };
+        /** CompanyResearchPreparationResponse */
+        CompanyResearchPreparationResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Request Hash */
+            request_hash: string;
+            /** Strategy Version */
+            strategy_version: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "preparing_sources" | "awaiting_evidence_review" | "building_model" | "awaiting_judgment_review" | "ready_to_freeze" | "recoverable_failure" | "blocked" | "completed";
+            /** Current Step */
+            current_step: string | null;
+            /** Progress */
+            progress: number;
+            /** Attempt */
+            attempt: number;
+            /** Next Attempt At */
+            next_attempt_at: string | null;
+            /** Last Error Code */
+            last_error_code: string | null;
+        };
+        /** CompanyResearchPreviewRequest */
+        CompanyResearchPreviewRequest: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Company Id
+             * Format: uuid
+             */
+            company_id: string;
+            /**
+             * Cutoff At
+             * Format: date-time
+             */
+            cutoff_at: string;
+        };
+        /** CompanyResearchPreviewResponse */
+        CompanyResearchPreviewResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            company: components["schemas"]["CompanyResearchIdentityResponse"];
+            /** Securities */
+            securities: components["schemas"]["CompanyResearchSecurityIdentityResponse"][];
+            /** Strategy Version */
+            strategy_version: string;
+            /** Horizon Years */
+            horizon_years: number;
+            /**
+             * Base Currency
+             * @constant
+             */
+            base_currency: "CNY";
+            /** Required Return */
+            required_return: string;
+            /** Permanent Loss Limit */
+            permanent_loss_limit: string;
+            /**
+             * Cutoff At
+             * Format: date-time
+             */
+            cutoff_at: string;
+            /** Agenda */
+            agenda: components["schemas"]["CompanyResearchAgendaModuleResponse"][];
+            /** Preview Hash */
+            preview_hash: string;
+        };
+        /** CompanyResearchProjectResponse */
+        CompanyResearchProjectResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Company Id
+             * Format: uuid
+             */
+            company_id: string;
+            preparation: components["schemas"]["CompanyResearchPreparationResponse"];
+        };
+        /** CompanyResearchSecurityIdentityResponse */
+        CompanyResearchSecurityIdentityResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /** External Key */
+            external_key: string;
+            /** Canonical Name */
+            canonical_name: string;
+            /** Symbol */
+            symbol: string;
+            /** Exchange */
+            exchange: string;
+            /** Share Class */
+            share_class: string;
+            /**
+             * Trading Currency
+             * @enum {string}
+             */
+            trading_currency: "CNY" | "USD";
         };
         /** CompareLinkDTO */
         CompareLinkDTO: {
@@ -7383,6 +7622,27 @@ export interface components {
             stock_id: string | null;
             /** Case Id */
             case_id: string | null;
+        };
+        /** InitializeCompanyResearchRequest */
+        InitializeCompanyResearchRequest: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Company Id
+             * Format: uuid
+             */
+            company_id: string;
+            /**
+             * Cutoff At
+             * Format: date-time
+             */
+            cutoff_at: string;
+            /** Preview Hash */
+            preview_hash: string;
         };
         /** JobDTO */
         JobDTO: {
@@ -17772,6 +18032,172 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    preview_company_research_api_underwriting_v1_product_company_research_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanyResearchPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResearchPreviewResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    initialize_company_research_api_underwriting_v1_product_company_research_initializations_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InitializeCompanyResearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResearchProjectResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_company_research_project_api_underwriting_v1_product_company_research_projects__project_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResearchProjectResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    retry_company_research_project_api_underwriting_v1_product_company_research_projects__project_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResearchProjectResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -30,6 +30,10 @@ export type ProductFxSnapshot = Schemas["FXSnapshotResponse"];
 export type ProductCapitalStructure = Schemas["CapitalStructureSnapshotResponse"];
 export type ProductSecurityRights = Schemas["SecurityRightsResponse"];
 export type EffectiveSecurityRights = Schemas["EffectiveSecurityRightsResponse"];
+export type CompanyResearchPreview = Schemas["CompanyResearchPreviewResponse"];
+export type CompanyResearchProject = Schemas["CompanyResearchProjectResponse"];
+export type CompanyResearchPreviewRequest = Schemas["CompanyResearchPreviewRequest"];
+export type InitializeCompanyResearchRequest = Schemas["InitializeCompanyResearchRequest"];
 
 type ErrorDetails = NonNullable<Schemas["UnderwritingErrorBody"]["details"]>;
 
@@ -602,6 +606,112 @@ function isRevision(value: unknown): value is ProductRevision {
     && (value.publication_status === "user_frozen" || value.publication_status === "superseded");
 }
 
+const COMPANY_RESEARCH_AGENDA_KEYS = [
+  "overview",
+  "business_map",
+  "operating_drivers",
+  "evidence_and_gaps",
+  "industry_competition_regulation",
+  "financials_cash_flow_capital_allocation",
+  "scenarios_valuation_implied_expectations",
+  "counterevidence_risks_next_checks",
+  "versions_changes_memo",
+] as const;
+
+const COMPANY_RESEARCH_STEPS = [
+  "evidence_index",
+  "business_map",
+  "driver_map",
+  "financial_bridge",
+  "scenario_set",
+  "valuation_set",
+  "research_gaps",
+  "judgment_context",
+  "memo",
+] as const;
+
+function isCompanyResearchIdentity(value: unknown): boolean {
+  return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "object_id", "external_key", "canonical_name"])
+    && isUuid(value.object_id) && isNonEmptyString(value.external_key)
+    && isNonEmptyString(value.canonical_name);
+}
+
+function isCompanyResearchSecurity(value: unknown): boolean {
+  return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "object_id", "external_key", "canonical_name", "symbol", "exchange", "share_class", "trading_currency"])
+    && isUuid(value.object_id) && isNonEmptyString(value.external_key)
+    && isNonEmptyString(value.canonical_name)
+    && isNonEmptyString(value.symbol) && isNonEmptyString(value.exchange)
+    && isNonEmptyString(value.share_class)
+    && (value.trading_currency === "CNY" || value.trading_currency === "USD");
+}
+
+function isCompanyResearchPreview(value: unknown): value is CompanyResearchPreview {
+  if (!isProductDto(value)
+    || !hasExactKeys(value, ["schema_version", "company", "securities", "strategy_version", "horizon_years", "base_currency", "required_return", "permanent_loss_limit", "cutoff_at", "agenda", "preview_hash"])
+    || !isCompanyResearchIdentity(value.company)
+    || !Array.isArray(value.securities) || value.securities.length === 0
+    || !value.securities.every(isCompanyResearchSecurity)
+    || new Set(value.securities.map((security) => security.object_id)).size !== value.securities.length
+    || new Set(value.securities.map((security) => security.external_key)).size !== value.securities.length
+    || value.strategy_version !== "company-research-default.v1"
+    || value.horizon_years !== 5 || value.base_currency !== "CNY"
+    || !sameDecimal(value.required_return, "0.12")
+    || !sameDecimal(value.permanent_loss_limit, "0.25")
+    || !isDateTime(value.cutoff_at) || !isHash(value.preview_hash)
+    || !Array.isArray(value.agenda) || value.agenda.length !== COMPANY_RESEARCH_AGENDA_KEYS.length) return false;
+  if (!value.agenda.every((module) => isProductDto(module)
+    && hasExactKeys(module, ["schema_version", "key", "label"])
+    && isNonEmptyString(module.key) && isNonEmptyString(module.label))) return false;
+  return sameStringSets(
+    value.agenda.map((module) => module.key),
+    [...COMPANY_RESEARCH_AGENDA_KEYS],
+  );
+}
+
+function isPreparationStateAndStep(value: Record<string, unknown>): boolean {
+  const step = value.current_step;
+  if (value.status === "queued") {
+    return step === "evidence_index" && value.progress === 0
+      && value.next_attempt_at === null && value.last_error_code === null;
+  }
+  if (value.status === "completed") {
+    return step === null && value.progress === 100
+      && value.next_attempt_at === null && value.last_error_code === null;
+  }
+  if (value.status === "preparing_sources" || value.status === "awaiting_evidence_review") {
+    return step === "evidence_index" && value.last_error_code === null;
+  }
+  if (value.status === "building_model") {
+    return typeof step === "string" && COMPANY_RESEARCH_STEPS.includes(step as typeof COMPANY_RESEARCH_STEPS[number])
+      && step !== "evidence_index" && value.last_error_code === null;
+  }
+  if (value.status === "awaiting_judgment_review") return step === "judgment_context" && value.last_error_code === null;
+  if (value.status === "ready_to_freeze") return step === "memo" && value.last_error_code === null;
+  if (value.status === "recoverable_failure" || value.status === "blocked") {
+    return typeof step === "string" && COMPANY_RESEARCH_STEPS.includes(step as typeof COMPANY_RESEARCH_STEPS[number])
+      && isNonEmptyString(value.last_error_code);
+  }
+  return false;
+}
+
+function isCompanyResearchProject(value: unknown): value is CompanyResearchProject {
+  if (!isProductDto(value)
+    || !hasExactKeys(value, ["schema_version", "project_id", "company_id", "preparation"])
+    || !isUuid(value.project_id) || !isUuid(value.company_id)
+    || !isProductDto(value.preparation)
+    || !hasExactKeys(value.preparation, ["schema_version", "id", "project_id", "request_hash", "strategy_version", "status", "current_step", "progress", "attempt", "next_attempt_at", "last_error_code"])
+    || !isUuid(value.preparation.id) || value.preparation.project_id !== value.project_id
+    || !isHash(value.preparation.request_hash)
+    || value.preparation.strategy_version !== "company-research-default.v1"
+    || !isNonNegativeInteger(value.preparation.progress)
+    || value.preparation.progress > 100 || !isPositiveInteger(value.preparation.attempt)
+    || !isNullableDateTime(value.preparation.next_attempt_at)
+    || !isNullableString(value.preparation.last_error_code)) return false;
+  return isPreparationStateAndStep(value.preparation);
+}
+
 function safeParse(text: string): unknown | null {
   if (!text.trim()) return null;
   try {
@@ -921,6 +1031,38 @@ export class InvestmentResearchApi {
   async revision(revisionId: string): Promise<ProductRevision> {
     const value = await requestJson(`${this.root}/revisions/${encodeURIComponent(revisionId)}`, isRevision, 200, { method: "GET" });
     if (value.id !== revisionId) mismatch("revision identity mismatch");
+    return value;
+  }
+
+  previewCompanyResearch(body: CompanyResearchPreviewRequest): Promise<CompanyResearchPreview> {
+    return requestJson(`${this.root}/company-research/preview`, isCompanyResearchPreview, 200, jsonInit("POST", body));
+  }
+
+  async initializeCompanyResearch(
+    body: InitializeCompanyResearchRequest,
+    idempotencyKey: string,
+  ): Promise<CompanyResearchProject> {
+    const value = await requestJson(
+      `${this.root}/company-research/initializations`,
+      isCompanyResearchProject,
+      201,
+      jsonInit("POST", body, { "Idempotency-Key": idempotencyKey }),
+    );
+    if (value.company_id !== body.company_id || value.preparation.request_hash !== body.preview_hash) {
+      mismatch("company-research initialization preview binding mismatch");
+    }
+    return value;
+  }
+
+  async companyResearchProject(projectId: string): Promise<CompanyResearchProject> {
+    const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}`, isCompanyResearchProject, 200, { method: "GET" });
+    if (value.project_id !== projectId) mismatch("company-research project identity mismatch");
+    return value;
+  }
+
+  async retryCompanyResearchProject(projectId: string): Promise<CompanyResearchProject> {
+    const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/retry`, isCompanyResearchProject, 202, { method: "POST" });
+    if (value.project_id !== projectId) mismatch("company-research project identity mismatch");
     return value;
   }
 }
