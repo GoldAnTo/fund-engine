@@ -5,8 +5,6 @@ from datetime import UTC, datetime, timedelta
 from threading import Barrier
 
 import pytest
-from sqlalchemy import create_engine, func, select
-from sqlalchemy.orm import sessionmaker
 
 from app.models.ledger import Base, ConflictError, ValidationError
 from app.models.operational import Job
@@ -32,6 +30,8 @@ from app.underwriting.services.company_research_initializer import (
 from app.underwriting.services.product_foundation_fixture import (
     ProductFoundationFixtureService,
 )
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import sessionmaker
 
 NOW = datetime(2026, 8, 25, 9, tzinfo=UTC)
 
