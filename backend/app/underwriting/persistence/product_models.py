@@ -4,7 +4,6 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
-import unicodedata
 
 from sqlalchemy import (
     CheckConstraint,
@@ -17,20 +16,17 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    text,
     UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.ledger import Base, _uuid
+from app.underwriting.domain.search_terms import normalize_search_term
 
 
 _HASH_CHECK = "length(content_hash) = 64"
-
-
-def normalize_research_object_alias(value: str) -> str:
-    """Return the auditable NFC + trim + lower alias lookup key."""
-    return unicodedata.normalize("NFC", value.strip()).lower()
 
 
 def _json_shape_constraints(
@@ -107,9 +103,22 @@ class UnderwritingResearchObjectAlias(Base):
             name="ck_uw_object_alias_text",
         ),
         CheckConstraint(
-            "normalized_alias = lower(trim(alias))",
-            name="ck_uw_object_alias_normalized",
+            "length(trim(normalized_alias)) > 0 "
+            "AND normalized_alias = trim(normalized_alias)",
+            name="ck_uw_object_alias_normalized_text",
         ),
+        CheckConstraint(
+            "length(CAST(alias AS BLOB)) != length(alias) "
+            "OR alias GLOB '*[^ -~]*' "
+            "OR normalized_alias = lower(trim(alias))",
+            name="ck_uw_object_alias_normalized",
+        ).ddl_if(dialect="sqlite"),
+        CheckConstraint(
+            "octet_length(alias) != char_length(alias) "
+            "OR alias !~ '^[ -~]*$' "
+            "OR normalized_alias = lower(btrim(alias))",
+            name="ck_uw_object_alias_normalized",
+        ).ddl_if(dialect="postgresql"),
         UniqueConstraint(
             "object_id",
             "normalized_alias",
@@ -134,9 +143,83 @@ class UnderwritingResearchObjectAlias(Base):
 def _validate_research_object_alias_normalization(
     _mapper, _connection, target: UnderwritingResearchObjectAlias
 ) -> None:
-    expected = normalize_research_object_alias(target.alias)
+    expected = normalize_search_term(target.alias)
     if target.normalized_alias != expected:
         raise ValueError("normalized_alias must equal NFC(trim(alias)).lower()")
+
+
+class UnderwritingResearchObjectSearchTerm(Base):
+    __tablename__ = "uw_research_object_search_terms"
+    __table_args__ = (
+        CheckConstraint(
+            "term_kind IN ('external_key', 'canonical_name', 'symbol')",
+            name="ck_uw_search_term_kind",
+        ),
+        CheckConstraint(
+            "(term_kind = 'external_key' AND identity_version_id IS NULL) OR "
+            "(term_kind IN ('canonical_name', 'symbol') "
+            "AND identity_version_id IS NOT NULL)",
+            name="ck_uw_search_term_source",
+        ),
+        CheckConstraint(
+            "length(trim(raw_value)) > 0",
+            name="ck_uw_search_term_raw_text",
+        ),
+        CheckConstraint(
+            "length(trim(normalized_value)) > 0 "
+            "AND normalized_value = trim(normalized_value)",
+            name="ck_uw_search_term_normalized_text",
+        ),
+        CheckConstraint(
+            "length(CAST(raw_value AS BLOB)) != length(raw_value) "
+            "OR raw_value GLOB '*[^ -~]*' "
+            "OR normalized_value = lower(trim(raw_value))",
+            name="ck_uw_search_term_normalized",
+        ).ddl_if(dialect="sqlite"),
+        CheckConstraint(
+            "octet_length(raw_value) != char_length(raw_value) "
+            "OR raw_value !~ '^[ -~]*$' "
+            "OR normalized_value = lower(btrim(raw_value))",
+            name="ck_uw_search_term_normalized",
+        ).ddl_if(dialect="postgresql"),
+        UniqueConstraint(
+            "identity_version_id",
+            "term_kind",
+            name="uq_uw_search_term_identity_kind",
+        ),
+        Index("ix_uw_search_term_identity", "identity_version_id"),
+        Index("ix_uw_search_term_normalized", "normalized_value"),
+        Index(
+            "uq_uw_search_term_external_object",
+            "object_id",
+            unique=True,
+            sqlite_where=text("term_kind = 'external_key'"),
+            postgresql_where=text("term_kind = 'external_key'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    object_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("uw_research_objects.id"), nullable=False
+    )
+    identity_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("uw_object_identity_versions.id"), nullable=True
+    )
+    term_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    raw_value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_value: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+@event.listens_for(UnderwritingResearchObjectSearchTerm, "before_insert")
+def _validate_research_object_search_term_normalization(
+    _mapper, _connection, target: UnderwritingResearchObjectSearchTerm
+) -> None:
+    expected = normalize_search_term(target.raw_value)
+    if target.normalized_value != expected:
+        raise ValueError("normalized_value must equal NFC(trim(raw_value)).lower()")
 
 
 class UnderwritingResearchProject(Base):

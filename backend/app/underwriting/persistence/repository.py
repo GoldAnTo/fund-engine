@@ -1,4 +1,5 @@
 """Append-only repository operations for the underwriting kernel."""
+
 from __future__ import annotations
 
 import uuid
@@ -9,6 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.underwriting.domain.search_terms import normalize_search_term
 from app.underwriting.domain.types import HistoricalBasisInput
 from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
@@ -18,6 +20,9 @@ from app.underwriting.persistence.models import (
     UnderwritingObjectRelation,
     UnderwritingResearchObject,
     UnderwritingResearchVersion,
+)
+from app.underwriting.persistence.product_models import (
+    UnderwritingResearchObjectSearchTerm,
 )
 
 
@@ -45,6 +50,17 @@ class UnderwritingRepository:
             created_at=created_at,
         )
         self._session.add(row)
+        self._session.flush()
+        self._session.add(
+            UnderwritingResearchObjectSearchTerm(
+                object_id=row.id,
+                identity_version_id=None,
+                term_kind="external_key",
+                raw_value=row.external_key,
+                normalized_value=normalize_search_term(row.external_key),
+                created_at=row.created_at,
+            )
+        )
         self._session.flush()
         return row
 

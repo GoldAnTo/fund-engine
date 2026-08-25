@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 from pathlib import Path
 import subprocess
@@ -10,13 +11,12 @@ from decimal import Decimal
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy import create_engine, delete, inspect, update
+from sqlalchemy import create_engine, delete, inspect, select, update
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 
 from app.models import Base
 import app.underwriting.persistence as persistence
-import app.underwriting.persistence.product_models as product_models
 from app.models.ledger import (
     DELETE_PROTECTED_TABLES,
     IMMUTABLE_TABLES,
@@ -26,6 +26,7 @@ from app.models.ledger import (
 
 PRODUCT_TABLES = {
     "uw_research_object_aliases",
+    "uw_research_object_search_terms",
     "uw_object_identity_versions",
     "uw_research_projects",
     "uw_research_project_securities",
@@ -42,10 +43,14 @@ PRODUCT_TABLES = {
 }
 
 IMMUTABLE_PRODUCT_TABLES = PRODUCT_TABLES - {"uw_workspace_drafts"}
-PRODUCT_0065_TABLES = PRODUCT_TABLES - {"uw_research_object_aliases"}
+PRODUCT_0065_TABLES = PRODUCT_TABLES - {
+    "uw_research_object_aliases",
+    "uw_research_object_search_terms",
+}
 
 PRODUCT_MODEL_NAMES = {
     "UnderwritingResearchObjectAlias",
+    "UnderwritingResearchObjectSearchTerm",
     "UnderwritingObjectIdentityVersion",
     "UnderwritingResearchProject",
     "UnderwritingResearchProjectSecurity",
@@ -196,7 +201,16 @@ def test_research_object_alias_schema_contract() -> None:
         if isinstance(constraint, sa.CheckConstraint)
     }
     assert "length(trim(alias)) > 0" in checks
-    assert "normalized_alias = lower(trim(alias))" in checks
+    assert (
+        "length(trim(normalized_alias)) > 0 "
+        "AND normalized_alias = trim(normalized_alias)"
+    ) in checks
+    sqlite_ddl = str(sa.schema.CreateTable(table).compile(dialect=sqlite.dialect()))
+    postgres_ddl = str(
+        sa.schema.CreateTable(table).compile(dialect=postgresql.dialect())
+    )
+    assert "length(CAST(alias AS BLOB)) != length(alias)" in sqlite_ddl
+    assert "octet_length(alias) != char_length(alias)" in postgres_ddl
     assert {index.name for index in table.indexes} == {"ix_uw_object_alias_normalized"}
     assert table.c.alias.type.length == 160
     assert table.c.normalized_alias.type.length == 160
@@ -227,12 +241,85 @@ def test_alias_orm_rejects_a_normalized_value_unrelated_to_alias(session) -> Non
 
 
 def test_alias_normalizer_uses_nfc_trim_and_lower_without_casefolding() -> None:
-    normalizer = getattr(product_models, "normalize_research_object_alias", None)
+    search_terms = importlib.import_module("app.underwriting.domain.search_terms")
+    normalizer = getattr(search_terms, "normalize_search_term", None)
 
     assert normalizer is not None
     assert normalizer("  Straße  ") == "straße"
     assert normalizer("Strasse") == "strasse"
     assert normalizer("E\N{COMBINING ACUTE ACCENT}cole") == "école"
+
+
+def test_research_object_search_term_schema_contract() -> None:
+    table = Base.metadata.tables["uw_research_object_search_terms"]
+
+    assert set(table.c.keys()) == {
+        "id",
+        "object_id",
+        "identity_version_id",
+        "term_kind",
+        "raw_value",
+        "normalized_value",
+        "created_at",
+    }
+    assert _foreign_key_targets(table.name) == {
+        "uw_research_objects.id",
+        "uw_object_identity_versions.id",
+    }
+    checks = {
+        str(constraint.sqltext)
+        for constraint in table.constraints
+        if isinstance(constraint, sa.CheckConstraint)
+    }
+    assert "term_kind IN ('external_key', 'canonical_name', 'symbol')" in checks
+    assert (
+        "(term_kind = 'external_key' AND identity_version_id IS NULL) OR "
+        "(term_kind IN ('canonical_name', 'symbol') AND identity_version_id IS NOT NULL)"
+    ) in checks
+    assert {index.name for index in table.indexes} == {
+        "ix_uw_search_term_identity",
+        "ix_uw_search_term_normalized",
+        "uq_uw_search_term_external_object",
+    }
+    assert _unique_columns(table.name) == {("identity_version_id", "term_kind")}
+    sqlite_ddl = str(sa.schema.CreateTable(table).compile(dialect=sqlite.dialect()))
+    postgres_ddl = str(
+        sa.schema.CreateTable(table).compile(dialect=postgresql.dialect())
+    )
+    assert "length(CAST(raw_value AS BLOB)) != length(raw_value)" in sqlite_ddl
+    assert "octet_length(raw_value) != char_length(raw_value)" in postgres_ddl
+    normalized_index = next(
+        index for index in table.indexes if index.name == "ix_uw_search_term_normalized"
+    )
+    assert "normalized_value" in str(
+        sa.schema.CreateIndex(normalized_index).compile(dialect=sqlite.dialect())
+    )
+    assert "normalized_value" in str(
+        sa.schema.CreateIndex(normalized_index).compile(dialect=postgresql.dialect())
+    )
+
+
+def test_object_repository_writes_external_key_search_projection(session) -> None:
+    repository = persistence.UnderwritingRepository(session)
+    research_object = repository.add_object(
+        "company",
+        "ÉCOLE:COMPANY",
+        "Unrelated Holdings",
+        datetime(2026, 8, 24, tzinfo=UTC),
+    )
+
+    term = session.scalar(
+        select(persistence.UnderwritingResearchObjectSearchTerm).where(
+            persistence.UnderwritingResearchObjectSearchTerm.object_id
+            == research_object.id
+        )
+    )
+    assert term is not None
+    assert (term.term_kind, term.raw_value, term.normalized_value) == (
+        "external_key",
+        "ÉCOLE:COMPANY",
+        "école:company",
+    )
 
 
 def _product_constraint_tables() -> list[sa.Table]:
@@ -529,7 +616,11 @@ def test_snapshot_rejects_duplicate_natural_identity_when_value_changes(
 
 
 def test_product_tables_expose_content_hash_except_mutable_draft() -> None:
-    for table_name in IMMUTABLE_PRODUCT_TABLES - {"uw_research_object_aliases"}:
+    derived_tables = {
+        "uw_research_object_aliases",
+        "uw_research_object_search_terms",
+    }
+    for table_name in IMMUTABLE_PRODUCT_TABLES - derived_tables:
         column = Base.metadata.tables[table_name].c.content_hash
         assert column.nullable is False
         assert column.type.length == 64

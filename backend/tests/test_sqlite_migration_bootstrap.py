@@ -124,6 +124,9 @@ def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
     assert upgraded.returncode == 0, upgraded.stderr
     engine = sa.create_engine(environment["DATABASE_URL"])
     object_id = "11111111111111111111111111111111"
+    identity_id = "12121212121212121212121212121212"
+    security_id = "13131313131313131313131313131313"
+    security_identity_id = "14141414141414141414141414141414"
     alias_id = "22222222222222222222222222222222"
     with engine.begin() as connection:
         connection.execute(
@@ -133,6 +136,46 @@ def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
                 "VALUES (:id, 'company', 'US:TEST:COMPANY', 'Test Inc.', :now)"
             ),
             {"id": object_id, "now": datetime.now(UTC)},
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_object_identity_versions "
+                "(id, object_id, version, canonical_name, symbol, exchange, "
+                "share_class, trading_currency, effective_from, effective_to, "
+                "supersedes_id, content_hash, created_at) VALUES "
+                "(:id, :object_id, 1, 'ÉCOLE Holdings', NULL, NULL, NULL, NULL, "
+                ":now, NULL, NULL, :digest, :now)"
+            ),
+            {
+                "id": identity_id,
+                "object_id": object_id,
+                "digest": "a" * 64,
+                "now": datetime.now(UTC),
+            },
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_research_objects "
+                "(id, kind, external_key, canonical_name, created_at) "
+                "VALUES (:id, 'security', 'FR:TEST:A', 'Unrelated Share', :now)"
+            ),
+            {"id": security_id, "now": datetime.now(UTC)},
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_object_identity_versions "
+                "(id, object_id, version, canonical_name, symbol, exchange, "
+                "share_class, trading_currency, effective_from, effective_to, "
+                "supersedes_id, content_hash, created_at) VALUES "
+                "(:id, :object_id, 1, 'Unrelated Share', 'ÉCOLE', 'TEST', "
+                "'ordinary', 'USD', :now, NULL, NULL, :digest, :now)"
+            ),
+            {
+                "id": security_identity_id,
+                "object_id": security_id,
+                "digest": "b" * 64,
+                "now": datetime.now(UTC),
+            },
         )
 
     migrated = subprocess.run(
@@ -148,6 +191,7 @@ def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
     with engine.begin() as connection:
         inspector = sa.inspect(connection)
         assert "uw_research_object_aliases" in inspector.get_table_names()
+        assert "uw_research_object_search_terms" in inspector.get_table_names()
         assert {
             column["name"]
             for column in inspector.get_columns("uw_research_object_aliases")
@@ -177,7 +221,40 @@ def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
         } == {
             "ck_uw_object_alias_text",
             "ck_uw_object_alias_normalized",
+            "ck_uw_object_alias_normalized_text",
         }
+        assert {
+            column["name"]
+            for column in inspector.get_columns("uw_research_object_search_terms")
+        } == {
+            "id",
+            "object_id",
+            "identity_version_id",
+            "term_kind",
+            "raw_value",
+            "normalized_value",
+            "created_at",
+        }
+        assert set(
+            connection.execute(
+                sa.text(
+                    "SELECT term_kind, raw_value, normalized_value "
+                    "FROM uw_research_object_search_terms ORDER BY term_kind"
+                )
+            ).all()
+        ) == {
+            ("canonical_name", "ÉCOLE Holdings", "école holdings"),
+            ("canonical_name", "Unrelated Share", "unrelated share"),
+            ("external_key", "US:TEST:COMPANY", "us:test:company"),
+            ("external_key", "FR:TEST:A", "fr:test:a"),
+            ("symbol", "ÉCOLE", "école"),
+        }
+        explain = connection.exec_driver_sql(
+            "EXPLAIN QUERY PLAN SELECT object_id "
+            "FROM uw_research_object_search_terms "
+            "WHERE normalized_value = 'école holdings'"
+        ).all()
+        assert any("ix_uw_search_term_normalized" in str(detail) for detail in explain)
         connection.execute(
             sa.text(
                 "INSERT INTO uw_research_object_aliases "
@@ -242,6 +319,18 @@ def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
                 "now": datetime.now(UTC),
             },
         )
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_research_object_aliases "
+                "(id, object_id, alias, normalized_alias, locale, created_at) "
+                "VALUES (:id, :object_id, 'ÉCOLE', 'école', 'fr', :now)"
+            ),
+            {
+                "id": "88888888888888888888888888888888",
+                "object_id": object_id,
+                "now": datetime.now(UTC),
+            },
+        )
     for mutation in (
         "UPDATE uw_research_object_aliases SET alias = 'Changed' WHERE id = :id",
         "DELETE FROM uw_research_object_aliases WHERE id = :id",
@@ -249,6 +338,13 @@ def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
         with pytest.raises(sa.exc.DBAPIError, match="append-only|immutable"):
             with engine.begin() as connection:
                 connection.execute(sa.text(mutation), {"id": alias_id})
+    for mutation in (
+        "UPDATE uw_research_object_search_terms SET raw_value = 'Changed'",
+        "DELETE FROM uw_research_object_search_terms",
+    ):
+        with pytest.raises(sa.exc.DBAPIError, match="append-only|immutable"):
+            with engine.begin() as connection:
+                connection.execute(sa.text(mutation))
 
     downgraded = subprocess.run(
         [sys.executable, "-m", "alembic", "downgrade", "0065"],
@@ -262,6 +358,10 @@ def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
     with engine.connect() as connection:
         assert (
             "uw_research_object_aliases" not in sa.inspect(connection).get_table_names()
+        )
+        assert (
+            "uw_research_object_search_terms"
+            not in sa.inspect(connection).get_table_names()
         )
         assert (
             connection.execute(

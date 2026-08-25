@@ -777,6 +777,105 @@ def test_0065_product_tables_install_precise_immutable_and_draft_delete_triggers
 
 
 @pytest.mark.pg_only
+def test_0066_search_terms_backfill_unicode_and_install_immutable_triggers() -> None:
+    database_url = os.environ["TEST_DATABASE_URL"]
+    schema = f"underwriting_0066_{uuid.uuid4().hex}"
+    migration_url = _schema_url(database_url, schema)
+    admin = sa.create_engine(database_url, future=True)
+    isolated = sa.create_engine(migration_url, future=True)
+    backend = Path(__file__).parents[2]
+    object_id = uuid.uuid4()
+    identity_id = uuid.uuid4()
+    try:
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+        migrated = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "0065"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert migrated.returncode == 0, migrated.stderr
+        with isolated.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_research_objects "
+                    "(id, kind, external_key, canonical_name, created_at) "
+                    "VALUES (:id, 'company', 'FR:TEST:COMPANY', 'Unrelated', now())"
+                ),
+                {"id": object_id},
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_object_identity_versions "
+                    "(id, object_id, version, canonical_name, effective_from, "
+                    "content_hash, created_at) VALUES "
+                    "(:id, :object_id, 1, 'ÉCOLE Holdings', now(), :digest, now())"
+                ),
+                {"id": identity_id, "object_id": object_id, "digest": "a" * 64},
+            )
+        migrated = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "0066"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert migrated.returncode == 0, migrated.stderr
+        with isolated.begin() as connection:
+            assert connection.execute(
+                sa.text(
+                    "SELECT term_kind, normalized_value "
+                    "FROM uw_research_object_search_terms ORDER BY term_kind"
+                )
+            ).all() == [
+                ("canonical_name", "école holdings"),
+                ("external_key", "fr:test:company"),
+            ]
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_research_object_aliases "
+                    "(id, object_id, alias, normalized_alias, locale, created_at) "
+                    "VALUES (:id, :object_id, 'ÉCOLE', 'école', 'fr', now())"
+                ),
+                {"id": uuid.uuid4(), "object_id": object_id},
+            )
+            triggered = set(
+                connection.execute(
+                    sa.text(
+                        "SELECT c.relname FROM pg_trigger t "
+                        "JOIN pg_class c ON c.oid = t.tgrelid "
+                        "WHERE NOT t.tgisinternal AND c.relname IN "
+                        "('uw_research_object_aliases', "
+                        "'uw_research_object_search_terms')"
+                    )
+                ).scalars()
+            )
+            assert triggered == {
+                "uw_research_object_aliases",
+                "uw_research_object_search_terms",
+            }
+        with pytest.raises(sa.exc.IntegrityError):
+            with isolated.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO uw_research_object_aliases "
+                        "(id, object_id, alias, normalized_alias, locale, created_at) "
+                        "VALUES (:id, :object_id, 'Google', 'unrelated', 'en', now())"
+                    ),
+                    {"id": uuid.uuid4(), "object_id": object_id},
+                )
+    finally:
+        isolated.dispose()
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin.dispose()
+
+
+@pytest.mark.pg_only
 def test_0065_downgrade_removes_only_product_foundation_and_restores_legacy_unique() -> None:
     database_url = os.environ["TEST_DATABASE_URL"]
     schema = f"underwriting_0065_down_{uuid.uuid4().hex}"

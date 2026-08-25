@@ -16,10 +16,10 @@ from app.underwriting.domain.product_contracts import (
     ResearchAgendaInput,
     ResearchScopeInput,
 )
+from app.underwriting.domain.search_terms import normalize_search_term
 from app.underwriting.domain.types import InvestmentMandateInput, ResearchObjectKind
 from app.underwriting.persistence.product_models import (
     UnderwritingObjectIdentityVersion,
-    normalize_research_object_alias,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.persistence.repository import StaleParentError
@@ -255,7 +255,7 @@ class ResearchProjectService:
         as_of: datetime,
         limit: int = 20,
     ) -> tuple[ObjectSearchResult, ...]:
-        normalized_query = normalize_research_object_alias(self._text(query, "query"))
+        normalized_query = normalize_search_term(self._text(query, "query"))
         normalized_as_of = self._utc(as_of, "as_of")
         if (
             not isinstance(limit, int)

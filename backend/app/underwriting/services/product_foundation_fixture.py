@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models.ledger import ConflictError, ValidationError
 from app.underwriting.domain.product_contracts import SecurityRightsInput
+from app.underwriting.domain.search_terms import SearchTermIntegrityError
 from app.underwriting.fixtures.product_foundation import (
     ProductFoundationFixture,
     validate_product_foundation_fixture,
@@ -254,6 +255,15 @@ class ProductFoundationFixtureService:
             raise ValidationError(
                 f"product foundation identity conflict for {research_object.external_key}"
             )
+        try:
+            for version in versions:
+                self._repository.ensure_identity_search_terms(
+                    research_object,
+                    version,
+                    repair_missing=True,
+                )
+        except SearchTermIntegrityError as exc:
+            raise ValidationError("product foundation search term conflict") from exc
         return root
 
     def _rights(self, fixture_rights, security: UnderwritingResearchObject):

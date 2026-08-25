@@ -10,12 +10,13 @@ from threading import Barrier
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 import app.underwriting.fixtures.product_foundation as product_foundation_fixture
+import app.underwriting.persistence.product_repository as product_repository
 from app.models.ledger import Base, ConflictError, ValidationError
 from app.underwriting.domain.product_contracts import (
     AgendaGenerationMethod,
@@ -35,6 +36,7 @@ from app.underwriting.persistence.models import (
 from app.underwriting.persistence.product_models import (
     UnderwritingObjectIdentityVersion,
     UnderwritingResearchObjectAlias,
+    UnderwritingResearchObjectSearchTerm,
     UnderwritingResearchAgendaVersion,
     UnderwritingResearchProject,
     UnderwritingResearchProjectSecurity,
@@ -1506,6 +1508,26 @@ def test_exact_company_match_wins_before_substring_company_group(
     } == {member.id for member in exact}
 
 
+def test_oversized_exact_company_group_is_not_replaced_by_substring_results(
+    session, service
+) -> None:
+    _company_group(
+        session,
+        service,
+        key="oversized-exact",
+        company_name="Target",
+        securities=(
+            ("OVERSIZED-A", "Oversized Class A", "OVA"),
+            ("OVERSIZED-B", "Oversized Class B", "OVB"),
+            ("OVERSIZED-C", "Oversized Class C", "OVC"),
+        ),
+    )
+    industry = _object(session, "industry", "target-reseller", "A Target reseller")
+    _identity(service, industry)
+
+    assert service.search_objects("Target", NOW, 3) == ()
+
+
 def test_exact_security_symbol_wins_before_substring_security_group(
     session, service
 ) -> None:
@@ -1628,6 +1650,142 @@ def test_unicode_alias_lower_queries_are_consistent(session, service) -> None:
             result.object_id for result in service.search_objects(query, NOW, 3)
         } == expected_ids
     assert service.search_objects("STRASSE", NOW, 3) == ()
+
+
+def test_uppercase_accented_alias_is_normalized_and_discoverable(
+    session, service
+) -> None:
+    group = _company_group(
+        session,
+        service,
+        key="FR:ALIAS",
+        company_name="Unrelated Holdings",
+        securities=(("FR:ALIAS:A", "Unrelated Class A", "FRA"),),
+    )
+    session.add(
+        UnderwritingResearchObjectAlias(
+            object_id=group[0].id,
+            alias="ÉCOLE",
+            normalized_alias="école",
+            locale="fr",
+            created_at=NOW,
+        )
+    )
+    session.flush()
+
+    assert {result.object_id for result in service.search_objects("école", NOW, 3)} == {
+        member.id for member in group
+    }
+
+
+def test_selected_core_nfd_alias_fails_closed(session, service) -> None:
+    company = _object(session, "company", "FR:CORE:COMPANY", "Unrelated Holdings")
+    _identity(service, company)
+    session.execute(
+        UnderwritingResearchObjectAlias.__table__.insert(),
+        {
+            "object_id": company.id,
+            "alias": "E\N{COMBINING ACUTE ACCENT}cole",
+            "normalized_alias": "e\N{COMBINING ACUTE ACCENT}cole",
+            "locale": "fr",
+            "created_at": NOW,
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="normalization"):
+        service.search_objects("cole", NOW, 3)
+
+
+@pytest.mark.parametrize(
+    ("source", "query"),
+    [
+        ("canonical_name", "école"),
+        ("external_key", "école"),
+        ("symbol", "école"),
+    ],
+)
+def test_unicode_non_alias_search_terms_are_discoverable(
+    session, service, source, query
+) -> None:
+    company_name = (
+        "ÉCOLE Holdings" if source == "canonical_name" else "Unrelated Holdings"
+    )
+    company_key = (
+        "ÉCOLE:COMPANY" if source == "external_key" else f"FR:{source}:COMPANY"
+    )
+    symbol = "ÉCOLE" if source == "symbol" else "FRA"
+    group = _company_group(
+        session,
+        service,
+        key=company_key.removesuffix(":COMPANY"),
+        company_name=company_name,
+        securities=((f"FR:{source}:A", "Unrelated Class A", symbol),),
+    )
+
+    assert {result.object_id for result in service.search_objects(query, NOW, 3)} == {
+        member.id for member in group
+    }
+
+
+def test_unicode_identity_search_terms_follow_as_of_successors(
+    session, service
+) -> None:
+    company = _object(session, "company", "FR:TEMPORAL:COMPANY", "Unrelated")
+    first = _identity(
+        service,
+        company,
+        name="ÉCOLE Legacy",
+        effective_from=OLD_FROM,
+        effective_to=OLD_TO,
+    )
+    _identity(
+        service,
+        company,
+        name="Unrelated Current",
+        effective_from=OLD_TO,
+        expected_parent_id=first.id,
+    )
+
+    historical = service.search_objects("école", datetime(2021, 1, 1, tzinfo=UTC), 3)
+    assert {result.object_id for result in historical} == {company.id}
+    assert service.search_objects("école", NOW, 3) == ()
+
+
+def test_object_search_candidates_are_exact_first_and_bounded_in_sql(
+    session, service
+) -> None:
+    candidate_statements: list[tuple[str, str]] = []
+
+    def capture_candidate_sql(
+        _connection, _cursor, statement, _parameters, context, _executemany
+    ) -> None:
+        stage = context.execution_options.get("uw_search_candidate_stage")
+        if stage is not None:
+            candidate_statements.append((stage, statement))
+
+    for index in range(300):
+        industry = _object(
+            session,
+            "industry",
+            f"bounded:{index:03d}",
+            f"Needle Industry {index:03d}",
+        )
+        _identity(service, industry)
+    session.flush()
+
+    event.listen(session.bind, "before_cursor_execute", capture_candidate_sql)
+    try:
+        outcome = ProductRepository(session).search_objects("needle", NOW, 100)
+    finally:
+        event.remove(session.bind, "before_cursor_execute", capture_candidate_sql)
+
+    assert product_repository._OBJECT_SEARCH_CANDIDATE_CAP == 256
+    assert outcome.candidate_count == 256
+    assert [stage for stage, _statement in candidate_statements] == [
+        "exact",
+        "substring",
+    ]
+    assert all(" LIMIT " in statement.upper() for _, statement in candidate_statements)
 
 
 def test_company_discovery_expands_only_identities_effective_as_of(session) -> None:
@@ -2116,6 +2274,101 @@ def test_foundation_fixture_reuses_roots_after_legal_identity_and_rights_success
             select(func.count()).select_from(UnderwritingSecurityRightsVersion)
         )
         == before["rights"]
+    )
+
+
+def test_foundation_fixture_repairs_only_missing_search_projection_rows(
+    session,
+) -> None:
+    fixture = load_product_foundation_fixture()
+    service = ProductFoundationFixtureService(session, now=lambda: NOW)
+    loaded = service.load(fixture)
+    company = loaded.objects["US:ALPHABET:COMPANY"]
+    identity = loaded.identities["US:ALPHABET:COMPANY"]
+    session.connection().exec_driver_sql(
+        "DELETE FROM uw_research_object_search_terms "
+        "WHERE object_id = ? AND identity_version_id = ? "
+        "AND term_kind = 'canonical_name'",
+        (company.id.hex, identity.id.hex),
+    )
+    session.expire_all()
+
+    service.load(load_product_foundation_fixture())
+
+    assert (
+        session.execute(
+            select(
+                Base.metadata.tables["uw_research_object_search_terms"].c.raw_value
+            ).where(
+                Base.metadata.tables["uw_research_object_search_terms"].c.object_id
+                == company.id,
+                Base.metadata.tables[
+                    "uw_research_object_search_terms"
+                ].c.identity_version_id
+                == identity.id,
+                Base.metadata.tables["uw_research_object_search_terms"].c.term_kind
+                == "canonical_name",
+            )
+        ).scalar_one()
+        == "Alphabet Inc."
+    )
+
+
+@pytest.mark.parametrize("corruption", ["wrong", "extra"])
+def test_foundation_fixture_rejects_inconsistent_search_projection_atomically(
+    session, corruption
+) -> None:
+    fixture = load_product_foundation_fixture()
+    service = ProductFoundationFixtureService(session, now=lambda: NOW)
+    loaded = service.load(fixture)
+    missing_company = loaded.objects["CN:300750:COMPANY"]
+    missing_identity = loaded.identities["CN:300750:COMPANY"]
+    company = loaded.objects["US:ALPHABET:COMPANY"]
+    identity = loaded.identities["US:ALPHABET:COMPANY"]
+    session.connection().exec_driver_sql(
+        "DELETE FROM uw_research_object_search_terms "
+        "WHERE object_id = ? AND identity_version_id = ? "
+        "AND term_kind = 'canonical_name'",
+        (missing_company.id.hex, missing_identity.id.hex),
+    )
+    if corruption == "wrong":
+        session.connection().exec_driver_sql(
+            "UPDATE uw_research_object_search_terms "
+            "SET raw_value = 'Unrelated', normalized_value = 'unrelated' "
+            "WHERE identity_version_id = ? AND term_kind = 'canonical_name'",
+            (identity.id.hex,),
+        )
+    else:
+        session.connection().exec_driver_sql(
+            "INSERT INTO uw_research_object_search_terms "
+            "(id, object_id, identity_version_id, term_kind, raw_value, "
+            "normalized_value, created_at) VALUES (?, ?, ?, 'symbol', "
+            "'EXTRA', 'extra', ?)",
+            (uuid4().hex, company.id.hex, identity.id.hex, NOW),
+        )
+    session.expire_all()
+
+    before = session.scalar(
+        select(func.count()).select_from(UnderwritingResearchObject)
+    )
+    with pytest.raises(ValidationError, match="search term conflict"):
+        service.load(load_product_foundation_fixture())
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingResearchObject))
+        == before
+    )
+    assert (
+        session.scalar(
+            select(func.count())
+            .select_from(UnderwritingResearchObjectSearchTerm)
+            .where(
+                UnderwritingResearchObjectSearchTerm.object_id == missing_company.id,
+                UnderwritingResearchObjectSearchTerm.identity_version_id
+                == missing_identity.id,
+                UnderwritingResearchObjectSearchTerm.term_kind == "canonical_name",
+            )
+        )
+        == 0
     )
 
 
