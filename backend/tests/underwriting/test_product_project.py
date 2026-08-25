@@ -2150,19 +2150,19 @@ def test_foundation_fixture_two_real_sqlite_sessions_converge_on_identical_roots
                 observer.scalar(
                     select(func.count()).select_from(UnderwritingResearchObject)
                 )
-                == 5
+                == 6
             )
             assert (
                 observer.scalar(
                     select(func.count()).select_from(UnderwritingObjectIdentityVersion)
                 )
-                == 5
+                == 6
             )
             assert (
                 observer.scalar(
                     select(func.count()).select_from(UnderwritingObjectRelation)
                 )
-                == 3
+                == 4
             )
             assert (
                 observer.scalar(
@@ -2196,7 +2196,7 @@ def test_foundation_fixture_load_never_commits_the_caller_transaction(tmp_path) 
         )
         assert (
             worker.scalar(select(func.count()).select_from(UnderwritingResearchObject))
-            == 5
+            == 6
         )
         worker.rollback()
         observer = sessions()
