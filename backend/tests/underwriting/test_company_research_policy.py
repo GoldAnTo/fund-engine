@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -41,6 +42,7 @@ def alphabet_identity_set() -> CompanyResearchIdentitySet:
                 object_id=uuid4(),
                 company_id=company.object_id,
                 external_key="NASDAQ:GOOGL",
+                canonical_name="Alphabet Class A",
                 symbol="GOOGL",
                 exchange="NASDAQ",
                 share_class="Class A",
@@ -50,6 +52,7 @@ def alphabet_identity_set() -> CompanyResearchIdentitySet:
                 object_id=uuid4(),
                 company_id=company.object_id,
                 external_key="NASDAQ:GOOG",
+                canonical_name="Alphabet Class C",
                 symbol="GOOG",
                 exchange="NASDAQ",
                 share_class="Class C",
@@ -130,6 +133,7 @@ def test_identity_set_rejects_missing_company_and_empty_or_unrelated_securities(
         object_id=uuid4(),
         company_id=uuid4(),
         external_key="NYSE:OTHER",
+        canonical_name="Other Common Stock",
         symbol="OTHER",
         exchange="NYSE",
         share_class="ordinary",
@@ -149,6 +153,7 @@ def test_identity_set_rejects_duplicate_security_id_or_external_key(
         object_id=security.object_id,
         company_id=security.company_id,
         external_key="NASDAQ:OTHER",
+        canonical_name="Other Common Stock",
         symbol="OTHER",
         exchange="NASDAQ",
         share_class="ordinary",
@@ -158,6 +163,7 @@ def test_identity_set_rejects_duplicate_security_id_or_external_key(
         object_id=uuid4(),
         company_id=security.company_id,
         external_key=security.external_key,
+        canonical_name="Other Common Stock",
         symbol="OTHER",
         exchange="NASDAQ",
         share_class="ordinary",
@@ -218,6 +224,7 @@ def test_unknown_adapter_company_is_rejected(alphabet_identity_set) -> None:
                 object_id=uuid4(),
                 company_id=other_company.object_id,
                 external_key="NASDAQ:OTHER",
+                canonical_name="Other Common Stock",
                 symbol="OTHER",
                 exchange="NASDAQ",
                 share_class="ordinary",
@@ -266,12 +273,6 @@ def test_alphabet_adapter_rejects_tampered_or_duplicate_business_modules(
         },
         {
             "code": "missing",
-            "module_key": "unknown",
-            "severity": ResearchGapSeverity.HIGH,
-            "message": "Missing",
-        },
-        {
-            "code": "missing",
             "module_key": "overview",
             "severity": "high",
             "message": "Missing",
@@ -305,6 +306,7 @@ def test_preview_hash_binds_identity_and_cutoff(alphabet_identity_set) -> None:
         object_id=alphabet_identity_set.securities[0].object_id,
         company_id=alphabet_identity_set.company.object_id,
         external_key="NASDAQ:GOOGL-ALT",
+        canonical_name="Alphabet Class A",
         symbol="GOOGL",
         exchange="NASDAQ",
         share_class="Class A",
@@ -321,6 +323,110 @@ def test_preview_hash_binds_identity_and_cutoff(alphabet_identity_set) -> None:
     )
     assert first.input_hash != later.input_hash
     assert first.input_hash != different.input_hash
+
+
+@pytest.mark.parametrize("canonical_name", ["", " Leading", "Cafe\u0301", "A" * 513])
+def test_security_canonical_name_requires_normalized_bounded_identity_text(
+    alphabet_identity_set, canonical_name
+) -> None:
+    with pytest.raises(CompanyResearchValidationError, match="canonical_name"):
+        replace(alphabet_identity_set.securities[0], canonical_name=canonical_name)
+
+
+def test_security_canonical_name_is_strict_and_binds_preview_hash(
+    alphabet_identity_set,
+) -> None:
+    first = build_company_research_preview(
+        adapter=AlphabetCompanyResearchAdapter(),
+        identities=alphabet_identity_set,
+        cutoff_at=datetime(2026, 8, 25, 1, 30, tzinfo=UTC),
+    )
+    altered_security = replace(
+        alphabet_identity_set.securities[0], canonical_name="Alphabet Class C Revised"
+    )
+    altered = CompanyResearchIdentitySet(
+        company=alphabet_identity_set.company,
+        securities=(altered_security, alphabet_identity_set.securities[1]),
+    )
+    second = build_company_research_preview(
+        adapter=AlphabetCompanyResearchAdapter(),
+        identities=altered,
+        cutoff_at=datetime(2026, 8, 25, 1, 30, tzinfo=UTC),
+    )
+
+    assert first.input_hash != second.input_hash
+    assert "canonical_name" in first.canonical_payload()["securities"][0]
+
+
+@pytest.mark.parametrize(
+    "required_return, permanent_loss_limit",
+    [
+        (Decimal("0.120"), Decimal("0.250")),
+        (Decimal("0.1200"), Decimal("0.2500")),
+        (Decimal("1.2E-1"), Decimal("2.5E-1")),
+    ],
+)
+def test_equivalent_default_decimals_have_one_canonical_preview_hash(
+    alphabet_identity_set, required_return, permanent_loss_limit
+) -> None:
+    preview = build_company_research_preview(
+        adapter=AlphabetCompanyResearchAdapter(),
+        identities=alphabet_identity_set,
+        cutoff_at=datetime(2026, 8, 25, 1, 30, tzinfo=UTC),
+    )
+    equivalent = replace(
+        preview,
+        required_return=required_return,
+        permanent_loss_limit=permanent_loss_limit,
+    )
+
+    assert equivalent == preview
+    assert equivalent.input_hash == preview.input_hash
+    assert equivalent.canonical_payload()["strategy"]["required_return"] == "0.12"
+    assert equivalent.canonical_payload()["strategy"]["permanent_loss_limit"] == "0.25"
+
+
+def test_preview_validates_gaps_against_its_generic_and_business_modules(
+    alphabet_identity_set,
+) -> None:
+    preview = build_company_research_preview(
+        adapter=AlphabetCompanyResearchAdapter(),
+        identities=alphabet_identity_set,
+        cutoff_at=datetime(2026, 8, 25, 1, 30, tzinfo=UTC),
+    )
+    generic_gap = ResearchGap(
+        code="missing_generic",
+        module_key="overview",
+        severity=ResearchGapSeverity.HIGH,
+        message="Missing overview evidence",
+    )
+    alphabet_gap = ResearchGap(
+        code="missing_cloud",
+        module_key="google_cloud",
+        severity=ResearchGapSeverity.HIGH,
+        message="Missing cloud evidence",
+    )
+    unknown_gap = ResearchGap(
+        code="missing_unknown",
+        module_key="not_a_real_module",
+        severity=ResearchGapSeverity.HIGH,
+        message="Missing unknown evidence",
+    )
+    other_adapter_gap = ResearchGap(
+        code="missing_other_adapter",
+        module_key="other_adapter_module",
+        severity=ResearchGapSeverity.HIGH,
+        message="Missing other adapter evidence",
+    )
+
+    assert preview.validate_research_gaps((generic_gap, alphabet_gap)) == (
+        generic_gap,
+        alphabet_gap,
+    )
+    with pytest.raises(CompanyResearchValidationError, match="not allowed"):
+        preview.validate_research_gaps((unknown_gap,))
+    with pytest.raises(CompanyResearchValidationError, match="not allowed"):
+        preview.validate_research_gaps((other_adapter_gap,))
 
 
 def test_domain_and_adapter_dependencies_remain_one_way() -> None:

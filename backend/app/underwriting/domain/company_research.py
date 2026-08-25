@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 from typing import Protocol
+from unicodedata import normalize
 from uuid import UUID
 
 
@@ -32,6 +33,7 @@ DEFAULT_REQUIRED_RETURN = Decimal("0.12")
 DEFAULT_PERMANENT_LOSS_LIMIT = Decimal("0.25")
 _MODULE_KEY = re.compile(r"[a-z][a-z0-9_]*")
 _GAP_CODE = re.compile(r"[a-z][a-z0-9_]*")
+_IDENTITY_NAME_MAX_LENGTH = 512
 
 
 class CompanyResearchValidationError(ValueError):
@@ -57,6 +59,17 @@ def _require_key(value: object, field_name: str, pattern: re.Pattern[str]) -> st
     if pattern.fullmatch(text) is None:
         raise CompanyResearchValidationError(
             f"{field_name} must be a lowercase underscore key"
+        )
+    return text
+
+
+def _require_canonical_name(value: object, field_name: str) -> str:
+    text = _require_text(value, field_name)
+    if text != normalize("NFC", text):
+        raise CompanyResearchValidationError(f"{field_name} must use NFC normalization")
+    if len(text) > _IDENTITY_NAME_MAX_LENGTH:
+        raise CompanyResearchValidationError(
+            f"{field_name} must not exceed {_IDENTITY_NAME_MAX_LENGTH} characters"
         )
     return text
 
@@ -91,7 +104,7 @@ class CompanyResearchCompany:
     def __post_init__(self) -> None:
         _require_uuid(self.object_id, "company.object_id")
         _require_text(self.external_key, "company.external_key")
-        _require_text(self.canonical_name, "company.canonical_name")
+        _require_canonical_name(self.canonical_name, "company.canonical_name")
 
     def canonical_payload(self) -> dict[str, str]:
         return {
@@ -108,6 +121,7 @@ class CompanyResearchSecurity:
     object_id: UUID
     company_id: UUID
     external_key: str
+    canonical_name: str
     symbol: str
     exchange: str
     share_class: str
@@ -117,6 +131,7 @@ class CompanyResearchSecurity:
         _require_uuid(self.object_id, "security.object_id")
         _require_uuid(self.company_id, "security.company_id")
         _require_text(self.external_key, "security.external_key")
+        _require_canonical_name(self.canonical_name, "security.canonical_name")
         _require_text(self.symbol, "security.symbol")
         _require_text(self.exchange, "security.exchange")
         _require_text(self.share_class, "security.share_class")
@@ -127,6 +142,7 @@ class CompanyResearchSecurity:
             "object_id": str(self.object_id),
             "company_id": str(self.company_id),
             "external_key": self.external_key,
+            "canonical_name": self.canonical_name,
             "symbol": self.symbol,
             "exchange": self.exchange,
             "share_class": self.share_class,
@@ -215,6 +231,12 @@ class CompanyResearchDefaultPolicy:
     generic_modules: tuple[CompanyResearchModule, ...] = _DEFAULT_MODULE_VALUES
 
     def __post_init__(self) -> None:
+        if type(self.required_return) is not Decimal:
+            raise CompanyResearchValidationError("required_return must be a Decimal")
+        if type(self.permanent_loss_limit) is not Decimal:
+            raise CompanyResearchValidationError(
+                "permanent_loss_limit must be a Decimal"
+            )
         if self.strategy_version != DEFAULT_STRATEGY_VERSION:
             raise CompanyResearchValidationError(
                 "strategy_version is fixed by the default policy"
@@ -239,6 +261,8 @@ class CompanyResearchDefaultPolicy:
             raise CompanyResearchValidationError(
                 "generic_modules are fixed by the default policy"
             )
+        object.__setattr__(self, "required_return", DEFAULT_REQUIRED_RETURN)
+        object.__setattr__(self, "permanent_loss_limit", DEFAULT_PERMANENT_LOSS_LIMIT)
 
     def canonical_payload(self) -> dict[str, object]:
         return {
@@ -272,15 +296,45 @@ class ResearchGap:
     def __post_init__(self) -> None:
         _require_key(self.code, "gap.code", _GAP_CODE)
         _require_key(self.module_key, "gap.module_key", _MODULE_KEY)
-        if self.module_key not in DEFAULT_MODULES:
-            raise CompanyResearchValidationError(
-                "gap.module_key must be a known generic module"
-            )
         if type(self.severity) is not ResearchGapSeverity:
             raise CompanyResearchValidationError(
                 "gap.severity must be a ResearchGapSeverity"
             )
         _require_text(self.message, "gap.message")
+
+    def canonical_payload(self) -> dict[str, str]:
+        return {
+            "code": self.code,
+            "module_key": self.module_key,
+            "severity": self.severity.value,
+            "message": self.message,
+        }
+
+
+def validate_research_gaps(
+    gaps: tuple[ResearchGap, ...], allowed_module_keys: tuple[str, ...]
+) -> tuple[ResearchGap, ...]:
+    """Validate closed gap descriptions against modules owned by a preview."""
+    if not isinstance(gaps, tuple) or not all(type(gap) is ResearchGap for gap in gaps):
+        raise CompanyResearchValidationError(
+            "gaps must be a tuple of ResearchGap values"
+        )
+    if not isinstance(allowed_module_keys, tuple) or not allowed_module_keys:
+        raise CompanyResearchValidationError(
+            "allowed_module_keys must be a non-empty tuple"
+        )
+    if not all(
+        isinstance(module_key, str) and _MODULE_KEY.fullmatch(module_key) is not None
+        for module_key in allowed_module_keys
+    ):
+        raise CompanyResearchValidationError(
+            "allowed_module_keys must contain module keys"
+        )
+    if len(set(allowed_module_keys)) != len(allowed_module_keys):
+        raise CompanyResearchValidationError("allowed_module_keys must be unique")
+    if any(gap.module_key not in allowed_module_keys for gap in gaps):
+        raise CompanyResearchValidationError("research gap module_key is not allowed")
+    return gaps
 
 
 class CompanyResearchAdapter(Protocol):
@@ -329,6 +383,7 @@ class CompanyResearchPreview:
     permanent_loss_limit: Decimal
     generic_modules: tuple[CompanyResearchModule, ...]
     business_modules: tuple[CompanyResearchModule, ...]
+    research_gaps: tuple[ResearchGap, ...] = ()
     input_hash: str = field(default="")
 
     def __post_init__(self) -> None:
@@ -337,7 +392,7 @@ class CompanyResearchPreview:
         )
         object.__setattr__(self, "securities", identities.securities)
         object.__setattr__(self, "cutoff_at", _utc(self.cutoff_at, "cutoff_at"))
-        CompanyResearchDefaultPolicy(
+        policy = CompanyResearchDefaultPolicy(
             strategy_version=self.strategy_version,
             horizon_years=self.horizon_years,
             base_currency=self.base_currency,
@@ -346,6 +401,9 @@ class CompanyResearchPreview:
             generic_modules=self.generic_modules,
         )
         _validated_business_modules(self.business_modules)
+        object.__setattr__(self, "required_return", policy.required_return)
+        object.__setattr__(self, "permanent_loss_limit", policy.permanent_loss_limit)
+        self.validate_research_gaps(self.research_gaps)
         calculated_hash = _canonical_hash(self.canonical_payload())
         if self.input_hash and self.input_hash != calculated_hash:
             raise CompanyResearchValidationError(
@@ -356,6 +414,15 @@ class CompanyResearchPreview:
     @property
     def security_external_keys(self) -> tuple[str, ...]:
         return tuple(security.external_key for security in self.securities)
+
+    @property
+    def allowed_module_keys(self) -> tuple[str, ...]:
+        return DEFAULT_MODULES + tuple(module.key for module in self.business_modules)
+
+    def validate_research_gaps(
+        self, gaps: tuple[ResearchGap, ...]
+    ) -> tuple[ResearchGap, ...]:
+        return validate_research_gaps(gaps, self.allowed_module_keys)
 
     def canonical_payload(self) -> dict[str, object]:
         return {
@@ -377,6 +444,9 @@ class CompanyResearchPreview:
             ),
             "business_modules": tuple(
                 module.canonical_payload() for module in self.business_modules
+            ),
+            "research_gaps": tuple(
+                gap.canonical_payload() for gap in self.research_gaps
             ),
         }
 
