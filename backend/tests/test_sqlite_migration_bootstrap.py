@@ -143,6 +143,25 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             "uw_company_research_artifact_versions",
             "uw_company_research_events",
         }.issubset(sa.inspect(connection).get_table_names())
+        inspector = sa.inspect(connection)
+        assert "parent_content_hash" in {
+            column["name"]
+            for column in inspector.get_columns(
+                "uw_company_research_artifact_versions"
+            )
+        }
+        assert {"sequence", "previous_event_hash"}.issubset(
+            {
+                column["name"]
+                for column in inspector.get_columns("uw_company_research_events")
+            }
+        )
+        assert {
+            tuple(constraint["column_names"])
+            for constraint in inspector.get_unique_constraints(
+                "uw_company_research_preparations"
+            )
+        } >= {("job_id",)}
         immutable_company_research_trigger_count = connection.execute(
             sa.text(
                 "SELECT COUNT(*) FROM sqlite_master "

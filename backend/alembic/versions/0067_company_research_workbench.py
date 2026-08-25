@@ -133,9 +133,7 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "idempotency_key", name="uq_uw_company_research_preparation_idempotency"
         ),
-    )
-    op.create_index(
-        "ix_uw_company_research_preparation_job", _PREPARATIONS, ["job_id"]
+        sa.UniqueConstraint("job_id", name="uq_uw_company_research_preparation_job"),
     )
     op.create_table(
         _ARTIFACTS,
@@ -144,6 +142,7 @@ def upgrade() -> None:
         sa.Column("kind", sa.String(length=32), nullable=False),
         sa.Column("version", sa.Integer(), nullable=False),
         sa.Column("supersedes_id", sa.Uuid(), nullable=True),
+        sa.Column("parent_content_hash", sa.String(length=64), nullable=True),
         sa.Column("input_hash", sa.String(length=64), nullable=False),
         sa.Column("payload", sa.JSON(), nullable=False),
         sa.Column("source_refs", sa.JSON(), nullable=False),
@@ -159,6 +158,12 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "length(content_hash) = 64", name="ck_uw_company_research_artifact_content_hash"
+        ),
+        sa.CheckConstraint(
+            "(supersedes_id IS NULL AND parent_content_hash IS NULL) OR "
+            "(supersedes_id IS NOT NULL AND parent_content_hash IS NOT NULL "
+            "AND length(parent_content_hash) = 64)",
+            name="ck_uw_company_research_artifact_parent_hash",
         ),
         sa.CheckConstraint(
             _json_shape_constraint("payload", "object", dialect_name),
@@ -193,12 +198,21 @@ def upgrade() -> None:
         _EVENTS,
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("preparation_id", sa.Uuid(), nullable=False),
+        sa.Column("sequence", sa.Integer(), nullable=False),
+        sa.Column("previous_event_hash", sa.String(length=64), nullable=True),
         sa.Column("event_type", sa.String(length=64), nullable=False),
         sa.Column("payload", sa.JSON(), nullable=False),
         sa.Column("content_hash", sa.String(length=64), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "length(content_hash) = 64", name="ck_uw_company_research_event_content_hash"
+        ),
+        sa.CheckConstraint("sequence >= 1", name="ck_uw_company_research_event_sequence"),
+        sa.CheckConstraint(
+            "(sequence = 1 AND previous_event_hash IS NULL) OR "
+            "(sequence > 1 AND previous_event_hash IS NOT NULL "
+            "AND length(previous_event_hash) = 64)",
+            name="ck_uw_company_research_event_predecessor_hash",
         ),
         sa.CheckConstraint(
             _json_shape_constraint("payload", "object", dialect_name),
@@ -209,11 +223,14 @@ def upgrade() -> None:
             name="fk_uw_company_research_event_preparation",
         ),
         sa.PrimaryKeyConstraint("id", name="pk_uw_company_research_events"),
+        sa.UniqueConstraint(
+            "preparation_id", "sequence", name="uq_uw_company_research_event_sequence"
+        ),
     )
     op.create_index(
         "ix_uw_company_research_event_preparation",
         _EVENTS,
-        ["preparation_id", "created_at"],
+        ["preparation_id", "sequence"],
     )
     _install_immutable_triggers(_ARTIFACTS, dialect_name)
     _install_immutable_triggers(_EVENTS, dialect_name)
@@ -227,5 +244,4 @@ def downgrade() -> None:
     op.drop_table(_EVENTS)
     op.drop_index("ix_uw_company_research_artifact_project_kind", table_name=_ARTIFACTS)
     op.drop_table(_ARTIFACTS)
-    op.drop_index("ix_uw_company_research_preparation_job", table_name=_PREPARATIONS)
     op.drop_table(_PREPARATIONS)

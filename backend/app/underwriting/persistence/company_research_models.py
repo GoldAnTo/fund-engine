@@ -116,7 +116,7 @@ class CompanyResearchPreparation(Base):
         UniqueConstraint(
             "idempotency_key", name="uq_uw_company_research_preparation_idempotency"
         ),
-        Index("ix_uw_company_research_preparation_job", "job_id"),
+        UniqueConstraint("job_id", name="uq_uw_company_research_preparation_job"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
@@ -165,6 +165,12 @@ class CompanyResearchArtifactVersion(Base):
             "length(content_hash) = 64",
             name="ck_uw_company_research_artifact_content_hash",
         ),
+        CheckConstraint(
+            "(supersedes_id IS NULL AND parent_content_hash IS NULL) OR "
+            "(supersedes_id IS NOT NULL AND parent_content_hash IS NOT NULL "
+            "AND length(parent_content_hash) = 64)",
+            name="ck_uw_company_research_artifact_parent_hash",
+        ),
         *_json_shape_constraints(
             "payload",
             "object",
@@ -198,6 +204,7 @@ class CompanyResearchArtifactVersion(Base):
         ForeignKey("uw_company_research_artifact_versions.id"),
         nullable=True,
     )
+    parent_content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON(none_as_null=True), nullable=False)
     source_refs: Mapped[list] = mapped_column(JSON(none_as_null=True), nullable=False)
@@ -216,13 +223,23 @@ class CompanyResearchEvent(Base):
             "length(content_hash) = 64",
             name="ck_uw_company_research_event_content_hash",
         ),
+        CheckConstraint("sequence >= 1", name="ck_uw_company_research_event_sequence"),
+        CheckConstraint(
+            "(sequence = 1 AND previous_event_hash IS NULL) OR "
+            "(sequence > 1 AND previous_event_hash IS NOT NULL "
+            "AND length(previous_event_hash) = 64)",
+            name="ck_uw_company_research_event_predecessor_hash",
+        ),
         *_json_shape_constraints(
             "payload",
             "object",
             "ck_uw_company_research_event_payload_shape",
         ),
+        UniqueConstraint(
+            "preparation_id", "sequence", name="uq_uw_company_research_event_sequence"
+        ),
         Index(
-            "ix_uw_company_research_event_preparation", "preparation_id", "created_at"
+            "ix_uw_company_research_event_preparation", "preparation_id", "sequence"
         ),
     )
 
@@ -230,6 +247,8 @@ class CompanyResearchEvent(Base):
     preparation_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("uw_company_research_preparations.id"), nullable=False
     )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_event_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON(none_as_null=True), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)

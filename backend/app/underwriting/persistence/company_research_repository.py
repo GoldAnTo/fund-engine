@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ConflictError, ValidationError
@@ -54,6 +54,22 @@ class CompanyResearchRepository:
         # transaction, do not begin, commit, or replace it here.
         if not dbapi_connection.in_transaction:
             connection.exec_driver_sql("BEGIN IMMEDIATE")
+
+    def _reserve_sqlite_writer_before_artifact_head_read(self) -> None:
+        """Reserve SQLite's writer before calculating an artifact successor."""
+        try:
+            self._reserve_sqlite_writer_before_ownership_read()
+        except OperationalError as exc:
+            raise StaleParentError(
+                "expected parent is not the company artifact head"
+            ) from exc
+
+    def _reserve_sqlite_writer_before_event_append(self) -> None:
+        """Serialize an event sequence without committing caller-owned work."""
+        try:
+            self._reserve_sqlite_writer_before_ownership_read()
+        except OperationalError as exc:
+            raise ConflictError("company research event append is concurrent") from exc
 
     def _job_for_update(self, job_id: UUID) -> Job | None:
         """Read a Job under the caller transaction's row lock when supported."""
@@ -116,6 +132,7 @@ class CompanyResearchRepository:
         kind: str,
         version: int,
         supersedes_id: UUID | None,
+        parent_content_hash: str | None,
         input_hash: str,
         payload: Mapping[str, object],
         source_refs: Sequence[Mapping[str, object]],
@@ -126,6 +143,7 @@ class CompanyResearchRepository:
             "kind": kind,
             "version": version,
             "supersedes_id": str(supersedes_id) if supersedes_id is not None else None,
+            "parent_content_hash": parent_content_hash,
             "input_hash": input_hash,
             "payload": payload,
             "source_refs": source_refs,
@@ -139,6 +157,7 @@ class CompanyResearchRepository:
         kind: str,
         version: int,
         supersedes_id: UUID | None,
+        parent_content_hash: str | None = None,
         input_hash: str,
         payload: Mapping[str, object],
         source_refs: Sequence[Mapping[str, object]],
@@ -149,6 +168,7 @@ class CompanyResearchRepository:
                 kind=kind,
                 version=version,
                 supersedes_id=supersedes_id,
+                parent_content_hash=parent_content_hash,
                 input_hash=input_hash,
                 payload=payload,
                 source_refs=source_refs,
@@ -157,22 +177,39 @@ class CompanyResearchRepository:
 
     @staticmethod
     def _event_payload(
-        *, preparation_id: UUID, event_type: str, payload: Mapping[str, object]
+        *,
+        preparation_id: UUID,
+        sequence: int,
+        previous_event_hash: str | None,
+        event_type: str,
+        payload: Mapping[str, object],
     ) -> dict[str, object]:
         return {
             "schema_version": "company-research-event.v1",
             "preparation_id": str(preparation_id),
+            "sequence": sequence,
+            "previous_event_hash": previous_event_hash,
             "event_type": event_type,
             "payload": payload,
         }
 
     @classmethod
     def event_content_hash(
-        cls, *, preparation_id: UUID, event_type: str, payload: Mapping[str, object]
+        cls,
+        *,
+        preparation_id: UUID,
+        sequence: int,
+        previous_event_hash: str | None,
+        event_type: str,
+        payload: Mapping[str, object],
     ) -> str:
         return canonical_hash(
             cls._event_payload(
-                preparation_id=preparation_id, event_type=event_type, payload=payload
+                preparation_id=preparation_id,
+                sequence=sequence,
+                previous_event_hash=previous_event_hash,
+                event_type=event_type,
+                payload=payload,
             )
         )
 
@@ -272,6 +309,7 @@ class CompanyResearchRepository:
             kind=row.kind,
             version=row.version,
             supersedes_id=row.supersedes_id,
+            parent_content_hash=row.parent_content_hash,
             input_hash=row.input_hash,
             payload=row.payload,
             source_refs=row.source_refs,
@@ -285,6 +323,8 @@ class CompanyResearchRepository:
     def _validate_event_row(row: CompanyResearchEvent) -> None:
         expected_hash = CompanyResearchRepository.event_content_hash(
             preparation_id=row.preparation_id,
+            sequence=row.sequence,
+            previous_event_hash=row.previous_event_hash,
             event_type=row.event_type,
             payload=row.payload,
         )
@@ -320,6 +360,7 @@ class CompanyResearchRepository:
             raise ValidationError("artifact source_refs must be an array")
         if not all(isinstance(value, Mapping) for value in source_refs):
             raise ValidationError("artifact source_refs must contain objects")
+        self._reserve_sqlite_writer_before_artifact_head_read()
         parent = self.current_artifact(project_id, kind, lock=True)
         actual_parent_id = parent.id if parent is not None else None
         if actual_parent_id != expected_parent_id:
@@ -333,6 +374,9 @@ class CompanyResearchRepository:
             kind=kind,
             version=version,
             supersedes_id=actual_parent_id,
+            parent_content_hash=(
+                parent.content_hash if parent is not None else None
+            ),
             input_hash=input_hash,
             payload=copied_payload,
             source_refs=copied_refs,
@@ -341,6 +385,9 @@ class CompanyResearchRepository:
                 kind=kind,
                 version=version,
                 supersedes_id=actual_parent_id,
+                parent_content_hash=(
+                    parent.content_hash if parent is not None else None
+                ),
                 input_hash=input_hash,
                 payload=copied_payload,
                 source_refs=copied_refs,
@@ -383,6 +430,21 @@ class CompanyResearchRepository:
                 raise CompanyResearchIntegrityError(
                     "company research artifact parent chain is invalid"
                 )
+            if row.supersedes_id is None:
+                if row.parent_content_hash is not None:
+                    raise CompanyResearchIntegrityError(
+                        "company research artifact root has a parent content hash"
+                    )
+            else:
+                parent = self.artifact(row.supersedes_id)
+                if parent is None:
+                    raise CompanyResearchIntegrityError(
+                        "company research artifact parent is missing"
+                    )
+                if row.parent_content_hash != parent.content_hash:
+                    raise CompanyResearchIntegrityError(
+                        "company research artifact parent content hash mismatch"
+                    )
             chain.append(row)
             expected_project_id = row.project_id
             expected_kind = row.kind
@@ -484,19 +546,30 @@ class CompanyResearchRepository:
         payload: Mapping[str, object],
         created_at: datetime,
     ) -> CompanyResearchEvent:
-        if self.preparation(preparation_id) is None:
+        self._reserve_sqlite_writer_before_event_append()
+        if self._preparation_for_update(preparation_id) is None:
             raise ValidationError("company research preparation not found")
         if not isinstance(payload, Mapping):
             raise ValidationError("company research event payload must be an object")
         event_type = self._require_nonempty_text(event_type, "event_type", 64)
         copied_payload = deepcopy(dict(payload))
+        existing_events = self.events(preparation_id)
+        predecessor = existing_events[-1] if existing_events else None
+        sequence = 1 if predecessor is None else predecessor.sequence + 1
+        previous_event_hash = (
+            predecessor.content_hash if predecessor is not None else None
+        )
         return self._flush_in_savepoint(
             CompanyResearchEvent(
                 preparation_id=preparation_id,
+                sequence=sequence,
+                previous_event_hash=previous_event_hash,
                 event_type=event_type,
                 payload=copied_payload,
                 content_hash=self.event_content_hash(
                     preparation_id=preparation_id,
+                    sequence=sequence,
+                    previous_event_hash=previous_event_hash,
                     event_type=event_type,
                     payload=copied_payload,
                 ),
@@ -509,26 +582,34 @@ class CompanyResearchRepository:
             self._session.scalars(
                 select(CompanyResearchEvent)
                 .where(CompanyResearchEvent.preparation_id == preparation_id)
-                .order_by(CompanyResearchEvent.created_at, CompanyResearchEvent.id)
+                .order_by(CompanyResearchEvent.sequence)
             )
         )
-        for row in rows:
+        previous_hash: str | None = None
+        for expected_sequence, row in enumerate(rows, start=1):
             self._validate_event_row(row)
+            if row.sequence != expected_sequence:
+                raise CompanyResearchIntegrityError(
+                    "company research event sequence is invalid"
+                )
+            if row.previous_event_hash != previous_hash:
+                raise CompanyResearchIntegrityError(
+                    "company research event predecessor hash mismatch"
+                )
+            previous_hash = row.content_hash
         return rows
 
     def prepare_job(self, preparation_id: UUID) -> Job | None:
-        """Find only the generic job owned by this exact preparation contract."""
-        return self._session.scalar(
-            select(Job)
-            .where(
-                Job.kind == _PREPARE_JOB_KIND,
-                Job.target_type == _PREPARE_JOB_TARGET_TYPE,
-                Job.target_id == preparation_id,
-                Job.research_case_id.is_(None),
+        """Return the preparation's bound job after verifying its discriminator."""
+        preparation = self.preparation(preparation_id)
+        if preparation is None or preparation.job_id is None:
+            return None
+        job = self._session.get(Job, preparation.job_id)
+        if not self._is_exact_prepare_job_owner(job, preparation.id):
+            raise CompanyResearchIntegrityError(
+                "company research preparation job ownership is invalid"
             )
-            .order_by(Job.created_at, Job.id)
-            .limit(1)
-        )
+        return job
 
     def attach_prepare_job(
         self, preparation_id: UUID, job_id: UUID
@@ -538,17 +619,36 @@ class CompanyResearchRepository:
         preparation = self._preparation_for_update(preparation_id)
         if preparation is None:
             raise ValidationError("company research preparation not found")
+        if preparation.job_id is not None:
+            if preparation.job_id != job_id:
+                raise ConflictError("company research preparation job is already bound")
+            job = self._job_for_update(job_id)
+            if not self._is_exact_prepare_job_owner(job, preparation.id):
+                raise CompanyResearchIntegrityError(
+                    "company research preparation job ownership is invalid"
+                )
+            return preparation
         job = self._job_for_update(job_id)
-        if (
-            job is None
-            or job.kind != _PREPARE_JOB_KIND
-            or job.target_type != _PREPARE_JOB_TARGET_TYPE
-            or job.target_id != preparation.id
-            or job.research_case_id is not None
-        ):
+        if not self._is_exact_prepare_job_owner(job, preparation.id):
             raise ValidationError(
                 "company research preparation job ownership is invalid"
             )
         preparation.job_id = job.id
-        self._session.flush([preparation])
+        try:
+            with self._session.begin_nested():
+                self._session.flush([preparation])
+        except IntegrityError as exc:
+            raise ConflictError("company research preparation job is already bound") from exc
         return preparation
+
+    @staticmethod
+    def _is_exact_prepare_job_owner(
+        job: Job | None, preparation_id: UUID
+    ) -> bool:
+        return bool(
+            job is not None
+            and job.kind == _PREPARE_JOB_KIND
+            and job.target_type == _PREPARE_JOB_TARGET_TYPE
+            and job.target_id == preparation_id
+            and job.research_case_id is None
+        )

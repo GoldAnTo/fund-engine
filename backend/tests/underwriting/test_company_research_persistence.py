@@ -19,6 +19,7 @@ from app.underwriting.persistence.company_research_repository import (
     CompanyResearchIntegrityError,
     CompanyResearchRepository,
 )
+from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.persistence.models import UnderwritingResearchObject
 from app.underwriting.persistence.product_models import UnderwritingResearchProject
 
@@ -145,18 +146,99 @@ def test_artifacts_are_immutable_and_replayed_from_a_strict_parent_chain(
         kind=first.kind,
         version=first.version,
         supersedes_id=second.id,
+        parent_content_hash=second.content_hash,
         input_hash=first.input_hash,
         payload=first.payload,
         source_refs=first.source_refs,
     )
     session.connection().exec_driver_sql(
         "UPDATE uw_company_research_artifact_versions "
-        "SET supersedes_id = ?, content_hash = ? WHERE id = ?",
-        (second.id.hex, cycle_hash, first.id.hex),
+        "SET supersedes_id = ?, parent_content_hash = ?, content_hash = ? WHERE id = ?",
+        (second.id.hex, second.content_hash, cycle_hash, first.id.hex),
     )
     session.expire_all()
-    with pytest.raises(CompanyResearchIntegrityError, match="cycle"):
+    with pytest.raises(CompanyResearchIntegrityError, match="parent content hash"):
         repository.artifact_chain(second.id)
+
+
+def test_artifact_chain_rejects_an_admin_rewrite_of_parent_content(session) -> None:
+    """A successor commits its parent's content hash, not only its UUID."""
+    repository, project, _ = _repository_with_preparation(session)
+    first = repository.append_artifact(
+        project_id=project.id,
+        kind="business_map",
+        input_hash="1" * 64,
+        payload={"segments": ["search"]},
+        source_refs=[],
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    second = repository.append_artifact(
+        project_id=project.id,
+        kind="business_map",
+        input_hash="2" * 64,
+        payload={"segments": ["search", "cloud"]},
+        source_refs=[],
+        expected_parent_id=first.id,
+        created_at=NOW,
+    )
+    assert second.parent_content_hash == first.content_hash
+
+    rewritten_payload = {"segments": ["rewritten"]}
+    rewritten_hash = CompanyResearchRepository.artifact_content_hash(
+        project_id=first.project_id,
+        kind=first.kind,
+        version=first.version,
+        supersedes_id=None,
+        parent_content_hash=None,
+        input_hash=first.input_hash,
+        payload=rewritten_payload,
+        source_refs=first.source_refs,
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_company_research_artifact_versions "
+        "SET payload = ?, content_hash = ? WHERE id = ?",
+        ('{"segments":["rewritten"]}', rewritten_hash, first.id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(CompanyResearchIntegrityError, match="parent content hash"):
+        repository.artifact_chain(second.id)
+
+
+def test_event_reads_reject_a_rewritten_predecessor(session) -> None:
+    repository, _, preparation = _repository_with_preparation(session)
+    first = repository.append_event(
+        preparation_id=preparation.id,
+        event_type="initialized",
+        payload={"step": "evidence_index"},
+        created_at=NOW,
+    )
+    second = repository.append_event(
+        preparation_id=preparation.id,
+        event_type="advanced",
+        payload={"step": "business_map"},
+        created_at=NOW,
+    )
+    assert (first.sequence, second.sequence) == (1, 2)
+    assert second.previous_event_hash == first.content_hash
+
+    rewritten_payload = {"step": "rewritten"}
+    rewritten_hash = CompanyResearchRepository.event_content_hash(
+        preparation_id=first.preparation_id,
+        sequence=first.sequence,
+        previous_event_hash=None,
+        event_type=first.event_type,
+        payload=rewritten_payload,
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_company_research_events SET payload = ?, content_hash = ? WHERE id = ?",
+        ('{"step":"rewritten"}', rewritten_hash, first.id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(CompanyResearchIntegrityError, match="predecessor"):
+        repository.events(preparation.id)
 
 
 def test_artifact_reads_fail_closed_on_hash_tamper_and_duplicate_heads(session) -> None:
@@ -237,10 +319,68 @@ def test_job_lookup_requires_exact_company_research_ownership(session) -> None:
     session.add_all((legacy, owned))
     session.flush()
 
-    assert repository.prepare_job(preparation.id).id == owned.id
+    assert repository.prepare_job(preparation.id) is None
     assert repository.attach_prepare_job(preparation.id, owned.id).job_id == owned.id
-    with pytest.raises(ValidationError, match="job ownership"):
+    assert repository.prepare_job(preparation.id).id == owned.id
+    with pytest.raises(ConflictError, match="already bound"):
         repository.attach_prepare_job(preparation.id, legacy.id)
+
+
+def test_preparation_can_only_attach_its_first_valid_job(session) -> None:
+    repository, _, preparation = _repository_with_preparation(session)
+    first = Job(
+        kind="prepare_company_research",
+        status="queued",
+        progress=0,
+        attempt=1,
+        target_type="company_research_preparation",
+        target_id=preparation.id,
+        research_case_id=None,
+        created_at=NOW,
+    )
+    second = Job(
+        kind="prepare_company_research",
+        status="queued",
+        progress=0,
+        attempt=1,
+        target_type="company_research_preparation",
+        target_id=preparation.id,
+        research_case_id=None,
+        created_at=NOW,
+    )
+    session.add_all((first, second))
+    session.flush()
+
+    assert repository.attach_prepare_job(preparation.id, first.id).job_id == first.id
+    assert repository.attach_prepare_job(preparation.id, first.id).job_id == first.id
+    with pytest.raises(ConflictError, match="already bound"):
+        repository.attach_prepare_job(preparation.id, second.id)
+
+
+def test_prepare_job_rejects_an_attached_job_whose_discriminator_was_rewritten(
+    session,
+) -> None:
+    repository, _, preparation = _repository_with_preparation(session)
+    job = Job(
+        kind="prepare_company_research",
+        status="queued",
+        progress=0,
+        attempt=1,
+        target_type="company_research_preparation",
+        target_id=preparation.id,
+        research_case_id=None,
+        created_at=NOW,
+    )
+    session.add(job)
+    session.flush()
+    repository.attach_prepare_job(preparation.id, job.id)
+    session.connection().exec_driver_sql(
+        "UPDATE jobs SET kind = 'prepare_research' WHERE id = ?", (job.id.hex,)
+    )
+    session.expire_all()
+
+    with pytest.raises(CompanyResearchIntegrityError, match="job ownership"):
+        repository.prepare_job(preparation.id)
 
 
 def test_add_preparation_rejects_a_job_that_is_not_its_exact_owner(session) -> None:
@@ -502,6 +642,7 @@ def test_sqlite_job_ownership_binding_reserves_the_writer_before_its_read(
             )
         else:
             result = repository.attach_prepare_job(preparation_id, job_id)
+        result_id = result.id
         worker.commit()
     finally:
         event.remove(engine, "after_cursor_execute", rewrite_after_primary_job_read)
@@ -515,7 +656,7 @@ def test_sqlite_job_ownership_binding_reserves_the_writer_before_its_read(
         try:
             persisted_job = observer.get(Job, job_id)
             persisted_preparation = observer.get(
-                CompanyResearchPreparation, result.id
+                CompanyResearchPreparation, result_id
             )
             assert persisted_job is not None
             assert persisted_job.kind == "prepare_company_research"
@@ -581,6 +722,90 @@ def test_sqlite_job_ownership_reservation_rolls_back_with_the_caller(
         engine.dispose()
 
 
+def test_sqlite_concurrent_artifact_append_returns_a_stale_parent_error(tmp_path) -> None:
+    """The losing writer must get a domain stale-parent result, not sqlite I/O."""
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'company-research-artifact-race.sqlite'}",
+        future=True,
+        connect_args={"timeout": 0.1},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    bootstrap = sessions()
+    try:
+        repository, project, _ = _repository_with_preparation(bootstrap)
+        root = repository.append_artifact(
+            project_id=project.id,
+            kind="business_map",
+            input_hash="9" * 64,
+            payload={"segments": ["search"]},
+            source_refs=[],
+            expected_parent_id=None,
+            created_at=NOW,
+        )
+        bootstrap.commit()
+        project_id, root_id = project.id, root.id
+    finally:
+        bootstrap.close()
+
+    primary, rival = sessions(), sessions()
+    primary_connection = primary.connection()
+    attempted_rival = False
+    rival_errors: list[Exception] = []
+
+    def append_from_rival(connection, _cursor, statement, *_args) -> None:
+        nonlocal attempted_rival
+        if connection is not primary_connection or attempted_rival:
+            return
+        if statement.lstrip().upper().startswith("SELECT") and (
+            "FROM uw_company_research_artifact_versions" in statement
+        ):
+            attempted_rival = True
+            try:
+                CompanyResearchRepository(rival).append_artifact(
+                    project_id=project_id,
+                    kind="business_map",
+                    input_hash="a" * 64,
+                    payload={"segments": ["cloud"]},
+                    source_refs=[],
+                    expected_parent_id=root_id,
+                    created_at=NOW,
+                )
+            except Exception as exc:  # assertion below makes the type strict
+                rival_errors.append(exc)
+
+    event.listen(engine, "after_cursor_execute", append_from_rival)
+    try:
+        appended = CompanyResearchRepository(primary).append_artifact(
+            project_id=project_id,
+            kind="business_map",
+            input_hash="b" * 64,
+            payload={"segments": ["youtube"]},
+            source_refs=[],
+            expected_parent_id=root_id,
+            created_at=NOW,
+        )
+        appended_id = appended.id
+        primary.commit()
+    finally:
+        event.remove(engine, "after_cursor_execute", append_from_rival)
+        primary.close()
+        rival.close()
+
+    try:
+        assert attempted_rival
+        assert len(rival_errors) == 1
+        assert isinstance(rival_errors[0], StaleParentError)
+        observer = sessions()
+        try:
+            assert CompanyResearchRepository(observer).artifact(appended_id) is not None
+        finally:
+            observer.close()
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
 @pytest.mark.parametrize("foreign_scope", ("kind", "project"))
 def test_current_artifact_rejects_a_foreign_scope_successor(
     session, foreign_scope: str
@@ -611,14 +836,15 @@ def test_current_artifact_rejects_a_foreign_scope_successor(
         kind=foreign.kind,
         version=foreign.version,
         supersedes_id=first.id,
+        parent_content_hash=first.content_hash,
         input_hash=foreign.input_hash,
         payload=foreign.payload,
         source_refs=foreign.source_refs,
     )
     session.connection().exec_driver_sql(
         "UPDATE uw_company_research_artifact_versions "
-        "SET supersedes_id = ?, content_hash = ? WHERE id = ?",
-        (first.id.hex, foreign_hash, foreign.id.hex),
+        "SET supersedes_id = ?, parent_content_hash = ?, content_hash = ? WHERE id = ?",
+        (first.id.hex, first.content_hash, foreign_hash, foreign.id.hex),
     )
     session.expire_all()
 
@@ -653,14 +879,15 @@ def test_current_artifact_rejects_a_cycle_instead_of_returning_no_current(
         kind=first.kind,
         version=first.version,
         supersedes_id=second.id,
+        parent_content_hash=second.content_hash,
         input_hash=first.input_hash,
         payload=first.payload,
         source_refs=first.source_refs,
     )
     session.connection().exec_driver_sql(
         "UPDATE uw_company_research_artifact_versions "
-        "SET supersedes_id = ?, content_hash = ? WHERE id = ?",
-        (second.id.hex, cycle_hash, first.id.hex),
+        "SET supersedes_id = ?, parent_content_hash = ?, content_hash = ? WHERE id = ?",
+        (second.id.hex, second.content_hash, cycle_hash, first.id.hex),
     )
     session.expire_all()
 
