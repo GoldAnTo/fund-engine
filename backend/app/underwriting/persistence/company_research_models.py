@@ -69,7 +69,7 @@ COMPANY_RESEARCH_PREPARATION_STATUSES = frozenset(
     }
 )
 
-COMPANY_RESEARCH_ARTIFACT_KINDS = frozenset(
+COMPANY_RESEARCH_PREPARATION_STEPS = frozenset(
     {
         "evidence_index",
         "business_map",
@@ -82,6 +82,8 @@ COMPANY_RESEARCH_ARTIFACT_KINDS = frozenset(
         "memo",
     }
 )
+
+COMPANY_RESEARCH_ARTIFACT_KINDS = COMPANY_RESEARCH_PREPARATION_STEPS
 
 
 class CompanyResearchPreparation(Base):

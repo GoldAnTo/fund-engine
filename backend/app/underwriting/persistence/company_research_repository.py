@@ -18,6 +18,7 @@ from app.models.operational import Job
 from app.underwriting.persistence.company_research_models import (
     COMPANY_RESEARCH_ARTIFACT_KINDS,
     COMPANY_RESEARCH_PREPARATION_STATUSES,
+    COMPANY_RESEARCH_PREPARATION_STEPS,
     CompanyResearchArtifactVersion,
     CompanyResearchEvent,
     CompanyResearchPreparation,
@@ -86,6 +87,32 @@ class CompanyResearchRepository:
             .where(CompanyResearchPreparation.id == preparation_id)
             .with_for_update()
         )
+
+    @staticmethod
+    def _require_preparation_step(value: str | None, field: str) -> str:
+        if value not in COMPANY_RESEARCH_PREPARATION_STEPS:
+            raise ValidationError(f"{field} is not a company research preparation step")
+        return value
+
+    @staticmethod
+    def _validate_prepare_job_step(
+        *,
+        preparation_step: str | None,
+        preparation_status: str,
+        job: Job,
+        persisted: bool,
+    ) -> None:
+        error_type = CompanyResearchIntegrityError if persisted else ValidationError
+        if preparation_step not in COMPANY_RESEARCH_PREPARATION_STEPS:
+            raise error_type("company research preparation step is invalid")
+        if job.step != preparation_step:
+            raise error_type("company research preparation job step is invalid")
+        expected_job_status = {
+            "queued": "queued",
+            "recoverable_failure": "failed",
+        }.get(preparation_status)
+        if expected_job_status is not None and job.status != expected_job_status:
+            raise error_type("company research preparation job status is invalid")
 
     def _flush_in_savepoint(self, row: Any) -> Any:
         """Flush without committing or poisoning an outer SQLite transaction."""
@@ -238,6 +265,7 @@ class CompanyResearchRepository:
             raise ValidationError("attempt must be at least 1")
         if current_step is not None:
             current_step = self._require_nonempty_text(current_step, "current_step", 64)
+            self._require_preparation_step(current_step, "current_step")
         if last_error_code is not None:
             last_error_code = self._require_nonempty_text(
                 last_error_code, "last_error_code", 96
@@ -261,6 +289,12 @@ class CompanyResearchRepository:
             # preparation at that exact UUID so no later attachment can turn a
             # legacy or unrelated job into an owner.
             preparation_id = job.target_id
+            self._validate_prepare_job_step(
+                preparation_step=current_step,
+                preparation_status=status,
+                job=job,
+                persisted=False,
+            )
         row = CompanyResearchPreparation(
             id=preparation_id,
             project_id=project_id,
@@ -328,8 +362,13 @@ class CompanyResearchRepository:
             raise CompanyResearchIntegrityError(
                 "company research preparation job is missing"
             )
+        self._validate_prepare_job_step(
+            preparation_step=preparation.current_step,
+            preparation_status=preparation.status,
+            job=job,
+            persisted=True,
+        )
         preparation.status = "queued"
-        preparation.current_step = "evidence_index"
         preparation.progress = 0
         preparation.attempt += 1
         preparation.next_attempt_at = None
@@ -338,7 +377,6 @@ class CompanyResearchRepository:
         job.status = "queued"
         job.progress = 0
         job.attempt += 1
-        job.step = "evidence_index"
         job.error = None
         job.started_at = None
         job.finished_at = None

@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
+from app.models.operational import Job
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchPreparation,
 )
@@ -166,12 +167,17 @@ def test_retry_requeues_only_a_recoverable_preparation(api_client, session) -> N
     assert initialized.status_code == 201
     project_id = initialized.json()["project_id"]
     preparation = session.scalar(select(CompanyResearchPreparation))
+    job = session.scalar(select(Job))
     assert preparation is not None
+    assert job is not None
     preparation.status = "recoverable_failure"
     preparation.current_step = "evidence_index"
     preparation.progress = 35
     preparation.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
     preparation.last_error_code = "source_unavailable"
+    job.status = "failed"
+    job.step = "evidence_index"
+    job.error = "source_unavailable"
     session.commit()
 
     retried = api_client.post(f"{BASE}/projects/{project_id}/retry")
@@ -183,6 +189,76 @@ def test_retry_requeues_only_a_recoverable_preparation(api_client, session) -> N
     assert body["preparation"]["progress"] == 0
     assert body["preparation"]["attempt"] == 2
     assert body["preparation"]["request_hash"] == preview["preview_hash"]
+
+
+def test_retry_preserves_the_server_declared_failed_financial_bridge_step(
+    api_client, session
+) -> None:
+    company_id = _alphabet_id(session)
+    preview = _preview(api_client, company_id)
+    initialized = _initialize(api_client, company_id, preview["preview_hash"])
+    assert initialized.status_code == 201
+    project_id = initialized.json()["project_id"]
+    preparation = session.scalar(select(CompanyResearchPreparation))
+    job = session.scalar(select(Job))
+    assert preparation is not None
+    assert job is not None
+    preparation.status = "recoverable_failure"
+    preparation.current_step = "financial_bridge"
+    preparation.progress = 65
+    preparation.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+    preparation.last_error_code = "financial_data_unavailable"
+    job.status = "failed"
+    job.step = "financial_bridge"
+    job.error = "financial_data_unavailable"
+    session.commit()
+
+    retried = api_client.post(f"{BASE}/projects/{project_id}/retry")
+
+    assert retried.status_code == 202, retried.text
+    assert retried.json()["preparation"]["current_step"] == "financial_bridge"
+    session.expire_all()
+    persisted_preparation = session.scalar(select(CompanyResearchPreparation))
+    persisted_job = session.scalar(select(Job))
+    assert persisted_preparation is not None
+    assert persisted_job is not None
+    assert persisted_preparation.current_step == "financial_bridge"
+    assert persisted_job.status == "queued"
+    assert persisted_job.step == "financial_bridge"
+
+
+def test_retry_rejects_mismatched_failed_preparation_and_job_steps(
+    api_client, session
+) -> None:
+    company_id = _alphabet_id(session)
+    preview = _preview(api_client, company_id)
+    initialized = _initialize(api_client, company_id, preview["preview_hash"])
+    assert initialized.status_code == 201
+    project_id = initialized.json()["project_id"]
+    preparation = session.scalar(select(CompanyResearchPreparation))
+    job = session.scalar(select(Job))
+    assert preparation is not None
+    assert job is not None
+    preparation.status = "recoverable_failure"
+    preparation.current_step = "financial_bridge"
+    preparation.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+    job.status = "failed"
+    job.step = "evidence_index"
+    session.commit()
+
+    retried = api_client.post(f"{BASE}/projects/{project_id}/retry")
+
+    assert retried.status_code == 422
+    assert retried.json()["error"]["code"] == "validation_failed"
+    session.expire_all()
+    persisted_preparation = session.scalar(select(CompanyResearchPreparation))
+    persisted_job = session.scalar(select(Job))
+    assert persisted_preparation is not None
+    assert persisted_job is not None
+    assert persisted_preparation.status == "recoverable_failure"
+    assert persisted_preparation.current_step == "financial_bridge"
+    assert persisted_job.status == "failed"
+    assert persisted_job.step == "evidence_index"
 
 
 def test_retry_rejects_a_preparation_that_is_not_recoverable(

@@ -358,6 +358,7 @@ class CompanyResearchInitializer:
             status="queued",
             progress=0,
             attempt=1,
+            step="evidence_index",
             target_type=_PREPARE_JOB_TARGET_TYPE,
             target_id=preparation_id,
             research_case_id=None,
