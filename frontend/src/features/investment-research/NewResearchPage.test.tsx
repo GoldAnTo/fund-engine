@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -76,8 +76,14 @@ function LocationProbe() {
   return <output aria-label="当前路径">{location.pathname}</output>;
 }
 
-function renderPage() {
-  render(<MemoryRouter initialEntries={["/research/new"]}><ResearchOsRoutes /><LocationProbe /></MemoryRouter>);
+function renderPage(initialEntry: string | { pathname: string; state: unknown } = "/research/new") {
+  render(<MemoryRouter initialEntries={[initialEntry]}><ResearchOsRoutes /><LocationProbe /></MemoryRouter>);
+}
+
+function deferred<T>() {
+  let resolve: (value: T) => void;
+  const promise = new Promise<T>((next) => { resolve = next; });
+  return { promise, resolve: resolve! };
 }
 
 async function selectAlphabet(user: ReturnType<typeof userEvent.setup>) {
@@ -145,6 +151,83 @@ describe("company research entry", () => {
     expect(screen.getByRole("button", { name: "研究 Alphabet" })).toBeVisible();
     expect(screen.queryByRole("button", { name: /研究 GOOGL|研究 GOOG/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "查看相关公司" })).toBeVisible();
+  });
+
+  it("invalidates an in-flight default-plan preview when a new search begins", async () => {
+    const user = userEvent.setup();
+    const delayedPreview = deferred<Response>();
+    const requests: Request[] = [];
+    vi.stubGlobal("fetch", vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url.includes("/product/objects?")) return json({ ...dto, items: objects });
+      if (url.endsWith("/company-research/preview")) return delayedPreview.promise;
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    renderPage();
+
+    await user.type(await screen.findByLabelText("搜索公司、证券或行业"), "Google");
+    await user.click(screen.getByRole("button", { name: "搜索对象" }));
+    await screen.findByRole("region", { name: "对象搜索结果" });
+    await user.click(screen.getByRole("button", { name: "研究 Alphabet" }));
+    expect(await screen.findByRole("button", { name: "正在准备默认方案" })).toBeVisible();
+
+    const input = screen.getByLabelText("搜索公司、证券或行业");
+    await user.clear(input);
+    await user.type(input, "GOOGL");
+    await user.click(screen.getByRole("button", { name: "搜索对象" }));
+    await screen.findByRole("region", { name: "对象搜索结果" });
+    await act(async () => {
+      delayedPreview.resolve(json(preview()));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("heading", { name: "选择研究公司" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "确认默认研究方案" })).not.toBeInTheDocument();
+    expect(requests.filter((request) => request.url.includes("/product/objects?"))).toHaveLength(2);
+  });
+
+  it("reloads a home-seeded company as its complete company group before research can start", async () => {
+    const user = userEvent.setup();
+    const delayedSearch = deferred<Response>();
+    const requests: Request[] = [];
+    vi.stubGlobal("fetch", vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url.includes("/product/objects?")) return delayedSearch.promise;
+      if (url.endsWith("/company-research/preview")) {
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) as { cutoff_at: string } : null;
+        return json(preview(body?.cutoff_at));
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    renderPage({ pathname: "/research/new", state: { seedObject: objects[0] } });
+
+    expect(await screen.findByRole("heading", { name: "选择研究公司" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "研究 Alphabet" })).not.toBeInTheDocument();
+    delayedSearch.resolve(json({ ...dto, items: objects }));
+    const results = await screen.findByRole("region", { name: "对象搜索结果" });
+    expect(results).toHaveTextContent("GOOGL");
+    expect(results).toHaveTextContent("GOOG");
+    expect(requests[0]?.url).toContain("query=US%3AALPHABET%3ACOMPANY");
+
+    await user.click(screen.getByRole("button", { name: "研究 Alphabet" }));
+    expect(await screen.findByRole("heading", { name: "确认默认研究方案" })).toBeVisible();
+  });
+
+  it("searches for an industry's related companies instead of only showing a notice", async () => {
+    const user = userEvent.setup();
+    const product = server();
+    vi.stubGlobal("fetch", product.fetch);
+    renderPage();
+    await user.type(await screen.findByLabelText("搜索公司、证券或行业"), "Google");
+    await user.click(screen.getByRole("button", { name: "搜索对象" }));
+    await screen.findByRole("region", { name: "对象搜索结果" });
+
+    await user.click(screen.getByRole("button", { name: "查看相关公司" }));
+    await waitFor(() => expect(product.requests.filter((request) => request.url.includes("/product/objects?"))).toHaveLength(2));
+    expect(product.requests[1]?.url).toContain("query=%E4%BA%92%E8%81%94%E7%BD%91%E5%B9%B3%E5%8F%B0");
+    expect(screen.queryByText(/可在公司研究中查看/)).not.toBeInTheDocument();
   });
 
   it("announces empty search results", async () => {

@@ -71,6 +71,7 @@ export default function NewResearchPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const seed = initialSeed(location.state);
+  const initialLookupRef = useRef(seed?.external_key ?? initialSearchQuery(location.state).trim());
   const mountedRef = useRef(true);
   const searchEpochRef = useRef(0);
   const previewEpochRef = useRef(0);
@@ -81,8 +82,8 @@ export default function NewResearchPage() {
   const alertRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<PageState>("selecting_company");
   const [query, setQuery] = useState(() => initialSearchQuery(location.state));
-  const [results, setResults] = useState<ProductObjectSearchItem[]>(seed ? [seed] : []);
-  const [searched, setSearched] = useState(Boolean(seed));
+  const [results, setResults] = useState<ProductObjectSearchItem[]>([]);
+  const [searched, setSearched] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [previewingCompanyId, setPreviewingCompanyId] = useState<string | null>(null);
@@ -90,7 +91,6 @@ export default function NewResearchPage() {
   const [preview, setPreview] = useState<CompanyResearchPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [initializationError, setInitializationError] = useState<string | null>(null);
-  const [industryNotice, setIndustryNotice] = useState<string | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -114,15 +114,29 @@ export default function NewResearchPage() {
   const securities = results.filter((item) => item.kind === "security");
   const industries = results.filter((item) => item.kind === "industry");
 
-  async function runSearch(event?: FormEvent<HTMLFormElement>) {
-    event?.preventDefault();
-    const term = query.trim();
-    if (!term || searching) return;
+  function invalidateDefaultPlan() {
+    previewEpochRef.current += 1;
+    initializationEpochRef.current += 1;
+    initializationLockRef.current = false;
+    intentKeyRef.current = null;
+    setSelectedCompanyId(null);
+    setPreviewingCompanyId(null);
+    setPreview(null);
+    setPreviewError(null);
+    setInitializationError(null);
+    setState("selecting_company");
+  }
+
+  async function searchFor(rawTerm: string) {
+    const term = rawTerm.trim();
+    if (!term) return;
+    // A result for the old company must never take the user back to its plan
+    // after they have explicitly begun looking for another research object.
+    invalidateDefaultPlan();
     const epoch = ++searchEpochRef.current;
     setSearching(true);
     setSearched(false);
     setSearchError(null);
-    setIndustryNotice(null);
     try {
       const response = await investmentResearchApi.searchObjects(term);
       if (!mountedRef.current || searchEpochRef.current !== epoch) return;
@@ -138,8 +152,19 @@ export default function NewResearchPage() {
     }
   }
 
+  useEffect(() => {
+    if (initialLookupRef.current) void searchFor(initialLookupRef.current);
+  }, []);
+
+  async function runSearch(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    const term = query.trim();
+    if (!term || searching) return;
+    await searchFor(term);
+  }
+
   async function reviewDefault(company: ProductObjectSearchItem) {
-    if (previewingCompanyId !== null || state === "initializing") return;
+    if (securities.length === 0 || previewingCompanyId !== null || state === "initializing") return;
     const epoch = ++previewEpochRef.current;
     setSelectedCompanyId(company.object_id);
     setPreviewingCompanyId(company.object_id);
@@ -191,14 +216,7 @@ export default function NewResearchPage() {
   }
 
   function returnToCompanySelection() {
-    previewEpochRef.current += 1;
-    initializationEpochRef.current += 1;
-    initializationLockRef.current = false;
-    intentKeyRef.current = null;
-    setPreview(null);
-    setPreviewError(null);
-    setInitializationError(null);
-    setState("selecting_company");
+    invalidateDefaultPlan();
   }
 
   if (state === "reviewing_default" || state === "initializing") {
@@ -261,14 +279,13 @@ export default function NewResearchPage() {
               <article className="ir-company-card" key={company.object_id}>
                 <div><span className="ir-kind ir-kind--company">Company</span><h3>{company.canonical_name}</h3><p>{company.external_key}</p></div>
                 {securities.length > 0 ? <p className="ir-company-card__securities">关联证券：{securities.map((security) => `${security.symbol} ${security.share_class}`).join("；")}</p> : <p className="ir-company-card__securities">尚未返回关联证券；不能建立研究。</p>}
-                <button className="ir-button ir-button--primary" disabled={previewingCompanyId !== null} onClick={() => void reviewDefault(company)} type="button">{previewingCompanyId === company.object_id ? "正在准备默认方案" : `研究 ${companyActionName(company)}`}</button>
+                <button className="ir-button ir-button--primary" disabled={securities.length === 0 || previewingCompanyId !== null} onClick={() => void reviewDefault(company)} type="button">{previewingCompanyId === company.object_id ? "正在准备默认方案" : `研究 ${companyActionName(company)}`}</button>
               </article>
             ))}
             {securities.length > 0 ? <section aria-label="关联证券" className="ir-related-securities"><h3>关联 Securities</h3><ul>{securities.map((security) => <li key={security.object_id}><span className="ir-kind ir-kind--security">Security</span><strong>{security.symbol} {security.share_class}</strong><small>{security.exchange} · {security.trading_currency}</small></li>)}</ul></section> : null}
-            {industries.length > 0 ? <section aria-label="行业浏览" className="ir-industry-browse"><h3>行业上下文</h3>{industries.map((industry) => <div key={industry.object_id}><span className="ir-kind ir-kind--industry">Industry</span><strong>{industry.canonical_name}</strong><button className="ir-button" onClick={() => setIndustryNotice(`可在公司研究中查看与“${industry.canonical_name}”相关的公司和竞争背景。`)} type="button">查看相关公司</button></div>)}</section> : null}
+            {industries.length > 0 ? <section aria-label="行业浏览" className="ir-industry-browse"><h3>行业上下文</h3>{industries.map((industry) => <div key={industry.object_id}><span className="ir-kind ir-kind--industry">Industry</span><strong>{industry.canonical_name}</strong><button className="ir-button" disabled={searching} onClick={() => { setQuery(industry.canonical_name); void searchFor(industry.canonical_name); }} type="button">查看相关公司</button></div>)}</section> : null}
           </div>
         ) : null}
-        {industryNotice ? <p className="ir-confirmed" role="status">{industryNotice}</p> : null}
         {searched && !searching && !searchError && results.length === 0 ? <p className="ir-empty" role="status">没有找到匹配的 Company、Security 或 Industry。请检查名称、代码或身份标识。</p> : null}
       </section>
     </main>
