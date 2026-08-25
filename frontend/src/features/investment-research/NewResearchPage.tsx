@@ -72,6 +72,7 @@ export default function NewResearchPage() {
   const location = useLocation();
   const seed = initialSeed(location.state);
   const initialLookupRef = useRef(seed?.external_key ?? initialSearchQuery(location.state).trim());
+  const retryLookupRef = useRef(initialLookupRef.current);
   const mountedRef = useRef(true);
   const searchEpochRef = useRef(0);
   const previewEpochRef = useRef(0);
@@ -130,6 +131,7 @@ export default function NewResearchPage() {
   async function searchFor(rawTerm: string) {
     const term = rawTerm.trim();
     if (!term) return;
+    retryLookupRef.current = term;
     // A result for the old company must never take the user back to its plan
     // after they have explicitly begun looking for another research object.
     invalidateDefaultPlan();
@@ -161,6 +163,10 @@ export default function NewResearchPage() {
     const term = query.trim();
     if (!term || searching) return;
     await searchFor(term);
+  }
+
+  function retrySearch() {
+    if (!searching) void searchFor(retryLookupRef.current);
   }
 
   async function reviewDefault(company: ProductObjectSearchItem) {
@@ -271,7 +277,7 @@ export default function NewResearchPage() {
           </label>
           <button className="ir-button" disabled={searching || !query.trim()} type="submit">{searching ? "搜索中" : "搜索对象"}</button>
         </form>
-        {searchError ? <div className="ir-alert" ref={alertRef} role="alert" tabIndex={-1}><p>{searchError}</p><button className="ir-button" disabled={searching} onClick={() => void runSearch()} type="button">重试对象搜索</button></div> : null}
+        {searchError ? <div className="ir-alert" ref={alertRef} role="alert" tabIndex={-1}><p>{searchError}</p><button className="ir-button" disabled={searching} onClick={retrySearch} type="button">重试对象搜索</button></div> : null}
         {previewError ? <div className="ir-alert" ref={alertRef} role="alert" tabIndex={-1}><p>{previewError}</p><button className="ir-button" disabled={previewingCompanyId !== null} onClick={() => { const company = companies.find((item) => item.object_id === selectedCompanyId); if (company) void reviewDefault(company); }} type="button">重试默认方案</button></div> : null}
         {results.length > 0 ? (
           <div aria-label="对象搜索结果" className="ir-company-results" role="region">

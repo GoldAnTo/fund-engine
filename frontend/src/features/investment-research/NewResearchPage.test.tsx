@@ -215,6 +215,35 @@ describe("company research entry", () => {
     expect(await screen.findByRole("heading", { name: "确认默认研究方案" })).toBeVisible();
   });
 
+  it("retries a failed home-seeded full-company lookup with its stable external key", async () => {
+    const user = userEvent.setup();
+    const requests: Request[] = [];
+    let searchAttempts = 0;
+    vi.stubGlobal("fetch", vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url.includes("/product/objects?")) {
+        searchAttempts += 1;
+        if (searchAttempts === 1) throw new TypeError("offline");
+        return json({ ...dto, items: objects });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    renderPage({ pathname: "/research/new", state: { seedObject: objects[0] } });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法连接投资研究服务");
+    await user.click(screen.getByRole("button", { name: "重试对象搜索" }));
+
+    const results = await screen.findByRole("region", { name: "对象搜索结果" });
+    expect(results).toHaveTextContent("GOOGL");
+    expect(results).toHaveTextContent("GOOG");
+    expect(requests).toHaveLength(2);
+    expect(requests.map((request) => request.url)).toEqual([
+      expect.stringContaining("query=US%3AALPHABET%3ACOMPANY"),
+      expect.stringContaining("query=US%3AALPHABET%3ACOMPANY"),
+    ]);
+  });
+
   it("searches for an industry's related companies instead of only showing a notice", async () => {
     const user = userEvent.setup();
     const product = server();
