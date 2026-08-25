@@ -1607,9 +1607,9 @@ def test_unicode_alias_lower_queries_are_consistent(session, service) -> None:
     group = _company_group(
         session,
         service,
-        key="strasse",
-        company_name="Street Holdings",
-        securities=(("STRASSE-A", "Street Class A", "STRA"),),
+        key="DE:TEST",
+        company_name="Unrelated Holdings",
+        securities=(("DE:TEST:A", "Unrelated Class A", "DTA"),),
     )
     session.add(
         UnderwritingResearchObjectAlias(
@@ -1627,6 +1627,7 @@ def test_unicode_alias_lower_queries_are_consistent(session, service) -> None:
         assert {
             result.object_id for result in service.search_objects(query, NOW, 3)
         } == expected_ids
+    assert service.search_objects("STRASSE", NOW, 3) == ()
 
 
 def test_company_discovery_expands_only_identities_effective_as_of(session) -> None:
