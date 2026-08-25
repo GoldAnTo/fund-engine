@@ -1013,6 +1013,72 @@ class ProductRepository:
             candidate_count=len(candidate_rows),
         )
 
+    def industry_company_groups(
+        self,
+        industry_id: UUID,
+        as_of: datetime,
+        limit: int,
+    ) -> tuple[
+        tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion], ...
+    ] | None:
+        """Return effective, complete Company groups directly exposed by an Industry.
+
+        The direct relation is the auditable browse boundary.  We inspect no
+        transitive graph edges and bound materialized relation rows before
+        expanding a Company to its effective Securities.
+        """
+        industry = self.object(industry_id)
+        if industry is None:
+            return None
+        if industry.kind != "industry":
+            raise ValidationError("industry_id must identify an Industry")
+        if not 1 <= limit <= 100:
+            raise ValidationError("limit must be between 1 and 100")
+
+        direct_children = tuple(
+            self._session.scalars(
+                select(UnderwritingResearchObject)
+                .join(
+                    UnderwritingObjectRelation,
+                    UnderwritingObjectRelation.child_id
+                    == UnderwritingResearchObject.id,
+                )
+                .where(
+                    UnderwritingObjectRelation.parent_id == industry_id,
+                    UnderwritingObjectRelation.relation_type
+                    == "industry_exposes_company",
+                )
+                .order_by(UnderwritingObjectRelation.child_id)
+                .limit(_OBJECT_SEARCH_CANDIDATE_CAP + 1)
+            )
+        )
+        if len(direct_children) > _OBJECT_SEARCH_CANDIDATE_CAP:
+            raise ValidationError("industry exposes too many Company relations")
+        if any(child.kind != "company" for child in direct_children):
+            raise ValidationError(
+                "industry_exposes_company must directly reference a Company"
+            )
+
+        child_ids = {child.id for child in direct_children}
+        effective_rows = (
+            tuple(
+                self._session.execute(
+                    self._effective_object_statement(as_of).where(
+                        UnderwritingResearchObject.id.in_(child_ids)
+                    )
+                )
+            )
+            if child_ids
+            else ()
+        )
+        anchors = {research_object.id: (research_object, identity) for research_object, identity in effective_rows}
+        return self._pack_search_groups(
+            anchors,
+            {company_id: True for company_id in anchors},
+            as_of,
+            limit,
+        )
+
     def create_project(
         self,
         *,

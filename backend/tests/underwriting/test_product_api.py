@@ -150,6 +150,96 @@ def _seed_catalog(session, *, suffix: str = "main") -> dict[str, object]:
     return locals()
 
 
+def test_industry_company_endpoint_returns_complete_alphabet_group(api_client, session) -> None:
+    from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
+    from app.underwriting.services.product_foundation_fixture import (
+        ProductFoundationFixtureService,
+    )
+
+    imported = ProductFoundationFixtureService(session, now=lambda: NOW).load(
+        load_product_foundation_fixture()
+    )
+    industry = imported.objects["GLOBAL:INTERNET_SERVICES:INDUSTRY"]
+
+    response = api_client.get(
+        f"{BASE}/industries/{industry.id}/companies",
+        params={"as_of": NOW.isoformat(), "limit": 3},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [item["external_key"] for item in response.json()["items"]] == [
+        "US:ALPHABET:COMPANY",
+        "NASDAQ:GOOGL",
+        "NASDAQ:GOOG",
+    ]
+
+
+def test_industry_company_endpoint_maps_not_found_validation_and_keeps_reads_transaction_free(
+    api_client, session, monkeypatch
+) -> None:
+    catalog = _seed_catalog(session, suffix="industry-browse")
+    empty_industry = _seed_object(
+        session, "industry", "industry-empty", "Empty Industry"
+    )
+    ResearchProjectService(session, now=lambda: NOW).append_identity_version(
+        object_id=empty_industry.id,
+        canonical_name=empty_industry.canonical_name,
+        symbol=None,
+        exchange=None,
+        share_class=None,
+        trading_currency=None,
+        effective_from=EFFECTIVE,
+        effective_to=None,
+        expected_parent_id=None,
+    )
+    transaction_calls = {"commit": 0, "rollback": 0}
+
+    def commit_spy() -> None:
+        transaction_calls["commit"] += 1
+
+    def rollback_spy() -> None:
+        transaction_calls["rollback"] += 1
+
+    monkeypatch.setattr(session, "commit", commit_spy)
+    monkeypatch.setattr(session, "rollback", rollback_spy)
+    session.add(
+        UnderwritingObjectRelation(
+            parent_id=catalog["industry"].id,
+            child_id=catalog["security"].id,
+            relation_type="industry_exposes_company",
+            created_at=NOW,
+        )
+    )
+    session.flush()
+
+    empty = api_client.get(
+        f"{BASE}/industries/{empty_industry.id}/companies",
+        params={"as_of": NOW.isoformat()},
+    )
+    missing = api_client.get(
+        f"{BASE}/industries/{uuid4()}/companies",
+        params={"as_of": NOW.isoformat()},
+    )
+    wrong_kind = api_client.get(
+        f"{BASE}/industries/{catalog['company'].id}/companies",
+        params={"as_of": NOW.isoformat()},
+    )
+    corrupt = api_client.get(
+        f"{BASE}/industries/{catalog['industry'].id}/companies",
+        params={"as_of": NOW.isoformat()},
+    )
+
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["items"] == []
+    assert missing.status_code == 404
+    assert _error_code(missing) == "not_found"
+    assert wrong_kind.status_code == 422
+    assert _error_code(wrong_kind) == "validation_failed"
+    assert corrupt.status_code == 422
+    assert _error_code(corrupt) == "validation_failed"
+    assert transaction_calls == {"commit": 0, "rollback": 0}
+
+
 def _create_project(api_client, catalog: dict[str, object]) -> dict:
     response = api_client.post(
         f"{BASE}/projects",

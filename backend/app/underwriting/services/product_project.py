@@ -295,6 +295,40 @@ class ResearchProjectService:
             for research_object, identity in outcome.rows
         )
 
+    def industry_companies(
+        self,
+        industry_id: UUID,
+        as_of: datetime,
+        limit: int = 20,
+    ) -> tuple[ObjectSearchResult, ...] | None:
+        industry_id = self._uuid(industry_id, "industry_id")
+        normalized_as_of = self._utc(as_of, "as_of")
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or not 1 <= limit <= 100
+        ):
+            raise ValidationError("limit must be between 1 and 100")
+        rows = self._repository.industry_company_groups(
+            industry_id, normalized_as_of, limit
+        )
+        if rows is None:
+            return None
+        return tuple(
+            ObjectSearchResult(
+                object_id=research_object.id,
+                identity_version_id=identity.id,
+                kind=ResearchObjectKind(research_object.kind),
+                external_key=research_object.external_key,
+                canonical_name=identity.canonical_name,
+                symbol=identity.symbol,
+                exchange=identity.exchange,
+                share_class=identity.share_class,
+                trading_currency=identity.trading_currency,
+            )
+            for research_object, identity in rows
+        )
+
     def _project_view(self, record) -> ResearchProjectView:
         project, security_ids = record
         created_at = self._stored_utc(project.created_at)

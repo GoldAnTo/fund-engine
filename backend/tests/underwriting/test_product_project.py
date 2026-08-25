@@ -1845,6 +1845,39 @@ def test_industry_matches_are_never_expanded_as_company_groups(
     ] == ["alpha-industry"]
 
 
+def test_industry_companies_expands_only_direct_company_groups_and_honors_limit(
+    session, service
+) -> None:
+    imported = ProductFoundationFixtureService(session, now=lambda: NOW).load(
+        load_product_foundation_fixture()
+    )
+    industry = imported.objects["GLOBAL:INTERNET_SERVICES:INDUSTRY"]
+
+    assert [
+        item.external_key for item in service.industry_companies(industry.id, NOW, 3)
+    ] == ["US:ALPHABET:COMPANY", "NASDAQ:GOOGL", "NASDAQ:GOOG"]
+    assert service.industry_companies(industry.id, NOW, 2) == ()
+
+
+def test_industry_companies_rejects_wrong_parent_and_corrupt_direct_child(
+    session, service
+) -> None:
+    industry = _object(session, "industry", "industry:target", "Target Industry")
+    company = _object(session, "company", "company:target", "Target Company")
+    security = _object(session, "security", "security:target", "Target Security")
+    for row in (industry, company, security):
+        _identity(service, row, currency="USD" if row is security else None)
+
+    assert service.industry_companies(industry.id, NOW, 10) == ()
+    with pytest.raises(ValidationError, match="Industry"):
+        service.industry_companies(company.id, NOW, 10)
+    assert service.industry_companies(uuid4(), NOW, 10) is None
+
+    _relation(session, industry.id, security.id, "industry_exposes_company")
+    with pytest.raises(ValidationError, match="Company"):
+        service.industry_companies(industry.id, NOW, 10)
+
+
 def test_foundation_fixture_is_idempotent_content_checked_and_contains_no_research_facts(
     session, tmp_path
 ) -> None:

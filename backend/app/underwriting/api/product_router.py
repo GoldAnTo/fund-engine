@@ -395,6 +395,31 @@ def search_product_objects(
 
 
 @router.get(
+    "/industries/{industry_id}/companies",
+    response_model=ProductObjectSearchResponse,
+    responses=READ_ERROR_RESPONSES,
+)
+def list_industry_companies(
+    industry_id: UUID,
+    as_of: datetime | None = Query(default=None),
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    db: Session = Depends(get_db),
+) -> ProductObjectSearchResponse:
+    values = _read_value(
+        lambda: ResearchProjectService(db, now=_now).industry_companies(
+            industry_id, as_of or _now(), limit
+        )
+    )
+    if values is None:
+        raise NotFoundError("industry not found")
+    return ProductObjectSearchResponse(
+        items=tuple(
+            ProductObjectSearchItemResponse(**asdict(value)) for value in values
+        )
+    )
+
+
+@router.get(
     "/projects",
     response_model=ResearchProjectListResponse,
     responses={422: {"model": UnderwritingErrorEnvelope}},
