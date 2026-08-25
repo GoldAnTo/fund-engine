@@ -213,6 +213,26 @@ def test_default_policy_rejects_overrides(kwargs) -> None:
         CompanyResearchDefaultPolicy(**kwargs)
 
 
+@pytest.mark.parametrize("horizon_years", [5.0, Decimal("5"), True, "5"])
+def test_default_policy_and_preview_reject_non_integer_horizon_years(
+    alphabet_identity_set, horizon_years
+) -> None:
+    with pytest.raises(
+        CompanyResearchValidationError, match="horizon_years must be an int"
+    ):
+        CompanyResearchDefaultPolicy(horizon_years=horizon_years)
+
+    preview = build_company_research_preview(
+        adapter=AlphabetCompanyResearchAdapter(),
+        identities=alphabet_identity_set,
+        cutoff_at=datetime(2026, 8, 25, 1, 30, tzinfo=UTC),
+    )
+    with pytest.raises(
+        CompanyResearchValidationError, match="horizon_years must be an int"
+    ):
+        replace(preview, horizon_years=horizon_years, input_hash="")
+
+
 def test_unknown_adapter_company_is_rejected(alphabet_identity_set) -> None:
     other_company = CompanyResearchCompany(
         object_id=uuid4(), external_key="US:OTHER:COMPANY", canonical_name="Other"

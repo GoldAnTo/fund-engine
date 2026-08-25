@@ -231,6 +231,8 @@ class CompanyResearchDefaultPolicy:
     generic_modules: tuple[CompanyResearchModule, ...] = _DEFAULT_MODULE_VALUES
 
     def __post_init__(self) -> None:
+        if type(self.horizon_years) is not int:
+            raise CompanyResearchValidationError("horizon_years must be an int")
         if type(self.required_return) is not Decimal:
             raise CompanyResearchValidationError("required_return must be a Decimal")
         if type(self.permanent_loss_limit) is not Decimal:
