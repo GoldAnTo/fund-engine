@@ -48,7 +48,7 @@ describe("independent investment research shell", () => {
 
   it.each([
     ["/research", "独立投资研究"],
-    ["/research/new", "建立研究项目"],
+    ["/research/new", "选择研究公司"],
   ])("renders %s outside legacy shells with product-only navigation", async (path, heading) => {
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
@@ -142,7 +142,7 @@ describe("independent investment research shell", () => {
     expect(within(results).getByText("Company")).toBeVisible();
     expect(within(results).getByText("Security")).toBeVisible();
     expect(within(results).getByText("Industry")).toBeVisible();
-    expect(within(results).getByText("仅浏览")).toBeVisible();
+    expect(within(results).getByRole("link", { name: /查看相关公司/ })).toBeVisible();
   });
 
   it("renders the honest nine-module workbench and an insufficient-evidence preview", async () => {
@@ -356,9 +356,9 @@ describe("independent investment research shell", () => {
     await user.click(screen.getByRole("button", { name: "搜索对象" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("搜索读取失败");
     await user.click(screen.getByRole("button", { name: "重试对象搜索" }));
-    await user.click(await screen.findByRole("link", { name: /带入建项.*宁德时代/ }));
-    expect(await screen.findByRole("heading", { name: "建立研究项目" })).toBeVisible();
-    expect(screen.getByRole("radio", { name: /Company.*宁德时代/ })).toBeChecked();
+    await user.click(await screen.findByRole("link", { name: /研究 宁德时代/ }));
+    expect(await screen.findByRole("heading", { name: "选择研究公司" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "研究 宁德时代" })).toBeVisible();
   });
 
   it("retries workbench and publication preview reads in place", async () => {

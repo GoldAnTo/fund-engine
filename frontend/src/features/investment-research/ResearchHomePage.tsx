@@ -22,6 +22,10 @@ function identityLine(item: ProductObjectSearchItem): string {
   return item.external_key;
 }
 
+function companyActionName(item: ProductObjectSearchItem): string {
+  return item.canonical_name === "Alphabet Inc." ? "Alphabet" : item.canonical_name;
+}
+
 export default function ResearchHomePage() {
   const [projects, setProjects] = useState<ProductProject[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,8 +118,10 @@ export default function ResearchHomePage() {
                   <small>{identityLine(item)}</small>
                 </div>
                 {item.kind === "industry"
-                  ? <span>仅浏览</span>
-                  : <Link aria-label={`带入建项 ${item.canonical_name}`} state={{ seedObject: item }} to="/research/new">带入建项</Link>}
+                  ? <Link aria-label={`查看相关公司 ${item.canonical_name}`} state={{ searchQuery: item.canonical_name }} to="/research/new">查看相关公司</Link>
+                  : item.kind === "company"
+                    ? <Link aria-label={`研究 ${companyActionName(item)}`} state={{ seedObject: item }} to="/research/new">研究 {companyActionName(item)}</Link>
+                    : <Link aria-label={`查看 ${item.canonical_name} 的关联公司`} state={{ searchQuery: item.symbol ?? item.canonical_name }} to="/research/new">查看关联公司</Link>}
               </li>
             ))}
           </ul>
