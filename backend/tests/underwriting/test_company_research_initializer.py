@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Barrier
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import sessionmaker
 
-from app.models.ledger import ConflictError, ValidationError
+from app.models.ledger import Base, ConflictError, ValidationError
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchEvent,
     CompanyResearchPreparation,
 )
+from app.underwriting.persistence.models import UnderwritingResearchObject
 from app.underwriting.persistence.product_models import UnderwritingResearchProject
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchInitializer,
@@ -29,6 +33,32 @@ def _initializer(session) -> tuple[CompanyResearchInitializer, object]:
     return CompanyResearchInitializer(session, now=lambda: NOW), loaded.objects[
         "US:ALPHABET:COMPANY"
     ]
+
+
+def _seeded_session_factory(tmp_path):
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'company-research-initializer.sqlite'}",
+        future=True,
+        connect_args={"check_same_thread": False, "timeout": 3},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    with sessions() as seed:
+        ProductFoundationFixtureService(seed, now=lambda: NOW).load(
+            load_product_foundation_fixture()
+        )
+        seed.commit()
+    return engine, sessions
+
+
+def _fresh_initializer(session) -> tuple[CompanyResearchInitializer, object]:
+    alphabet = session.scalar(
+        select(UnderwritingResearchObject).where(
+            UnderwritingResearchObject.external_key == "US:ALPHABET:COMPANY"
+        )
+    )
+    assert alphabet is not None
+    return CompanyResearchInitializer(session, now=lambda: NOW), alphabet
 
 
 def test_preview_is_read_only_and_resolves_all_effective_alphabet_securities(
@@ -107,6 +137,98 @@ def test_initialize_replays_the_original_foundation_for_the_same_key(session) ->
     assert replay.project.id == first.project.id
     assert replay.preparation.id == first.preparation.id
     assert replay.job.id == first.job.id
+
+
+def test_initialize_recovers_a_lost_response_in_a_fresh_session(tmp_path) -> None:
+    engine, sessions = _seeded_session_factory(tmp_path)
+    try:
+        with sessions() as first_session:
+            initializer, alphabet = _fresh_initializer(first_session)
+            preview = initializer.preview(company_id=alphabet.id, cutoff_at=NOW)
+            created = initializer.initialize(
+                preview_hash=preview.input_hash,
+                company_id=alphabet.id,
+                cutoff_at=NOW,
+                idempotency_key="alphabet-fresh-session-replay",
+            )
+            created_project_id = created.project.id
+            created_preparation_id = created.preparation.id
+            first_session.commit()
+
+        with sessions() as replay_session:
+            initializer, alphabet = _fresh_initializer(replay_session)
+            preview = initializer.preview(company_id=alphabet.id, cutoff_at=NOW)
+            replay = initializer.initialize(
+                preview_hash=preview.input_hash,
+                company_id=alphabet.id,
+                cutoff_at=NOW,
+                idempotency_key="alphabet-fresh-session-replay",
+            )
+
+            assert replay.project.id == created_project_id
+            assert replay.preparation.id == created_preparation_id
+            assert (
+                replay_session.scalar(
+                    select(func.count()).select_from(UnderwritingResearchProject)
+                )
+                == 1
+            )
+            assert (
+                replay_session.scalar(
+                    select(func.count()).select_from(CompanyResearchPreparation)
+                )
+                == 1
+            )
+    finally:
+        engine.dispose()
+
+
+def test_concurrent_different_keys_converge_or_conflict_without_raw_sqlite_error(
+    tmp_path,
+) -> None:
+    engine, sessions = _seeded_session_factory(tmp_path)
+    barrier = Barrier(2)
+
+    def initialize(key: str):
+        with sessions() as worker:
+            initializer, alphabet = _fresh_initializer(worker)
+            preview = initializer.preview(company_id=alphabet.id, cutoff_at=NOW)
+            barrier.wait()
+            try:
+                result = initializer.initialize(
+                    preview_hash=preview.input_hash,
+                    company_id=alphabet.id,
+                    cutoff_at=NOW,
+                    idempotency_key=key,
+                )
+                worker.commit()
+                return ("created", result.project.id, result.preparation.id)
+            except ConflictError:
+                worker.rollback()
+                return ("conflict", None, None)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = tuple(
+                pool.map(initialize, ("alphabet-concurrent-a", "alphabet-concurrent-b"))
+            )
+
+        assert {outcome[0] for outcome in outcomes} == {"created", "conflict"}
+        with sessions() as observer:
+            assert (
+                observer.scalar(
+                    select(func.count()).select_from(UnderwritingResearchProject)
+                )
+                == 1
+            )
+            assert (
+                observer.scalar(
+                    select(func.count()).select_from(CompanyResearchPreparation)
+                )
+                == 1
+            )
+    finally:
+        engine.dispose()
 
 
 def test_initialize_rejects_an_idempotency_key_reused_for_a_different_request(
