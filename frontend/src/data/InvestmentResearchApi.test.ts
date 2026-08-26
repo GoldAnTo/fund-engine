@@ -288,6 +288,14 @@ describe("InvestmentResearchApi", () => {
     );
   });
 
+  it("accepts a lowercase response industry UUID for an uppercase request UUID", async () => {
+    const lowercaseIndustryId = "a0000000-0000-4000-8000-000000000001";
+    vi.stubGlobal("fetch", vi.fn(async () => response(industryCompanyBrowseBody(undefined, lowercaseIndustryId))));
+
+    await expect(new InvestmentResearchApi().industryCompanies(lowercaseIndustryId.toUpperCase()))
+      .resolves.toMatchObject({ industry_id: lowercaseIndustryId });
+  });
+
   it("rejects an invalid industry identity locally without making a request", async () => {
     const fetchSpy = vi.fn<typeof fetch>();
     vi.stubGlobal("fetch", fetchSpy);

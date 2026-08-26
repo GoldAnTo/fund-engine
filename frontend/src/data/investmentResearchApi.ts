@@ -913,6 +913,7 @@ export class InvestmentResearchApi {
 
   async industryCompanies(industryId: string, options: { asOf?: string; limit?: number } = {}): Promise<IndustryCompanyBrowse> {
     assertUuid(industryId, "industryId");
+    const normalizedIndustryId = industryId.toLowerCase();
     const params = new URLSearchParams();
     if (options.asOf) params.set("as_of", options.asOf);
     params.set("limit", String(options.limit ?? 20));
@@ -922,7 +923,7 @@ export class InvestmentResearchApi {
       200,
       { method: "GET" },
     );
-    if (browse.industry_id !== industryId) {
+    if (browse.industry_id !== normalizedIndustryId) {
       throw new InvestmentResearchRequestError("投资研究服务返回了不匹配的行业结果", 502, "invalid_response", null);
     }
     return browse;
