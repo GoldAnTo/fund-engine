@@ -4,6 +4,8 @@ type Schemas = components["schemas"];
 
 export type ProductObjectSearch = Schemas["ProductObjectSearchResponse"];
 export type ProductObjectSearchItem = Schemas["ProductObjectSearchItemResponse"];
+export type IndustryCompanyBrowse = Schemas["IndustryCompanyBrowseResponse"];
+export type IndustryCompanyBrowseItem = Schemas["IndustryCompanyBrowseItemResponse"];
 export type ProductProject = Schemas["ResearchProjectResponse"];
 export type ProductProjectList = Schemas["ResearchProjectListResponse"];
 export type ProductDraft = Schemas["WorkspaceDraftResponse"];
@@ -218,6 +220,42 @@ function isObjectItem(value: unknown): value is ProductObjectSearchItem {
 
 function isObjectSearch(value: unknown): value is ProductObjectSearch {
   return isProductDto(value) && hasExactKeys(value, ["schema_version", "items"]) && Array.isArray(value.items) && value.items.every(isObjectItem);
+}
+
+function isIndustryCompanyBrowseItem(value: unknown): value is IndustryCompanyBrowseItem {
+  if (!isProductDto(value)
+    || !hasExactKeys(value, ["schema_version", "object_id", "kind", "external_key", "canonical_name", "symbol", "exchange", "share_class", "trading_currency"])
+    || !isUuid(value.object_id)
+    || !isNonEmptyString(value.external_key)
+    || !isNonEmptyString(value.canonical_name)) return false;
+  if (value.kind === "company") {
+    return value.symbol === null && value.exchange === null && value.share_class === null && value.trading_currency === null;
+  }
+  return value.kind === "security"
+    && isNonEmptyString(value.symbol)
+    && isNonEmptyString(value.exchange)
+    && isNonEmptyString(value.share_class)
+    && (value.trading_currency === "CNY" || value.trading_currency === "USD");
+}
+
+function isIndustryCompanyBrowse(value: unknown): value is IndustryCompanyBrowse {
+  if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "items"])
+    || !Array.isArray(value.items) || !value.items.every(isIndustryCompanyBrowseItem)) return false;
+  const objectIds = value.items.map((item) => item.object_id);
+  if (new Set(objectIds).size !== objectIds.length) return false;
+  let hasAnchor = false;
+  let securitiesInCurrentGroup = 0;
+  for (const item of value.items) {
+    if (item.kind === "company") {
+      if (hasAnchor && securitiesInCurrentGroup === 0) return false;
+      hasAnchor = true;
+      securitiesInCurrentGroup = 0;
+    } else {
+      if (!hasAnchor) return false;
+      securitiesInCurrentGroup += 1;
+    }
+  }
+  return !hasAnchor || securitiesInCurrentGroup > 0;
 }
 
 function isProject(value: unknown): value is ProductProject {
@@ -864,6 +902,18 @@ export class InvestmentResearchApi {
     if (options.asOf) params.set("as_of", options.asOf);
     params.set("limit", String(options.limit ?? 20));
     return requestJson(`${this.root}/objects?${params}`, isObjectSearch, 200, { method: "GET" });
+  }
+
+  industryCompanies(industryId: string, options: { asOf?: string; limit?: number } = {}): Promise<IndustryCompanyBrowse> {
+    const params = new URLSearchParams();
+    if (options.asOf) params.set("as_of", options.asOf);
+    params.set("limit", String(options.limit ?? 20));
+    return requestJson(
+      `${this.root}/industries/${encodeURIComponent(industryId)}/companies?${params}`,
+      isIndustryCompanyBrowse,
+      200,
+      { method: "GET" },
+    );
   }
 
   projects(limit = 20): Promise<ProductProjectList> {

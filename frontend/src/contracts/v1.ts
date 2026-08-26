@@ -2534,6 +2534,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/underwriting/v1/product/industries/{industry_id}/companies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Industry Companies */
+        get: operations["list_industry_companies_api_underwriting_v1_product_industries__industry_id__companies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/underwriting/v1/product/projects": {
         parameters: {
             query?: never;
@@ -7567,6 +7584,51 @@ export interface components {
             link_agreement_rate: number | null;
             /** Link Modified */
             link_modified: number;
+        };
+        /**
+         * IndustryCompanyBrowseItemResponse
+         * @description Public identity projection for an Industry's directly related companies.
+         */
+        IndustryCompanyBrowseItemResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "industry" | "company" | "security";
+            /** External Key */
+            external_key: string;
+            /** Canonical Name */
+            canonical_name: string;
+            /** Symbol */
+            symbol: string | null;
+            /** Exchange */
+            exchange: string | null;
+            /** Share Class */
+            share_class: string | null;
+            /** Trading Currency */
+            trading_currency: ("CNY" | "USD") | null;
+        };
+        /** IndustryCompanyBrowseResponse */
+        IndustryCompanyBrowseResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Items */
+            items: components["schemas"]["IndustryCompanyBrowseItemResponse"][];
         };
         /**
          * IngestRequest
@@ -17327,6 +17389,49 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProductObjectSearchResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_industry_companies_api_underwriting_v1_product_industries__industry_id__companies_get: {
+        parameters: {
+            query?: {
+                as_of?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                industry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndustryCompanyBrowseResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
             /** @description Unprocessable Content */

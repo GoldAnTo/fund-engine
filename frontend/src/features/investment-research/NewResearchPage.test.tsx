@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +16,12 @@ const objects = [
   { ...dto, object_id: ids.googl, identity_version_id: uid(11), kind: "security", external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD" },
   { ...dto, object_id: ids.goog, identity_version_id: uid(12), kind: "security", external_key: "NASDAQ:GOOG", canonical_name: "Alphabet Inc. Class C", symbol: "GOOG", exchange: "NASDAQ", share_class: "Class C", trading_currency: "USD" },
   { ...dto, object_id: ids.industry, identity_version_id: uid(13), kind: "industry", external_key: "INDUSTRY:INTERNET", canonical_name: "互联网平台", symbol: null, exchange: null, share_class: null, trading_currency: null },
+] as const;
+
+const industryCompanyItems = [
+  { ...dto, object_id: ids.company, kind: "company", external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc.", symbol: null, exchange: null, share_class: null, trading_currency: null },
+  { ...dto, object_id: ids.googl, kind: "security", external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD" },
+  { ...dto, object_id: ids.goog, kind: "security", external_key: "NASDAQ:GOOG", canonical_name: "Alphabet Inc. Class C", symbol: "GOOG", exchange: "NASDAQ", share_class: "Class C", trading_currency: "USD" },
 ] as const;
 
 function json(body: object, status = 200): Response {
@@ -46,13 +52,19 @@ function initialized() {
 }
 
 type Request = { url: string; init: RequestInit | undefined };
-function server({ loseFirstInitialization = false, searchItems = objects }: { loseFirstInitialization?: boolean; searchItems?: readonly object[] } = {}) {
+function server({ loseFirstInitialization = false, searchItems = objects, industryItems = industryCompanyItems, loseFirstIndustryBrowse = false }: { loseFirstInitialization?: boolean; searchItems?: readonly object[]; industryItems?: readonly object[]; loseFirstIndustryBrowse?: boolean } = {}) {
   let initializationAttempts = 0;
+  let industryBrowseAttempts = 0;
   const requests: Request[] = [];
   const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
     const url = String(input);
     requests.push({ url, init });
     if (url.includes("/product/objects?")) return json({ ...dto, items: searchItems });
+    if (url.includes(`/product/industries/${ids.industry}/companies?`)) {
+      industryBrowseAttempts += 1;
+      if (loseFirstIndustryBrowse && industryBrowseAttempts === 1) throw new TypeError("offline");
+      return json({ ...dto, items: industryItems });
+    }
     if (url.endsWith("/company-research/preview")) {
       const body = typeof init?.body === "string" ? JSON.parse(init.body) as { cutoff_at: string } : null;
       return json(preview(body?.cutoff_at));
@@ -244,7 +256,7 @@ describe("company research entry", () => {
     ]);
   });
 
-  it("searches for an industry's related companies instead of only showing a notice", async () => {
+  it("browses an industry's complete Company group through its dedicated route and starts only the chosen Company", async () => {
     const user = userEvent.setup();
     const product = server();
     vi.stubGlobal("fetch", product.fetch);
@@ -254,9 +266,56 @@ describe("company research entry", () => {
     await screen.findByRole("region", { name: "对象搜索结果" });
 
     await user.click(screen.getByRole("button", { name: "查看相关公司" }));
-    await waitFor(() => expect(product.requests.filter((request) => request.url.includes("/product/objects?"))).toHaveLength(2));
-    expect(product.requests[1]?.url).toContain("query=%E4%BA%92%E8%81%94%E7%BD%91%E5%B9%B3%E5%8F%B0");
-    expect(screen.queryByText(/可在公司研究中查看/)).not.toBeInTheDocument();
+    const related = await screen.findByRole("region", { name: "行业相关公司" });
+    expect(related).toHaveTextContent("Alphabet Inc.");
+    expect(related).toHaveTextContent("GOOGL Class A；GOOG Class C");
+    const browseRequest = product.requests.find((request) => request.url.includes(`/product/industries/${ids.industry}/companies?`));
+    expect(browseRequest?.url).toContain(`as_of=`);
+    expect(screen.queryByRole("button", { name: /研究 互联网平台/ })).not.toBeInTheDocument();
+
+    await user.click(within(related).getByRole("button", { name: "研究 Alphabet" }));
+    expect(await screen.findByRole("heading", { name: "确认默认研究方案" })).toBeVisible();
+    const previewRequest = product.requests.find((request) => request.url.endsWith("/company-research/preview"));
+    expect(JSON.parse(String(previewRequest?.init?.body))).toMatchObject({ company_id: ids.company });
+  });
+
+  it("shows an empty industry browse result and retries a failed industry browse", async () => {
+    const user = userEvent.setup();
+    const product = server({ industryItems: [], loseFirstIndustryBrowse: true });
+    vi.stubGlobal("fetch", product.fetch);
+    renderPage();
+    await user.type(await screen.findByLabelText("搜索公司、证券或行业"), "Google");
+    await user.click(screen.getByRole("button", { name: "搜索对象" }));
+    await screen.findByRole("region", { name: "对象搜索结果" });
+
+    await user.click(screen.getByRole("button", { name: "查看相关公司" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法连接投资研究服务");
+    await user.click(screen.getByRole("button", { name: "重试相关公司" }));
+    expect(await screen.findByText("该行业暂未配置可研究公司。")).toBeVisible();
+    expect(product.requests.filter((request) => request.url.includes(`/product/industries/${ids.industry}/companies?`))).toHaveLength(2);
+  });
+
+  it("ignores a stale industry browse after a new object search starts", async () => {
+    const user = userEvent.setup();
+    const delayedBrowse = deferred<Response>();
+    vi.stubGlobal("fetch", vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input);
+      if (url.includes("/product/objects?")) return json({ ...dto, items: objects });
+      if (url.includes(`/product/industries/${ids.industry}/companies?`)) return delayedBrowse.promise;
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    renderPage();
+    const input = await screen.findByLabelText("搜索公司、证券或行业");
+    await user.type(input, "Google");
+    await user.click(screen.getByRole("button", { name: "搜索对象" }));
+    await screen.findByRole("region", { name: "对象搜索结果" });
+    await user.click(screen.getByRole("button", { name: "查看相关公司" }));
+    await user.clear(input);
+    await user.type(input, "GOOGL");
+    await user.click(screen.getByRole("button", { name: "搜索对象" }));
+    await act(async () => { delayedBrowse.resolve(json({ ...dto, items: industryCompanyItems })); await Promise.resolve(); });
+
+    expect(screen.queryByRole("region", { name: "行业相关公司" })).not.toBeInTheDocument();
   });
 
   it("announces empty search results", async () => {

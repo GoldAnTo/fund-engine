@@ -83,6 +83,14 @@ function companyResearchProjectBody(status = "queued", currentStep: string | nul
   };
 }
 
+function industryCompanyBrowseBody(items: object[] = [
+  { schema_version: "underwriting.v1", object_id: ids.company, kind: "company", external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc.", symbol: null, exchange: null, share_class: null, trading_currency: null },
+  { schema_version: "underwriting.v1", object_id: ids.securityA, kind: "security", external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD" },
+  { schema_version: "underwriting.v1", object_id: ids.securityB, kind: "security", external_key: "NASDAQ:GOOG", canonical_name: "Alphabet Inc. Class C", symbol: "GOOG", exchange: "NASDAQ", share_class: "Class C", trading_currency: "USD" },
+]) {
+  return { schema_version: "underwriting.v1", items };
+}
+
 function mandateBody() {
   return {
     schema_version: "underwriting.v1", id: ids.mandate, project_id: ids.project,
@@ -266,6 +274,31 @@ describe("InvestmentResearchApi", () => {
       expect(typeof init?.body).toBe("string");
     }
     if (operation.idempotencyKey) expect(init?.headers).toMatchObject({ "Idempotency-Key": operation.idempotencyKey });
+  });
+
+  it("accepts only complete, uniquely grouped Company and Security industry browse results", async () => {
+    const fetchSpy = vi.fn<typeof fetch>(async () => response(industryCompanyBrowseBody()));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(new InvestmentResearchApi().industryCompanies(ids.company, { asOf: now, limit: 3 }))
+      .resolves.toMatchObject({ items: [{ object_id: ids.company }, { object_id: ids.securityA }, { object_id: ids.securityB }] });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      `/api/underwriting/v1/product/industries/${ids.company}/companies?as_of=2026-08-24T00%3A00%3A00Z&limit=3`,
+      expect.objectContaining({ method: "GET", credentials: "include" }),
+    );
+  });
+
+  it.each([
+    ["an industry item", industryCompanyBrowseBody([{ schema_version: "underwriting.v1", object_id: ids.company, kind: "industry", external_key: "INDUSTRY:INTERNET", canonical_name: "Internet", symbol: null, exchange: null, share_class: null, trading_currency: null }])],
+    ["a security before its Company", industryCompanyBrowseBody([{ schema_version: "underwriting.v1", object_id: ids.securityA, kind: "security", external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD" }])],
+    ["a Company without Securities", industryCompanyBrowseBody([{ schema_version: "underwriting.v1", object_id: ids.company, kind: "company", external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc.", symbol: null, exchange: null, share_class: null, trading_currency: null }])],
+    ["a duplicate object", industryCompanyBrowseBody([{ schema_version: "underwriting.v1", object_id: ids.company, kind: "company", external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc.", symbol: null, exchange: null, share_class: null, trading_currency: null }, { schema_version: "underwriting.v1", object_id: ids.securityA, kind: "security", external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD" }, { schema_version: "underwriting.v1", object_id: ids.securityA, kind: "security", external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD" }])],
+    ["an extra identity field", (() => { const body = industryCompanyBrowseBody(); Object.assign(body.items[0]!, { identity_version_id: ids.membershipA }); return body; })()],
+    ["a malformed UUID", industryCompanyBrowseBody([{ schema_version: "underwriting.v1", object_id: "not-a-uuid", kind: "company", external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc.", symbol: null, exchange: null, share_class: null, trading_currency: null }, { schema_version: "underwriting.v1", object_id: ids.securityA, kind: "security", external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD" }])],
+    ["a split Company group", industryCompanyBrowseBody([{ schema_version: "underwriting.v1", object_id: ids.company, kind: "company", external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc.", symbol: null, exchange: null, share_class: null, trading_currency: null }, { schema_version: "underwriting.v1", object_id: ids.securityA, kind: "security", external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD" }, { schema_version: "underwriting.v1", object_id: ids.company, kind: "company", external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc.", symbol: null, exchange: null, share_class: null, trading_currency: null }, { schema_version: "underwriting.v1", object_id: ids.securityB, kind: "security", external_key: "NASDAQ:GOOG", canonical_name: "Alphabet Inc. Class C", symbol: "GOOG", exchange: "NASDAQ", share_class: "Class C", trading_currency: "USD" }])],
+  ])("rejects an invalid industry browse response: %s", async (_name, body) => {
+    vi.stubGlobal("fetch", vi.fn(async () => response(body)));
+    await expect(new InvestmentResearchApi().industryCompanies(ids.company)).rejects.toMatchObject({ code: "invalid_response" });
   });
 
   it("uses only high-level company-research routes and binds initialization to its preview", async () => {
