@@ -127,8 +127,12 @@ def _backfill_search_terms() -> None:
             connection.execute(terms.insert(), batch)
             batch.clear()
 
-    object_rows = connection.execution_options(stream_results=True).execute(
-        sa.select(objects.c.id, objects.c.external_key, objects.c.created_at)
+    object_rows = connection.execute(
+        sa.select(
+            objects.c.id,
+            objects.c.external_key,
+            objects.c.created_at,
+        ).execution_options(stream_results=True)
     )
     for row in object_rows:
         append_term(
@@ -138,14 +142,14 @@ def _backfill_search_terms() -> None:
             raw_value=row.external_key,
             created_at=row.created_at,
         )
-    identity_rows = connection.execution_options(stream_results=True).execute(
+    identity_rows = connection.execute(
         sa.select(
             identities.c.id,
             identities.c.object_id,
             identities.c.canonical_name,
             identities.c.symbol,
             identities.c.created_at,
-        )
+        ).execution_options(stream_results=True)
     )
     for row in identity_rows:
         append_term(

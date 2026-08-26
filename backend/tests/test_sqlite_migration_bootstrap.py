@@ -7,6 +7,7 @@ history used by the application and retain a durable revision marker.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import os
 import subprocess
 import sys
@@ -63,6 +64,89 @@ def test_0066_migration_freezes_search_digest_without_app_imports() -> None:
     assert "from app." not in source
     assert "import app." not in source
     assert "hashlib.sha256" in source
+
+
+def test_0066_backfill_keeps_server_side_cursor_option_off_the_shared_bind() -> None:
+    """Later PostgreSQL DDL must not inherit a streaming server cursor.
+
+    SQLAlchemy 2.x mutates a ``Connection`` when its ``execution_options``
+    method is called.  PostgreSQL cannot DECLARE a cursor for ``CREATE
+    TRIGGER``, so the backfill must attach ``stream_results`` to each SELECT,
+    rather than to Alembic's shared migration bind.
+    """
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0066_research_object_aliases.py"
+    )
+    module_spec = importlib.util.spec_from_file_location(
+        "migration_0066_backfill_execution_options",
+        migration_path,
+    )
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    migration = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(migration)
+
+    metadata = sa.MetaData()
+    objects = sa.Table(
+        "uw_research_objects",
+        metadata,
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("external_key", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    identities = sa.Table(
+        "uw_object_identity_versions",
+        metadata,
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("object_id", sa.String(), nullable=False),
+        sa.Column("canonical_name", sa.String(), nullable=False),
+        sa.Column("symbol", sa.String(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    terms = sa.Table(
+        "uw_research_object_search_terms",
+        metadata,
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("object_id", sa.String(), nullable=False),
+        sa.Column("identity_version_id", sa.String(), nullable=True),
+        sa.Column("term_kind", sa.String(), nullable=False),
+        sa.Column("raw_value", sa.String(), nullable=False),
+        sa.Column("normalized_value", sa.String(), nullable=False),
+        sa.Column("normalized_digest", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    engine = sa.create_engine("sqlite://")
+    metadata.create_all(engine)
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            objects.insert(),
+            {"id": "object", "external_key": "US:EXAMPLE", "created_at": now},
+        )
+        connection.execute(
+            identities.insert(),
+            {
+                "id": "identity",
+                "object_id": "object",
+                "canonical_name": "Example",
+                "symbol": "EX",
+                "created_at": now,
+            },
+        )
+        migration.op = SimpleNamespace(get_bind=lambda: connection)
+
+        migration._backfill_search_terms()
+
+        assert "stream_results" not in connection.get_execution_options()
+        assert (
+            connection.execute(
+                sa.select(sa.func.count()).select_from(terms)
+            ).scalar_one()
+            == 3
+        )
 
 
 CANDIDATE_EVIDENCE_TABLES = {
