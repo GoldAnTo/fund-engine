@@ -315,7 +315,11 @@ def load_alphabet_golden_case_fixture(root: Path | None = None) -> AlphabetGolde
     if company_key != "US:ALPHABET:COMPANY":
         raise AlphabetGoldenCaseFixtureError("Alphabet fixture company key is unsupported")
     security_keys_raw = facts_raw.get("security_external_keys")
-    if not isinstance(security_keys_raw, list) or set(security_keys_raw) != {"NASDAQ:GOOG", "NASDAQ:GOOGL"}:
+    if (
+        not isinstance(security_keys_raw, list)
+        or not all(isinstance(key, str) for key in security_keys_raw)
+        or tuple(sorted(security_keys_raw)) != ("NASDAQ:GOOG", "NASDAQ:GOOGL")
+    ):
         raise AlphabetGoldenCaseFixtureError("Alphabet fixture securities must preserve GOOGL and GOOG")
     facts_values = facts_raw.get("facts")
     gaps_values = facts_raw.get("research_gaps")

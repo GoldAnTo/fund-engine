@@ -175,6 +175,37 @@ def test_custom_fixture_rejects_unknown_keys_hash_mismatch_and_duplicate_fact_id
         load_alphabet_golden_case_fixture(root)
 
 
+def test_custom_fixture_rejects_unhashable_security_external_key(tmp_path: Path) -> None:
+    root = _copy_fixture(tmp_path)
+    facts = _read_json(root / "source_facts.json")
+    facts["security_external_keys"] = [["NASDAQ:GOOG"], "NASDAQ:GOOGL"]
+    _write_json(root / "source_facts.json", facts)
+    _refresh_manifest(root)
+
+    with pytest.raises(AlphabetGoldenCaseFixtureError, match="securities"):
+        load_alphabet_golden_case_fixture(root)
+
+
+@pytest.mark.parametrize(
+    "security_external_keys",
+    (
+        ["NASDAQ:GOOG", "NASDAQ:GOOGL", "NASDAQ:GOOG"],
+        ["NASDAQ:GOOG", "NYSE:GOOGL"],
+    ),
+)
+def test_custom_fixture_rejects_duplicate_or_wrong_security_external_keys(
+    tmp_path: Path, security_external_keys: list[str]
+) -> None:
+    root = _copy_fixture(tmp_path)
+    facts = _read_json(root / "source_facts.json")
+    facts["security_external_keys"] = security_external_keys
+    _write_json(root / "source_facts.json", facts)
+    _refresh_manifest(root)
+
+    with pytest.raises(AlphabetGoldenCaseFixtureError, match="securities"):
+        load_alphabet_golden_case_fixture(root)
+
+
 def test_loaded_fixture_keeps_official_lineage_modules_gaps_and_distinct_securities() -> None:
     fixture = load_alphabet_golden_case_fixture()
 
@@ -282,3 +313,27 @@ def test_prepare_evidence_index_records_recoverable_failure_without_artifact_hea
         "code": "alphabet_source_unavailable",
         "recoverable": True,
     }
+
+
+def test_prepare_evidence_index_recovers_from_unhashable_fixture_security_key(
+    session, monkeypatch, tmp_path: Path
+) -> None:
+    initialized = _preparation(session)
+    root = _copy_fixture(tmp_path)
+    facts = _read_json(root / "source_facts.json")
+    facts["security_external_keys"] = [["NASDAQ:GOOG"], "NASDAQ:GOOGL"]
+    _write_json(root / "source_facts.json", facts)
+    _refresh_manifest(root)
+    service = CompanyResearchSourceService(session, now=lambda: NOW)
+    monkeypatch.setattr(service, "_load_fixture", lambda: load_alphabet_golden_case_fixture(root))
+
+    outcome = service.prepare_evidence_index(preparation_id=initialized.preparation.id)
+
+    assert outcome.status == "recoverable_failure"
+    assert outcome.error == {"code": "alphabet_source_unavailable", "recoverable": True}
+    assert session.scalar(
+        select(func.count()).select_from(CompanyResearchArtifactVersion).where(
+            CompanyResearchArtifactVersion.project_id == initialized.project.id
+        )
+    ) == 0
+    assert outcome.events[-1].event_type == "source_preparation_failed"
