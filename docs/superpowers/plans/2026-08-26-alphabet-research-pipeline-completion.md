@@ -158,6 +158,15 @@ to module mappings, minimum operating-baseline requirements, and the exact
 Base/Bull/Bear mechanism mapping. The generic builder must consume this template
 and must not guess classifications from metric names or attach all drivers to an
 arbitrary first module. Modules named only by a gap remain present in the output.
+The template keeps operating-driver bindings separate from the exactly six
+financial-driver ownership bindings. Confirmed facts build reported/derived
+operating drivers (Search use, monetization, TAC, YouTube, Cloud workload,
+capital intensity, dilution, or a future adapter's equivalents); the six
+strategy paths are only the closed financial/scenario compiler inputs. The
+engine requires those six as a subset and does not limit the driver map to them.
+Metric classifications are executable routing rules: confirmed numeric facts
+must be placed into the module's revenue, cost, or capital evidence according to
+their declared category, not merely checked against an allowlist.
 
 `FrozenMarketSnapshotBinding` binds every UUID to the exact typed market role,
 Security key where applicable, and `SourceLineageReference` consumed by the
@@ -200,6 +209,11 @@ The controlled input state must survive into `DriverMetricArtifact` and
 that persisted state. Do not weaken the existing non-empty business module
 invariants. Adapter templates provide non-empty revenue, cost, and capital
 descriptors even when a corresponding numeric fact is still a gap.
+Every emitted business module must carry at least one confirmed fact ref or one
+explicit gap ref. A template-only empty shell becomes a generated gap and cannot
+silently remain `answerable`. Facts used for baseline or drivers require a
+canonical finite numeric value, value kind, unit/currency/period, and exact
+lineage; labels alone never satisfy an operating-baseline requirement.
 
 `StrategyAssumptionSet` is a separate, hash-addressed candidate artifact. It must
 contain exactly the six five-year engine paths (`revenue`, `operating_margin`,
