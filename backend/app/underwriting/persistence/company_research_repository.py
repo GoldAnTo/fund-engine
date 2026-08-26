@@ -387,6 +387,116 @@ class CompanyResearchRepository:
             raise ConflictError("company research preparation retry conflicts") from exc
         return preparation
 
+    def complete_evidence_preparation(
+        self,
+        preparation_id: UUID,
+        *,
+        input_hash: str,
+        evidence_index_payload: Mapping[str, object],
+        research_gaps_payload: Mapping[str, object],
+        source_refs: Sequence[Mapping[str, object]],
+        created_at: datetime,
+    ) -> tuple[CompanyResearchPreparation, CompanyResearchArtifactVersion, CompanyResearchArtifactVersion, Job, CompanyResearchEvent]:
+        """Append the two source artifacts and atomically hand off to review."""
+        self._reserve_sqlite_writer_before_ownership_read()
+        preparation = self._preparation_for_update(preparation_id)
+        if preparation is None:
+            raise ValidationError("company research preparation not found")
+        job = self.prepare_job(preparation_id)
+        if job is None:
+            raise CompanyResearchIntegrityError("company research preparation job is missing")
+        self._validate_prepare_job_step(
+            preparation_step=preparation.current_step,
+            preparation_status=preparation.status,
+            job=job,
+            persisted=True,
+        )
+        if preparation.status != "queued" or preparation.current_step != "evidence_index":
+            raise ValidationError("company research preparation is not queued for evidence indexing")
+        when = self._stored_datetime(created_at, "created_at")
+        with self._session.begin_nested():
+            evidence_index = self.append_artifact(
+                project_id=preparation.project_id,
+                kind="evidence_index",
+                input_hash=input_hash,
+                payload=evidence_index_payload,
+                source_refs=source_refs,
+                expected_parent_id=None,
+                created_at=when,
+            )
+            research_gaps = self.append_artifact(
+                project_id=preparation.project_id,
+                kind="research_gaps",
+                input_hash=input_hash,
+                payload=research_gaps_payload,
+                source_refs=source_refs,
+                expected_parent_id=None,
+                created_at=when,
+            )
+            preparation.status = "awaiting_evidence_review"
+            preparation.current_step = "research_gaps"
+            preparation.progress = 25
+            preparation.next_attempt_at = None
+            preparation.last_error_code = None
+            preparation.updated_at = when
+            job.status = "waiting_for_review"
+            job.progress = 25
+            job.step = "research_gaps"
+            job.error = None
+            job.finished_at = None
+            event = self.append_event(
+                preparation_id=preparation_id,
+                event_type="evidence_index_prepared",
+                payload={"evidence_index_id": str(evidence_index.id), "research_gaps_id": str(research_gaps.id)},
+                created_at=when,
+            )
+            self._session.flush([preparation, job])
+        return preparation, evidence_index, research_gaps, job, event
+
+    def fail_evidence_preparation(
+        self,
+        preparation_id: UUID,
+        *,
+        error_code: str,
+        created_at: datetime,
+    ) -> tuple[CompanyResearchPreparation, Job, CompanyResearchEvent]:
+        """Record a recoverable source failure before any source artifact exists."""
+        self._reserve_sqlite_writer_before_ownership_read()
+        preparation = self._preparation_for_update(preparation_id)
+        if preparation is None:
+            raise ValidationError("company research preparation not found")
+        job = self.prepare_job(preparation_id)
+        if job is None:
+            raise CompanyResearchIntegrityError("company research preparation job is missing")
+        self._validate_prepare_job_step(
+            preparation_step=preparation.current_step,
+            preparation_status=preparation.status,
+            job=job,
+            persisted=True,
+        )
+        if preparation.status != "queued" or preparation.current_step != "evidence_index":
+            raise ValidationError("company research preparation is not queued for evidence indexing")
+        when = self._stored_datetime(created_at, "created_at")
+        error_code = self._require_nonempty_text(error_code, "error_code", 96)
+        with self._session.begin_nested():
+            preparation.status = "recoverable_failure"
+            preparation.progress = 0
+            preparation.next_attempt_at = None
+            preparation.last_error_code = error_code
+            preparation.updated_at = when
+            job.status = "failed"
+            job.progress = 0
+            job.error = error_code
+            job.finished_at = when
+            event = self.append_event(
+                preparation_id=preparation_id,
+                event_type="source_preparation_failed",
+                payload={"code": error_code, "recoverable": True},
+                created_at=when,
+            )
+            self._session.flush([preparation, job])
+        return preparation, job, event
+
     @staticmethod
     def _validate_artifact_row(row: CompanyResearchArtifactVersion) -> None:
         expected_hash = CompanyResearchRepository.artifact_content_hash(

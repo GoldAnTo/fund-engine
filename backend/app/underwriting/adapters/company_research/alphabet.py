@@ -53,3 +53,16 @@ class AlphabetCompanyResearchAdapter:
             CompanyResearchModule(key=key, label=_ALPHABET_MODULE_LABELS[key])
             for key in ALPHABET_BUSINESS_MODULES
         )
+
+    def validate_source_modules(
+        self,
+        company_external_key: str,
+        modules: tuple[CompanyResearchModule, ...],
+    ) -> tuple[CompanyResearchModule, ...]:
+        """Reject a bundled source fixture whose business vocabulary drifted."""
+        expected = self.business_modules(company_external_key)
+        if modules != expected:
+            raise CompanyResearchValidationError(
+                "Alphabet source fixture business modules do not match the adapter"
+            )
+        return modules

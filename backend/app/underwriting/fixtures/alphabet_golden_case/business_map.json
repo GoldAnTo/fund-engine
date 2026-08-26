@@ -1,0 +1,12 @@
+{
+  "schema_version": "alphabet.golden-case.business-map.v1",
+  "content_hash": "7ebf317412def7898836c935c131886fcc833a0f7904f4210dc47f3c46faba70",
+  "modules": [
+    {"key": "search_and_other_ads", "label": "Search and Other Ads"},
+    {"key": "youtube_ads_and_subscriptions", "label": "YouTube Ads and Subscriptions"},
+    {"key": "google_cloud", "label": "Google Cloud"},
+    {"key": "other_google_services", "label": "Other Google Services"},
+    {"key": "other_bets", "label": "Other Bets"},
+    {"key": "corporate_capital_allocation", "label": "Corporate Capital Allocation"}
+  ]
+}
