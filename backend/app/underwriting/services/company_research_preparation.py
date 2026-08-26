@@ -1,0 +1,425 @@
+"""Lease-fenced execution of the review-gated company-research source stage.
+
+Only ``prepare_sources`` is currently executable: it produces the immutable
+evidence index and research gaps, then deliberately stops for human review.
+The remaining model stages are never inferred from unreviewed source material.
+"""
+
+from __future__ import annotations
+
+import secrets
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Literal
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.ledger import ValidationError
+from app.models.operational import Job
+from app.repositories.operational import JobRepository
+from app.underwriting.persistence.company_research_models import (
+    CompanyResearchPreparation,
+)
+from app.underwriting.persistence.company_research_repository import (
+    CompanyResearchRepository,
+)
+from app.underwriting.services.company_research_sources import (
+    CompanyResearchEvidenceCompilation,
+    CompanyResearchSourceService,
+)
+from app.underwriting.fixtures.alphabet_golden_case import AlphabetGoldenCaseFixtureError
+from app.underwriting.domain.company_research import CompanyResearchValidationError
+
+
+COMPANY_RESEARCH_STAGES = (
+    "prepare_sources",
+    "build_business_map",
+    "build_driver_map",
+    "build_financial_bridge",
+    "build_scenarios",
+    "build_valuation",
+    "evaluate_readiness",
+)
+MAX_ATTEMPTS = 3
+BACKOFF_SECONDS = (30, 120, 600)
+_SAFE_PROVIDER_ERROR = "provider_unavailable"
+_SAFE_STALE_ERROR = "stale_output_discarded"
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchClaim:
+    job_id: UUID
+    preparation_id: UUID
+    claim_token: str
+    request_hash: str
+    strategy_version: str
+
+
+class CompanyResearchPreparationWorker:
+    """Claim, compile outside a transaction, then commit one fenced output."""
+
+    def __init__(
+        self,
+        session: Session,
+        *,
+        now: Callable[[], datetime],
+        provider: Callable[[CompanyResearchPreparation], CompanyResearchEvidenceCompilation]
+        | None = None,
+    ) -> None:
+        self._session = session
+        self._now = now
+        self._repository = CompanyResearchRepository(session)
+        self._jobs = JobRepository(session)
+        self._provider = provider
+
+    def _utcnow(self) -> datetime:
+        value = self._now()
+        if not isinstance(value, datetime) or value.tzinfo is None:
+            raise ValidationError("clock must be a timezone-aware datetime")
+        return value.astimezone(UTC)
+
+    def claim_next(self) -> CompanyResearchClaim | None:
+        """Atomically claim only the first executable company source job."""
+        self._repository._reserve_sqlite_writer_before_ownership_read()
+        now = self._utcnow()
+        row = self._session.execute(
+            select(Job, CompanyResearchPreparation)
+            .join(
+                CompanyResearchPreparation,
+                CompanyResearchPreparation.job_id == Job.id,
+            )
+            .where(
+                Job.kind == "prepare_company_research",
+                Job.target_type == "company_research_preparation",
+                Job.status == "queued",
+                Job.cancel_requested.is_(False),
+                CompanyResearchPreparation.status == "queued",
+                CompanyResearchPreparation.current_step == "evidence_index",
+                (CompanyResearchPreparation.next_attempt_at.is_(None))
+                | (CompanyResearchPreparation.next_attempt_at <= now),
+            )
+            .order_by(Job.created_at, Job.id)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        ).first()
+        if row is None:
+            return None
+        job, preparation = row
+        if job.target_id != preparation.id:
+            return None
+        token = secrets.token_hex(16)
+        job.status = "running"
+        job.started_at = now
+        job.claim_token = token
+        job.step = "evidence_index"
+        preparation.status = "preparing_sources"
+        preparation.progress = 5
+        preparation.updated_at = now
+        self._jobs.append_event(
+            job_id=job.id,
+            seq=self._jobs.next_event_seq(job.id),
+            status="running",
+            step="evidence_index",
+            message="company research source job claimed",
+        )
+        self._repository.append_event(
+            preparation_id=preparation.id,
+            event_type="source_stage_claimed",
+            payload={"stage": "prepare_sources", "attempt": job.attempt},
+            created_at=now,
+        )
+        self._session.flush()
+        return CompanyResearchClaim(
+            job_id=job.id,
+            preparation_id=preparation.id,
+            claim_token=token,
+            request_hash=preparation.request_hash,
+            strategy_version=preparation.strategy_version,
+        )
+
+    def recover_stale_claims(self, *, before: datetime) -> int:
+        """Make an abandoned source claim eligible again without cloning it."""
+        before = before.astimezone(UTC)
+        jobs = tuple(
+            self._session.scalars(
+                select(Job)
+                .where(
+                    Job.kind == "prepare_company_research",
+                    Job.status == "running",
+                    Job.started_at.is_not(None),
+                    Job.started_at < before,
+                )
+                .with_for_update(skip_locked=True)
+            )
+        )
+        recovered = 0
+        for job in jobs:
+            preparation = self._session.scalar(
+                select(CompanyResearchPreparation)
+                .where(CompanyResearchPreparation.job_id == job.id)
+                .with_for_update()
+            )
+            if preparation is None:
+                continue
+            now = self._utcnow()
+            if job.cancel_requested:
+                job.status = "cancelled"
+                job.error = _SAFE_STALE_ERROR
+                preparation.status = "blocked"
+                preparation.last_error_code = _SAFE_STALE_ERROR
+                event_type = "stale_output_discarded"
+            else:
+                job.status = "queued"
+                job.error = None
+                job.started_at = None
+                preparation.status = "queued"
+                preparation.progress = 0
+                preparation.last_error_code = None
+                event_type = "source_claim_recovered"
+            job.claim_token = None
+            job.finished_at = now if job.status == "cancelled" else None
+            preparation.updated_at = now
+            self._jobs.append_event(
+                job_id=job.id,
+                seq=self._jobs.next_event_seq(job.id),
+                status=job.status,
+                step="evidence_index",
+                message=event_type,
+            )
+            self._repository.append_event(
+                preparation_id=preparation.id,
+                event_type=event_type,
+                payload={"stage": "prepare_sources"},
+                created_at=now,
+            )
+            recovered += 1
+        self._session.flush()
+        return recovered
+
+    def cancel_queued_claims(self) -> int:
+        """Honor cancellation before a queued job can reach provider work."""
+        jobs = tuple(
+            self._session.scalars(
+                select(Job)
+                .where(
+                    Job.kind == "prepare_company_research",
+                    Job.status == "queued",
+                    Job.cancel_requested.is_(True),
+                )
+                .with_for_update(skip_locked=True)
+            )
+        )
+        for job in jobs:
+            preparation = self._session.scalar(
+                select(CompanyResearchPreparation)
+                .where(CompanyResearchPreparation.job_id == job.id)
+                .with_for_update()
+            )
+            if preparation is None:
+                continue
+            now = self._utcnow()
+            job.status = "cancelled"
+            job.error = _SAFE_STALE_ERROR
+            job.finished_at = now
+            preparation.status = "blocked"
+            preparation.last_error_code = _SAFE_STALE_ERROR
+            preparation.updated_at = now
+            self._jobs.append_event(
+                job_id=job.id,
+                seq=self._jobs.next_event_seq(job.id),
+                status="cancelled",
+                step="evidence_index",
+                message=_SAFE_STALE_ERROR,
+            )
+            self._repository.append_event(
+                preparation_id=preparation.id,
+                event_type="stale_output_discarded",
+                payload={"stage": "prepare_sources"},
+                created_at=now,
+            )
+        self._session.flush()
+        return len(jobs)
+
+    def _current_claim(self, claim: CompanyResearchClaim) -> tuple[Job, CompanyResearchPreparation] | None:
+        job = self._session.scalar(select(Job).where(Job.id == claim.job_id).with_for_update())
+        preparation = self._session.scalar(
+            select(CompanyResearchPreparation)
+            .where(CompanyResearchPreparation.id == claim.preparation_id)
+            .with_for_update()
+        )
+        if (
+            job is None
+            or preparation is None
+            or preparation.job_id != job.id
+            or job.status != "running"
+            or job.claim_token != claim.claim_token
+            or job.cancel_requested
+            or preparation.status != "preparing_sources"
+            or preparation.current_step != "evidence_index"
+            or preparation.request_hash != claim.request_hash
+            or preparation.strategy_version != claim.strategy_version
+        ):
+            return None
+        return job, preparation
+
+    def _discard(self, claim: CompanyResearchClaim) -> None:
+        job = self._session.scalar(
+            select(Job).where(Job.id == claim.job_id).with_for_update()
+        )
+        preparation = self._session.scalar(
+            select(CompanyResearchPreparation)
+            .where(CompanyResearchPreparation.id == claim.preparation_id)
+            .with_for_update()
+        )
+        if (
+            job is None
+            or preparation is None
+            or preparation.job_id != job.id
+            or job.claim_token != claim.claim_token
+            or job.status != "running"
+        ):
+            return
+        now = self._utcnow()
+        job.status = "cancelled"
+        job.error = _SAFE_STALE_ERROR
+        job.finished_at = now
+        job.claim_token = None
+        preparation.status = "blocked"
+        preparation.last_error_code = _SAFE_STALE_ERROR
+        preparation.updated_at = now
+        self._jobs.append_event(
+            job_id=job.id,
+            seq=self._jobs.next_event_seq(job.id),
+            status="cancelled",
+            step="evidence_index",
+            message=_SAFE_STALE_ERROR,
+        )
+        self._repository.append_event(
+            preparation_id=preparation.id,
+            event_type="stale_output_discarded",
+            payload={"stage": "prepare_sources"},
+            created_at=now,
+        )
+        self._session.flush()
+
+    def _recoverable_failure(self, claim: CompanyResearchClaim) -> None:
+        current = self._current_claim(claim)
+        if current is None:
+            return
+        job, preparation = current
+        now = self._utcnow()
+        if job.attempt >= MAX_ATTEMPTS:
+            job.status = "failed"
+            job.finished_at = now
+            job.claim_token = None
+            preparation.status = "blocked"
+            preparation.next_attempt_at = None
+        else:
+            job.status = "queued"
+            job.attempt += 1
+            job.started_at = None
+            job.claim_token = None
+            preparation.status = "recoverable_failure"
+            preparation.attempt += 1
+            preparation.next_attempt_at = now + timedelta(
+                seconds=BACKOFF_SECONDS[job.attempt - 2]
+            )
+        job.error = _SAFE_PROVIDER_ERROR
+        preparation.last_error_code = _SAFE_PROVIDER_ERROR
+        preparation.updated_at = now
+        self._jobs.append_event(
+            job_id=job.id,
+            seq=self._jobs.next_event_seq(job.id),
+            status=job.status,
+            step="evidence_index",
+            message=_SAFE_PROVIDER_ERROR,
+        )
+        self._repository.append_event(
+            preparation_id=preparation.id,
+            event_type="source_provider_failed",
+            payload={"code": _SAFE_PROVIDER_ERROR, "recoverable": job.status == "queued"},
+            created_at=now,
+        )
+        self._session.flush()
+
+    def _block(self, claim: CompanyResearchClaim) -> None:
+        current = self._current_claim(claim)
+        if current is None:
+            return
+        job, preparation = current
+        now = self._utcnow()
+        job.status = "failed"
+        job.error = "validation_failed"
+        job.claim_token = None
+        job.finished_at = now
+        preparation.status = "blocked"
+        preparation.last_error_code = "validation_failed"
+        preparation.updated_at = now
+        self._jobs.append_event(
+            job_id=job.id,
+            seq=self._jobs.next_event_seq(job.id),
+            status="failed",
+            step="evidence_index",
+            message="validation_failed",
+        )
+        self._repository.append_event(
+            preparation_id=preparation.id,
+            event_type="source_preparation_blocked",
+            payload={"code": "validation_failed"},
+            created_at=now,
+        )
+        self._session.flush()
+
+    def _compile(self, preparation: CompanyResearchPreparation) -> CompanyResearchEvidenceCompilation:
+        if self._provider is not None:
+            return self._provider(preparation)
+        return CompanyResearchSourceService(
+            self._session, now=self._now
+        ).compile_evidence_index(preparation_id=preparation.id)
+
+    def run_claim(
+        self, claim: CompanyResearchClaim
+    ) -> Literal["awaiting_evidence_review", "recoverable_failure", "discarded"]:
+        """Run provider work without locks, then fence its immutable commit."""
+        current = self._current_claim(claim)
+        if current is None:
+            self._discard(claim)
+            return "discarded"
+        _job, preparation = current
+        # Publish the fenced claim before file/provider work.  The completion
+        # path below takes fresh locks and checks the same token again.
+        self._session.commit()
+        try:
+            compiled = self._compile(preparation)
+        except (OSError, TimeoutError, ConnectionError):
+            self._recoverable_failure(claim)
+            return "recoverable_failure"
+        except (AlphabetGoldenCaseFixtureError, CompanyResearchValidationError, ValidationError):
+            self._block(claim)
+            return "discarded"
+
+        # Source compilation may have made read-only database checks.  Close
+        # that transaction before taking the short output-commit locks.
+        self._session.commit()
+
+        # The provider/result boundary is explicit: publish no database write
+        # until the output has been assembled, then reacquire the claim fence.
+        try:
+            self._repository.complete_evidence_preparation(
+                claim.preparation_id,
+                input_hash=compiled.input_hash,
+                evidence_index_payload=compiled.evidence_index_payload,
+                research_gaps_payload=compiled.research_gaps_payload,
+                source_refs=compiled.source_refs,
+                created_at=self._utcnow(),
+                expected_claim_token=claim.claim_token,
+                expected_request_hash=claim.request_hash,
+                expected_strategy_version=claim.strategy_version,
+            )
+        except ValidationError:
+            self._discard(claim)
+            return "discarded"
+        return "awaiting_evidence_review"

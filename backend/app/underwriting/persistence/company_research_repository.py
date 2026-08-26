@@ -411,6 +411,9 @@ class CompanyResearchRepository:
         research_gaps_payload: Mapping[str, object],
         source_refs: Sequence[Mapping[str, object]],
         created_at: datetime,
+        expected_claim_token: str | None = None,
+        expected_request_hash: str | None = None,
+        expected_strategy_version: str | None = None,
     ) -> tuple[CompanyResearchPreparation, CompanyResearchArtifactVersion, CompanyResearchArtifactVersion, Job, CompanyResearchEvent]:
         """Append the two source artifacts and atomically hand off to review."""
         self._reserve_sqlite_writer_before_ownership_read()
@@ -424,7 +427,24 @@ class CompanyResearchRepository:
             job=job,
             persisted=True,
         )
-        if preparation.status != "queued" or preparation.current_step != "evidence_index":
+        claimed = expected_claim_token is not None
+        if expected_request_hash is not None and preparation.request_hash != expected_request_hash:
+            raise ValidationError("company research preparation input changed")
+        if (
+            expected_strategy_version is not None
+            and preparation.strategy_version != expected_strategy_version
+        ):
+            raise ValidationError("company research preparation strategy changed")
+        if claimed:
+            if (
+                preparation.status != "preparing_sources"
+                or preparation.current_step != "evidence_index"
+                or job.status != "running"
+                or job.claim_token != expected_claim_token
+                or job.cancel_requested
+            ):
+                raise ValidationError("company research preparation claim is stale")
+        elif preparation.status != "queued" or preparation.current_step != "evidence_index":
             raise ValidationError("company research preparation is not queued for evidence indexing")
         when = self._stored_datetime(created_at, "created_at")
         with self._session.begin_nested():
@@ -457,6 +477,7 @@ class CompanyResearchRepository:
             job.step = "research_gaps"
             job.error = None
             job.finished_at = None
+            job.claim_token = None
             event = self.append_event(
                 preparation_id=preparation_id,
                 event_type="evidence_index_prepared",
@@ -472,6 +493,9 @@ class CompanyResearchRepository:
         *,
         error_code: str,
         created_at: datetime,
+        expected_claim_token: str | None = None,
+        expected_request_hash: str | None = None,
+        expected_strategy_version: str | None = None,
     ) -> tuple[CompanyResearchPreparation, Job, CompanyResearchEvent]:
         """Record a recoverable source failure before any source artifact exists."""
         self._reserve_sqlite_writer_before_ownership_read()
@@ -485,7 +509,24 @@ class CompanyResearchRepository:
             job=job,
             persisted=True,
         )
-        if preparation.status != "queued" or preparation.current_step != "evidence_index":
+        claimed = expected_claim_token is not None
+        if expected_request_hash is not None and preparation.request_hash != expected_request_hash:
+            raise ValidationError("company research preparation input changed")
+        if (
+            expected_strategy_version is not None
+            and preparation.strategy_version != expected_strategy_version
+        ):
+            raise ValidationError("company research preparation strategy changed")
+        if claimed:
+            if (
+                preparation.status != "preparing_sources"
+                or preparation.current_step != "evidence_index"
+                or job.status != "running"
+                or job.claim_token != expected_claim_token
+                or job.cancel_requested
+            ):
+                raise ValidationError("company research preparation claim is stale")
+        elif preparation.status != "queued" or preparation.current_step != "evidence_index":
             raise ValidationError("company research preparation is not queued for evidence indexing")
         when = self._stored_datetime(created_at, "created_at")
         error_code = self._require_nonempty_text(error_code, "error_code", 96)
@@ -499,6 +540,7 @@ class CompanyResearchRepository:
             job.progress = 0
             job.error = error_code
             job.finished_at = when
+            job.claim_token = None
             event = self.append_event(
                 preparation_id=preparation_id,
                 event_type="source_preparation_failed",

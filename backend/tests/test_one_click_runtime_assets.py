@@ -39,6 +39,7 @@ def test_compose_has_separate_data_and_automatic_services() -> None:
         "api:",
         "research-worker:",
         "acquisition-worker:",
+        "company-research-worker:",
         "frontend:",
     ):
         assert name in compose
@@ -62,7 +63,8 @@ def test_compose_healthchecks_http_services_before_starting_frontend() -> None:
     compose = (ROOT / "docker-compose.one-click.yml").read_text()
     api = compose[compose.index("  api:\n") : compose.index("  research-worker:\n")]
     research_worker = compose[compose.index("  research-worker:\n") : compose.index("  acquisition-worker:\n")]
-    acquisition_worker = compose[compose.index("  acquisition-worker:\n") : compose.index("  frontend:\n")]
+    acquisition_worker = compose[compose.index("  acquisition-worker:\n") : compose.index("  company-research-worker:\n")]
+    company_research_worker = compose[compose.index("  company-research-worker:\n") : compose.index("  frontend:\n")]
     frontend = compose[compose.index("  frontend:\n") : compose.index("\nvolumes:\n")]
 
     assert "http://127.0.0.1:8000/health" in api
@@ -70,7 +72,11 @@ def test_compose_healthchecks_http_services_before_starting_frontend() -> None:
     assert "healthcheck:" in api
     assert "healthcheck:" in frontend
     assert "api:\n        condition: service_healthy" in frontend
-    for worker, kind in ((research_worker, "research_run"), (acquisition_worker, "acquisition")):
+    for worker, kind in (
+        (research_worker, "research_run"),
+        (acquisition_worker, "acquisition"),
+        (company_research_worker, "company_research"),
+    ):
         assert "healthcheck:" in worker
         assert "app.scripts.check_worker_heartbeat" in worker
         assert f"--worker-kind {kind}" in worker

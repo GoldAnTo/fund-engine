@@ -227,9 +227,15 @@ def test_runtime_compose_installs_fixture_and_has_optional_integrations() -> Non
     following_service = {
         "api": "research-worker",
         "research-worker": "acquisition-worker",
-        "acquisition-worker": "frontend",
+        "acquisition-worker": "company-research-worker",
+        "company-research-worker": "frontend",
     }
-    for service in ("api", "research-worker", "acquisition-worker"):
+    for service in (
+        "api",
+        "research-worker",
+        "acquisition-worker",
+        "company-research-worker",
+    ):
         section_start = compose.index(f"  {service}:\n")
         section_end = compose.index(f"  {following_service[service]}:\n")
         section = compose[section_start:section_end]

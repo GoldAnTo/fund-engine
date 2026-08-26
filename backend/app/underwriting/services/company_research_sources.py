@@ -45,6 +45,16 @@ class CompanyResearchSourcePreparation:
     error: Mapping[str, object] | None
 
 
+@dataclass(frozen=True, slots=True)
+class CompanyResearchEvidenceCompilation:
+    """Provider output held in memory until the worker owns a commit slot."""
+
+    input_hash: str
+    evidence_index_payload: Mapping[str, object]
+    research_gaps_payload: Mapping[str, object]
+    source_refs: tuple[dict[str, str], ...]
+
+
 class CompanyResearchSourceService:
     """Prepare evidence only; assessment and publication belong to later steps."""
 
@@ -107,19 +117,35 @@ class CompanyResearchSourceService:
         if company is None or company.external_key != fixture.company_external_key:
             raise ValidationError("Alphabet source fixture does not match preparation company")
 
-    def prepare_evidence_index(self, *, preparation_id: UUID) -> CompanyResearchSourcePreparation:
-        """Append source evidence and gaps, or a safe recoverable failure event."""
-        now = self._utc(self._now())
+    def compile_evidence_index(
+        self, *, preparation_id: UUID
+    ) -> CompanyResearchEvidenceCompilation:
+        """Read and validate source material without mutating durable state.
+
+        The worker calls this outside its output transaction.  Keeping this
+        boundary explicit prevents a slow file/provider operation from holding
+        the preparation or Job row lock.
+        """
+        fixture = self._load_fixture()
+        self._adapter.validate_source_modules(
+            fixture.company_external_key, fixture.business_modules
+        )
         preparation = self._repository.preparation(preparation_id)
         if preparation is None:
             raise ValidationError("company research preparation not found")
+        self._validate_company(preparation, fixture)
+        return CompanyResearchEvidenceCompilation(
+            input_hash=fixture.content_hash,
+            evidence_index_payload=self._evidence_payload(fixture),
+            research_gaps_payload=self._gaps_payload(fixture),
+            source_refs=self._source_refs(fixture),
+        )
+
+    def prepare_evidence_index(self, *, preparation_id: UUID) -> CompanyResearchSourcePreparation:
+        """Append source evidence and gaps, or a safe recoverable failure event."""
+        now = self._utc(self._now())
         try:
-            fixture = self._load_fixture()
-            # The relation is intentionally resolved before any durable artifact write.
-            self._validate_company(preparation, fixture)
-            self._adapter.validate_source_modules(
-                fixture.company_external_key, fixture.business_modules
-            )
+            compiled = self.compile_evidence_index(preparation_id=preparation_id)
         except (
             AlphabetGoldenCaseFixtureError,
             CompanyResearchValidationError,
@@ -135,10 +161,10 @@ class CompanyResearchSourceService:
             )
         preparation, evidence_index, gaps, job, _event = self._repository.complete_evidence_preparation(
             preparation_id,
-            input_hash=fixture.content_hash,
-            evidence_index_payload=self._evidence_payload(fixture),
-            research_gaps_payload=self._gaps_payload(fixture),
-            source_refs=self._source_refs(fixture),
+            input_hash=compiled.input_hash,
+            evidence_index_payload=compiled.evidence_index_payload,
+            research_gaps_payload=compiled.research_gaps_payload,
+            source_refs=compiled.source_refs,
             created_at=now,
         )
         return CompanyResearchSourcePreparation(
