@@ -587,6 +587,9 @@ def build_company_research_preview(
 # between authenticated evidence preparation and a later durable workbench;
 # prose, arbitrary formulas, and probability-weighted targets do not cross it.
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_VERSIONED_ASSUMPTION_KEY = re.compile(
+    r"[a-z][a-z0-9_.-]*\.v[1-9][0-9]*:[a-z][a-z0-9_]*\Z"
+)
 _MECHANISMS = frozenset(
     {
         "search_cloud_resilience",
@@ -638,6 +641,20 @@ def _artifact_refs(value: object, field_name: str) -> tuple["SourceLineageRefere
     return value
 
 
+def _artifact_optional_refs(
+    value: object, field_name: str
+) -> tuple["SourceLineageReference", ...]:
+    if not isinstance(value, tuple) or not all(
+        type(item) is SourceLineageReference for item in value
+    ):
+        raise CompanyResearchValidationError(
+            f"{field_name} must contain SourceLineageReference values"
+        )
+    if len(set(value)) != len(value):
+        raise CompanyResearchValidationError(f"{field_name} must not contain duplicates")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class SourceLineageReference:
     """One immutable source locator and digest, including its fact identity."""
@@ -666,6 +683,85 @@ class SourceLineageReference:
         }
 
 
+class ModelInputState(StrEnum):
+    """Controlled provenance state for one numeric model-input path."""
+
+    REPORTED = "reported"
+    DERIVED = "derived"
+    ASSUMPTION = "assumption"
+
+
+@dataclass(frozen=True, slots=True)
+class DriverInput:
+    """One numeric path whose reported, derived, or assumed state is explicit."""
+
+    driver_key: str
+    state: ModelInputState
+    values: tuple[Decimal, ...]
+    source_refs: tuple[SourceLineageReference, ...]
+    assumption_key: str | None
+    equation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_key(self.driver_key, "driver input driver_key", _GAP_CODE)
+        if type(self.state) is not ModelInputState:
+            raise CompanyResearchValidationError(
+                "driver input state must be a ModelInputState"
+            )
+        if not isinstance(self.values, tuple) or not self.values:
+            raise CompanyResearchValidationError(
+                "driver input missing values must remain a ResearchGap"
+            )
+        for value in self.values:
+            _artifact_decimal(value, "driver input value")
+        _artifact_optional_refs(self.source_refs, "driver input source refs")
+
+        if self.state is ModelInputState.REPORTED:
+            if not self.source_refs:
+                raise CompanyResearchValidationError(
+                    "reported driver input requires exact source refs"
+                )
+            if self.assumption_key is not None or self.equation_id is not None:
+                raise CompanyResearchValidationError(
+                    "reported driver input cannot carry an assumption or equation"
+                )
+        elif self.state is ModelInputState.DERIVED:
+            if not self.source_refs:
+                raise CompanyResearchValidationError(
+                    "derived driver input requires exact source refs"
+                )
+            if self.equation_id not in _DRIVER_EQUATIONS:
+                raise CompanyResearchValidationError(
+                    "derived driver input requires a closed equation"
+                )
+            if self.assumption_key is not None:
+                raise CompanyResearchValidationError(
+                    "derived driver input cannot carry an assumption_key"
+                )
+        else:
+            if (
+                not isinstance(self.assumption_key, str)
+                or _VERSIONED_ASSUMPTION_KEY.fullmatch(self.assumption_key) is None
+            ):
+                raise CompanyResearchValidationError(
+                    "assumption driver input requires a versioned assumption_key"
+                )
+            if self.source_refs or self.equation_id is not None:
+                raise CompanyResearchValidationError(
+                    "assumption driver input must not be labeled as sourced or derived"
+                )
+
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            "driver_key": self.driver_key,
+            "state": self.state.value,
+            "values": tuple(canonical_decimal_string(value) for value in self.values),
+            "source_refs": tuple(ref.canonical_payload() for ref in self.source_refs),
+            "assumption_key": self.assumption_key,
+            "equation_id": self.equation_id,
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class BusinessModuleArtifact:
     module_key: str
@@ -679,10 +775,12 @@ class BusinessModuleArtifact:
         _require_key(self.module_key, "business_map.module_key", _MODULE_KEY)
         for name in ("revenue_sources", "cost_structure", "capital_needs"):
             values = getattr(self, name)
-            if not isinstance(values, tuple) or not values or not all(
+            if not isinstance(values, tuple) or not all(
                 isinstance(item, str) and item.strip() == item and item for item in values
             ):
-                raise CompanyResearchValidationError(f"business_map.{name} must be non-empty text")
+                raise CompanyResearchValidationError(
+                    f"business_map.{name} must contain canonical text"
+                )
         _artifact_refs(self.fact_refs, "business_map.fact_refs")
         if not isinstance(self.gap_refs, tuple) or not all(
             isinstance(item, str) and _GAP_CODE.fullmatch(item) for item in self.gap_refs
@@ -715,7 +813,7 @@ class DriverMetricArtifact:
     def __post_init__(self) -> None:
         _require_key(self.driver_key, "driver.driver_key", _GAP_CODE)
         _require_key(self.module_key, "driver.module_key", _MODULE_KEY)
-        _artifact_refs(self.fact_refs, "driver.fact_refs")
+        _artifact_optional_refs(self.fact_refs, "driver.fact_refs")
         _artifact_refs(self.assumption_refs, "driver.assumption_refs")
         if self.equation not in _DRIVER_EQUATIONS:
             raise CompanyResearchValidationError("driver.equation must be a closed equation identifier")
@@ -1249,3 +1347,111 @@ class CompanyResearchAssessment:
     @classmethod
     def partially_answerable(cls) -> "CompanyResearchAssessment":
         return cls("partially_answerable", "provisional_neutral", "low")
+
+
+_MEMO_ARTIFACT_KINDS = frozenset(
+    {
+        "business_map",
+        "driver_map",
+        "financial_bridge",
+        "scenario_set",
+        "valuation_set",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchArtifactReference:
+    """A typed content-addressed reference used by a machine memo candidate."""
+
+    artifact_kind: str
+    content_hash: str
+
+    def __post_init__(self) -> None:
+        if self.artifact_kind not in _MEMO_ARTIFACT_KINDS:
+            raise CompanyResearchValidationError(
+                "memo artifact reference kind is invalid"
+            )
+        if not isinstance(self.content_hash, str) or _SHA256.fullmatch(
+            self.content_hash
+        ) is None:
+            raise CompanyResearchValidationError(
+                "memo artifact reference content_hash must be SHA-256"
+            )
+
+    def canonical_payload(self) -> dict[str, str]:
+        return {
+            "artifact_kind": self.artifact_kind,
+            "content_hash": self.content_hash,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchMemoArtifact:
+    """Structured machine draft awaiting judgment review; never a published memo."""
+
+    assessment_status: str
+    business_map_ref: CompanyResearchArtifactReference
+    driver_map_ref: CompanyResearchArtifactReference
+    financial_bridge_ref: CompanyResearchArtifactReference
+    scenario_set_ref: CompanyResearchArtifactReference
+    valuation_set_ref: CompanyResearchArtifactReference | None
+    gap_keys: tuple[str, ...]
+    strongest_counterevidence: tuple[SourceLineageReference, ...]
+    next_verification_events: tuple[str, ...]
+    candidate_status: str = "machine_draft"
+
+    def __post_init__(self) -> None:
+        if self.candidate_status != "machine_draft":
+            raise CompanyResearchValidationError(
+                "company research memo must remain a machine_draft"
+            )
+        if self.assessment_status not in {
+            "not_answerable",
+            "partially_answerable",
+            "answerable",
+        }:
+            raise CompanyResearchValidationError(
+                "company research memo assessment status is invalid"
+            )
+        references = (
+            (self.business_map_ref, "business_map"),
+            (self.driver_map_ref, "driver_map"),
+            (self.financial_bridge_ref, "financial_bridge"),
+            (self.scenario_set_ref, "scenario_set"),
+        )
+        if any(
+            type(reference) is not CompanyResearchArtifactReference
+            or reference.artifact_kind != expected_kind
+            for reference, expected_kind in references
+        ):
+            raise CompanyResearchValidationError(
+                "company research memo references must match artifact kinds"
+            )
+        if self.valuation_set_ref is not None and (
+            type(self.valuation_set_ref) is not CompanyResearchArtifactReference
+            or self.valuation_set_ref.artifact_kind != "valuation_set"
+        ):
+            raise CompanyResearchValidationError(
+                "company research memo valuation reference must be typed"
+            )
+        if (
+            not isinstance(self.gap_keys, tuple)
+            or tuple(sorted(self.gap_keys)) != self.gap_keys
+            or len(set(self.gap_keys)) != len(self.gap_keys)
+            or not all(_GAP_CODE.fullmatch(key) for key in self.gap_keys)
+        ):
+            raise CompanyResearchValidationError(
+                "company research memo gap keys must be unique and canonical"
+            )
+        _artifact_optional_refs(
+            self.strongest_counterevidence,
+            "company research memo strongest counterevidence",
+        )
+        if not isinstance(self.next_verification_events, tuple) or not all(
+            isinstance(item, str) and item and item == item.strip()
+            for item in self.next_verification_events
+        ):
+            raise CompanyResearchValidationError(
+                "company research memo verification events must be canonical text"
+            )

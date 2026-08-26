@@ -52,6 +52,7 @@ class SecurityValueResult:
 @dataclass(frozen=True, slots=True)
 class CompanyResearchModelResult:
     assessment: CompanyResearchAssessment
+    financial_bridges: dict[str, FinancialBridgeArtifact]
     scenario_enterprise_values: dict[str, Decimal]
     security_values: tuple[SecurityValueResult, ...]
     reverse_dcf: ReverseDcfResult | None
@@ -83,6 +84,7 @@ class CompanyResearchEngine:
             ):
                 return CompanyResearchModelResult(
                     assessment=CompanyResearchAssessment.not_answerable(),
+                    financial_bridges=compiled_bridges,
                     scenario_enterprise_values={},
                     security_values=(),
                     reverse_dcf=None,
@@ -152,6 +154,7 @@ class CompanyResearchEngine:
                 if model.research_gaps
                 else CompanyResearchAssessment.answerable()
             ),
+            financial_bridges=compiled_bridges,
             scenario_enterprise_values=values,
             security_values=securities,
             reverse_dcf=reverse,
