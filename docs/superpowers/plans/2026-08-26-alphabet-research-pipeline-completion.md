@@ -107,6 +107,8 @@ class FrozenMarketContext:
     security_rights_ids: tuple[UUID, ...]
     snapshot_ids: tuple[UUID, ...]
     market_at: datetime
+    snapshot_bindings: tuple[FrozenMarketSnapshotBinding, ...]
+    reverse_dcf_request: ReverseDcfRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +131,7 @@ class CompanyResearchBuildInput:
     evidence_payload: Mapping[str, object]
     gap_payload: Mapping[str, object]
     source_refs: tuple[dict[str, str], ...]
+    model_template: CompanyResearchModelTemplate
     strategy_assumptions: StrategyAssumptionSet
     market_context: FrozenMarketContext | None
 
@@ -147,7 +150,22 @@ class CompanyResearchBuildResult:
     market_snapshot_ids: tuple[UUID, ...]
 ```
 
-All constructors must reject naive datetimes, duplicate refs, noncanonical UUID order, unknown evidence fields, unreviewed facts, facts marked `rejected` when used as model inputs, and missing or unversioned strategy assumptions.
+All constructors must reject naive datetimes, duplicate refs, noncanonical UUID order, unknown evidence fields, unreviewed facts, facts marked `rejected` when used as model inputs, and missing or unversioned strategy assumptions. Rejected facts remain valid reviewed evidence but are filtered out of model inputs; if a required input is then absent, the builder records a gap instead of rejecting the whole reviewed artifact.
+
+`CompanyResearchModelTemplate` is the typed seam through which a company adapter
+supplies module structure, metric classification (revenue/cost/capital), driver
+to module mappings, minimum operating-baseline requirements, and the exact
+Base/Bull/Bear mechanism mapping. The generic builder must consume this template
+and must not guess classifications from metric names or attach all drivers to an
+arbitrary first module. Modules named only by a gap remain present in the output.
+
+`FrozenMarketSnapshotBinding` binds every UUID to the exact typed market role,
+Security key where applicable, and `SourceLineageReference` consumed by the
+`MarketBridgeArtifact`. `FrozenMarketContext` rejects a bridge whose refs do not
+match those bindings. Its `ReverseDcfRequest` is computed by the governed market
+resolver from the frozen price, class-count, and capital-structure inputs; the
+generic builder passes it to the pure engine and never invents an implied market
+enterprise value.
 
 - [ ] **Step 4: Separate sourced facts, deterministic derivations, and strategy assumptions**
 
@@ -175,6 +193,13 @@ Rules:
 - `derived` requires source refs and a closed equation identifier;
 - `assumption` requires a versioned strategy `assumption_key` and is never labeled reported;
 - missing values create `ResearchGap` entries rather than zeroes.
+
+The controlled input state must survive into `DriverMetricArtifact` and
+`ScenarioFinancialDriverForecast`, together with the applicable
+`assumption_key` or `equation_id`; source-lineage validation is conditional on
+that persisted state. Do not weaken the existing non-empty business module
+invariants. Adapter templates provide non-empty revenue, cost, and capital
+descriptors even when a corresponding numeric fact is still a gap.
 
 `StrategyAssumptionSet` is a separate, hash-addressed candidate artifact. It must
 contain exactly the six five-year engine paths (`revenue`, `operating_margin`,
@@ -237,6 +262,7 @@ git commit -m "feat: build reviewed company research model bundle"
 - Create: `backend/app/underwriting/fixtures/alphabet_golden_case/market_inputs.json`
 - Create: `backend/app/underwriting/fixtures/alphabet_golden_case/strategy_assumptions.json`
 - Modify: `backend/app/underwriting/fixtures/alphabet_golden_case/__init__.py`
+- Modify: `backend/app/underwriting/adapters/company_research/alphabet.py`
 - Modify: `backend/app/underwriting/services/company_research_model_builder.py`
 - Modify: `backend/app/underwriting/services/company_research_initializer.py`
 - Modify: `docs/research/2026-08-26-alphabet-golden-case-primary-source-audit.md`
@@ -318,6 +344,13 @@ or equation, and remain visibly distinct from source facts. Missing or invalid
 strategy assumptions fail the model stage closed; neither the loader nor the
 Alphabet adapter derives replacement forecasts from historical facts.
 
+The Alphabet adapter also emits the concrete `CompanyResearchModelTemplate`:
+all six business modules, metric classifications, minimum operating-driver map,
+financial-driver ownership, and exact scenario-to-mechanism mapping. This is
+vocabulary and structure only; it contains no forecast numbers. A reviewed fact
+marked `rejected` is excluded, and any now-unsatisfied required template input
+becomes an explicit gap and keeps the candidate `not_answerable`.
+
 For the frozen Alphabet acceptance set, capture source envelopes from:
 
 - Alphabet Q2 2026 SEC 10-Q for cash, debt, securities, diluted shares and class counts;
@@ -337,6 +370,7 @@ git add backend/app/underwriting/services/company_research_market_inputs.py \
   backend/app/underwriting/fixtures/alphabet_golden_case/market_inputs.json \
   backend/app/underwriting/fixtures/alphabet_golden_case/strategy_assumptions.json \
   backend/app/underwriting/fixtures/alphabet_golden_case/__init__.py \
+  backend/app/underwriting/adapters/company_research/alphabet.py \
   backend/app/underwriting/services/company_research_model_builder.py \
   backend/app/underwriting/services/company_research_initializer.py \
   docs/research/2026-08-26-alphabet-golden-case-primary-source-audit.md \
