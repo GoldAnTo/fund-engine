@@ -26,6 +26,7 @@ from app.underwriting.persistence.company_research_models import (
 from app.underwriting.persistence.company_research_repository import (
     CompanyResearchRepository,
 )
+from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.services.company_research_sources import (
     CompanyResearchEvidenceCompilation,
     CompanyResearchProviderInput,
@@ -468,7 +469,7 @@ class CompanyResearchPreparationWorker:
                 expected_strategy_version=claim.strategy_version,
             )
             self._session.commit()
-        except ValidationError:
+        except (StaleParentError, ValidationError):
             self._session.rollback()
             self._discard(claim)
             return "discarded"

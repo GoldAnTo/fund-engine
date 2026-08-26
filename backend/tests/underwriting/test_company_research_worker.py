@@ -15,6 +15,9 @@ from app.underwriting.persistence.company_research_models import (
     CompanyResearchEvent,
     CompanyResearchPreparation,
 )
+from app.underwriting.persistence.company_research_repository import (
+    CompanyResearchRepository,
+)
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchInitializer,
     CompanyResearchPreparationService,
@@ -261,6 +264,66 @@ def test_strategy_drift_after_provider_work_discards_the_output(session) -> None
         )
     ) is None
     assert session.get(Job, initialized.job.id).status == "cancelled"
+
+
+def test_artifact_head_change_after_provider_work_discards_worker_output(session) -> None:
+    initialized = _initialized(session)
+
+    def provider(provider_input):
+        output = CompanyResearchSourceService(
+            session, now=lambda: NOW
+        ).compile_evidence_index(preparation_id=provider_input.preparation_id)
+        # The worker has already committed its claim before provider work.  A
+        # separate SQLite session can therefore publish a new artifact head
+        # before this worker reaches its fenced completion transaction.
+        external = Session(bind=session.get_bind(), future=True)
+        try:
+            CompanyResearchRepository(external).append_artifact(
+                project_id=initialized.project.id,
+                kind="evidence_index",
+                input_hash=output.input_hash,
+                payload=output.evidence_index_payload,
+                source_refs=output.source_refs,
+                expected_parent_id=None,
+                created_at=NOW,
+            )
+            external.commit()
+        finally:
+            external.close()
+        return output
+
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW, provider=provider)
+    claim = worker.claim_next()
+    assert claim is not None
+
+    assert worker.run_claim(claim) == "discarded"
+    session.expire_all()
+    job = session.get(Job, initialized.job.id)
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    assert job is not None
+    assert job.status == "cancelled"
+    assert job.error == "stale_output_discarded"
+    assert job.claim_token is None
+    assert preparation is not None
+    assert preparation.status == "blocked"
+    assert preparation.last_error_code == "stale_output_discarded"
+    artifacts = tuple(
+        session.scalars(
+            select(CompanyResearchArtifactVersion)
+            .where(CompanyResearchArtifactVersion.project_id == initialized.project.id)
+            .order_by(CompanyResearchArtifactVersion.created_at)
+        )
+    )
+    assert [artifact.kind for artifact in artifacts] == ["evidence_index"]
+    events = tuple(
+        session.scalars(
+            select(CompanyResearchEvent)
+            .where(CompanyResearchEvent.preparation_id == initialized.preparation.id)
+            .order_by(CompanyResearchEvent.sequence)
+        )
+    )
+    assert events[-1].event_type == "stale_output_discarded"
+    assert all(event.event_type != "evidence_index_prepared" for event in events)
 
 
 def test_stale_running_claim_is_recovered_without_cloning_the_job(session) -> None:
