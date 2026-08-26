@@ -175,6 +175,57 @@ def test_unknown_provider_exception_is_blocked_without_leaking_its_message(sessi
     assert "provider secret token" not in repr(job_events)
 
 
+def test_provider_flush_failure_rolls_back_only_provider_work_then_blocks_safely(session) -> None:
+    initialized = _initialized(session)
+
+    def provider(_preparation):
+        # The duplicate primary key simulates a provider-side persistence bug.
+        # Its flush invalidates the provider transaction after the worker has
+        # already committed the lease-fenced claim.
+        existing = session.get(Job, initialized.job.id)
+        assert existing is not None
+        session.expunge(existing)
+        session.add(
+            Job(
+                id=initialized.job.id,
+                kind="prepare_company_research",
+                created_at=NOW,
+            )
+        )
+        session.flush()
+        raise AssertionError("unreachable")
+
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        provider=provider,
+    )
+    claim = worker.claim_next()
+    assert claim is not None
+
+    assert worker.run_claim(claim) == "discarded"
+
+    job = session.get(Job, initialized.job.id)
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    assert job is not None and job.status == "failed" and job.error == "provider_failed"
+    assert preparation is not None
+    assert preparation.status == "blocked"
+    assert preparation.last_error_code == "provider_failed"
+    events = tuple(
+        session.scalars(
+            select(CompanyResearchEvent).where(
+                CompanyResearchEvent.preparation_id == initialized.preparation.id
+            )
+        )
+    )
+    job_events = tuple(
+        session.scalars(select(JobEvent).where(JobEvent.job_id == initialized.job.id))
+    )
+    assert events[-1].payload == {"code": "provider_failed"}
+    assert job_events[-1].message == "provider_failed"
+    assert "UNIQUE constraint" not in repr((events, job_events))
+
+
 def test_manual_retry_accepts_a_due_worker_scheduled_recoverable_job(session) -> None:
     initialized = _initialized(session)
     current_time = NOW

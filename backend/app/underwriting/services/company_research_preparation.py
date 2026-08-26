@@ -385,6 +385,17 @@ class CompanyResearchPreparationWorker:
             self._session, now=self._now
         ).compile_evidence_index(preparation_id=preparation.id)
 
+    def _rollback_provider_transaction(self) -> None:
+        """Discard only uncommitted provider work before a safe transition.
+
+        ``run_claim`` commits the ownership fence before invoking a provider.
+        A provider may nevertheless issue a failing flush, which leaves the
+        session in SQLAlchemy's pending-rollback state.  Rolling back here
+        cannot undo that committed fence, and makes the short terminal-state
+        transaction below usable on SQLite and PostgreSQL alike.
+        """
+        self._session.rollback()
+
     def run_claim(
         self, claim: CompanyResearchClaim
     ) -> Literal["awaiting_evidence_review", "recoverable_failure", "discarded"]:
@@ -399,19 +410,21 @@ class CompanyResearchPreparationWorker:
         self._session.commit()
         try:
             compiled = self._compile(preparation)
+            # A provider may have performed read-only database checks.  Close
+            # that transaction before taking the short output-commit locks.
+            self._session.commit()
         except (OSError, TimeoutError, ConnectionError):
+            self._rollback_provider_transaction()
             self._recoverable_failure(claim)
             return "recoverable_failure"
         except (AlphabetGoldenCaseFixtureError, CompanyResearchValidationError, ValidationError):
+            self._rollback_provider_transaction()
             self._block(claim)
             return "discarded"
         except Exception:
+            self._rollback_provider_transaction()
             self._block(claim, error_code=_SAFE_UNKNOWN_PROVIDER_ERROR)
             return "discarded"
-
-        # Source compilation may have made read-only database checks.  Close
-        # that transaction before taking the short output-commit locks.
-        self._session.commit()
 
         # The provider/result boundary is explicit: publish no database write
         # until the output has been assembled, then reacquire the claim fence.
