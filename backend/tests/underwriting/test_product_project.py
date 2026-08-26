@@ -83,13 +83,20 @@ def _object(session, kind: str, key: str, name: str) -> UnderwritingResearchObje
     return row
 
 
-def _relation(session, parent: UUID, child: UUID, relation_type: str) -> None:
+def _relation(
+    session,
+    parent: UUID,
+    child: UUID,
+    relation_type: str,
+    *,
+    created_at: datetime = NOW,
+) -> None:
     session.add(
         UnderwritingObjectRelation(
             parent_id=parent,
             child_id=child,
             relation_type=relation_type,
-            created_at=NOW,
+            created_at=created_at,
         )
     )
     session.flush()
@@ -1906,6 +1913,86 @@ def test_industry_companies_skips_an_oversized_group_to_return_a_later_group(
     assert [
         item.external_key for item in service.industry_companies(industry.id, NOW, 2)
     ] == [later.external_key]
+
+
+def test_industry_companies_excludes_a_future_direct_company_relation(
+    session, service
+) -> None:
+    industry = _object(session, "industry", "industry:future", "Future Industry")
+    company, security = _company_group(
+        session,
+        service,
+        key="future-direct",
+        company_name="Future Direct",
+        securities=(("FUTURE.TEST", "Future Security", "FUTURE"),),
+    )
+    historical_as_of = NOW.replace(hour=8)
+    _relation(
+        session,
+        industry.id,
+        company.id,
+        "industry_exposes_company",
+        created_at=NOW,
+    )
+
+    assert service.industry_companies(industry.id, historical_as_of, 10) == ()
+    assert [
+        item.object_id for item in service.industry_companies(industry.id, NOW, 10)
+    ] == [company.id, security.id]
+
+
+def test_industry_companies_excludes_a_future_company_security_relation(
+    session, service
+) -> None:
+    industry = _object(session, "industry", "industry:security-time", "Time Industry")
+    company = _object(session, "company", "company:security-time", "Time Company")
+    security = _object(session, "security", "security:time", "Time Security")
+    _identity(service, industry)
+    _identity(service, company)
+    _identity(service, security, currency="USD")
+    historical_as_of = NOW.replace(hour=8)
+    _relation(
+        session,
+        industry.id,
+        company.id,
+        "industry_exposes_company",
+        created_at=OLD_FROM,
+    )
+    _relation(
+        session,
+        company.id,
+        security.id,
+        "company_has_security",
+        created_at=NOW,
+    )
+
+    assert [
+        item.object_id
+        for item in service.industry_companies(industry.id, historical_as_of, 10)
+    ] == [company.id]
+    assert [
+        item.object_id for item in service.industry_companies(industry.id, NOW, 10)
+    ] == [company.id, security.id]
+
+
+def test_industry_companies_rejects_overlapping_securities_across_direct_companies(
+    session, service
+) -> None:
+    industry = _object(session, "industry", "industry:overlap", "Overlap Industry")
+    first = _object(session, "company", "company:first", "First Company")
+    second = _object(session, "company", "company:second", "Second Company")
+    shared_security = _object(session, "security", "security:shared", "Shared")
+    for row in (industry, first, second, shared_security):
+        _identity(service, row, currency="USD" if row is shared_security else None)
+    _relation(session, industry.id, first.id, "industry_exposes_company")
+    _relation(session, industry.id, second.id, "industry_exposes_company")
+    _relation(session, first.id, shared_security.id, "company_has_security")
+    _relation(session, second.id, shared_security.id, "company_has_security")
+
+    with pytest.raises(ValidationError, match="Security.*multiple"):
+        service.industry_companies(industry.id, NOW, 10)
+    with pytest.raises(ValidationError, match="Security.*multiple"):
+        service.industry_companies(industry.id, NOW, 2)
 
 
 def test_foundation_fixture_is_idempotent_content_checked_and_contains_no_research_facts(

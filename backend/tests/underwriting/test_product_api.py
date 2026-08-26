@@ -249,6 +249,52 @@ def test_industry_company_endpoint_maps_not_found_validation_and_keeps_reads_tra
     assert transaction_calls == {"commit": 0, "rollback": 0}
 
 
+def test_industry_company_endpoint_maps_overlapping_direct_company_security_to_422(
+    api_client, session
+) -> None:
+    catalog = _seed_catalog(session, suffix="industry-overlap")
+    second_company = _seed_object(
+        session, "company", "company-overlap", "Second Company"
+    )
+    service = ResearchProjectService(session, now=lambda: NOW)
+    service.append_identity_version(
+        object_id=second_company.id,
+        canonical_name=second_company.canonical_name,
+        symbol=None,
+        exchange=None,
+        share_class=None,
+        trading_currency=None,
+        effective_from=EFFECTIVE,
+        effective_to=None,
+        expected_parent_id=None,
+    )
+    session.add_all(
+        (
+            UnderwritingObjectRelation(
+                parent_id=catalog["industry"].id,
+                child_id=second_company.id,
+                relation_type="industry_exposes_company",
+                created_at=NOW,
+            ),
+            UnderwritingObjectRelation(
+                parent_id=second_company.id,
+                child_id=catalog["security"].id,
+                relation_type="company_has_security",
+                created_at=NOW,
+            ),
+        )
+    )
+    session.flush()
+
+    response = api_client.get(
+        f"{BASE}/industries/{catalog['industry'].id}/companies",
+        params={"as_of": NOW.isoformat()},
+    )
+
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
+
+
 def _create_project(api_client, catalog: dict[str, object]) -> dict:
     response = api_client.post(
         f"{BASE}/projects",

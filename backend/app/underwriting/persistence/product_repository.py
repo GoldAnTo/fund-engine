@@ -862,7 +862,12 @@ class ProductRepository:
         }
 
     @staticmethod
-    def _effective_company_children_statement(company_ids: set[UUID], as_of: datetime):
+    def _effective_company_children_statement(
+        company_ids: set[UUID],
+        as_of: datetime,
+        *,
+        require_relation_as_of: bool = False,
+    ):
         child = aliased(UnderwritingResearchObject)
         identity = aliased(UnderwritingObjectIdentityVersion)
         candidate = aliased(UnderwritingObjectIdentityVersion)
@@ -877,7 +882,7 @@ class ProductRepository:
             .correlate(child)
             .scalar_subquery()
         )
-        return (
+        statement = (
             select(UnderwritingObjectRelation.parent_id, child, identity)
             .join(child, child.id == UnderwritingObjectRelation.child_id)
             .join(identity, identity.id == effective_identity_id)
@@ -889,6 +894,9 @@ class ProductRepository:
                 or_(identity.effective_to.is_(None), identity.effective_to > as_of),
             )
         )
+        if require_relation_as_of:
+            statement = statement.where(UnderwritingObjectRelation.created_at <= as_of)
+        return statement
 
     def _pack_search_groups(
         self,
@@ -1002,7 +1010,7 @@ class ProductRepository:
         child_counts: dict[UUID, int] = {}
         if anchor_rows:
             child_rows = self._effective_company_children_statement(
-                set(anchor_rows), as_of
+                set(anchor_rows), as_of, require_relation_as_of=True
             ).subquery()
             child_counts = dict(
                 self._session.execute(
@@ -1034,7 +1042,9 @@ class ProductRepository:
         ] = {company_id: [] for company_id in selected_company_ids}
         if selected_company_ids:
             child_statement = (
-                self._effective_company_children_statement(selected_company_ids, as_of)
+                self._effective_company_children_statement(
+                    selected_company_ids, as_of, require_relation_as_of=True
+                )
                 .order_by(
                     UnderwritingObjectRelation.parent_id,
                     UnderwritingObjectRelation.child_id,
@@ -1117,6 +1127,7 @@ class ProductRepository:
                     UnderwritingObjectRelation.parent_id == industry_id,
                     UnderwritingObjectRelation.relation_type
                     == "industry_exposes_company",
+                    UnderwritingObjectRelation.created_at <= as_of,
                 )
                 .order_by(UnderwritingObjectRelation.child_id)
                 .limit(_OBJECT_SEARCH_CANDIDATE_CAP + 1)
@@ -1141,7 +1152,24 @@ class ProductRepository:
             if child_ids
             else ()
         )
-        anchors = {research_object.id: (research_object, identity) for research_object, identity in effective_rows}
+        anchors = {
+            research_object.id: (research_object, identity)
+            for research_object, identity in effective_rows
+        }
+        if anchors:
+            security_rows = self._effective_company_children_statement(
+                set(anchors), as_of, require_relation_as_of=True
+            ).subquery()
+            overlapping_security_id = self._session.scalar(
+                select(security_rows.c.id)
+                .group_by(security_rows.c.id)
+                .having(func.count(func.distinct(security_rows.c.parent_id)) > 1)
+                .limit(1)
+            )
+            if overlapping_security_id is not None:
+                raise ValidationError(
+                    "Security belongs to multiple selected Industry Company groups"
+                )
         return self._pack_industry_company_groups(anchors, as_of, limit)
 
     def create_project(
