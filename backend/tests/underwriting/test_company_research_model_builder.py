@@ -32,6 +32,7 @@ from app.underwriting.services.company_research_model_builder import (
     CompanyResearchModelModule,
     CompanyResearchModelTemplate,
     CompanyResearchModelBuilder,
+    CompanyResearchOperatingDriverBinding,
     CompanyResearchOperatingBaselineRequirement,
     CompanyResearchScenarioMechanism,
     FrozenMarketContext,
@@ -148,7 +149,6 @@ def _model_template() -> CompanyResearchModelTemplate:
         "other_google_services",
         "other_bets",
         "corporate_capital_allocation",
-        "distribution_risk",
     )
     driver_modules = {
         "revenue": "search_and_other_ads",
@@ -170,13 +170,34 @@ def _model_template() -> CompanyResearchModelTemplate:
             for key in module_keys
         ),
         metric_classifications=(
-            CompanyResearchMetricClassification("revenue", "revenue"),
-            CompanyResearchMetricClassification(
-                "capital_expenditures", "capital"
+            *(
+                CompanyResearchMetricClassification(key, "revenue", "revenue")
+                for key in module_keys
             ),
-            CompanyResearchMetricClassification("operating_expense", "cost"),
+            CompanyResearchMetricClassification(
+                "corporate_capital_allocation", "capital_expenditures", "capital"
+            ),
+            CompanyResearchMetricClassification(
+                "corporate_capital_allocation", "operating_expense", "cost"
+            ),
         ),
-        driver_bindings=tuple(
+        operating_driver_bindings=(
+            CompanyResearchOperatingDriverBinding(
+                driver_key="audience_intensity",
+                module_key="search_and_other_ads",
+                metric_key="revenue",
+                input_state=ModelInputState.REPORTED,
+                equation_id=None,
+            ),
+            CompanyResearchOperatingDriverBinding(
+                driver_key="infrastructure_intensity",
+                module_key="corporate_capital_allocation",
+                metric_key="capital_expenditures",
+                input_state=ModelInputState.REPORTED,
+                equation_id=None,
+            ),
+        ),
+        financial_driver_ownership=tuple(
             CompanyResearchDriverBinding(key, driver_modules[key])
             for key in (
                 "revenue",
@@ -516,6 +537,12 @@ def test_memo_is_a_hash_referenced_machine_candidate() -> None:
 
 def test_template_preserves_gap_only_modules_and_classifies_capex_as_capital() -> None:
     value = _build_input()
+    gap_only_module = CompanyResearchModelModule(
+        module_key="distribution_risk",
+        revenue_sources=("distribution revenue descriptor",),
+        cost_structure=("distribution cost descriptor",),
+        capital_needs=("distribution capital descriptor",),
+    )
     gap_payload = deepcopy(value.gap_payload)
     gap_payload["gaps"].append(
         {
@@ -526,7 +553,15 @@ def test_template_preserves_gap_only_modules_and_classifies_capex_as_capital() -
     )
 
     result = CompanyResearchModelBuilder().build(
-        replace(value, gap_payload=gap_payload, market_context=None)
+        replace(
+            value,
+            model_template=replace(
+                value.model_template,
+                modules=(*value.model_template.modules, gap_only_module),
+            ),
+            gap_payload=gap_payload,
+            market_context=None,
+        )
     )
 
     modules = {item.module_key: item for item in result.business_map.modules}
@@ -555,9 +590,17 @@ def test_generic_builder_consumes_fully_synthetic_module_vocabulary() -> None:
             replace(module, module_key=module_map[module.module_key])
             for module in original.modules
         ),
-        driver_bindings=tuple(
+        metric_classifications=tuple(
+            replace(item, module_key=module_map[item.module_key])
+            for item in original.metric_classifications
+        ),
+        operating_driver_bindings=tuple(
             replace(binding, module_key=module_map[binding.module_key])
-            for binding in original.driver_bindings
+            for binding in original.operating_driver_bindings
+        ),
+        financial_driver_ownership=tuple(
+            replace(binding, module_key=module_map[binding.module_key])
+            for binding in original.financial_driver_ownership
         ),
         operating_baseline_requirements=tuple(
             replace(requirement, module_key=module_map[requirement.module_key])
@@ -594,11 +637,13 @@ def test_template_driver_bindings_and_candidate_provenance_survive_build() -> No
     result = CompanyResearchModelBuilder().build(value)
     expected_modules = {
         item.driver_key: item.module_key
-        for item in value.model_template.driver_bindings
+        for item in value.model_template.financial_driver_ownership
     }
 
     assert {
-        item.driver_key: item.module_key for item in result.driver_map.drivers
+        item.driver_key: item.module_key
+        for item in result.driver_map.drivers
+        if item.driver_key in expected_modules
     } == expected_modules
     assert all(
         item.input_state is ModelInputState.ASSUMPTION
@@ -607,7 +652,165 @@ def test_template_driver_bindings_and_candidate_provenance_survive_build() -> No
         and item.fact_refs == ()
         and item.assumption_refs
         for item in result.driver_map.drivers
+        if item.driver_key in expected_modules
     )
+
+
+def test_confirmed_numeric_facts_build_nonfinancial_operating_drivers() -> None:
+    result = CompanyResearchModelBuilder().build(_build_input())
+    drivers = {item.driver_key: item for item in result.driver_map.drivers}
+
+    audience = drivers["audience_intensity"]
+    infrastructure = drivers["infrastructure_intensity"]
+    assert audience.module_key == "search_and_other_ads"
+    assert infrastructure.module_key == "corporate_capital_allocation"
+    assert audience.input_state is ModelInputState.REPORTED
+    assert infrastructure.input_state is ModelInputState.REPORTED
+    assert audience.fact_refs[0].fact_key == "fy2025_search_other_revenue"
+    assert infrastructure.fact_refs[0].fact_key == "fy2025_capital_expenditures"
+    assert audience.values == (Decimal("224532"),)
+    assert infrastructure.values == (Decimal("91447"),)
+
+
+def test_metric_classification_routes_numeric_evidence_and_swaps_executably() -> None:
+    value = _build_input()
+    result = CompanyResearchModelBuilder().build(value)
+    corporate = next(
+        item
+        for item in result.business_map.modules
+        if item.module_key == "corporate_capital_allocation"
+    )
+    capex = next(
+        item
+        for item in corporate.classified_evidence
+        if item.metric_key == "capital_expenditures"
+    )
+    assert capex.category == "capital"
+
+    classifications = tuple(
+        replace(item, category="cost")
+        if item.metric_key == "capital_expenditures"
+        else replace(item, category="capital")
+        if item.metric_key == "operating_expense"
+        else item
+        for item in value.model_template.metric_classifications
+    )
+    swapped = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            model_template=replace(
+                value.model_template,
+                metric_classifications=classifications,
+            ),
+        )
+    )
+    swapped_corporate = next(
+        item
+        for item in swapped.business_map.modules
+        if item.module_key == "corporate_capital_allocation"
+    )
+    assert next(
+        item
+        for item in swapped_corporate.classified_evidence
+        if item.metric_key == "capital_expenditures"
+    ).category == "cost"
+
+
+def test_template_only_empty_module_gets_explicit_blocking_gap() -> None:
+    value = _build_input()
+    orphan = CompanyResearchModelModule(
+        module_key="orphan_unit",
+        revenue_sources=("orphan revenue",),
+        cost_structure=("orphan cost",),
+        capital_needs=("orphan capital",),
+    )
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            model_template=replace(
+                value.model_template,
+                modules=(*value.model_template.modules, orphan),
+            ),
+        )
+    )
+
+    orphan_artifact = next(
+        item for item in result.business_map.modules if item.module_key == "orphan_unit"
+    )
+    assert orphan_artifact.fact_refs == ()
+    assert orphan_artifact.gap_refs == ("missing_module_evidence_orphan_unit",)
+    assert result.assessment.status == "not_answerable"
+
+
+def test_missing_bound_operating_driver_creates_critical_gap() -> None:
+    value = _build_input()
+    missing = CompanyResearchOperatingDriverBinding(
+        driver_key="cost_signal",
+        module_key="corporate_capital_allocation",
+        metric_key="operating_expense",
+        input_state=ModelInputState.REPORTED,
+        equation_id=None,
+    )
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            model_template=replace(
+                value.model_template,
+                operating_driver_bindings=(
+                    *value.model_template.operating_driver_bindings,
+                    missing,
+                ),
+            ),
+        )
+    )
+
+    assert "operating_driver_missing_cost_signal" in {
+        gap.code for gap in result.gaps
+    }
+    assert result.assessment.status == "not_answerable"
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    (
+        ("value", "NaN"),
+        ("value", "01"),
+        ("value_kind", "estimate"),
+        ("currency", None),
+        ("unit", ""),
+        ("period_start", "2025-13-01"),
+    ),
+)
+def test_confirmed_model_facts_require_canonical_numeric_contract(
+    field: str, invalid: object
+) -> None:
+    value = _build_input()
+    payload = deepcopy(value.evidence_payload)
+    payload["facts"][0][field] = invalid
+
+    with pytest.raises(ValidationError, match="model fact"):
+        CompanyResearchModelBuilder().build(
+            replace(
+                value,
+                evidence_payload=payload,
+                evidence_content_hash=canonical_hash(payload),
+            )
+        )
+
+
+def test_confirmed_model_fact_currency_and_units_are_consistent_per_metric() -> None:
+    value = _build_input()
+    payload = deepcopy(value.evidence_payload)
+    payload["facts"][0]["currency"] = "CNY"
+
+    with pytest.raises(ValidationError, match="model fact currency and unit"):
+        CompanyResearchModelBuilder().build(
+            replace(
+                value,
+                evidence_payload=payload,
+                evidence_content_hash=canonical_hash(payload),
+            )
+        )
 
 
 def test_mixed_review_decisions_filter_rejected_nonrequired_facts() -> None:
@@ -626,7 +829,10 @@ def test_mixed_review_decisions_filter_rejected_nonrequired_facts() -> None:
         )
     )
 
-    assert result.assessment.status == "answerable"
+    assert result.assessment.status == "not_answerable"
+    assert "missing_module_evidence_other_bets" in {
+        gap.code for gap in result.gaps
+    }
     assert all(
         ref.fact_key != rejected_key
         for module in result.business_map.modules

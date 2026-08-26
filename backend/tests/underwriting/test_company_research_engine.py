@@ -152,6 +152,11 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
                 input_state=ModelInputState.ASSUMPTION,
                 assumption_key=f"engine-candidate.v1:{driver_key}",
                 equation_id=None,
+                values=next(
+                    item.values
+                    for item in _scenario_forecasts(source_by_key["c"])
+                    if item.driver_key == driver_key
+                ),
             )
             for driver_key in _FORECAST_DRIVER_KEYS
         )
@@ -312,7 +317,20 @@ def test_high_precision_scenario_and_dcf_results_ignore_caller_decimal_context()
         )
         for bridge in model.scenario_bridges
     )
-    precise_model = replace(model, scenario_bridges=precise_bridges)
+    precise_model = replace(
+        model,
+        driver_map=replace(
+            model.driver_map,
+            drivers=tuple(
+                replace(
+                    driver,
+                    values=(precise_values[driver.driver_key],) * 5,
+                )
+                for driver in model.driver_map.drivers
+            ),
+        ),
+        scenario_bridges=precise_bridges,
+    )
 
     global_context = getcontext().copy()
     with localcontext() as context:

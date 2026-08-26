@@ -238,6 +238,7 @@ class CompanyResearchEngine:
                 driver = drivers_by_key[forecast.driver_key]
                 if (
                     forecast.input_state is not driver.input_state
+                    or forecast.values != driver.values
                     or forecast.fact_refs != driver.fact_refs
                     or forecast.assumption_refs != driver.assumption_refs
                     or forecast.assumption_key != driver.assumption_key

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
-from decimal import Decimal
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 import re
 from typing import Any
@@ -15,11 +15,13 @@ from app.models.ledger import ValidationError
 from app.underwriting.domain.company_research import (
     BusinessMapArtifact,
     BusinessModuleArtifact,
+    ClassifiedBusinessEvidenceArtifact,
     CompanyResearchArtifactReference,
     CompanyResearchAssessment,
     CompanyResearchMemoArtifact,
     CompanyResearchModelInput,
     CompanyResearchValidationError,
+    canonical_decimal_string,
     DriverInput,
     DriverMapArtifact,
     DriverMetricArtifact,
@@ -170,10 +172,12 @@ class CompanyResearchModelModule:
 
 @dataclass(frozen=True, slots=True)
 class CompanyResearchMetricClassification:
+    module_key: str
     metric_key: str
     category: str
 
     def __post_init__(self) -> None:
+        _text(self.module_key, "model template metric module_key")
         _text(self.metric_key, "model template metric_key")
         if self.category not in {"revenue", "cost", "capital"}:
             raise ValidationError("model template metric category is invalid")
@@ -187,6 +191,31 @@ class CompanyResearchDriverBinding:
     def __post_init__(self) -> None:
         _text(self.driver_key, "model template driver_key")
         _text(self.module_key, "model template driver module_key")
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchOperatingDriverBinding:
+    driver_key: str
+    module_key: str
+    metric_key: str
+    input_state: ModelInputState
+    equation_id: str | None
+
+    def __post_init__(self) -> None:
+        for value, name in (
+            (self.driver_key, "driver_key"),
+            (self.module_key, "module_key"),
+            (self.metric_key, "metric_key"),
+        ):
+            _text(value, f"operating driver {name}")
+        if self.driver_key in SCENARIO_FINANCIAL_DRIVER_KEYS:
+            raise ValidationError("operating drivers must be separate from financial drivers")
+        if self.input_state not in {ModelInputState.REPORTED, ModelInputState.DERIVED}:
+            raise ValidationError("operating driver state must be reported or derived")
+        if self.input_state is ModelInputState.REPORTED and self.equation_id is not None:
+            raise ValidationError("reported operating driver cannot carry equation_id")
+        if self.input_state is ModelInputState.DERIVED and not self.equation_id:
+            raise ValidationError("derived operating driver requires equation_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,7 +248,8 @@ class CompanyResearchModelTemplate:
     template_version: str
     modules: tuple[CompanyResearchModelModule, ...]
     metric_classifications: tuple[CompanyResearchMetricClassification, ...]
-    driver_bindings: tuple[CompanyResearchDriverBinding, ...]
+    operating_driver_bindings: tuple[CompanyResearchOperatingDriverBinding, ...]
+    financial_driver_ownership: tuple[CompanyResearchDriverBinding, ...]
     operating_baseline_requirements: tuple[CompanyResearchOperatingBaselineRequirement, ...]
     scenario_mechanisms: tuple[CompanyResearchScenarioMechanism, ...]
 
@@ -231,8 +261,10 @@ class CompanyResearchModelTemplate:
         module_keys = tuple(item.module_key for item in self.modules)
         if len(set(module_keys)) != len(module_keys):
             raise ValidationError("company model template modules must be unique")
-        if not isinstance(self.metric_classifications, tuple) or not self.metric_classifications or not all(type(item) is CompanyResearchMetricClassification for item in self.metric_classifications) or len({item.metric_key for item in self.metric_classifications}) != len(self.metric_classifications):
+        if not isinstance(self.metric_classifications, tuple) or not self.metric_classifications or not all(type(item) is CompanyResearchMetricClassification for item in self.metric_classifications) or len({(item.module_key, item.metric_key) for item in self.metric_classifications}) != len(self.metric_classifications):
             raise ValidationError("company model template metric classifications must be unique")
+        if any(item.module_key not in set(module_keys) for item in self.metric_classifications):
+            raise ValidationError("metric classification references unknown module")
         if {item.category for item in self.metric_classifications} != {
             "revenue",
             "cost",
@@ -241,16 +273,23 @@ class CompanyResearchModelTemplate:
             raise ValidationError(
                 "company model template must classify revenue, cost, and capital metrics"
             )
-        if not isinstance(self.driver_bindings, tuple) or not all(type(item) is CompanyResearchDriverBinding for item in self.driver_bindings) or tuple(item.driver_key for item in self.driver_bindings) != SCENARIO_FINANCIAL_DRIVER_KEYS:
+        if not isinstance(self.operating_driver_bindings, tuple) or not self.operating_driver_bindings or not all(type(item) is CompanyResearchOperatingDriverBinding for item in self.operating_driver_bindings) or len({item.driver_key for item in self.operating_driver_bindings}) != len(self.operating_driver_bindings):
+            raise ValidationError("company model template operating drivers must be unique")
+        if not isinstance(self.financial_driver_ownership, tuple) or not all(type(item) is CompanyResearchDriverBinding for item in self.financial_driver_ownership) or tuple(item.driver_key for item in self.financial_driver_ownership) != SCENARIO_FINANCIAL_DRIVER_KEYS:
             raise ValidationError("company model template must bind all six drivers canonically")
-        if any(item.module_key not in set(module_keys) for item in self.driver_bindings):
+        if any(item.module_key not in set(module_keys) for item in (*self.operating_driver_bindings, *self.financial_driver_ownership)):
             raise ValidationError("company model template driver references unknown module")
         if not isinstance(self.operating_baseline_requirements, tuple) or not self.operating_baseline_requirements or not all(type(item) is CompanyResearchOperatingBaselineRequirement for item in self.operating_baseline_requirements):
             raise ValidationError("company model template requires an operating baseline")
         if len({item.requirement_key for item in self.operating_baseline_requirements}) != len(self.operating_baseline_requirements):
             raise ValidationError("operating baseline requirements must be unique")
-        metrics = {item.metric_key for item in self.metric_classifications}
-        if any(item.module_key not in set(module_keys) or item.metric_key not in metrics for item in self.operating_baseline_requirements):
+        metrics = {
+            (item.module_key, item.metric_key)
+            for item in self.metric_classifications
+        }
+        if any((item.module_key, item.metric_key) not in metrics for item in self.operating_driver_bindings):
+            raise ValidationError("operating driver metric is outside the template")
+        if any(item.module_key not in set(module_keys) or (item.module_key, item.metric_key) not in metrics for item in self.operating_baseline_requirements):
             raise ValidationError("operating baseline requirement is outside the template")
         if not isinstance(self.scenario_mechanisms, tuple) or not all(type(item) is CompanyResearchScenarioMechanism for item in self.scenario_mechanisms) or tuple(item.scenario_id for item in self.scenario_mechanisms) != _SCENARIO_ORDER or len({item.mechanism_id for item in self.scenario_mechanisms}) != 3:
             raise ValidationError("company model template scenario mapping must be exact")
@@ -577,6 +616,39 @@ def _parse_timestamp(value: object, field_name: str) -> datetime:
     return _aware_utc(parsed, field_name)
 
 
+def _model_fact_decimal(fact: Mapping[str, object]) -> Decimal:
+    raw = fact.get("value")
+    if not isinstance(raw, str):
+        raise ValidationError("model fact value must be a canonical Decimal string")
+    try:
+        parsed = Decimal(raw)
+    except InvalidOperation as exc:
+        raise ValidationError("model fact value must be a canonical Decimal string") from exc
+    if not parsed.is_finite() or canonical_decimal_string(parsed) != raw:
+        raise ValidationError("model fact value must be a canonical finite Decimal string")
+    return parsed
+
+
+def _model_fact_period(fact: Mapping[str, object]) -> tuple[str, str]:
+    values: list[str] = []
+    parsed: list[date] = []
+    for name in ("period_start", "period_end"):
+        raw = fact.get(name)
+        if not isinstance(raw, str) or not raw:
+            raise ValidationError("model fact period must be complete")
+        try:
+            item = date.fromisoformat(raw)
+        except ValueError as exc:
+            raise ValidationError("model fact period must be valid") from exc
+        if item.isoformat() != raw:
+            raise ValidationError("model fact period must be canonical")
+        values.append(raw)
+        parsed.append(item)
+    if parsed[0] > parsed[1]:
+        raise ValidationError("model fact period must be ordered")
+    return values[0], values[1]
+
+
 def _validate_evidence_payload(
     payload_value: object, cutoff_at: datetime
 ) -> tuple[Mapping[str, object], ...]:
@@ -632,7 +704,36 @@ def _validate_evidence_payload(
         review = fact.get("review_decision")
         if review not in {"confirmed", "rejected"}:
             raise ValidationError("evidence must be reviewed before model input")
+        if review == "confirmed":
+            _model_fact_decimal(fact)
+            if fact.get("value_kind") not in {
+                "reported",
+                "derived",
+                "management_guidance",
+            }:
+                raise ValidationError("model fact value_kind is unsupported")
+            _text(fact.get("currency"), "model fact currency")
+            _text(fact.get("unit"), "model fact unit")
+            _model_fact_period(fact)
         reviewed.append(fact)
+    confirmed = tuple(
+        fact for fact in reviewed if fact["review_decision"] == "confirmed"
+    )
+    for metric_key in {str(fact["metric_key"]) for fact in confirmed}:
+        currencies = {
+            str(fact["currency"])
+            for fact in confirmed
+            if fact["metric_key"] == metric_key
+        }
+        units = {
+            str(fact["unit"])
+            for fact in confirmed
+            if fact["metric_key"] == metric_key
+        }
+        if len(currencies) != 1 or len(units) != 1:
+            raise ValidationError(
+                "model fact currency and unit must be consistent per metric"
+            )
     return tuple(reviewed)
 
 
@@ -694,12 +795,28 @@ class CompanyResearchModelBuilder:
         active_gaps = self._active_gaps(
             raw_gaps, value.market_context, baseline_gaps
         )
+        active_gaps = tuple(
+            sorted(
+                (
+                    *active_gaps,
+                    *self._operating_driver_gaps(value.model_template, confirmed),
+                ),
+                key=lambda item: item.code,
+            )
+        )
+        active_gaps = self._complete_module_gaps(
+            value.model_template, confirmed, active_gaps
+        )
         business_map = self._business_map(
             value.model_template, confirmed, active_gaps, evidence_refs
         )
         assumption_refs = self._assumption_refs(value.strategy_assumptions)
         driver_map = self._driver_map(
-            value.model_template, value.strategy_assumptions, assumption_refs
+            value.model_template,
+            confirmed,
+            evidence_refs,
+            value.strategy_assumptions,
+            assumption_refs,
         )
         scenario_set, scenario_bridges = self._scenario_inputs(
             value.strategy_assumptions, assumption_refs
@@ -825,10 +942,16 @@ class CompanyResearchModelBuilder:
         gaps: tuple[Mapping[str, object], ...],
     ) -> None:
         modules = {item.module_key for item in template.modules}
-        metrics = {item.metric_key for item in template.metric_classifications}
+        metrics = {
+            (item.module_key, item.metric_key)
+            for item in template.metric_classifications
+        }
         if any(str(item["business_module"]) not in modules for item in (*facts, *gaps)):
             raise ValidationError("evidence module is outside the company model template")
-        if any(str(item["metric_key"]) not in metrics for item in facts):
+        if any(
+            (str(item["business_module"]), str(item["metric_key"])) not in metrics
+            for item in facts
+        ):
             raise ValidationError("evidence metric is outside the company model template")
 
     @staticmethod
@@ -904,6 +1027,47 @@ class CompanyResearchModelBuilder:
         return tuple(sorted((*source_gaps, *baseline_gaps), key=lambda item: item.code))
 
     @staticmethod
+    def _complete_module_gaps(
+        template: CompanyResearchModelTemplate,
+        facts: tuple[Mapping[str, object], ...],
+        gaps: tuple[ResearchGap, ...],
+    ) -> tuple[ResearchGap, ...]:
+        covered = {str(item["business_module"]) for item in facts} | {
+            item.module_key for item in gaps
+        }
+        generated = tuple(
+            ResearchGap(
+                code=f"missing_module_evidence_{module.module_key}",
+                module_key=module.module_key,
+                severity=ResearchGapSeverity.CRITICAL,
+                message=f"No confirmed evidence or governed gap covers {module.module_key}",
+            )
+            for module in template.modules
+            if module.module_key not in covered
+        )
+        return tuple(sorted((*gaps, *generated), key=lambda item: item.code))
+
+    @staticmethod
+    def _operating_driver_gaps(
+        template: CompanyResearchModelTemplate,
+        facts: tuple[Mapping[str, object], ...],
+    ) -> tuple[ResearchGap, ...]:
+        available = {
+            (str(item["business_module"]), str(item["metric_key"]))
+            for item in facts
+        }
+        return tuple(
+            ResearchGap(
+                code=f"operating_driver_missing_{binding.driver_key}",
+                module_key=binding.module_key,
+                severity=ResearchGapSeverity.CRITICAL,
+                message=f"Confirmed numeric input is missing for {binding.driver_key}",
+            )
+            for binding in template.operating_driver_bindings
+            if (binding.module_key, binding.metric_key) not in available
+        )
+
+    @staticmethod
     def _business_map(
         template: CompanyResearchModelTemplate,
         facts: tuple[Mapping[str, object], ...],
@@ -911,6 +1075,10 @@ class CompanyResearchModelBuilder:
         refs: tuple[SourceLineageReference, ...],
     ) -> BusinessMapArtifact:
         refs_by_key = {item.fact_key: item for item in refs}
+        categories = {
+            (item.module_key, item.metric_key): item.category
+            for item in template.metric_classifications
+        }
         return BusinessMapArtifact(
             modules=tuple(
                 BusinessModuleArtifact(
@@ -925,6 +1093,22 @@ class CompanyResearchModelBuilder:
                     ),
                     gap_refs=tuple(
                         gap.code for gap in gaps if gap.module_key == module.module_key
+                    ),
+                    classified_evidence=tuple(
+                        ClassifiedBusinessEvidenceArtifact(
+                            fact_ref=refs_by_key[str(item["fact_key"])],
+                            metric_key=str(item["metric_key"]),
+                            category=categories[
+                                (module.module_key, str(item["metric_key"]))
+                            ],
+                            value=_model_fact_decimal(item),
+                            currency=str(item["currency"]),
+                            unit=str(item["unit"]),
+                            period_start=str(item["period_start"]),
+                            period_end=str(item["period_end"]),
+                        )
+                        for item in facts
+                        if item["business_module"] == module.module_key
                     ),
                 )
                 for module in template.modules
@@ -949,20 +1133,57 @@ class CompanyResearchModelBuilder:
     @staticmethod
     def _driver_map(
         template: CompanyResearchModelTemplate,
+        facts: tuple[Mapping[str, object], ...],
+        evidence_refs: tuple[SourceLineageReference, ...],
         assumptions: StrategyAssumptionSet,
         assumption_refs: tuple[SourceLineageReference, ...],
     ) -> DriverMapArtifact:
         modules_by_driver = {
-            item.driver_key: item.module_key for item in template.driver_bindings
+            item.driver_key: item.module_key
+            for item in template.financial_driver_ownership
         }
+        evidence_by_key = {item.fact_key: item for item in evidence_refs}
         refs_by_driver = {
             path.driver_key: ref
             for path, ref in zip(
                 assumptions.driver_paths, assumption_refs, strict=True
             )
         }
-        return DriverMapArtifact(
-            drivers=tuple(
+        operating = tuple(
+            DriverMetricArtifact(
+                driver_key=binding.driver_key,
+                module_key=binding.module_key,
+                fact_refs=tuple(
+                    evidence_by_key[str(item["fact_key"])]
+                    for item in facts
+                    if item["business_module"] == binding.module_key
+                    and item["metric_key"] == binding.metric_key
+                ),
+                assumption_refs=(),
+                equation=(
+                    "reported_value = reviewed_fact"
+                    if binding.input_state is ModelInputState.REPORTED
+                    else str(binding.equation_id)
+                ),
+                output_metric=binding.metric_key,
+                input_state=binding.input_state,
+                assumption_key=None,
+                equation_id=binding.equation_id,
+                values=tuple(
+                    _model_fact_decimal(item)
+                    for item in facts
+                    if item["business_module"] == binding.module_key
+                    and item["metric_key"] == binding.metric_key
+                ),
+            )
+            for binding in template.operating_driver_bindings
+            if any(
+                item["business_module"] == binding.module_key
+                and item["metric_key"] == binding.metric_key
+                for item in facts
+            )
+        )
+        financial = tuple(
                 DriverMetricArtifact(
                     driver_key=path.driver_key,
                     module_key=modules_by_driver[path.driver_key],
@@ -973,10 +1194,11 @@ class CompanyResearchModelBuilder:
                     input_state=path.state,
                     assumption_key=path.assumption_key,
                     equation_id=path.equation_id,
+                    values=path.values,
                 )
                 for path in assumptions.driver_paths
             )
-        )
+        return DriverMapArtifact(drivers=(*operating, *financial))
 
     @staticmethod
     def _scenario_inputs(

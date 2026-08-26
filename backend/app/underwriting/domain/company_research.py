@@ -610,6 +610,7 @@ _DRIVER_EQUATIONS = frozenset(
     {
         *SCENARIO_FINANCIAL_DRIVER_EQUATIONS.values(),
         "fcff = nopat + depreciation - capex - working_capital_change",
+        "reported_value = reviewed_fact",
     }
 )
 
@@ -756,6 +757,28 @@ class DriverInput:
 
 
 @dataclass(frozen=True, slots=True)
+class ClassifiedBusinessEvidenceArtifact:
+    fact_ref: SourceLineageReference
+    metric_key: str
+    category: str
+    value: Decimal
+    currency: str
+    unit: str
+    period_start: str
+    period_end: str
+
+    def __post_init__(self) -> None:
+        if type(self.fact_ref) is not SourceLineageReference:
+            raise CompanyResearchValidationError("classified evidence requires a fact ref")
+        _require_key(self.metric_key, "classified evidence metric_key", _GAP_CODE)
+        if self.category not in {"revenue", "cost", "capital"}:
+            raise CompanyResearchValidationError("classified evidence category is invalid")
+        _artifact_decimal(self.value, "classified evidence value")
+        for name in ("currency", "unit", "period_start", "period_end"):
+            _artifact_text(getattr(self, name), f"classified evidence {name}")
+
+
+@dataclass(frozen=True, slots=True)
 class BusinessModuleArtifact:
     module_key: str
     revenue_sources: tuple[str, ...]
@@ -763,6 +786,7 @@ class BusinessModuleArtifact:
     capital_needs: tuple[str, ...]
     fact_refs: tuple[SourceLineageReference, ...]
     gap_refs: tuple[str, ...]
+    classified_evidence: tuple[ClassifiedBusinessEvidenceArtifact, ...] = ()
 
     def __post_init__(self) -> None:
         _require_key(self.module_key, "business_map.module_key", _MODULE_KEY)
@@ -779,6 +803,17 @@ class BusinessModuleArtifact:
             isinstance(item, str) and _GAP_CODE.fullmatch(item) for item in self.gap_refs
         ):
             raise CompanyResearchValidationError("business_map.gap_refs must contain gap keys")
+        if not self.fact_refs and not self.gap_refs:
+            raise CompanyResearchValidationError(
+                "business module requires confirmed fact refs or explicit gap refs"
+            )
+        if not isinstance(self.classified_evidence, tuple) or not all(
+            type(item) is ClassifiedBusinessEvidenceArtifact
+            for item in self.classified_evidence
+        ):
+            raise CompanyResearchValidationError("business module classified evidence must be typed")
+        if any(item.fact_ref not in self.fact_refs for item in self.classified_evidence):
+            raise CompanyResearchValidationError("classified evidence must use module fact refs")
 
 
 @dataclass(frozen=True, slots=True)
@@ -805,6 +840,7 @@ class DriverMetricArtifact:
     input_state: ModelInputState
     assumption_key: str | None
     equation_id: str | None
+    values: tuple[Decimal, ...]
 
     def __post_init__(self) -> None:
         _require_key(self.driver_key, "driver.driver_key", _GAP_CODE)
@@ -814,6 +850,10 @@ class DriverMetricArtifact:
         if self.equation not in _DRIVER_EQUATIONS:
             raise CompanyResearchValidationError("driver.equation must be a closed equation identifier")
         _require_key(self.output_metric, "driver.output_metric", _GAP_CODE)
+        if not isinstance(self.values, tuple) or not self.values:
+            raise CompanyResearchValidationError("driver values must be non-empty")
+        for value in self.values:
+            _artifact_decimal(value, "driver value")
         if type(self.input_state) is not ModelInputState:
             raise CompanyResearchValidationError("driver.input_state must be controlled")
         if self.input_state is ModelInputState.REPORTED:
