@@ -122,11 +122,13 @@ class CompanyResearchRepository:
             raise error_type("company research preparation step is invalid")
         if job.step != preparation_step:
             raise error_type("company research preparation job step is invalid")
-        expected_job_status = {
-            "queued": "queued",
-            "recoverable_failure": "failed",
+        expected_job_statuses = {
+            "queued": frozenset({"queued"}),
+            # A legacy/manual retry records a failed Job, while the worker's
+            # automatic retry keeps its owned Job queued behind backoff.
+            "recoverable_failure": frozenset({"failed", "queued"}),
         }.get(preparation_status)
-        if expected_job_status is not None and job.status != expected_job_status:
+        if expected_job_statuses is not None and job.status not in expected_job_statuses:
             raise error_type("company research preparation job status is invalid")
 
     def _flush_in_savepoint(self, row: Any) -> Any:

@@ -46,6 +46,7 @@ COMPANY_RESEARCH_STAGES = (
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = (30, 120, 600)
 _SAFE_PROVIDER_ERROR = "provider_unavailable"
+_SAFE_UNKNOWN_PROVIDER_ERROR = "provider_failed"
 _SAFE_STALE_ERROR = "stale_output_discarded"
 
 
@@ -96,7 +97,9 @@ class CompanyResearchPreparationWorker:
                 Job.target_type == "company_research_preparation",
                 Job.status == "queued",
                 Job.cancel_requested.is_(False),
-                CompanyResearchPreparation.status == "queued",
+                CompanyResearchPreparation.status.in_(
+                    ("queued", "recoverable_failure")
+                ),
                 CompanyResearchPreparation.current_step == "evidence_index",
                 (CompanyResearchPreparation.next_attempt_at.is_(None))
                 | (CompanyResearchPreparation.next_attempt_at <= now),
@@ -345,30 +348,32 @@ class CompanyResearchPreparationWorker:
         )
         self._session.flush()
 
-    def _block(self, claim: CompanyResearchClaim) -> None:
+    def _block(
+        self, claim: CompanyResearchClaim, *, error_code: str = "validation_failed"
+    ) -> None:
         current = self._current_claim(claim)
         if current is None:
             return
         job, preparation = current
         now = self._utcnow()
         job.status = "failed"
-        job.error = "validation_failed"
+        job.error = error_code
         job.claim_token = None
         job.finished_at = now
         preparation.status = "blocked"
-        preparation.last_error_code = "validation_failed"
+        preparation.last_error_code = error_code
         preparation.updated_at = now
         self._jobs.append_event(
             job_id=job.id,
             seq=self._jobs.next_event_seq(job.id),
             status="failed",
             step="evidence_index",
-            message="validation_failed",
+            message=error_code,
         )
         self._repository.append_event(
             preparation_id=preparation.id,
             event_type="source_preparation_blocked",
-            payload={"code": "validation_failed"},
+            payload={"code": error_code},
             created_at=now,
         )
         self._session.flush()
@@ -399,6 +404,9 @@ class CompanyResearchPreparationWorker:
             return "recoverable_failure"
         except (AlphabetGoldenCaseFixtureError, CompanyResearchValidationError, ValidationError):
             self._block(claim)
+            return "discarded"
+        except Exception:
+            self._block(claim, error_code=_SAFE_UNKNOWN_PROVIDER_ERROR)
             return "discarded"
 
         # Source compilation may have made read-only database checks.  Close
