@@ -24,7 +24,7 @@ from app.underwriting.persistence.company_research_models import (
     CompanyResearchPreparation,
 )
 from app.underwriting.persistence.repository import StaleParentError
-from app.underwriting.services.kernel import canonical_hash
+from app.underwriting.hashing import canonical_hash
 
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _PREPARE_JOB_KIND = "prepare_company_research"
