@@ -24,6 +24,7 @@ from app.underwriting.domain.company_research import (
     ResearchGap,
     ResearchGapSeverity,
     ReverseDcfRequest,
+    ValuationSetArtifact,
     ScenarioArtifact,
     ScenarioDriverOverride,
     ScenarioFinancialDriverForecast,
@@ -33,6 +34,7 @@ from app.underwriting.domain.company_research import (
     SourceLineageReference,
     ValueRange,
 )
+from app.underwriting.hashing import canonical_hash
 from app.underwriting.services.company_research_engine import CompanyResearchEngine
 
 
@@ -546,6 +548,70 @@ def test_decimal_boundaries_are_decimal_only_and_serialize_canonically() -> None
             fiscal_year=2026, revenue=Decimal("1"), operating_income=1.0,
             cash_tax_rate=Decimal("0"), depreciation=Decimal("0"), capex=Decimal("0"),
             working_capital_change=Decimal("0"), fcff=Decimal("0"), fact_refs=(_source("a"),),
+        )
+
+
+def test_valuation_canonical_payload_and_hash_ignore_caller_decimal_context() -> None:
+    valuation = CompanyResearchEngine().compile(_input()).valuation_set
+    assert valuation is not None
+    high_precision_return = ValueRange(
+        Decimal("0.123456789012345678901234567890123456789012345678901234567890"),
+        Decimal("0.223456789012345678901234567890123456789012345678901234567890"),
+    )
+    first_range = valuation.security_value_ranges[0]
+    first_comparison = valuation.required_return_comparisons[0]
+    valuation = replace(
+        valuation,
+        security_value_ranges=(
+            replace(first_range, cny_return=high_precision_return),
+            *valuation.security_value_ranges[1:],
+        ),
+        required_return_comparisons=(
+            replace(
+                first_comparison,
+                achieved_return_range=high_precision_return,
+                meets_required_return=True,
+            ),
+            *valuation.required_return_comparisons[1:],
+        ),
+    )
+
+    global_context = getcontext().copy()
+    with localcontext() as context:
+        context.prec = 5
+        low_precision_payload = valuation.canonical_payload()
+        low_precision_hash = canonical_hash(low_precision_payload)
+    with localcontext() as context:
+        context.prec = 120
+        high_precision_payload = valuation.canonical_payload()
+        high_precision_hash = canonical_hash(high_precision_payload)
+
+    assert low_precision_payload == high_precision_payload
+    assert low_precision_hash == high_precision_hash
+    assert getcontext().prec == global_context.prec
+    assert getcontext().rounding == global_context.rounding
+
+
+def test_valuation_rejects_comparison_with_nonmatching_security_return_range() -> None:
+    valuation = CompanyResearchEngine().compile(_input()).valuation_set
+    assert valuation is not None
+    first_comparison = valuation.required_return_comparisons[0]
+    mismatched_comparison = replace(
+        first_comparison,
+        achieved_return_range=ValueRange(Decimal("0.13"), Decimal("0.23")),
+        meets_required_return=True,
+    )
+
+    with pytest.raises(CompanyResearchValidationError, match="match security return ranges"):
+        ValuationSetArtifact(
+            scenario_dcf_values=valuation.scenario_dcf_values,
+            reverse_dcf=valuation.reverse_dcf,
+            security_value_ranges=valuation.security_value_ranges,
+            required_return=valuation.required_return,
+            required_return_comparisons=(
+                mismatched_comparison,
+                *valuation.required_return_comparisons[1:],
+            ),
         )
 
 

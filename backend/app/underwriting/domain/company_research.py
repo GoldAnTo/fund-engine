@@ -1015,7 +1015,9 @@ class ValueRange:
 def canonical_decimal_string(value: Decimal) -> str:
     """Stable Decimal serialization for a later immutable-artifact boundary."""
     _artifact_decimal(value, "decimal")
-    normalized = value.normalize()
+    with localcontext() as context:
+        context.prec = COMPANY_RESEARCH_DECIMAL_PRECISION
+        normalized = value.normalize()
     if normalized.is_zero():
         return "0"
     return format(normalized, "f")
@@ -1138,6 +1140,24 @@ class ValuationSetArtifact:
             raise CompanyResearchValidationError(
                 "valuation set required return comparisons must preserve the mandate return"
             )
+        ranges_by_security = {
+            item.security_external_key: item.cny_return
+            for item in self.security_value_ranges
+        }
+        for comparison in self.required_return_comparisons:
+            if (
+                comparison.achieved_return_range
+                != ranges_by_security[comparison.security_external_key]
+            ):
+                raise CompanyResearchValidationError(
+                    "valuation set required return comparisons must match security return ranges"
+                )
+            if comparison.meets_required_return != (
+                comparison.achieved_return_range.minimum >= self.required_return
+            ):
+                raise CompanyResearchValidationError(
+                    "valuation set required return comparisons must use the conservative return rule"
+                )
 
     def canonical_payload(self) -> dict[str, object]:
         return {
