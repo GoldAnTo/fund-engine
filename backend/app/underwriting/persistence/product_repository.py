@@ -1114,6 +1114,8 @@ class ProductRepository:
             raise ValidationError("industry_id must identify an Industry")
         if not 1 <= limit <= 100:
             raise ValidationError("limit must be between 1 and 100")
+        if self.effective_identity(industry_id, as_of) is None:
+            raise ValidationError("Industry has no effective identity at as_of")
 
         direct_children = tuple(
             self._session.scalars(

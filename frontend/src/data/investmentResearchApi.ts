@@ -262,7 +262,7 @@ function isIndustryCompanyBrowse(value: unknown): value is IndustryCompanyBrowse
       securitiesInCurrentGroup += 1;
     }
   }
-  return !hasAnchor || securitiesInCurrentGroup > 0;
+  return true;
 }
 
 function isProject(value: unknown): value is ProductProject {

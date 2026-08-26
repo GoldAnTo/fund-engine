@@ -255,6 +255,20 @@ def test_industry_company_endpoint_maps_not_found_validation_and_keeps_reads_tra
     assert transaction_calls == {"commit": 0, "rollback": 0}
 
 
+def test_industry_company_endpoint_rejects_an_industry_without_an_effective_identity(
+    api_client, session
+) -> None:
+    catalog = _seed_catalog(session, suffix="future-industry-identity")
+
+    response = api_client.get(
+        f"{BASE}/industries/{catalog['industry'].id}/companies",
+        params={"as_of": (EFFECTIVE - timedelta(days=1)).isoformat()},
+    )
+
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
+
+
 def test_industry_company_endpoint_maps_overlapping_direct_company_security_to_422(
     api_client, session
 ) -> None:

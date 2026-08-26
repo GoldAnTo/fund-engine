@@ -1919,6 +1919,7 @@ def test_industry_companies_excludes_a_future_direct_company_relation(
     session, service
 ) -> None:
     industry = _object(session, "industry", "industry:future", "Future Industry")
+    _identity(service, industry)
     company, security = _company_group(
         session,
         service,
@@ -1936,6 +1937,27 @@ def test_industry_companies_excludes_a_future_direct_company_relation(
     )
 
     assert service.industry_companies(industry.id, historical_as_of, 10) == ()
+    assert [
+        item.object_id for item in service.industry_companies(industry.id, NOW, 10)
+    ] == [company.id, security.id]
+
+
+def test_industry_companies_rejects_an_industry_without_an_effective_identity(
+    session, service
+) -> None:
+    industry = _object(session, "industry", "industry:future-identity", "Future Industry")
+    company, security = _company_group(
+        session,
+        service,
+        key="future-industry-identity",
+        company_name="Future Industry Company",
+        securities=(("FUTURE.IDENTITY", "Future Identity Security", "FUTURE"),),
+    )
+    _identity(service, industry, effective_from=NOW)
+    _relation(session, industry.id, company.id, "industry_exposes_company", created_at=OLD_FROM)
+
+    with pytest.raises(ValidationError, match="Industry has no effective identity"):
+        service.industry_companies(industry.id, NOW.replace(hour=8), 10)
     assert [
         item.object_id for item in service.industry_companies(industry.id, NOW, 10)
     ] == [company.id, security.id]

@@ -295,6 +295,21 @@ describe("company research entry", () => {
     expect(product.requests.filter((request) => request.url.includes(`/product/industries/${ids.industry}/companies?`))).toHaveLength(2);
   });
 
+  it("shows a browseable Company without Securities but does not allow research to start", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", server({ industryItems: [industryCompanyItems[0]] }).fetch);
+    renderPage();
+    await user.type(await screen.findByLabelText("搜索公司、证券或行业"), "Google");
+    await user.click(screen.getByRole("button", { name: "搜索对象" }));
+    await screen.findByRole("region", { name: "对象搜索结果" });
+
+    await user.click(screen.getByRole("button", { name: "查看相关公司" }));
+    const related = await screen.findByRole("region", { name: "行业相关公司" });
+    expect(related).toHaveTextContent("Alphabet Inc.");
+    expect(related).toHaveTextContent("尚无在该时点有效的关联证券；不能建立研究。");
+    expect(within(related).getByRole("button", { name: "研究 Alphabet" })).toBeDisabled();
+  });
+
   it("ignores a stale industry browse after a new object search starts", async () => {
     const user = userEvent.setup();
     const delayedBrowse = deferred<Response>();
