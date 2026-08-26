@@ -987,6 +987,76 @@ class ProductRepository:
             seen.update(group_ids)
         return tuple(results)
 
+    def _pack_industry_company_groups(
+        self,
+        anchor_rows: dict[
+            UUID,
+            tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion],
+        ],
+        as_of: datetime,
+        limit: int,
+    ) -> tuple[
+        tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion], ...
+    ]:
+        """Pack Industry browse groups without search's exact-match priority rule."""
+        child_counts: dict[UUID, int] = {}
+        if anchor_rows:
+            child_rows = self._effective_company_children_statement(
+                set(anchor_rows), as_of
+            ).subquery()
+            child_counts = dict(
+                self._session.execute(
+                    select(child_rows.c.parent_id, func.count())
+                    .group_by(child_rows.c.parent_id)
+                    .order_by(child_rows.c.parent_id)
+                ).all()
+            )
+        selected: list[
+            tuple[
+                UUID,
+                tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion],
+            ]
+        ] = []
+        reserved = 0
+        for anchor_id, anchor_row in sorted(
+            anchor_rows.items(), key=lambda item: self._row_key(item[1])
+        ):
+            group_size = 1 + child_counts.get(anchor_id, 0)
+            if reserved + group_size > limit:
+                continue
+            selected.append((anchor_id, anchor_row))
+            reserved += group_size
+
+        selected_company_ids = {anchor_id for anchor_id, _ in selected}
+        children_by_company: dict[
+            UUID,
+            list[tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion]],
+        ] = {company_id: [] for company_id in selected_company_ids}
+        if selected_company_ids:
+            child_statement = (
+                self._effective_company_children_statement(selected_company_ids, as_of)
+                .order_by(
+                    UnderwritingObjectRelation.parent_id,
+                    UnderwritingObjectRelation.child_id,
+                )
+                .limit(limit)
+            )
+            for parent_id, child, identity in self._session.execute(child_statement):
+                children_by_company[parent_id].append((child, identity))
+        results: list[
+            tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion]
+        ] = []
+        seen: set[UUID] = set()
+        for anchor_id, anchor_row in selected:
+            group = [anchor_row, *children_by_company.get(anchor_id, ())]
+            group = sorted(group, key=self._row_key)
+            group_ids = {row[0].id for row in group}
+            if group_ids & seen or len(results) + len(group) > limit:
+                continue
+            results.extend(group)
+            seen.update(group_ids)
+        return tuple(results)
+
     def search_objects(
         self,
         query: str,
@@ -1072,12 +1142,7 @@ class ProductRepository:
             else ()
         )
         anchors = {research_object.id: (research_object, identity) for research_object, identity in effective_rows}
-        return self._pack_search_groups(
-            anchors,
-            {company_id: True for company_id in anchors},
-            as_of,
-            limit,
-        )
+        return self._pack_industry_company_groups(anchors, as_of, limit)
 
     def create_project(
         self,

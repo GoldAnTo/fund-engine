@@ -32,6 +32,8 @@ from app.underwriting.api.product_schemas import (
     CreateSecurityRightsRequest,
     EffectiveSecurityRightsResponse,
     FXSnapshotResponse,
+    IndustryCompanyBrowseItemResponse,
+    IndustryCompanyBrowseResponse,
     PatchWorkspaceDraftRequest,
     PreviewProductRevisionRequest,
     PriceSnapshotResponse,
@@ -396,7 +398,7 @@ def search_product_objects(
 
 @router.get(
     "/industries/{industry_id}/companies",
-    response_model=ProductObjectSearchResponse,
+    response_model=IndustryCompanyBrowseResponse,
     responses=READ_ERROR_RESPONSES,
 )
 def list_industry_companies(
@@ -404,7 +406,7 @@ def list_industry_companies(
     as_of: datetime | None = Query(default=None),
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     db: Session = Depends(get_db),
-) -> ProductObjectSearchResponse:
+) -> IndustryCompanyBrowseResponse:
     values = _read_value(
         lambda: ResearchProjectService(db, now=_now).industry_companies(
             industry_id, as_of or _now(), limit
@@ -412,9 +414,19 @@ def list_industry_companies(
     )
     if values is None:
         raise NotFoundError("industry not found")
-    return ProductObjectSearchResponse(
+    return IndustryCompanyBrowseResponse(
         items=tuple(
-            ProductObjectSearchItemResponse(**asdict(value)) for value in values
+            IndustryCompanyBrowseItemResponse(
+                object_id=value.object_id,
+                kind=value.kind,
+                external_key=value.external_key,
+                canonical_name=value.canonical_name,
+                symbol=value.symbol,
+                exchange=value.exchange,
+                share_class=value.share_class,
+                trading_currency=value.trading_currency,
+            )
+            for value in values
         )
     )
 

@@ -1878,6 +1878,36 @@ def test_industry_companies_rejects_wrong_parent_and_corrupt_direct_child(
         service.industry_companies(industry.id, NOW, 10)
 
 
+def test_industry_companies_skips_an_oversized_group_to_return_a_later_group(
+    session, service
+) -> None:
+    industry = _object(session, "industry", "industry:browse", "Browse Industry")
+    _identity(service, industry)
+    oversized = _company_group(
+        session,
+        service,
+        key="a-oversized",
+        company_name="A Oversized",
+        securities=(
+            ("A1.TEST", "A One", "A1"),
+            ("A2.TEST", "A Two", "A2"),
+        ),
+    )[0]
+    later = _company_group(
+        session,
+        service,
+        key="b-fits",
+        company_name="B Fits",
+        securities=(),
+    )[0]
+    _relation(session, industry.id, oversized.id, "industry_exposes_company")
+    _relation(session, industry.id, later.id, "industry_exposes_company")
+
+    assert [
+        item.external_key for item in service.industry_companies(industry.id, NOW, 2)
+    ] == [later.external_key]
+
+
 def test_foundation_fixture_is_idempotent_content_checked_and_contains_no_research_facts(
     session, tmp_path
 ) -> None:

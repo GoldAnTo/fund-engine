@@ -75,6 +75,23 @@ class ProductObjectSearchResponse(UnderwritingModel):
     items: tuple[ProductObjectSearchItemResponse, ...]
 
 
+class IndustryCompanyBrowseItemResponse(UnderwritingModel):
+    """Public identity projection for an Industry's directly related companies."""
+
+    object_id: UUID
+    kind: ResearchObjectKind
+    external_key: str
+    canonical_name: str
+    symbol: str | None
+    exchange: str | None
+    share_class: str | None
+    trading_currency: Currency | None
+
+
+class IndustryCompanyBrowseResponse(UnderwritingModel):
+    items: tuple[IndustryCompanyBrowseItemResponse, ...]
+
+
 class CreateResearchProjectRequest(UnderwritingModel):
     primary_company_id: UUID
     target_security_ids: tuple[UUID, ...] = Field(min_length=1, max_length=32)

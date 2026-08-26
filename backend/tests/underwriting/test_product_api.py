@@ -172,6 +172,15 @@ def test_industry_company_endpoint_returns_complete_alphabet_group(api_client, s
         "NASDAQ:GOOGL",
         "NASDAQ:GOOG",
     ]
+    assert all(
+        "identity_version_id" not in item for item in response.json()["items"]
+    )
+    openapi = api_client.get("/openapi.json")
+    assert openapi.status_code == 200
+    item_schema = openapi.json()["components"]["schemas"][
+        "IndustryCompanyBrowseItemResponse"
+    ]
+    assert "identity_version_id" not in item_schema["properties"]
 
 
 def test_industry_company_endpoint_maps_not_found_validation_and_keeps_reads_transaction_free(
