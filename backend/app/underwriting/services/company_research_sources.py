@@ -74,7 +74,7 @@ class CompanyResearchSourceCompiler:
 
     @staticmethod
     def _source_refs(fixture: AlphabetGoldenCaseFixture) -> tuple[dict[str, str], ...]:
-        return tuple(
+        refs = (
             {
                 "source_role": fact.source_role,
                 "source_url": fact.source_url,
@@ -91,6 +91,11 @@ class CompanyResearchSourceCompiler:
                 ),
             )
         )
+        # Several facts legitimately cite one exact disclosure location.  The
+        # artifact owns a source *set*, while facts retain the many-to-one
+        # evidence linkage in their payload.
+        unique = dict.fromkeys(tuple(sorted(ref.items())) for ref in refs)
+        return tuple(dict(items) for items in unique)
 
     @staticmethod
     def _evidence_payload(fixture: AlphabetGoldenCaseFixture) -> dict[str, object]:

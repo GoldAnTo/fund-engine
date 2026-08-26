@@ -36,6 +36,9 @@ export type CompanyResearchPreview = Schemas["CompanyResearchPreviewResponse"];
 export type CompanyResearchProject = Schemas["CompanyResearchProjectResponse"];
 export type CompanyResearchPreviewRequest = Schemas["CompanyResearchPreviewRequest"];
 export type InitializeCompanyResearchRequest = Schemas["InitializeCompanyResearchRequest"];
+export type CompanyResearchWorkspace = Schemas["CompanyResearchWorkspaceResponse"];
+export type ReviewCompanyEvidenceRequest = Schemas["ReviewCompanyEvidenceRequest"];
+export type CompanyResearchEvidenceReview = Schemas["CompanyResearchEvidenceReviewResponse"];
 
 type ErrorDetails = NonNullable<Schemas["UnderwritingErrorBody"]["details"]>;
 
@@ -753,6 +756,51 @@ function isCompanyResearchProject(value: unknown): value is CompanyResearchProje
   return isPreparationStateAndStep(value.preparation);
 }
 
+const COMPANY_RESEARCH_ARTIFACT_KINDS = new Set(COMPANY_RESEARCH_STEPS);
+
+function isCompanyResearchArtifact(value: unknown): boolean {
+  if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "id", "kind", "version", "input_hash", "content_hash", "payload", "source_refs"])
+    || !isUuid(value.id) || typeof value.kind !== "string" || !COMPANY_RESEARCH_ARTIFACT_KINDS.has(value.kind as typeof COMPANY_RESEARCH_STEPS[number])
+    || !isPositiveInteger(value.version) || !isHash(value.input_hash) || !isHash(value.content_hash)
+    || !isRecord(value.payload) || !Array.isArray(value.source_refs) || !value.source_refs.every(isRecord)) return false;
+  const refs = value.source_refs.map((ref) => JSON.stringify(ref));
+  if (new Set(refs).size !== refs.length) return false;
+  if (value.kind === "evidence_index") {
+    const facts = value.payload.facts;
+    if (!Array.isArray(facts) || facts.length === 0 || !facts.every(isRecord)) return false;
+    const keys = facts.map((fact) => fact.fact_key);
+    if (!keys.every(isNonEmptyString) || new Set(keys).size !== keys.length) return false;
+  }
+  return true;
+}
+
+function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWorkspace {
+  if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "project_id", "company", "preparation", "modules", "source_count", "gap_count", "draft", "selected_revision", "change_summary"])
+    || !isUuid(value.project_id) || !isProductDto(value.company)
+    || !hasExactKeys(value.company, ["schema_version", "object_id", "external_key", "canonical_name", "id"])
+    || !isUuid(value.company.id) || value.company.object_id !== value.company.id || !isNonEmptyString(value.company.external_key) || !isNonEmptyString(value.company.canonical_name)
+    || !isProductDto(value.preparation) || !hasExactKeys(value.preparation, ["schema_version", "id", "status", "current_step", "progress"])
+    || !isUuid(value.preparation.id) || !isPreparationStateAndStep({ ...value.preparation, attempt: 1, next_attempt_at: null, last_error_code: value.preparation.status === "blocked" ? "blocked" : null })
+    || !Array.isArray(value.modules) || value.modules.length !== COMPANY_RESEARCH_AGENDA_KEYS.length
+    || !isNonNegativeInteger(value.source_count) || !isNonNegativeInteger(value.gap_count)
+    || !isProductDto(value.draft) || !hasExactKeys(value.draft, ["schema_version", "id", "lock_version", "base_revision_id"])
+    || !isUuid(value.draft.id) || !isPositiveInteger(value.draft.lock_version) || !isNullableUuid(value.draft.base_revision_id)
+    || !isNullableUuid(value.selected_revision) || value.selected_revision !== value.draft.base_revision_id || !isRecord(value.change_summary)) return false;
+  const moduleKeys = value.modules.map((item) => isProductDto(item) ? item.key : null);
+  if (!sameStringSets(moduleKeys.filter(isNonEmptyString), [...COMPANY_RESEARCH_AGENDA_KEYS])) return false;
+  return value.modules.every((item) => isProductDto(item)
+    && hasExactKeys(item, ["schema_version", "key", "state", "artifact"])
+    && isNonEmptyString(item.key) && ["not_started", "preparing", "needs_review", "ready", "blocked"].includes(String(item.state))
+    && (item.artifact === null || isCompanyResearchArtifact(item.artifact))
+    && (item.state !== "ready" || item.artifact !== null));
+}
+
+function isCompanyResearchEvidenceReview(value: unknown): value is CompanyResearchEvidenceReview {
+  const artifact = isProductDto(value) ? value.evidence_artifact : null;
+  return isProductDto(value) && hasExactKeys(value, ["schema_version", "evidence_artifact"])
+    && isCompanyResearchArtifact(artifact) && isRecord(artifact) && artifact.kind === "evidence_index";
+}
+
 function safeParse(text: string): unknown | null {
   if (!text.trim()) return null;
   try {
@@ -1132,6 +1180,20 @@ export class InvestmentResearchApi {
   async retryCompanyResearchProject(projectId: string): Promise<CompanyResearchProject> {
     const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/retry`, isCompanyResearchProject, 202, { method: "POST" });
     if (value.project_id !== projectId) mismatch("company-research project identity mismatch");
+    return value;
+  }
+
+  async companyResearchWorkspace(projectId: string): Promise<CompanyResearchWorkspace> {
+    assertUuid(projectId, "projectId");
+    const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/workspace`, isCompanyResearchWorkspace, 200, { method: "GET" });
+    if (value.project_id !== projectId) mismatch("company-research workspace project identity mismatch");
+    return value;
+  }
+
+  async reviewCompanyEvidence(projectId: string, body: ReviewCompanyEvidenceRequest): Promise<CompanyResearchEvidenceReview> {
+    assertUuid(projectId, "projectId");
+    const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/evidence-reviews`, isCompanyResearchEvidenceReview, 200, jsonInit("POST", body));
+    if (value.evidence_artifact.kind !== "evidence_index") mismatch("company-research evidence review kind mismatch");
     return value;
   }
 }

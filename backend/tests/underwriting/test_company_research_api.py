@@ -11,6 +11,9 @@ from app.models.operational import Job
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchPreparation,
 )
+from app.underwriting.services.company_research_preparation import (
+    CompanyResearchPreparationWorker,
+)
 from app.underwriting.services.product_foundation_fixture import (
     ProductFoundationFixtureService,
 )
@@ -274,3 +277,28 @@ def test_retry_rejects_a_preparation_that_is_not_recoverable(
     )
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_failed"
+
+
+def test_workspace_and_evidence_review_routes_are_closed(api_client, session) -> None:
+    company_id = _alphabet_id(session)
+    preview = _preview(api_client, company_id)
+    initialized = _initialize(api_client, company_id, preview["preview_hash"])
+    assert initialized.status_code == 201
+    project_id = initialized.json()["project_id"]
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None and worker.run_claim(claim) == "awaiting_evidence_review"
+
+    workspace = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    assert workspace.status_code == 200, workspace.text
+    body = workspace.json()
+    assert set(body) == {"schema_version", "project_id", "company", "preparation", "modules", "source_count", "gap_count", "draft", "selected_revision", "change_summary"}
+    evidence = next(item["artifact"] for item in body["modules"] if item["key"] == "evidence_and_gaps")
+    assert evidence is not None
+    reviewed = api_client.post(
+        f"{BASE}/projects/{project_id}/evidence-reviews",
+        json={"evidence_artifact_id": evidence["id"], "fact_key": evidence["payload"]["facts"][0]["fact_key"], "decision": "confirmed", "expected_head_id": evidence["id"]},
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["evidence_artifact"]["version"] == 2
+    assert api_client.post(f"{BASE}/projects/{project_id}/evidence-reviews", json={"evidence_artifact_id": evidence["id"], "fact_key": evidence["payload"]["facts"][0]["fact_key"], "decision": "confirmed", "expected_head_id": evidence["id"], "unexpected": True}).status_code == 422

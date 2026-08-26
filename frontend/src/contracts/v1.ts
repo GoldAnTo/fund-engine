@@ -2876,6 +2876,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Company Research Workspace */
+        get: operations["get_company_research_workspace_api_underwriting_v1_product_company_research_projects__project_id__workspace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/evidence-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Company Evidence */
+        post: operations["review_company_evidence_api_underwriting_v1_product_company_research_projects__project_id__evidence_reviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -4737,6 +4771,46 @@ export interface components {
             /** Label */
             label: string;
         };
+        /** CompanyResearchArtifactResponse */
+        CompanyResearchArtifactResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Version */
+            version: number;
+            /** Input Hash */
+            input_hash: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Source Refs */
+            source_refs: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** CompanyResearchEvidenceReviewResponse */
+        CompanyResearchEvidenceReviewResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            evidence_artifact: components["schemas"]["CompanyResearchArtifactResponse"];
+        };
         /** CompanyResearchIdentityResponse */
         CompanyResearchIdentityResponse: {
             /**
@@ -4894,6 +4968,116 @@ export interface components {
              * @enum {string}
              */
             trading_currency: "CNY" | "USD";
+        };
+        /** CompanyResearchWorkbenchModuleResponse */
+        CompanyResearchWorkbenchModuleResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Key */
+            key: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "not_started" | "preparing" | "needs_review" | "ready" | "blocked";
+            artifact: components["schemas"]["CompanyResearchArtifactResponse"] | null;
+        };
+        /** CompanyResearchWorkspaceCompanyResponse */
+        CompanyResearchWorkspaceCompanyResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /** External Key */
+            external_key: string;
+            /** Canonical Name */
+            canonical_name: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+        };
+        /** CompanyResearchWorkspaceDraftResponse */
+        CompanyResearchWorkspaceDraftResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Lock Version */
+            lock_version: number;
+            /** Base Revision Id */
+            base_revision_id: string | null;
+        };
+        /** CompanyResearchWorkspacePreparationResponse */
+        CompanyResearchWorkspacePreparationResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "preparing_sources" | "awaiting_evidence_review" | "building_model" | "awaiting_judgment_review" | "ready_to_freeze" | "recoverable_failure" | "blocked" | "completed";
+            /** Current Step */
+            current_step: string | null;
+            /** Progress */
+            progress: number;
+        };
+        /** CompanyResearchWorkspaceResponse */
+        CompanyResearchWorkspaceResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            company: components["schemas"]["CompanyResearchWorkspaceCompanyResponse"];
+            preparation: components["schemas"]["CompanyResearchWorkspacePreparationResponse"];
+            /** Modules */
+            modules: components["schemas"]["CompanyResearchWorkbenchModuleResponse"][];
+            /** Source Count */
+            source_count: number;
+            /** Gap Count */
+            gap_count: number;
+            draft: components["schemas"]["CompanyResearchWorkspaceDraftResponse"];
+            /** Selected Revision */
+            selected_revision: string | null;
+            /** Change Summary */
+            change_summary: {
+                [key: string]: unknown;
+            };
         };
         /** CompareLinkDTO */
         CompareLinkDTO: {
@@ -10502,6 +10686,32 @@ export interface components {
             revision: number;
             /** Actor */
             actor: string;
+        };
+        /** ReviewCompanyEvidenceRequest */
+        ReviewCompanyEvidenceRequest: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Evidence Artifact Id
+             * Format: uuid
+             */
+            evidence_artifact_id: string;
+            /** Fact Key */
+            fact_key: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "confirmed" | "rejected";
+            /**
+             * Expected Head Id
+             * Format: uuid
+             */
+            expected_head_id: string;
         };
         /** ReviewDecisionRequest */
         ReviewDecisionRequest: {
@@ -16831,7 +17041,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16873,7 +17083,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16915,7 +17125,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16957,7 +17167,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17001,7 +17211,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17045,7 +17255,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17086,7 +17296,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17127,7 +17337,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17167,7 +17377,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17207,7 +17417,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17247,7 +17457,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17288,7 +17498,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17322,7 +17532,7 @@ export interface operations {
                     "application/json": components["schemas"]["ResearchArchiveListResponse"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17363,7 +17573,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17396,7 +17606,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProductObjectSearchResponse"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17439,7 +17649,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17470,7 +17680,7 @@ export interface operations {
                     "application/json": components["schemas"]["ResearchProjectListResponse"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17512,7 +17722,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17552,7 +17762,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17596,7 +17806,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17640,7 +17850,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17684,7 +17894,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17726,7 +17936,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17768,7 +17978,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17810,7 +18020,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17852,7 +18062,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17893,7 +18103,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17935,7 +18145,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17975,7 +18185,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18019,7 +18229,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18063,7 +18273,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18109,7 +18319,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18149,7 +18359,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18191,7 +18401,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18235,7 +18445,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18275,7 +18485,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18324,7 +18534,100 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_company_research_workspace_api_underwriting_v1_product_company_research_projects__project_id__workspace_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResearchWorkspaceResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    review_company_evidence_api_underwriting_v1_product_company_research_projects__project_id__evidence_reviews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewCompanyEvidenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResearchEvidenceReviewResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
