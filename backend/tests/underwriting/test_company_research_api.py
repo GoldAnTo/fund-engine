@@ -292,13 +292,56 @@ def test_workspace_and_evidence_review_routes_are_closed(api_client, session) ->
     workspace = api_client.get(f"{BASE}/projects/{project_id}/workspace")
     assert workspace.status_code == 200, workspace.text
     body = workspace.json()
-    assert set(body) == {"schema_version", "project_id", "company", "preparation", "modules", "source_count", "gap_count", "draft", "selected_revision", "change_summary"}
-    evidence = next(item["artifact"] for item in body["modules"] if item["key"] == "evidence_and_gaps")
+    assert set(body) == {
+        "schema_version",
+        "project_id",
+        "company",
+        "preparation",
+        "modules",
+        "source_count",
+        "gap_count",
+        "draft",
+        "selected_revision",
+        "change_summary",
+    }
+    assert body["preparation"]["status"] == "awaiting_evidence_review"
+    assert body["preparation"]["current_step"] == "research_gaps"
+    assert body["change_summary"] == {
+        "artifact_versions": {"evidence_index": 1, "research_gaps": 1},
+        "reviewed_fact_count": 0,
+    }
+    assert {
+        item["state"]
+        for item in body["modules"]
+        if item["artifact"] is not None and item["artifact"]["kind"] == "evidence_index"
+    } == {"needs_review"}
+    evidence = next(
+        item["artifact"]
+        for item in body["modules"]
+        if item["key"] == "evidence_and_gaps"
+    )
     assert evidence is not None
     reviewed = api_client.post(
         f"{BASE}/projects/{project_id}/evidence-reviews",
-        json={"evidence_artifact_id": evidence["id"], "fact_key": evidence["payload"]["facts"][0]["fact_key"], "decision": "confirmed", "expected_head_id": evidence["id"]},
+        json={
+            "evidence_artifact_id": evidence["id"],
+            "fact_key": evidence["payload"]["facts"][0]["fact_key"],
+            "decision": "confirmed",
+            "expected_head_id": evidence["id"],
+        },
     )
     assert reviewed.status_code == 200, reviewed.text
     assert reviewed.json()["evidence_artifact"]["version"] == 2
-    assert api_client.post(f"{BASE}/projects/{project_id}/evidence-reviews", json={"evidence_artifact_id": evidence["id"], "fact_key": evidence["payload"]["facts"][0]["fact_key"], "decision": "confirmed", "expected_head_id": evidence["id"], "unexpected": True}).status_code == 422
+    assert (
+        api_client.post(
+            f"{BASE}/projects/{project_id}/evidence-reviews",
+            json={
+                "evidence_artifact_id": evidence["id"],
+                "fact_key": evidence["payload"]["facts"][0]["fact_key"],
+                "decision": "confirmed",
+                "expected_head_id": evidence["id"],
+                "unexpected": True,
+            },
+        ).status_code
+        == 422
+    )

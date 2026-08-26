@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field, StrictInt, StrictStr, field_validator
+from pydantic import Field, StrictInt, StrictStr, field_validator, model_validator
 
 from app.underwriting.api.product_schemas import SHA256_PATTERN, _require_aware
 from app.underwriting.api.schemas import UnderwritingModel
@@ -84,6 +84,18 @@ class CompanyResearchPreparationResponse(UnderwritingModel):
     next_attempt_at: datetime | None
     last_error_code: str | None
 
+    @model_validator(mode="after")
+    def valid_status_step_pair(self):
+        pairs = {
+            "preparing_sources": "evidence_index",
+            "awaiting_evidence_review": "research_gaps",
+            "awaiting_judgment_review": "judgment_context",
+            "ready_to_freeze": "memo",
+        }
+        if self.status in pairs and self.current_step != pairs[self.status]:
+            raise ValueError("preparation status and current_step are inconsistent")
+        return self
+
 
 class CompanyResearchProjectResponse(UnderwritingModel):
     project_id: UUID
@@ -99,6 +111,37 @@ class CompanyResearchArtifactResponse(UnderwritingModel):
     content_hash: str = Field(pattern=SHA256_PATTERN)
     payload: dict
     source_refs: tuple[dict, ...]
+
+    @model_validator(mode="after")
+    def closed_artifact_contract(self):
+        ref_keys = {"raw_hash", "source_locator", "source_role", "source_url"}
+        if any(
+            set(ref) != ref_keys
+            or not all(
+                isinstance(ref[key], str) and ref[key].strip() for key in ref_keys
+            )
+            or len(ref["raw_hash"]) != 64
+            for ref in self.source_refs
+        ):
+            raise ValueError("source_refs must use the closed source reference schema")
+        if len({tuple(sorted(ref.items())) for ref in self.source_refs}) != len(
+            self.source_refs
+        ):
+            raise ValueError("source_refs must be unique")
+        if self.kind == "evidence_index":
+            facts = self.payload.get("facts")
+            if not isinstance(facts, list) or not facts:
+                raise ValueError("evidence_index requires facts")
+            fact_keys = [
+                fact.get("fact_key") for fact in facts if isinstance(fact, dict)
+            ]
+            if (
+                len(fact_keys) != len(facts)
+                or not all(isinstance(key, str) and key for key in fact_keys)
+                or len(set(fact_keys)) != len(fact_keys)
+            ):
+                raise ValueError("evidence_index fact keys must be unique")
+        return self
 
 
 class CompanyResearchWorkbenchModuleResponse(UnderwritingModel):
@@ -117,6 +160,20 @@ class CompanyResearchWorkspacePreparationResponse(UnderwritingModel):
     current_step: str | None
     progress: StrictInt = Field(ge=0, le=100)
 
+    @model_validator(mode="after")
+    def valid_status_step_pair(self):
+        if (
+            self.status == "awaiting_evidence_review"
+            and self.current_step != "research_gaps"
+        ):
+            raise ValueError("awaiting_evidence_review must expose research_gaps")
+        if (
+            self.status == "awaiting_judgment_review"
+            and self.current_step != "judgment_context"
+        ):
+            raise ValueError("awaiting_judgment_review must expose judgment_context")
+        return self
+
 
 class CompanyResearchWorkspaceDraftResponse(UnderwritingModel):
     id: UUID
@@ -128,12 +185,32 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
     project_id: UUID
     company: CompanyResearchWorkspaceCompanyResponse
     preparation: CompanyResearchWorkspacePreparationResponse
-    modules: tuple[CompanyResearchWorkbenchModuleResponse, ...] = Field(min_length=9, max_length=9)
+    modules: tuple[CompanyResearchWorkbenchModuleResponse, ...] = Field(
+        min_length=9, max_length=9
+    )
     source_count: StrictInt = Field(ge=0)
     gap_count: StrictInt = Field(ge=0)
     draft: CompanyResearchWorkspaceDraftResponse
     selected_revision: UUID | None
     change_summary: dict
+
+    @model_validator(mode="after")
+    def closed_workspace_contract(self):
+        if set(self.change_summary) != {"artifact_versions", "reviewed_fact_count"}:
+            raise ValueError("change_summary has an invalid schema")
+        versions = self.change_summary["artifact_versions"]
+        if not isinstance(versions, dict) or any(
+            not isinstance(key, str)
+            or not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < 1
+            for key, value in versions.items()
+        ):
+            raise ValueError("change_summary artifact_versions is invalid")
+        reviewed = self.change_summary["reviewed_fact_count"]
+        if not isinstance(reviewed, int) or isinstance(reviewed, bool) or reviewed < 0:
+            raise ValueError("change_summary reviewed_fact_count is invalid")
+        return self
 
 
 class ReviewCompanyEvidenceRequest(UnderwritingModel):

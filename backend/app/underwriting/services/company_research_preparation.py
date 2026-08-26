@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
@@ -34,7 +34,9 @@ from app.underwriting.services.company_research_sources import (
 )
 from app.underwriting.persistence.models import UnderwritingResearchObject
 from app.underwriting.persistence.product_models import UnderwritingResearchProject
-from app.underwriting.fixtures.alphabet_golden_case import AlphabetGoldenCaseFixtureError
+from app.underwriting.fixtures.alphabet_golden_case import (
+    AlphabetGoldenCaseFixtureError,
+)
 from app.underwriting.domain.company_research import CompanyResearchValidationError
 
 
@@ -61,6 +63,7 @@ class CompanyResearchClaim:
     claim_token: str
     request_hash: str
     strategy_version: str
+    step: str
 
 
 class CompanyResearchPreparationWorker:
@@ -71,7 +74,9 @@ class CompanyResearchPreparationWorker:
         session: Session,
         *,
         now: Callable[[], datetime],
-        provider: Callable[[CompanyResearchProviderInput], CompanyResearchEvidenceCompilation]
+        provider: Callable[
+            [CompanyResearchProviderInput], CompanyResearchEvidenceCompilation
+        ]
         | None = None,
     ) -> None:
         self._session = session
@@ -87,7 +92,7 @@ class CompanyResearchPreparationWorker:
         return value.astimezone(UTC)
 
     def claim_next(self) -> CompanyResearchClaim | None:
-        """Atomically claim only the first executable company source job."""
+        """Atomically claim only an explicitly executable company stage."""
         self._repository._reserve_sqlite_writer_before_ownership_read()
         now = self._utcnow()
         row = self._session.execute(
@@ -103,11 +108,20 @@ class CompanyResearchPreparationWorker:
                 Job.research_case_id.is_(None),
                 Job.status == "queued",
                 Job.cancel_requested.is_(False),
-                Job.step == "evidence_index",
-                CompanyResearchPreparation.status.in_(
-                    ("queued", "recoverable_failure")
+                or_(
+                    and_(
+                        Job.step == "evidence_index",
+                        CompanyResearchPreparation.status.in_(
+                            ("queued", "recoverable_failure")
+                        ),
+                        CompanyResearchPreparation.current_step == "evidence_index",
+                    ),
+                    and_(
+                        Job.step == "business_map",
+                        CompanyResearchPreparation.status == "building_model",
+                        CompanyResearchPreparation.current_step == "business_map",
+                    ),
                 ),
-                CompanyResearchPreparation.current_step == "evidence_index",
                 (CompanyResearchPreparation.next_attempt_at.is_(None))
                 | (CompanyResearchPreparation.next_attempt_at <= now),
             )
@@ -124,21 +138,25 @@ class CompanyResearchPreparationWorker:
         job.status = "running"
         job.started_at = now
         job.claim_token = token
-        job.step = "evidence_index"
-        preparation.status = "preparing_sources"
-        preparation.progress = 5
+        stage = job.step
+        preparation.status = (
+            "preparing_sources" if stage == "evidence_index" else "building_model"
+        )
+        preparation.progress = 5 if stage == "evidence_index" else 30
         preparation.updated_at = now
         self._jobs.append_event(
             job_id=job.id,
             seq=self._jobs.next_event_seq(job.id),
             status="running",
-            step="evidence_index",
-            message="company research source job claimed",
+            step=stage,
+            message=f"company research {stage} job claimed",
         )
         self._repository.append_event(
             preparation_id=preparation.id,
-            event_type="source_stage_claimed",
-            payload={"stage": "prepare_sources", "attempt": job.attempt},
+            event_type="source_stage_claimed"
+            if stage == "evidence_index"
+            else "model_stage_claimed",
+            payload={"stage": stage, "attempt": job.attempt},
             created_at=now,
         )
         self._session.flush()
@@ -148,6 +166,7 @@ class CompanyResearchPreparationWorker:
             claim_token=token,
             request_hash=preparation.request_hash,
             strategy_version=preparation.strategy_version,
+            step=stage,
         )
 
     def recover_stale_claims(self, *, before: datetime) -> int:
@@ -263,8 +282,12 @@ class CompanyResearchPreparationWorker:
         self._session.flush()
         return cancelled
 
-    def _current_claim(self, claim: CompanyResearchClaim) -> tuple[Job, CompanyResearchPreparation] | None:
-        job = self._session.scalar(select(Job).where(Job.id == claim.job_id).with_for_update())
+    def _current_claim(
+        self, claim: CompanyResearchClaim
+    ) -> tuple[Job, CompanyResearchPreparation] | None:
+        job = self._session.scalar(
+            select(Job).where(Job.id == claim.job_id).with_for_update()
+        )
         preparation = self._session.scalar(
             select(CompanyResearchPreparation)
             .where(CompanyResearchPreparation.id == claim.preparation_id)
@@ -278,9 +301,14 @@ class CompanyResearchPreparationWorker:
             or job.status != "running"
             or job.claim_token != claim.claim_token
             or job.cancel_requested
-            or job.step != "evidence_index"
-            or preparation.status != "preparing_sources"
-            or preparation.current_step != "evidence_index"
+            or job.step != claim.step
+            or preparation.current_step != claim.step
+            or preparation.status
+            != (
+                "preparing_sources"
+                if claim.step == "evidence_index"
+                else "building_model"
+            )
             or preparation.request_hash != claim.request_hash
             or preparation.strategy_version != claim.strategy_version
         ):
@@ -303,9 +331,14 @@ class CompanyResearchPreparationWorker:
             or not self._repository.is_exact_prepare_job_owner(job, preparation.id)
             or job.claim_token != claim.claim_token
             or job.status != "running"
-            or job.step != "evidence_index"
-            or preparation.status != "preparing_sources"
-            or preparation.current_step != "evidence_index"
+            or job.step != claim.step
+            or preparation.current_step != claim.step
+            or preparation.status
+            != (
+                "preparing_sources"
+                if claim.step == "evidence_index"
+                else "building_model"
+            )
         ):
             return
         now = self._utcnow()
@@ -320,13 +353,13 @@ class CompanyResearchPreparationWorker:
             job_id=job.id,
             seq=self._jobs.next_event_seq(job.id),
             status="cancelled",
-            step="evidence_index",
+            step=claim.step,
             message=_SAFE_STALE_ERROR,
         )
         self._repository.append_event(
             preparation_id=preparation.id,
             event_type="stale_output_discarded",
-            payload={"stage": "prepare_sources"},
+            payload={"stage": claim.step},
             created_at=now,
         )
         self._session.flush()
@@ -366,7 +399,10 @@ class CompanyResearchPreparationWorker:
         self._repository.append_event(
             preparation_id=preparation.id,
             event_type="source_provider_failed",
-            payload={"code": _SAFE_PROVIDER_ERROR, "recoverable": job.status == "queued"},
+            payload={
+                "code": _SAFE_PROVIDER_ERROR,
+                "recoverable": job.status == "queued",
+            },
             created_at=now,
         )
         self._session.flush()
@@ -431,13 +467,36 @@ class CompanyResearchPreparationWorker:
 
     def run_claim(
         self, claim: CompanyResearchClaim
-    ) -> Literal["awaiting_evidence_review", "recoverable_failure", "discarded"]:
+    ) -> Literal[
+        "awaiting_evidence_review",
+        "awaiting_judgment_review",
+        "recoverable_failure",
+        "discarded",
+    ]:
         """Run provider work without locks, then fence its immutable commit."""
         current = self._current_claim(claim)
         if current is None:
             self._discard(claim)
             return "discarded"
         _job, preparation = current
+        if claim.step == "business_map":
+            try:
+                self._repository.complete_business_map_preparation(
+                    claim.preparation_id,
+                    created_at=self._utcnow(),
+                    expected_claim_token=claim.claim_token,
+                    expected_request_hash=claim.request_hash,
+                    expected_strategy_version=claim.strategy_version,
+                )
+                self._session.commit()
+            except (StaleParentError, ValidationError):
+                self._session.rollback()
+                self._discard(claim)
+                return "discarded"
+            return "awaiting_judgment_review"
+        if claim.step != "evidence_index":
+            self._discard(claim)
+            return "discarded"
         provider_input = self._provider_input(preparation)
         # Publish the fenced claim before file/provider work.  The completion
         # path below takes fresh locks and checks the same token again.
@@ -447,7 +506,11 @@ class CompanyResearchPreparationWorker:
         except (OSError, TimeoutError, ConnectionError):
             self._recoverable_failure(claim)
             return "recoverable_failure"
-        except (AlphabetGoldenCaseFixtureError, CompanyResearchValidationError, ValidationError):
+        except (
+            AlphabetGoldenCaseFixtureError,
+            CompanyResearchValidationError,
+            ValidationError,
+        ):
             self._block(claim)
             return "discarded"
         except Exception:

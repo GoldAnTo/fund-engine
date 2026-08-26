@@ -95,7 +95,10 @@ class CompanyResearchRepository:
         return self._session.scalar(statement)
 
     def _locked_prepare_job(
-        self, preparation: CompanyResearchPreparation, *, populate_existing: bool = False
+        self,
+        preparation: CompanyResearchPreparation,
+        *,
+        populate_existing: bool = False,
     ) -> Job:
         """Lock the Job owned by an already-locked preparation exactly."""
         if preparation.job_id is None:
@@ -136,7 +139,10 @@ class CompanyResearchRepository:
             # automatic retry keeps its owned Job queued behind backoff.
             "recoverable_failure": frozenset({"failed", "queued"}),
         }.get(preparation_status)
-        if expected_job_statuses is not None and job.status not in expected_job_statuses:
+        if (
+            expected_job_statuses is not None
+            and job.status not in expected_job_statuses
+        ):
             raise error_type("company research preparation job status is invalid")
 
     def _flush_in_savepoint(self, row: Any) -> Any:
@@ -379,9 +385,7 @@ class CompanyResearchRepository:
         if preparation is None:
             raise ValidationError("company research preparation not found")
         if preparation.status != "recoverable_failure":
-            raise ValidationError(
-                "company research preparation is not recoverable"
-            )
+            raise ValidationError("company research preparation is not recoverable")
         job = self.prepare_job(preparation.id)
         if job is None:
             raise CompanyResearchIntegrityError(
@@ -424,7 +428,13 @@ class CompanyResearchRepository:
         expected_claim_token: str | None = None,
         expected_request_hash: str | None = None,
         expected_strategy_version: str | None = None,
-    ) -> tuple[CompanyResearchPreparation, CompanyResearchArtifactVersion, CompanyResearchArtifactVersion, Job, CompanyResearchEvent]:
+    ) -> tuple[
+        CompanyResearchPreparation,
+        CompanyResearchArtifactVersion,
+        CompanyResearchArtifactVersion,
+        Job,
+        CompanyResearchEvent,
+    ]:
         """Append the two source artifacts and atomically hand off to review."""
         self._reserve_sqlite_writer_before_ownership_read()
         claimed = expected_claim_token is not None
@@ -440,7 +450,10 @@ class CompanyResearchRepository:
             job=job,
             persisted=True,
         )
-        if expected_request_hash is not None and preparation.request_hash != expected_request_hash:
+        if (
+            expected_request_hash is not None
+            and preparation.request_hash != expected_request_hash
+        ):
             raise ValidationError("company research preparation input changed")
         if (
             expected_strategy_version is not None
@@ -456,8 +469,13 @@ class CompanyResearchRepository:
                 or job.cancel_requested
             ):
                 raise ValidationError("company research preparation claim is stale")
-        elif preparation.status != "queued" or preparation.current_step != "evidence_index":
-            raise ValidationError("company research preparation is not queued for evidence indexing")
+        elif (
+            preparation.status != "queued"
+            or preparation.current_step != "evidence_index"
+        ):
+            raise ValidationError(
+                "company research preparation is not queued for evidence indexing"
+            )
         when = self._stored_datetime(created_at, "created_at")
         with self._session.begin_nested():
             evidence_index = self.append_artifact(
@@ -493,11 +511,126 @@ class CompanyResearchRepository:
             event = self.append_event(
                 preparation_id=preparation_id,
                 event_type="evidence_index_prepared",
-                payload={"evidence_index_id": str(evidence_index.id), "research_gaps_id": str(research_gaps.id)},
+                payload={
+                    "evidence_index_id": str(evidence_index.id),
+                    "research_gaps_id": str(research_gaps.id),
+                },
                 created_at=when,
             )
             self._session.flush([preparation, job])
         return preparation, evidence_index, research_gaps, job, event
+
+    def complete_business_map_preparation(
+        self,
+        preparation_id: UUID,
+        *,
+        created_at: datetime,
+        expected_claim_token: str,
+        expected_request_hash: str,
+        expected_strategy_version: str,
+    ) -> tuple[
+        CompanyResearchPreparation,
+        CompanyResearchArtifactVersion,
+        Job,
+        CompanyResearchEvent,
+    ]:
+        """Build the first model artifact from an explicitly reviewed index.
+
+        The source and model jobs deliberately share a single owned Job.  This
+        transition therefore validates the exact step and lease before it reads
+        the evidence head; a stale source claim can never be reinterpreted as a
+        model claim.
+        """
+        self._reserve_sqlite_writer_before_ownership_read()
+        preparation = self._preparation_for_update(
+            preparation_id, populate_existing=True
+        )
+        if preparation is None:
+            raise ValidationError("company research preparation not found")
+        job = self._locked_prepare_job(preparation, populate_existing=True)
+        if (
+            preparation.status != "building_model"
+            or preparation.current_step != "business_map"
+            or job.status != "running"
+            or job.step != "business_map"
+            or job.claim_token != expected_claim_token
+            or job.cancel_requested
+            or preparation.request_hash != expected_request_hash
+            or preparation.strategy_version != expected_strategy_version
+        ):
+            raise ValidationError("company research preparation claim is stale")
+        evidence = self.current_artifact(
+            preparation.project_id, "evidence_index", lock=True
+        )
+        if evidence is None or not isinstance(evidence.payload, Mapping):
+            raise ValidationError("reviewed evidence index is missing")
+        facts = evidence.payload.get("facts")
+        if not isinstance(facts, list) or not facts:
+            raise ValidationError("reviewed evidence index facts are invalid")
+        if any(
+            not isinstance(item, Mapping)
+            or item.get("review_decision") not in {"confirmed", "rejected"}
+            for item in facts
+        ):
+            raise ValidationError("reviewed evidence index is incomplete")
+        modules: dict[str, list[str]] = {}
+        for fact in facts:
+            module, fact_key = fact.get("business_module"), fact.get("fact_key")
+            if (
+                not isinstance(module, str)
+                or not module
+                or not isinstance(fact_key, str)
+                or not fact_key
+            ):
+                raise ValidationError("reviewed evidence index facts are invalid")
+            modules.setdefault(module, []).append(fact_key)
+        payload = {
+            "evidence_index_id": str(evidence.id),
+            "evidence_content_hash": evidence.content_hash,
+            "modules": [
+                {"key": key, "fact_keys": sorted(values)}
+                for key, values in sorted(modules.items())
+            ],
+        }
+        when = self._stored_datetime(created_at, "created_at")
+        with self._session.begin_nested():
+            business_map = self.append_artifact(
+                project_id=preparation.project_id,
+                kind="business_map",
+                input_hash=canonical_hash(
+                    {"evidence_content_hash": evidence.content_hash}
+                ),
+                payload=payload,
+                source_refs=evidence.source_refs,
+                expected_parent_id=None,
+                created_at=when,
+            )
+            # There is no executable driver compiler yet.  Stop at a named,
+            # review-gated boundary rather than silently recomputing evidence
+            # or queuing an unsupported stage.
+            preparation.status = "awaiting_judgment_review"
+            preparation.current_step = "judgment_context"
+            preparation.progress = 40
+            preparation.next_attempt_at = None
+            preparation.last_error_code = None
+            preparation.updated_at = when
+            job.status = "waiting_for_review"
+            job.step = "judgment_context"
+            job.progress = 40
+            job.error = None
+            job.finished_at = None
+            job.claim_token = None
+            event = self.append_event(
+                preparation_id=preparation.id,
+                event_type="business_map_prepared",
+                payload={
+                    "business_map_id": str(business_map.id),
+                    "evidence_index_id": str(evidence.id),
+                },
+                created_at=when,
+            )
+            self._session.flush([preparation, job])
+        return preparation, business_map, job, event
 
     def fail_evidence_preparation(
         self,
@@ -522,7 +655,10 @@ class CompanyResearchRepository:
             persisted=True,
         )
         claimed = expected_claim_token is not None
-        if expected_request_hash is not None and preparation.request_hash != expected_request_hash:
+        if (
+            expected_request_hash is not None
+            and preparation.request_hash != expected_request_hash
+        ):
             raise ValidationError("company research preparation input changed")
         if (
             expected_strategy_version is not None
@@ -538,8 +674,13 @@ class CompanyResearchRepository:
                 or job.cancel_requested
             ):
                 raise ValidationError("company research preparation claim is stale")
-        elif preparation.status != "queued" or preparation.current_step != "evidence_index":
-            raise ValidationError("company research preparation is not queued for evidence indexing")
+        elif (
+            preparation.status != "queued"
+            or preparation.current_step != "evidence_index"
+        ):
+            raise ValidationError(
+                "company research preparation is not queued for evidence indexing"
+            )
         when = self._stored_datetime(created_at, "created_at")
         error_code = self._require_nonempty_text(error_code, "error_code", 96)
         with self._session.begin_nested():
@@ -634,9 +775,7 @@ class CompanyResearchRepository:
             kind=kind,
             version=version,
             supersedes_id=actual_parent_id,
-            parent_content_hash=(
-                parent.content_hash if parent is not None else None
-            ),
+            parent_content_hash=(parent.content_hash if parent is not None else None),
             input_hash=input_hash,
             payload=copied_payload,
             source_refs=copied_refs,
@@ -786,9 +925,7 @@ class CompanyResearchRepository:
                     )
                 current = parent
 
-        heads = tuple(
-            row for row in rows if row.id not in parent_ids_with_successors
-        )
+        heads = tuple(row for row in rows if row.id not in parent_ids_with_successors)
         if not heads:
             raise CompanyResearchIntegrityError(
                 "company research artifact rows have no current leaf"
@@ -898,13 +1035,13 @@ class CompanyResearchRepository:
             with self._session.begin_nested():
                 self._session.flush([preparation])
         except IntegrityError as exc:
-            raise ConflictError("company research preparation job is already bound") from exc
+            raise ConflictError(
+                "company research preparation job is already bound"
+            ) from exc
         return preparation
 
     @staticmethod
-    def is_exact_prepare_job_owner(
-        job: Job | None, preparation_id: UUID
-    ) -> bool:
+    def is_exact_prepare_job_owner(job: Job | None, preparation_id: UUID) -> bool:
         return bool(
             job is not None
             and job.kind == _PREPARE_JOB_KIND

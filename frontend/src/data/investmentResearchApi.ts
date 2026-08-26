@@ -725,7 +725,8 @@ function isPreparationStateAndStep(value: Record<string, unknown>): boolean {
       && value.next_attempt_at === null && value.last_error_code === null;
   }
   if (value.status === "preparing_sources" || value.status === "awaiting_evidence_review") {
-    return step === "evidence_index" && value.last_error_code === null;
+    return step === (value.status === "awaiting_evidence_review" ? "research_gaps" : "evidence_index")
+      && value.last_error_code === null;
   }
   if (value.status === "building_model") {
     return typeof step === "string" && COMPANY_RESEARCH_STEPS.includes(step as typeof COMPANY_RESEARCH_STEPS[number])
@@ -762,7 +763,10 @@ function isCompanyResearchArtifact(value: unknown): boolean {
   if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "id", "kind", "version", "input_hash", "content_hash", "payload", "source_refs"])
     || !isUuid(value.id) || typeof value.kind !== "string" || !COMPANY_RESEARCH_ARTIFACT_KINDS.has(value.kind as typeof COMPANY_RESEARCH_STEPS[number])
     || !isPositiveInteger(value.version) || !isHash(value.input_hash) || !isHash(value.content_hash)
-    || !isRecord(value.payload) || !Array.isArray(value.source_refs) || !value.source_refs.every(isRecord)) return false;
+    || !isRecord(value.payload) || !Array.isArray(value.source_refs) || !value.source_refs.every((ref) => isRecord(ref)
+      && hasExactKeys(ref, ["raw_hash", "source_locator", "source_role", "source_url"])
+      && isHash(ref.raw_hash) && isNonEmptyString(ref.source_locator)
+      && isNonEmptyString(ref.source_role) && isNonEmptyString(ref.source_url))) return false;
   const refs = value.source_refs.map((ref) => JSON.stringify(ref));
   if (new Set(refs).size !== refs.length) return false;
   if (value.kind === "evidence_index") {
@@ -770,9 +774,24 @@ function isCompanyResearchArtifact(value: unknown): boolean {
     if (!Array.isArray(facts) || facts.length === 0 || !facts.every(isRecord)) return false;
     const keys = facts.map((fact) => fact.fact_key);
     if (!keys.every(isNonEmptyString) || new Set(keys).size !== keys.length) return false;
+    const factKeys = ["fact_key", "company_external_key", "business_module", "metric_key", "value", "value_kind", "currency", "unit", "period_start", "period_end", "published_at", "available_at", "source_role", "source_url", "source_locator", "raw_hash"];
+    if (!facts.every((fact) => hasExactKeys(fact, factKeys)
+      || hasExactKeys(fact, [...factKeys, "review_decision"]))) return false;
   }
   return true;
 }
+
+const COMPANY_RESEARCH_MODULE_ARTIFACTS: Record<string, string> = {
+  overview: "evidence_index",
+  business_map: "business_map",
+  operating_drivers: "driver_map",
+  evidence_and_gaps: "evidence_index",
+  industry_competition_regulation: "business_map",
+  financials_cash_flow_capital_allocation: "financial_bridge",
+  scenarios_valuation_implied_expectations: "valuation_set",
+  counterevidence_risks_next_checks: "research_gaps",
+  versions_changes_memo: "memo",
+};
 
 function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWorkspace {
   if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "project_id", "company", "preparation", "modules", "source_count", "gap_count", "draft", "selected_revision", "change_summary"])
@@ -788,11 +807,25 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
     || !isNullableUuid(value.selected_revision) || value.selected_revision !== value.draft.base_revision_id || !isRecord(value.change_summary)) return false;
   const moduleKeys = value.modules.map((item) => isProductDto(item) ? item.key : null);
   if (!sameStringSets(moduleKeys.filter(isNonEmptyString), [...COMPANY_RESEARCH_AGENDA_KEYS])) return false;
-  return value.modules.every((item) => isProductDto(item)
-    && hasExactKeys(item, ["schema_version", "key", "state", "artifact"])
-    && isNonEmptyString(item.key) && ["not_started", "preparing", "needs_review", "ready", "blocked"].includes(String(item.state))
-    && (item.artifact === null || isCompanyResearchArtifact(item.artifact))
-    && (item.state !== "ready" || item.artifact !== null));
+  const expectedEvidenceReview = value.preparation.status === "awaiting_evidence_review";
+  const summary = value.change_summary;
+  if (!hasExactKeys(summary, ["artifact_versions", "reviewed_fact_count"])
+    || !isRecord(summary.artifact_versions)
+    || !Object.values(summary.artifact_versions).every(isPositiveInteger)
+    || !isNonNegativeInteger(summary.reviewed_fact_count)) return false;
+  return value.modules.every((item) => {
+    if (!isProductDto(item)
+      || !hasExactKeys(item, ["schema_version", "key", "state", "artifact"])
+      || !isNonEmptyString(item.key)
+      || COMPANY_RESEARCH_MODULE_ARTIFACTS[item.key] === undefined
+      || !["not_started", "preparing", "needs_review", "ready", "blocked"].includes(String(item.state))
+      || (item.artifact !== null && !isCompanyResearchArtifact(item.artifact))) return false;
+    const artifact = isRecord(item.artifact) ? item.artifact : null;
+    if (artifact !== null && artifact.kind !== COMPANY_RESEARCH_MODULE_ARTIFACTS[item.key]) return false;
+    if (item.state === "ready") return artifact !== null && !(expectedEvidenceReview && artifact.kind === "evidence_index");
+    if (item.state === "needs_review") return expectedEvidenceReview && artifact !== null && artifact.kind === "evidence_index";
+    return artifact === null;
+  });
 }
 
 function isCompanyResearchEvidenceReview(value: unknown): value is CompanyResearchEvidenceReview {

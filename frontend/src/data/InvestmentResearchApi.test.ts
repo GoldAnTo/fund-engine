@@ -87,18 +87,18 @@ function companyResearchWorkspaceBody() {
   const artifact = {
     schema_version: "underwriting.v1", id: ids.agenda, kind: "evidence_index", version: 1,
     input_hash: hash, content_hash: hash,
-    payload: { facts: [{ fact_key: "reported_revenue" }] },
-    source_refs: [{ source_url: "https://example.test/source", raw_hash: hash }],
+    payload: { facts: [{ fact_key: "reported_revenue", company_external_key: "US:ALPHABET:COMPANY", business_module: "search", metric_key: "revenue", value: "1", value_kind: "reported", currency: "USD", unit: "million", period_start: "2025-01-01", period_end: "2025-12-31", published_at: now, available_at: now, source_role: "regulatory_filing", source_url: "https://example.test/source", source_locator: "p. 1", raw_hash: hash }] },
+    source_refs: [{ source_url: "https://example.test/source", raw_hash: hash, source_locator: "p. 1", source_role: "regulatory_filing" }],
   };
   const keys = ["overview", "business_map", "operating_drivers", "evidence_and_gaps", "industry_competition_regulation", "financials_cash_flow_capital_allocation", "scenarios_valuation_implied_expectations", "counterevidence_risks_next_checks", "versions_changes_memo"];
   return {
     schema_version: "underwriting.v1", project_id: ids.project,
     company: { schema_version: "underwriting.v1", id: ids.company, object_id: ids.company, external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc." },
-    preparation: { schema_version: "underwriting.v1", id: ids.draft, status: "awaiting_evidence_review", current_step: "evidence_index", progress: 25 },
-    modules: keys.map((key) => ({ schema_version: "underwriting.v1", key, state: key === "overview" || key === "evidence_and_gaps" ? "ready" : "not_started", artifact: key === "overview" || key === "evidence_and_gaps" ? artifact : null })),
+    preparation: { schema_version: "underwriting.v1", id: ids.draft, status: "awaiting_evidence_review", current_step: "research_gaps", progress: 25 },
+    modules: keys.map((key) => ({ schema_version: "underwriting.v1", key, state: key === "overview" || key === "evidence_and_gaps" ? "needs_review" : "not_started", artifact: key === "overview" || key === "evidence_and_gaps" ? artifact : null })),
     source_count: 1, gap_count: 0,
     draft: { schema_version: "underwriting.v1", id: ids.draft, lock_version: 1, base_revision_id: null },
-    selected_revision: null, change_summary: {},
+    selected_revision: null, change_summary: { artifact_versions: { evidence_index: 1 }, reviewed_fact_count: 0 },
   };
 }
 
