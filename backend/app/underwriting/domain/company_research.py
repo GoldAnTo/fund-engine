@@ -814,6 +814,14 @@ class BusinessModuleArtifact:
             raise CompanyResearchValidationError("business module classified evidence must be typed")
         if any(item.fact_ref not in self.fact_refs for item in self.classified_evidence):
             raise CompanyResearchValidationError("classified evidence must use module fact refs")
+        classified_refs = tuple(item.fact_ref for item in self.classified_evidence)
+        if (
+            len(set(classified_refs)) != len(classified_refs)
+            or set(classified_refs) != set(self.fact_refs)
+        ):
+            raise CompanyResearchValidationError(
+                "business module fact refs must be classified exactly once"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -890,6 +898,8 @@ class FinancialBridgeRow:
     working_capital_change: Decimal
     fcff: Decimal
     fact_refs: tuple[SourceLineageReference, ...]
+    assumption_refs: tuple[SourceLineageReference, ...]
+    input_states: tuple[ModelInputState, ...]
 
     def __post_init__(self) -> None:
         if type(self.fiscal_year) is not int or self.fiscal_year < 1900:
@@ -901,7 +911,38 @@ class FinancialBridgeRow:
             _artifact_decimal(getattr(self, name), f"financial_bridge.{name}")
         if self.cash_tax_rate < Decimal("0") or self.cash_tax_rate > Decimal("1"):
             raise CompanyResearchValidationError("financial_bridge.cash_tax_rate must be between zero and one")
-        _artifact_refs(self.fact_refs, "financial_bridge.fact_refs")
+        _artifact_optional_refs(self.fact_refs, "financial_bridge.fact_refs")
+        _artifact_optional_refs(
+            self.assumption_refs, "financial_bridge.assumption_refs"
+        )
+        if not self.fact_refs and not self.assumption_refs:
+            raise CompanyResearchValidationError(
+                "financial bridge requires factual or assumption provenance"
+            )
+        if set(self.fact_refs) & set(self.assumption_refs):
+            raise CompanyResearchValidationError(
+                "financial bridge factual and assumption provenance must be separate"
+            )
+        if (
+            not isinstance(self.input_states, tuple)
+            or not self.input_states
+            or not all(type(item) is ModelInputState for item in self.input_states)
+            or len(set(self.input_states)) != len(self.input_states)
+        ):
+            raise CompanyResearchValidationError(
+                "financial bridge input states must be unique controlled states"
+            )
+        factual_state_present = any(
+            item in {ModelInputState.REPORTED, ModelInputState.DERIVED}
+            for item in self.input_states
+        )
+        assumption_state_present = ModelInputState.ASSUMPTION in self.input_states
+        if bool(self.fact_refs) != factual_state_present or bool(
+            self.assumption_refs
+        ) != assumption_state_present:
+            raise CompanyResearchValidationError(
+                "financial bridge provenance must match each input state"
+            )
         with localcontext(_COMPANY_RESEARCH_ARITHMETIC_CONTEXT):
             expected_fcff = +(
                 self.operating_income * (Decimal("1") - self.cash_tax_rate)

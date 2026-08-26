@@ -342,14 +342,24 @@ class CompanyResearchEngine:
                 override.driver_key: override.value
                 for override in scenario.driver_overrides
             }
-            source_refs = tuple(
+            fact_refs = tuple(
                 dict.fromkeys(
                     reference
                     for driver_key in SCENARIO_FINANCIAL_DRIVER_KEYS
-                    for reference in (
-                        *forecasts[driver_key].fact_refs,
-                        *forecasts[driver_key].assumption_refs,
-                    )
+                    for reference in forecasts[driver_key].fact_refs
+                )
+            )
+            assumption_refs = tuple(
+                dict.fromkeys(
+                    reference
+                    for driver_key in SCENARIO_FINANCIAL_DRIVER_KEYS
+                    for reference in forecasts[driver_key].assumption_refs
+                )
+            )
+            input_states = tuple(
+                dict.fromkeys(
+                    forecasts[driver_key].input_state
+                    for driver_key in SCENARIO_FINANCIAL_DRIVER_KEYS
                 )
             )
             rows = []
@@ -389,7 +399,9 @@ class CompanyResearchEngine:
                         capex=capex,
                         working_capital_change=working_capital_change,
                         fcff=fcff,
-                        fact_refs=source_refs,
+                        fact_refs=fact_refs,
+                        assumption_refs=assumption_refs,
+                        input_states=input_states,
                     )
                 )
         return FinancialBridgeArtifact(rows=tuple(rows))
@@ -472,8 +484,8 @@ class CompanyResearchEngine:
                 else:
                     lower = midpoint
                     lower_value = residual + target
-            return ReverseDcfResult(
-                request.driver_key, +midpoint, +residual, request.max_iterations
+            raise ValidationError(
+                "reverse DCF did not converge within the bounded iteration budget"
             )
 
     def _security_value(

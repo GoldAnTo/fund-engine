@@ -11,6 +11,7 @@ from app.underwriting.domain.company_research import (
     BusinessMapArtifact,
     BusinessModuleArtifact,
     CapitalStructureReference,
+    ClassifiedBusinessEvidenceArtifact,
     CompanyResearchAssessment,
     CompanyResearchModelInput,
     CompanyResearchValidationError,
@@ -60,6 +61,8 @@ def _row(year: int, *, fcff: Decimal = Decimal("80")) -> FinancialBridgeRow:
         working_capital_change=Decimal("10"),
         fcff=fcff,
         fact_refs=(_source("a"),),
+        assumption_refs=(),
+        input_states=(ModelInputState.REPORTED,),
     )
 
 
@@ -129,6 +132,18 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
                 capital_needs=("data centers",),
                 fact_refs=(source_by_key["a"],),
                 gap_refs=(),
+                classified_evidence=(
+                    ClassifiedBusinessEvidenceArtifact(
+                        fact_ref=source_by_key["a"],
+                        metric_key="revenue",
+                        category="revenue",
+                        value=Decimal("200"),
+                        currency="USD",
+                        unit="million",
+                        period_start="2025-01-01",
+                        period_end="2025-12-31",
+                    ),
+                ),
             ),
         )
     )
@@ -416,9 +431,28 @@ def test_rejects_dropping_source_declared_evidence_gaps_from_model_input() -> No
 
 def test_rejects_source_reference_not_in_evidence_lineage() -> None:
     model = _input()
+    bad_ref = SourceLineageReference(
+        "z",
+        "regulatory_filing",
+        "https://www.sec.gov/example",
+        "Item 7 / z",
+        "f" * 64,
+    )
     bad_module = BusinessModuleArtifact(
         module_key="search_and_other_ads", revenue_sources=("query",), cost_structure=("tac",),
-        capital_needs=("servers",), fact_refs=(SourceLineageReference("z", "regulatory_filing", "https://www.sec.gov/example", "Item 7 / z", "f" * 64),), gap_refs=(),
+        capital_needs=("servers",), fact_refs=(bad_ref,), gap_refs=(),
+        classified_evidence=(
+            ClassifiedBusinessEvidenceArtifact(
+                bad_ref,
+                "revenue",
+                "revenue",
+                Decimal("1"),
+                "USD",
+                "million",
+                "2025-01-01",
+                "2025-12-31",
+            ),
+        ),
     )
     with pytest.raises(ValidationError, match="source lineage"):
         CompanyResearchEngine().compile(
@@ -464,6 +498,67 @@ def test_reverse_dcf_rejects_non_integer_iteration_count_as_domain_validation() 
         ReverseDcfRequest(
             "fcff_multiplier", Decimal("500"), Decimal("0.5"), Decimal("2.0"), "80"  # type: ignore[arg-type]
         )
+
+
+def test_reverse_dcf_fails_closed_when_iteration_budget_does_not_converge() -> None:
+    model = _input()
+    with pytest.raises(ValidationError, match="did not converge"):
+        CompanyResearchEngine().compile(
+            replace(
+                model,
+                reverse_dcf=ReverseDcfRequest(
+                    "fcff_multiplier",
+                    Decimal("500"),
+                    Decimal("0.5"),
+                    Decimal("2.0"),
+                    1,
+                ),
+            )
+        )
+
+
+def test_financial_bridge_row_requires_typed_separate_provenance() -> None:
+    row = _row(2026)
+    assumed = replace(
+        row,
+        fact_refs=(),
+        assumption_refs=(_source("c"),),
+        input_states=(ModelInputState.ASSUMPTION,),
+    )
+    assert assumed.fact_refs == ()
+    assert assumed.assumption_refs == (_source("c"),)
+    with pytest.raises(CompanyResearchValidationError, match="provenance"):
+        replace(row, fact_refs=(), assumption_refs=())
+    with pytest.raises(CompanyResearchValidationError, match="state"):
+        replace(row, input_states=(ModelInputState.ASSUMPTION,))
+
+
+def test_business_module_fact_refs_are_classified_exactly_once() -> None:
+    source = _source("a")
+    evidence = ClassifiedBusinessEvidenceArtifact(
+        fact_ref=source,
+        metric_key="revenue",
+        category="revenue",
+        value=Decimal("200"),
+        currency="USD",
+        unit="million",
+        period_start="2025-01-01",
+        period_end="2025-12-31",
+    )
+    module = BusinessModuleArtifact(
+        module_key="synthetic_unit",
+        revenue_sources=("revenue",),
+        cost_structure=("cost",),
+        capital_needs=("capital",),
+        fact_refs=(source,),
+        gap_refs=(),
+        classified_evidence=(evidence,),
+    )
+    assert module.classified_evidence == (evidence,)
+    with pytest.raises(CompanyResearchValidationError, match="exactly once"):
+        replace(module, classified_evidence=())
+    with pytest.raises(CompanyResearchValidationError, match="exactly once"):
+        replace(module, classified_evidence=(evidence, evidence))
 
 
 def test_rejects_scenario_baselines_with_equal_values_but_different_source_provenance() -> None:
@@ -606,6 +701,8 @@ def test_decimal_boundaries_are_decimal_only_and_serialize_canonically() -> None
             fiscal_year=2026, revenue=Decimal("1"), operating_income=1.0,
             cash_tax_rate=Decimal("0"), depreciation=Decimal("0"), capex=Decimal("0"),
             working_capital_change=Decimal("0"), fcff=Decimal("0"), fact_refs=(_source("a"),),
+            assumption_refs=(),
+            input_states=(ModelInputState.REPORTED,),
         )
 
 

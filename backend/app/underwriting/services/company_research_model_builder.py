@@ -18,6 +18,7 @@ from app.underwriting.domain.company_research import (
     ClassifiedBusinessEvidenceArtifact,
     CompanyResearchArtifactReference,
     CompanyResearchAssessment,
+    CompanyResearchIdentitySet,
     CompanyResearchMemoArtifact,
     CompanyResearchModelInput,
     CompanyResearchValidationError,
@@ -89,6 +90,7 @@ _SOURCE_REF_FIELDS = frozenset(
 _SCENARIO_ORDER = ("base", "bull", "bear")
 _CLOSED_BY_STRATEGY = frozenset({"forward_model_missing"})
 _CLOSED_BY_MARKET = frozenset({"market_price_missing", "usd_cny_fx_missing"})
+_BUILDER_GAP_PREFIX = "builder_generated_"
 
 
 def _aware_utc(value: object, field_name: str) -> datetime:
@@ -246,6 +248,8 @@ class CompanyResearchModelTemplate:
     """Adapter-owned vocabulary and mappings for one company model."""
 
     template_version: str
+    company_external_key: str
+    security_external_keys: tuple[str, ...]
     modules: tuple[CompanyResearchModelModule, ...]
     metric_classifications: tuple[CompanyResearchMetricClassification, ...]
     operating_driver_bindings: tuple[CompanyResearchOperatingDriverBinding, ...]
@@ -256,6 +260,15 @@ class CompanyResearchModelTemplate:
     def __post_init__(self) -> None:
         if not isinstance(self.template_version, str) or _VERSIONED_STRATEGY.fullmatch(self.template_version) is None:
             raise ValidationError("company model template must be versioned")
+        _text(self.company_external_key, "company model template company identity")
+        security_keys = _text_tuple(
+            self.security_external_keys,
+            "company model template security identity",
+        )
+        if security_keys != tuple(sorted(set(security_keys))):
+            raise ValidationError(
+                "company model template security identity must be canonical"
+            )
         if not isinstance(self.modules, tuple) or not self.modules or not all(type(item) is CompanyResearchModelModule for item in self.modules):
             raise ValidationError("company model template modules must be typed")
         module_keys = tuple(item.module_key for item in self.modules)
@@ -426,7 +439,7 @@ class ScenarioAssumption:
             "driver_overrides": tuple(
                 {
                     "driver_key": item.driver_key,
-                    "value": str(item.value),
+                    "value": canonical_decimal_string(item.value),
                 }
                 for item in self.driver_overrides
             ),
@@ -529,7 +542,7 @@ class StrategyAssumptionSet:
                 "scenario_overrides": tuple(
                     item.canonical_payload() for item in scenario_overrides
                 ),
-                "terminal_growth": str(terminal_growth),
+                "terminal_growth": canonical_decimal_string(terminal_growth),
             }
         )
 
@@ -537,6 +550,7 @@ class StrategyAssumptionSet:
 @dataclass(frozen=True, slots=True)
 class CompanyResearchBuildInput:
     project_id: UUID
+    identity_set: CompanyResearchIdentitySet
     cutoff_at: datetime
     required_return: Decimal
     evidence_artifact_id: UUID
@@ -550,6 +564,8 @@ class CompanyResearchBuildInput:
 
     def __post_init__(self) -> None:
         _uuid(self.project_id, "project_id")
+        if type(self.identity_set) is not CompanyResearchIdentitySet:
+            raise ValidationError("company research identity set is required")
         _uuid(self.evidence_artifact_id, "evidence_artifact_id")
         object.__setattr__(self, "cutoff_at", _aware_utc(self.cutoff_at, "cutoff_at"))
         required_return = _decimal(self.required_return, "required_return")
@@ -576,6 +592,33 @@ class CompanyResearchBuildInput:
         # Mapping can be mutated by its owner despite this frozen outer value.
         _validate_evidence_payload(self.evidence_payload, self.cutoff_at)
         _validate_gap_payload(self.gap_payload, self.evidence_payload)
+        self._validate_identity_bindings()
+
+    def _validate_identity_bindings(self) -> None:
+        company_key = self.identity_set.company.external_key
+        security_keys = tuple(
+            security.external_key for security in self.identity_set.securities
+        )
+        if self.evidence_payload.get("company_external_key") != company_key:
+            raise ValidationError("evidence company identity does not match target identity")
+        if tuple(self.evidence_payload.get("security_external_keys", ())) != security_keys:
+            raise ValidationError("evidence security identity does not match target identity")
+        if self.gap_payload.get("company_external_key") != company_key:
+            raise ValidationError("gap company identity does not match target identity")
+        if (
+            self.model_template.company_external_key != company_key
+            or self.model_template.security_external_keys != security_keys
+        ):
+            raise ValidationError("company model template identity does not match target identity")
+        if self.market_context is not None:
+            market_keys = tuple(
+                sorted(
+                    security.security_external_key
+                    for security in self.market_context.market_bridge.securities
+                )
+            )
+            if market_keys != security_keys:
+                raise ValidationError("market securities do not match target identity")
 
     @staticmethod
     def _validate_source_refs(value: object) -> None:
@@ -759,6 +802,10 @@ def _validate_gap_payload(
         if set(gap) != _GAP_FIELDS:
             raise ValidationError("gap payload fields are not recognized")
         key = _text(gap.get("gap_key"), "gap payload gap_key")
+        if key.startswith(_BUILDER_GAP_PREFIX):
+            raise ValidationError(
+                "gap payload cannot use the reserved builder-generated namespace"
+            )
         if key in keys:
             raise ValidationError("gap payload must not contain duplicate refs")
         keys.add(key)
@@ -780,6 +827,7 @@ class CompanyResearchModelBuilder:
         reviewed = _validate_evidence_payload(value.evidence_payload, value.cutoff_at)
         raw_gaps = _validate_gap_payload(value.gap_payload, value.evidence_payload)
         value._validate_source_refs(value.source_refs)
+        value._validate_identity_bindings()
         if canonical_hash(value.evidence_payload) != value.evidence_content_hash:
             raise ValidationError("evidence content hash does not match payload")
         self._validate_authenticated_sources(value.source_refs, reviewed)
@@ -983,7 +1031,10 @@ class CompanyResearchModelBuilder:
         }
         return tuple(
             ResearchGap(
-                code=f"operating_baseline_missing_{item.requirement_key}",
+                code=(
+                    f"{_BUILDER_GAP_PREFIX}operating_baseline_missing_"
+                    f"{item.requirement_key}"
+                ),
                 module_key=item.module_key,
                 severity=ResearchGapSeverity.CRITICAL,
                 message=f"Reviewed operating baseline is missing: {item.requirement_key}",
@@ -1037,7 +1088,10 @@ class CompanyResearchModelBuilder:
         }
         generated = tuple(
             ResearchGap(
-                code=f"missing_module_evidence_{module.module_key}",
+                code=(
+                    f"{_BUILDER_GAP_PREFIX}missing_module_evidence_"
+                    f"{module.module_key}"
+                ),
                 module_key=module.module_key,
                 severity=ResearchGapSeverity.CRITICAL,
                 message=f"No confirmed evidence or governed gap covers {module.module_key}",
@@ -1058,7 +1112,10 @@ class CompanyResearchModelBuilder:
         }
         return tuple(
             ResearchGap(
-                code=f"operating_driver_missing_{binding.driver_key}",
+                code=(
+                    f"{_BUILDER_GAP_PREFIX}operating_driver_missing_"
+                    f"{binding.driver_key}"
+                ),
                 module_key=binding.module_key,
                 severity=ResearchGapSeverity.CRITICAL,
                 message=f"Confirmed numeric input is missing for {binding.driver_key}",

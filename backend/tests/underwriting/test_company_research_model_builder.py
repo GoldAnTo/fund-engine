@@ -12,6 +12,9 @@ import pytest
 from app.models.ledger import ValidationError
 from app.underwriting.domain.company_research import (
     CapitalStructureReference,
+    CompanyResearchCompany,
+    CompanyResearchIdentitySet,
+    CompanyResearchSecurity,
     CompanyResearchValidationError,
     DriverInput,
     MarketBridgeArtifact,
@@ -160,6 +163,8 @@ def _model_template() -> CompanyResearchModelTemplate:
     }
     return CompanyResearchModelTemplate(
         template_version="synthetic-company-model.v1",
+        company_external_key="US:ALPHABET:COMPANY",
+        security_external_keys=("NASDAQ:GOOG", "NASDAQ:GOOGL"),
         modules=tuple(
             CompanyResearchModelModule(
                 module_key=key,
@@ -227,6 +232,36 @@ def _model_template() -> CompanyResearchModelTemplate:
             ),
         ),
     )
+
+
+def _identity_set(
+    *,
+    company_external_key: str = "US:ALPHABET:COMPANY",
+    security_external_keys: tuple[str, ...] = ("NASDAQ:GOOG", "NASDAQ:GOOGL"),
+) -> CompanyResearchIdentitySet:
+    company = CompanyResearchCompany(
+        object_id=UUID(int=200),
+        external_key=company_external_key,
+        canonical_name="Synthetic Company",
+    )
+    return CompanyResearchIdentitySet(
+        company=company,
+        securities=tuple(
+            CompanyResearchSecurity(
+                object_id=UUID(int=201 + index),
+                company_id=company.object_id,
+                external_key=external_key,
+                canonical_name=f"Synthetic Security {index}",
+                symbol=external_key.rsplit(":", 1)[-1],
+                exchange=external_key.split(":", 1)[0],
+                share_class=f"Class {index}",
+                trading_currency="USD",
+            )
+            for index, external_key in enumerate(security_external_keys)
+        ),
+    )
+
+
 def _market_context() -> FrozenMarketContext:
     refs = {
         key: _lineage(key, "frozen_market_snapshot")
@@ -323,6 +358,7 @@ def _build_input() -> CompanyResearchBuildInput:
         fact["review_decision"] = "confirmed"
     return CompanyResearchBuildInput(
         project_id=UUID(int=100),
+        identity_set=_identity_set(),
         cutoff_at=CUTOFF,
         required_return=Decimal("0.12"),
         evidence_artifact_id=UUID(int=101),
@@ -334,6 +370,82 @@ def _build_input() -> CompanyResearchBuildInput:
         strategy_assumptions=_strategy_assumptions(),
         market_context=_market_context(),
     )
+
+
+def test_build_input_requires_an_exact_company_identity_set() -> None:
+    with pytest.raises(ValidationError, match="identity"):
+        replace(_build_input(), identity_set=None)  # type: ignore[arg-type]
+
+
+def test_builder_rejects_other_company_inputs_before_compiling_goog_market() -> None:
+    value = _build_input()
+    evidence = deepcopy(value.evidence_payload)
+    evidence["company_external_key"] = "US:OTHER:COMPANY"
+    evidence["security_external_keys"] = ["NYSE:OTHER"]
+    for fact in evidence["facts"]:
+        fact["company_external_key"] = "US:OTHER:COMPANY"
+    gaps = deepcopy(value.gap_payload)
+    gaps["company_external_key"] = "US:OTHER:COMPANY"
+    other_template = replace(
+        value.model_template,
+        company_external_key="US:OTHER:COMPANY",
+        security_external_keys=("NYSE:OTHER",),
+    )
+
+    with pytest.raises(ValidationError, match="market.*identity"):
+        CompanyResearchModelBuilder().build(
+            replace(
+                value,
+                identity_set=_identity_set(
+                    company_external_key="US:OTHER:COMPANY",
+                    security_external_keys=("NYSE:OTHER",),
+                ),
+                evidence_payload=evidence,
+                evidence_content_hash=canonical_hash(evidence),
+                gap_payload=gaps,
+                model_template=other_template,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("target", "replacement"),
+    (
+        ("evidence_company", "US:OTHER:COMPANY"),
+        ("evidence_security", ["NYSE:OTHER"]),
+        ("gap_company", "US:OTHER:COMPANY"),
+        ("template_company", "US:OTHER:COMPANY"),
+        ("template_security", ("NYSE:OTHER",)),
+    ),
+)
+def test_builder_rejects_each_cross_identity_boundary(
+    target: str, replacement: object
+) -> None:
+    value = _build_input()
+    evidence = deepcopy(value.evidence_payload)
+    gaps = deepcopy(value.gap_payload)
+    template = value.model_template
+    if target == "evidence_company":
+        evidence["company_external_key"] = replacement
+        for fact in evidence["facts"]:
+            fact["company_external_key"] = replacement
+    elif target == "evidence_security":
+        evidence["security_external_keys"] = replacement
+    elif target == "gap_company":
+        gaps["company_external_key"] = replacement
+    elif target == "template_company":
+        template = replace(template, company_external_key=replacement)
+    else:
+        template = replace(template, security_external_keys=replacement)
+
+    with pytest.raises(ValidationError, match="identity"):
+        replace(
+            value,
+            evidence_payload=evidence,
+            evidence_content_hash=canonical_hash(evidence),
+            gap_payload=gaps,
+            model_template=template,
+        )
 
 
 def test_builder_rejects_an_evidence_fact_without_review_decision() -> None:
@@ -472,6 +584,45 @@ def test_strategy_assumption_set_is_required_hash_addressed_and_never_reported()
         )
     with pytest.raises(ValidationError, match="content hash"):
         replace(assumptions, content_hash="0" * 64)
+
+
+def test_strategy_assumption_hash_canonicalizes_all_decimal_scales() -> None:
+    paths = _driver_paths()
+    scaled_paths = tuple(
+        replace(
+            path,
+            values=tuple(value.quantize(Decimal("0.0000")) for value in path.values),
+        )
+        for path in paths
+    )
+    scenarios = _strategy_assumptions().scenario_overrides
+    scaled_scenarios = tuple(
+        replace(
+            scenario,
+            driver_overrides=tuple(
+                replace(override, value=override.value.quantize(Decimal("0.0000")))
+                for override in scenario.driver_overrides
+            ),
+        )
+        for scenario in scenarios
+    )
+
+    first = StrategyAssumptionSet.calculate_content_hash(
+        strategy_version="alphabet-candidate.v1",
+        first_fiscal_year=2026,
+        driver_paths=paths,
+        scenario_overrides=scenarios,
+        terminal_growth=Decimal("0.03"),
+    )
+    second = StrategyAssumptionSet.calculate_content_hash(
+        strategy_version="alphabet-candidate.v1",
+        first_fiscal_year=2026,
+        driver_paths=scaled_paths,
+        scenario_overrides=scaled_scenarios,
+        terminal_growth=Decimal("0.030"),
+    )
+
+    assert first == second
 
 
 def test_company_model_template_is_required() -> None:
@@ -738,7 +889,9 @@ def test_template_only_empty_module_gets_explicit_blocking_gap() -> None:
         item for item in result.business_map.modules if item.module_key == "orphan_unit"
     )
     assert orphan_artifact.fact_refs == ()
-    assert orphan_artifact.gap_refs == ("missing_module_evidence_orphan_unit",)
+    assert orphan_artifact.gap_refs == (
+        "builder_generated_missing_module_evidence_orphan_unit",
+    )
     assert result.assessment.status == "not_answerable"
 
 
@@ -764,10 +917,45 @@ def test_missing_bound_operating_driver_creates_critical_gap() -> None:
         )
     )
 
-    assert "operating_driver_missing_cost_signal" in {
+    assert "builder_generated_operating_driver_missing_cost_signal" in {
         gap.code for gap in result.gaps
     }
     assert result.assessment.status == "not_answerable"
+
+
+def test_raw_governed_gaps_cannot_use_the_builder_generated_namespace() -> None:
+    value = _build_input()
+    gaps = deepcopy(value.gap_payload)
+    gaps["gaps"].append(
+        {
+            "gap_key": "builder_generated_missing_module_evidence_orphan_unit",
+            "business_module": "corporate_capital_allocation",
+            "reason": "Attempted collision with a compiled gap.",
+        }
+    )
+
+    with pytest.raises(ValidationError, match="reserved.*namespace"):
+        replace(value, gap_payload=gaps)
+
+
+def test_compiled_financial_bridge_keeps_assumption_refs_out_of_fact_refs() -> None:
+    result = CompanyResearchModelBuilder().build(_build_input())
+
+    assert all(not row.fact_refs for row in result.financial_bridge.rows)
+    assert all(row.assumption_refs for row in result.financial_bridge.rows)
+    assert {
+        ref.fact_key for ref in result.financial_bridge.rows[0].assumption_refs
+    } == {
+        f"strategy_assumption_{key}"
+        for key in (
+            "revenue",
+            "operating_margin",
+            "cash_tax_rate",
+            "depreciation",
+            "capex",
+            "working_capital_change",
+        )
+    }
 
 
 @pytest.mark.parametrize(
@@ -830,7 +1018,7 @@ def test_mixed_review_decisions_filter_rejected_nonrequired_facts() -> None:
     )
 
     assert result.assessment.status == "not_answerable"
-    assert "missing_module_evidence_other_bets" in {
+    assert "builder_generated_missing_module_evidence_other_bets" in {
         gap.code for gap in result.gaps
     }
     assert all(
@@ -858,7 +1046,7 @@ def test_missing_required_reviewed_baseline_creates_gap_and_blocks_answerability
     assert result.assessment.status == "not_answerable"
     assert result.judgment_context.operating_baseline_available is False
     assert result.valuation_set is None
-    assert "operating_baseline_missing_consolidated_revenue" in {
+    assert "builder_generated_operating_baseline_missing_consolidated_revenue" in {
         gap.code for gap in result.gaps
     }
 
