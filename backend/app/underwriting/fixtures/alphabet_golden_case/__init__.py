@@ -128,10 +128,17 @@ def _strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def _read_json(path: Path) -> dict[str, object]:
+def _read_bytes(path: Path) -> bytes:
     try:
-        raw = json.loads(path.read_bytes().decode("utf-8"), object_pairs_hook=_strict_object)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return path.read_bytes()
+    except OSError as exc:
+        raise AlphabetGoldenCaseFixtureError(f"Alphabet fixture {path.name} is unreadable") from exc
+
+
+def _read_json(path: Path, contents: bytes) -> dict[str, object]:
+    try:
+        raw = json.loads(contents.decode("utf-8"), object_pairs_hook=_strict_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise AlphabetGoldenCaseFixtureError(f"Alphabet fixture {path.name} is unreadable") from exc
     if not isinstance(raw, dict):
         raise AlphabetGoldenCaseFixtureError(f"Alphabet fixture {path.name} must be an object")
@@ -185,8 +192,8 @@ def _date(value: object, field: str) -> date | None:
     return parsed
 
 
-def _file_hash(path: Path, expected: str) -> None:
-    if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+def _file_hash(path: Path, contents: bytes, expected: str) -> None:
+    if hashlib.sha256(contents).hexdigest() != expected:
         raise AlphabetGoldenCaseFixtureError(f"Alphabet fixture {path.name} content hash mismatch")
 
 
@@ -285,12 +292,12 @@ def load_alphabet_golden_case_fixture(root: Path | None = None) -> AlphabetGolde
     fixture_root = root or _ROOT
     manifest_path = fixture_root / "manifest.json"
     try:
-        manifest_bytes = manifest_path.read_bytes()
-    except OSError as exc:
+        manifest_bytes = _read_bytes(manifest_path)
+    except AlphabetGoldenCaseFixtureError as exc:
         raise AlphabetGoldenCaseFixtureError("Alphabet fixture manifest is unavailable") from exc
     if root is None and hashlib.sha256(manifest_bytes).hexdigest() != BUNDLED_MANIFEST_CONTENT_SHA256:
         raise AlphabetGoldenCaseFixtureError("Alphabet fixture bundled manifest trusted content digest mismatch")
-    manifest = _read_json(manifest_path)
+    manifest = _read_json(manifest_path, manifest_bytes)
     _exact_object(manifest, _MANIFEST_KEYS, "manifest")
     if manifest.get("schema_version") != _MANIFEST_SCHEMA:
         raise AlphabetGoldenCaseFixtureError("Alphabet fixture manifest schema is unsupported")
@@ -303,8 +310,10 @@ def load_alphabet_golden_case_fixture(root: Path | None = None) -> AlphabetGolde
     for entry in files:
         item = _exact_object(entry, _FILE_KEYS, "manifest file")
         name = _text(item.get("name"), "manifest file.name")
-        parsed_files[name] = _read_json(fixture_root / name)
-        _file_hash(fixture_root / name, _hash(item.get("content_hash"), "manifest file.content_hash"))
+        path = fixture_root / name
+        contents = _read_bytes(path)
+        parsed_files[name] = _read_json(path, contents)
+        _file_hash(path, contents, _hash(item.get("content_hash"), "manifest file.content_hash"))
     business_map = _modules(parsed_files["business_map.json"])
     facts_raw = parsed_files["source_facts.json"]
     _exact_object(facts_raw, _SOURCE_FACTS_KEYS, "source facts")

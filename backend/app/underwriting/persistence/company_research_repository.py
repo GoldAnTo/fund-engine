@@ -88,6 +88,21 @@ class CompanyResearchRepository:
             .with_for_update()
         )
 
+    def _locked_prepare_job(
+        self, preparation: CompanyResearchPreparation
+    ) -> Job:
+        """Lock the Job owned by an already-locked preparation exactly."""
+        if preparation.job_id is None:
+            raise CompanyResearchIntegrityError(
+                "company research preparation job is missing"
+            )
+        job = self._job_for_update(preparation.job_id)
+        if not self._is_exact_prepare_job_owner(job, preparation.id):
+            raise CompanyResearchIntegrityError(
+                "company research preparation job ownership is invalid"
+            )
+        return job
+
     @staticmethod
     def _require_preparation_step(value: str | None, field: str) -> str:
         if value not in COMPANY_RESEARCH_PREPARATION_STEPS:
@@ -402,9 +417,7 @@ class CompanyResearchRepository:
         preparation = self._preparation_for_update(preparation_id)
         if preparation is None:
             raise ValidationError("company research preparation not found")
-        job = self.prepare_job(preparation_id)
-        if job is None:
-            raise CompanyResearchIntegrityError("company research preparation job is missing")
+        job = self._locked_prepare_job(preparation)
         self._validate_prepare_job_step(
             preparation_step=preparation.current_step,
             preparation_status=preparation.status,
@@ -465,9 +478,7 @@ class CompanyResearchRepository:
         preparation = self._preparation_for_update(preparation_id)
         if preparation is None:
             raise ValidationError("company research preparation not found")
-        job = self.prepare_job(preparation_id)
-        if job is None:
-            raise CompanyResearchIntegrityError("company research preparation job is missing")
+        job = self._locked_prepare_job(preparation)
         self._validate_prepare_job_step(
             preparation_step=preparation.current_step,
             preparation_status=preparation.status,

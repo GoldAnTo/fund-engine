@@ -66,6 +66,25 @@ def _repository_with_preparation(session):
     return repository, project, preparation
 
 
+def _repository_with_evidence_job(session):
+    repository, project, preparation = _repository_with_preparation(session)
+    job = Job(
+        kind="prepare_company_research",
+        status="queued",
+        progress=0,
+        attempt=1,
+        step="evidence_index",
+        target_type="company_research_preparation",
+        target_id=preparation.id,
+        research_case_id=None,
+        created_at=NOW,
+    )
+    session.add(job)
+    session.flush()
+    repository.attach_prepare_job(preparation.id, job.id)
+    return repository, project, preparation, job
+
+
 def test_preparation_is_mutable_but_idempotency_and_project_are_unique(session) -> None:
     repository, project, preparation = _repository_with_preparation(session)
 
@@ -382,6 +401,45 @@ def test_prepare_job_rejects_an_attached_job_whose_discriminator_was_rewritten(
 
     with pytest.raises(CompanyResearchIntegrityError, match="job ownership"):
         repository.prepare_job(preparation.id)
+
+
+@pytest.mark.parametrize("operation", ("complete", "fail"))
+def test_evidence_lifecycle_locks_its_owned_job_before_transition(
+    session, operation: str
+) -> None:
+    """A PostgreSQL rival cannot rewrite the Job after preparation is locked."""
+    repository, _project, preparation, _job = _repository_with_evidence_job(session)
+    session.expire_all()
+    statements = []
+
+    def _capture_job_select(execute_state) -> None:
+        statement = execute_state.statement
+        if execute_state.is_select and "FROM jobs" in str(statement):
+            statements.append(statement)
+
+    event.listen(session, "do_orm_execute", _capture_job_select)
+    try:
+        if operation == "complete":
+            repository.complete_evidence_preparation(
+                preparation.id,
+                input_hash="c" * 64,
+                evidence_index_payload={"facts": []},
+                research_gaps_payload={"gaps": []},
+                source_refs=[],
+                created_at=NOW,
+            )
+        else:
+            repository.fail_evidence_preparation(
+                preparation.id,
+                error_code="fixture_unavailable",
+                created_at=NOW,
+            )
+    finally:
+        event.remove(session, "do_orm_execute", _capture_job_select)
+
+    assert len(statements) == 1
+    assert "FOR UPDATE" in str(statements[0].compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE" not in str(statements[0].compile(dialect=sqlite.dialect()))
 
 
 def test_add_preparation_rejects_a_job_that_is_not_its_exact_owner(session) -> None:

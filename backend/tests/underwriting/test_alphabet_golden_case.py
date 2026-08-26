@@ -83,6 +83,75 @@ def test_bundled_manifest_is_pinned_by_its_exact_utf8_bytes() -> None:
     )
 
 
+def test_custom_fixture_hashes_and_parses_each_file_from_the_same_read(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A replacement between parse and hash must not affect one load."""
+    root = _copy_fixture(tmp_path)
+    facts_path = root / "source_facts.json"
+    original_read_bytes = Path.read_bytes
+    original = original_read_bytes(facts_path)
+    calls = 0
+
+    def replace_after_first_read(path: Path) -> bytes:
+        nonlocal calls
+        if path == facts_path:
+            calls += 1
+            if calls == 1:
+                return original
+            return b'{"replaced":"after-parse"}'
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", replace_after_first_read)
+
+    fixture = load_alphabet_golden_case_fixture(root)
+
+    assert calls == 1
+    assert fixture.company_external_key == "US:ALPHABET:COMPANY"
+
+
+def test_custom_fixture_read_failure_is_a_fixture_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = _copy_fixture(tmp_path)
+    facts_path = root / "source_facts.json"
+    original_read_bytes = Path.read_bytes
+
+    def deny_source_read(path: Path) -> bytes:
+        if path == facts_path:
+            raise PermissionError("fixture is not readable")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", deny_source_read)
+
+    with pytest.raises(AlphabetGoldenCaseFixtureError, match="source_facts.json is unreadable"):
+        load_alphabet_golden_case_fixture(root)
+
+
+def test_custom_fixture_deep_json_is_a_recoverable_fixture_error(
+    tmp_path: Path,
+) -> None:
+    root = _copy_fixture(tmp_path)
+    facts_path = root / "source_facts.json"
+    facts_path.write_bytes(b'{"nested":' * 2_000 + b"0" + b"}" * 2_000)
+    manifest = _read_json(root / "manifest.json")
+    files = manifest["files"]
+    assert isinstance(files, list)
+    for item in files:
+        assert isinstance(item, dict)
+        if item["name"] == "source_facts.json":
+            item["content_hash"] = hashlib.sha256(facts_path.read_bytes()).hexdigest()
+    from app.underwriting.hashing import canonical_hash
+
+    manifest["content_hash"] = canonical_hash(
+        {key: value for key, value in manifest.items() if key != "content_hash"}
+    )
+    _write_json(root / "manifest.json", manifest)
+
+    with pytest.raises(AlphabetGoldenCaseFixtureError, match="unreadable"):
+        load_alphabet_golden_case_fixture(root)
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
@@ -326,6 +395,43 @@ def test_prepare_evidence_index_recovers_from_unhashable_fixture_security_key(
     _refresh_manifest(root)
     service = CompanyResearchSourceService(session, now=lambda: NOW)
     monkeypatch.setattr(service, "_load_fixture", lambda: load_alphabet_golden_case_fixture(root))
+
+    outcome = service.prepare_evidence_index(preparation_id=initialized.preparation.id)
+
+    assert outcome.status == "recoverable_failure"
+    assert outcome.error == {"code": "alphabet_source_unavailable", "recoverable": True}
+    assert session.scalar(
+        select(func.count()).select_from(CompanyResearchArtifactVersion).where(
+            CompanyResearchArtifactVersion.project_id == initialized.project.id
+        )
+    ) == 0
+    assert outcome.events[-1].event_type == "source_preparation_failed"
+
+
+def test_prepare_evidence_index_recovers_from_deep_fixture_json(
+    session, monkeypatch, tmp_path: Path
+) -> None:
+    initialized = _preparation(session)
+    root = _copy_fixture(tmp_path)
+    facts_path = root / "source_facts.json"
+    facts_path.write_bytes(b'{"nested":' * 2_000 + b"0" + b"}" * 2_000)
+    manifest = _read_json(root / "manifest.json")
+    files = manifest["files"]
+    assert isinstance(files, list)
+    for item in files:
+        assert isinstance(item, dict)
+        if item["name"] == "source_facts.json":
+            item["content_hash"] = hashlib.sha256(facts_path.read_bytes()).hexdigest()
+    from app.underwriting.hashing import canonical_hash
+
+    manifest["content_hash"] = canonical_hash(
+        {key: value for key, value in manifest.items() if key != "content_hash"}
+    )
+    _write_json(root / "manifest.json", manifest)
+    service = CompanyResearchSourceService(session, now=lambda: NOW)
+    monkeypatch.setattr(
+        service, "_load_fixture", lambda: load_alphabet_golden_case_fixture(root)
+    )
 
     outcome = service.prepare_evidence_index(preparation_id=initialized.preparation.id)
 
