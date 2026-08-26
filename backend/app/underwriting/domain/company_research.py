@@ -563,9 +563,25 @@ _MECHANISMS = frozenset(
         "search_disruption_and_capital_drag",
     }
 )
+SCENARIO_FINANCIAL_DRIVER_KEYS = (
+    "revenue",
+    "operating_margin",
+    "cash_tax_rate",
+    "depreciation",
+    "capex",
+    "working_capital_change",
+)
+SCENARIO_FINANCIAL_DRIVER_EQUATIONS = {
+    "revenue": "revenue = volume * monetization",
+    "operating_margin": "operating_income = revenue * operating_margin",
+    "cash_tax_rate": "cash_tax_rate = reported_tax_rate",
+    "depreciation": "depreciation = reported_depreciation",
+    "capex": "capex = reported_capex",
+    "working_capital_change": "working_capital_change = reported_working_capital_change",
+}
 _DRIVER_EQUATIONS = frozenset(
     {
-        "revenue = volume * monetization",
+        *SCENARIO_FINANCIAL_DRIVER_EQUATIONS.values(),
         "fcff = nopat + depreciation - capex - working_capital_change",
     }
 )
@@ -775,13 +791,54 @@ class ScenarioSetArtifact:
 
 
 @dataclass(frozen=True, slots=True)
-class ScenarioFinancialBridge:
-    scenario_id: str
-    bridge: FinancialBridgeArtifact
+class ScenarioFinancialDriverForecast:
+    """Five-year baseline values for one financial driver in a scenario path."""
+
+    driver_key: str
+    values: tuple[Decimal, ...]
+    fact_refs: tuple[SourceLineageReference, ...]
 
     def __post_init__(self) -> None:
-        if self.scenario_id not in {"base", "bull", "bear"} or type(self.bridge) is not FinancialBridgeArtifact:
-            raise CompanyResearchValidationError("scenario financial bridge must be typed and named")
+        if self.driver_key not in SCENARIO_FINANCIAL_DRIVER_KEYS:
+            raise CompanyResearchValidationError(
+                "scenario financial forecast must use a named financial driver"
+            )
+        if not isinstance(self.values, tuple) or len(self.values) != 5:
+            raise CompanyResearchValidationError(
+                "scenario financial forecast values must contain five Decimal values"
+            )
+        for value in self.values:
+            _artifact_decimal(value, "scenario financial forecast value")
+        _artifact_refs(self.fact_refs, "scenario financial forecast fact_refs")
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioFinancialBridge:
+    scenario_id: str
+    first_fiscal_year: int
+    driver_forecasts: tuple[ScenarioFinancialDriverForecast, ...]
+
+    def __post_init__(self) -> None:
+        if self.scenario_id not in {"base", "bull", "bear"}:
+            raise CompanyResearchValidationError("scenario financial bridge must be named")
+        if type(self.first_fiscal_year) is not int or self.first_fiscal_year < 1900:
+            raise CompanyResearchValidationError(
+                "scenario financial bridge first_fiscal_year must be a year"
+            )
+        if not isinstance(self.driver_forecasts, tuple) or not all(
+            type(item) is ScenarioFinancialDriverForecast
+            for item in self.driver_forecasts
+        ):
+            raise CompanyResearchValidationError(
+                "scenario financial bridge driver forecasts must be typed"
+            )
+        keys = tuple(item.driver_key for item in self.driver_forecasts)
+        if set(keys) != set(SCENARIO_FINANCIAL_DRIVER_KEYS) or len(keys) != len(
+            SCENARIO_FINANCIAL_DRIVER_KEYS
+        ):
+            raise CompanyResearchValidationError(
+                "scenario financial bridge must cover each named financial driver exactly once"
+            )
 
 
 @dataclass(frozen=True, slots=True)

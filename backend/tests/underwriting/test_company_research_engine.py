@@ -18,7 +18,6 @@ from app.underwriting.domain.company_research import (
     DriverMapArtifact,
     DriverMetricArtifact,
     EvidenceGapContract,
-    FinancialBridgeArtifact,
     FinancialBridgeRow,
     JudgmentContextArtifact,
     MarketBridgeArtifact,
@@ -27,6 +26,7 @@ from app.underwriting.domain.company_research import (
     ReverseDcfRequest,
     ScenarioArtifact,
     ScenarioDriverOverride,
+    ScenarioFinancialDriverForecast,
     ScenarioFinancialBridge,
     ScenarioSetArtifact,
     SecurityValuationReference,
@@ -60,6 +60,42 @@ def _row(year: int, *, fcff: Decimal = Decimal("80")) -> FinancialBridgeRow:
     )
 
 
+_FORECAST_DRIVER_KEYS = (
+    "revenue",
+    "operating_margin",
+    "cash_tax_rate",
+    "depreciation",
+    "capex",
+    "working_capital_change",
+)
+
+
+def _overrides(**values: Decimal) -> tuple[ScenarioDriverOverride, ...]:
+    return tuple(
+        ScenarioDriverOverride(driver_key, values.get(driver_key, Decimal("1")))
+        for driver_key in _FORECAST_DRIVER_KEYS
+    )
+
+
+def _scenario_forecasts(source: SourceLineageReference) -> tuple[ScenarioFinancialDriverForecast, ...]:
+    values = {
+        "revenue": Decimal("200"),
+        "operating_margin": Decimal("0.50"),
+        "cash_tax_rate": Decimal("0.20"),
+        "depreciation": Decimal("20"),
+        "capex": Decimal("10"),
+        "working_capital_change": Decimal("10"),
+    }
+    return tuple(
+        ScenarioFinancialDriverForecast(
+            driver_key=driver_key,
+            values=(values[driver_key],) * 5,
+            fact_refs=(source,),
+        )
+        for driver_key in _FORECAST_DRIVER_KEYS
+    )
+
+
 def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> CompanyResearchModelInput:
     source_by_key = {
         key: _source(key)
@@ -89,16 +125,25 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
             ),
         )
     )
+    equations = {
+        "revenue": "revenue = volume * monetization",
+        "operating_margin": "operating_income = revenue * operating_margin",
+        "cash_tax_rate": "cash_tax_rate = reported_tax_rate",
+        "depreciation": "depreciation = reported_depreciation",
+        "capex": "capex = reported_capex",
+        "working_capital_change": "working_capital_change = reported_working_capital_change",
+    }
     drivers = DriverMapArtifact(
-        drivers=(
+        drivers=tuple(
             DriverMetricArtifact(
-                driver_key="search_volume",
+                driver_key=driver_key,
                 module_key="search_and_other_ads",
                 fact_refs=(source_by_key["b"],),
                 assumption_refs=(source_by_key["c"],),
-                equation="revenue = volume * monetization",
-                output_metric="revenue",
-            ),
+                equation=equations[driver_key],
+                output_metric=driver_key,
+            )
+            for driver_key in _FORECAST_DRIVER_KEYS
         )
     )
     scenarios = ScenarioSetArtifact(
@@ -106,24 +151,35 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
             ScenarioArtifact(
                 scenario_id="base",
                 mechanism_id="search_cloud_resilience",
-                driver_overrides=(ScenarioDriverOverride("search_volume", Decimal("1.00")),),
+                driver_overrides=_overrides(),
             ),
             ScenarioArtifact(
                 scenario_id="bull",
                 mechanism_id="ai_monetization_and_utilization",
-                driver_overrides=(ScenarioDriverOverride("search_volume", Decimal("1.10")),),
+                driver_overrides=_overrides(
+                    revenue=Decimal("1.10"),
+                    operating_margin=Decimal("1.05"),
+                    capex=Decimal("0.95"),
+                    working_capital_change=Decimal("0.90"),
+                ),
             ),
             ScenarioArtifact(
                 scenario_id="bear",
                 mechanism_id="search_disruption_and_capital_drag",
-                driver_overrides=(ScenarioDriverOverride("search_volume", Decimal("0.90")),),
+                driver_overrides=_overrides(
+                    revenue=Decimal("0.90"),
+                    operating_margin=Decimal("0.90"),
+                    capex=Decimal("1.10"),
+                    working_capital_change=Decimal("1.20"),
+                ),
             ),
         )
     )
     bridges = tuple(
         ScenarioFinancialBridge(
             scenario_id=scenario.scenario_id,
-            bridge=FinancialBridgeArtifact(rows=tuple(_row(2026 + index) for index in range(5))),
+            first_fiscal_year=2026,
+            driver_forecasts=_scenario_forecasts(source_by_key["a"]),
         )
         for scenario in scenarios.scenarios
     )
@@ -194,11 +250,35 @@ def test_rejects_market_references_reused_across_capital_rights_price_and_fx_rol
         )
 
 
-def test_scenario_overrides_change_the_fcff_used_by_the_dcf() -> None:
+def test_mechanism_scenarios_transmit_named_financial_drivers_into_distinct_dcf_values() -> None:
     result = CompanyResearchEngine().compile(_input())
 
+    # The input forecast is common.  Each mechanism changes named financial
+    # drivers (revenue, margin, capex, and working capital), which the engine
+    # compiles into a separate closed FCFF bridge before discounting it.
     assert result.scenario_enterprise_values["bull"] > result.scenario_enterprise_values["base"]
     assert result.scenario_enterprise_values["bear"] < result.scenario_enterprise_values["base"]
+
+
+def test_derived_scenario_financial_bridges_close_each_year_without_generic_multiplier() -> None:
+    bridges = CompanyResearchEngine._validate_model_links(_input())
+    base = bridges["base"].rows[0]
+    bull = bridges["bull"].rows[0]
+
+    assert bull.revenue == Decimal("220")
+    assert bull.operating_income == Decimal("115.5000")
+    assert bull.capex == Decimal("9.50")
+    assert bull.working_capital_change == Decimal("9.00")
+    assert bull.fcff == Decimal("93.900000")
+    assert bull.fcff != base.fcff * Decimal("1.10")
+    for bridge in bridges.values():
+        for row in bridge.rows:
+            assert row.fcff == (
+                row.operating_income * (Decimal("1") - row.cash_tax_rate)
+                + row.depreciation
+                - row.capex
+                - row.working_capital_change
+            )
 
 
 def test_rejects_a_non_base_scenario_with_a_no_op_override() -> None:
@@ -206,7 +286,7 @@ def test_rejects_a_non_base_scenario_with_a_no_op_override() -> None:
     no_op_bull = ScenarioArtifact(
         scenario_id="bull",
         mechanism_id="ai_monetization_and_utilization",
-        driver_overrides=(ScenarioDriverOverride("search_volume", Decimal("1")),),
+        driver_overrides=_overrides(),
     )
     scenario_set = ScenarioSetArtifact(
         scenarios=tuple(
@@ -215,7 +295,26 @@ def test_rejects_a_non_base_scenario_with_a_no_op_override() -> None:
         )
     )
 
-    with pytest.raises(ValidationError, match="non-no-op FCFF effect"):
+    with pytest.raises(ValidationError, match="distinct mechanism-specific financial forecasts"):
+        CompanyResearchEngine().compile(replace(model, scenario_set=scenario_set))
+
+
+def test_rejects_same_financial_forecast_plus_generic_fcff_multiplier() -> None:
+    """A mechanism must transmit through financial drivers, never a DCF multiplier."""
+    model = _input()
+    generic_multiplier_bull = ScenarioArtifact(
+        scenario_id="bull",
+        mechanism_id="ai_monetization_and_utilization",
+        driver_overrides=(ScenarioDriverOverride("fcff_multiplier", Decimal("1.10")),),
+    )
+    scenario_set = ScenarioSetArtifact(
+        scenarios=tuple(
+            generic_multiplier_bull if scenario.scenario_id == "bull" else scenario
+            for scenario in model.scenario_set.scenarios
+        )
+    )
+
+    with pytest.raises(ValidationError, match="named financial forecast driver"):
         CompanyResearchEngine().compile(replace(model, scenario_set=scenario_set))
 
 

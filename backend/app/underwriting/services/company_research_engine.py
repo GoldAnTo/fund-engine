@@ -17,6 +17,8 @@ from app.underwriting.domain.company_research import (
     SecurityValueRangeArtifact,
     SourceLineageReference,
     ScenarioDcfValue,
+    SCENARIO_FINANCIAL_DRIVER_EQUATIONS,
+    SCENARIO_FINANCIAL_DRIVER_KEYS,
     ValuationSetArtifact,
     ValueRange,
 )
@@ -30,8 +32,6 @@ _MECHANISMS = frozenset(
     }
 )
 _REVERSE_TOLERANCE = Decimal("0.000001")
-
-
 @dataclass(frozen=True, slots=True)
 class ReverseDcfResult:
     driver_key: str
@@ -65,7 +65,7 @@ class CompanyResearchEngine:
         if model.terminal_growth >= model.required_return:
             raise ValidationError("terminal growth must be less than the discount rate")
         self._validate_lineage(model)
-        self._validate_model_links(model)
+        compiled_bridges = self._validate_model_links(model)
 
         critical_gaps = any(gap.severity.value == "critical" for gap in model.research_gaps)
         judgment = model.judgment_context
@@ -86,24 +86,13 @@ class CompanyResearchEngine:
             )
 
         values = {
-            item.scenario_id: self._dcf(
-                item.bridge,
-                model.required_return,
-                model.terminal_growth,
-                multiplier=self._scenario_fcff_multiplier(
-                    next(
-                        scenario
-                        for scenario in model.scenario_set.scenarios
-                        if scenario.scenario_id == item.scenario_id
-                    )
-                ),
-            )
-            for item in model.scenario_bridges
+            scenario_id: self._dcf(bridge, model.required_return, model.terminal_growth)
+            for scenario_id, bridge in compiled_bridges.items()
         }
         reverse = (
             self._reverse_dcf(
                 request=model.reverse_dcf,
-                bridge=next(item.bridge for item in model.scenario_bridges if item.scenario_id == "base"),
+                bridge=compiled_bridges["base"],
                 required_return=model.required_return,
                 terminal_growth=model.terminal_growth,
             )
@@ -155,8 +144,8 @@ class CompanyResearchEngine:
             refs.extend(driver.fact_refs)
             refs.extend(driver.assumption_refs)
         for scenario_bridge in model.scenario_bridges:
-            for row in scenario_bridge.bridge.rows:
-                refs.extend(row.fact_refs)
+            for forecast in scenario_bridge.driver_forecasts:
+                refs.extend(forecast.fact_refs)
         refs.append(model.evidence_gap_contract.source_ref)
         if model.market_bridge is not None:
             refs.append(model.market_bridge.capital_structure.source_ref)
@@ -173,32 +162,32 @@ class CompanyResearchEngine:
             if available.get(reference.fact_key) != reference:
                 raise ValidationError("artifact source lineage must match authenticated evidence exactly")
 
-    @staticmethod
-    def _validate_model_links(model: CompanyResearchModelInput) -> None:
+    @classmethod
+    def _validate_model_links(
+        cls, model: CompanyResearchModelInput
+    ) -> dict[str, FinancialBridgeArtifact]:
         mechanisms = {scenario.mechanism_id for scenario in model.scenario_set.scenarios}
         if mechanisms != _MECHANISMS:
             raise ValidationError("Alphabet scenarios must use distinct mechanisms")
         modules = {item.module_key for item in model.business_map.modules}
-        drivers = {item.driver_key for item in model.driver_map.drivers}
+        drivers_by_key = {item.driver_key: item for item in model.driver_map.drivers}
+        drivers = set(drivers_by_key)
         if any(item.module_key not in modules for item in model.driver_map.drivers):
             raise ValidationError("driver references an unknown business module")
+        for driver_key, equation in SCENARIO_FINANCIAL_DRIVER_EQUATIONS.items():
+            driver = drivers_by_key.get(driver_key)
+            if driver is None or driver.equation != equation or driver.output_metric != driver_key:
+                raise ValidationError(
+                    "scenario financial forecast drivers must have closed named equations"
+                )
         if any(
             override.driver_key not in drivers
             for scenario in model.scenario_set.scenarios
             for override in scenario.driver_overrides
         ):
-            raise ValidationError("scenario override references an unknown driver")
-        scenario_multipliers = {
-            scenario.scenario_id: CompanyResearchEngine._scenario_fcff_multiplier(scenario)
-            for scenario in model.scenario_set.scenarios
-        }
-        if scenario_multipliers["base"] != Decimal("1"):
-            raise ValidationError("base scenario overrides must preserve the baseline FCFF")
-        if any(
-            scenario_multipliers[scenario_id] == Decimal("1")
-            for scenario_id in ("bull", "bear")
-        ) or len(set(scenario_multipliers.values())) != len(scenario_multipliers):
-            raise ValidationError("scenario overrides must have a distinct non-no-op FCFF effect")
+            raise ValidationError(
+                "scenario overrides must target named financial forecast drivers"
+            )
         bridge_ids = {item.scenario_id for item in model.scenario_bridges}
         scenario_ids = {item.scenario_id for item in model.scenario_set.scenarios}
         if bridge_ids and bridge_ids != scenario_ids:
@@ -214,13 +203,128 @@ class CompanyResearchEngine:
             ):
                 raise ValidationError("security FX references must use the exact market FX rate")
 
+        if not model.scenario_bridges:
+            return {}
+        scenarios_by_id = {
+            scenario.scenario_id: scenario for scenario in model.scenario_set.scenarios
+        }
+        bridges_by_id = {
+            scenario_bridge.scenario_id: scenario_bridge
+            for scenario_bridge in model.scenario_bridges
+        }
+        for scenario_id, scenario in scenarios_by_id.items():
+            override_keys = {override.driver_key for override in scenario.driver_overrides}
+            if override_keys != set(SCENARIO_FINANCIAL_DRIVER_KEYS):
+                raise ValidationError(
+                    "scenario overrides must target every named financial forecast driver"
+                )
+            if scenario_id == "base" and any(
+                override.value != Decimal("1") for override in scenario.driver_overrides
+            ):
+                raise ValidationError("base scenario overrides must preserve named financial drivers")
+
+        baseline_signatures = {
+            cls._forecast_signature(bridge)
+            for bridge in bridges_by_id.values()
+        }
+        if len(baseline_signatures) != 1:
+            raise ValidationError(
+                "scenario financial forecasts must share one named-driver baseline"
+            )
+        compiled = {
+            scenario_id: cls._compile_scenario_bridge(
+                bridge=bridges_by_id[scenario_id],
+                scenario=scenarios_by_id[scenario_id],
+            )
+            for scenario_id in ("base", "bull", "bear")
+        }
+        if len({cls._bridge_signature(bridge) for bridge in compiled.values()}) != len(compiled):
+            raise ValidationError(
+                "scenario overrides must produce distinct mechanism-specific financial forecasts"
+            )
+        return compiled
+
     @staticmethod
-    def _scenario_fcff_multiplier(scenario) -> Decimal:
-        """Apply every closed driver override directly to projected FCFF."""
-        multiplier = Decimal("1")
-        for override in scenario.driver_overrides:
-            multiplier *= override.value
-        return multiplier
+    def _forecast_signature(
+        scenario_bridge,
+    ) -> tuple[int, tuple[tuple[str, tuple[Decimal, ...]], ...]]:
+        return (
+            scenario_bridge.first_fiscal_year,
+            tuple(
+                sorted(
+                    (forecast.driver_key, forecast.values)
+                    for forecast in scenario_bridge.driver_forecasts
+                )
+            ),
+        )
+
+    @staticmethod
+    def _bridge_signature(bridge: FinancialBridgeArtifact) -> tuple[tuple[Decimal, ...], ...]:
+        return tuple(
+            (
+                row.revenue,
+                row.operating_income,
+                row.cash_tax_rate,
+                row.depreciation,
+                row.capex,
+                row.working_capital_change,
+                row.fcff,
+            )
+            for row in bridge.rows
+        )
+
+    @staticmethod
+    def _compile_scenario_bridge(*, bridge, scenario) -> FinancialBridgeArtifact:
+        forecasts = {forecast.driver_key: forecast for forecast in bridge.driver_forecasts}
+        overrides = {override.driver_key: override.value for override in scenario.driver_overrides}
+        source_refs = tuple(
+            dict.fromkeys(
+                reference
+                for driver_key in SCENARIO_FINANCIAL_DRIVER_KEYS
+                for reference in forecasts[driver_key].fact_refs
+            )
+        )
+        rows = []
+        for offset in range(5):
+            revenue = forecasts["revenue"].values[offset] * overrides["revenue"]
+            operating_margin = (
+                forecasts["operating_margin"].values[offset]
+                * overrides["operating_margin"]
+            )
+            cash_tax_rate = (
+                forecasts["cash_tax_rate"].values[offset]
+                * overrides["cash_tax_rate"]
+            )
+            depreciation = (
+                forecasts["depreciation"].values[offset]
+                * overrides["depreciation"]
+            )
+            capex = forecasts["capex"].values[offset] * overrides["capex"]
+            working_capital_change = (
+                forecasts["working_capital_change"].values[offset]
+                * overrides["working_capital_change"]
+            )
+            operating_income = revenue * operating_margin
+            fcff = (
+                operating_income * (Decimal("1") - cash_tax_rate)
+                + depreciation
+                - capex
+                - working_capital_change
+            )
+            rows.append(
+                FinancialBridgeRow(
+                    fiscal_year=bridge.first_fiscal_year + offset,
+                    revenue=revenue,
+                    operating_income=operating_income,
+                    cash_tax_rate=cash_tax_rate,
+                    depreciation=depreciation,
+                    capex=capex,
+                    working_capital_change=working_capital_change,
+                    fcff=fcff,
+                    fact_refs=source_refs,
+                )
+            )
+        return FinancialBridgeArtifact(rows=tuple(rows))
 
     @staticmethod
     def _validate_financial_closure(row: FinancialBridgeRow) -> None:
