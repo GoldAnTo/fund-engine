@@ -590,13 +590,6 @@ _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _VERSIONED_ASSUMPTION_KEY = re.compile(
     r"[a-z][a-z0-9_.-]*\.v[1-9][0-9]*:[a-z][a-z0-9_]*\Z"
 )
-_MECHANISMS = frozenset(
-    {
-        "search_cloud_resilience",
-        "ai_monetization_and_utilization",
-        "search_disruption_and_capital_drag",
-    }
-)
 SCENARIO_FINANCIAL_DRIVER_KEYS = (
     "revenue",
     "operating_margin",
@@ -775,13 +768,13 @@ class BusinessModuleArtifact:
         _require_key(self.module_key, "business_map.module_key", _MODULE_KEY)
         for name in ("revenue_sources", "cost_structure", "capital_needs"):
             values = getattr(self, name)
-            if not isinstance(values, tuple) or not all(
+            if not isinstance(values, tuple) or not values or not all(
                 isinstance(item, str) and item.strip() == item and item for item in values
             ):
                 raise CompanyResearchValidationError(
-                    f"business_map.{name} must contain canonical text"
+                    f"business_map.{name} must contain non-empty canonical text"
                 )
-        _artifact_refs(self.fact_refs, "business_map.fact_refs")
+        _artifact_optional_refs(self.fact_refs, "business_map.fact_refs")
         if not isinstance(self.gap_refs, tuple) or not all(
             isinstance(item, str) and _GAP_CODE.fullmatch(item) for item in self.gap_refs
         ):
@@ -809,15 +802,28 @@ class DriverMetricArtifact:
     assumption_refs: tuple[SourceLineageReference, ...]
     equation: str
     output_metric: str
+    input_state: ModelInputState
+    assumption_key: str | None
+    equation_id: str | None
 
     def __post_init__(self) -> None:
         _require_key(self.driver_key, "driver.driver_key", _GAP_CODE)
         _require_key(self.module_key, "driver.module_key", _MODULE_KEY)
         _artifact_optional_refs(self.fact_refs, "driver.fact_refs")
-        _artifact_refs(self.assumption_refs, "driver.assumption_refs")
+        _artifact_optional_refs(self.assumption_refs, "driver.assumption_refs")
         if self.equation not in _DRIVER_EQUATIONS:
             raise CompanyResearchValidationError("driver.equation must be a closed equation identifier")
         _require_key(self.output_metric, "driver.output_metric", _GAP_CODE)
+        if type(self.input_state) is not ModelInputState:
+            raise CompanyResearchValidationError("driver.input_state must be controlled")
+        if self.input_state is ModelInputState.REPORTED:
+            if not self.fact_refs or self.assumption_refs or self.assumption_key is not None or self.equation_id is not None:
+                raise CompanyResearchValidationError("reported driver requires fact refs only")
+        elif self.input_state is ModelInputState.DERIVED:
+            if not self.fact_refs or self.assumption_refs or self.assumption_key is not None or self.equation_id not in _DRIVER_EQUATIONS:
+                raise CompanyResearchValidationError("derived driver requires fact refs and a closed equation_id")
+        elif self.fact_refs or not self.assumption_refs or self.equation_id is not None or not isinstance(self.assumption_key, str) or _VERSIONED_ASSUMPTION_KEY.fullmatch(self.assumption_key) is None:
+            raise CompanyResearchValidationError("assumption driver requires candidate refs and a versioned assumption_key")
 
 
 @dataclass(frozen=True, slots=True)
@@ -929,6 +935,10 @@ class ScenarioFinancialDriverForecast:
     driver_key: str
     values: tuple[Decimal, ...]
     fact_refs: tuple[SourceLineageReference, ...]
+    assumption_refs: tuple[SourceLineageReference, ...]
+    input_state: ModelInputState
+    assumption_key: str | None
+    equation_id: str | None
 
     def __post_init__(self) -> None:
         if self.driver_key not in SCENARIO_FINANCIAL_DRIVER_KEYS:
@@ -941,7 +951,18 @@ class ScenarioFinancialDriverForecast:
             )
         for value in self.values:
             _artifact_decimal(value, "scenario financial forecast value")
-        _artifact_refs(self.fact_refs, "scenario financial forecast fact_refs")
+        _artifact_optional_refs(self.fact_refs, "scenario financial forecast fact_refs")
+        _artifact_optional_refs(self.assumption_refs, "scenario financial forecast assumption_refs")
+        if type(self.input_state) is not ModelInputState:
+            raise CompanyResearchValidationError("scenario financial forecast input_state must be controlled")
+        if self.input_state is ModelInputState.REPORTED:
+            if not self.fact_refs or self.assumption_refs or self.assumption_key is not None or self.equation_id is not None:
+                raise CompanyResearchValidationError("reported forecast requires fact refs only")
+        elif self.input_state is ModelInputState.DERIVED:
+            if not self.fact_refs or self.assumption_refs or self.assumption_key is not None or self.equation_id not in _DRIVER_EQUATIONS:
+                raise CompanyResearchValidationError("derived forecast requires fact refs and a closed equation_id")
+        elif self.fact_refs or not self.assumption_refs or self.equation_id is not None or not isinstance(self.assumption_key, str) or _VERSIONED_ASSUMPTION_KEY.fullmatch(self.assumption_key) is None:
+            raise CompanyResearchValidationError("assumption forecast requires candidate refs and a versioned assumption_key")
 
 
 @dataclass(frozen=True, slots=True)

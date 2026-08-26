@@ -21,6 +21,7 @@ from app.underwriting.domain.company_research import (
     FinancialBridgeRow,
     JudgmentContextArtifact,
     MarketBridgeArtifact,
+    ModelInputState,
     ResearchGap,
     ResearchGapSeverity,
     ReverseDcfRequest,
@@ -92,7 +93,11 @@ def _scenario_forecasts(source: SourceLineageReference) -> tuple[ScenarioFinanci
         ScenarioFinancialDriverForecast(
             driver_key=driver_key,
             values=(values[driver_key],) * 5,
-            fact_refs=(source,),
+            fact_refs=(),
+            assumption_refs=(source,),
+            input_state=ModelInputState.ASSUMPTION,
+            assumption_key=f"engine-candidate.v1:{driver_key}",
+            equation_id=None,
         )
         for driver_key in _FORECAST_DRIVER_KEYS
     )
@@ -140,10 +145,13 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
             DriverMetricArtifact(
                 driver_key=driver_key,
                 module_key="search_and_other_ads",
-                fact_refs=(source_by_key["b"],),
+                fact_refs=(),
                 assumption_refs=(source_by_key["c"],),
                 equation=equations[driver_key],
                 output_metric=driver_key,
+                input_state=ModelInputState.ASSUMPTION,
+                assumption_key=f"engine-candidate.v1:{driver_key}",
+                equation_id=None,
             )
             for driver_key in _FORECAST_DRIVER_KEYS
         )
@@ -181,7 +189,7 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
         ScenarioFinancialBridge(
             scenario_id=scenario.scenario_id,
             first_fiscal_year=2026,
-            driver_forecasts=_scenario_forecasts(source_by_key["a"]),
+            driver_forecasts=_scenario_forecasts(source_by_key["c"]),
         )
         for scenario in scenarios.scenarios
     )
@@ -449,12 +457,12 @@ def test_rejects_scenario_baselines_with_equal_values_but_different_source_prove
     altered_bull = replace(
         bull_bridge,
         driver_forecasts=tuple(
-            replace(forecast, fact_refs=(alternate_source,))
+            replace(forecast, assumption_refs=(alternate_source,))
             for forecast in bull_bridge.driver_forecasts
         ),
     )
 
-    with pytest.raises(ValidationError, match="share one named-driver baseline"):
+    with pytest.raises(ValidationError, match="provenance"):
         CompanyResearchEngine().compile(
             replace(
                 model,
@@ -463,6 +471,38 @@ def test_rejects_scenario_baselines_with_equal_values_but_different_source_prove
                     altered_bull if bridge.scenario_id == "bull" else bridge
                     for bridge in model.scenario_bridges
                 ),
+            )
+        )
+
+
+def test_rejects_forecast_provenance_that_disagrees_with_driver_state() -> None:
+    model = _input()
+    reported_ref = _source("reported_forecast")
+    bridges = tuple(
+        replace(
+            bridge,
+            driver_forecasts=tuple(
+                replace(
+                    forecast,
+                    fact_refs=(reported_ref,),
+                    assumption_refs=(),
+                    input_state=ModelInputState.REPORTED,
+                    assumption_key=None,
+                )
+                if forecast.driver_key == "revenue"
+                else forecast
+                for forecast in bridge.driver_forecasts
+            ),
+        )
+        for bridge in model.scenario_bridges
+    )
+
+    with pytest.raises(ValidationError, match="provenance"):
+        CompanyResearchEngine().compile(
+            replace(
+                model,
+                source_lineage=model.source_lineage + (reported_ref,),
+                scenario_bridges=bridges,
             )
         )
 

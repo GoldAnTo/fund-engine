@@ -26,13 +26,6 @@ from app.underwriting.domain.company_research import (
 )
 
 
-_MECHANISMS = frozenset(
-    {
-        "search_cloud_resilience",
-        "ai_monetization_and_utilization",
-        "search_disruption_and_capital_drag",
-    }
-)
 _REVERSE_TOLERANCE = Decimal("0.000001")
 @dataclass(frozen=True, slots=True)
 class ReverseDcfResult:
@@ -172,6 +165,7 @@ class CompanyResearchEngine:
         for scenario_bridge in model.scenario_bridges:
             for forecast in scenario_bridge.driver_forecasts:
                 refs.extend(forecast.fact_refs)
+                refs.extend(forecast.assumption_refs)
         refs.append(model.evidence_gap_contract.source_ref)
         refs.extend(model.judgment_context.strongest_counterevidence)
         if model.market_bridge is not None:
@@ -194,8 +188,8 @@ class CompanyResearchEngine:
         cls, model: CompanyResearchModelInput
     ) -> dict[str, FinancialBridgeArtifact]:
         mechanisms = {scenario.mechanism_id for scenario in model.scenario_set.scenarios}
-        if mechanisms != _MECHANISMS:
-            raise ValidationError("Alphabet scenarios must use distinct mechanisms")
+        if len(mechanisms) != 3:
+            raise ValidationError("scenarios must use three distinct mechanisms")
         modules = {item.module_key for item in model.business_map.modules}
         drivers_by_key = {item.driver_key: item for item in model.driver_map.drivers}
         drivers = set(drivers_by_key)
@@ -239,6 +233,19 @@ class CompanyResearchEngine:
             scenario_bridge.scenario_id: scenario_bridge
             for scenario_bridge in model.scenario_bridges
         }
+        for bridge in model.scenario_bridges:
+            for forecast in bridge.driver_forecasts:
+                driver = drivers_by_key[forecast.driver_key]
+                if (
+                    forecast.input_state is not driver.input_state
+                    or forecast.fact_refs != driver.fact_refs
+                    or forecast.assumption_refs != driver.assumption_refs
+                    or forecast.assumption_key != driver.assumption_key
+                    or forecast.equation_id != driver.equation_id
+                ):
+                    raise ValidationError(
+                        "scenario forecast provenance must match its driver state"
+                    )
         for scenario_id, scenario in scenarios_by_id.items():
             override_keys = {override.driver_key for override in scenario.driver_overrides}
             if override_keys != set(SCENARIO_FINANCIAL_DRIVER_KEYS):
@@ -279,14 +286,30 @@ class CompanyResearchEngine:
     ) -> tuple[
         int,
         tuple[
-            tuple[str, tuple[Decimal, ...], tuple[SourceLineageReference, ...]], ...
+            tuple[
+                str,
+                tuple[Decimal, ...],
+                tuple[SourceLineageReference, ...],
+                tuple[SourceLineageReference, ...],
+                str,
+                str | None,
+                str | None,
+            ], ...
         ],
     ]:
         return (
             scenario_bridge.first_fiscal_year,
             tuple(
                 sorted(
-                    (forecast.driver_key, forecast.values, forecast.fact_refs)
+                    (
+                        forecast.driver_key,
+                        forecast.values,
+                        forecast.fact_refs,
+                        forecast.assumption_refs,
+                        forecast.input_state.value,
+                        forecast.assumption_key,
+                        forecast.equation_id,
+                    )
                     for forecast in scenario_bridge.driver_forecasts
                 )
             ),
@@ -322,7 +345,10 @@ class CompanyResearchEngine:
                 dict.fromkeys(
                     reference
                     for driver_key in SCENARIO_FINANCIAL_DRIVER_KEYS
-                    for reference in forecasts[driver_key].fact_refs
+                    for reference in (
+                        *forecasts[driver_key].fact_refs,
+                        *forecasts[driver_key].assumption_refs,
+                    )
                 )
             )
             rows = []

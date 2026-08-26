@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import StrEnum
 import re
 from typing import Any
 from uuid import UUID
@@ -29,6 +30,7 @@ from app.underwriting.domain.company_research import (
     ModelInputState,
     ResearchGap,
     ResearchGapSeverity,
+    ReverseDcfRequest,
     SCENARIO_FINANCIAL_DRIVER_EQUATIONS,
     SCENARIO_FINANCIAL_DRIVER_KEYS,
     ScenarioArtifact,
@@ -145,6 +147,141 @@ def _decimal(value: object, field_name: str) -> Decimal:
     return value
 
 
+def _text_tuple(value: object, field_name: str) -> tuple[str, ...]:
+    if not isinstance(value, tuple) or not value or not all(
+        isinstance(item, str) and item and item == item.strip() for item in value
+    ):
+        raise ValidationError(f"{field_name} must be non-empty canonical text")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchModelModule:
+    module_key: str
+    revenue_sources: tuple[str, ...]
+    cost_structure: tuple[str, ...]
+    capital_needs: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _text(self.module_key, "model template module_key")
+        for name in ("revenue_sources", "cost_structure", "capital_needs"):
+            _text_tuple(getattr(self, name), f"model template {name}")
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchMetricClassification:
+    metric_key: str
+    category: str
+
+    def __post_init__(self) -> None:
+        _text(self.metric_key, "model template metric_key")
+        if self.category not in {"revenue", "cost", "capital"}:
+            raise ValidationError("model template metric category is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchDriverBinding:
+    driver_key: str
+    module_key: str
+
+    def __post_init__(self) -> None:
+        _text(self.driver_key, "model template driver_key")
+        _text(self.module_key, "model template driver module_key")
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchOperatingBaselineRequirement:
+    requirement_key: str
+    module_key: str
+    metric_key: str
+
+    def __post_init__(self) -> None:
+        _text(self.requirement_key, "operating baseline requirement_key")
+        _text(self.module_key, "operating baseline module_key")
+        _text(self.metric_key, "operating baseline metric_key")
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchScenarioMechanism:
+    scenario_id: str
+    mechanism_id: str
+
+    def __post_init__(self) -> None:
+        if self.scenario_id not in set(_SCENARIO_ORDER):
+            raise ValidationError("model template scenario_id is invalid")
+        _text(self.mechanism_id, "model template mechanism_id")
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchModelTemplate:
+    """Adapter-owned vocabulary and mappings for one company model."""
+
+    template_version: str
+    modules: tuple[CompanyResearchModelModule, ...]
+    metric_classifications: tuple[CompanyResearchMetricClassification, ...]
+    driver_bindings: tuple[CompanyResearchDriverBinding, ...]
+    operating_baseline_requirements: tuple[CompanyResearchOperatingBaselineRequirement, ...]
+    scenario_mechanisms: tuple[CompanyResearchScenarioMechanism, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.template_version, str) or _VERSIONED_STRATEGY.fullmatch(self.template_version) is None:
+            raise ValidationError("company model template must be versioned")
+        if not isinstance(self.modules, tuple) or not self.modules or not all(type(item) is CompanyResearchModelModule for item in self.modules):
+            raise ValidationError("company model template modules must be typed")
+        module_keys = tuple(item.module_key for item in self.modules)
+        if len(set(module_keys)) != len(module_keys):
+            raise ValidationError("company model template modules must be unique")
+        if not isinstance(self.metric_classifications, tuple) or not self.metric_classifications or not all(type(item) is CompanyResearchMetricClassification for item in self.metric_classifications) or len({item.metric_key for item in self.metric_classifications}) != len(self.metric_classifications):
+            raise ValidationError("company model template metric classifications must be unique")
+        if {item.category for item in self.metric_classifications} != {
+            "revenue",
+            "cost",
+            "capital",
+        }:
+            raise ValidationError(
+                "company model template must classify revenue, cost, and capital metrics"
+            )
+        if not isinstance(self.driver_bindings, tuple) or not all(type(item) is CompanyResearchDriverBinding for item in self.driver_bindings) or tuple(item.driver_key for item in self.driver_bindings) != SCENARIO_FINANCIAL_DRIVER_KEYS:
+            raise ValidationError("company model template must bind all six drivers canonically")
+        if any(item.module_key not in set(module_keys) for item in self.driver_bindings):
+            raise ValidationError("company model template driver references unknown module")
+        if not isinstance(self.operating_baseline_requirements, tuple) or not self.operating_baseline_requirements or not all(type(item) is CompanyResearchOperatingBaselineRequirement for item in self.operating_baseline_requirements):
+            raise ValidationError("company model template requires an operating baseline")
+        if len({item.requirement_key for item in self.operating_baseline_requirements}) != len(self.operating_baseline_requirements):
+            raise ValidationError("operating baseline requirements must be unique")
+        metrics = {item.metric_key for item in self.metric_classifications}
+        if any(item.module_key not in set(module_keys) or item.metric_key not in metrics for item in self.operating_baseline_requirements):
+            raise ValidationError("operating baseline requirement is outside the template")
+        if not isinstance(self.scenario_mechanisms, tuple) or not all(type(item) is CompanyResearchScenarioMechanism for item in self.scenario_mechanisms) or tuple(item.scenario_id for item in self.scenario_mechanisms) != _SCENARIO_ORDER or len({item.mechanism_id for item in self.scenario_mechanisms}) != 3:
+            raise ValidationError("company model template scenario mapping must be exact")
+
+
+class FrozenMarketSnapshotRole(StrEnum):
+    PRICE = "price"
+    FX = "fx"
+    CAPITAL_STRUCTURE = "capital_structure"
+    SECURITY_RIGHTS = "security_rights"
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenMarketSnapshotBinding:
+    snapshot_id: UUID
+    role: FrozenMarketSnapshotRole
+    security_external_key: str | None
+    source_ref: SourceLineageReference
+
+    def __post_init__(self) -> None:
+        _uuid(self.snapshot_id, "market snapshot binding snapshot_id")
+        if type(self.role) is not FrozenMarketSnapshotRole:
+            raise ValidationError("market snapshot binding role must be typed")
+        if self.role in {FrozenMarketSnapshotRole.PRICE, FrozenMarketSnapshotRole.SECURITY_RIGHTS}:
+            _text(self.security_external_key, "market snapshot binding security key")
+        elif self.security_external_key is not None:
+            raise ValidationError("non-security market binding cannot name a security")
+        if type(self.source_ref) is not SourceLineageReference:
+            raise ValidationError("market snapshot binding source ref must be typed")
+
+
 @dataclass(frozen=True, slots=True)
 class FrozenMarketContext:
     """An exact, already-resolved market boundary; the builder never fetches it."""
@@ -156,6 +293,8 @@ class FrozenMarketContext:
     snapshot_ids: tuple[UUID, ...]
     market_at: datetime
     market_bridge: MarketBridgeArtifact
+    snapshot_bindings: tuple[FrozenMarketSnapshotBinding, ...]
+    reverse_dcf_request: ReverseDcfRequest
 
     def __post_init__(self) -> None:
         price_ids = _uuid_tuple(self.price_snapshot_ids, "price_snapshot_ids")
@@ -185,6 +324,30 @@ class FrozenMarketContext:
             raise ValidationError(
                 "frozen market context requires one price and rights ref per security and one FX ref"
             )
+        if not isinstance(self.snapshot_bindings, tuple) or not all(type(item) is FrozenMarketSnapshotBinding for item in self.snapshot_bindings):
+            raise ValidationError("frozen market snapshot bindings must be typed")
+        if tuple(item.snapshot_id for item in self.snapshot_bindings) != snapshot_ids:
+            raise ValidationError("snapshot bindings must exactly follow canonical snapshot_ids")
+        role_ids = {
+            FrozenMarketSnapshotRole.PRICE: price_ids,
+            FrozenMarketSnapshotRole.FX: fx_ids,
+            FrozenMarketSnapshotRole.CAPITAL_STRUCTURE: (capital_id,),
+            FrozenMarketSnapshotRole.SECURITY_RIGHTS: rights_ids,
+        }
+        if any({item.snapshot_id for item in self.snapshot_bindings if item.role is role} != set(ids) for role, ids in role_ids.items()):
+            raise ValidationError("snapshot bindings must exactly cover each market role")
+        bindings = {(item.role, item.security_external_key): item.source_ref for item in self.snapshot_bindings}
+        bridge = self.market_bridge
+        expected_refs = {
+            (FrozenMarketSnapshotRole.CAPITAL_STRUCTURE, None): bridge.capital_structure.source_ref,
+            (FrozenMarketSnapshotRole.FX, None): bridge.fx_ref,
+            **{(FrozenMarketSnapshotRole.PRICE, item.security_external_key): item.price_ref for item in bridge.securities},
+            **{(FrozenMarketSnapshotRole.SECURITY_RIGHTS, item.security_external_key): item.rights_ref for item in bridge.securities},
+        }
+        if bindings != expected_refs:
+            raise ValidationError("frozen market snapshot binding bridge refs do not match")
+        if type(self.reverse_dcf_request) is not ReverseDcfRequest:
+            raise ValidationError("frozen market context requires governed reverse DCF")
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +505,7 @@ class CompanyResearchBuildInput:
     evidence_payload: Mapping[str, object]
     gap_payload: Mapping[str, object]
     source_refs: tuple[dict[str, str], ...]
+    model_template: CompanyResearchModelTemplate
     strategy_assumptions: StrategyAssumptionSet
     market_context: FrozenMarketContext | None
 
@@ -358,6 +522,8 @@ class CompanyResearchBuildInput:
         _mapping(self.evidence_payload, "evidence_payload")
         _mapping(self.gap_payload, "gap_payload")
         self._validate_source_refs(self.source_refs)
+        if type(self.model_template) is not CompanyResearchModelTemplate:
+            raise ValidationError("company model template is required")
         if type(self.strategy_assumptions) is not StrategyAssumptionSet:
             raise ValidationError("strategy assumptions are required")
         if self.market_context is not None and type(self.market_context) is not FrozenMarketContext:
@@ -464,9 +630,7 @@ def _validate_evidence_payload(
         if available_at > cutoff_at:
             raise ValidationError("evidence fact is unavailable at model cutoff")
         review = fact.get("review_decision")
-        if review == "rejected":
-            raise ValidationError("rejected facts cannot be model inputs")
-        if review != "confirmed":
+        if review not in {"confirmed", "rejected"}:
             raise ValidationError("evidence must be reviewed before model input")
         reviewed.append(fact)
     return tuple(reviewed)
@@ -518,13 +682,24 @@ class CompanyResearchModelBuilder:
         if canonical_hash(value.evidence_payload) != value.evidence_content_hash:
             raise ValidationError("evidence content hash does not match payload")
         self._validate_authenticated_sources(value.source_refs, reviewed)
-
-        evidence_refs = self._evidence_refs(reviewed)
-        active_gaps = self._active_gaps(raw_gaps, value.market_context)
-        business_map = self._business_map(reviewed, active_gaps, evidence_refs)
+        self._validate_template_evidence(value.model_template, reviewed, raw_gaps)
+        confirmed = tuple(
+            fact for fact in reviewed if fact["review_decision"] == "confirmed"
+        )
+        self._validate_scenario_mapping(
+            value.model_template, value.strategy_assumptions
+        )
+        evidence_refs = self._evidence_refs(confirmed)
+        baseline_gaps = self._baseline_gaps(value.model_template, confirmed)
+        active_gaps = self._active_gaps(
+            raw_gaps, value.market_context, baseline_gaps
+        )
+        business_map = self._business_map(
+            value.model_template, confirmed, active_gaps, evidence_refs
+        )
         assumption_refs = self._assumption_refs(value.strategy_assumptions)
         driver_map = self._driver_map(
-            business_map, value.strategy_assumptions, assumption_refs
+            value.model_template, value.strategy_assumptions, assumption_refs
         )
         scenario_set, scenario_bridges = self._scenario_inputs(
             value.strategy_assumptions, assumption_refs
@@ -541,7 +716,7 @@ class CompanyResearchModelBuilder:
             gaps=active_gaps,
         )
         judgment = JudgmentContextArtifact(
-            operating_baseline_available=bool(reviewed),
+            operating_baseline_available=not baseline_gaps,
             financial_bridge_closed=True,
             market_security_bridge_available=value.market_context is not None,
             strongest_counterevidence=(),
@@ -569,6 +744,11 @@ class CompanyResearchModelBuilder:
                 else None
             ),
             judgment_context=judgment,
+            reverse_dcf=(
+                value.market_context.reverse_dcf_request
+                if value.market_context is not None
+                else None
+            ),
         )
         compiled = self._engine.compile(typed)
         financial_bridge = compiled.financial_bridges["base"]
@@ -639,9 +819,61 @@ class CompanyResearchModelBuilder:
         )
 
     @staticmethod
+    def _validate_template_evidence(
+        template: CompanyResearchModelTemplate,
+        facts: tuple[Mapping[str, object], ...],
+        gaps: tuple[Mapping[str, object], ...],
+    ) -> None:
+        modules = {item.module_key for item in template.modules}
+        metrics = {item.metric_key for item in template.metric_classifications}
+        if any(str(item["business_module"]) not in modules for item in (*facts, *gaps)):
+            raise ValidationError("evidence module is outside the company model template")
+        if any(str(item["metric_key"]) not in metrics for item in facts):
+            raise ValidationError("evidence metric is outside the company model template")
+
+    @staticmethod
+    def _validate_scenario_mapping(
+        template: CompanyResearchModelTemplate,
+        assumptions: StrategyAssumptionSet,
+    ) -> None:
+        expected = tuple(
+            (item.scenario_id, item.mechanism_id)
+            for item in template.scenario_mechanisms
+        )
+        actual = tuple(
+            (item.scenario_id, item.mechanism_id)
+            for item in assumptions.scenario_overrides
+        )
+        if actual != expected:
+            raise ValidationError(
+                "strategy assumptions must match the template mechanism mapping"
+            )
+
+    @staticmethod
+    def _baseline_gaps(
+        template: CompanyResearchModelTemplate,
+        facts: tuple[Mapping[str, object], ...],
+    ) -> tuple[ResearchGap, ...]:
+        available = {
+            (str(item["business_module"]), str(item["metric_key"]))
+            for item in facts
+        }
+        return tuple(
+            ResearchGap(
+                code=f"operating_baseline_missing_{item.requirement_key}",
+                module_key=item.module_key,
+                severity=ResearchGapSeverity.CRITICAL,
+                message=f"Reviewed operating baseline is missing: {item.requirement_key}",
+            )
+            for item in template.operating_baseline_requirements
+            if (item.module_key, item.metric_key) not in available
+        )
+
+    @staticmethod
     def _active_gaps(
         raw_gaps: tuple[Mapping[str, object], ...],
         market_context: FrozenMarketContext | None,
+        baseline_gaps: tuple[ResearchGap, ...],
     ) -> tuple[ResearchGap, ...]:
         raw_keys = {str(item["gap_key"]) for item in raw_gaps}
         if market_context is None and not _CLOSED_BY_MARKET.issubset(raw_keys):
@@ -656,7 +888,7 @@ class CompanyResearchModelBuilder:
             for item in raw_gaps
             if str(item["gap_key"]) not in closed
         }
-        return tuple(
+        source_gaps = tuple(
             ResearchGap(
                 code=key,
                 module_key=str(item["business_module"]),
@@ -669,40 +901,33 @@ class CompanyResearchModelBuilder:
             )
             for key, item in sorted(source.items())
         )
+        return tuple(sorted((*source_gaps, *baseline_gaps), key=lambda item: item.code))
 
     @staticmethod
     def _business_map(
+        template: CompanyResearchModelTemplate,
         facts: tuple[Mapping[str, object], ...],
         gaps: tuple[ResearchGap, ...],
         refs: tuple[SourceLineageReference, ...],
     ) -> BusinessMapArtifact:
         refs_by_key = {item.fact_key: item for item in refs}
-        modules = sorted({str(item["business_module"]) for item in facts})
         return BusinessMapArtifact(
             modules=tuple(
                 BusinessModuleArtifact(
-                    module_key=module,
-                    revenue_sources=tuple(
-                        sorted(
-                            {
-                                str(item["metric_key"])
-                                for item in facts
-                                if item["business_module"] == module
-                            }
-                        )
-                    ),
-                    cost_structure=(),
-                    capital_needs=(),
+                    module_key=module.module_key,
+                    revenue_sources=module.revenue_sources,
+                    cost_structure=module.cost_structure,
+                    capital_needs=module.capital_needs,
                     fact_refs=tuple(
                         refs_by_key[str(item["fact_key"])]
                         for item in facts
-                        if item["business_module"] == module
+                        if item["business_module"] == module.module_key
                     ),
                     gap_refs=tuple(
-                        gap.code for gap in gaps if gap.module_key == module
+                        gap.code for gap in gaps if gap.module_key == module.module_key
                     ),
                 )
-                for module in modules
+                for module in template.modules
             )
         )
 
@@ -723,11 +948,13 @@ class CompanyResearchModelBuilder:
 
     @staticmethod
     def _driver_map(
-        business_map: BusinessMapArtifact,
+        template: CompanyResearchModelTemplate,
         assumptions: StrategyAssumptionSet,
         assumption_refs: tuple[SourceLineageReference, ...],
     ) -> DriverMapArtifact:
-        module_key = business_map.modules[0].module_key
+        modules_by_driver = {
+            item.driver_key: item.module_key for item in template.driver_bindings
+        }
         refs_by_driver = {
             path.driver_key: ref
             for path, ref in zip(
@@ -738,11 +965,14 @@ class CompanyResearchModelBuilder:
             drivers=tuple(
                 DriverMetricArtifact(
                     driver_key=path.driver_key,
-                    module_key=module_key,
+                    module_key=modules_by_driver[path.driver_key],
                     fact_refs=(),
                     assumption_refs=(refs_by_driver[path.driver_key],),
                     equation=SCENARIO_FINANCIAL_DRIVER_EQUATIONS[path.driver_key],
                     output_metric=path.driver_key,
+                    input_state=path.state,
+                    assumption_key=path.assumption_key,
+                    equation_id=path.equation_id,
                 )
                 for path in assumptions.driver_paths
             )
@@ -757,7 +987,11 @@ class CompanyResearchModelBuilder:
             ScenarioFinancialDriverForecast(
                 driver_key=path.driver_key,
                 values=path.values,
-                fact_refs=(reference,),
+                fact_refs=(),
+                assumption_refs=(reference,),
+                input_state=path.state,
+                assumption_key=path.assumption_key,
+                equation_id=path.equation_id,
             )
             for path, reference in zip(
                 assumptions.driver_paths, assumption_refs, strict=True

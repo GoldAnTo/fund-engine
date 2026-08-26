@@ -16,6 +16,7 @@ from app.underwriting.domain.company_research import (
     DriverInput,
     MarketBridgeArtifact,
     ModelInputState,
+    ReverseDcfRequest,
     ScenarioDriverOverride,
     SecurityValuationReference,
     SourceLineageReference,
@@ -25,9 +26,17 @@ from app.underwriting.fixtures.alphabet_golden_case import (
 )
 from app.underwriting.hashing import canonical_hash
 from app.underwriting.services.company_research_model_builder import (
+    CompanyResearchDriverBinding,
     CompanyResearchBuildInput,
+    CompanyResearchMetricClassification,
+    CompanyResearchModelModule,
+    CompanyResearchModelTemplate,
     CompanyResearchModelBuilder,
+    CompanyResearchOperatingBaselineRequirement,
+    CompanyResearchScenarioMechanism,
     FrozenMarketContext,
+    FrozenMarketSnapshotBinding,
+    FrozenMarketSnapshotRole,
     ScenarioAssumption,
     StrategyAssumptionSet,
 )
@@ -91,11 +100,11 @@ def _strategy_assumptions() -> StrategyAssumptionSet:
     driver_paths = _driver_paths()
     scenarios = (
         ScenarioAssumption(
-            "base", "search_cloud_resilience", _overrides()
+            "base", "steady_operations", _overrides()
         ),
         ScenarioAssumption(
             "bull",
-            "ai_monetization_and_utilization",
+            "capacity_upside",
             _overrides(
                 revenue="1.10",
                 operating_margin="1.05",
@@ -105,7 +114,7 @@ def _strategy_assumptions() -> StrategyAssumptionSet:
         ),
         ScenarioAssumption(
             "bear",
-            "search_disruption_and_capital_drag",
+            "demand_stress",
             _overrides(
                 revenue="0.90",
                 operating_margin="0.90",
@@ -131,6 +140,72 @@ def _strategy_assumptions() -> StrategyAssumptionSet:
     )
 
 
+def _model_template() -> CompanyResearchModelTemplate:
+    module_keys = (
+        "search_and_other_ads",
+        "youtube_ads_and_subscriptions",
+        "google_cloud",
+        "other_google_services",
+        "other_bets",
+        "corporate_capital_allocation",
+        "distribution_risk",
+    )
+    driver_modules = {
+        "revenue": "search_and_other_ads",
+        "operating_margin": "google_cloud",
+        "cash_tax_rate": "corporate_capital_allocation",
+        "depreciation": "corporate_capital_allocation",
+        "capex": "corporate_capital_allocation",
+        "working_capital_change": "other_google_services",
+    }
+    return CompanyResearchModelTemplate(
+        template_version="synthetic-company-model.v1",
+        modules=tuple(
+            CompanyResearchModelModule(
+                module_key=key,
+                revenue_sources=(f"{key} revenue descriptor",),
+                cost_structure=(f"{key} cost descriptor",),
+                capital_needs=(f"{key} capital descriptor",),
+            )
+            for key in module_keys
+        ),
+        metric_classifications=(
+            CompanyResearchMetricClassification("revenue", "revenue"),
+            CompanyResearchMetricClassification(
+                "capital_expenditures", "capital"
+            ),
+            CompanyResearchMetricClassification("operating_expense", "cost"),
+        ),
+        driver_bindings=tuple(
+            CompanyResearchDriverBinding(key, driver_modules[key])
+            for key in (
+                "revenue",
+                "operating_margin",
+                "cash_tax_rate",
+                "depreciation",
+                "capex",
+                "working_capital_change",
+            )
+        ),
+        operating_baseline_requirements=(
+            CompanyResearchOperatingBaselineRequirement(
+                requirement_key="consolidated_revenue",
+                module_key="corporate_capital_allocation",
+                metric_key="revenue",
+            ),
+        ),
+        scenario_mechanisms=(
+            CompanyResearchScenarioMechanism(
+                "base", "steady_operations"
+            ),
+            CompanyResearchScenarioMechanism(
+                "bull", "capacity_upside"
+            ),
+            CompanyResearchScenarioMechanism(
+                "bear", "demand_stress"
+            ),
+        ),
+    )
 def _market_context() -> FrozenMarketContext:
     refs = {
         key: _lineage(key, "frozen_market_snapshot")
@@ -175,6 +250,31 @@ def _market_context() -> FrozenMarketContext:
         fx_ref=refs["usd_cny_fx"],
     )
     ids = tuple(UUID(int=value) for value in range(1, 7))
+    bindings = (
+        FrozenMarketSnapshotBinding(
+            ids[0], FrozenMarketSnapshotRole.PRICE, "NASDAQ:GOOG",
+            refs["market_price_usd_nasdaq_goog"],
+        ),
+        FrozenMarketSnapshotBinding(
+            ids[1], FrozenMarketSnapshotRole.PRICE, "NASDAQ:GOOGL",
+            refs["market_price_usd_nasdaq_googl"],
+        ),
+        FrozenMarketSnapshotBinding(
+            ids[2], FrozenMarketSnapshotRole.FX, None, refs["usd_cny_fx"],
+        ),
+        FrozenMarketSnapshotBinding(
+            ids[3], FrozenMarketSnapshotRole.CAPITAL_STRUCTURE, None,
+            refs["capital_structure_usd"],
+        ),
+        FrozenMarketSnapshotBinding(
+            ids[4], FrozenMarketSnapshotRole.SECURITY_RIGHTS, "NASDAQ:GOOG",
+            refs["security_rights_nasdaq_goog"],
+        ),
+        FrozenMarketSnapshotBinding(
+            ids[5], FrozenMarketSnapshotRole.SECURITY_RIGHTS, "NASDAQ:GOOGL",
+            refs["security_rights_nasdaq_googl"],
+        ),
+    )
     return FrozenMarketContext(
         price_snapshot_ids=(ids[0], ids[1]),
         fx_snapshot_ids=(ids[2],),
@@ -183,6 +283,14 @@ def _market_context() -> FrozenMarketContext:
         snapshot_ids=ids,
         market_at=CUTOFF,
         market_bridge=market_bridge,
+        snapshot_bindings=bindings,
+        reverse_dcf_request=ReverseDcfRequest(
+            driver_key="fcff_multiplier",
+            target_enterprise_value=Decimal("1000000"),
+            lower_bound=Decimal("0.01"),
+            upper_bound=Decimal("10"),
+            max_iterations=100,
+        ),
     )
 
 
@@ -201,6 +309,7 @@ def _build_input() -> CompanyResearchBuildInput:
         evidence_payload=evidence_payload,
         gap_payload=CompanyResearchSourceCompiler._gaps_payload(fixture),
         source_refs=CompanyResearchSourceCompiler._source_refs(fixture),
+        model_template=_model_template(),
         strategy_assumptions=_strategy_assumptions(),
         market_context=_market_context(),
     )
@@ -264,7 +373,7 @@ def test_builder_uses_exact_frozen_market_refs_for_both_alphabet_securities() ->
     )
 
 
-def test_builder_rejects_unknown_evidence_fields_and_rejected_required_facts() -> None:
+def test_builder_rejects_unknown_evidence_fields() -> None:
     value = _build_input()
     unknown = deepcopy(value.evidence_payload)
     unknown["facts"][0]["invented"] = "no"
@@ -276,18 +385,6 @@ def test_builder_rejects_unknown_evidence_fields_and_rejected_required_facts() -
                 evidence_content_hash=canonical_hash(unknown),
             )
         )
-
-    rejected = deepcopy(value.evidence_payload)
-    rejected["facts"][0]["review_decision"] = "rejected"
-    with pytest.raises(ValidationError, match="rejected facts cannot be model inputs"):
-        CompanyResearchModelBuilder().build(
-            replace(
-                value,
-                evidence_payload=rejected,
-                evidence_content_hash=canonical_hash(rejected),
-            )
-        )
-
 
 def test_strict_contracts_reject_naive_datetimes_duplicates_and_uuid_order() -> None:
     value = _build_input()
@@ -356,6 +453,20 @@ def test_strategy_assumption_set_is_required_hash_addressed_and_never_reported()
         replace(assumptions, content_hash="0" * 64)
 
 
+def test_company_model_template_is_required() -> None:
+    with pytest.raises(ValidationError, match="model template"):
+        replace(_build_input(), model_template=None)  # type: ignore[arg-type]
+
+
+def test_company_model_template_requires_revenue_cost_and_capital_classifications() -> None:
+    template = _model_template()
+    with pytest.raises(ValidationError, match="revenue, cost, and capital"):
+        replace(
+            template,
+            metric_classifications=(template.metric_classifications[0],),
+        )
+
+
 def test_driver_input_states_are_closed_and_missing_values_are_rejected() -> None:
     source = _lineage("reported_revenue", "regulatory_filing")
     reported = DriverInput(
@@ -401,3 +512,232 @@ def test_memo_is_a_hash_referenced_machine_candidate() -> None:
             result.memo.valuation_set_ref,
         )
     )
+
+
+def test_template_preserves_gap_only_modules_and_classifies_capex_as_capital() -> None:
+    value = _build_input()
+    gap_payload = deepcopy(value.gap_payload)
+    gap_payload["gaps"].append(
+        {
+            "gap_key": "distribution_evidence_missing",
+            "business_module": "distribution_risk",
+            "reason": "No reviewed distribution evidence is available.",
+        }
+    )
+
+    result = CompanyResearchModelBuilder().build(
+        replace(value, gap_payload=gap_payload, market_context=None)
+    )
+
+    modules = {item.module_key: item for item in result.business_map.modules}
+    assert "distribution_risk" in modules
+    assert modules["distribution_risk"].gap_refs == (
+        "distribution_evidence_missing",
+    )
+    assert modules["distribution_risk"].fact_refs == ()
+    corporate = modules["corporate_capital_allocation"]
+    assert "capital_expenditures" not in corporate.revenue_sources
+    assert corporate.revenue_sources
+    assert corporate.cost_structure
+    assert corporate.capital_needs
+
+
+def test_generic_builder_consumes_fully_synthetic_module_vocabulary() -> None:
+    value = _build_input()
+    original = value.model_template
+    module_map = {
+        module.module_key: f"synthetic_unit_{index}"
+        for index, module in enumerate(original.modules, start=1)
+    }
+    template = replace(
+        original,
+        modules=tuple(
+            replace(module, module_key=module_map[module.module_key])
+            for module in original.modules
+        ),
+        driver_bindings=tuple(
+            replace(binding, module_key=module_map[binding.module_key])
+            for binding in original.driver_bindings
+        ),
+        operating_baseline_requirements=tuple(
+            replace(requirement, module_key=module_map[requirement.module_key])
+            for requirement in original.operating_baseline_requirements
+        ),
+    )
+    evidence = deepcopy(value.evidence_payload)
+    for fact in evidence["facts"]:
+        fact["business_module"] = module_map[fact["business_module"]]
+    gaps = deepcopy(value.gap_payload)
+    for gap in gaps["gaps"]:
+        gap["business_module"] = module_map[gap["business_module"]]
+
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            model_template=template,
+            evidence_payload=evidence,
+            evidence_content_hash=canonical_hash(evidence),
+            gap_payload=gaps,
+        )
+    )
+
+    assert {module.module_key for module in result.business_map.modules} == set(
+        module_map.values()
+    )
+    assert {
+        driver.module_key for driver in result.driver_map.drivers
+    } <= set(module_map.values())
+
+
+def test_template_driver_bindings_and_candidate_provenance_survive_build() -> None:
+    value = _build_input()
+    result = CompanyResearchModelBuilder().build(value)
+    expected_modules = {
+        item.driver_key: item.module_key
+        for item in value.model_template.driver_bindings
+    }
+
+    assert {
+        item.driver_key: item.module_key for item in result.driver_map.drivers
+    } == expected_modules
+    assert all(
+        item.input_state is ModelInputState.ASSUMPTION
+        and item.assumption_key is not None
+        and item.equation_id is None
+        and item.fact_refs == ()
+        and item.assumption_refs
+        for item in result.driver_map.drivers
+    )
+
+
+def test_mixed_review_decisions_filter_rejected_nonrequired_facts() -> None:
+    value = _build_input()
+    payload = deepcopy(value.evidence_payload)
+    rejected_key = "fy2025_other_bets_revenue"
+    for fact in payload["facts"]:
+        if fact["fact_key"] == rejected_key:
+            fact["review_decision"] = "rejected"
+
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            evidence_payload=payload,
+            evidence_content_hash=canonical_hash(payload),
+        )
+    )
+
+    assert result.assessment.status == "answerable"
+    assert all(
+        ref.fact_key != rejected_key
+        for module in result.business_map.modules
+        for ref in module.fact_refs
+    )
+
+
+def test_missing_required_reviewed_baseline_creates_gap_and_blocks_answerability() -> None:
+    value = _build_input()
+    payload = deepcopy(value.evidence_payload)
+    for fact in payload["facts"]:
+        if fact["fact_key"] == "q4_2025_consolidated_revenue":
+            fact["review_decision"] = "rejected"
+
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            evidence_payload=payload,
+            evidence_content_hash=canonical_hash(payload),
+        )
+    )
+
+    assert result.assessment.status == "not_answerable"
+    assert result.judgment_context.operating_baseline_available is False
+    assert result.valuation_set is None
+    assert "operating_baseline_missing_consolidated_revenue" in {
+        gap.code for gap in result.gaps
+    }
+
+
+def test_absent_required_baseline_fact_also_creates_a_gap() -> None:
+    value = _build_input()
+    payload = deepcopy(value.evidence_payload)
+    payload["facts"] = [
+        fact
+        for fact in payload["facts"]
+        if fact["fact_key"] != "q4_2025_consolidated_revenue"
+    ]
+    source_refs = tuple(
+        ref for ref in value.source_refs if ref["source_role"] != "company_material"
+    )
+
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            evidence_payload=payload,
+            evidence_content_hash=canonical_hash(payload),
+            source_refs=source_refs,
+        )
+    )
+
+    assert result.judgment_context.operating_baseline_available is False
+    assert result.assessment.status == "not_answerable"
+
+
+def test_strategy_mechanisms_must_match_template_scenario_mapping_exactly() -> None:
+    value = _build_input()
+    assumptions = value.strategy_assumptions
+    base, bull, bear = assumptions.scenario_overrides
+    swapped = (
+        replace(base, mechanism_id=bull.mechanism_id),
+        replace(bull, mechanism_id=base.mechanism_id),
+        bear,
+    )
+    swapped_assumptions = StrategyAssumptionSet(
+        strategy_version=assumptions.strategy_version,
+        content_hash=StrategyAssumptionSet.calculate_content_hash(
+            strategy_version=assumptions.strategy_version,
+            first_fiscal_year=assumptions.first_fiscal_year,
+            driver_paths=assumptions.driver_paths,
+            scenario_overrides=swapped,
+            terminal_growth=assumptions.terminal_growth,
+        ),
+        first_fiscal_year=assumptions.first_fiscal_year,
+        driver_paths=assumptions.driver_paths,
+        scenario_overrides=swapped,
+        terminal_growth=assumptions.terminal_growth,
+    )
+
+    with pytest.raises(ValidationError, match="template mechanism mapping"):
+        CompanyResearchModelBuilder().build(
+            replace(value, strategy_assumptions=swapped_assumptions)
+        )
+
+
+def test_frozen_market_bindings_reject_arbitrary_ids_and_mismatched_bridge_refs() -> None:
+    market = _market_context()
+    with pytest.raises(ValidationError, match="snapshot bindings"):
+        replace(
+            market,
+            snapshot_bindings=(
+                replace(market.snapshot_bindings[0], snapshot_id=UUID(int=999)),
+                *market.snapshot_bindings[1:],
+            ),
+        )
+    with pytest.raises(ValidationError, match="bridge refs"):
+        replace(
+            market,
+            snapshot_bindings=(
+                replace(
+                    market.snapshot_bindings[0],
+                    source_ref=_lineage("arbitrary_price", "frozen_market_snapshot"),
+                ),
+                *market.snapshot_bindings[1:],
+            ),
+        )
+
+
+def test_governed_reverse_dcf_request_survives_the_frozen_market_boundary() -> None:
+    result = CompanyResearchModelBuilder().build(_build_input())
+
+    assert result.valuation_set is not None
+    assert result.valuation_set.reverse_dcf is not None
+    assert result.valuation_set.reverse_dcf.driver_key == "fcff_multiplier"
