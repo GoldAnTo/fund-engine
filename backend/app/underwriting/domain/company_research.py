@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from enum import StrEnum
 import hashlib
 import json
@@ -31,6 +31,7 @@ DEFAULT_HORIZON_YEARS = 5
 DEFAULT_BASE_CURRENCY = "CNY"
 DEFAULT_REQUIRED_RETURN = Decimal("0.12")
 DEFAULT_PERMANENT_LOSS_LIMIT = Decimal("0.25")
+COMPANY_RESEARCH_DECIMAL_PRECISION = 60
 _MODULE_KEY = re.compile(r"[a-z][a-z0-9_]*")
 _GAP_CODE = re.compile(r"[a-z][a-z0-9_]*")
 _INPUT_HASH = re.compile(r"[0-9a-f]{64}")
@@ -727,10 +728,14 @@ class FinancialBridgeRow:
         if self.cash_tax_rate < Decimal("0") or self.cash_tax_rate > Decimal("1"):
             raise CompanyResearchValidationError("financial_bridge.cash_tax_rate must be between zero and one")
         _artifact_refs(self.fact_refs, "financial_bridge.fact_refs")
-        expected_fcff = (
-            self.operating_income * (Decimal("1") - self.cash_tax_rate)
-            + self.depreciation - self.capex - self.working_capital_change
-        )
+        with localcontext() as context:
+            context.prec = COMPANY_RESEARCH_DECIMAL_PRECISION
+            expected_fcff = +(
+                self.operating_income * (Decimal("1") - self.cash_tax_rate)
+                + self.depreciation
+                - self.capex
+                - self.working_capital_change
+            )
         if self.fcff != expected_fcff:
             raise CompanyResearchValidationError("financial bridge does not close")
 
@@ -938,7 +943,11 @@ class ReverseDcfRequest:
             raise CompanyResearchValidationError("reverse DCF driver must be fcff_multiplier")
         for name in ("target_enterprise_value", "lower_bound", "upper_bound"):
             _artifact_decimal(getattr(self, name), f"reverse_dcf.{name}")
-        if self.lower_bound >= self.upper_bound or self.max_iterations <= 0 or type(self.max_iterations) is not int:
+        if (
+            type(self.max_iterations) is not int
+            or self.lower_bound >= self.upper_bound
+            or self.max_iterations <= 0
+        ):
             raise CompanyResearchValidationError("reverse DCF bounds and iteration count must be valid")
 
 
@@ -1050,10 +1059,52 @@ class ReverseDcfArtifact:
 
 
 @dataclass(frozen=True, slots=True)
+class RequiredReturnComparisonArtifact:
+    """One Security's mechanism range compared against the mandated return."""
+
+    security_external_key: str
+    required_return: Decimal
+    achieved_return_range: ValueRange
+    meets_required_return: bool
+
+    def __post_init__(self) -> None:
+        _artifact_text(self.security_external_key, "required return security key")
+        _artifact_decimal(self.required_return, "required return comparison required_return")
+        if self.required_return <= Decimal("0"):
+            raise CompanyResearchValidationError(
+                "required return comparison required_return must be positive"
+            )
+        if type(self.achieved_return_range) is not ValueRange:
+            raise CompanyResearchValidationError(
+                "required return comparison achieved return range must be typed"
+            )
+        if type(self.meets_required_return) is not bool:
+            raise CompanyResearchValidationError(
+                "required return comparison meeting condition must be a bool"
+            )
+        if self.meets_required_return != (
+            self.achieved_return_range.minimum >= self.required_return
+        ):
+            raise CompanyResearchValidationError(
+                "required return comparison meeting condition must be conservative"
+            )
+
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            "security_external_key": self.security_external_key,
+            "required_return": canonical_decimal_string(self.required_return),
+            "achieved_return_range": self.achieved_return_range.canonical_payload(),
+            "meets_required_return": self.meets_required_return,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ValuationSetArtifact:
     scenario_dcf_values: tuple[ScenarioDcfValue, ...]
     reverse_dcf: ReverseDcfArtifact | None
     security_value_ranges: tuple[SecurityValueRangeArtifact, ...]
+    required_return: Decimal
+    required_return_comparisons: tuple[RequiredReturnComparisonArtifact, ...]
 
     def __post_init__(self) -> None:
         if not isinstance(self.scenario_dcf_values, tuple) or {item.scenario_id for item in self.scenario_dcf_values} != {"base", "bull", "bear"} or not all(type(item) is ScenarioDcfValue for item in self.scenario_dcf_values):
@@ -1064,6 +1115,38 @@ class ValuationSetArtifact:
             raise CompanyResearchValidationError("valuation set security ranges must be typed")
         if len({item.security_external_key for item in self.security_value_ranges}) != len(self.security_value_ranges):
             raise CompanyResearchValidationError("valuation set security ranges must not duplicate")
+        _artifact_decimal(self.required_return, "valuation set required_return")
+        if self.required_return <= Decimal("0"):
+            raise CompanyResearchValidationError("valuation set required_return must be positive")
+        if not isinstance(self.required_return_comparisons, tuple) or not all(
+            type(item) is RequiredReturnComparisonArtifact
+            for item in self.required_return_comparisons
+        ):
+            raise CompanyResearchValidationError(
+                "valuation set required return comparisons must be typed"
+            )
+        if {
+            item.security_external_key for item in self.required_return_comparisons
+        } != {item.security_external_key for item in self.security_value_ranges}:
+            raise CompanyResearchValidationError(
+                "valuation set required return comparisons must cover each security exactly once"
+            )
+        if any(
+            item.required_return != self.required_return
+            for item in self.required_return_comparisons
+        ):
+            raise CompanyResearchValidationError(
+                "valuation set required return comparisons must preserve the mandate return"
+            )
+
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            "required_return": canonical_decimal_string(self.required_return),
+            "required_return_comparisons": tuple(
+                item.canonical_payload()
+                for item in self.required_return_comparisons
+            ),
+        }
 
 
 @dataclass(frozen=True, slots=True)

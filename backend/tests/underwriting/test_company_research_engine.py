@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import Decimal
+from decimal import Decimal, getcontext, localcontext
 import hashlib
 
 import pytest
@@ -281,6 +281,59 @@ def test_derived_scenario_financial_bridges_close_each_year_without_generic_mult
             )
 
 
+def test_high_precision_scenario_and_dcf_results_ignore_caller_decimal_context() -> None:
+    """The audited calculation precision is fixed, not inherited from callers."""
+    model = _input()
+    precise_values = {
+        "revenue": Decimal("200.123456789012345678901234567890123456789012345678901234567890"),
+        "operating_margin": Decimal("0.501234567890123456789012345678901234567890123456789012345678"),
+        "cash_tax_rate": Decimal("0.201234567890123456789012345678901234567890123456789012345678"),
+        "depreciation": Decimal("20.123456789012345678901234567890123456789012345678901234567890"),
+        "capex": Decimal("10.123456789012345678901234567890123456789012345678901234567890"),
+        "working_capital_change": Decimal("10.123456789012345678901234567890123456789012345678901234567890"),
+    }
+    precise_bridges = tuple(
+        replace(
+            bridge,
+            driver_forecasts=tuple(
+                replace(forecast, values=(precise_values[forecast.driver_key],) * 5)
+                for forecast in bridge.driver_forecasts
+            ),
+        )
+        for bridge in model.scenario_bridges
+    )
+    precise_model = replace(model, scenario_bridges=precise_bridges)
+
+    global_context = getcontext().copy()
+    with localcontext() as context:
+        context.prec = 28
+        low_precision = CompanyResearchEngine().compile(precise_model)
+    with localcontext() as context:
+        context.prec = 120
+        high_precision = CompanyResearchEngine().compile(precise_model)
+
+    assert low_precision.scenario_enterprise_values == high_precision.scenario_enterprise_values
+    assert low_precision.valuation_set == high_precision.valuation_set
+    assert getcontext().prec == global_context.prec
+    assert getcontext().rounding == global_context.rounding
+
+
+def test_rejects_counterevidence_outside_authenticated_source_lineage() -> None:
+    model = _input()
+    counterevidence = _source("counterevidence")
+
+    with pytest.raises(ValidationError, match="source lineage"):
+        CompanyResearchEngine().compile(
+            replace(
+                model,
+                judgment_context=replace(
+                    model.judgment_context,
+                    strongest_counterevidence=(counterevidence,),
+                ),
+            )
+        )
+
+
 def test_rejects_a_non_base_scenario_with_a_no_op_override() -> None:
     model = _input()
     no_op_bull = ScenarioArtifact(
@@ -376,6 +429,80 @@ def test_reverse_dcf_uses_deterministic_bisection_and_reports_residual() -> None
     assert first.reverse_dcf is not None
     assert first.reverse_dcf.iteration_count <= 80
     assert abs(first.reverse_dcf.achieved_residual) <= Decimal("0.000001")
+
+
+def test_reverse_dcf_rejects_non_integer_iteration_count_as_domain_validation() -> None:
+    with pytest.raises(CompanyResearchValidationError, match="iteration count"):
+        ReverseDcfRequest(
+            "fcff_multiplier", Decimal("500"), Decimal("0.5"), Decimal("2.0"), "80"  # type: ignore[arg-type]
+        )
+
+
+def test_rejects_scenario_baselines_with_equal_values_but_different_source_provenance() -> None:
+    model = _input()
+    alternate_source = _source("alternative_forecast_source")
+    bull_bridge = next(
+        bridge for bridge in model.scenario_bridges if bridge.scenario_id == "bull"
+    )
+    altered_bull = replace(
+        bull_bridge,
+        driver_forecasts=tuple(
+            replace(forecast, fact_refs=(alternate_source,))
+            for forecast in bull_bridge.driver_forecasts
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="share one named-driver baseline"):
+        CompanyResearchEngine().compile(
+            replace(
+                model,
+                source_lineage=model.source_lineage + (alternate_source,),
+                scenario_bridges=tuple(
+                    altered_bull if bridge.scenario_id == "bull" else bridge
+                    for bridge in model.scenario_bridges
+                ),
+            )
+        )
+
+
+def test_valuation_output_exposes_required_return_comparisons_without_probabilities() -> None:
+    result = CompanyResearchEngine().compile(_input())
+    valuation = result.valuation_set
+    assert valuation is not None
+
+    assert valuation.required_return == Decimal("0.12")
+    comparisons = valuation.required_return_comparisons
+    assert [comparison.security_external_key for comparison in comparisons] == [
+        "NASDAQ:GOOG",
+        "NASDAQ:GOOGL",
+    ]
+    assert all(
+        comparison.achieved_return_range.minimum
+        <= comparison.achieved_return_range.maximum
+        for comparison in comparisons
+    )
+    assert all(type(comparison.meets_required_return) is bool for comparison in comparisons)
+    assert comparisons[0].canonical_payload() == {
+        "security_external_key": "NASDAQ:GOOG",
+        "required_return": "0.12",
+        "achieved_return_range": comparisons[0].achieved_return_range.canonical_payload(),
+        "meets_required_return": comparisons[0].meets_required_return,
+    }
+    assert valuation.canonical_payload() == {
+        "required_return": "0.12",
+        "required_return_comparisons": tuple(
+            comparison.canonical_payload() for comparison in comparisons
+        ),
+    }
+    forbidden_probability_fields = {
+        "probability",
+        "odds",
+        "expected_value",
+        "scenario_weight",
+        "weight",
+    }
+    assert forbidden_probability_fields.isdisjoint(comparisons[0].canonical_payload())
+    assert forbidden_probability_fields.isdisjoint(valuation.canonical_payload())
 
 
 def test_missing_market_or_critical_gap_is_not_answerable_without_direction_or_confidence() -> None:
