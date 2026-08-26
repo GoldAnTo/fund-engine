@@ -124,6 +124,7 @@ class StrategyAssumptionSet:
 @dataclass(frozen=True, slots=True)
 class CompanyResearchBuildInput:
     project_id: UUID
+    identity_set: CompanyResearchIdentitySet
     cutoff_at: datetime
     required_return: Decimal
     evidence_artifact_id: UUID
@@ -150,7 +151,7 @@ class CompanyResearchBuildResult:
     market_snapshot_ids: tuple[UUID, ...]
 ```
 
-All constructors must reject naive datetimes, duplicate refs, noncanonical UUID order, unknown evidence fields, unreviewed facts, facts marked `rejected` when used as model inputs, and missing or unversioned strategy assumptions. Rejected facts remain valid reviewed evidence but are filtered out of model inputs; if a required input is then absent, the builder records a gap instead of rejecting the whole reviewed artifact.
+All constructors must reject naive datetimes, duplicate refs, noncanonical UUID order, unknown evidence fields, unreviewed facts, facts marked `rejected` when used as model inputs, and missing or unversioned strategy assumptions. Rejected facts remain valid reviewed evidence but are filtered out of model inputs; if a required input is then absent, the builder records a gap instead of rejecting the whole reviewed artifact. The evidence company/security keys, gap identity, model template, and market bridge must exactly match the required `CompanyResearchIdentitySet`; cross-company evidence or market inputs fail before compilation.
 
 `CompanyResearchModelTemplate` is the typed seam through which a company adapter
 supplies module structure, metric classification (revenue/cost/capital), driver
@@ -175,6 +176,12 @@ match those bindings. Its `ReverseDcfRequest` is computed by the governed market
 resolver from the frozen price, class-count, and capital-structure inputs; the
 generic builder passes it to the pure engine and never invents an implied market
 enterprise value.
+
+Strategy-assumption hashing uses `canonical_decimal_string` for every Decimal so
+numerically equal values have one hash regardless of exponent/scale. Builder-
+generated gaps use a reserved namespace that raw governed gaps cannot occupy;
+combining gaps is deterministic and cannot leak a lower-level duplicate-code
+error.
 
 - [ ] **Step 4: Separate sourced facts, deterministic derivations, and strategy assumptions**
 
@@ -214,6 +221,11 @@ explicit gap ref. A template-only empty shell becomes a generated gap and cannot
 silently remain `answerable`. Facts used for baseline or drivers require a
 canonical finite numeric value, value kind, unit/currency/period, and exact
 lineage; labels alone never satisfy an operating-baseline requirement.
+Every module fact ref is classified exactly once as revenue, cost, or capital at
+the domain boundary. Financial bridge rows preserve factual and assumption
+lineage separately. Reverse DCF results are emitted only when the bounded solver
+meets its residual tolerance; exhausting `max_iterations` fails closed instead
+of publishing an unconverged implied value.
 
 `StrategyAssumptionSet` is a separate, hash-addressed candidate artifact. It must
 contain exactly the six five-year engine paths (`revenue`, `operating_margin`,
