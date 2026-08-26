@@ -276,7 +276,7 @@ describe("InvestmentResearchApi", () => {
     if (operation.idempotencyKey) expect(init?.headers).toMatchObject({ "Idempotency-Key": operation.idempotencyKey });
   });
 
-  it("accepts only complete, uniquely grouped Company and Security industry browse results", async () => {
+  it("accepts uniquely identified, ordered Company and Security industry browse results", async () => {
     const fetchSpy = vi.fn<typeof fetch>(async () => response(industryCompanyBrowseBody()));
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -303,6 +303,18 @@ describe("InvestmentResearchApi", () => {
 
     await expect(new InvestmentResearchApi().industryCompanies(ids.company))
       .resolves.toMatchObject({ items: [{ object_id: ids.company, kind: "company" }] });
+  });
+
+  it("accepts an empty Company group before a complete Company and Security group", async () => {
+    const companyWithoutSecurity = "00000000-0000-4000-8000-000000000021";
+    vi.stubGlobal("fetch", vi.fn(async () => response(industryCompanyBrowseBody([
+      { schema_version: "underwriting.v1", object_id: companyWithoutSecurity, kind: "company", external_key: "US:PRIVATE:COMPANY", canonical_name: "Private Company", symbol: null, exchange: null, share_class: null, trading_currency: null },
+      { schema_version: "underwriting.v1", object_id: ids.company, kind: "company", external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc.", symbol: null, exchange: null, share_class: null, trading_currency: null },
+      { schema_version: "underwriting.v1", object_id: ids.securityA, kind: "security", external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD" },
+    ]))));
+
+    await expect(new InvestmentResearchApi().industryCompanies(ids.company))
+      .resolves.toMatchObject({ items: [{ object_id: companyWithoutSecurity }, { object_id: ids.company }, { object_id: ids.securityA }] });
   });
 
   it("rejects an invalid industry identity locally without making a request", async () => {

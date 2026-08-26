@@ -24,6 +24,18 @@ const industryCompanyItems = [
   { ...dto, object_id: ids.goog, kind: "security", external_key: "NASDAQ:GOOG", canonical_name: "Alphabet Inc. Class C", symbol: "GOOG", exchange: "NASDAQ", share_class: "Class C", trading_currency: "USD" },
 ] as const;
 
+const industryCompanyWithoutSecurity = {
+  ...dto,
+  object_id: uid(6),
+  kind: "company",
+  external_key: "US:PRIVATE:COMPANY",
+  canonical_name: "Private Company",
+  symbol: null,
+  exchange: null,
+  share_class: null,
+  trading_currency: null,
+} as const;
+
 function json(body: object, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "x-request-id": "req-new" } });
 }
@@ -308,6 +320,24 @@ describe("company research entry", () => {
     expect(related).toHaveTextContent("Alphabet Inc.");
     expect(related).toHaveTextContent("尚无在该时点有效的关联证券；不能建立研究。");
     expect(within(related).getByRole("button", { name: "研究 Alphabet" })).toBeDisabled();
+  });
+
+  it("keeps an empty Company group browseable before a researchable Company group", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", server({ industryItems: [industryCompanyWithoutSecurity, ...industryCompanyItems] }).fetch);
+    renderPage();
+    await user.type(await screen.findByLabelText("搜索公司、证券或行业"), "Google");
+    await user.click(screen.getByRole("button", { name: "搜索对象" }));
+    await screen.findByRole("region", { name: "对象搜索结果" });
+
+    await user.click(screen.getByRole("button", { name: "查看相关公司" }));
+    const related = await screen.findByRole("region", { name: "行业相关公司" });
+    expect(related).toHaveTextContent("Private Company");
+    expect(related).toHaveTextContent("Alphabet Inc.");
+    expect(within(related).getByRole("button", { name: "研究 Private Company" })).toBeDisabled();
+
+    await user.click(within(related).getByRole("button", { name: "研究 Alphabet" }));
+    expect(await screen.findByRole("heading", { name: "确认默认研究方案" })).toBeVisible();
   });
 
   it("ignores a stale industry browse after a new object search starts", async () => {

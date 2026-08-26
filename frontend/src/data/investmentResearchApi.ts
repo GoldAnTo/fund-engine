@@ -251,15 +251,11 @@ function isIndustryCompanyBrowse(value: unknown): value is IndustryCompanyBrowse
   const objectIds = value.items.map((item) => item.object_id);
   if (new Set(objectIds).size !== objectIds.length) return false;
   let hasAnchor = false;
-  let securitiesInCurrentGroup = 0;
   for (const item of value.items) {
     if (item.kind === "company") {
-      if (hasAnchor && securitiesInCurrentGroup === 0) return false;
       hasAnchor = true;
-      securitiesInCurrentGroup = 0;
     } else {
       if (!hasAnchor) return false;
-      securitiesInCurrentGroup += 1;
     }
   }
   return true;
