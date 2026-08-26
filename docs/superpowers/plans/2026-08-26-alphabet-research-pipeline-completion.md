@@ -31,7 +31,7 @@ This plan completes the research **pipeline** and aggregated read model. It does
 
 Those boundaries prevent a visually complete workbench from hiding an incomplete research engine.
 
-### Task 1: Close the model-input and market-input contracts
+### Task 1: Close the model, strategy-assumption, and market-input contracts
 
 **Files:**
 - Modify: `backend/app/underwriting/domain/company_research.py`
@@ -70,6 +70,15 @@ def test_builder_uses_exact_frozen_market_refs(builder_input) -> None:
     assert result.market_snapshot_ids == tuple(
         sorted(builder_input.market_context.snapshot_ids, key=str)
     )
+
+
+def test_builder_rejects_a_missing_or_unversioned_strategy_assumption_set(
+    builder_input,
+) -> None:
+    with pytest.raises(ValidationError, match="strategy assumptions"):
+        CompanyResearchModelBuilder().build(
+            replace(builder_input, strategy_assumptions=None)
+        )
 ```
 
 - [ ] **Step 2: Run the tests and confirm RED**
@@ -101,6 +110,16 @@ class FrozenMarketContext:
 
 
 @dataclass(frozen=True, slots=True)
+class StrategyAssumptionSet:
+    strategy_version: str
+    content_hash: str
+    first_fiscal_year: int
+    driver_paths: tuple[DriverInput, ...]
+    scenario_overrides: tuple[ScenarioAssumption, ...]
+    terminal_growth: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class CompanyResearchBuildInput:
     project_id: UUID
     cutoff_at: datetime
@@ -110,6 +129,7 @@ class CompanyResearchBuildInput:
     evidence_payload: Mapping[str, object]
     gap_payload: Mapping[str, object]
     source_refs: tuple[dict[str, str], ...]
+    strategy_assumptions: StrategyAssumptionSet
     market_context: FrozenMarketContext | None
 
 
@@ -127,7 +147,7 @@ class CompanyResearchBuildResult:
     market_snapshot_ids: tuple[UUID, ...]
 ```
 
-All constructors must reject naive datetimes, duplicate refs, noncanonical UUID order, unknown evidence fields, unreviewed facts, and facts marked `rejected` when used as model inputs.
+All constructors must reject naive datetimes, duplicate refs, noncanonical UUID order, unknown evidence fields, unreviewed facts, facts marked `rejected` when used as model inputs, and missing or unversioned strategy assumptions.
 
 - [ ] **Step 4: Separate sourced facts, deterministic derivations, and strategy assumptions**
 
@@ -155,6 +175,15 @@ Rules:
 - `derived` requires source refs and a closed equation identifier;
 - `assumption` requires a versioned strategy `assumption_key` and is never labeled reported;
 - missing values create `ResearchGap` entries rather than zeroes.
+
+`StrategyAssumptionSet` is a separate, hash-addressed candidate artifact. It must
+contain exactly the six five-year engine paths (`revenue`, `operating_margin`,
+`cash_tax_rate`, `depreciation`, `capex`, and `working_capital_change`), all with
+`state=assumption`, and mechanism-specific Base/Bull/Bear overrides. The builder
+must never synthesize numeric forecast paths from the authenticated historical
+facts. The Alphabet adapter may validate driver/module vocabulary, but the
+numeric paths enter only through this explicit versioned contract and remain
+candidate assumptions until the later judgment-review boundary.
 
 Add `CompanyResearchMemoArtifact` as a frozen structured candidate containing
 `assessment_status`, `business_map_ref`, `driver_map_ref`, `financial_bridge_ref`,
@@ -201,11 +230,12 @@ git add backend/app/underwriting/domain/company_research.py \
 git commit -m "feat: build reviewed company research model bundle"
 ```
 
-### Task 2: Resolve governed market inputs without browser-authored internal forms
+### Task 2: Resolve governed market and strategy inputs without browser-authored internal forms
 
 **Files:**
 - Create: `backend/app/underwriting/services/company_research_market_inputs.py`
 - Create: `backend/app/underwriting/fixtures/alphabet_golden_case/market_inputs.json`
+- Create: `backend/app/underwriting/fixtures/alphabet_golden_case/strategy_assumptions.json`
 - Modify: `backend/app/underwriting/fixtures/alphabet_golden_case/__init__.py`
 - Modify: `backend/app/underwriting/services/company_research_model_builder.py`
 - Modify: `backend/app/underwriting/services/company_research_initializer.py`
@@ -281,6 +311,13 @@ response leaves the existing explicit gap and does not create a partial bundle.
 
 The initializer continues to create the research foundation without synthetic prices. During the model stage, `CompanyResearchMarketInputs.prepare()` installs the authenticated bundle through the existing `MarketSnapshotService`, then patches the draft with exact immutable refs using its current lock version. Repeating the same bundle is idempotent; a different hash for the same identity/time conflicts. If no governed bundle exists, the model builder receives `market_context=None`, keeps the market gaps, and returns `not_answerable`; it must not call the old low-level form endpoints or invent a current quote.
 
+The fixture loader also loads `strategy_assumptions.json` as a separate
+hash-addressed candidate artifact. Every numeric forecast value must be labeled
+`assumption`, carry a versioned `assumption_key`, name its deterministic rationale
+or equation, and remain visibly distinct from source facts. Missing or invalid
+strategy assumptions fail the model stage closed; neither the loader nor the
+Alphabet adapter derives replacement forecasts from historical facts.
+
 For the frozen Alphabet acceptance set, capture source envelopes from:
 
 - Alphabet Q2 2026 SEC 10-Q for cash, debt, securities, diluted shares and class counts;
@@ -298,6 +335,7 @@ Every captured row stores source URL, exact locator/date, market/effective time,
   tests/underwriting/test_company_research_initializer.py -q
 git add backend/app/underwriting/services/company_research_market_inputs.py \
   backend/app/underwriting/fixtures/alphabet_golden_case/market_inputs.json \
+  backend/app/underwriting/fixtures/alphabet_golden_case/strategy_assumptions.json \
   backend/app/underwriting/fixtures/alphabet_golden_case/__init__.py \
   backend/app/underwriting/services/company_research_model_builder.py \
   backend/app/underwriting/services/company_research_initializer.py \
