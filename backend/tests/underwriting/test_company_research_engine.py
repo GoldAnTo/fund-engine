@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from decimal import Decimal, getcontext, localcontext
+from decimal import Decimal, ROUND_DOWN, ROUND_UP, getcontext, localcontext
 import hashlib
 
 import pytest
@@ -592,6 +592,46 @@ def test_valuation_canonical_payload_and_hash_ignore_caller_decimal_context() ->
     assert getcontext().rounding == global_context.rounding
 
 
+@pytest.mark.parametrize("rounding", (ROUND_UP, ROUND_DOWN))
+def test_canonical_decimal_serialization_ignores_restricted_caller_context(
+    rounding: str,
+) -> None:
+    """Canonical artifacts retain every legal Decimal digit and exponent."""
+    values = (
+        Decimal("1234567890123456789012345678901234567890123456789012345678901234567890"),
+        Decimal("1.2300E+999999"),
+        Decimal("-1.2300E-999999"),
+    )
+    expected = (
+        "1234567890123456789012345678901234567890123456789012345678901234567890",
+        "123" + "0" * 999997,
+        "-0." + "0" * 999998 + "123",
+    )
+
+    with localcontext() as caller_context:
+        caller_context.prec = 2
+        caller_context.rounding = rounding
+        caller_context.Emin = -2
+        caller_context.Emax = 2
+        caller_context.clamp = 1
+        for signal in caller_context.traps:
+            caller_context.traps[signal] = True
+        before = caller_context.copy()
+
+        serialized = tuple(canonical_decimal_string(value) for value in values)
+        payload_hash = canonical_hash({"values": serialized})
+
+        assert serialized == expected
+        assert payload_hash == canonical_hash({"values": expected})
+        assert getcontext().prec == before.prec
+        assert getcontext().rounding == before.rounding
+        assert getcontext().Emin == before.Emin
+        assert getcontext().Emax == before.Emax
+        assert getcontext().clamp == before.clamp
+        assert getcontext().flags == before.flags
+        assert getcontext().traps == before.traps
+
+
 def test_valuation_rejects_comparison_with_nonmatching_security_return_range() -> None:
     valuation = CompanyResearchEngine().compile(_input()).valuation_set
     assert valuation is not None
@@ -611,6 +651,23 @@ def test_valuation_rejects_comparison_with_nonmatching_security_return_range() -
             required_return_comparisons=(
                 mismatched_comparison,
                 *valuation.required_return_comparisons[1:],
+            ),
+        )
+
+
+def test_valuation_rejects_duplicate_required_return_comparison_for_a_security() -> None:
+    valuation = CompanyResearchEngine().compile(_input()).valuation_set
+    assert valuation is not None
+
+    with pytest.raises(CompanyResearchValidationError, match="cover each security exactly once"):
+        ValuationSetArtifact(
+            scenario_dcf_values=valuation.scenario_dcf_values,
+            reverse_dcf=valuation.reverse_dcf,
+            security_value_ranges=valuation.security_value_ranges,
+            required_return=valuation.required_return,
+            required_return_comparisons=(
+                *valuation.required_return_comparisons,
+                valuation.required_return_comparisons[0],
             ),
         )
 

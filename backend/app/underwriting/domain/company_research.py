@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import Decimal, localcontext
+from decimal import (
+    Context,
+    Decimal,
+    MAX_EMAX,
+    MAX_PREC,
+    MIN_EMIN,
+    ROUND_HALF_EVEN,
+    localcontext,
+)
 from enum import StrEnum
 import hashlib
 import json
@@ -36,6 +44,28 @@ _MODULE_KEY = re.compile(r"[a-z][a-z0-9_]*")
 _GAP_CODE = re.compile(r"[a-z][a-z0-9_]*")
 _INPUT_HASH = re.compile(r"[0-9a-f]{64}")
 _IDENTITY_NAME_MAX_LENGTH = 512
+
+
+def _company_research_decimal_context(*, precision: int) -> Context:
+    """Return a fully-defined, caller-independent Decimal context."""
+    return Context(
+        prec=precision,
+        rounding=ROUND_HALF_EVEN,
+        Emin=MIN_EMIN,
+        Emax=MAX_EMAX,
+        capitals=1,
+        clamp=0,
+        flags=[],
+        traps=[],
+    )
+
+
+_COMPANY_RESEARCH_ARITHMETIC_CONTEXT = _company_research_decimal_context(
+    precision=COMPANY_RESEARCH_DECIMAL_PRECISION,
+)
+_COMPANY_RESEARCH_CANONICAL_DECIMAL_CONTEXT = _company_research_decimal_context(
+    precision=MAX_PREC,
+)
 
 
 class CompanyResearchValidationError(ValueError):
@@ -728,8 +758,7 @@ class FinancialBridgeRow:
         if self.cash_tax_rate < Decimal("0") or self.cash_tax_rate > Decimal("1"):
             raise CompanyResearchValidationError("financial_bridge.cash_tax_rate must be between zero and one")
         _artifact_refs(self.fact_refs, "financial_bridge.fact_refs")
-        with localcontext() as context:
-            context.prec = COMPANY_RESEARCH_DECIMAL_PRECISION
+        with localcontext(_COMPANY_RESEARCH_ARITHMETIC_CONTEXT):
             expected_fcff = +(
                 self.operating_income * (Decimal("1") - self.cash_tax_rate)
                 + self.depreciation
@@ -1015,9 +1044,8 @@ class ValueRange:
 def canonical_decimal_string(value: Decimal) -> str:
     """Stable Decimal serialization for a later immutable-artifact boundary."""
     _artifact_decimal(value, "decimal")
-    with localcontext() as context:
-        context.prec = COMPANY_RESEARCH_DECIMAL_PRECISION
-        normalized = value.normalize()
+    with localcontext(_COMPANY_RESEARCH_CANONICAL_DECIMAL_CONTEXT) as context:
+        normalized = context.normalize(value)
     if normalized.is_zero():
         return "0"
     return format(normalized, "f")
@@ -1130,6 +1158,10 @@ class ValuationSetArtifact:
         if {
             item.security_external_key for item in self.required_return_comparisons
         } != {item.security_external_key for item in self.security_value_ranges}:
+            raise CompanyResearchValidationError(
+                "valuation set required return comparisons must cover each security exactly once"
+            )
+        if len(self.required_return_comparisons) != len(self.security_value_ranges):
             raise CompanyResearchValidationError(
                 "valuation set required return comparisons must cover each security exactly once"
             )
