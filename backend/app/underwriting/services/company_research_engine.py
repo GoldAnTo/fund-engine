@@ -87,7 +87,16 @@ class CompanyResearchEngine:
 
         values = {
             item.scenario_id: self._dcf(
-                item.bridge, model.required_return, model.terminal_growth
+                item.bridge,
+                model.required_return,
+                model.terminal_growth,
+                multiplier=self._scenario_fcff_multiplier(
+                    next(
+                        scenario
+                        for scenario in model.scenario_set.scenarios
+                        if scenario.scenario_id == item.scenario_id
+                    )
+                ),
             )
             for item in model.scenario_bridges
         }
@@ -148,6 +157,7 @@ class CompanyResearchEngine:
         for scenario_bridge in model.scenario_bridges:
             for row in scenario_bridge.bridge.rows:
                 refs.extend(row.fact_refs)
+        refs.append(model.evidence_gap_contract.source_ref)
         if model.market_bridge is not None:
             refs.append(model.market_bridge.capital_structure.source_ref)
             refs.append(model.market_bridge.fx_ref)
@@ -178,6 +188,17 @@ class CompanyResearchEngine:
             for override in scenario.driver_overrides
         ):
             raise ValidationError("scenario override references an unknown driver")
+        scenario_multipliers = {
+            scenario.scenario_id: CompanyResearchEngine._scenario_fcff_multiplier(scenario)
+            for scenario in model.scenario_set.scenarios
+        }
+        if scenario_multipliers["base"] != Decimal("1"):
+            raise ValidationError("base scenario overrides must preserve the baseline FCFF")
+        if any(
+            scenario_multipliers[scenario_id] == Decimal("1")
+            for scenario_id in ("bull", "bear")
+        ) or len(set(scenario_multipliers.values())) != len(scenario_multipliers):
+            raise ValidationError("scenario overrides must have a distinct non-no-op FCFF effect")
         bridge_ids = {item.scenario_id for item in model.scenario_bridges}
         scenario_ids = {item.scenario_id for item in model.scenario_set.scenarios}
         if bridge_ids and bridge_ids != scenario_ids:
@@ -192,6 +213,14 @@ class CompanyResearchEngine:
                 for item in model.market_bridge.securities
             ):
                 raise ValidationError("security FX references must use the exact market FX rate")
+
+    @staticmethod
+    def _scenario_fcff_multiplier(scenario) -> Decimal:
+        """Apply every closed driver override directly to projected FCFF."""
+        multiplier = Decimal("1")
+        for override in scenario.driver_overrides:
+            multiplier *= override.value
+        return multiplier
 
     @staticmethod
     def _validate_financial_closure(row: FinancialBridgeRow) -> None:

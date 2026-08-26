@@ -318,6 +318,54 @@ class ResearchGap:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceGapContract:
+    """Immutable source-derived identity for the gaps supplied to a model."""
+
+    source_ref: "SourceLineageReference"
+    gaps: tuple[ResearchGap, ...]
+    content_hash: str = ""
+
+    def __post_init__(self) -> None:
+        if type(self.source_ref) is not SourceLineageReference:
+            raise CompanyResearchValidationError(
+                "evidence gap contract source_ref must be source lineage"
+            )
+        if self.source_ref.fact_key != "evidence_gap_contract":
+            raise CompanyResearchValidationError(
+                "evidence gap contract must reference the source-derived gap contract"
+            )
+        if not isinstance(self.gaps, tuple) or not all(
+            type(gap) is ResearchGap for gap in self.gaps
+        ):
+            raise CompanyResearchValidationError(
+                "evidence gap contract gaps must be a typed tuple"
+            )
+        if len({gap.code for gap in self.gaps}) != len(self.gaps):
+            raise CompanyResearchValidationError(
+                "evidence gap contract gap codes must be unique"
+            )
+        calculated_hash = _canonical_hash(self.canonical_payload())
+        if type(self.content_hash) is not str:
+            raise CompanyResearchValidationError("evidence gap contract content_hash must be a string")
+        if self.content_hash and _INPUT_HASH.fullmatch(self.content_hash) is None:
+            raise CompanyResearchValidationError(
+                "evidence gap contract content_hash must be a lowercase SHA-256 hex digest"
+            )
+        if self.content_hash and self.content_hash != calculated_hash:
+            raise CompanyResearchValidationError(
+                "evidence gap contract content_hash does not match canonical payload"
+            )
+        object.__setattr__(self, "content_hash", calculated_hash)
+
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            "schema_version": "company-research-evidence-gaps.v1",
+            "source_ref": self.source_ref.canonical_payload(),
+            "gaps": tuple(gap.canonical_payload() for gap in self.gaps),
+        }
+
+
 def validate_research_gaps(
     gaps: tuple[ResearchGap, ...], allowed_module_keys: tuple[str, ...]
 ) -> tuple[ResearchGap, ...]:
@@ -795,6 +843,29 @@ class MarketBridgeArtifact:
         _artifact_decimal(self.usd_cny_rate, "market_bridge.usd_cny_rate")
         if self.usd_cny_rate <= Decimal("0") or type(self.fx_ref) is not SourceLineageReference:
             raise CompanyResearchValidationError("market_bridge must have an exact positive FX reference")
+        references = (
+            self.capital_structure.source_ref,
+            self.fx_ref,
+            *(reference for security in self.securities for reference in (security.rights_ref, security.price_ref)),
+        )
+        if len(set(references)) != len(references) or len({item.fact_key for item in references}) != len(references):
+            raise CompanyResearchValidationError(
+                "market bridge references must be unique across capital, rights, price, and FX roles"
+            )
+        if self.capital_structure.source_ref.fact_key != "capital_structure_usd":
+            raise CompanyResearchValidationError("market bridge capital reference must identify USD capital structure")
+        if self.fx_ref.fact_key != "usd_cny_fx":
+            raise CompanyResearchValidationError("market bridge FX reference must identify the USD/CNY pair")
+        for security in self.securities:
+            suffix = re.sub(r"[^a-z0-9]+", "_", security.security_external_key.lower()).strip("_")
+            if security.rights_ref.fact_key != f"security_rights_{suffix}":
+                raise CompanyResearchValidationError(
+                    "market bridge rights reference must identify its security"
+                )
+            if security.price_ref.fact_key != f"market_price_usd_{suffix}":
+                raise CompanyResearchValidationError(
+                    "market bridge price reference must identify its security and USD currency"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -822,6 +893,7 @@ class CompanyResearchModelInput:
     scenario_bridges: tuple[ScenarioFinancialBridge, ...]
     source_lineage: tuple[SourceLineageReference, ...]
     research_gaps: tuple[ResearchGap, ...]
+    evidence_gap_contract: EvidenceGapContract
     required_return: Decimal
     terminal_growth: Decimal
     market_bridge: MarketBridgeArtifact | None
@@ -838,6 +910,12 @@ class CompanyResearchModelInput:
         _artifact_refs(self.source_lineage, "model input source_lineage")
         if not isinstance(self.research_gaps, tuple) or not all(type(item) is ResearchGap for item in self.research_gaps):
             raise CompanyResearchValidationError("model input research gaps must be typed")
+        if type(self.evidence_gap_contract) is not EvidenceGapContract:
+            raise CompanyResearchValidationError("model input evidence gap contract must be typed")
+        if self.research_gaps != self.evidence_gap_contract.gaps:
+            raise CompanyResearchValidationError(
+                "model input research gaps must exactly match the evidence gap contract"
+            )
         _artifact_decimal(self.required_return, "model input required_return")
         _artifact_decimal(self.terminal_growth, "model input terminal_growth")
         if self.required_return <= Decimal("0") or self.terminal_growth < Decimal("0"):

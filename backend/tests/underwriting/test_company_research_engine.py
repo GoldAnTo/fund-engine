@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+import hashlib
 
 import pytest
 
@@ -16,6 +17,7 @@ from app.underwriting.domain.company_research import (
     canonical_decimal_string,
     DriverMapArtifact,
     DriverMetricArtifact,
+    EvidenceGapContract,
     FinancialBridgeArtifact,
     FinancialBridgeRow,
     JudgmentContextArtifact,
@@ -40,7 +42,7 @@ def _source(key: str) -> SourceLineageReference:
         source_role="regulatory_filing",
         source_url="https://www.sec.gov/example",
         source_locator=f"Item 7 / {key}",
-        raw_hash=(key[0] * 64),
+        raw_hash=hashlib.sha256(key.encode("utf-8")).hexdigest(),
     )
 
 
@@ -59,7 +61,22 @@ def _row(year: int, *, fcff: Decimal = Decimal("80")) -> FinancialBridgeRow:
 
 
 def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> CompanyResearchModelInput:
-    sources = (_source("a"), _source("b"), _source("c"), _source("d"))
+    source_by_key = {
+        key: _source(key)
+        for key in (
+            "a",
+            "b",
+            "c",
+            "capital_structure_usd",
+            "security_rights_nasdaq_googl",
+            "market_price_usd_nasdaq_googl",
+            "security_rights_nasdaq_goog",
+            "market_price_usd_nasdaq_goog",
+            "usd_cny_fx",
+            "evidence_gap_contract",
+        )
+    }
+    sources = tuple(source_by_key.values())
     business_map = BusinessMapArtifact(
         modules=(
             BusinessModuleArtifact(
@@ -67,7 +84,7 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
                 revenue_sources=("query advertising",),
                 cost_structure=("traffic acquisition",),
                 capital_needs=("data centers",),
-                fact_refs=(sources[0],),
+                fact_refs=(source_by_key["a"],),
                 gap_refs=(),
             ),
         )
@@ -77,8 +94,8 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
             DriverMetricArtifact(
                 driver_key="search_volume",
                 module_key="search_and_other_ads",
-                fact_refs=(sources[1],),
-                assumption_refs=(sources[2],),
+                fact_refs=(source_by_key["b"],),
+                assumption_refs=(source_by_key["c"],),
                 equation="revenue = volume * monetization",
                 output_metric="revenue",
             ),
@@ -117,6 +134,9 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
         scenario_bridges=bridges,
         source_lineage=sources,
         research_gaps=gaps,
+        evidence_gap_contract=EvidenceGapContract(
+            source_ref=source_by_key["evidence_gap_contract"], gaps=gaps
+        ),
         required_return=Decimal("0.12"),
         terminal_growth=Decimal("0.03"),
         market_bridge=(
@@ -124,13 +144,13 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
                 capital_structure=CapitalStructureReference(
                     cash=Decimal("10"), debt=Decimal("5"), minority_interest=Decimal("0"),
                     investments=Decimal("2"), pension_liabilities=Decimal("0"),
-                    other_adjustments=Decimal("0"), source_ref=sources[3],
+                    other_adjustments=Decimal("0"), source_ref=source_by_key["capital_structure_usd"],
                 ),
                 securities=(
-                    SecurityValuationReference("NASDAQ:GOOGL", Decimal("10"), Decimal("100"), Decimal("7.20"), sources[3], sources[3]),
-                    SecurityValuationReference("NASDAQ:GOOG", Decimal("10"), Decimal("100"), Decimal("7.20"), sources[3], sources[3]),
+                    SecurityValuationReference("NASDAQ:GOOGL", Decimal("10"), Decimal("100"), Decimal("7.20"), source_by_key["security_rights_nasdaq_googl"], source_by_key["market_price_usd_nasdaq_googl"]),
+                    SecurityValuationReference("NASDAQ:GOOG", Decimal("10"), Decimal("100"), Decimal("7.20"), source_by_key["security_rights_nasdaq_goog"], source_by_key["market_price_usd_nasdaq_goog"]),
                 ),
-                usd_cny_rate=Decimal("7.20"), fx_ref=sources[3],
+                usd_cny_rate=Decimal("7.20"), fx_ref=source_by_key["usd_cny_fx"],
             )
             if market
             else None
@@ -139,7 +159,7 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
             operating_baseline_available=True,
             financial_bridge_closed=True,
             market_security_bridge_available=market,
-            strongest_counterevidence=(sources[0],),
+            strongest_counterevidence=(source_by_key["a"],),
             next_verification_events=("next filing",),
         ),
     )
@@ -155,6 +175,63 @@ def test_compiles_exact_lineage_closed_financials_and_ordered_mechanism_value_ra
     assert [item.security_external_key for item in result.security_values] == ["NASDAQ:GOOG", "NASDAQ:GOOGL"]
     assert all(item.value_range.minimum <= item.value_range.maximum for item in result.security_values)
     assert not hasattr(result.security_values[0].value_range, "probability")
+
+
+def test_rejects_market_references_reused_across_capital_rights_price_and_fx_roles() -> None:
+    """Each market number must retain a distinct, role-specific source fact."""
+    model = _input()
+    market = model.market_bridge
+    assert market is not None
+    with pytest.raises(CompanyResearchValidationError, match="market bridge references.*role"):
+        MarketBridgeArtifact(
+            capital_structure=market.capital_structure,
+            securities=tuple(
+                replace(security, rights_ref=market.capital_structure.source_ref)
+                for security in market.securities
+            ),
+            usd_cny_rate=market.usd_cny_rate,
+            fx_ref=market.fx_ref,
+        )
+
+
+def test_scenario_overrides_change_the_fcff_used_by_the_dcf() -> None:
+    result = CompanyResearchEngine().compile(_input())
+
+    assert result.scenario_enterprise_values["bull"] > result.scenario_enterprise_values["base"]
+    assert result.scenario_enterprise_values["bear"] < result.scenario_enterprise_values["base"]
+
+
+def test_rejects_a_non_base_scenario_with_a_no_op_override() -> None:
+    model = _input()
+    no_op_bull = ScenarioArtifact(
+        scenario_id="bull",
+        mechanism_id="ai_monetization_and_utilization",
+        driver_overrides=(ScenarioDriverOverride("search_volume", Decimal("1")),),
+    )
+    scenario_set = ScenarioSetArtifact(
+        scenarios=tuple(
+            no_op_bull if scenario.scenario_id == "bull" else scenario
+            for scenario in model.scenario_set.scenarios
+        )
+    )
+
+    with pytest.raises(ValidationError, match="non-no-op FCFF effect"):
+        CompanyResearchEngine().compile(replace(model, scenario_set=scenario_set))
+
+
+def test_rejects_dropping_source_declared_evidence_gaps_from_model_input() -> None:
+    source_declared_gaps = (
+        ResearchGap("market_price_missing", "corporate_capital_allocation", ResearchGapSeverity.CRITICAL, "price"),
+        ResearchGap("usd_cny_fx_missing", "corporate_capital_allocation", ResearchGapSeverity.CRITICAL, "FX"),
+        ResearchGap("forward_model_missing", "corporate_capital_allocation", ResearchGapSeverity.CRITICAL, "forecast"),
+    )
+    model = _input(gaps=source_declared_gaps)
+
+    with pytest.raises(CompanyResearchValidationError, match="evidence gap contract"):
+        replace(model, research_gaps=())
+
+    result = CompanyResearchEngine().compile(model)
+    assert result.assessment == CompanyResearchAssessment.not_answerable()
 
 
 def test_rejects_source_reference_not_in_evidence_lineage() -> None:
