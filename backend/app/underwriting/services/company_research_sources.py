@@ -55,20 +55,22 @@ class CompanyResearchEvidenceCompilation:
     source_refs: tuple[dict[str, str], ...]
 
 
-class CompanyResearchSourceService:
-    """Prepare evidence only; assessment and publication belong to later steps."""
+@dataclass(frozen=True, slots=True)
+class CompanyResearchProviderInput:
+    """Immutable, database-free input handed to a source provider."""
 
-    def __init__(self, session: Session, *, now: Callable[[], datetime]) -> None:
-        self._session = session
-        self._now = now
-        self._repository = CompanyResearchRepository(session)
+    preparation_id: UUID
+    project_id: UUID
+    company_external_key: str
+    request_hash: str
+    strategy_version: str
+
+
+class CompanyResearchSourceCompiler:
+    """Compile the bundled source fixture from an immutable provider input."""
+
+    def __init__(self) -> None:
         self._adapter = AlphabetCompanyResearchAdapter()
-
-    @staticmethod
-    def _utc(value: object) -> datetime:
-        if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
-            raise ValidationError("clock must be a timezone-aware datetime")
-        return value.astimezone(UTC)
 
     @staticmethod
     def _source_refs(fixture: AlphabetGoldenCaseFixture) -> tuple[dict[str, str], ...]:
@@ -81,7 +83,12 @@ class CompanyResearchSourceService:
             }
             for fact in sorted(
                 fixture.facts,
-                key=lambda item: (item.source_role, item.source_url, item.source_locator, item.fact_key),
+                key=lambda item: (
+                    item.source_role,
+                    item.source_url,
+                    item.source_locator,
+                    item.fact_key,
+                ),
             )
         )
 
@@ -103,10 +110,63 @@ class CompanyResearchSourceService:
             "gaps": [gap.payload() for gap in fixture.research_gaps],
         }
 
+    @staticmethod
+    def _load_fixture() -> AlphabetGoldenCaseFixture:
+        return load_alphabet_golden_case_fixture()
+
+    def compile_evidence_index(
+        self,
+        provider_input: CompanyResearchProviderInput,
+        *,
+        fixture: AlphabetGoldenCaseFixture | None = None,
+    ) -> CompanyResearchEvidenceCompilation:
+        source_fixture = fixture if fixture is not None else self._load_fixture()
+        self._adapter.validate_source_modules(
+            source_fixture.company_external_key, source_fixture.business_modules
+        )
+        if provider_input.company_external_key != source_fixture.company_external_key:
+            raise ValidationError("Alphabet source fixture does not match preparation company")
+        return CompanyResearchEvidenceCompilation(
+            input_hash=source_fixture.content_hash,
+            evidence_index_payload=self._evidence_payload(source_fixture),
+            research_gaps_payload=self._gaps_payload(source_fixture),
+            source_refs=self._source_refs(source_fixture),
+        )
+
+
+class CompanyResearchSourceService:
+    """Prepare evidence only; assessment and publication belong to later steps."""
+
+    def __init__(self, session: Session, *, now: Callable[[], datetime]) -> None:
+        self._session = session
+        self._now = now
+        self._repository = CompanyResearchRepository(session)
+        self._compiler = CompanyResearchSourceCompiler()
+
+    @staticmethod
+    def _utc(value: object) -> datetime:
+        if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+            raise ValidationError("clock must be a timezone-aware datetime")
+        return value.astimezone(UTC)
+
+    @staticmethod
+    def _source_refs(fixture: AlphabetGoldenCaseFixture) -> tuple[dict[str, str], ...]:
+        return CompanyResearchSourceCompiler._source_refs(fixture)
+
+    @staticmethod
+    def _evidence_payload(fixture: AlphabetGoldenCaseFixture) -> dict[str, object]:
+        return CompanyResearchSourceCompiler._evidence_payload(fixture)
+
+    @staticmethod
+    def _gaps_payload(fixture: AlphabetGoldenCaseFixture) -> dict[str, object]:
+        return CompanyResearchSourceCompiler._gaps_payload(fixture)
+
     def _load_fixture(self) -> AlphabetGoldenCaseFixture:
         return load_alphabet_golden_case_fixture()
 
-    def _validate_company(self, preparation: CompanyResearchPreparation, fixture: AlphabetGoldenCaseFixture) -> None:
+    def _provider_input(
+        self, preparation: CompanyResearchPreparation
+    ) -> CompanyResearchProviderInput:
         project = self._session.get(UnderwritingResearchProject, preparation.project_id)
         if project is None:
             raise ValidationError("company research preparation project is missing")
@@ -114,8 +174,15 @@ class CompanyResearchSourceService:
             select(UnderwritingResearchObject)
             .where(UnderwritingResearchObject.id == project.primary_company_id)
         )
-        if company is None or company.external_key != fixture.company_external_key:
-            raise ValidationError("Alphabet source fixture does not match preparation company")
+        if company is None:
+            raise ValidationError("company research preparation company is missing")
+        return CompanyResearchProviderInput(
+            preparation_id=preparation.id,
+            project_id=project.id,
+            company_external_key=company.external_key,
+            request_hash=preparation.request_hash,
+            strategy_version=preparation.strategy_version,
+        )
 
     def compile_evidence_index(
         self, *, preparation_id: UUID
@@ -126,19 +193,11 @@ class CompanyResearchSourceService:
         boundary explicit prevents a slow file/provider operation from holding
         the preparation or Job row lock.
         """
-        fixture = self._load_fixture()
-        self._adapter.validate_source_modules(
-            fixture.company_external_key, fixture.business_modules
-        )
         preparation = self._repository.preparation(preparation_id)
         if preparation is None:
             raise ValidationError("company research preparation not found")
-        self._validate_company(preparation, fixture)
-        return CompanyResearchEvidenceCompilation(
-            input_hash=fixture.content_hash,
-            evidence_index_payload=self._evidence_payload(fixture),
-            research_gaps_payload=self._gaps_payload(fixture),
-            source_refs=self._source_refs(fixture),
+        return self._compiler.compile_evidence_index(
+            self._provider_input(preparation), fixture=self._load_fixture()
         )
 
     def prepare_evidence_index(self, *, preparation_id: UUID) -> CompanyResearchSourcePreparation:

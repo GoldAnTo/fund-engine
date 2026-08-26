@@ -72,32 +72,40 @@ class CompanyResearchRepository:
         except OperationalError as exc:
             raise ConflictError("company research event append is concurrent") from exc
 
-    def _job_for_update(self, job_id: UUID) -> Job | None:
+    def _job_for_update(
+        self, job_id: UUID, *, populate_existing: bool = False
+    ) -> Job | None:
         """Read a Job under the caller transaction's row lock when supported."""
-        return self._session.scalar(
-            select(Job).where(Job.id == job_id).with_for_update()
-        )
+        statement = select(Job).where(Job.id == job_id).with_for_update()
+        if populate_existing:
+            statement = statement.execution_options(populate_existing=True)
+        return self._session.scalar(statement)
 
     def _preparation_for_update(
-        self, preparation_id: UUID
+        self, preparation_id: UUID, *, populate_existing: bool = False
     ) -> CompanyResearchPreparation | None:
         """Serialize competing attachments to the mutable preparation row."""
-        return self._session.scalar(
+        statement = (
             select(CompanyResearchPreparation)
             .where(CompanyResearchPreparation.id == preparation_id)
             .with_for_update()
         )
+        if populate_existing:
+            statement = statement.execution_options(populate_existing=True)
+        return self._session.scalar(statement)
 
     def _locked_prepare_job(
-        self, preparation: CompanyResearchPreparation
+        self, preparation: CompanyResearchPreparation, *, populate_existing: bool = False
     ) -> Job:
         """Lock the Job owned by an already-locked preparation exactly."""
         if preparation.job_id is None:
             raise CompanyResearchIntegrityError(
                 "company research preparation job is missing"
             )
-        job = self._job_for_update(preparation.job_id)
-        if not self._is_exact_prepare_job_owner(job, preparation.id):
+        job = self._job_for_update(
+            preparation.job_id, populate_existing=populate_existing
+        )
+        if not self.is_exact_prepare_job_owner(job, preparation.id):
             raise CompanyResearchIntegrityError(
                 "company research preparation job ownership is invalid"
             )
@@ -419,17 +427,19 @@ class CompanyResearchRepository:
     ) -> tuple[CompanyResearchPreparation, CompanyResearchArtifactVersion, CompanyResearchArtifactVersion, Job, CompanyResearchEvent]:
         """Append the two source artifacts and atomically hand off to review."""
         self._reserve_sqlite_writer_before_ownership_read()
-        preparation = self._preparation_for_update(preparation_id)
+        claimed = expected_claim_token is not None
+        preparation = self._preparation_for_update(
+            preparation_id, populate_existing=claimed
+        )
         if preparation is None:
             raise ValidationError("company research preparation not found")
-        job = self._locked_prepare_job(preparation)
+        job = self._locked_prepare_job(preparation, populate_existing=claimed)
         self._validate_prepare_job_step(
             preparation_step=preparation.current_step,
             preparation_status=preparation.status,
             job=job,
             persisted=True,
         )
-        claimed = expected_claim_token is not None
         if expected_request_hash is not None and preparation.request_hash != expected_request_hash:
             raise ValidationError("company research preparation input changed")
         if (
@@ -855,7 +865,7 @@ class CompanyResearchRepository:
         if preparation is None or preparation.job_id is None:
             return None
         job = self._session.get(Job, preparation.job_id)
-        if not self._is_exact_prepare_job_owner(job, preparation.id):
+        if not self.is_exact_prepare_job_owner(job, preparation.id):
             raise CompanyResearchIntegrityError(
                 "company research preparation job ownership is invalid"
             )
@@ -873,13 +883,13 @@ class CompanyResearchRepository:
             if preparation.job_id != job_id:
                 raise ConflictError("company research preparation job is already bound")
             job = self._job_for_update(job_id)
-            if not self._is_exact_prepare_job_owner(job, preparation.id):
+            if not self.is_exact_prepare_job_owner(job, preparation.id):
                 raise CompanyResearchIntegrityError(
                     "company research preparation job ownership is invalid"
                 )
             return preparation
         job = self._job_for_update(job_id)
-        if not self._is_exact_prepare_job_owner(job, preparation.id):
+        if not self.is_exact_prepare_job_owner(job, preparation.id):
             raise ValidationError(
                 "company research preparation job ownership is invalid"
             )
@@ -892,7 +902,7 @@ class CompanyResearchRepository:
         return preparation
 
     @staticmethod
-    def _is_exact_prepare_job_owner(
+    def is_exact_prepare_job_owner(
         job: Job | None, preparation_id: UUID
     ) -> bool:
         return bool(

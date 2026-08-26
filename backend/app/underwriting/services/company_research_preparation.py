@@ -28,8 +28,11 @@ from app.underwriting.persistence.company_research_repository import (
 )
 from app.underwriting.services.company_research_sources import (
     CompanyResearchEvidenceCompilation,
-    CompanyResearchSourceService,
+    CompanyResearchProviderInput,
+    CompanyResearchSourceCompiler,
 )
+from app.underwriting.persistence.models import UnderwritingResearchObject
+from app.underwriting.persistence.product_models import UnderwritingResearchProject
 from app.underwriting.fixtures.alphabet_golden_case import AlphabetGoldenCaseFixtureError
 from app.underwriting.domain.company_research import CompanyResearchValidationError
 
@@ -67,7 +70,7 @@ class CompanyResearchPreparationWorker:
         session: Session,
         *,
         now: Callable[[], datetime],
-        provider: Callable[[CompanyResearchPreparation], CompanyResearchEvidenceCompilation]
+        provider: Callable[[CompanyResearchProviderInput], CompanyResearchEvidenceCompilation]
         | None = None,
     ) -> None:
         self._session = session
@@ -270,9 +273,11 @@ class CompanyResearchPreparationWorker:
             job is None
             or preparation is None
             or preparation.job_id != job.id
+            or not self._repository.is_exact_prepare_job_owner(job, preparation.id)
             or job.status != "running"
             or job.claim_token != claim.claim_token
             or job.cancel_requested
+            or job.step != "evidence_index"
             or preparation.status != "preparing_sources"
             or preparation.current_step != "evidence_index"
             or preparation.request_hash != claim.request_hash
@@ -294,8 +299,12 @@ class CompanyResearchPreparationWorker:
             job is None
             or preparation is None
             or preparation.job_id != job.id
+            or not self._repository.is_exact_prepare_job_owner(job, preparation.id)
             or job.claim_token != claim.claim_token
             or job.status != "running"
+            or job.step != "evidence_index"
+            or preparation.status != "preparing_sources"
+            or preparation.current_step != "evidence_index"
         ):
             return
         now = self._utcnow()
@@ -391,23 +400,33 @@ class CompanyResearchPreparationWorker:
         )
         self._session.flush()
 
-    def _compile(self, preparation: CompanyResearchPreparation) -> CompanyResearchEvidenceCompilation:
+    def _provider_input(
+        self, preparation: CompanyResearchPreparation
+    ) -> CompanyResearchProviderInput:
+        project = self._session.get(UnderwritingResearchProject, preparation.project_id)
+        if project is None:
+            raise ValidationError("company research preparation project is missing")
+        company = self._session.scalar(
+            select(UnderwritingResearchObject).where(
+                UnderwritingResearchObject.id == project.primary_company_id
+            )
+        )
+        if company is None:
+            raise ValidationError("company research preparation company is missing")
+        return CompanyResearchProviderInput(
+            preparation_id=preparation.id,
+            project_id=project.id,
+            company_external_key=company.external_key,
+            request_hash=preparation.request_hash,
+            strategy_version=preparation.strategy_version,
+        )
+
+    def _compile(
+        self, provider_input: CompanyResearchProviderInput
+    ) -> CompanyResearchEvidenceCompilation:
         if self._provider is not None:
-            return self._provider(preparation)
-        return CompanyResearchSourceService(
-            self._session, now=self._now
-        ).compile_evidence_index(preparation_id=preparation.id)
-
-    def _rollback_provider_transaction(self) -> None:
-        """Discard only uncommitted provider work before a safe transition.
-
-        ``run_claim`` commits the ownership fence before invoking a provider.
-        A provider may nevertheless issue a failing flush, which leaves the
-        session in SQLAlchemy's pending-rollback state.  Rolling back here
-        cannot undo that committed fence, and makes the short terminal-state
-        transaction below usable on SQLite and PostgreSQL alike.
-        """
-        self._session.rollback()
+            return self._provider(provider_input)
+        return CompanyResearchSourceCompiler().compile_evidence_index(provider_input)
 
     def run_claim(
         self, claim: CompanyResearchClaim
@@ -418,26 +437,19 @@ class CompanyResearchPreparationWorker:
             self._discard(claim)
             return "discarded"
         _job, preparation = current
+        provider_input = self._provider_input(preparation)
         # Publish the fenced claim before file/provider work.  The completion
         # path below takes fresh locks and checks the same token again.
         self._session.commit()
         try:
-            compiled = self._compile(preparation)
-            # Providers run between two product-writer transactions.  Their
-            # reads may open a transaction, and accidental ORM writes may be
-            # flushed, but neither becomes durable before the claim-fenced
-            # output is accepted below.
-            self._rollback_provider_transaction()
+            compiled = self._compile(provider_input)
         except (OSError, TimeoutError, ConnectionError):
-            self._rollback_provider_transaction()
             self._recoverable_failure(claim)
             return "recoverable_failure"
         except (AlphabetGoldenCaseFixtureError, CompanyResearchValidationError, ValidationError):
-            self._rollback_provider_transaction()
             self._block(claim)
             return "discarded"
         except Exception:
-            self._rollback_provider_transaction()
             self._block(claim, error_code=_SAFE_UNKNOWN_PROVIDER_ERROR)
             return "discarded"
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -93,14 +94,14 @@ def test_recoverable_provider_failure_is_requeued_with_bounded_backoff(session) 
     current_time = NOW
     provider_attempts = 0
 
-    def provider(preparation):
+    def provider(provider_input):
         nonlocal provider_attempts
         provider_attempts += 1
         if provider_attempts == 1:
             raise OSError("secret")
         return CompanyResearchSourceService(
             session, now=lambda: current_time
-        ).compile_evidence_index(preparation_id=preparation.id)
+        ).compile_evidence_index(preparation_id=provider_input.preparation_id)
 
     worker = CompanyResearchPreparationWorker(
         session,
@@ -178,57 +179,6 @@ def test_unknown_provider_exception_is_blocked_without_leaking_its_message(sessi
     assert "provider secret token" not in repr(job_events)
 
 
-def test_provider_flush_failure_rolls_back_only_provider_work_then_blocks_safely(session) -> None:
-    initialized = _initialized(session)
-
-    def provider(_preparation):
-        # The duplicate primary key simulates a provider-side persistence bug.
-        # Its flush invalidates the provider transaction after the worker has
-        # already committed the lease-fenced claim.
-        existing = session.get(Job, initialized.job.id)
-        assert existing is not None
-        session.expunge(existing)
-        session.add(
-            Job(
-                id=initialized.job.id,
-                kind="prepare_company_research",
-                created_at=NOW,
-            )
-        )
-        session.flush()
-        raise AssertionError("unreachable")
-
-    worker = CompanyResearchPreparationWorker(
-        session,
-        now=lambda: NOW,
-        provider=provider,
-    )
-    claim = worker.claim_next()
-    assert claim is not None
-
-    assert worker.run_claim(claim) == "discarded"
-
-    job = session.get(Job, initialized.job.id)
-    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
-    assert job is not None and job.status == "failed" and job.error == "provider_failed"
-    assert preparation is not None
-    assert preparation.status == "blocked"
-    assert preparation.last_error_code == "provider_failed"
-    events = tuple(
-        session.scalars(
-            select(CompanyResearchEvent).where(
-                CompanyResearchEvent.preparation_id == initialized.preparation.id
-            )
-        )
-    )
-    job_events = tuple(
-        session.scalars(select(JobEvent).where(JobEvent.job_id == initialized.job.id))
-    )
-    assert events[-1].payload == {"code": "provider_failed"}
-    assert job_events[-1].message == "provider_failed"
-    assert "UNIQUE constraint" not in repr((events, job_events))
-
-
 def test_manual_retry_accepts_a_due_worker_scheduled_recoverable_job(session) -> None:
     initialized = _initialized(session)
     current_time = NOW
@@ -281,16 +231,18 @@ def test_recoverable_provider_retries_stop_after_the_third_attempt(session) -> N
 def test_strategy_drift_after_provider_work_discards_the_output(session) -> None:
     initialized = _initialized(session)
 
-    def provider(preparation):
+    def provider(provider_input):
         output = CompanyResearchSourceService(
             session, now=lambda: NOW
-        ).compile_evidence_index(preparation_id=preparation.id)
+        ).compile_evidence_index(preparation_id=provider_input.preparation_id)
         # A separate actor can change the immutable input after provider work;
-        # this is distinct from provider-local writes, which the worker rolls
-        # back before it reacquires the output fence.
+        # this is distinct from provider work: a separate actor owns its own
+        # database session and can change the immutable input concurrently.
         external = Session(bind=session.get_bind(), future=True)
         try:
-            changed = external.get(CompanyResearchPreparation, preparation.id)
+            changed = external.get(
+                CompanyResearchPreparation, provider_input.preparation_id
+            )
             assert changed is not None
             changed.strategy_version = "new-strategy.v1"
             external.commit()
@@ -408,16 +360,21 @@ def test_queued_cancel_ignores_corrupt_or_non_source_company_jobs(session) -> No
     ) == before_events
 
 
-def test_provider_writes_are_rolled_back_before_the_output_fence(session) -> None:
+def test_provider_cannot_commit_or_add_durable_database_writes(session) -> None:
     initialized = _initialized(session)
     leaked_job_id = uuid4()
+    reference = CompanyResearchSourceService(
+        session, now=lambda: NOW
+    ).compile_evidence_index(preparation_id=initialized.preparation.id)
 
-    def provider(preparation):
-        session.add(Job(id=leaked_job_id, kind="provider_write", created_at=NOW))
-        session.flush()
-        return CompanyResearchSourceService(
-            session, now=lambda: NOW
-        ).compile_evidence_index(preparation_id=preparation.id)
+    def provider(provider_input):
+        with pytest.raises(AttributeError):
+            provider_input.add(
+                Job(id=leaked_job_id, kind="provider_write", created_at=NOW)
+            )
+        with pytest.raises(AttributeError):
+            provider_input.commit()
+        return reference
 
     worker = CompanyResearchPreparationWorker(
         session, now=lambda: NOW, provider=provider
@@ -428,6 +385,48 @@ def test_provider_writes_are_rolled_back_before_the_output_fence(session) -> Non
     assert worker.run_claim(claim) == "awaiting_evidence_review"
     assert session.get(Job, leaked_job_id) is None
     assert session.get(Job, initialized.job.id).status == "waiting_for_review"
+
+
+def test_provider_receives_an_immutable_snapshot_without_session_write_apis(session) -> None:
+    initialized = _initialized(session)
+    reference = CompanyResearchSourceService(
+        session, now=lambda: NOW
+    ).compile_evidence_index(preparation_id=initialized.preparation.id)
+
+    def provider(provider_input):
+        assert provider_input.__class__.__name__ == "CompanyResearchProviderInput"
+        assert not hasattr(provider_input, "add")
+        assert not hasattr(provider_input, "flush")
+        assert not hasattr(provider_input, "commit")
+        with pytest.raises(FrozenInstanceError):
+            provider_input.request_hash = "rewritten"
+        return reference
+
+    worker = CompanyResearchPreparationWorker(
+        session, now=lambda: NOW, provider=provider
+    )
+    claim = worker.claim_next()
+    assert claim is not None
+
+    assert worker.run_claim(claim) == "awaiting_evidence_review"
+    assert session.get(Job, initialized.job.id).status == "waiting_for_review"
+
+
+def test_corrupt_claim_ownership_never_cancels_the_foreign_job(session) -> None:
+    initialized = _initialized(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None
+    job = session.get(Job, initialized.job.id)
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    assert job is not None and preparation is not None
+    job.target_type = "foreign_job"
+    session.flush()
+
+    assert worker.run_claim(claim) == "discarded"
+    assert job.status == "running"
+    assert job.claim_token == claim.claim_token
+    assert preparation.status == "preparing_sources"
 
 
 def test_crash_after_provider_before_output_commit_retries_the_same_job(session, monkeypatch) -> None:
