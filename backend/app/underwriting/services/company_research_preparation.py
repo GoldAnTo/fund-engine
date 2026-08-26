@@ -95,8 +95,11 @@ class CompanyResearchPreparationWorker:
             .where(
                 Job.kind == "prepare_company_research",
                 Job.target_type == "company_research_preparation",
+                Job.target_id == CompanyResearchPreparation.id,
+                Job.research_case_id.is_(None),
                 Job.status == "queued",
                 Job.cancel_requested.is_(False),
+                Job.step == "evidence_index",
                 CompanyResearchPreparation.status.in_(
                     ("queued", "recoverable_failure")
                 ),
@@ -147,26 +150,29 @@ class CompanyResearchPreparationWorker:
         """Make an abandoned source claim eligible again without cloning it."""
         before = before.astimezone(UTC)
         jobs = tuple(
-            self._session.scalars(
-                select(Job)
+            self._session.execute(
+                select(Job, CompanyResearchPreparation)
+                .join(
+                    CompanyResearchPreparation,
+                    CompanyResearchPreparation.job_id == Job.id,
+                )
                 .where(
                     Job.kind == "prepare_company_research",
+                    Job.target_type == "company_research_preparation",
+                    Job.target_id == CompanyResearchPreparation.id,
+                    Job.research_case_id.is_(None),
                     Job.status == "running",
+                    Job.step == "evidence_index",
                     Job.started_at.is_not(None),
                     Job.started_at < before,
+                    CompanyResearchPreparation.status == "preparing_sources",
+                    CompanyResearchPreparation.current_step == "evidence_index",
                 )
                 .with_for_update(skip_locked=True)
             )
         )
         recovered = 0
-        for job in jobs:
-            preparation = self._session.scalar(
-                select(CompanyResearchPreparation)
-                .where(CompanyResearchPreparation.job_id == job.id)
-                .with_for_update()
-            )
-            if preparation is None:
-                continue
+        for job, preparation in jobs:
             now = self._utcnow()
             if job.cancel_requested:
                 job.status = "cancelled"
@@ -205,24 +211,30 @@ class CompanyResearchPreparationWorker:
     def cancel_queued_claims(self) -> int:
         """Honor cancellation before a queued job can reach provider work."""
         jobs = tuple(
-            self._session.scalars(
-                select(Job)
+            self._session.execute(
+                select(Job, CompanyResearchPreparation)
+                .join(
+                    CompanyResearchPreparation,
+                    CompanyResearchPreparation.job_id == Job.id,
+                )
                 .where(
                     Job.kind == "prepare_company_research",
+                    Job.target_type == "company_research_preparation",
+                    Job.target_id == CompanyResearchPreparation.id,
+                    Job.research_case_id.is_(None),
                     Job.status == "queued",
                     Job.cancel_requested.is_(True),
+                    Job.step == "evidence_index",
+                    CompanyResearchPreparation.status.in_(
+                        ("queued", "recoverable_failure")
+                    ),
+                    CompanyResearchPreparation.current_step == "evidence_index",
                 )
                 .with_for_update(skip_locked=True)
             )
         )
-        for job in jobs:
-            preparation = self._session.scalar(
-                select(CompanyResearchPreparation)
-                .where(CompanyResearchPreparation.job_id == job.id)
-                .with_for_update()
-            )
-            if preparation is None:
-                continue
+        cancelled = 0
+        for job, preparation in jobs:
             now = self._utcnow()
             job.status = "cancelled"
             job.error = _SAFE_STALE_ERROR
@@ -243,8 +255,9 @@ class CompanyResearchPreparationWorker:
                 payload={"stage": "prepare_sources"},
                 created_at=now,
             )
+            cancelled += 1
         self._session.flush()
-        return len(jobs)
+        return cancelled
 
     def _current_claim(self, claim: CompanyResearchClaim) -> tuple[Job, CompanyResearchPreparation] | None:
         job = self._session.scalar(select(Job).where(Job.id == claim.job_id).with_for_update())
@@ -410,9 +423,11 @@ class CompanyResearchPreparationWorker:
         self._session.commit()
         try:
             compiled = self._compile(preparation)
-            # A provider may have performed read-only database checks.  Close
-            # that transaction before taking the short output-commit locks.
-            self._session.commit()
+            # Providers run between two product-writer transactions.  Their
+            # reads may open a transaction, and accidental ORM writes may be
+            # flushed, but neither becomes durable before the claim-fenced
+            # output is accepted below.
+            self._rollback_provider_transaction()
         except (OSError, TimeoutError, ConnectionError):
             self._rollback_provider_transaction()
             self._recoverable_failure(claim)
@@ -440,7 +455,9 @@ class CompanyResearchPreparationWorker:
                 expected_request_hash=claim.request_hash,
                 expected_strategy_version=claim.strategy_version,
             )
+            self._session.commit()
         except ValidationError:
+            self._session.rollback()
             self._discard(claim)
             return "discarded"
         return "awaiting_evidence_review"

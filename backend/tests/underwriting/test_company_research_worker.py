@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
+import pytest
 from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.operational import Job, JobEvent
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
@@ -282,8 +285,17 @@ def test_strategy_drift_after_provider_work_discards_the_output(session) -> None
         output = CompanyResearchSourceService(
             session, now=lambda: NOW
         ).compile_evidence_index(preparation_id=preparation.id)
-        preparation.strategy_version = "new-strategy.v1"
-        session.flush()
+        # A separate actor can change the immutable input after provider work;
+        # this is distinct from provider-local writes, which the worker rolls
+        # back before it reacquires the output fence.
+        external = Session(bind=session.get_bind(), future=True)
+        try:
+            changed = external.get(CompanyResearchPreparation, preparation.id)
+            assert changed is not None
+            changed.strategy_version = "new-strategy.v1"
+            external.commit()
+        finally:
+            external.close()
         return output
 
     worker = CompanyResearchPreparationWorker(session, now=lambda: NOW, provider=provider)
@@ -315,6 +327,41 @@ def test_stale_running_claim_is_recovered_without_cloning_the_job(session) -> No
     assert session.get(CompanyResearchPreparation, initialized.preparation.id).status == "queued"
 
 
+def test_stale_recovery_ignores_corrupt_or_non_source_company_jobs(session) -> None:
+    initialized = _initialized(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None
+    job = session.get(Job, initialized.job.id)
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    assert job is not None and preparation is not None
+    job.target_type = "legacy_company_research"
+    job.started_at = NOW - timedelta(minutes=31)
+    before_job_events = tuple(
+        session.scalars(select(JobEvent).where(JobEvent.job_id == job.id))
+    )
+    before_events = tuple(
+        session.scalars(
+            select(CompanyResearchEvent).where(
+                CompanyResearchEvent.preparation_id == preparation.id
+            )
+        )
+    )
+    session.flush()
+
+    assert worker.recover_stale_claims(before=NOW - timedelta(minutes=30)) == 0
+    assert job.status == "running"
+    assert preparation.status == "preparing_sources"
+    assert tuple(session.scalars(select(JobEvent).where(JobEvent.job_id == job.id))) == before_job_events
+    assert tuple(
+        session.scalars(
+            select(CompanyResearchEvent).where(
+                CompanyResearchEvent.preparation_id == preparation.id
+            )
+        )
+    ) == before_events
+
+
 def test_queued_cancel_never_reaches_the_provider(session) -> None:
     initialized = _initialized(session)
     job = session.get(Job, initialized.job.id)
@@ -325,3 +372,150 @@ def test_queued_cancel_never_reaches_the_provider(session) -> None:
     assert worker.cancel_queued_claims() == 1
     assert worker.claim_next() is None
     assert job.status == "cancelled"
+
+
+def test_queued_cancel_ignores_corrupt_or_non_source_company_jobs(session) -> None:
+    initialized = _initialized(session)
+    job = session.get(Job, initialized.job.id)
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    assert job is not None and preparation is not None
+    job.target_id = uuid4()
+    job.cancel_requested = True
+    before_job_events = tuple(
+        session.scalars(select(JobEvent).where(JobEvent.job_id == job.id))
+    )
+    before_events = tuple(
+        session.scalars(
+            select(CompanyResearchEvent).where(
+                CompanyResearchEvent.preparation_id == preparation.id
+            )
+        )
+    )
+    session.flush()
+
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+
+    assert worker.cancel_queued_claims() == 0
+    assert job.status == "queued"
+    assert preparation.status == "queued"
+    assert tuple(session.scalars(select(JobEvent).where(JobEvent.job_id == job.id))) == before_job_events
+    assert tuple(
+        session.scalars(
+            select(CompanyResearchEvent).where(
+                CompanyResearchEvent.preparation_id == preparation.id
+            )
+        )
+    ) == before_events
+
+
+def test_provider_writes_are_rolled_back_before_the_output_fence(session) -> None:
+    initialized = _initialized(session)
+    leaked_job_id = uuid4()
+
+    def provider(preparation):
+        session.add(Job(id=leaked_job_id, kind="provider_write", created_at=NOW))
+        session.flush()
+        return CompanyResearchSourceService(
+            session, now=lambda: NOW
+        ).compile_evidence_index(preparation_id=preparation.id)
+
+    worker = CompanyResearchPreparationWorker(
+        session, now=lambda: NOW, provider=provider
+    )
+    claim = worker.claim_next()
+    assert claim is not None
+
+    assert worker.run_claim(claim) == "awaiting_evidence_review"
+    assert session.get(Job, leaked_job_id) is None
+    assert session.get(Job, initialized.job.id).status == "waiting_for_review"
+
+
+def test_crash_after_provider_before_output_commit_retries_the_same_job(session, monkeypatch) -> None:
+    initialized = _initialized(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None
+
+    def crash_before_output(*_args, **_kwargs):
+        raise SystemExit("simulated worker crash")
+
+    monkeypatch.setattr(
+        worker._repository, "complete_evidence_preparation", crash_before_output
+    )
+    with pytest.raises(SystemExit, match="simulated worker crash"):
+        worker.run_claim(claim)
+
+    job = session.get(Job, initialized.job.id)
+    assert job is not None and job.status == "running"
+    job.started_at = NOW - timedelta(minutes=31)
+    session.flush()
+    retry_worker = CompanyResearchPreparationWorker(
+        session, now=lambda: NOW + timedelta(minutes=31)
+    )
+    assert retry_worker.recover_stale_claims(before=NOW) == 1
+    retry_claim = retry_worker.claim_next()
+    assert retry_claim is not None and retry_claim.job_id == claim.job_id
+    assert retry_worker.run_claim(retry_claim) == "awaiting_evidence_review"
+
+
+def test_committed_output_survives_a_worker_crash_after_artifact_event_convergence(session) -> None:
+    initialized = _initialized(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None
+    assert worker.run_claim(claim) == "awaiting_evidence_review"
+    preparation_id = initialized.preparation.id
+    job_id = initialized.job.id
+    project_id = initialized.project.id
+
+    # Simulate process teardown after the worker's final commit, then inspect
+    # the durable state through a fresh session.
+    bind = session.get_bind()
+    session.rollback()
+    session.close()
+    restarted = Session(bind=bind, future=True)
+    try:
+        preparation = restarted.get(
+            CompanyResearchPreparation, preparation_id
+        )
+        job = restarted.get(Job, job_id)
+        assert preparation is not None and preparation.status == "awaiting_evidence_review"
+        assert job is not None and job.status == "waiting_for_review"
+        assert len(
+            tuple(
+                restarted.scalars(
+                    select(CompanyResearchArtifactVersion).where(
+                        CompanyResearchArtifactVersion.project_id == project_id
+                    )
+                )
+            )
+        ) == 2
+        assert CompanyResearchPreparationWorker(
+            restarted, now=lambda: NOW + timedelta(hours=1)
+        ).recover_stale_claims(before=NOW + timedelta(hours=1)) == 0
+    finally:
+        restarted.rollback()
+        restarted.close()
+
+
+@pytest.mark.pg_only
+def test_postgresql_two_workers_claim_the_same_company_job_exclusively(engine) -> None:
+    sessions = sessionmaker(bind=engine, future=True)
+    initializer_session = sessions()
+    first_session = sessions()
+    second_session = sessions()
+    try:
+        _initialized(initializer_session)
+        initializer_session.commit()
+        first = CompanyResearchPreparationWorker(first_session, now=lambda: NOW)
+        second = CompanyResearchPreparationWorker(second_session, now=lambda: NOW)
+
+        assert first.claim_next() is not None
+        assert second.claim_next() is None
+    finally:
+        first_session.rollback()
+        second_session.rollback()
+        initializer_session.rollback()
+        first_session.close()
+        second_session.close()
+        initializer_session.close()
