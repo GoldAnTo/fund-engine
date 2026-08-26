@@ -415,6 +415,7 @@ def list_industry_companies(
     if values is None:
         raise NotFoundError("industry not found")
     return IndustryCompanyBrowseResponse(
+        industry_id=industry_id,
         items=tuple(
             IndustryCompanyBrowseItemResponse(
                 object_id=value.object_id,

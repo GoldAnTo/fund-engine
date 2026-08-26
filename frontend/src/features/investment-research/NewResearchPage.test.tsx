@@ -63,7 +63,7 @@ function server({ loseFirstInitialization = false, searchItems = objects, indust
     if (url.includes(`/product/industries/${ids.industry}/companies?`)) {
       industryBrowseAttempts += 1;
       if (loseFirstIndustryBrowse && industryBrowseAttempts === 1) throw new TypeError("offline");
-      return json({ ...dto, items: industryItems });
+      return json({ ...dto, industry_id: ids.industry, items: industryItems });
     }
     if (url.endsWith("/company-research/preview")) {
       const body = typeof init?.body === "string" ? JSON.parse(init.body) as { cutoff_at: string } : null;
@@ -313,7 +313,7 @@ describe("company research entry", () => {
     await user.clear(input);
     await user.type(input, "GOOGL");
     await user.click(screen.getByRole("button", { name: "搜索对象" }));
-    await act(async () => { delayedBrowse.resolve(json({ ...dto, items: industryCompanyItems })); await Promise.resolve(); });
+    await act(async () => { delayedBrowse.resolve(json({ ...dto, industry_id: ids.industry, items: industryCompanyItems })); await Promise.resolve(); });
 
     expect(screen.queryByRole("region", { name: "行业相关公司" })).not.toBeInTheDocument();
   });

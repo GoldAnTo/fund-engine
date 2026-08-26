@@ -89,6 +89,7 @@ class IndustryCompanyBrowseItemResponse(UnderwritingModel):
 
 
 class IndustryCompanyBrowseResponse(UnderwritingModel):
+    industry_id: UUID
     items: tuple[IndustryCompanyBrowseItemResponse, ...]
 
 

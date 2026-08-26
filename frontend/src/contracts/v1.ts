@@ -7627,6 +7627,11 @@ export interface components {
              * @constant
              */
             schema_version: "underwriting.v1";
+            /**
+             * Industry Id
+             * Format: uuid
+             */
+            industry_id: string;
             /** Items */
             items: components["schemas"]["IndustryCompanyBrowseItemResponse"][];
         };
@@ -16826,7 +16831,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16868,7 +16873,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16910,7 +16915,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16952,7 +16957,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16996,7 +17001,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17040,7 +17045,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17081,7 +17086,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17122,7 +17127,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17162,7 +17167,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17202,7 +17207,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17242,7 +17247,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17283,7 +17288,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17317,7 +17322,7 @@ export interface operations {
                     "application/json": components["schemas"]["ResearchArchiveListResponse"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17358,7 +17363,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17391,7 +17396,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProductObjectSearchResponse"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17434,7 +17439,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17465,7 +17470,7 @@ export interface operations {
                     "application/json": components["schemas"]["ResearchProjectListResponse"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17507,7 +17512,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17547,7 +17552,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17591,7 +17596,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17635,7 +17640,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17679,7 +17684,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17721,7 +17726,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17763,7 +17768,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17805,7 +17810,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17847,7 +17852,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17888,7 +17893,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17930,7 +17935,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17970,7 +17975,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18014,7 +18019,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18058,7 +18063,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18104,7 +18109,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18144,7 +18149,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18186,7 +18191,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18230,7 +18235,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18270,7 +18275,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -18319,7 +18324,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;

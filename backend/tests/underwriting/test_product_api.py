@@ -167,6 +167,7 @@ def test_industry_company_endpoint_returns_complete_alphabet_group(api_client, s
     )
 
     assert response.status_code == 200, response.text
+    assert response.json()["industry_id"] == str(industry.id)
     assert [item["external_key"] for item in response.json()["items"]] == [
         "US:ALPHABET:COMPANY",
         "NASDAQ:GOOGL",
@@ -181,6 +182,11 @@ def test_industry_company_endpoint_returns_complete_alphabet_group(api_client, s
         "IndustryCompanyBrowseItemResponse"
     ]
     assert "identity_version_id" not in item_schema["properties"]
+    response_schema = openapi.json()["components"]["schemas"][
+        "IndustryCompanyBrowseResponse"
+    ]
+    assert set(response_schema["required"]) == {"industry_id", "items"}
+    assert response_schema["properties"]["industry_id"]["format"] == "uuid"
 
 
 def test_industry_company_endpoint_maps_not_found_validation_and_keeps_reads_transaction_free(

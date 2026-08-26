@@ -245,7 +245,8 @@ function isIndustryCompanyBrowseItem(value: unknown): value is IndustryCompanyBr
 }
 
 function isIndustryCompanyBrowse(value: unknown): value is IndustryCompanyBrowse {
-  if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "items"])
+  if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "industry_id", "items"])
+    || !isUuid(value.industry_id)
     || !Array.isArray(value.items) || !value.items.every(isIndustryCompanyBrowseItem)) return false;
   const objectIds = value.items.map((item) => item.object_id);
   if (new Set(objectIds).size !== objectIds.length) return false;
@@ -915,12 +916,16 @@ export class InvestmentResearchApi {
     const params = new URLSearchParams();
     if (options.asOf) params.set("as_of", options.asOf);
     params.set("limit", String(options.limit ?? 20));
-    return requestJson(
+    const browse = await requestJson(
       `${this.root}/industries/${encodeURIComponent(industryId)}/companies?${params}`,
       isIndustryCompanyBrowse,
       200,
       { method: "GET" },
     );
+    if (browse.industry_id !== industryId) {
+      throw new InvestmentResearchRequestError("投资研究服务返回了不匹配的行业结果", 502, "invalid_response", null);
+    }
+    return browse;
   }
 
   projects(limit = 20): Promise<ProductProjectList> {
