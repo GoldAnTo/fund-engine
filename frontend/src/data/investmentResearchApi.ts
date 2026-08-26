@@ -71,6 +71,12 @@ function isUuid(value: unknown): value is string {
   return typeof value === "string" && UUID_PATTERN.test(value);
 }
 
+function assertUuid(value: string, fieldName: string): void {
+  if (!isUuid(value)) {
+    throw new InvestmentResearchRequestError(`${fieldName} 必须是有效 UUID`, 0, "invalid_request", null);
+  }
+}
+
 function isNullableUuid(value: unknown): value is string | null {
   return value === null || isUuid(value);
 }
@@ -904,7 +910,8 @@ export class InvestmentResearchApi {
     return requestJson(`${this.root}/objects?${params}`, isObjectSearch, 200, { method: "GET" });
   }
 
-  industryCompanies(industryId: string, options: { asOf?: string; limit?: number } = {}): Promise<IndustryCompanyBrowse> {
+  async industryCompanies(industryId: string, options: { asOf?: string; limit?: number } = {}): Promise<IndustryCompanyBrowse> {
+    assertUuid(industryId, "industryId");
     const params = new URLSearchParams();
     if (options.asOf) params.set("as_of", options.asOf);
     params.set("limit", String(options.limit ?? 20));

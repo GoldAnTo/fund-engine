@@ -288,6 +288,15 @@ describe("InvestmentResearchApi", () => {
     );
   });
 
+  it("rejects an invalid industry identity locally without making a request", async () => {
+    const fetchSpy = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(new InvestmentResearchApi().industryCompanies("not-a-uuid"))
+      .rejects.toMatchObject({ code: "invalid_request" });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["an industry item", industryCompanyBrowseBody([{ schema_version: "underwriting.v1", object_id: ids.company, kind: "industry", external_key: "INDUSTRY:INTERNET", canonical_name: "Internet", symbol: null, exchange: null, share_class: null, trading_currency: null }])],
     ["a security before its Company", industryCompanyBrowseBody([{ schema_version: "underwriting.v1", object_id: ids.securityA, kind: "security", external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD" }])],
