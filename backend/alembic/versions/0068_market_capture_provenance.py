@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Union
 
 from alembic import op
@@ -24,6 +24,28 @@ depends_on: Union[str, tuple[str, ...], None] = None
 _TABLE = "uw_market_capture_envelopes"
 _LEGACY_LOCATOR = "legacy snapshot: exact source locator was not captured"
 _LEGACY_POLICY = "legacy_snapshot_without_exact_provenance.v1"
+_BUSINESS_UNIQUE_INDEXES = (
+    (
+        "uq_uw_price_snapshot_business_time",
+        "uw_price_snapshots",
+        "security_identity_id, price_type, adjustment_basis, market_at",
+    ),
+    (
+        "uq_uw_fx_snapshot_business_time",
+        "uw_fx_snapshots",
+        "base_currency, quote_currency, quote_direction, market_at",
+    ),
+    (
+        "uq_uw_capital_structure_business_time",
+        "uw_capital_structure_snapshots",
+        "company_id, report_period_start, report_period_end, market_at",
+    ),
+    (
+        "uq_uw_security_rights_business_time",
+        "uw_security_rights_versions",
+        "security_identity_id, effective_from",
+    ),
+)
 
 
 def _canonical_hash(value: object) -> str:
@@ -35,6 +57,10 @@ def _canonical_hash(value: object) -> str:
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _json_array_constraint(column: str, dialect: str) -> str:
@@ -69,6 +95,61 @@ def _drop_immutable_triggers(dialect: str) -> None:
         op.execute(f"DROP TRIGGER IF EXISTS no_{action}_{_TABLE}{suffix};")
 
 
+def _install_capture_reference_trigger(dialect: str) -> None:
+    if dialect == "sqlite":
+        op.execute(f"""
+            CREATE TRIGGER validate_{_TABLE}_insert
+            BEFORE INSERT ON {_TABLE}
+            BEGIN
+                SELECT CASE WHEN
+                    (NEW.provenance_role IN ('class_b_legal_rights', 'class_b_units')
+                     AND NEW.snapshot_kind <> 'capital_structure')
+                    OR (NEW.snapshot_kind = 'price' AND NOT EXISTS
+                        (SELECT 1 FROM uw_price_snapshots WHERE id = NEW.snapshot_id))
+                    OR (NEW.snapshot_kind = 'fx' AND NOT EXISTS
+                        (SELECT 1 FROM uw_fx_snapshots WHERE id = NEW.snapshot_id))
+                    OR (NEW.snapshot_kind = 'capital_structure' AND NOT EXISTS
+                        (SELECT 1 FROM uw_capital_structure_snapshots WHERE id = NEW.snapshot_id))
+                    OR (NEW.snapshot_kind = 'security_rights' AND NOT EXISTS
+                        (SELECT 1 FROM uw_security_rights_versions WHERE id = NEW.snapshot_id))
+                THEN RAISE(ABORT, 'invalid market capture snapshot kind/role reference') END;
+            END;
+        """)
+        return
+    op.execute("""
+        CREATE OR REPLACE FUNCTION validate_market_capture_reference()
+        RETURNS trigger AS $$
+        BEGIN
+            IF (NEW.provenance_role IN ('class_b_legal_rights', 'class_b_units')
+                AND NEW.snapshot_kind <> 'capital_structure')
+               OR (NEW.snapshot_kind = 'price' AND NOT EXISTS
+                   (SELECT 1 FROM uw_price_snapshots WHERE id = NEW.snapshot_id))
+               OR (NEW.snapshot_kind = 'fx' AND NOT EXISTS
+                   (SELECT 1 FROM uw_fx_snapshots WHERE id = NEW.snapshot_id))
+               OR (NEW.snapshot_kind = 'capital_structure' AND NOT EXISTS
+                   (SELECT 1 FROM uw_capital_structure_snapshots WHERE id = NEW.snapshot_id))
+               OR (NEW.snapshot_kind = 'security_rights' AND NOT EXISTS
+                   (SELECT 1 FROM uw_security_rights_versions WHERE id = NEW.snapshot_id)) THEN
+                RAISE EXCEPTION 'invalid market capture snapshot kind/role reference';
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+    """)
+    op.execute(f"""
+        CREATE TRIGGER validate_{_TABLE}_insert
+        BEFORE INSERT ON {_TABLE}
+        FOR EACH ROW EXECUTE FUNCTION validate_market_capture_reference()
+    """)
+
+
+def _drop_capture_reference_trigger(dialect: str) -> None:
+    suffix = f" ON {_TABLE}" if dialect == "postgresql" else ""
+    op.execute(f"DROP TRIGGER IF EXISTS validate_{_TABLE}_insert{suffix};")
+    if dialect == "postgresql":
+        op.execute("DROP FUNCTION IF EXISTS validate_market_capture_reference();")
+
+
 def _backfill_legacy_rows() -> None:
     connection = op.get_bind()
     sources = (
@@ -90,11 +171,13 @@ def _backfill_legacy_rows() -> None:
             acquired_at = item["created_at"]
             if isinstance(acquired_at, str):
                 acquired_at = datetime.fromisoformat(acquired_at)
+            acquired_at = _utc(acquired_at)
             authenticated_available_at = item["authenticated_available_at"]
             if isinstance(authenticated_available_at, str):
                 authenticated_available_at = datetime.fromisoformat(
                     authenticated_available_at
                 )
+            authenticated_available_at = _utc(authenticated_available_at)
             payload = {
                 "schema_version": "product.market-capture-envelope.v1",
                 "snapshot_kind": kind,
@@ -182,11 +265,17 @@ def upgrade() -> None:
         ["snapshot_kind", "snapshot_id"],
     )
     _backfill_legacy_rows()
+    for name, table, columns in _BUSINESS_UNIQUE_INDEXES:
+        op.execute(f"CREATE UNIQUE INDEX {name} ON {table} ({columns})")
+    _install_capture_reference_trigger(dialect)
     _install_immutable_triggers(dialect)
 
 
 def downgrade() -> None:
     dialect = op.get_bind().dialect.name
     _drop_immutable_triggers(dialect)
+    _drop_capture_reference_trigger(dialect)
+    for name, table, _columns in reversed(_BUSINESS_UNIQUE_INDEXES):
+        op.drop_index(name, table_name=table)
     op.drop_index("ix_uw_market_capture_snapshot", table_name=_TABLE)
     op.drop_table(_TABLE)

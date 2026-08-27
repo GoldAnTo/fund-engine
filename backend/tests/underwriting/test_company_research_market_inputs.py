@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.orm.attributes import set_committed_value
@@ -38,6 +39,7 @@ from app.underwriting.services.company_research_initializer import (
 )
 from app.underwriting.services.company_research_market_inputs import (
     CompanyResearchMarketInputs,
+    _latest_exact,
 )
 from app.underwriting.services.market_snapshots import MarketSnapshotService
 from app.underwriting.services.market_snapshots import (
@@ -230,28 +232,16 @@ def test_market_inputs_reject_hash_invalid_rows(session) -> None:
         )
 
 
-def test_market_inputs_reject_duplicate_latest_prices(session) -> None:
-    initialized = _initialized(session)
-    _freeze_complete_market(session, initialized)
-    security = _securities(session, initialized)["NASDAQ:GOOG"]
-    MarketSnapshotService(session, now=lambda: CUTOFF).freeze_price(
-        PriceSnapshotInput(
-            security.id,
-            Decimal("208"),
-            "USD",
-            "official_close",
-            "unadjusted",
-            datetime(2026, 8, 25, 20, tzinfo=UTC),
-            datetime(2026, 8, 25, 23, tzinfo=UTC),
-            "test:duplicate-price",
-            "1" * 64,
-        )
-    )
-
+def test_market_inputs_reject_duplicate_latest_prices() -> None:
+    latest_at = datetime(2026, 8, 25, 20, tzinfo=UTC)
     with pytest.raises(ValidationError, match="duplicate price"):
-        CompanyResearchMarketInputs(session).resolve(
-            project_id=initialized.project.id,
-            cutoff_at=CUTOFF,
+        _latest_exact(
+            (
+                SimpleNamespace(market_at=latest_at),
+                SimpleNamespace(market_at=latest_at),
+            ),
+            time_field="market_at",
+            label="price for NASDAQ:GOOG",
         )
 
 
@@ -427,6 +417,79 @@ def test_prepare_rejects_security_rights_authenticated_after_cutoff(session) -> 
         )
 
 
+@pytest.mark.parametrize("role", ("price", "fx", "capital"))
+def test_resolver_rejects_primary_capture_available_after_cutoff(session, role: str) -> None:
+    initialized = _initialized(session)
+    context = CompanyResearchMarketInputs(session, now=lambda: INSTALL_TIME).prepare(
+        project_id=initialized.project.id,
+        cutoff_at=CUTOFF,
+        market_inputs=_captured_bundle(),
+    )
+    from app.underwriting.persistence.product_models import UnderwritingMarketCaptureEnvelope
+
+    snapshot_id = {
+        "price": context.price_snapshot_ids[0],
+        "fx": context.fx_snapshot_ids[0],
+        "capital": context.capital_structure_snapshot_id,
+    }[role]
+    envelope = session.scalar(
+        select(UnderwritingMarketCaptureEnvelope).where(
+            UnderwritingMarketCaptureEnvelope.snapshot_id == snapshot_id,
+            UnderwritingMarketCaptureEnvelope.provenance_role == "primary",
+        )
+    )
+    assert envelope is not None
+    envelope.authenticated_available_at = datetime(2026, 8, 26, tzinfo=UTC)
+    from app.underwriting.hashing import canonical_hash
+
+    envelope.content_hash = canonical_hash(
+        {
+            "schema_version": "product.market-capture-envelope.v1",
+            "snapshot_kind": envelope.snapshot_kind,
+            "snapshot_id": str(envelope.snapshot_id),
+            "provenance_role": envelope.provenance_role,
+            "source_url": envelope.source_url,
+            "source_locator": envelope.source_locator,
+            "provider_policy_version": envelope.provider_policy_version,
+            "raw_hash": envelope.raw_hash,
+            "raw_components": envelope.raw_components,
+            "authenticated_available_at": "2026-08-26T00:00:00+00:00",
+        }
+    )
+    session.flush()
+    session.expire_all()
+    with pytest.raises(ValidationError, match="market inputs are incomplete"):
+        CompanyResearchMarketInputs(session).resolve(
+            project_id=initialized.project.id,
+            cutoff_at=CUTOFF,
+        )
+
+
+def test_database_rejects_different_price_at_same_business_identity_time(session) -> None:
+    initialized = _initialized(session)
+    resolver = CompanyResearchMarketInputs(session, now=lambda: INSTALL_TIME)
+    resolver.prepare(
+        project_id=initialized.project.id,
+        cutoff_at=CUTOFF,
+        market_inputs=_captured_bundle(),
+    )
+    security = _securities(session, initialized)["NASDAQ:GOOG"]
+    with pytest.raises(ConflictError, match="natural identity"):
+        MarketSnapshotService(session, now=lambda: INSTALL_TIME).freeze_price(
+            PriceSnapshotInput(
+                security.id,
+                Decimal("999"),
+                "USD",
+                "official_close",
+                "unadjusted",
+                datetime(2026, 8, 25, 20, tzinfo=UTC),
+                datetime(2026, 8, 25, 23, tzinfo=UTC),
+                "https://different.example/price",
+                "9" * 64,
+            )
+        )
+
+
 @pytest.mark.parametrize("kind", ("price", "fx", "capital", "rights"))
 def test_prepare_conflicts_on_different_content_for_same_business_identity_time(
     session, kind: str
@@ -491,6 +554,25 @@ def test_class_b_is_a_typed_nonlisted_legal_rights_and_proxy_component(session) 
     assert class_b.unit_source_ref.fact_key == "economic_units_class_b"
     assert class_b.price_proxy_ref.fact_key == "market_price_proxy_class_b"
     assert class_b.price_proxy_policy_version == "alphabet_class_b_googl_proxy.v1"
+
+
+def test_frozen_snapshot_raw_components_are_recursively_immutable_typed_values(
+    session,
+) -> None:
+    initialized = _initialized(session)
+    context = CompanyResearchMarketInputs(session, now=lambda: INSTALL_TIME).prepare(
+        project_id=initialized.project.id,
+        cutoff_at=CUTOFF,
+        market_inputs=load_alphabet_golden_case_fixture().market_inputs,
+    )
+    component = next(
+        binding.raw_components[0]
+        for binding in context.snapshot_bindings
+        if binding.raw_components
+    )
+    assert type(component).__name__ == "FrozenRawComponentReference"
+    with pytest.raises(FrozenInstanceError):
+        component.raw_hash = "0" * 64
 
 
 def test_frozen_context_rejects_missing_class_b_or_class_b_merged_into_listed_rights(

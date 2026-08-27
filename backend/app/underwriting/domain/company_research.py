@@ -1297,6 +1297,33 @@ class ReverseDcfRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class MarketEquityComponentReference:
+    component_key: str
+    economic_units: Decimal
+    price_proxy_security_external_key: str
+    unit_source_ref: SourceLineageReference
+    price_ref: SourceLineageReference
+    votes_per_unit: Decimal | None = None
+    conversion_to_security_external_key: str | None = None
+    conversion_ratio: Decimal | None = None
+    dividend_rights_per_unit: Decimal | None = None
+    economic_rights_per_unit: Decimal | None = None
+    legal_rights_ref: SourceLineageReference | None = None
+    price_proxy_ref: SourceLineageReference | None = None
+    price_proxy_policy_version: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.component_key not in {"class_a", "class_b", "class_c"}:
+            raise CompanyResearchValidationError("market equity component key is invalid")
+        _artifact_decimal(self.economic_units, "market equity component units")
+        if self.economic_units < 0:
+            raise CompanyResearchValidationError("market equity component units are invalid")
+        _artifact_text(self.price_proxy_security_external_key, "market equity price proxy")
+        if type(self.unit_source_ref) is not SourceLineageReference or type(self.price_ref) is not SourceLineageReference:
+            raise CompanyResearchValidationError("market equity component lineage must be typed")
+
+
+@dataclass(frozen=True, slots=True)
 class CompanyResearchModelInput:
     business_map: BusinessMapArtifact
     driver_map: DriverMapArtifact
@@ -1310,6 +1337,7 @@ class CompanyResearchModelInput:
     market_bridge: MarketBridgeArtifact | None
     judgment_context: "JudgmentContextArtifact"
     reverse_dcf: ReverseDcfRequest | None = None
+    equity_components: tuple[MarketEquityComponentReference, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.business_map) is not BusinessMapArtifact or type(self.driver_map) is not DriverMapArtifact or type(self.scenario_set) is not ScenarioSetArtifact:
@@ -1337,6 +1365,20 @@ class CompanyResearchModelInput:
             raise CompanyResearchValidationError("model input judgment context must be typed")
         if self.reverse_dcf is not None and type(self.reverse_dcf) is not ReverseDcfRequest:
             raise CompanyResearchValidationError("model input reverse DCF must be typed")
+        if self.market_bridge is not None:
+            if (
+                not isinstance(self.equity_components, tuple)
+                or not all(type(item) is MarketEquityComponentReference for item in self.equity_components)
+                or tuple(item.component_key for item in self.equity_components)
+                != ("class_a", "class_b", "class_c")
+            ):
+                raise CompanyResearchValidationError(
+                    "model input requires exact Class A-B-C equity components"
+                )
+        elif self.equity_components:
+            raise CompanyResearchValidationError(
+                "model input cannot carry equity components without a market bridge"
+            )
 
 
 @dataclass(frozen=True, slots=True)

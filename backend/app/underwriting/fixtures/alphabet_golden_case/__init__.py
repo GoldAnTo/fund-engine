@@ -12,6 +12,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 import gzip
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -468,8 +469,13 @@ def _verified_raw_sidecar(
         raise AlphabetGoldenCaseFixtureError(
             f"Alphabet fixture {path.name} raw_size is invalid"
         )
+    if len(contents) > 10_000_000:
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {path.name} compressed size is invalid"
+        )
     try:
-        raw = gzip.decompress(contents)
+        with gzip.GzipFile(fileobj=io.BytesIO(contents)) as stream:
+            raw = stream.read(expected_raw_size + 1)
     except (OSError, EOFError) as exc:
         raise AlphabetGoldenCaseFixtureError(
             f"Alphabet fixture {path.name} gzip sidecar is invalid"

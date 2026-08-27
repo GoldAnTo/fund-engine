@@ -8,6 +8,7 @@ from decimal import Decimal, localcontext
 from uuid import UUID
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ConflictError, ValidationError
@@ -42,6 +43,7 @@ from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.services.company_research_model_builder import (
     FrozenMarketContext,
     FrozenMarketEquityComponent,
+    FrozenRawComponentReference,
     FrozenMarketSnapshotBinding,
     FrozenMarketSnapshotRole,
 )
@@ -263,9 +265,30 @@ class CompanyResearchMarketInputs:
                     "Class B must remain a separate typed legal-rights component"
                 )
             price_rows = tuple(
-                market.freeze_price(value) for _item, value in price_values
+                self._converge_snapshot_insert(
+                    lambda value=value: market.freeze_price(value),
+                    UnderwritingPriceSnapshot,
+                    (
+                        UnderwritingPriceSnapshot.security_identity_id == value.security_identity_id,
+                        UnderwritingPriceSnapshot.price_type == value.price_type,
+                        UnderwritingPriceSnapshot.adjustment_basis == value.adjustment_basis,
+                        UnderwritingPriceSnapshot.market_at == value.market_at,
+                    ),
+                    price_snapshot_hash(value),
+                )
+                for _item, value in price_values
             )
-            fx_row = market.freeze_fx(fx_value)
+            fx_row = self._converge_snapshot_insert(
+                lambda: market.freeze_fx(fx_value),
+                UnderwritingFXSnapshot,
+                (
+                    UnderwritingFXSnapshot.base_currency == fx_value.base_currency,
+                    UnderwritingFXSnapshot.quote_currency == fx_value.quote_currency,
+                    UnderwritingFXSnapshot.quote_direction == fx_value.quote_direction.value,
+                    UnderwritingFXSnapshot.market_at == fx_value.market_at,
+                ),
+                fx_snapshot_hash(fx_value),
+            )
             if (
                 capital_item.capital_bridge_policy_version
                 != "alphabet-capital-bridge.v1"
@@ -274,9 +297,27 @@ class CompanyResearchMarketInputs:
                 or capital_item.value("pension_liabilities") != Decimal("0")
             ):
                 raise ValidationError("capital bridge policy is unsupported or not closed")
-            capital_row = market.freeze_capital_structure(capital_value)
+            capital_row = self._converge_snapshot_insert(
+                lambda: market.freeze_capital_structure(capital_value),
+                UnderwritingCapitalStructureSnapshot,
+                (
+                    UnderwritingCapitalStructureSnapshot.company_id == capital_value.company_id,
+                    UnderwritingCapitalStructureSnapshot.report_period_start == capital_value.report_period_start,
+                    UnderwritingCapitalStructureSnapshot.report_period_end == capital_value.report_period_end,
+                    UnderwritingCapitalStructureSnapshot.market_at == capital_value.market_at,
+                ),
+                capital_structure_snapshot_hash(capital_value),
+            )
             rights_rows = tuple(
-                self._freeze_rights(market, value)
+                self._converge_snapshot_insert(
+                    lambda value=value: self._freeze_rights(market, value),
+                    UnderwritingSecurityRightsVersion,
+                    (
+                        UnderwritingSecurityRightsVersion.security_identity_id == value.security_identity_id,
+                        UnderwritingSecurityRightsVersion.effective_from == value.effective_from,
+                    ),
+                    security_rights_hash(value),
+                )
                 for _item, value in rights_values
             )
             for (item, _value), row in zip(price_values, price_rows, strict=True):
@@ -420,6 +461,24 @@ class CompanyResearchMarketInputs:
                     "different content already exists for the same business identity/time"
                 )
 
+    def _converge_snapshot_insert(
+        self,
+        insert: Callable[[], object],
+        model: type,
+        predicates: tuple[object, ...],
+        expected_hash: str,
+    ) -> object:
+        try:
+            with self._session.begin_nested():
+                return insert()
+        except IntegrityError:
+            row = self._session.scalar(select(model).where(*predicates))
+            if row is None or row.content_hash != expected_hash:
+                raise ConflictError(
+                    "different content already exists for the same business identity/time"
+                ) from None
+            return row
+
     def _persist_capture(
         self,
         snapshot_kind: str,
@@ -472,9 +531,24 @@ class CompanyResearchMarketInputs:
             authenticated_available_at=authenticated_available_at,
             acquired_at=self._clock(),
         )
-        self._session.add(row)
-        self._session.flush()
-        return row
+        try:
+            with self._session.begin_nested():
+                self._session.add(row)
+                self._session.flush()
+            return row
+        except IntegrityError:
+            existing = self._session.scalar(
+                select(UnderwritingMarketCaptureEnvelope).where(
+                    UnderwritingMarketCaptureEnvelope.snapshot_kind == snapshot_kind,
+                    UnderwritingMarketCaptureEnvelope.snapshot_id == snapshot_id,
+                    UnderwritingMarketCaptureEnvelope.provenance_role == provenance_role,
+                )
+            )
+            if existing is None or existing.content_hash != content_hash:
+                raise ConflictError(
+                    "different capture provenance exists for the same snapshot role"
+                ) from None
+            return existing
 
     def resolve(self, *, project_id: UUID, cutoff_at: datetime) -> FrozenMarketContext:
         if type(project_id) is not UUID:
@@ -602,17 +676,25 @@ class CompanyResearchMarketInputs:
     def _price(self, *, security_id: UUID, security_key: str, cutoff: datetime):
         rows = self._session.scalars(
             select(UnderwritingPriceSnapshot)
+            .join(
+                UnderwritingMarketCaptureEnvelope,
+                (UnderwritingMarketCaptureEnvelope.snapshot_id == UnderwritingPriceSnapshot.id)
+                & (UnderwritingMarketCaptureEnvelope.snapshot_kind == "price")
+                & (UnderwritingMarketCaptureEnvelope.provenance_role == "primary"),
+            )
             .where(
                 UnderwritingPriceSnapshot.security_identity_id == security_id,
                 UnderwritingPriceSnapshot.price_type == _PRICE_TYPE,
                 UnderwritingPriceSnapshot.adjustment_basis == _ADJUSTMENT_BASIS,
                 UnderwritingPriceSnapshot.market_at <= cutoff,
                 UnderwritingPriceSnapshot.available_at <= cutoff,
+                UnderwritingMarketCaptureEnvelope.authenticated_available_at <= cutoff,
             )
             .order_by(
                 UnderwritingPriceSnapshot.market_at.desc(),
                 UnderwritingPriceSnapshot.id,
             )
+            .limit(2)
         )
         row = _latest_exact(rows, time_field="market_at", label=f"price for {security_key}")
         if row.security_identity_id != security_id:
@@ -624,32 +706,51 @@ class CompanyResearchMarketInputs:
     def _fx(self, cutoff: datetime):
         rows = self._session.scalars(
             select(UnderwritingFXSnapshot)
+            .join(
+                UnderwritingMarketCaptureEnvelope,
+                (UnderwritingMarketCaptureEnvelope.snapshot_id == UnderwritingFXSnapshot.id)
+                & (UnderwritingMarketCaptureEnvelope.snapshot_kind == "fx")
+                & (UnderwritingMarketCaptureEnvelope.provenance_role == "primary"),
+            )
             .where(
                 UnderwritingFXSnapshot.base_currency == "USD",
                 UnderwritingFXSnapshot.quote_currency == _MODEL_CURRENCY,
                 UnderwritingFXSnapshot.quote_direction == "quote_per_base",
                 UnderwritingFXSnapshot.market_at <= cutoff,
                 UnderwritingFXSnapshot.available_at <= cutoff,
+                UnderwritingMarketCaptureEnvelope.authenticated_available_at <= cutoff,
             )
             .order_by(
                 UnderwritingFXSnapshot.market_at.desc(),
                 UnderwritingFXSnapshot.id,
             )
+            .limit(2)
         )
         return _latest_exact(rows, time_field="market_at", label="USD/CNY FX")
 
     def _capital(self, company_id: UUID, cutoff: datetime):
         rows = self._session.scalars(
             select(UnderwritingCapitalStructureSnapshot)
+            .join(
+                UnderwritingMarketCaptureEnvelope,
+                (
+                    UnderwritingMarketCaptureEnvelope.snapshot_id
+                    == UnderwritingCapitalStructureSnapshot.id
+                )
+                & (UnderwritingMarketCaptureEnvelope.snapshot_kind == "capital_structure")
+                & (UnderwritingMarketCaptureEnvelope.provenance_role == "primary"),
+            )
             .where(
                 UnderwritingCapitalStructureSnapshot.company_id == company_id,
                 UnderwritingCapitalStructureSnapshot.market_at <= cutoff,
                 UnderwritingCapitalStructureSnapshot.available_at <= cutoff,
+                UnderwritingMarketCaptureEnvelope.authenticated_available_at <= cutoff,
             )
             .order_by(
                 UnderwritingCapitalStructureSnapshot.market_at.desc(),
                 UnderwritingCapitalStructureSnapshot.id,
             )
+            .limit(2)
         )
         row = _latest_exact(rows, time_field="market_at", label="capital structure")
         if row.company_id != company_id:
@@ -687,6 +788,7 @@ class CompanyResearchMarketInputs:
                 UnderwritingSecurityRightsVersion.version.desc(),
                 UnderwritingSecurityRightsVersion.id,
             )
+            .limit(2)
         )
         row = _latest_exact(
             rows,
@@ -910,7 +1012,8 @@ class CompanyResearchMarketInputs:
                     (capture_kind[role_by_id[snapshot_id][0]], snapshot_id, "primary")
                 ].provider_policy_version,
                 raw_components=tuple(
-                    captures[
+                    FrozenRawComponentReference(**component)
+                    for component in captures[
                         (capture_kind[role_by_id[snapshot_id][0]], snapshot_id, "primary")
                     ].raw_components
                 ),

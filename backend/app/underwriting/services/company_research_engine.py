@@ -174,6 +174,12 @@ class CompanyResearchEngine:
             refs.append(model.market_bridge.fx_ref)
             for security in model.market_bridge.securities:
                 refs.extend((security.rights_ref, security.price_ref))
+            for component in model.equity_components:
+                refs.extend((component.unit_source_ref, component.price_ref))
+                if component.legal_rights_ref is not None:
+                    refs.append(component.legal_rights_ref)
+                if component.price_proxy_ref is not None:
+                    refs.append(component.price_proxy_ref)
         return tuple(refs)
 
     def _validate_lineage(self, model: CompanyResearchModelInput) -> None:
@@ -224,6 +230,64 @@ class CompanyResearchEngine:
                 for item in model.market_bridge.securities
             ):
                 raise ValidationError("security FX references must use the exact market FX rate")
+            securities = {
+                item.security_external_key: item for item in model.market_bridge.securities
+            }
+            class_a, class_b, class_c = model.equity_components
+            capital = model.market_bridge.capital_structure
+            if (
+                class_a.price_proxy_security_external_key != "NASDAQ:GOOGL"
+                or class_b.price_proxy_security_external_key != "NASDAQ:GOOGL"
+                or class_c.price_proxy_security_external_key != "NASDAQ:GOOG"
+                or class_a.economic_units
+                != securities["NASDAQ:GOOGL"].listed_class_economic_units
+                or class_c.economic_units
+                != securities["NASDAQ:GOOG"].listed_class_economic_units
+                or class_a.unit_source_ref != securities["NASDAQ:GOOGL"].rights_ref
+                or class_c.unit_source_ref != securities["NASDAQ:GOOG"].rights_ref
+                or class_a.price_ref != securities["NASDAQ:GOOGL"].price_ref
+                or class_b.price_ref != securities["NASDAQ:GOOGL"].price_ref
+                or class_c.price_ref != securities["NASDAQ:GOOG"].price_ref
+                or class_b.economic_units
+                != capital.basic_shares
+                - class_a.economic_units
+                - class_c.economic_units
+                or class_b.unit_source_ref.fact_key != "economic_units_class_b"
+                or class_b.votes_per_unit != Decimal("10")
+                or class_b.conversion_to_security_external_key != "NASDAQ:GOOGL"
+                or class_b.conversion_ratio != Decimal("1")
+                or class_b.dividend_rights_per_unit != Decimal("1")
+                or class_b.economic_rights_per_unit != Decimal("1")
+                or class_b.legal_rights_ref is None
+                or class_b.legal_rights_ref.fact_key != "security_rights_class_b"
+                or class_b.price_proxy_ref is None
+                or class_b.price_proxy_ref.fact_key != "market_price_proxy_class_b"
+                or class_b.price_proxy_policy_version
+                != "alphabet_class_b_googl_proxy.v1"
+            ):
+                raise ValidationError("valuation requires exact Class A-B-C components")
+            if model.reverse_dcf is not None:
+                market_equity = sum(
+                    (
+                        item.economic_units
+                        * securities[item.price_proxy_security_external_key].market_price_usd
+                        for item in model.equity_components
+                    ),
+                    start=Decimal("0"),
+                )
+                expected_target = (
+                    market_equity
+                    + capital.debt
+                    + capital.minority_interest
+                    + capital.pension_liabilities
+                    + capital.other_adjustments
+                    - capital.cash
+                    - capital.investments
+                )
+                if model.reverse_dcf.target_enterprise_value != expected_target:
+                    raise ValidationError(
+                        "reverse DCF target must close to Class A-B-C market equity"
+                    )
 
         if not model.scenario_bridges:
             return {}

@@ -16,6 +16,7 @@ from app.underwriting.fixtures.alphabet_golden_case import (
     BUNDLED_MANIFEST_CONTENT_SHA256,
     AlphabetGoldenCaseFixtureError,
     load_alphabet_golden_case_fixture,
+    _verified_raw_sidecar,
 )
 from app.underwriting.adapters.company_research import AlphabetCompanyResearchAdapter
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
@@ -458,6 +459,21 @@ def test_custom_fixture_rejects_unknown_keys_hash_mismatch_and_duplicate_fact_id
     with pytest.raises(ValidationError, match="content hash mismatch"):
         load_alphabet_golden_case_fixture(root)
 
+    root = _copy_fixture(tmp_path / "composite")
+    market = _read_json(root / "market_inputs.json")
+    capital = market["capital_structure"]
+    assert isinstance(capital, dict)
+    capital["raw_hash"] = "0" * 64
+    from app.underwriting.hashing import canonical_hash
+
+    market["content_hash"] = canonical_hash(
+        {key: value for key, value in market.items() if key != "content_hash"}
+    )
+    _write_json(root / "market_inputs.json", market)
+    _refresh_manifest(root)
+    with pytest.raises(ValidationError, match="composite raw hash mismatch"):
+        load_alphabet_golden_case_fixture(root)
+
     root = _copy_fixture(tmp_path / "duplicate")
     facts = _read_json(root / "source_facts.json")
     rows = facts["facts"]
@@ -700,21 +716,26 @@ def test_governed_fixture_rejects_compressed_and_composite_raw_hash_drift(
     with pytest.raises(ValidationError, match="content hash mismatch"):
         load_alphabet_golden_case_fixture(root)
 
-    root = _copy_fixture(tmp_path / "composite")
-    market = _read_json(root / "market_inputs.json")
-    capital = market["capital_structure"]
-    assert isinstance(capital, dict)
-    capital["raw_hash"] = "0" * 64
-    from app.underwriting.hashing import canonical_hash
 
-    market["content_hash"] = canonical_hash(
-        {key: value for key, value in market.items() if key != "content_hash"}
-    )
-    _write_json(root / "market_inputs.json", market)
-    _refresh_manifest(root)
-    with pytest.raises(ValidationError, match="composite raw hash mismatch"):
-        load_alphabet_golden_case_fixture(root)
+def test_raw_sidecar_rejects_oversized_compressed_envelope_before_decompression(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "bomb.gz"
+    with pytest.raises(ValidationError, match="compressed size"):
+        _verified_raw_sidecar(
+            path,
+            b"x" * 10_000_001,
+            expected_raw_hash="0" * 64,
+            expected_raw_size=1,
+        )
 
+
+def test_capture_script_enforces_streamed_download_byte_limit() -> None:
+    source = (
+        _FIXTURE_ROOT / "_capture_verified_raw.py"
+    ).read_text(encoding="utf-8")
+    assert "--max-filesize" in source
+    assert "expected_size + 1" in source
 
 def test_strategy_fixture_fails_closed_when_numeric_metadata_is_missing(
     tmp_path: Path,

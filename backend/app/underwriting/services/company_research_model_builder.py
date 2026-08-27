@@ -30,6 +30,7 @@ from app.underwriting.domain.company_research import (
     FinancialBridgeArtifact,
     JudgmentContextArtifact,
     MarketBridgeArtifact,
+    MarketEquityComponentReference,
     ModelInputState,
     ResearchGap,
     ResearchGapSeverity,
@@ -327,13 +328,27 @@ class FrozenMarketSnapshotRole(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class FrozenRawComponentReference:
+    raw_file: str
+    raw_hash: str
+    source_url: str
+    source_locator: str
+
+    def __post_init__(self) -> None:
+        _text(self.raw_file, "frozen raw component file")
+        _hash(self.raw_hash, "frozen raw component hash")
+        _text(self.source_url, "frozen raw component URL")
+        _text(self.source_locator, "frozen raw component locator")
+
+
+@dataclass(frozen=True, slots=True)
 class FrozenMarketSnapshotBinding:
     snapshot_id: UUID
     role: FrozenMarketSnapshotRole
     security_external_key: str | None
     source_ref: SourceLineageReference
     provider_policy_version: str = "legacy_snapshot_without_exact_provenance.v1"
-    raw_components: tuple[dict[str, str], ...] = ()
+    raw_components: tuple[FrozenRawComponentReference, ...] = ()
 
     def __post_init__(self) -> None:
         _uuid(self.snapshot_id, "market snapshot binding snapshot_id")
@@ -347,7 +362,7 @@ class FrozenMarketSnapshotBinding:
             raise ValidationError("market snapshot binding source ref must be typed")
         _text(self.provider_policy_version, "market snapshot provider policy version")
         if not isinstance(self.raw_components, tuple) or not all(
-            isinstance(item, dict) for item in self.raw_components
+            type(item) is FrozenRawComponentReference for item in self.raw_components
         ):
             raise ValidationError("market snapshot raw components must be immutable")
 
@@ -1107,6 +1122,28 @@ class CompanyResearchModelBuilder:
                 value.market_context.reverse_dcf_request
                 if value.market_context is not None
                 else None
+            ),
+            equity_components=(
+                tuple(
+                    MarketEquityComponentReference(
+                        component_key=item.component_key,
+                        economic_units=item.economic_units,
+                        price_proxy_security_external_key=item.price_proxy_security_external_key,
+                        unit_source_ref=item.unit_source_ref,
+                        price_ref=item.price_ref,
+                        votes_per_unit=item.votes_per_unit,
+                        conversion_to_security_external_key=item.conversion_to_security_external_key,
+                        conversion_ratio=item.conversion_ratio,
+                        dividend_rights_per_unit=item.dividend_rights_per_unit,
+                        economic_rights_per_unit=item.economic_rights_per_unit,
+                        legal_rights_ref=item.legal_rights_ref,
+                        price_proxy_ref=item.price_proxy_ref,
+                        price_proxy_policy_version=item.price_proxy_policy_version,
+                    )
+                    for item in value.market_context.equity_components
+                )
+                if value.market_context is not None
+                else ()
             ),
         )
         compiled = self._engine.compile(typed)

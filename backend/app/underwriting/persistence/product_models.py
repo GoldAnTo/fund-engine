@@ -347,9 +347,7 @@ class UnderwritingPriceSnapshot(Base):
             "price_type",
             "adjustment_basis",
             "market_at",
-            "source_id",
-            "raw_hash",
-            name="uq_uw_price_snapshot_identity",
+            name="uq_uw_price_snapshot_business_time",
         ),
         Index(
             "ix_uw_price_snapshot_security_market",
@@ -399,9 +397,7 @@ class UnderwritingFXSnapshot(Base):
             "quote_currency",
             "quote_direction",
             "market_at",
-            "source_id",
-            "raw_hash",
-            name="uq_uw_fx_snapshot_identity",
+            name="uq_uw_fx_snapshot_business_time",
         ),
         Index("ix_uw_fx_snapshot_pair_market", "base_currency", "quote_currency", "market_at"),
     )
@@ -447,9 +443,7 @@ class UnderwritingCapitalStructureSnapshot(Base):
             "report_period_start",
             "report_period_end",
             "market_at",
-            "source_id",
-            "raw_hash",
-            name="uq_uw_capital_structure_identity",
+            name="uq_uw_capital_structure_business_time",
         ),
         Index("ix_uw_capital_structure_company_market", "company_id", "market_at"),
     )
@@ -511,6 +505,11 @@ class UnderwritingSecurityRightsVersion(Base):
         ),
         UniqueConstraint(
             "supersedes_id", name="uq_uw_security_rights_successor"
+        ),
+        UniqueConstraint(
+            "security_identity_id",
+            "effective_from",
+            name="uq_uw_security_rights_business_time",
         ),
         Index(
             "ix_uw_security_rights_security_effective",

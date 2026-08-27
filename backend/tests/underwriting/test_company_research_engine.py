@@ -22,6 +22,7 @@ from app.underwriting.domain.company_research import (
     FinancialBridgeRow,
     JudgmentContextArtifact,
     MarketBridgeArtifact,
+    MarketEquityComponentReference,
     ModelInputState,
     ResearchGap,
     ResearchGapSeverity,
@@ -120,6 +121,9 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
             "security_rights_nasdaq_goog",
             "market_price_usd_nasdaq_goog",
             "usd_cny_fx",
+            "economic_units_class_b",
+            "security_rights_class_b",
+            "market_price_proxy_class_b",
             "evidence_gap_contract",
         )
     }
@@ -231,7 +235,7 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
                 capital_structure=CapitalStructureReference(
                     cash=Decimal("10"), debt=Decimal("5"), minority_interest=Decimal("0"),
                     investments=Decimal("2"), pension_liabilities=Decimal("0"),
-                    other_adjustments=Decimal("0"), basic_shares=Decimal("10"),
+                    other_adjustments=Decimal("0"), basic_shares=Decimal("11"),
                     diluted_shares=Decimal("12"), source_ref=source_by_key["capital_structure_usd"],
                     capital_bridge_policy_version="synthetic-capital-bridge.v1",
                     policy_ref=source_by_key["capital_bridge_policy"],
@@ -253,7 +257,39 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
             strongest_counterevidence=(source_by_key["a"],),
             next_verification_events=("next filing",),
         ),
+        equity_components=(
+            MarketEquityComponentReference(
+                "class_a", Decimal("6"), "NASDAQ:GOOGL",
+                source_by_key["security_rights_nasdaq_googl"],
+                source_by_key["market_price_usd_nasdaq_googl"],
+            ),
+            MarketEquityComponentReference(
+                "class_b", Decimal("1"), "NASDAQ:GOOGL",
+                source_by_key["economic_units_class_b"],
+                source_by_key["market_price_usd_nasdaq_googl"],
+                votes_per_unit=Decimal("10"),
+                conversion_to_security_external_key="NASDAQ:GOOGL",
+                conversion_ratio=Decimal("1"),
+                dividend_rights_per_unit=Decimal("1"),
+                economic_rights_per_unit=Decimal("1"),
+                legal_rights_ref=source_by_key["security_rights_class_b"],
+                price_proxy_ref=source_by_key["market_price_proxy_class_b"],
+                price_proxy_policy_version="alphabet_class_b_googl_proxy.v1",
+            ),
+            MarketEquityComponentReference(
+                "class_c", Decimal("4"), "NASDAQ:GOOG",
+                source_by_key["security_rights_nasdaq_goog"],
+                source_by_key["market_price_usd_nasdaq_goog"],
+            ),
+        ) if market else (),
     )
+
+
+def test_engine_rejects_market_bridge_without_exact_abc_equity_components() -> None:
+    with pytest.raises(
+        (ValidationError, CompanyResearchValidationError), match="Class A-B-C"
+    ):
+        CompanyResearchEngine().compile(replace(_input(), equity_components=()))
 
 
 def test_compiles_exact_lineage_closed_financials_and_ordered_mechanism_value_ranges() -> None:
@@ -487,10 +523,10 @@ def test_rejects_non_distinct_alphabet_mechanisms_and_terminal_growth_boundary()
 def test_reverse_dcf_uses_deterministic_bisection_and_reports_residual() -> None:
     model = _input()
     first = CompanyResearchEngine().compile(
-        replace(model, reverse_dcf=ReverseDcfRequest("fcff_multiplier", Decimal("500"), Decimal("0.5"), Decimal("2.0"), 80))
+        replace(model, reverse_dcf=ReverseDcfRequest("fcff_multiplier", Decimal("1053"), Decimal("0.5"), Decimal("2.0"), 80))
     )
     second = CompanyResearchEngine().compile(
-        replace(model, reverse_dcf=ReverseDcfRequest("fcff_multiplier", Decimal("500"), Decimal("0.5"), Decimal("2.0"), 80))
+        replace(model, reverse_dcf=ReverseDcfRequest("fcff_multiplier", Decimal("1053"), Decimal("0.5"), Decimal("2.0"), 80))
     )
     assert first.reverse_dcf == second.reverse_dcf
     assert first.reverse_dcf is not None
@@ -513,7 +549,7 @@ def test_reverse_dcf_fails_closed_when_iteration_budget_does_not_converge() -> N
                 model,
                 reverse_dcf=ReverseDcfRequest(
                     "fcff_multiplier",
-                    Decimal("500"),
+                    Decimal("1053"),
                     Decimal("0.5"),
                     Decimal("2.0"),
                     1,

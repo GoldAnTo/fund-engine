@@ -11,7 +11,9 @@ import importlib.util
 import os
 import subprocess
 import sys
+from uuid import UUID
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -327,6 +329,95 @@ def test_0068_backfills_legacy_market_capture_and_makes_it_immutable(tmp_path) -
                     "SET source_locator = 'rewritten'"
                 )
             )
+
+
+def test_0068_orm_naive_datetime_backfill_replays_through_production_capture(
+    tmp_path,
+) -> None:
+    from app.underwriting.persistence.product_models import UnderwritingFXSnapshot
+    from app.underwriting.services.company_research_market_inputs import (
+        CompanyResearchMarketInputs,
+    )
+
+    database_path = tmp_path / "orm-market-provenance-0067.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0067"],
+        cwd=backend,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    snapshot_id = UUID("22222222-2222-2222-2222-222222222222")
+    with sessionmaker(engine)() as session:
+        session.add(
+            UnderwritingFXSnapshot(
+                id=snapshot_id,
+                base_currency="USD",
+                quote_currency="CNY",
+                rate=Decimal("7.18"),
+                quote_direction="quote_per_base",
+                market_at=datetime(2026, 8, 21, tzinfo=UTC),
+                available_at=datetime(2026, 8, 24, tzinfo=UTC),
+                source_id="https://legacy.example/orm-fx",
+                raw_hash="3" * 64,
+                content_hash="4" * 64,
+                created_at=datetime(2026, 8, 27, 12, tzinfo=UTC),
+            )
+        )
+        session.commit()
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0068"],
+        cwd=backend,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    with sessionmaker(engine)() as session:
+        capture = CompanyResearchMarketInputs(session)._capture("fx", snapshot_id)
+        assert capture.authenticated_available_at.replace(tzinfo=UTC) == datetime(
+            2026, 8, 24, tzinfo=UTC
+        )
+        for kind, target_id, role in (
+            ("price", UUID("33333333-3333-3333-3333-333333333333"), "primary"),
+            ("price", snapshot_id, "primary"),
+            ("fx", snapshot_id, "class_b_units"),
+        ):
+            with pytest.raises(sa.exc.IntegrityError):
+                session.execute(
+                    sa.text(
+                        "INSERT INTO uw_market_capture_envelopes ("
+                        "id,snapshot_kind,snapshot_id,provenance_role,source_url,"
+                        "source_locator,provider_policy_version,raw_hash,raw_components,"
+                        "content_hash,authenticated_available_at,acquired_at) VALUES ("
+                        ":id,:kind,:snapshot_id,:role,'https://example.test','locator',"
+                        "'policy.v1',:hash,'[]',:hash,:now,:now)"
+                    ),
+                    {
+                        "id": UUID(int=target_id.int + 1).hex,
+                        "kind": kind,
+                        "snapshot_id": target_id.hex,
+                        "role": role,
+                        "hash": "5" * 64,
+                        "now": datetime(2026, 8, 27, tzinfo=UTC),
+                    },
+                )
+            session.rollback()
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0067"],
+        cwd=backend,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    with engine.connect() as connection:
+        inspector = sa.inspect(connection)
+        assert "uw_market_capture_envelopes" not in inspector.get_table_names()
+        assert "uq_uw_fx_snapshot_business_time" not in {
+            item["name"] for item in inspector.get_indexes("uw_fx_snapshots")
+        }
 
 
 def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(

@@ -11,6 +11,7 @@ import gzip
 import hashlib
 from pathlib import Path
 import subprocess
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parent
@@ -86,13 +87,17 @@ def main() -> None:
     RAW_ROOT.mkdir(parents=True, exist_ok=True)
     captured: list[tuple[Path, bytes]] = []
     for name, url, expected_size, expected_hash, provider in CAPTURES:
-        command = [
-            "curl", "--http1.1", "--fail", "--silent", "--show-error",
-            "--retry", "4", "--retry-all-errors", "--max-time", "60",
-        ]
-        for key, value in _headers(provider).items():
-            command.extend(("--header", f"{key}: {value}"))
-        raw = subprocess.check_output((*command, url))
+        with tempfile.NamedTemporaryFile() as download:
+            command = [
+                "curl", "--http1.1", "--fail", "--silent", "--show-error",
+                "--retry", "4", "--retry-all-errors", "--max-time", "60",
+                "--max-filesize", str(expected_size + 1), "--output", download.name,
+            ]
+            for key, value in _headers(provider).items():
+                command.extend(("--header", f"{key}: {value}"))
+            subprocess.run((*command, url), check=True)
+            download.seek(0)
+            raw = download.read(expected_size + 1)
         actual_hash = hashlib.sha256(raw).hexdigest()
         if len(raw) != expected_size or actual_hash != expected_hash:
             raise RuntimeError(

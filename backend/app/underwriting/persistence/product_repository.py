@@ -135,9 +135,9 @@ _SQLITE_CAS_COLUMNS = {
 }
 
 _SNAPSHOT_IDENTITY_CONSTRAINTS = {
-    "uw_price_snapshots": "uq_uw_price_snapshot_identity",
-    "uw_fx_snapshots": "uq_uw_fx_snapshot_identity",
-    "uw_capital_structure_snapshots": "uq_uw_capital_structure_identity",
+    "uw_price_snapshots": "uq_uw_price_snapshot_business_time",
+    "uw_fx_snapshots": "uq_uw_fx_snapshot_business_time",
+    "uw_capital_structure_snapshots": "uq_uw_capital_structure_business_time",
 }
 _SQLITE_SNAPSHOT_IDENTITY_COLUMNS = {
     "uw_price_snapshots": frozenset(
@@ -146,8 +146,6 @@ _SQLITE_SNAPSHOT_IDENTITY_COLUMNS = {
             "price_type",
             "adjustment_basis",
             "market_at",
-            "source_id",
-            "raw_hash",
         }
     ),
     "uw_fx_snapshots": frozenset(
@@ -156,8 +154,6 @@ _SQLITE_SNAPSHOT_IDENTITY_COLUMNS = {
             "quote_currency",
             "quote_direction",
             "market_at",
-            "source_id",
-            "raw_hash",
         }
     ),
     "uw_capital_structure_snapshots": frozenset(
@@ -166,8 +162,6 @@ _SQLITE_SNAPSHOT_IDENTITY_COLUMNS = {
             "report_period_start",
             "report_period_end",
             "market_at",
-            "source_id",
-            "raw_hash",
         }
     ),
 }
@@ -1609,8 +1603,6 @@ class ProductRepository:
             UnderwritingPriceSnapshot.price_type == price_type,
             UnderwritingPriceSnapshot.adjustment_basis == adjustment_basis,
             UnderwritingPriceSnapshot.market_at == market_at,
-            UnderwritingPriceSnapshot.source_id == source_id,
-            UnderwritingPriceSnapshot.raw_hash == raw_hash,
         )
         return self._flush_snapshot(row, existing)
 
@@ -1659,8 +1651,6 @@ class ProductRepository:
             UnderwritingFXSnapshot.quote_currency == quote_currency,
             UnderwritingFXSnapshot.quote_direction == quote_direction,
             UnderwritingFXSnapshot.market_at == market_at,
-            UnderwritingFXSnapshot.source_id == source_id,
-            UnderwritingFXSnapshot.raw_hash == raw_hash,
         )
         return self._flush_snapshot(row, existing)
 
@@ -1752,8 +1742,6 @@ class ProductRepository:
             == report_period_start,
             UnderwritingCapitalStructureSnapshot.report_period_end == report_period_end,
             UnderwritingCapitalStructureSnapshot.market_at == market_at,
-            UnderwritingCapitalStructureSnapshot.source_id == source_id,
-            UnderwritingCapitalStructureSnapshot.raw_hash == raw_hash,
         )
         return self._flush_snapshot(row, existing)
 
