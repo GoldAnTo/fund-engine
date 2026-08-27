@@ -57,6 +57,7 @@ from app.underwriting.domain.company_research_contracts import (
     StrategyAssumptionSet as _StrategyAssumptionSetContract,
 )
 from app.underwriting.hashing import canonical_hash
+from app.underwriting.domain.company_research_provenance import canonical_source_refs
 from app.underwriting.services.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
 )
@@ -99,9 +100,6 @@ _GAP_PAYLOAD_FIELDS = frozenset(
     {"fixture_content_hash", "company_external_key", "gaps"}
 )
 _GAP_FIELDS = frozenset({"gap_key", "business_module", "reason"})
-_SOURCE_REF_FIELDS = frozenset(
-    {"source_role", "source_url", "source_locator", "raw_hash"}
-)
 _SCENARIO_ORDER = ("base", "bull", "bear")
 _CLOSED_BY_STRATEGY = frozenset({"forward_model_missing"})
 _CLOSED_BY_MARKET = frozenset({"market_price_missing", "usd_cny_fx_missing"})
@@ -1003,15 +1001,7 @@ class CompanyResearchBuildInput:
     def _validate_source_refs(value: object) -> None:
         if not isinstance(value, tuple) or not value:
             raise ValidationError("source_refs must be a non-empty tuple")
-        canonical: list[tuple[tuple[str, str], ...]] = []
-        for item in value:
-            if not isinstance(item, dict) or set(item) != _SOURCE_REF_FIELDS:
-                raise ValidationError("source_refs contain invalid fields")
-            for field in _SOURCE_REF_FIELDS - {"raw_hash"}:
-                _text(item.get(field), f"source_refs.{field}")
-            _hash(item.get("raw_hash"), "source_refs.raw_hash")
-            canonical.append(tuple(sorted(item.items())))
-        if len(set(canonical)) != len(canonical):
+        if len(canonical_source_refs(value)) != len(value):
             raise ValidationError("source_refs must not contain duplicates")
 
 

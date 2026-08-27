@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
@@ -17,6 +17,7 @@ from app.underwriting.domain.company_research import (
     JudgmentContextArtifact,
 )
 from app.underwriting.hashing import canonical_hash
+from app.underwriting.domain.company_research_provenance import canonical_source_refs
 from app.underwriting.persistence.models import UnderwritingResearchVersion
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
@@ -312,6 +313,7 @@ class CompanyResearchWorkbench:
         self,
         project_id: UUID,
         heads: dict[str, CompanyResearchArtifactVersion],
+        history_by_id: Mapping[UUID, CompanyResearchArtifactVersion],
     ) -> None:
         """Reject a partial, substituted, or cross-project model bundle."""
         model_kinds = {
@@ -422,6 +424,33 @@ class CompanyResearchWorkbench:
             bindings=parsed,
             cutoff_at=cutoff,
         )
+        current_gaps = heads["research_gaps"]
+        predecessor_gaps = (
+            history_by_id.get(current_gaps.supersedes_id)
+            if current_gaps.supersedes_id is not None
+            else None
+        )
+        if (
+            predecessor_gaps is None
+            or predecessor_gaps.project_id != project_id
+            or predecessor_gaps.kind != "research_gaps"
+        ):
+            raise ValidationError("company research model source refs are invalid")
+        expected_source_refs = self._company.expected_model_source_refs(
+            evidence=heads["evidence_index"],
+            predecessor_gaps=predecessor_gaps,
+            market_snapshot_bindings=parsed,
+        )
+        for kind in expectations:
+            row = heads[kind]
+            actual = canonical_source_refs(
+                row.source_refs,
+                field_name=f"{kind} source refs",
+            )
+            if actual != expected_source_refs or tuple(row.source_refs) != actual:
+                raise ValidationError(
+                    "company research model source refs do not match governed inputs"
+                )
         memo = CompanyResearchArtifactCodec.decode(
             "memo",
             {
@@ -536,7 +565,7 @@ class CompanyResearchWorkbench:
             )
             if not any(ref["artifact_kind"] == "valuation_set" for ref in refs):
                 head_rows.pop("valuation_set", None)
-        self._validate_cross_artifact_lineage(project_id, head_rows)
+        self._validate_cross_artifact_lineage(project_id, head_rows, by_id)
         heads = {
             kind: self._artifact(row, project_id) for kind, row in head_rows.items()
         }

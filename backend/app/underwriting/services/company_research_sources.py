@@ -20,6 +20,7 @@ from app.underwriting.fixtures.alphabet_golden_case import (
     load_alphabet_golden_case_fixture,
 )
 from app.underwriting.domain.company_research import CompanyResearchValidationError
+from app.underwriting.domain.company_research_provenance import canonical_source_refs
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
     CompanyResearchEvent,
@@ -94,8 +95,7 @@ class CompanyResearchSourceCompiler:
         # Several facts legitimately cite one exact disclosure location.  The
         # artifact owns a source *set*, while facts retain the many-to-one
         # evidence linkage in their payload.
-        unique = dict.fromkeys(tuple(sorted(ref.items())) for ref in refs)
-        return tuple(dict(items) for items in unique)
+        return canonical_source_refs(tuple(refs))
 
     @staticmethod
     def _evidence_payload(fixture: AlphabetGoldenCaseFixture) -> dict[str, object]:
@@ -130,7 +130,9 @@ class CompanyResearchSourceCompiler:
             source_fixture.company_external_key, source_fixture.business_modules
         )
         if provider_input.company_external_key != source_fixture.company_external_key:
-            raise ValidationError("Alphabet source fixture does not match preparation company")
+            raise ValidationError(
+                "Alphabet source fixture does not match preparation company"
+            )
         return CompanyResearchEvidenceCompilation(
             input_hash=source_fixture.content_hash,
             evidence_index_payload=self._evidence_payload(source_fixture),
@@ -150,7 +152,11 @@ class CompanyResearchSourceService:
 
     @staticmethod
     def _utc(value: object) -> datetime:
-        if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        if (
+            not isinstance(value, datetime)
+            or value.tzinfo is None
+            or value.utcoffset() is None
+        ):
             raise ValidationError("clock must be a timezone-aware datetime")
         return value.astimezone(UTC)
 
@@ -176,8 +182,9 @@ class CompanyResearchSourceService:
         if project is None:
             raise ValidationError("company research preparation project is missing")
         company = self._session.scalar(
-            select(UnderwritingResearchObject)
-            .where(UnderwritingResearchObject.id == project.primary_company_id)
+            select(UnderwritingResearchObject).where(
+                UnderwritingResearchObject.id == project.primary_company_id
+            )
         )
         if company is None:
             raise ValidationError("company research preparation company is missing")
@@ -205,7 +212,9 @@ class CompanyResearchSourceService:
             self._provider_input(preparation), fixture=self._load_fixture()
         )
 
-    def prepare_evidence_index(self, *, preparation_id: UUID) -> CompanyResearchSourcePreparation:
+    def prepare_evidence_index(
+        self, *, preparation_id: UUID
+    ) -> CompanyResearchSourcePreparation:
         """Append source evidence and gaps, or a safe recoverable failure event."""
         now = self._utc(self._now())
         try:
@@ -219,19 +228,28 @@ class CompanyResearchSourceService:
                 preparation_id, error_code=_SOURCE_UNAVAILABLE, created_at=now
             )
             return CompanyResearchSourcePreparation(
-                status=failed.status, evidence_index=None, research_gaps=None, job=job,
+                status=failed.status,
+                evidence_index=None,
+                research_gaps=None,
+                job=job,
                 events=self._repository.events(preparation_id),
                 error={"code": _SOURCE_UNAVAILABLE, "recoverable": True},
             )
-        preparation, evidence_index, gaps, job, _event = self._repository.complete_evidence_preparation(
-            preparation_id,
-            input_hash=compiled.input_hash,
-            evidence_index_payload=compiled.evidence_index_payload,
-            research_gaps_payload=compiled.research_gaps_payload,
-            source_refs=compiled.source_refs,
-            created_at=now,
+        preparation, evidence_index, gaps, job, _event = (
+            self._repository.complete_evidence_preparation(
+                preparation_id,
+                input_hash=compiled.input_hash,
+                evidence_index_payload=compiled.evidence_index_payload,
+                research_gaps_payload=compiled.research_gaps_payload,
+                source_refs=compiled.source_refs,
+                created_at=now,
+            )
         )
         return CompanyResearchSourcePreparation(
-            status=preparation.status, evidence_index=evidence_index, research_gaps=gaps,
-            job=job, events=self._repository.events(preparation_id), error=None,
+            status=preparation.status,
+            evidence_index=evidence_index,
+            research_gaps=gaps,
+            job=job,
+            events=self._repository.events(preparation_id),
+            error=None,
         )

@@ -62,6 +62,32 @@ NOW = datetime(2026, 8, 26, tzinfo=UTC)
 MARKET_CUTOFF = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
 
 
+def _expected_model_source_refs(evidence_refs, gap_refs, bindings):
+    values = [
+        *(dict(value) for value in evidence_refs),
+        *(dict(value) for value in gap_refs),
+    ]
+    values.extend(
+        {
+            "raw_hash": binding.source_ref.raw_hash,
+            "source_locator": binding.source_ref.source_locator,
+            "source_role": binding.source_ref.source_role,
+            "source_url": binding.source_ref.source_url,
+        }
+        for binding in bindings
+    )
+    unique = {
+        (
+            value["source_role"],
+            value["source_url"],
+            value["source_locator"],
+            value["raw_hash"],
+        ): value
+        for value in values
+    }
+    return tuple(dict(unique[key]) for key in sorted(unique))
+
+
 def _prepared(session):
     loaded = ProductFoundationFixtureService(session, now=lambda: NOW).load(
         load_product_foundation_fixture()
@@ -111,7 +137,6 @@ def _model_workspace(
     job.status = "running"
     job.step = "model_bundle"
     job.claim_token = "model-claim"
-    source_refs = tuple(current.source_refs)
     prior_gaps = repository.current_artifact(initialized.project.id, "research_gaps")
     assert prior_gaps is not None
     governed = CompanyResearchInitializer(session, now=lambda: NOW).governed_inputs(
@@ -124,6 +149,11 @@ def _model_workspace(
         bindings = (binding_mutation(bindings[0]), *bindings[1:])
     if bindings_mutation is not None:
         bindings = bindings_mutation(bindings, initialized)
+    source_refs = _expected_model_source_refs(
+        current.source_refs,
+        prior_gaps.source_refs,
+        bindings,
+    )
     result = CompanyResearchModelBuilder().build(_build_input())
     payloads = {
         kind: CompanyResearchArtifactCodec.encode(kind, artifact)
@@ -192,6 +222,22 @@ def _rewrite_payload(
     set_committed_value(row, "content_hash", content_hash)
 
 
+def _rewrite_source_refs(row, source_refs) -> None:
+    copied = [dict(value) for value in source_refs]
+    content_hash = CompanyResearchRepository.artifact_content_hash(
+        project_id=row.project_id,
+        kind=row.kind,
+        version=row.version,
+        supersedes_id=row.supersedes_id,
+        parent_content_hash=row.parent_content_hash,
+        input_hash=row.input_hash,
+        payload=row.payload,
+        source_refs=copied,
+    )
+    set_committed_value(row, "source_refs", copied)
+    set_committed_value(row, "content_hash", content_hash)
+
+
 def test_workspace_is_a_closed_snapshot_of_the_review_gate(session) -> None:
     initialized = _prepared(session)
 
@@ -216,6 +262,16 @@ def test_workspace_is_a_closed_snapshot_of_the_review_gate(session) -> None:
     assert workspace.gap_count >= 0
     assert workspace.draft.lock_version == 1
     assert workspace.selected_revision is None
+
+
+def test_alphabet_model_workspace_counts_each_governed_source_once(session) -> None:
+    initialized, workbench, repository = _model_workspace(session)
+    workspace = workbench.workspace(project_id=initialized.project.id)
+    business_map = repository.current_artifact(initialized.project.id, "business_map")
+    assert business_map is not None
+
+    assert workspace.source_count == len(business_map.source_refs)
+    assert workspace.source_count == 9
 
 
 def test_workbench_fails_closed_when_artifact_history_exceeds_its_bound(
@@ -405,7 +461,11 @@ def test_optional_valuation_tracks_the_current_model_epoch_across_rebuilds(
                 judgment_context=payloads["judgment_context"],
                 research_gaps=payloads["research_gaps"],
                 memo=payloads["memo"],
-                source_refs=tuple(evidence.source_refs),
+                source_refs=_expected_model_source_refs(
+                    evidence.source_refs,
+                    gaps.source_refs,
+                    epoch_bindings,
+                ),
                 market_snapshot_bindings=tuple(epoch_bindings),
             ),
             expected_claim_token="model-claim",
@@ -891,6 +951,41 @@ def test_workbench_rejects_source_identity_tamper_even_with_rehashed_artifact(
     _rewrite_payload(session, driver, payload, input_hash=input_hash)
 
     with pytest.raises(ValidationError, match="cross-artifact lineage"):
+        workbench.workspace(project_id=initialized.project.id)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("extra", "omitted", "fabricated", "source_role", "source_locator", "raw_hash"),
+)
+def test_workbench_rejects_rehashed_model_source_refs_not_derived_from_governed_heads(
+    session, mutation: str
+) -> None:
+    initialized, workbench, repository = _model_workspace(session)
+    memo = repository.current_artifact(initialized.project.id, "memo")
+    assert memo is not None
+    refs = [dict(value) for value in memo.source_refs]
+    fabricated = {
+        "raw_hash": "9" * 64,
+        "source_locator": "fabricated:source",
+        "source_role": "third_party",
+        "source_url": "https://attacker.invalid/source",
+    }
+    if mutation == "extra":
+        refs.append(fabricated)
+    elif mutation == "omitted":
+        refs.pop()
+    elif mutation == "fabricated":
+        refs[0] = fabricated
+    else:
+        refs[0][mutation] = {
+            "source_role": "third_party",
+            "source_locator": "fabricated:locator",
+            "raw_hash": "8" * 64,
+        }[mutation]
+    _rewrite_source_refs(memo, refs)
+
+    with pytest.raises(ValidationError, match="source refs"):
         workbench.workspace(project_id=initialized.project.id)
 
 

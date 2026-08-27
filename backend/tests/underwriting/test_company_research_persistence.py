@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine, event, select, update
+from sqlalchemy import bindparam, create_engine, event, select, text, update
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
@@ -17,6 +17,7 @@ from app.models.operational import Job
 from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
+    CompanyResearchEvent,
     CompanyResearchPreparation,
 )
 from app.underwriting.persistence.company_research_repository import (
@@ -161,7 +162,13 @@ def _repository_with_model_job(session):
         input_hash="2" * 64,
         payload={
             "cutoff": NOW.isoformat(),
-            "facts": [{"fact_key": "revenue", "review_decision": "confirmed"}],
+            "facts": [
+                {
+                    "fact_key": "revenue",
+                    "review_decision": "confirmed",
+                    **source_refs[0],
+                }
+            ],
         },
         source_refs=source_refs,
         expected_parent_id=None,
@@ -221,6 +228,55 @@ def _complete_model_bundle(repository, preparation, bundle):
         expected_strategy_version=preparation.strategy_version,
         created_at=NOW,
     )
+
+
+def _tamper_row(session, model, row_id, **values) -> None:
+    """Bypass ORM immutability with dialect-typed named SQL parameters."""
+    table = model.__table__
+    if not values or any(key not in table.c for key in values):
+        raise AssertionError("tamper helper received an unknown column")
+    statement = text(
+        f"UPDATE {table.name} SET "
+        + ", ".join(f"{key} = :{key}" for key in values)
+        + " WHERE id = :tamper_row_id"
+    ).bindparams(
+        *(bindparam(key, type_=table.c[key].type) for key in values),
+        bindparam("tamper_row_id", type_=table.c.id.type),
+    )
+    connection = session.connection()
+    disable_trigger = text(f"ALTER TABLE {table.name} DISABLE TRIGGER USER")
+    enable_trigger = text(f"ALTER TABLE {table.name} ENABLE TRIGGER USER")
+    if connection.dialect.name == "postgresql":
+        connection.execute(disable_trigger)
+    try:
+        connection.execute(statement, {**values, "tamper_row_id": row_id})
+    finally:
+        if connection.dialect.name == "postgresql":
+            connection.execute(enable_trigger)
+    session.expire_all()
+
+
+def _mutated_bundle_source_refs(bundle, mutation: str):
+    refs = [dict(value) for value in bundle.source_refs]
+    fabricated = {
+        "raw_hash": "9" * 64,
+        "source_locator": "fabricated:source",
+        "source_role": "third_party",
+        "source_url": "https://attacker.invalid/source",
+    }
+    if mutation == "extra":
+        refs.append(fabricated)
+    elif mutation == "omitted":
+        refs.pop()
+    elif mutation == "fabricated":
+        refs[0] = fabricated
+    else:
+        refs[0][mutation] = {
+            "source_role": "third_party",
+            "source_locator": "fabricated:locator",
+            "raw_hash": "8" * 64,
+        }[mutation]
+    return tuple(refs)
 
 
 @pytest.mark.parametrize(
@@ -298,6 +354,7 @@ def test_complete_model_bundle_persists_exact_dependency_refs_and_input_hashes(
     assert job.progress == 85
     assert job.claim_token is None
     assert by_kind["research_gaps"].supersedes_id == old_gaps.id
+    assert all(tuple(row.source_refs) == bundle.source_refs for row in rows)
 
     def refs(kind: str) -> dict[str, tuple[str, str]]:
         return {
@@ -340,6 +397,27 @@ def test_complete_model_bundle_persists_exact_dependency_refs_and_input_hashes(
                 "market_snapshot_bindings": lineage["market_snapshot_bindings"],
             }
         )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("extra", "omitted", "fabricated", "source_role", "source_locator", "raw_hash"),
+)
+def test_complete_model_bundle_rejects_source_refs_not_derived_from_governed_heads(
+    session, mutation: str
+) -> None:
+    repository, project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    changed = replace(
+        bundle,
+        source_refs=_mutated_bundle_source_refs(bundle, mutation),
+    )
+
+    with pytest.raises(ValidationError, match="source refs"):
+        _complete_model_bundle(repository, preparation, changed)
+
+    assert repository.current_artifact(project.id, "business_map") is None
 
 
 def test_complete_model_bundle_rejects_a_stale_claim_without_writing(session) -> None:
@@ -600,12 +678,14 @@ def test_artifacts_are_immutable_and_replayed_from_a_strict_parent_chain(
         payload=first.payload,
         source_refs=first.source_refs,
     )
-    session.connection().exec_driver_sql(
-        "UPDATE uw_company_research_artifact_versions "
-        "SET supersedes_id = ?, parent_content_hash = ?, content_hash = ? WHERE id = ?",
-        (second.id.hex, second.content_hash, cycle_hash, first.id.hex),
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        first.id,
+        supersedes_id=second.id,
+        parent_content_hash=second.content_hash,
+        content_hash=cycle_hash,
     )
-    session.expire_all()
     with pytest.raises(CompanyResearchIntegrityError, match="parent content hash"):
         repository.artifact_chain(second.id)
 
@@ -644,12 +724,13 @@ def test_artifact_chain_rejects_an_admin_rewrite_of_parent_content(session) -> N
         payload=rewritten_payload,
         source_refs=first.source_refs,
     )
-    session.connection().exec_driver_sql(
-        "UPDATE uw_company_research_artifact_versions "
-        "SET payload = ?, content_hash = ? WHERE id = ?",
-        ('{"segments":["rewritten"]}', rewritten_hash, first.id.hex),
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        first.id,
+        payload=rewritten_payload,
+        content_hash=rewritten_hash,
     )
-    session.expire_all()
 
     with pytest.raises(CompanyResearchIntegrityError, match="parent content hash"):
         repository.artifact_chain(second.id)
@@ -680,11 +761,13 @@ def test_event_reads_reject_a_rewritten_predecessor(session) -> None:
         event_type=first.event_type,
         payload=rewritten_payload,
     )
-    session.connection().exec_driver_sql(
-        "UPDATE uw_company_research_events SET payload = ?, content_hash = ? WHERE id = ?",
-        ('{"step":"rewritten"}', rewritten_hash, first.id.hex),
+    _tamper_row(
+        session,
+        CompanyResearchEvent,
+        first.id,
+        payload=rewritten_payload,
+        content_hash=rewritten_hash,
     )
-    session.expire_all()
 
     with pytest.raises(CompanyResearchIntegrityError, match="predecessor"):
         repository.events(preparation.id)
@@ -703,21 +786,21 @@ def test_artifact_reads_fail_closed_on_hash_tamper_and_duplicate_heads(session) 
     )
     original_hash = artifact.content_hash
 
-    session.connection().exec_driver_sql(
-        "UPDATE uw_company_research_artifact_versions "
-        "SET content_hash = ? WHERE id = ?",
-        ("0" * 64, artifact.id.hex),
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        artifact.id,
+        content_hash="0" * 64,
     )
-    session.expire_all()
     with pytest.raises(CompanyResearchIntegrityError, match="content hash"):
         repository.artifact(artifact.id)
 
-    session.connection().exec_driver_sql(
-        "UPDATE uw_company_research_artifact_versions "
-        "SET content_hash = ? WHERE id = ?",
-        (original_hash, artifact.id.hex),
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        artifact.id,
+        content_hash=original_hash,
     )
-    session.expire_all()
     duplicate = CompanyResearchArtifactVersion(
         project_id=project.id,
         kind="evidence_index",
@@ -824,10 +907,7 @@ def test_prepare_job_rejects_an_attached_job_whose_discriminator_was_rewritten(
     session.add(job)
     session.flush()
     repository.attach_prepare_job(preparation.id, job.id)
-    session.connection().exec_driver_sql(
-        "UPDATE jobs SET kind = 'prepare_research' WHERE id = ?", (job.id.hex,)
-    )
-    session.expire_all()
+    _tamper_row(session, Job, job.id, kind="prepare_research")
 
     with pytest.raises(CompanyResearchIntegrityError, match="job ownership"):
         repository.prepare_job(preparation.id)
@@ -1336,12 +1416,14 @@ def test_current_artifact_rejects_a_foreign_scope_successor(
         payload=foreign.payload,
         source_refs=foreign.source_refs,
     )
-    session.connection().exec_driver_sql(
-        "UPDATE uw_company_research_artifact_versions "
-        "SET supersedes_id = ?, parent_content_hash = ?, content_hash = ? WHERE id = ?",
-        (first.id.hex, first.content_hash, foreign_hash, foreign.id.hex),
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        foreign.id,
+        supersedes_id=first.id,
+        parent_content_hash=first.content_hash,
+        content_hash=foreign_hash,
     )
-    session.expire_all()
 
     with pytest.raises(ValidationError, match="successor|payload is invalid"):
         repository.current_artifact(project.id, "evidence_index")
@@ -1379,12 +1461,14 @@ def test_current_artifact_rejects_a_cycle_instead_of_returning_no_current(
         payload=first.payload,
         source_refs=first.source_refs,
     )
-    session.connection().exec_driver_sql(
-        "UPDATE uw_company_research_artifact_versions "
-        "SET supersedes_id = ?, parent_content_hash = ?, content_hash = ? WHERE id = ?",
-        (second.id.hex, second.content_hash, cycle_hash, first.id.hex),
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        first.id,
+        supersedes_id=second.id,
+        parent_content_hash=second.content_hash,
+        content_hash=cycle_hash,
     )
-    session.expire_all()
 
     with pytest.raises(CompanyResearchIntegrityError, match="cycle"):
         repository.current_artifact(project.id, "evidence_index")

@@ -21,6 +21,11 @@ from app.underwriting.domain.company_research import (
     JudgmentContextArtifact,
     SourceLineageReference,
 )
+from app.underwriting.domain.company_research_provenance import (
+    canonical_source_refs,
+    evidence_payload_source_refs,
+    source_record,
+)
 from app.underwriting.persistence.company_research_models import (
     COMPANY_RESEARCH_ARTIFACT_KINDS,
     COMPANY_RESEARCH_PREPARATION_STATUSES,
@@ -132,12 +137,18 @@ class CompanyResearchPersistedBundle:
             "_lineage" in payload for payload in (*required, self.valuation_set or {})
         ):
             raise ValidationError("company research model bundle lineage is reserved")
-        if not isinstance(self.source_refs, tuple) or not all(
-            isinstance(item, dict) for item in self.source_refs
-        ):
+        if not isinstance(self.source_refs, tuple):
             raise ValidationError(
                 "company research model bundle source refs are invalid"
             )
+        object.__setattr__(
+            self,
+            "source_refs",
+            canonical_source_refs(
+                self.source_refs,
+                field_name="company research model bundle source refs",
+            ),
+        )
         if (
             not isinstance(self.market_snapshot_bindings, tuple)
             or not all(
@@ -1289,6 +1300,35 @@ class CompanyResearchRepository:
                     "company research market snapshot exceeds preparation cutoff"
                 )
 
+    @staticmethod
+    def expected_model_source_refs(
+        *,
+        evidence: CompanyResearchArtifactVersion,
+        predecessor_gaps: CompanyResearchArtifactVersion,
+        market_snapshot_bindings: Sequence[FrozenMarketSnapshotBinding],
+    ) -> tuple[dict[str, str], ...]:
+        """Derive the only source-record set a model publication may carry."""
+        evidence_refs = evidence_payload_source_refs(evidence.payload)
+        persisted_evidence_refs = canonical_source_refs(
+            evidence.source_refs,
+            field_name="evidence index source refs",
+        )
+        if persisted_evidence_refs != evidence_refs:
+            raise CompanyResearchIntegrityError(
+                "evidence index source refs do not match governed facts"
+            )
+        gap_refs = canonical_source_refs(
+            predecessor_gaps.source_refs,
+            field_name="predecessor research gaps source refs",
+        )
+        market_refs = tuple(
+            source_record(binding.source_ref) for binding in market_snapshot_bindings
+        )
+        return canonical_source_refs(
+            (*evidence_refs, *gap_refs, *market_refs),
+            field_name="company research model source refs",
+        )
+
     def complete_model_bundle(
         self,
         preparation_id: UUID,
@@ -1372,6 +1412,15 @@ class CompanyResearchRepository:
             bindings=market_snapshot_bindings,
             cutoff_at=preparation_cutoff,
         )
+        model_source_refs = self.expected_model_source_refs(
+            evidence=evidence,
+            predecessor_gaps=current_gaps,
+            market_snapshot_bindings=market_snapshot_bindings,
+        )
+        if bundle.source_refs != model_source_refs:
+            raise ValidationError(
+                "company research model source refs do not match governed inputs"
+            )
         artifacts: list[CompanyResearchArtifactVersion] = []
 
         with self._session.begin_nested():
@@ -1398,7 +1447,7 @@ class CompanyResearchRepository:
                         artifact_refs=refs,
                         market_snapshot_bindings=market_snapshot_bindings,
                     ),
-                    source_refs=bundle.source_refs,
+                    source_refs=model_source_refs,
                     expected_parent_id=current.id if current is not None else None,
                     created_at=when,
                     artifact_id=artifact_id,
@@ -1451,7 +1500,7 @@ class CompanyResearchRepository:
                 parent_content_hash=current_gaps.content_hash,
                 input_hash=gap_input_hash,
                 payload=gap_payload,
-                source_refs=bundle.source_refs,
+                source_refs=model_source_refs,
             )
             planned_gap = CompanyResearchArtifactVersion(
                 id=planned_gap_id,
@@ -1462,7 +1511,7 @@ class CompanyResearchRepository:
                 parent_content_hash=current_gaps.content_hash,
                 input_hash=gap_input_hash,
                 payload=gap_payload,
-                source_refs=list(bundle.source_refs),
+                source_refs=list(model_source_refs),
                 content_hash=planned_gap_hash,
                 created_at=when,
             )
