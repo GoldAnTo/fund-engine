@@ -28,6 +28,7 @@ from app.underwriting.fixtures.alphabet_golden_case import (
     load_alphabet_golden_case_fixture,
 )
 from app.underwriting.hashing import canonical_hash
+from app.underwriting.domain.company_research_contracts import StrategyAssumptionValue
 from app.underwriting.services.company_research_model_builder import (
     CompanyResearchDriverBinding,
     CompanyResearchBuildInput,
@@ -79,16 +80,22 @@ def _driver_paths() -> tuple[DriverInput, ...]:
             values=tuple(Decimal(item) for item in path),
             source_refs=(),
             assumption_key=f"alphabet-candidate.v1:{key}",
+            assumption_rationale="Synthetic candidate rationale.",
+            assumption_equation="candidate_input",
         )
         for key, path in values.items()
     )
 
 
-def _overrides(**changes: str) -> tuple[ScenarioDriverOverride, ...]:
+def _overrides(scenario: str, **changes: str) -> tuple[ScenarioDriverOverride, ...]:
     return tuple(
         ScenarioDriverOverride(
             driver_key=key,
             value=Decimal(changes.get(key, "1")),
+            state=ModelInputState.ASSUMPTION,
+            assumption_key=f"alphabet-candidate.v1:{scenario}:{key}",
+            rationale="Synthetic scenario candidate rationale.",
+            equation="baseline * scenario_multiplier",
         )
         for key in (
             "revenue",
@@ -105,12 +112,13 @@ def _strategy_assumptions() -> StrategyAssumptionSet:
     driver_paths = _driver_paths()
     scenarios = (
         ScenarioAssumption(
-            "base", "steady_operations", _overrides()
+            "base", "steady_operations", _overrides("base")
         ),
         ScenarioAssumption(
             "bull",
             "capacity_upside",
             _overrides(
+                "bull",
                 revenue="1.10",
                 operating_margin="1.05",
                 capex="0.95",
@@ -121,6 +129,7 @@ def _strategy_assumptions() -> StrategyAssumptionSet:
             "bear",
             "demand_stress",
             _overrides(
+                "bear",
                 revenue="0.90",
                 operating_margin="0.90",
                 capex="1.10",
@@ -128,12 +137,19 @@ def _strategy_assumptions() -> StrategyAssumptionSet:
             ),
         ),
     )
+    terminal_growth = StrategyAssumptionValue(
+        value=Decimal("0.03"),
+        state=ModelInputState.ASSUMPTION,
+        assumption_key="alphabet-candidate.v1:terminal_growth",
+        rationale="Synthetic terminal candidate rationale.",
+        equation="terminal_growth_candidate",
+    )
     content_hash = StrategyAssumptionSet.calculate_content_hash(
         strategy_version="alphabet-candidate.v1",
         first_fiscal_year=2026,
         driver_paths=driver_paths,
         scenario_overrides=scenarios,
-        terminal_growth=Decimal("0.03"),
+        terminal_growth=terminal_growth,
     )
     return StrategyAssumptionSet(
         strategy_version="alphabet-candidate.v1",
@@ -141,7 +157,7 @@ def _strategy_assumptions() -> StrategyAssumptionSet:
         first_fiscal_year=2026,
         driver_paths=driver_paths,
         scenario_overrides=scenarios,
-        terminal_growth=Decimal("0.03"),
+        terminal_growth=terminal_growth,
     )
 
 
@@ -361,8 +377,25 @@ def _market_context() -> FrozenMarketContext:
             ),
             FrozenMarketEquityComponent(
                 "class_b", Decimal("0"), "NASDAQ:GOOGL",
-                refs["capital_structure_usd"], ids[1],
+                SourceLineageReference(
+                    "economic_units_class_b", "frozen_market_snapshot",
+                    "https://example.com/sec", "Class B units", "2" * 64,
+                ), ids[1],
                 refs["market_price_usd_nasdaq_googl"],
+                votes_per_unit=Decimal("10"),
+                conversion_to_security_external_key="NASDAQ:GOOGL",
+                conversion_ratio=Decimal("1"),
+                dividend_rights_per_unit=Decimal("1"),
+                economic_rights_per_unit=Decimal("1"),
+                legal_rights_ref=SourceLineageReference(
+                    "security_rights_class_b", "frozen_market_snapshot",
+                    "https://example.com/sec", "Class B legal rights", "3" * 64,
+                ),
+                price_proxy_ref=SourceLineageReference(
+                    "market_price_proxy_class_b", "frozen_market_snapshot",
+                    "https://example.com/price", "GOOGL proxy", "1" * 64,
+                ),
+                price_proxy_policy_version="alphabet_class_b_googl_proxy.v1",
             ),
             FrozenMarketEquityComponent(
                 "class_c", Decimal("5800"), "NASDAQ:GOOG",
@@ -507,6 +540,31 @@ def test_builder_keeps_missing_market_inputs_as_blocking_gaps() -> None:
     assert result.financial_bridge.rows[0].revenue == Decimal("410000")
 
 
+def test_builder_emits_a_critical_gap_for_each_missing_minimum_operating_driver() -> None:
+    value = _build_input()
+    result = CompanyResearchModelBuilder().build(value)
+    available = {
+        (str(item["business_module"]), str(item["metric_key"]))
+        for item in value.evidence_payload["facts"]
+        if item["review_decision"] == "confirmed"
+    }
+    missing = {
+        item.driver_key
+        for item in value.model_template.operating_driver_bindings
+        if (item.module_key, item.metric_key) not in available
+    }
+    assert {
+        gap.code.removeprefix("builder_generated_operating_driver_missing_")
+        for gap in result.gaps
+        if gap.code.startswith("builder_generated_operating_driver_missing_")
+    } == missing
+    assert all(
+        gap.severity.value == "critical"
+        for gap in result.gaps
+        if gap.code.startswith("builder_generated_operating_driver_missing_")
+    )
+
+
 def test_builder_does_not_invent_market_gap_ownership_when_governed_gaps_are_missing() -> None:
     value = _build_input()
     gap_payload = deepcopy(value.gap_payload)
@@ -642,14 +700,18 @@ def test_strategy_assumption_hash_canonicalizes_all_decimal_scales() -> None:
         first_fiscal_year=2026,
         driver_paths=paths,
         scenario_overrides=scenarios,
-        terminal_growth=Decimal("0.03"),
+        terminal_growth=replace(
+            _strategy_assumptions().terminal_growth, value=Decimal("0.03")
+        ),
     )
     second = StrategyAssumptionSet.calculate_content_hash(
         strategy_version="alphabet-candidate.v1",
         first_fiscal_year=2026,
         driver_paths=scaled_paths,
         scenario_overrides=scaled_scenarios,
-        terminal_growth=Decimal("0.030"),
+        terminal_growth=replace(
+            _strategy_assumptions().terminal_growth, value=Decimal("0.030")
+        ),
     )
 
     assert first == second

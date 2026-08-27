@@ -20,6 +20,9 @@ from app.underwriting.hashing import canonical_hash
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _VERSIONED_STRATEGY = re.compile(r"[a-z][a-z0-9_.-]*\.v[1-9][0-9]*\Z")
+_VERSIONED_ASSUMPTION = re.compile(
+    r"[a-z][a-z0-9_.-]*\.v[1-9][0-9]*:[a-z0-9_.:-]+\Z"
+)
 _SCENARIO_ORDER = ("base", "bull", "bear")
 
 
@@ -195,6 +198,17 @@ class ScenarioAssumption:
         keys = tuple(item.driver_key for item in self.driver_overrides)
         if keys != SCENARIO_FINANCIAL_DRIVER_KEYS:
             raise ValidationError("strategy scenario overrides must cover the six drivers in canonical order")
+        if any(
+            item.state is not ModelInputState.ASSUMPTION
+            or not isinstance(item.assumption_key, str)
+            or _VERSIONED_ASSUMPTION.fullmatch(item.assumption_key) is None
+            or not item.rationale
+            or not item.equation
+            for item in self.driver_overrides
+        ):
+            raise ValidationError(
+                "strategy scenario overrides require complete assumption metadata"
+            )
         if self.scenario_id == "base" and any(item.value != Decimal("1") for item in self.driver_overrides):
             raise ValidationError("base strategy scenario must preserve the baseline")
         if self.scenario_id != "base" and all(item.value == Decimal("1") for item in self.driver_overrides):
@@ -206,8 +220,42 @@ class ScenarioAssumption:
             "mechanism_id": self.mechanism_id,
             "driver_overrides": tuple(
                 {"driver_key": item.driver_key, "value": canonical_decimal_string(item.value)}
+                | {
+                    "state": item.state.value,
+                    "assumption_key": item.assumption_key,
+                    "rationale": item.rationale,
+                    "equation": item.equation,
+                }
                 for item in self.driver_overrides
             ),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyAssumptionValue:
+    value: Decimal
+    state: ModelInputState
+    assumption_key: str
+    rationale: str
+    equation: str
+
+    def __post_init__(self) -> None:
+        _decimal(self.value, "strategy assumption value")
+        if (
+            self.state is not ModelInputState.ASSUMPTION
+            or _VERSIONED_ASSUMPTION.fullmatch(self.assumption_key) is None
+        ):
+            raise ValidationError("strategy value requires a versioned assumption")
+        _text(self.rationale, "strategy assumption rationale")
+        _text(self.equation, "strategy assumption equation")
+
+    def canonical_payload(self) -> dict[str, str]:
+        return {
+            "value": canonical_decimal_string(self.value),
+            "state": self.state.value,
+            "assumption_key": self.assumption_key,
+            "rationale": self.rationale,
+            "equation": self.equation,
         }
 
 
@@ -220,7 +268,7 @@ class StrategyAssumptionSet:
     first_fiscal_year: int
     driver_paths: tuple[DriverInput, ...]
     scenario_overrides: tuple[ScenarioAssumption, ...]
-    terminal_growth: Decimal
+    terminal_growth: StrategyAssumptionValue
 
     def __post_init__(self) -> None:
         if not isinstance(self.strategy_version, str) or _VERSIONED_STRATEGY.fullmatch(self.strategy_version) is None:
@@ -238,13 +286,20 @@ class StrategyAssumptionSet:
                 raise ValidationError("strategy assumption driver paths must contain five years")
             if path.assumption_key is None or not path.assumption_key.startswith(f"{self.strategy_version}:"):
                 raise ValidationError("strategy assumption keys must be versioned by strategy_version")
+            if not path.assumption_rationale or not path.assumption_equation:
+                raise ValidationError(
+                    "strategy driver paths require rationale and equation metadata"
+                )
         if not isinstance(self.scenario_overrides, tuple) or not all(type(item) is ScenarioAssumption for item in self.scenario_overrides) or tuple(item.scenario_id for item in self.scenario_overrides) != _SCENARIO_ORDER:
             raise ValidationError("strategy assumptions must contain canonical Base-Bull-Bear scenarios")
         if len({item.mechanism_id for item in self.scenario_overrides}) != 3:
             raise ValidationError("strategy assumptions require mechanism-specific scenario overrides")
-        terminal_growth = _decimal(self.terminal_growth, "strategy assumptions terminal_growth")
-        if terminal_growth < Decimal("0"):
+        if type(self.terminal_growth) is not StrategyAssumptionValue:
+            raise ValidationError("strategy terminal growth must be a typed assumption")
+        if self.terminal_growth.value < Decimal("0"):
             raise ValidationError("strategy assumptions terminal growth is invalid")
+        if not self.terminal_growth.assumption_key.startswith(f"{self.strategy_version}:"):
+            raise ValidationError("strategy terminal growth key must be versioned")
         if not isinstance(self.content_hash, str) or _SHA256.fullmatch(self.content_hash) is None:
             raise ValidationError("strategy assumptions content hash must be a SHA-256 content hash")
         expected_hash = self.calculate_content_hash(
@@ -265,15 +320,27 @@ class StrategyAssumptionSet:
         first_fiscal_year: int,
         driver_paths: tuple[DriverInput, ...],
         scenario_overrides: tuple[ScenarioAssumption, ...],
-        terminal_growth: Decimal,
+        terminal_growth: StrategyAssumptionValue,
     ) -> str:
         return canonical_hash(
             {
-                "schema_version": "company-research-strategy-assumptions.v1",
+                "schema_version": "alphabet.golden-case.strategy-assumptions.v1",
                 "strategy_version": strategy_version,
                 "first_fiscal_year": first_fiscal_year,
-                "driver_paths": tuple(item.canonical_payload() for item in driver_paths),
+                "driver_paths": tuple(
+                    {
+                        "driver_key": item.driver_key,
+                        "values": tuple(
+                            canonical_decimal_string(value) for value in item.values
+                        ),
+                        "state": item.state.value,
+                        "assumption_key": item.assumption_key,
+                        "rationale": item.assumption_rationale,
+                        "equation": item.assumption_equation,
+                    }
+                    for item in driver_paths
+                ),
                 "scenario_overrides": tuple(item.canonical_payload() for item in scenario_overrides),
-                "terminal_growth": canonical_decimal_string(terminal_growth),
+                "terminal_growth": terminal_growth.canonical_payload(),
             }
         )

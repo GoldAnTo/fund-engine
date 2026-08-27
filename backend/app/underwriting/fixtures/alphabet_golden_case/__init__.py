@@ -28,7 +28,7 @@ _BUSINESS_MAP_SCHEMA = "alphabet.golden-case.business-map.v1"
 _SOURCE_FACTS_SCHEMA = "alphabet.golden-case.source-facts.v1"
 _MARKET_INPUTS_SCHEMA = "alphabet.golden-case.market-inputs.v1"
 _STRATEGY_ASSUMPTIONS_SCHEMA = "alphabet.golden-case.strategy-assumptions.v1"
-BUNDLED_MANIFEST_CONTENT_SHA256 = "619961a99d0170b2cd16afe0b5dfd98a246c94c5a3e11b75d06d7ecfdfcc4d7d"
+BUNDLED_MANIFEST_CONTENT_SHA256 = "43a6d4e13d1dddbf2c24e097b4bc05dbe52bd9424a60e1233a054de138a0631a"
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _MANIFEST_KEYS = frozenset({"schema_version", "content_hash", "cutoff", "files"})
 _JSON_FILE_KEYS = frozenset({"name", "content_hash"})
@@ -50,7 +50,7 @@ _MARKET_INPUT_KEYS = frozenset(
     {
         "schema_version", "content_hash", "company_external_key",
         "security_external_keys", "prices", "fx", "capital_structure",
-        "security_rights",
+        "security_rights", "class_b_rights",
     }
 )
 _PROVENANCE_KEYS = frozenset(
@@ -89,7 +89,17 @@ _RIGHTS_KEYS = frozenset(
     {
         "kind", "security_external_key", "economic_units", "votes_per_unit",
         "conversion_ratio", "adr_ratio", "dividend_rights_per_unit",
-        "effective_from", "effective_to", *_PROVENANCE_KEYS,
+        "effective_from", "effective_to", "available_at", *_PROVENANCE_KEYS,
+    }
+)
+_CLASS_B_RIGHTS_KEYS = frozenset(
+    {
+        "kind", "component_key", "economic_units", "votes_per_unit",
+        "conversion_to_security_external_key", "conversion_ratio",
+        "dividend_rights_per_unit", "economic_rights_per_unit",
+        "effective_from", "effective_to", "price_proxy_security_external_key",
+        "price_proxy_policy_version", "available_at", "legal_provenance",
+        "unit_provenance",
     }
 )
 _STRATEGY_KEYS = frozenset(
@@ -247,10 +257,29 @@ class CapturedSecurityRights:
     values: tuple[tuple[str, Decimal], ...]
     effective_from: datetime
     effective_to: datetime | None
+    available_at: datetime
     provenance: CapturedProvenance
 
     def value(self, name: str) -> Decimal:
         return dict(self.values)[name]
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedNonListedSecurityRights:
+    component_key: str
+    economic_units: Decimal
+    votes_per_unit: Decimal
+    conversion_to_security_external_key: str
+    conversion_ratio: Decimal
+    dividend_rights_per_unit: Decimal
+    economic_rights_per_unit: Decimal
+    effective_from: datetime
+    effective_to: datetime | None
+    price_proxy_security_external_key: str
+    price_proxy_policy_version: str
+    available_at: datetime
+    legal_provenance: CapturedProvenance
+    unit_provenance: CapturedProvenance
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +291,7 @@ class AlphabetMarketInputBundle:
     fx: CapturedMarketFX
     capital_structure: CapturedCapitalStructure
     security_rights: tuple[CapturedSecurityRights, ...]
+    class_b_rights: CapturedNonListedSecurityRights
 
 
 @dataclass(frozen=True, slots=True)
@@ -764,6 +794,9 @@ def _market_inputs(
             _timestamp(item.get("effective_to"), f"market rights[{index}].effective_to")
             if item.get("effective_to") is not None else None
         )
+        available_at = _timestamp(
+            item.get("available_at"), f"market rights[{index}].available_at"
+        )
         values = tuple(
             (name, _canonical_decimal(item.get(name), f"market rights[{index}].{name}"))
             for name in rights_names
@@ -772,6 +805,7 @@ def _market_inputs(
         if (
             item.get("kind") != "security_rights"
             or effective_from > cutoff
+            or available_at > cutoff
             or (effective_to is not None and effective_to <= effective_from)
             or numbers["economic_units"] <= 0
             or numbers["conversion_ratio"] <= 0
@@ -786,6 +820,7 @@ def _market_inputs(
                 values=values,
                 effective_from=effective_from,
                 effective_to=effective_to,
+                available_at=available_at,
                 provenance=_provenance(
                     item, f"market rights[{index}]", raw_sidecars=raw_sidecars
                 ),
@@ -794,10 +829,78 @@ def _market_inputs(
     if tuple(item.security_external_key for item in rights) != tuple(security_values):
         raise AlphabetGoldenCaseFixtureError("Alphabet fixture rights must exactly cover Securities")
 
+    class_b_item = _exact_object(
+        raw.get("class_b_rights"), _CLASS_B_RIGHTS_KEYS, "market inputs.class_b_rights"
+    )
+    class_b_effective_from = _timestamp(
+        class_b_item.get("effective_from"), "market class_b_rights.effective_from"
+    )
+    class_b_effective_to = (
+        _timestamp(
+            class_b_item.get("effective_to"), "market class_b_rights.effective_to"
+        )
+        if class_b_item.get("effective_to") is not None
+        else None
+    )
+    class_b = CapturedNonListedSecurityRights(
+        component_key=_text(class_b_item.get("component_key"), "market class_b_rights.component_key"),
+        economic_units=_canonical_decimal(class_b_item.get("economic_units"), "market class_b_rights.economic_units"),
+        votes_per_unit=_canonical_decimal(class_b_item.get("votes_per_unit"), "market class_b_rights.votes_per_unit"),
+        conversion_to_security_external_key=_text(class_b_item.get("conversion_to_security_external_key"), "market class_b_rights.conversion_to_security_external_key"),
+        conversion_ratio=_canonical_decimal(class_b_item.get("conversion_ratio"), "market class_b_rights.conversion_ratio"),
+        dividend_rights_per_unit=_canonical_decimal(class_b_item.get("dividend_rights_per_unit"), "market class_b_rights.dividend_rights_per_unit"),
+        economic_rights_per_unit=_canonical_decimal(class_b_item.get("economic_rights_per_unit"), "market class_b_rights.economic_rights_per_unit"),
+        effective_from=class_b_effective_from,
+        effective_to=class_b_effective_to,
+        price_proxy_security_external_key=_text(class_b_item.get("price_proxy_security_external_key"), "market class_b_rights.price_proxy_security_external_key"),
+        price_proxy_policy_version=_text(class_b_item.get("price_proxy_policy_version"), "market class_b_rights.price_proxy_policy_version"),
+        available_at=_timestamp(
+            class_b_item.get("available_at"), "market class_b_rights.available_at"
+        ),
+        legal_provenance=_provenance(
+            _exact_object(class_b_item.get("legal_provenance"), _PROVENANCE_KEYS, "market class_b_rights.legal_provenance"),
+            "market class_b_rights.legal_provenance",
+            raw_sidecars=raw_sidecars,
+        ),
+        unit_provenance=_provenance(
+            _exact_object(class_b_item.get("unit_provenance"), _PROVENANCE_KEYS, "market class_b_rights.unit_provenance"),
+            "market class_b_rights.unit_provenance",
+            raw_sidecars=raw_sidecars,
+        ),
+    )
+    if (
+        class_b_item.get("kind") != "nonlisted_security_rights"
+        or class_b.component_key != "class_b"
+        or class_b.economic_units <= 0
+        or class_b.votes_per_unit != Decimal("10")
+        or class_b.conversion_to_security_external_key != "NASDAQ:GOOGL"
+        or class_b.conversion_ratio != Decimal("1")
+        or class_b.dividend_rights_per_unit != Decimal("1")
+        or class_b.economic_rights_per_unit != Decimal("1")
+        or class_b.price_proxy_security_external_key != "NASDAQ:GOOGL"
+        or class_b.price_proxy_policy_version != "alphabet_class_b_googl_proxy.v1"
+        or class_b.effective_from > cutoff
+        or class_b.available_at > cutoff
+        or (class_b.effective_to is not None and class_b.effective_to <= class_b.effective_from)
+    ):
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture Class B rights are invalid")
+    listed_units = sum(item.value("economic_units") for item in rights)
+    if class_b.economic_units != capital.value("basic_shares") - listed_units:
+        raise AlphabetGoldenCaseFixtureError(
+            "Alphabet fixture Class B units must close basic shares"
+        )
+
     referenced_raw_files = {
         component.raw_file
-        for capture in (*prices, fx, capital, *rights)
-        for component in capture.provenance.raw_components
+        for capture in (
+            *prices, fx, capital, *rights,
+            class_b.legal_provenance, class_b.unit_provenance,
+        )
+        for component in (
+            capture.raw_components
+            if type(capture) is CapturedProvenance
+            else capture.provenance.raw_components
+        )
     }
     if referenced_raw_files != set(raw_sidecars):
         raise AlphabetGoldenCaseFixtureError(
@@ -811,6 +914,7 @@ def _market_inputs(
         fx=fx,
         capital_structure=capital,
         security_rights=tuple(rights),
+        class_b_rights=class_b,
     )
 
 

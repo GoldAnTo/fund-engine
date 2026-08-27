@@ -695,6 +695,8 @@ class DriverInput:
     source_refs: tuple[SourceLineageReference, ...]
     assumption_key: str | None
     equation_id: str | None = None
+    assumption_rationale: str | None = None
+    assumption_equation: str | None = None
 
     def __post_init__(self) -> None:
         _require_key(self.driver_key, "driver input driver_key", _GAP_CODE)
@@ -715,9 +717,15 @@ class DriverInput:
                 raise CompanyResearchValidationError(
                     "reported driver input requires exact source refs"
                 )
-            if self.assumption_key is not None or self.equation_id is not None:
+            if (
+                self.assumption_key is not None
+                or self.equation_id is not None
+                or self.assumption_rationale is not None
+                or self.assumption_equation is not None
+            ):
                 raise CompanyResearchValidationError(
-                    "reported driver input cannot carry an assumption or equation"
+                    "reported driver input cannot carry an assumption or equation; "
+                    "strategy paths require state=assumption"
                 )
         elif self.state is ModelInputState.DERIVED:
             if not self.source_refs:
@@ -728,7 +736,11 @@ class DriverInput:
                 raise CompanyResearchValidationError(
                     "derived driver input requires a closed equation"
                 )
-            if self.assumption_key is not None:
+            if (
+                self.assumption_key is not None
+                or self.assumption_rationale is not None
+                or self.assumption_equation is not None
+            ):
                 raise CompanyResearchValidationError(
                     "derived driver input cannot carry an assumption_key"
                 )
@@ -744,6 +756,12 @@ class DriverInput:
                 raise CompanyResearchValidationError(
                     "assumption driver input must not be labeled as sourced or derived"
                 )
+            for value, field in (
+                (self.assumption_rationale, "assumption_rationale"),
+                (self.assumption_equation, "assumption_equation"),
+            ):
+                if value is not None:
+                    _artifact_text(value, f"driver input {field}")
 
     def canonical_payload(self) -> dict[str, object]:
         return {
@@ -753,6 +771,8 @@ class DriverInput:
             "source_refs": tuple(ref.canonical_payload() for ref in self.source_refs),
             "assumption_key": self.assumption_key,
             "equation_id": self.equation_id,
+            "assumption_rationale": self.assumption_rationale,
+            "assumption_equation": self.assumption_equation,
         }
 
 
@@ -849,6 +869,8 @@ class DriverMetricArtifact:
     assumption_key: str | None
     equation_id: str | None
     values: tuple[Decimal, ...]
+    assumption_rationale: str | None = None
+    assumption_equation: str | None = None
 
     def __post_init__(self) -> None:
         _require_key(self.driver_key, "driver.driver_key", _GAP_CODE)
@@ -870,8 +892,20 @@ class DriverMetricArtifact:
         elif self.input_state is ModelInputState.DERIVED:
             if not self.fact_refs or self.assumption_refs or self.assumption_key is not None or self.equation_id not in _DRIVER_EQUATIONS:
                 raise CompanyResearchValidationError("derived driver requires fact refs and a closed equation_id")
-        elif self.fact_refs or not self.assumption_refs or self.equation_id is not None or not isinstance(self.assumption_key, str) or _VERSIONED_ASSUMPTION_KEY.fullmatch(self.assumption_key) is None:
-            raise CompanyResearchValidationError("assumption driver requires candidate refs and a versioned assumption_key")
+        elif (
+            self.fact_refs
+            or not self.assumption_refs
+            or self.equation_id is not None
+            or not isinstance(self.assumption_key, str)
+            or _VERSIONED_ASSUMPTION_KEY.fullmatch(self.assumption_key) is None
+        ):
+            raise CompanyResearchValidationError(
+                "assumption driver requires candidate refs and a versioned assumption_key"
+            )
+        if bool(self.assumption_rationale) != bool(self.assumption_equation):
+            raise CompanyResearchValidationError(
+                "assumption driver metadata must preserve rationale and equation together"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -972,10 +1006,23 @@ class FinancialBridgeArtifact:
 class ScenarioDriverOverride:
     driver_key: str
     value: Decimal
+    state: ModelInputState | None = None
+    assumption_key: str | None = None
+    rationale: str | None = None
+    equation: str | None = None
 
     def __post_init__(self) -> None:
         _require_key(self.driver_key, "scenario.driver_key", _GAP_CODE)
         _artifact_decimal(self.value, "scenario.value")
+        if self.state is not None and type(self.state) is not ModelInputState:
+            raise CompanyResearchValidationError("scenario override state must be controlled")
+        for value, field_name in (
+            (self.assumption_key, "assumption_key"),
+            (self.rationale, "rationale"),
+            (self.equation, "equation"),
+        ):
+            if value is not None:
+                _artifact_text(value, f"scenario override {field_name}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1020,6 +1067,8 @@ class ScenarioFinancialDriverForecast:
     input_state: ModelInputState
     assumption_key: str | None
     equation_id: str | None
+    assumption_rationale: str | None = None
+    assumption_equation: str | None = None
 
     def __post_init__(self) -> None:
         if self.driver_key not in SCENARIO_FINANCIAL_DRIVER_KEYS:
@@ -1042,8 +1091,20 @@ class ScenarioFinancialDriverForecast:
         elif self.input_state is ModelInputState.DERIVED:
             if not self.fact_refs or self.assumption_refs or self.assumption_key is not None or self.equation_id not in _DRIVER_EQUATIONS:
                 raise CompanyResearchValidationError("derived forecast requires fact refs and a closed equation_id")
-        elif self.fact_refs or not self.assumption_refs or self.equation_id is not None or not isinstance(self.assumption_key, str) or _VERSIONED_ASSUMPTION_KEY.fullmatch(self.assumption_key) is None:
-            raise CompanyResearchValidationError("assumption forecast requires candidate refs and a versioned assumption_key")
+        elif (
+            self.fact_refs
+            or not self.assumption_refs
+            or self.equation_id is not None
+            or not isinstance(self.assumption_key, str)
+            or _VERSIONED_ASSUMPTION_KEY.fullmatch(self.assumption_key) is None
+        ):
+            raise CompanyResearchValidationError(
+                "assumption forecast requires candidate refs and a versioned assumption_key"
+            )
+        if bool(self.assumption_rationale) != bool(self.assumption_equation):
+            raise CompanyResearchValidationError(
+                "assumption forecast metadata must preserve rationale and equation together"
+            )
 
 
 @dataclass(frozen=True, slots=True)

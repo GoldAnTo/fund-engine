@@ -186,10 +186,28 @@ def _add_synthetic_governed_inputs(root: Path) -> None:
                 "dividend_rights_per_unit": "1",
                 "effective_from": "2026-01-01T00:00:00+00:00",
                 "effective_to": None,
+                "available_at": "2026-07-30T00:00:00+00:00",
                 **provenance,
             }
             for key, votes in (("NASDAQ:GOOG", "0"), ("NASDAQ:GOOGL", "1"))
         ],
+        "class_b_rights": {
+            "kind": "nonlisted_security_rights",
+            "component_key": "class_b",
+            "economic_units": "400",
+            "votes_per_unit": "10",
+            "conversion_to_security_external_key": "NASDAQ:GOOGL",
+            "conversion_ratio": "1",
+            "dividend_rights_per_unit": "1",
+            "economic_rights_per_unit": "1",
+            "effective_from": "2026-01-01T00:00:00+00:00",
+            "effective_to": None,
+            "price_proxy_security_external_key": "NASDAQ:GOOGL",
+            "price_proxy_policy_version": "alphabet_class_b_googl_proxy.v1",
+            "available_at": "2026-07-30T00:00:00+00:00",
+            "legal_provenance": dict(provenance),
+            "unit_provenance": dict(provenance),
+        },
     }
     market["content_hash"] = canonical_hash(
         {key: value for key, value in market.items() if key != "content_hash"}
@@ -542,6 +560,37 @@ def test_bundled_strategy_is_an_explicit_machine_candidate_not_a_source_fact() -
     )
 
 
+def test_strategy_adapter_preserves_candidate_digest_and_all_assumption_metadata() -> None:
+    fixture = load_alphabet_golden_case_fixture()
+    assert fixture.strategy_assumptions is not None
+    captured = fixture.strategy_assumptions
+
+    assumptions = AlphabetCompanyResearchAdapter().strategy_assumptions(captured)
+
+    assert assumptions.content_hash == captured.content_hash
+    assert all(path.state.value == "assumption" for path in assumptions.driver_paths)
+    assert all(path.assumption_key and path.assumption_rationale and path.assumption_equation for path in assumptions.driver_paths)
+    assert all(
+        override.state.value == "assumption"
+        and override.assumption_key
+        and override.rationale
+        and override.equation
+        for scenario in assumptions.scenario_overrides
+        for override in scenario.driver_overrides
+    )
+    assert assumptions.terminal_growth.state.value == "assumption"
+    assert assumptions.terminal_growth.assumption_key
+    assert assumptions.terminal_growth.rationale
+    assert assumptions.terminal_growth.equation
+    assert assumptions.calculate_content_hash(
+        strategy_version=assumptions.strategy_version,
+        first_fiscal_year=assumptions.first_fiscal_year,
+        driver_paths=assumptions.driver_paths,
+        scenario_overrides=assumptions.scenario_overrides,
+        terminal_growth=assumptions.terminal_growth,
+    ) == captured.content_hash
+
+
 def test_bundled_market_inputs_pin_exact_abc_capital_and_raw_lineage() -> None:
     fixture = load_alphabet_golden_case_fixture()
     assert fixture.market_inputs is not None
@@ -713,6 +762,30 @@ def test_alphabet_adapter_emits_six_module_model_template_without_forecasts() ->
         "working_capital_change",
     )
     assert not hasattr(template, "forecast_values")
+
+
+def test_alphabet_template_declares_every_minimum_operating_driver_and_baseline() -> None:
+    template = AlphabetCompanyResearchAdapter().model_template()
+    expected = {
+        "search_query_intensity", "search_ad_monetization", "traffic_acquisition_cost",
+        "youtube_usage", "youtube_ad_monetization", "youtube_subscription_growth",
+        "cloud_workload", "cloud_revenue_growth", "cloud_operating_margin",
+        "ai_data_center_capex", "infrastructure_depreciation", "infrastructure_opex", "free_cash_flow",
+        "stock_based_compensation", "share_repurchases", "dilution",
+    }
+    assert {item.driver_key for item in template.operating_driver_bindings} == expected
+    assert {item.requirement_key for item in template.operating_baseline_requirements} == expected
+    assert {
+        (item.module_key, item.metric_key)
+        for item in template.operating_driver_bindings
+    }.issubset({
+        (item.module_key, item.metric_key) for item in template.metric_classifications
+    })
+    assert all(
+        "Reviewed" not in descriptor and "explicit gap" not in descriptor
+        for module in template.modules
+        for descriptor in (*module.revenue_sources, *module.cost_structure, *module.capital_needs)
+    )
 
 
 def _preparation(session):

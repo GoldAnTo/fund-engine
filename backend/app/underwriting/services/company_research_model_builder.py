@@ -332,6 +332,8 @@ class FrozenMarketSnapshotBinding:
     role: FrozenMarketSnapshotRole
     security_external_key: str | None
     source_ref: SourceLineageReference
+    provider_policy_version: str = "legacy_snapshot_without_exact_provenance.v1"
+    raw_components: tuple[dict[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         _uuid(self.snapshot_id, "market snapshot binding snapshot_id")
@@ -343,6 +345,11 @@ class FrozenMarketSnapshotBinding:
             raise ValidationError("non-security market binding cannot name a security")
         if type(self.source_ref) is not SourceLineageReference:
             raise ValidationError("market snapshot binding source ref must be typed")
+        _text(self.provider_policy_version, "market snapshot provider policy version")
+        if not isinstance(self.raw_components, tuple) or not all(
+            isinstance(item, dict) for item in self.raw_components
+        ):
+            raise ValidationError("market snapshot raw components must be immutable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,6 +362,14 @@ class FrozenMarketEquityComponent:
     unit_source_ref: SourceLineageReference
     price_snapshot_id: UUID
     price_ref: SourceLineageReference
+    votes_per_unit: Decimal | None = None
+    conversion_to_security_external_key: str | None = None
+    conversion_ratio: Decimal | None = None
+    dividend_rights_per_unit: Decimal | None = None
+    economic_rights_per_unit: Decimal | None = None
+    legal_rights_ref: SourceLineageReference | None = None
+    price_proxy_ref: SourceLineageReference | None = None
+    price_proxy_policy_version: str | None = None
 
     def __post_init__(self) -> None:
         if self.component_key not in {"class_a", "class_b", "class_c"}:
@@ -371,6 +386,29 @@ class FrozenMarketEquityComponent:
         _uuid(self.price_snapshot_id, "market equity component price_snapshot_id")
         if type(self.price_ref) is not SourceLineageReference:
             raise ValidationError("market equity component price ref must be typed")
+        if self.component_key == "class_b":
+            if (
+                _decimal(self.votes_per_unit, "Class B votes_per_unit")
+                != Decimal("10")
+                or self.conversion_to_security_external_key != "NASDAQ:GOOGL"
+                or _decimal(self.conversion_ratio, "Class B conversion_ratio")
+                != Decimal("1")
+                or _decimal(
+                    self.dividend_rights_per_unit,
+                    "Class B dividend_rights_per_unit",
+                )
+                != Decimal("1")
+                or _decimal(
+                    self.economic_rights_per_unit,
+                    "Class B economic_rights_per_unit",
+                )
+                != Decimal("1")
+                or type(self.legal_rights_ref) is not SourceLineageReference
+                or type(self.price_proxy_ref) is not SourceLineageReference
+                or self.price_proxy_policy_version
+                != "alphabet_class_b_googl_proxy.v1"
+            ):
+                raise ValidationError("Class B legal rights and price proxy must be explicit")
 
 
 @dataclass(frozen=True, slots=True)
@@ -483,7 +521,6 @@ class FrozenMarketContext:
             != securities["NASDAQ:GOOG"].listed_class_economic_units
             or class_a.unit_source_ref != securities["NASDAQ:GOOGL"].rights_ref
             or class_c.unit_source_ref != securities["NASDAQ:GOOG"].rights_ref
-            or class_b.unit_source_ref != self.market_bridge.capital_structure.source_ref
         ):
             raise ValidationError(
                 "Class A/C units must match listed rights and Class B must remain separate"
@@ -1059,7 +1096,7 @@ class CompanyResearchModelBuilder:
             research_gaps=active_gaps,
             evidence_gap_contract=evidence_gap_contract,
             required_return=value.required_return,
-            terminal_growth=value.strategy_assumptions.terminal_growth,
+            terminal_growth=value.strategy_assumptions.terminal_growth.value,
             market_bridge=(
                 value.market_context.market_bridge
                 if value.market_context is not None
@@ -1409,6 +1446,8 @@ class CompanyResearchModelBuilder:
                     assumption_key=path.assumption_key,
                     equation_id=path.equation_id,
                     values=path.values,
+                    assumption_rationale=path.assumption_rationale,
+                    assumption_equation=path.assumption_equation,
                 )
                 for path in assumptions.driver_paths
             )
@@ -1428,6 +1467,8 @@ class CompanyResearchModelBuilder:
                 input_state=path.state,
                 assumption_key=path.assumption_key,
                 equation_id=path.equation_id,
+                assumption_rationale=path.assumption_rationale,
+                assumption_equation=path.assumption_equation,
             )
             for path, reference in zip(
                 assumptions.driver_paths, assumption_refs, strict=True
@@ -1463,6 +1504,9 @@ class CompanyResearchModelBuilder:
         market_refs: tuple[SourceLineageReference, ...] = ()
         if market_context is not None:
             bridge = market_context.market_bridge
+            class_b = market_context.equity_components[1]
+            assert class_b.legal_rights_ref is not None
+            assert class_b.price_proxy_ref is not None
             market_refs = (
                 bridge.capital_structure.source_ref,
                 bridge.capital_structure.policy_ref,
@@ -1472,6 +1516,9 @@ class CompanyResearchModelBuilder:
                     for security in bridge.securities
                     for ref in (security.rights_ref, security.price_ref)
                 ),
+                class_b.legal_rights_ref,
+                class_b.unit_source_ref,
+                class_b.price_proxy_ref,
             )
         values = (*evidence_refs, *assumption_refs, gap_ref, *market_refs)
         if len({item.fact_key for item in values}) != len(values):

@@ -1,6 +1,6 @@
 {
   "schema_version": "alphabet.golden-case.market-inputs.v1",
-  "content_hash": "eaaf3481ec641fba933011f05d691b06c4e86cdaa62a9afd3eeade4a80f45039",
+  "content_hash": "31643c0b83534c58785e223c326bed0d9ea3be3b9f6c85a83fe688f7e5eddbf9",
   "company_external_key": "US:ALPHABET:COMPANY",
   "security_external_keys": ["NASDAQ:GOOG", "NASDAQ:GOOGL"],
   "prices": [
@@ -123,6 +123,7 @@
       "dividend_rights_per_unit": "1",
       "effective_from": "2026-06-30T00:00:00+00:00",
       "effective_to": null,
+      "available_at": "2026-07-22T20:02:09+00:00",
       "source_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
       "source_locator": "Composite: 2025 10-K Note 11 legal rights; Q2 exhibit June 30 Class C outstanding count",
       "raw_hash": "5f67a9dc753c9601f9a364c5445de1e2afe23c7242970abd7a223acfa3524503",
@@ -152,6 +153,7 @@
       "dividend_rights_per_unit": "1",
       "effective_from": "2026-06-30T00:00:00+00:00",
       "effective_to": null,
+      "available_at": "2026-07-22T20:02:09+00:00",
       "source_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
       "source_locator": "Composite: 2025 10-K Note 11 legal rights; Q2 exhibit June 30 Class A outstanding count",
       "raw_hash": "0fc9cf098215abfc0c4fa970bbd735624942e6e1954a6c854f59ca1638c27d5d",
@@ -171,5 +173,48 @@
         }
       ]
     }
-  ]
+  ],
+  "class_b_rights": {
+    "kind": "nonlisted_security_rights",
+    "component_key": "class_b",
+    "economic_units": "835",
+    "votes_per_unit": "10",
+    "conversion_to_security_external_key": "NASDAQ:GOOGL",
+    "conversion_ratio": "1",
+    "dividend_rights_per_unit": "1",
+    "economic_rights_per_unit": "1",
+    "effective_from": "2026-06-30T00:00:00+00:00",
+    "effective_to": null,
+    "price_proxy_security_external_key": "NASDAQ:GOOGL",
+    "price_proxy_policy_version": "alphabet_class_b_googl_proxy.v1",
+    "available_at": "2026-07-22T20:02:09+00:00",
+    "legal_provenance": {
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+      "source_locator": "Note 11 Stockholders' Equity, Class A and Class B Common Stock and Class C Capital Stock",
+      "raw_hash": "c2f6301004f35411a20611c14ff01d80a85c0bcbab6053c80d8cc7f6fc747161",
+      "provider_policy_version": "alphabet_class_b_legal_rights_v1",
+      "raw_components": [
+        {
+          "raw_file": "raw/alphabet_2025_10k.html.gz",
+          "raw_hash": "c2f6301004f35411a20611c14ff01d80a85c0bcbab6053c80d8cc7f6fc747161",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+          "source_locator": "Note 11 Stockholders' Equity, Class A and Class B Common Stock and Class C Capital Stock"
+        }
+      ]
+    },
+    "unit_provenance": {
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000066/googexhibit991q22026.htm",
+      "source_locator": "Condensed Consolidated Balance Sheets at June 30, 2026: Class B 835 million shares issued and outstanding",
+      "raw_hash": "a01f6bd87c7fa0dcb562493dda7348a1a37d017b4a4b5edb39b915b45688237e",
+      "provider_policy_version": "alphabet_class_b_current_units_v1",
+      "raw_components": [
+        {
+          "raw_file": "raw/alphabet_q2_2026_exhibit_99_1.html.gz",
+          "raw_hash": "a01f6bd87c7fa0dcb562493dda7348a1a37d017b4a4b5edb39b915b45688237e",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000066/googexhibit991q22026.htm",
+          "source_locator": "Condensed Consolidated Balance Sheets at June 30, 2026: Class B 835 million shares issued and outstanding"
+        }
+      ]
+    }
+  }
 }

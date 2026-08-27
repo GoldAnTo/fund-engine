@@ -452,7 +452,7 @@ class CompanyResearchInitializer:
         if fixture.cutoff != cutoff:
             raise ValidationError("governed inputs require the exact fixture cutoff")
         strategy = adapter.strategy_assumptions(fixture.strategy_assumptions)
-        resolver = CompanyResearchMarketInputs(self._session)
+        resolver = CompanyResearchMarketInputs(self._session, now=self._now)
         if fixture.market_inputs is not None:
             market_context = resolver.prepare(
                 project_id=project_id,
