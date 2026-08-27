@@ -87,7 +87,7 @@ function companyResearchWorkspaceBody() {
   const artifact = {
     schema_version: "underwriting.v1", id: ids.agenda, kind: "evidence_index", version: 1,
     input_hash: hash, content_hash: hash,
-    payload: { facts: [{ fact_key: "reported_revenue", company_external_key: "US:ALPHABET:COMPANY", business_module: "search", metric_key: "revenue", value: "1", value_kind: "reported", currency: "USD", unit: "million", period_start: "2025-01-01", period_end: "2025-12-31", published_at: now, available_at: now, source_role: "regulatory_filing", source_url: "https://example.test/source", source_locator: "p. 1", raw_hash: hash }] },
+    payload: { fixture_content_hash: hash, cutoff: now, company_external_key: "US:ALPHABET:COMPANY", security_external_keys: ["NASDAQ:GOOG", "NASDAQ:GOOGL"], facts: [{ fact_key: "reported_revenue", company_external_key: "US:ALPHABET:COMPANY", business_module: "search", metric_key: "revenue", value: "1", value_kind: "reported", currency: "USD", unit: "million", period_start: "2025-01-01", period_end: "2025-12-31", published_at: now, available_at: now, source_role: "regulatory_filing", source_url: "https://example.test/source", source_locator: "p. 1", raw_hash: hash }] },
     source_refs: [{ source_url: "https://example.test/source", raw_hash: hash, source_locator: "p. 1", source_role: "regulatory_filing" }],
   };
   const keys = ["overview", "business_map", "operating_drivers", "evidence_and_gaps", "industry_competition_regulation", "financials_cash_flow_capital_allocation", "scenarios_valuation_implied_expectations", "counterevidence_risks_next_checks", "versions_changes_memo"];
@@ -505,6 +505,44 @@ describe("InvestmentResearchApi", () => {
     await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
     await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects reordered modules, invalid decimals, and evidence without its exact source parent", async () => {
+    const reordered = companyResearchWorkspaceBody();
+    [reordered.modules[0], reordered.modules[1]] = [reordered.modules[1], reordered.modules[0]];
+    const invalidDecimal = companyResearchWorkspaceBody();
+    (invalidDecimal.modules[0].artifact!.payload.facts[0] as { value: string }).value = "1e3";
+    const missingParent = companyResearchWorkspaceBody();
+    missingParent.modules[0].artifact!.source_refs = [];
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(response(reordered))
+      .mockResolvedValueOnce(response(invalidDecimal))
+      .mockResolvedValueOnce(response(missingParent));
+    const api = new InvestmentResearchApi();
+
+    await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects workspace extra keys, project mismatch, and duplicate module keys", async () => {
+    const extra = companyResearchWorkspaceBody();
+    Reflect.set(extra, "unexpected", true);
+    const mismatched = companyResearchWorkspaceBody();
+    mismatched.project_id = ids.company;
+    const duplicate = companyResearchWorkspaceBody();
+    duplicate.modules[1] = { ...duplicate.modules[0] };
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(response(extra))
+      .mockResolvedValueOnce(response(mismatched))
+      .mockResolvedValueOnce(response(duplicate));
+    const api = new InvestmentResearchApi();
+
+    await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
   });
 
   it("rejects a zero-length rights interval from the service", async () => {

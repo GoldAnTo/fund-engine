@@ -131,33 +131,55 @@ def _initialization_response(
 
 
 def _artifact_response(value: WorkbenchArtifact) -> CompanyResearchArtifactResponse:
-    return CompanyResearchArtifactResponse(
-        id=value.id, kind=value.kind, version=value.version,
-        input_hash=value.input_hash, content_hash=value.content_hash,
-        payload=value.payload, source_refs=value.source_refs,
+    return CompanyResearchArtifactResponse.model_validate(
+        {
+            "id": value.id,
+            "kind": value.kind,
+            "version": value.version,
+            "input_hash": value.input_hash,
+            "content_hash": value.content_hash,
+            "payload": value.payload,
+            "source_refs": value.source_refs,
+        }
     )
 
 
-def _workspace_response(value) -> CompanyResearchWorkspaceResponse:
+def _workspace_response(
+    value, *, expected_project_id: UUID
+) -> CompanyResearchWorkspaceResponse:
+    if value.project_id != expected_project_id:
+        raise ValidationError("company research workspace project identity mismatch")
     return CompanyResearchWorkspaceResponse(
         project_id=value.project_id,
         company=CompanyResearchWorkspaceCompanyResponse(
-            id=value.company.id, object_id=value.company.id,
-            external_key=value.company.external_key, canonical_name=value.company.canonical_name,
+            id=value.company.id,
+            object_id=value.company.id,
+            external_key=value.company.external_key,
+            canonical_name=value.company.canonical_name,
         ),
         preparation=CompanyResearchWorkspacePreparationResponse(
-            id=value.preparation.id, status=value.preparation.status,
-            current_step=value.preparation.current_step, progress=value.preparation.progress,
+            id=value.preparation.id,
+            status=value.preparation.status,
+            current_step=value.preparation.current_step,
+            progress=value.preparation.progress,
         ),
-        modules=tuple(CompanyResearchWorkbenchModuleResponse(
-            key=item.key, state=item.state,
-            artifact=_artifact_response(item.artifact) if item.artifact else None,
-        ) for item in value.modules),
-        source_count=value.source_count, gap_count=value.gap_count,
+        modules=tuple(
+            CompanyResearchWorkbenchModuleResponse(
+                key=item.key,
+                state=item.state,
+                artifact=_artifact_response(item.artifact) if item.artifact else None,
+            )
+            for item in value.modules
+        ),
+        source_count=value.source_count,
+        gap_count=value.gap_count,
         draft=CompanyResearchWorkspaceDraftResponse(
-            id=value.draft.id, lock_version=value.draft.lock_version,
+            id=value.draft.id,
+            lock_version=value.draft.lock_version,
             base_revision_id=value.draft.base_revision_id,
-        ), selected_revision=value.selected_revision, change_summary=value.change_summary,
+        ),
+        selected_revision=value.selected_revision,
+        change_summary=value.change_summary,
     )
 
 
@@ -263,7 +285,12 @@ def retry_company_research_project(
 def get_company_research_workspace(
     project_id: UUID, db: DbSession
 ) -> CompanyResearchWorkspaceResponse:
-    return _workspace_response(_read(lambda: CompanyResearchWorkbench(db, now=_now).workspace(project_id=project_id)))
+    return _read(
+        lambda: _workspace_response(
+            CompanyResearchWorkbench(db, now=_now).workspace(project_id=project_id),
+            expected_project_id=project_id,
+        )
+    )
 
 
 @router.post(
@@ -274,8 +301,19 @@ def get_company_research_workspace(
 def review_company_evidence(
     project_id: UUID, payload: ReviewCompanyEvidenceRequest, db: DbSession
 ) -> CompanyResearchEvidenceReviewResponse:
-    result = commit_write(db, lambda: _read(lambda: CompanyResearchWorkbench(db, now=_now).review_evidence(
-        project_id=project_id, evidence_artifact_id=payload.evidence_artifact_id,
-        fact_key=payload.fact_key, decision=payload.decision, expected_head_id=payload.expected_head_id,
-    )))
-    return CompanyResearchEvidenceReviewResponse(evidence_artifact=_artifact_response(result.evidence_artifact))
+    result = commit_write(
+        db,
+        lambda: _read(
+            lambda: CompanyResearchWorkbench(db, now=_now).review_evidence(
+                project_id=project_id,
+                evidence_artifact_id=payload.evidence_artifact_id,
+                fact_key=payload.fact_key,
+                decision=payload.decision,
+                expected_head_id=payload.expected_head_id,
+            )
+        ),
+    )
+    artifact = _artifact_response(result.evidence_artifact).root
+    if artifact.kind != "evidence_index":
+        raise ValidationFailedError("evidence review returned the wrong artifact kind")
+    return CompanyResearchEvidenceReviewResponse(evidence_artifact=artifact)

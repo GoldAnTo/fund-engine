@@ -248,7 +248,17 @@ def test_workspace_is_a_closed_snapshot_of_the_review_gate(session) -> None:
     assert workspace.project_id == initialized.project.id
     assert workspace.company.external_key == "US:ALPHABET:COMPANY"
     assert workspace.preparation.status == "awaiting_evidence_review"
-    assert len(workspace.modules) == 9
+    assert tuple(item.key for item in workspace.modules) == (
+        "overview",
+        "business_map",
+        "operating_drivers",
+        "evidence_and_gaps",
+        "industry_competition_regulation",
+        "financials_cash_flow_capital_allocation",
+        "scenarios_valuation_implied_expectations",
+        "counterevidence_risks_next_checks",
+        "versions_changes_memo",
+    )
     evidence = next(
         item for item in workspace.modules if item.key == "evidence_and_gaps"
     )

@@ -3,9 +3,21 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
+import pytest
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import select
 
+from app.underwriting.api.company_research_schemas import (
+    CompanyResearchArtifactResponse,
+    CompanyResearchWorkbenchModuleResponse,
+    CompanyResearchWorkspaceCompanyResponse,
+    CompanyResearchWorkspaceDraftResponse,
+    CompanyResearchWorkspacePreparationResponse,
+    CompanyResearchWorkspaceResponse,
+)
+from app.underwriting.api.company_research_router import _artifact_response
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
 from app.models.operational import Job
 from app.underwriting.persistence.company_research_models import (
@@ -14,12 +26,253 @@ from app.underwriting.persistence.company_research_models import (
 from app.underwriting.services.company_research_preparation import (
     CompanyResearchPreparationWorker,
 )
+from app.underwriting.services.company_research_workbench import WorkbenchArtifact
 from app.underwriting.services.product_foundation_fixture import (
     ProductFoundationFixtureService,
 )
+from tests.underwriting.test_company_research_workbench import _model_workspace
 
 BASE = "/api/underwriting/v1/product/company-research"
 NOW = datetime(2026, 8, 25, 9, tzinfo=UTC)
+HASH = "a" * 64
+PROJECT_ID = UUID("00000000-0000-4000-8000-000000000001")
+COMPANY_ID = UUID("00000000-0000-4000-8000-000000000002")
+ARTIFACT_ID = UUID("00000000-0000-4000-8000-000000000003")
+EXPECTED_MODULES = (
+    "overview",
+    "business_map",
+    "operating_drivers",
+    "evidence_and_gaps",
+    "industry_competition_regulation",
+    "financials_cash_flow_capital_allocation",
+    "scenarios_valuation_implied_expectations",
+    "counterevidence_risks_next_checks",
+    "versions_changes_memo",
+)
+
+
+def _evidence_artifact_payload() -> dict:
+    return {
+        "id": ARTIFACT_ID,
+        "kind": "evidence_index",
+        "version": 1,
+        "input_hash": HASH,
+        "content_hash": HASH,
+        "payload": {
+            "fixture_content_hash": HASH,
+            "cutoff": NOW.isoformat(),
+            "company_external_key": "US:ALPHABET:COMPANY",
+            "security_external_keys": ["NASDAQ:GOOG", "NASDAQ:GOOGL"],
+            "facts": [
+                {
+                    "fact_key": "reported_revenue",
+                    "company_external_key": "US:ALPHABET:COMPANY",
+                    "business_module": "search_and_other_ads",
+                    "metric_key": "revenue",
+                    "value": "1",
+                    "value_kind": "reported",
+                    "currency": "USD",
+                    "unit": "million",
+                    "period_start": "2025-01-01",
+                    "period_end": "2025-12-31",
+                    "published_at": NOW.isoformat(),
+                    "available_at": NOW.isoformat(),
+                    "source_role": "regulatory_filing",
+                    "source_url": "https://example.test/source",
+                    "source_locator": "p. 1",
+                    "raw_hash": HASH,
+                }
+            ],
+        },
+        "source_refs": [
+            {
+                "source_url": "https://example.test/source",
+                "raw_hash": HASH,
+                "source_locator": "p. 1",
+                "source_role": "regulatory_filing",
+            }
+        ],
+    }
+
+
+def _workspace_contract(modules) -> CompanyResearchWorkspaceResponse:
+    return CompanyResearchWorkspaceResponse(
+        project_id=PROJECT_ID,
+        company=CompanyResearchWorkspaceCompanyResponse(
+            id=COMPANY_ID,
+            object_id=COMPANY_ID,
+            external_key="US:ALPHABET:COMPANY",
+            canonical_name="Alphabet Inc.",
+        ),
+        preparation=CompanyResearchWorkspacePreparationResponse(
+            id=ARTIFACT_ID,
+            status="awaiting_evidence_review",
+            current_step="research_gaps",
+            progress=25,
+        ),
+        modules=modules,
+        source_count=1,
+        gap_count=0,
+        draft=CompanyResearchWorkspaceDraftResponse(
+            id=ARTIFACT_ID, lock_version=1, base_revision_id=None
+        ),
+        selected_revision=None,
+        change_summary={
+            "artifact_versions": {"evidence_index": 1},
+            "reviewed_fact_count": 0,
+        },
+    )
+
+
+def test_company_research_wire_contract_rejects_missing_numeric_metadata_and_unknown_fields() -> (
+    None
+):
+    missing_unit = _evidence_artifact_payload()
+    missing_unit["payload"]["facts"][0].pop("unit")
+    unknown = _evidence_artifact_payload()
+    unknown["payload"]["unexpected"] = True
+
+    with pytest.raises(PydanticValidationError):
+        CompanyResearchArtifactResponse.model_validate(missing_unit)
+    with pytest.raises(PydanticValidationError):
+        CompanyResearchArtifactResponse.model_validate(unknown)
+
+
+def test_company_research_wire_contract_rejects_duplicate_refs_and_valuation_without_exact_market_refs() -> (
+    None
+):
+    duplicate = _evidence_artifact_payload()
+    duplicate["source_refs"].append(dict(duplicate["source_refs"][0]))
+    valuation = {
+        "id": ARTIFACT_ID,
+        "kind": "valuation_set",
+        "version": 1,
+        "input_hash": HASH,
+        "content_hash": HASH,
+        "payload": {
+            "scenario_dcf_values": [],
+            "reverse_dcf": None,
+            "security_value_ranges": [],
+            "required_return": "0.12",
+            "required_return_comparisons": [],
+            "_lineage": {
+                "artifact_refs": [],
+                "market_snapshot_ids": [],
+                "market_snapshot_bindings": [],
+            },
+        },
+        "source_refs": [],
+    }
+
+    with pytest.raises(PydanticValidationError):
+        CompanyResearchArtifactResponse.model_validate(duplicate)
+    with pytest.raises(PydanticValidationError):
+        CompanyResearchArtifactResponse.model_validate(valuation)
+
+
+def test_company_research_workspace_requires_exact_module_order_and_state_artifact_pairs() -> (
+    None
+):
+    artifact = CompanyResearchArtifactResponse.model_validate(
+        _evidence_artifact_payload()
+    )
+    modules = tuple(
+        CompanyResearchWorkbenchModuleResponse(
+            key=key,
+            state=(
+                "needs_review"
+                if key in {"overview", "evidence_and_gaps"}
+                else "not_started"
+            ),
+            artifact=(artifact if key in {"overview", "evidence_and_gaps"} else None),
+        )
+        for key in EXPECTED_MODULES
+    )
+    _workspace_contract(modules)
+
+    with pytest.raises(PydanticValidationError):
+        _workspace_contract((modules[1], modules[0], *modules[2:]))
+    with pytest.raises(PydanticValidationError):
+        CompanyResearchWorkbenchModuleResponse(
+            key="business_map", state="ready", artifact=artifact
+        )
+
+
+@pytest.mark.parametrize("state", ("not_started", "preparing", "blocked"))
+def test_company_research_empty_module_states_are_closed(state: str) -> None:
+    module = CompanyResearchWorkbenchModuleResponse(
+        key="operating_drivers", state=state, artifact=None
+    )
+    assert module.state == state
+
+
+@pytest.mark.parametrize("state", ("ready", "needs_review"))
+def test_company_research_artifact_module_states_are_closed(state: str) -> None:
+    artifact = CompanyResearchArtifactResponse.model_validate(
+        _evidence_artifact_payload()
+    )
+    module = CompanyResearchWorkbenchModuleResponse(
+        key="overview", state=state, artifact=artifact
+    )
+    assert module.state == state
+
+
+def test_complete_model_bundle_constructs_all_nine_discriminated_artifact_variants(
+    session,
+) -> None:
+    initialized, _workbench, repository = _model_workspace(session)
+    kinds = (
+        "evidence_index",
+        "research_gaps",
+        "business_map",
+        "driver_map",
+        "financial_bridge",
+        "scenario_set",
+        "valuation_set",
+        "judgment_context",
+        "memo",
+    )
+
+    responses = []
+    for kind in kinds:
+        row = repository.current_artifact(initialized.project.id, kind)
+        assert row is not None
+        responses.append(
+            _artifact_response(
+                WorkbenchArtifact(
+                    id=row.id,
+                    kind=row.kind,
+                    version=row.version,
+                    input_hash=row.input_hash,
+                    content_hash=row.content_hash,
+                    payload=row.payload,
+                    source_refs=tuple(row.source_refs),
+                )
+            )
+        )
+
+    assert tuple(item.kind for item in responses) == kinds
+
+
+def test_complete_pipeline_route_exposes_exact_project_status_and_ordered_modules(
+    api_client, session
+) -> None:
+    initialized, _workbench, _repository = _model_workspace(session)
+
+    response = api_client.get(f"{BASE}/projects/{initialized.project.id}/workspace")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["project_id"] == str(initialized.project.id)
+    assert body["preparation"] == {
+        "schema_version": "underwriting.v1",
+        "id": str(initialized.preparation.id),
+        "status": "awaiting_judgment_review",
+        "current_step": "judgment_context",
+        "progress": 85,
+    }
+    assert tuple(module["key"] for module in body["modules"]) == EXPECTED_MODULES
+    assert all(module["state"] == "ready" for module in body["modules"])
 
 
 def _alphabet_id(session):
