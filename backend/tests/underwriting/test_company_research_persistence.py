@@ -11,12 +11,14 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models.ledger import Base, ConflictError, ImmutableLedgerError, ValidationError
 from app.models.operational import Job
+from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
     CompanyResearchPreparation,
 )
 from app.underwriting.persistence.company_research_repository import (
     CompanyResearchIntegrityError,
+    CompanyResearchPersistedBundle,
     CompanyResearchRepository,
 )
 from app.underwriting.persistence.repository import StaleParentError
@@ -83,6 +85,262 @@ def _repository_with_evidence_job(session):
     session.flush()
     repository.attach_prepare_job(preparation.id, job.id)
     return repository, project, preparation, job
+
+
+def _repository_with_model_job(session):
+    repository, project, preparation, job = _repository_with_evidence_job(session)
+    source_refs = (
+        {
+            "raw_hash": "1" * 64,
+            "source_locator": "fixture:1",
+            "source_role": "filing",
+            "source_url": "https://example.test/filing",
+        },
+    )
+    evidence = repository.append_artifact(
+        project_id=project.id,
+        kind="evidence_index",
+        input_hash="2" * 64,
+        payload={"facts": [{"fact_key": "revenue", "review_decision": "confirmed"}]},
+        source_refs=source_refs,
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    gaps = repository.append_artifact(
+        project_id=project.id,
+        kind="research_gaps",
+        input_hash="3" * 64,
+        payload={"gaps": []},
+        source_refs=source_refs,
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    preparation.status = "building_model"
+    preparation.current_step = "model_bundle"
+    preparation.progress = 25
+    job.status = "running"
+    job.step = "model_bundle"
+    job.progress = 25
+    job.claim_token = "model-claim"
+    session.flush([preparation, job])
+    market_snapshot_ids = tuple(sorted((uuid.uuid4(), uuid.uuid4()), key=str))
+    bundle = CompanyResearchPersistedBundle(
+        business_map={"modules": [{"key": "search"}]},
+        driver_map={"drivers": [{"driver_key": "queries"}]},
+        financial_bridge={"scenario_id": "base", "rows": []},
+        scenario_set={"scenarios": [{"scenario_id": "base"}]},
+        valuation_set={"security_value_ranges": []},
+        judgment_context={"assessment_status": "answerable"},
+        research_gaps={"gaps": []},
+        memo={"candidate_status": "machine_draft"},
+        source_refs=source_refs,
+        market_snapshot_ids=market_snapshot_ids,
+    )
+    return repository, project, preparation, job, evidence, gaps, bundle
+
+
+def _complete_model_bundle(repository, preparation, bundle):
+    return repository.complete_model_bundle(
+        preparation.id,
+        bundle=bundle,
+        expected_claim_token="model-claim",
+        expected_request_hash=preparation.request_hash,
+        expected_strategy_version=preparation.strategy_version,
+        created_at=NOW,
+    )
+
+
+@pytest.mark.parametrize(
+    "fail_after",
+    (
+        "business_map",
+        "driver_map",
+        "financial_bridge",
+        "scenario_set",
+        "valuation_set",
+        "judgment_context",
+        "research_gaps",
+        "memo",
+    ),
+)
+def test_model_bundle_rolls_back_every_artifact_on_failure(
+    session, fail_after: str, monkeypatch
+) -> None:
+    repository, project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    original = repository.append_artifact
+
+    def fail_on_kind(*args, kind, **kwargs):
+        if kind == fail_after:
+            raise RuntimeError("injected bundle failure")
+        return original(*args, kind=kind, **kwargs)
+
+    monkeypatch.setattr(repository, "append_artifact", fail_on_kind)
+    with pytest.raises(RuntimeError, match="injected bundle failure"):
+        _complete_model_bundle(repository, preparation, bundle)
+
+    observer = CompanyResearchRepository(session)
+    existing = {
+        kind
+        for kind in (
+            "evidence_index",
+            "business_map",
+            "driver_map",
+            "financial_bridge",
+            "scenario_set",
+            "valuation_set",
+            "judgment_context",
+            "research_gaps",
+            "memo",
+        )
+        if observer.current_artifact(project.id, kind) is not None
+    }
+    assert existing == {"evidence_index", "research_gaps"}
+
+
+def test_complete_model_bundle_persists_exact_dependency_refs_and_input_hashes(
+    session,
+) -> None:
+    repository, _project, preparation, job, evidence, old_gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+
+    updated, rows = _complete_model_bundle(repository, preparation, bundle)
+    by_kind = {row.kind: row for row in rows}
+
+    assert tuple(by_kind) == (
+        "business_map",
+        "driver_map",
+        "financial_bridge",
+        "scenario_set",
+        "valuation_set",
+        "judgment_context",
+        "research_gaps",
+        "memo",
+    )
+    assert updated.status == "awaiting_judgment_review"
+    assert updated.current_step == "judgment_context"
+    assert updated.progress == 85
+    assert job.status == "waiting_for_review"
+    assert job.step == "judgment_context"
+    assert job.progress == 85
+    assert job.claim_token is None
+    assert by_kind["research_gaps"].supersedes_id == old_gaps.id
+
+    def refs(kind: str) -> dict[str, tuple[str, str]]:
+        return {
+            item["artifact_kind"]: (item["artifact_id"], item["content_hash"])
+            for item in by_kind[kind].payload["_lineage"]["artifact_refs"]
+        }
+
+    assert refs("business_map") == {
+        "evidence_index": (str(evidence.id), evidence.content_hash)
+    }
+    assert refs("driver_map") == {
+        "business_map": (
+            str(by_kind["business_map"].id),
+            by_kind["business_map"].content_hash,
+        )
+    }
+    assert set(refs("valuation_set")) == {"financial_bridge", "scenario_set"}
+    assert set(refs("judgment_context")) == {
+        "evidence_index",
+        "business_map",
+        "driver_map",
+        "financial_bridge",
+        "scenario_set",
+        "valuation_set",
+        "research_gaps",
+    }
+    assert refs("memo") == {
+        "judgment_context": (
+            str(by_kind["judgment_context"].id),
+            by_kind["judgment_context"].content_hash,
+        )
+    }
+    assert by_kind["valuation_set"].payload["_lineage"][
+        "market_snapshot_ids"
+    ] == sorted(str(value) for value in bundle.market_snapshot_ids)
+    for row in rows:
+        lineage = row.payload["_lineage"]
+        assert row.input_hash == canonical_hash(
+            {
+                "request_hash": preparation.request_hash,
+                "artifact_refs": lineage["artifact_refs"],
+                "market_snapshot_ids": lineage["market_snapshot_ids"],
+            }
+        )
+
+
+def test_complete_model_bundle_rejects_a_stale_claim_without_writing(session) -> None:
+    repository, project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+
+    with pytest.raises(ValidationError, match="claim is stale"):
+        repository.complete_model_bundle(
+            preparation.id,
+            bundle=bundle,
+            expected_claim_token="stale-claim",
+            expected_request_hash=preparation.request_hash,
+            expected_strategy_version=preparation.strategy_version,
+            created_at=NOW,
+        )
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
+def test_complete_model_bundle_omits_optional_valuation_and_keeps_lineage_closed(
+    session,
+) -> None:
+    repository, _project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    without_valuation = CompanyResearchPersistedBundle(
+        business_map=bundle.business_map,
+        driver_map=bundle.driver_map,
+        financial_bridge=bundle.financial_bridge,
+        scenario_set=bundle.scenario_set,
+        valuation_set=None,
+        judgment_context=bundle.judgment_context,
+        research_gaps=bundle.research_gaps,
+        memo=bundle.memo,
+        source_refs=bundle.source_refs,
+        market_snapshot_ids=(),
+    )
+
+    _updated, rows = _complete_model_bundle(repository, preparation, without_valuation)
+    by_kind = {row.kind: row for row in rows}
+
+    assert "valuation_set" not in by_kind
+    judgment_kinds = {
+        item["artifact_kind"]
+        for item in by_kind["judgment_context"].payload["_lineage"]["artifact_refs"]
+    }
+    assert "valuation_set" not in judgment_kinds
+
+
+def test_complete_model_bundle_requires_a_successor_for_the_existing_gap_head(
+    session,
+) -> None:
+    repository, _project, preparation, _job, _evidence, gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    successor = repository.append_artifact(
+        project_id=preparation.project_id,
+        kind="research_gaps",
+        input_hash="4" * 64,
+        payload={"gaps": [{"gap_key": "new"}]},
+        source_refs=bundle.source_refs,
+        expected_parent_id=gaps.id,
+        created_at=NOW,
+    )
+
+    _updated, rows = _complete_model_bundle(repository, preparation, bundle)
+    persisted_gaps = next(row for row in rows if row.kind == "research_gaps")
+
+    assert persisted_gaps.supersedes_id == successor.id
 
 
 def test_preparation_is_mutable_but_idempotency_and_project_are_unique(session) -> None:
@@ -517,7 +775,9 @@ def test_add_preparation_binds_a_job_to_its_new_exact_target(session) -> None:
 
 
 @pytest.mark.parametrize("operation", ("add", "attach"))
-def test_job_ownership_binding_locks_the_job_before_validation(session, operation: str) -> None:
+def test_job_ownership_binding_locks_the_job_before_validation(
+    session, operation: str
+) -> None:
     """The Job discriminator must remain stable through the binding decision."""
     repository, _, preparation = _repository_with_preparation(session)
     legacy = Job(
@@ -586,15 +846,16 @@ def test_attach_prepare_job_locks_the_preparation_it_mutates(session) -> None:
 
     def _capture_preparation_select(execute_state) -> None:
         statement = execute_state.statement
-        if (
-            execute_state.is_select
-            and "FROM uw_company_research_preparations" in str(statement)
+        if execute_state.is_select and "FROM uw_company_research_preparations" in str(
+            statement
         ):
             statements.append(statement)
 
     event.listen(session, "do_orm_execute", _capture_preparation_select)
     try:
-        assert repository.attach_prepare_job(preparation.id, owned.id).job_id == owned.id
+        assert (
+            repository.attach_prepare_job(preparation.id, owned.id).job_id == owned.id
+        )
     finally:
         event.remove(session, "do_orm_execute", _capture_preparation_select)
 
@@ -660,22 +921,15 @@ def test_sqlite_job_ownership_binding_reserves_the_writer_before_its_read(
     rival_errors: list[OperationalError] = []
     job_read_seen = False
 
-    def rewrite_after_primary_job_read(
-        connection, _cursor, statement, *_args
-    ) -> None:
+    def rewrite_after_primary_job_read(connection, _cursor, statement, *_args) -> None:
         nonlocal job_read_seen
         if connection is not primary_connection or job_read_seen:
             return
-        if (
-            statement.lstrip().upper().startswith("SELECT")
-            and "FROM jobs" in statement
-        ):
+        if statement.lstrip().upper().startswith("SELECT") and "FROM jobs" in statement:
             job_read_seen = True
             try:
                 rival.execute(
-                    update(Job)
-                    .where(Job.id == job_id)
-                    .values(kind="prepare_research")
+                    update(Job).where(Job.id == job_id).values(kind="prepare_research")
                 )
                 rival.commit()
             except OperationalError as exc:
@@ -716,9 +970,7 @@ def test_sqlite_job_ownership_binding_reserves_the_writer_before_its_read(
         observer = sessions()
         try:
             persisted_job = observer.get(Job, job_id)
-            persisted_preparation = observer.get(
-                CompanyResearchPreparation, result_id
-            )
+            persisted_preparation = observer.get(CompanyResearchPreparation, result_id)
             assert persisted_job is not None
             assert persisted_job.kind == "prepare_company_research"
             assert persisted_preparation is not None
@@ -783,7 +1035,9 @@ def test_sqlite_job_ownership_reservation_rolls_back_with_the_caller(
         engine.dispose()
 
 
-def test_sqlite_concurrent_artifact_append_returns_a_stale_parent_error(tmp_path) -> None:
+def test_sqlite_concurrent_artifact_append_returns_a_stale_parent_error(
+    tmp_path,
+) -> None:
     """The losing writer must get a domain stale-parent result, not sqlite I/O."""
     engine = create_engine(
         f"sqlite:///{tmp_path / 'company-research-artifact-race.sqlite'}",

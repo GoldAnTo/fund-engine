@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -33,6 +34,63 @@ _PREPARE_JOB_TARGET_TYPE = "company_research_preparation"
 
 class CompanyResearchIntegrityError(ValidationError):
     """A persisted immutable company-research record cannot be trusted."""
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchPersistedBundle:
+    """Complete JSON-ready model candidate passed to one atomic publication."""
+
+    business_map: Mapping[str, object]
+    driver_map: Mapping[str, object]
+    financial_bridge: Mapping[str, object]
+    scenario_set: Mapping[str, object]
+    valuation_set: Mapping[str, object] | None
+    judgment_context: Mapping[str, object]
+    research_gaps: Mapping[str, object]
+    memo: Mapping[str, object]
+    source_refs: tuple[dict[str, str], ...]
+    market_snapshot_ids: tuple[UUID, ...]
+
+    def __post_init__(self) -> None:
+        required = (
+            self.business_map,
+            self.driver_map,
+            self.financial_bridge,
+            self.scenario_set,
+            self.judgment_context,
+            self.research_gaps,
+            self.memo,
+        )
+        if any(not isinstance(payload, Mapping) for payload in required):
+            raise ValidationError("company research model bundle payload is invalid")
+        if self.valuation_set is not None and not isinstance(
+            self.valuation_set, Mapping
+        ):
+            raise ValidationError("company research model bundle valuation is invalid")
+        if bool(self.market_snapshot_ids) != (self.valuation_set is not None):
+            raise ValidationError(
+                "company research model bundle valuation market refs are invalid"
+            )
+        if any(
+            "_lineage" in payload for payload in (*required, self.valuation_set or {})
+        ):
+            raise ValidationError("company research model bundle lineage is reserved")
+        if not isinstance(self.source_refs, tuple) or not all(
+            isinstance(item, dict) for item in self.source_refs
+        ):
+            raise ValidationError(
+                "company research model bundle source refs are invalid"
+            )
+        if (
+            not isinstance(self.market_snapshot_ids, tuple)
+            or not all(type(item) is UUID for item in self.market_snapshot_ids)
+            or len(set(self.market_snapshot_ids)) != len(self.market_snapshot_ids)
+            or tuple(sorted(self.market_snapshot_ids, key=str))
+            != self.market_snapshot_ids
+        ):
+            raise ValidationError(
+                "company research model bundle market snapshot ids must be canonical"
+            )
 
 
 class CompanyResearchRepository:
@@ -632,6 +690,233 @@ class CompanyResearchRepository:
             self._session.flush([preparation, job])
         return preparation, business_map, job, event
 
+    @staticmethod
+    def _artifact_reference(
+        row: CompanyResearchArtifactVersion,
+    ) -> dict[str, str]:
+        return {
+            "artifact_id": str(row.id),
+            "artifact_kind": row.kind,
+            "content_hash": row.content_hash,
+        }
+
+    @staticmethod
+    def _model_artifact_payload(
+        payload: Mapping[str, object],
+        *,
+        artifact_refs: Sequence[Mapping[str, str]],
+        market_snapshot_ids: Sequence[UUID] = (),
+    ) -> dict[str, object]:
+        copied = deepcopy(dict(payload))
+        if "_lineage" in copied:
+            raise ValidationError("company research model bundle lineage is reserved")
+        copied["_lineage"] = {
+            "artifact_refs": deepcopy(list(artifact_refs)),
+            "market_snapshot_ids": [str(value) for value in market_snapshot_ids],
+        }
+        return copied
+
+    @staticmethod
+    def _model_artifact_input_hash(
+        *,
+        request_hash: str,
+        artifact_refs: Sequence[Mapping[str, str]],
+        market_snapshot_ids: Sequence[UUID] = (),
+    ) -> str:
+        return canonical_hash(
+            {
+                "request_hash": request_hash,
+                "artifact_refs": list(artifact_refs),
+                "market_snapshot_ids": [str(value) for value in market_snapshot_ids],
+            }
+        )
+
+    def complete_model_bundle(
+        self,
+        preparation_id: UUID,
+        *,
+        bundle: CompanyResearchPersistedBundle,
+        expected_claim_token: str,
+        expected_request_hash: str,
+        expected_strategy_version: str,
+        created_at: datetime,
+    ) -> tuple[
+        CompanyResearchPreparation,
+        tuple[CompanyResearchArtifactVersion, ...],
+    ]:
+        """Append one closed model bundle or leave every artifact family unchanged."""
+        if type(bundle) is not CompanyResearchPersistedBundle:
+            raise ValidationError("company research model bundle is invalid")
+        self._reserve_sqlite_writer_before_ownership_read()
+        preparation = self._preparation_for_update(
+            preparation_id, populate_existing=True
+        )
+        if preparation is None:
+            raise ValidationError("company research preparation not found")
+        job = self._locked_prepare_job(preparation, populate_existing=True)
+        if (
+            preparation.status != "building_model"
+            or preparation.current_step != "model_bundle"
+            or job.status != "running"
+            or job.step != "model_bundle"
+            or job.claim_token != expected_claim_token
+            or job.cancel_requested
+            or preparation.request_hash != expected_request_hash
+            or preparation.strategy_version != expected_strategy_version
+        ):
+            raise ValidationError("company research preparation claim is stale")
+        evidence = self.current_artifact(
+            preparation.project_id, "evidence_index", lock=True
+        )
+        current_gaps = self.current_artifact(
+            preparation.project_id, "research_gaps", lock=True
+        )
+        if evidence is None or current_gaps is None:
+            raise ValidationError("reviewed evidence and research gaps are required")
+        facts = (
+            evidence.payload.get("facts")
+            if isinstance(evidence.payload, dict)
+            else None
+        )
+        if (
+            not isinstance(facts, list)
+            or not facts
+            or any(
+                not isinstance(item, Mapping)
+                or item.get("review_decision") not in {"confirmed", "rejected"}
+                for item in facts
+            )
+        ):
+            raise ValidationError("reviewed evidence index is incomplete")
+        when = self._stored_datetime(created_at, "created_at")
+        request_hash = self._require_hash(
+            expected_request_hash, "expected_request_hash"
+        )
+        market_snapshot_ids = bundle.market_snapshot_ids
+        artifacts: list[CompanyResearchArtifactVersion] = []
+
+        with self._session.begin_nested():
+
+            def append(
+                kind: str,
+                payload: Mapping[str, object],
+                parents: Sequence[CompanyResearchArtifactVersion],
+                *,
+                snapshots: Sequence[UUID] = (),
+                artifact_id: UUID | None = None,
+            ) -> CompanyResearchArtifactVersion:
+                refs = tuple(self._artifact_reference(parent) for parent in parents)
+                current = self.current_artifact(preparation.project_id, kind, lock=True)
+                row = self.append_artifact(
+                    project_id=preparation.project_id,
+                    kind=kind,
+                    input_hash=self._model_artifact_input_hash(
+                        request_hash=request_hash,
+                        artifact_refs=refs,
+                        market_snapshot_ids=snapshots,
+                    ),
+                    payload=self._model_artifact_payload(
+                        payload,
+                        artifact_refs=refs,
+                        market_snapshot_ids=snapshots,
+                    ),
+                    source_refs=bundle.source_refs,
+                    expected_parent_id=current.id if current is not None else None,
+                    created_at=when,
+                    artifact_id=artifact_id,
+                )
+                artifacts.append(row)
+                return row
+
+            business_map = append("business_map", bundle.business_map, (evidence,))
+            driver_map = append("driver_map", bundle.driver_map, (business_map,))
+            financial_bridge = append(
+                "financial_bridge", bundle.financial_bridge, (driver_map,)
+            )
+            scenario_set = append("scenario_set", bundle.scenario_set, (driver_map,))
+            valuation_set = (
+                append(
+                    "valuation_set",
+                    bundle.valuation_set,
+                    (scenario_set, financial_bridge),
+                    snapshots=market_snapshot_ids,
+                )
+                if bundle.valuation_set is not None
+                else None
+            )
+
+            model_rows = (
+                business_map,
+                driver_map,
+                financial_bridge,
+                scenario_set,
+                *((valuation_set,) if valuation_set is not None else ()),
+            )
+            gap_parents = (evidence, *model_rows)
+            gap_refs = tuple(self._artifact_reference(parent) for parent in gap_parents)
+            gap_payload = self._model_artifact_payload(
+                bundle.research_gaps, artifact_refs=gap_refs
+            )
+            gap_input_hash = self._model_artifact_input_hash(
+                request_hash=request_hash, artifact_refs=gap_refs
+            )
+            planned_gap_id = uuid4()
+            planned_gap_version = current_gaps.version + 1
+            planned_gap_hash = self.artifact_content_hash(
+                project_id=preparation.project_id,
+                kind="research_gaps",
+                version=planned_gap_version,
+                supersedes_id=current_gaps.id,
+                parent_content_hash=current_gaps.content_hash,
+                input_hash=gap_input_hash,
+                payload=gap_payload,
+                source_refs=bundle.source_refs,
+            )
+            planned_gap = CompanyResearchArtifactVersion(
+                id=planned_gap_id,
+                project_id=preparation.project_id,
+                kind="research_gaps",
+                version=planned_gap_version,
+                supersedes_id=current_gaps.id,
+                parent_content_hash=current_gaps.content_hash,
+                input_hash=gap_input_hash,
+                payload=gap_payload,
+                source_refs=list(bundle.source_refs),
+                content_hash=planned_gap_hash,
+                created_at=when,
+            )
+            judgment_context = append(
+                "judgment_context",
+                bundle.judgment_context,
+                (evidence, *model_rows, planned_gap),
+            )
+            persisted_gaps = append(
+                "research_gaps",
+                bundle.research_gaps,
+                gap_parents,
+                artifact_id=planned_gap_id,
+            )
+            if persisted_gaps.content_hash != planned_gap_hash:
+                raise CompanyResearchIntegrityError(
+                    "planned research gaps content hash changed"
+                )
+            append("memo", bundle.memo, (judgment_context,))
+
+            preparation.status = "awaiting_judgment_review"
+            preparation.current_step = "judgment_context"
+            preparation.progress = 85
+            preparation.next_attempt_at = None
+            preparation.last_error_code = None
+            preparation.updated_at = when
+            job.status = "waiting_for_review"
+            job.step = "judgment_context"
+            job.progress = 85
+            job.error = None
+            job.finished_at = None
+            job.claim_token = None
+            self._session.flush([preparation, job])
+        return preparation, tuple(artifacts)
+
     def fail_evidence_preparation(
         self,
         preparation_id: UUID,
@@ -750,6 +1035,7 @@ class CompanyResearchRepository:
         source_refs: Sequence[Mapping[str, object]],
         expected_parent_id: UUID | None,
         created_at: datetime,
+        artifact_id: UUID | None = None,
     ) -> CompanyResearchArtifactVersion:
         if kind not in COMPANY_RESEARCH_ARTIFACT_KINDS:
             raise ValidationError("company research artifact kind is invalid")
@@ -771,6 +1057,7 @@ class CompanyResearchRepository:
         copied_refs = deepcopy(list(source_refs))
         input_hash = self._require_hash(input_hash, "input_hash")
         row = CompanyResearchArtifactVersion(
+            id=artifact_id,
             project_id=project_id,
             kind=kind,
             version=version,

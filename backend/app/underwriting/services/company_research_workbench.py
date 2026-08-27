@@ -140,6 +140,7 @@ class CompanyResearchWorkbench:
             raise ValidationError(
                 "company research artifact source refs are duplicated"
             )
+        closed_model_artifact = "_lineage" in row.payload
         if row.kind == "evidence_index":
             if set(row.payload) != {
                 "fixture_content_hash",
@@ -189,7 +190,7 @@ class CompanyResearchWorkbench:
                 for fact in facts
             ):
                 raise ValidationError("evidence index review decision is invalid")
-        elif row.kind == "research_gaps":
+        elif row.kind == "research_gaps" and not closed_model_artifact:
             if set(row.payload) != {
                 "fixture_content_hash",
                 "company_external_key",
@@ -203,7 +204,7 @@ class CompanyResearchWorkbench:
                 for gap in gaps
             ):
                 raise ValidationError("research gaps payload is invalid")
-        elif row.kind == "business_map":
+        elif row.kind == "business_map" and not closed_model_artifact:
             if set(row.payload) != {
                 "evidence_index_id",
                 "evidence_content_hash",
@@ -238,6 +239,142 @@ class CompanyResearchWorkbench:
             tuple(row.source_refs),
         )
 
+    @staticmethod
+    def _lineage_reference(row: CompanyResearchArtifactVersion) -> dict[str, str]:
+        return {
+            "artifact_id": str(row.id),
+            "artifact_kind": row.kind,
+            "content_hash": row.content_hash,
+        }
+
+    @staticmethod
+    def _validate_closed_lineage_shape(
+        row: CompanyResearchArtifactVersion,
+    ) -> tuple[list[dict[str, str]], list[str]]:
+        lineage = row.payload.get("_lineage")
+        if not isinstance(lineage, dict) or set(lineage) != {
+            "artifact_refs",
+            "market_snapshot_ids",
+        }:
+            raise ValidationError("company research cross-artifact lineage is invalid")
+        refs = lineage["artifact_refs"]
+        snapshot_ids = lineage["market_snapshot_ids"]
+        if (
+            not isinstance(refs, list)
+            or any(
+                not isinstance(ref, dict)
+                or set(ref) != {"artifact_id", "artifact_kind", "content_hash"}
+                or not isinstance(ref["artifact_id"], str)
+                or not isinstance(ref["artifact_kind"], str)
+                or not isinstance(ref["content_hash"], str)
+                for ref in refs
+            )
+            or len({canonical_hash(ref) for ref in refs}) != len(refs)
+            or not isinstance(snapshot_ids, list)
+            or any(not isinstance(value, str) for value in snapshot_ids)
+            or len(set(snapshot_ids)) != len(snapshot_ids)
+            or sorted(snapshot_ids) != snapshot_ids
+        ):
+            raise ValidationError("company research cross-artifact lineage is invalid")
+        try:
+            if any(str(UUID(value)) != value for value in snapshot_ids):
+                raise ValueError
+        except ValueError as exc:
+            raise ValidationError(
+                "company research cross-artifact lineage is invalid"
+            ) from exc
+        return refs, snapshot_ids
+
+    def _validate_cross_artifact_lineage(
+        self,
+        project_id: UUID,
+        heads: dict[str, CompanyResearchArtifactVersion],
+    ) -> None:
+        """Reject a partial, substituted, or cross-project model bundle."""
+        model_kinds = {
+            "business_map",
+            "driver_map",
+            "financial_bridge",
+            "scenario_set",
+            "valuation_set",
+            "judgment_context",
+            "memo",
+        }
+        if not any(kind in heads for kind in model_kinds - {"business_map"}):
+            return
+        required = {
+            "evidence_index",
+            "research_gaps",
+            "business_map",
+            "driver_map",
+            "financial_bridge",
+            "scenario_set",
+            "judgment_context",
+            "memo",
+        }
+        if not required <= heads.keys():
+            raise ValidationError("company research cross-artifact lineage is invalid")
+        preparation = self._company.preparation_for_project(project_id)
+        if preparation is None:
+            raise ValidationError("company research cross-artifact lineage is invalid")
+
+        def expected(*kinds: str) -> list[dict[str, str]]:
+            return [self._lineage_reference(heads[kind]) for kind in kinds]
+
+        expectations: dict[str, tuple[list[dict[str, str]], bool]] = {
+            "business_map": (expected("evidence_index"), False),
+            "driver_map": (expected("business_map"), False),
+            "financial_bridge": (expected("driver_map"), False),
+            "scenario_set": (expected("driver_map"), False),
+            "research_gaps": (
+                expected(
+                    "evidence_index",
+                    "business_map",
+                    "driver_map",
+                    "financial_bridge",
+                    "scenario_set",
+                    *(("valuation_set",) if "valuation_set" in heads else ()),
+                ),
+                False,
+            ),
+            "judgment_context": (
+                expected(
+                    "evidence_index",
+                    "business_map",
+                    "driver_map",
+                    "financial_bridge",
+                    "scenario_set",
+                    *(("valuation_set",) if "valuation_set" in heads else ()),
+                    "research_gaps",
+                ),
+                False,
+            ),
+            "memo": (expected("judgment_context"), False),
+        }
+        if "valuation_set" in heads:
+            expectations["valuation_set"] = (
+                expected("scenario_set", "financial_bridge"),
+                True,
+            )
+        for kind, (expected_refs, requires_snapshots) in expectations.items():
+            row = heads[kind]
+            refs, snapshot_ids = self._validate_closed_lineage_shape(row)
+            if refs != expected_refs or bool(snapshot_ids) != requires_snapshots:
+                raise ValidationError(
+                    "company research cross-artifact lineage is invalid"
+                )
+            expected_input_hash = canonical_hash(
+                {
+                    "request_hash": preparation.request_hash,
+                    "artifact_refs": refs,
+                    "market_snapshot_ids": snapshot_ids,
+                }
+            )
+            if row.input_hash != expected_input_hash:
+                raise ValidationError(
+                    "company research cross-artifact lineage is invalid"
+                )
+
     def _heads(self, project_id: UUID) -> dict[str, WorkbenchArtifact]:
         """Materialize all artifact families once; never query once per module."""
         rows = tuple(
@@ -251,12 +388,12 @@ class CompanyResearchWorkbench:
         successor_ids = {
             row.supersedes_id for row in rows if row.supersedes_id is not None
         }
-        heads: dict[str, WorkbenchArtifact] = {}
+        head_rows: dict[str, CompanyResearchArtifactVersion] = {}
         for row in rows:
             self._company._validate_artifact_row(row)
             if row.id in successor_ids:
                 continue
-            if row.kind in heads:
+            if row.kind in head_rows:
                 raise ConflictError("multiple current artifact heads")
             # Validate the complete in-memory lineage, including project/kind,
             # monotonic version, and immutable parent content hash.
@@ -286,10 +423,14 @@ class CompanyResearchWorkbench:
                         "company research artifact lineage is invalid"
                     )
                 current, expected_version = parent, expected_version - 1
-            heads[row.kind] = self._artifact(row, project_id)
+            head_rows[row.kind] = row
+        self._validate_cross_artifact_lineage(project_id, head_rows)
+        heads = {
+            kind: self._artifact(row, project_id) for kind, row in head_rows.items()
+        }
         business_map = heads.get("business_map")
         evidence = heads.get("evidence_index")
-        if business_map is not None:
+        if business_map is not None and "_lineage" not in business_map.payload:
             if (
                 evidence is None
                 or business_map.payload.get("evidence_index_id") != str(evidence.id)
