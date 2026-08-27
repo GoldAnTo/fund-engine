@@ -170,6 +170,7 @@ class CompanyResearchEngine:
         refs.extend(model.judgment_context.strongest_counterevidence)
         if model.market_bridge is not None:
             refs.append(model.market_bridge.capital_structure.source_ref)
+            refs.append(model.market_bridge.capital_structure.policy_ref)
             refs.append(model.market_bridge.fx_ref)
             for security in model.market_bridge.securities:
                 refs.extend((security.rights_ref, security.price_ref))
@@ -509,7 +510,15 @@ class CompanyResearchEngine:
                 - capital.other_adjustments
                 for value in scenario_values.values()
             )
-            per_share = tuple(value / security.share_count for value in equity_values)
+            rights_factor = (
+                security.conversion_ratio
+                * security.dividend_rights_per_unit
+                / security.adr_ratio
+            )
+            per_share = tuple(
+                value / capital.diluted_shares * rights_factor
+                for value in equity_values
+            )
             cny_values = tuple(value * market.usd_cny_rate for value in per_share)
             market_cny = security.market_price_usd * market.usd_cny_rate
             returns = tuple(value / market_cny - Decimal("1") for value in cny_values)

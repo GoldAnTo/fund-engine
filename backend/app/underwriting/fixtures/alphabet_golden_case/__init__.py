@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -25,10 +26,13 @@ _ROOT = Path(__file__).resolve().parent
 _MANIFEST_SCHEMA = "alphabet.golden-case.manifest.v1"
 _BUSINESS_MAP_SCHEMA = "alphabet.golden-case.business-map.v1"
 _SOURCE_FACTS_SCHEMA = "alphabet.golden-case.source-facts.v1"
-BUNDLED_MANIFEST_CONTENT_SHA256 = "52657a2393f6e59f16cde6e342998462055d40f224e0766e585139c9c5b1eb2f"
+_MARKET_INPUTS_SCHEMA = "alphabet.golden-case.market-inputs.v1"
+_STRATEGY_ASSUMPTIONS_SCHEMA = "alphabet.golden-case.strategy-assumptions.v1"
+BUNDLED_MANIFEST_CONTENT_SHA256 = "619961a99d0170b2cd16afe0b5dfd98a246c94c5a3e11b75d06d7ecfdfcc4d7d"
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _MANIFEST_KEYS = frozenset({"schema_version", "content_hash", "cutoff", "files"})
-_FILE_KEYS = frozenset({"name", "content_hash"})
+_JSON_FILE_KEYS = frozenset({"name", "content_hash"})
+_RAW_FILE_KEYS = frozenset({"name", "content_hash", "raw_hash", "raw_size"})
 _BUSINESS_MAP_KEYS = frozenset({"schema_version", "content_hash", "modules"})
 _MODULE_KEYS = frozenset({"key", "label"})
 _SOURCE_FACTS_KEYS = frozenset(
@@ -42,6 +46,69 @@ _FACT_KEYS = frozenset(
     }
 )
 _GAP_KEYS = frozenset({"gap_key", "business_module", "reason"})
+_MARKET_INPUT_KEYS = frozenset(
+    {
+        "schema_version", "content_hash", "company_external_key",
+        "security_external_keys", "prices", "fx", "capital_structure",
+        "security_rights",
+    }
+)
+_PROVENANCE_KEYS = frozenset(
+    {
+        "source_url", "source_locator", "raw_hash", "provider_policy_version",
+        "raw_components",
+    }
+)
+_RAW_COMPONENT_KEYS = frozenset(
+    {"raw_file", "raw_hash", "source_url", "source_locator"}
+)
+_PRICE_KEYS = frozenset(
+    {
+        "kind", "security_external_key", "value", "currency", "price_type",
+        "adjustment_basis", "market_at", "available_at", *_PROVENANCE_KEYS,
+    }
+)
+_FX_KEYS = frozenset(
+    {
+        "kind", "base_currency", "quote_currency", "rate", "quote_direction",
+        "market_at", "available_at", *_PROVENANCE_KEYS,
+    }
+)
+_CAPITAL_KEYS = frozenset(
+    {
+        "kind", "company_external_key", "currency", "cash", "debt",
+        "minority_interest", "investments", "pension_liabilities",
+        "other_adjustments", "basic_shares", "diluted_shares",
+        "potential_dilution_descriptors", "report_period_start",
+        "report_period_end", "market_at", "available_at",
+        "capital_bridge_policy_version", "policy_excluded_adjustments",
+        *_PROVENANCE_KEYS,
+    }
+)
+_RIGHTS_KEYS = frozenset(
+    {
+        "kind", "security_external_key", "economic_units", "votes_per_unit",
+        "conversion_ratio", "adr_ratio", "dividend_rights_per_unit",
+        "effective_from", "effective_to", *_PROVENANCE_KEYS,
+    }
+)
+_STRATEGY_KEYS = frozenset(
+    {
+        "schema_version", "content_hash", "strategy_version", "first_fiscal_year",
+        "driver_paths", "scenario_overrides", "terminal_growth",
+    }
+)
+_ASSUMPTION_METADATA_KEYS = frozenset(
+    {"state", "assumption_key", "rationale", "equation"}
+)
+_ASSUMPTION_NUMBER_KEYS = frozenset({"value", *_ASSUMPTION_METADATA_KEYS})
+_DRIVER_PATH_KEYS = frozenset({"driver_key", "values", *_ASSUMPTION_METADATA_KEYS})
+_SCENARIO_KEYS = frozenset({"scenario_id", "mechanism_id", "driver_overrides"})
+_OVERRIDE_KEYS = frozenset({"driver_key", *_ASSUMPTION_NUMBER_KEYS})
+_FINANCIAL_DRIVER_KEYS = (
+    "revenue", "operating_margin", "cash_tax_rate", "depreciation", "capex",
+    "working_capital_change",
+)
 _BUSINESS_MODULES = frozenset(
     {
         "search_and_other_ads", "youtube_ads_and_subscriptions", "google_cloud",
@@ -109,6 +176,131 @@ class ResearchGap:
 
 
 @dataclass(frozen=True, slots=True)
+class CapturedRawComponent:
+    raw_file: str
+    raw_hash: str
+    source_url: str
+    source_locator: str
+
+    def payload(self) -> dict[str, str]:
+        return {
+            "raw_file": self.raw_file,
+            "raw_hash": self.raw_hash,
+            "source_url": self.source_url,
+            "source_locator": self.source_locator,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedProvenance:
+    source_url: str
+    source_locator: str
+    raw_hash: str
+    provider_policy_version: str
+    raw_components: tuple[CapturedRawComponent, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedMarketPrice:
+    security_external_key: str
+    value: Decimal
+    currency: str
+    price_type: str
+    adjustment_basis: str
+    market_at: datetime
+    available_at: datetime
+    provenance: CapturedProvenance
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedMarketFX:
+    base_currency: str
+    quote_currency: str
+    rate: Decimal
+    quote_direction: str
+    market_at: datetime
+    available_at: datetime
+    provenance: CapturedProvenance
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedCapitalStructure:
+    company_external_key: str
+    currency: str
+    values: tuple[tuple[str, Decimal], ...]
+    potential_dilution_descriptors: tuple[str, ...]
+    report_period_start: datetime
+    report_period_end: datetime
+    market_at: datetime
+    available_at: datetime
+    provenance: CapturedProvenance
+    capital_bridge_policy_version: str
+    policy_excluded_adjustments: tuple[str, ...]
+
+    def value(self, name: str) -> Decimal:
+        return dict(self.values)[name]
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedSecurityRights:
+    security_external_key: str
+    values: tuple[tuple[str, Decimal], ...]
+    effective_from: datetime
+    effective_to: datetime | None
+    provenance: CapturedProvenance
+
+    def value(self, name: str) -> Decimal:
+        return dict(self.values)[name]
+
+
+@dataclass(frozen=True, slots=True)
+class AlphabetMarketInputBundle:
+    content_hash: str
+    company_external_key: str
+    security_external_keys: tuple[str, ...]
+    prices: tuple[CapturedMarketPrice, ...]
+    fx: CapturedMarketFX
+    capital_structure: CapturedCapitalStructure
+    security_rights: tuple[CapturedSecurityRights, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedAssumptionNumber:
+    value: Decimal
+    state: str
+    assumption_key: str
+    rationale: str
+    equation: str
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedStrategyDriverPath:
+    driver_key: str
+    values: tuple[Decimal, ...]
+    state: str
+    assumption_key: str
+    rationale: str
+    equation: str
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedStrategyScenario:
+    scenario_id: str
+    mechanism_id: str
+    driver_overrides: tuple[tuple[str, CapturedAssumptionNumber], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AlphabetStrategyAssumptionBundle:
+    content_hash: str
+    strategy_version: str
+    first_fiscal_year: int
+    driver_paths: tuple[CapturedStrategyDriverPath, ...]
+    scenario_overrides: tuple[CapturedStrategyScenario, ...]
+    terminal_growth: CapturedAssumptionNumber
+
+
+@dataclass(frozen=True, slots=True)
 class AlphabetGoldenCaseFixture:
     cutoff: datetime
     content_hash: str
@@ -117,6 +309,8 @@ class AlphabetGoldenCaseFixture:
     business_modules: tuple[object, ...]
     facts: tuple[CompanySourceFact, ...]
     research_gaps: tuple[ResearchGap, ...]
+    market_inputs: AlphabetMarketInputBundle | None = None
+    strategy_assumptions: AlphabetStrategyAssumptionBundle | None = None
 
 
 def _strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -168,6 +362,32 @@ def _hash(value: object, field: str) -> str:
     return text
 
 
+def _canonical_decimal(value: object, field: str) -> Decimal:
+    text = _text(value, field)
+    try:
+        parsed = Decimal(text)
+    except InvalidOperation as exc:
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {field} must be a canonical Decimal string"
+        ) from exc
+    from app.underwriting.domain.company_research import canonical_decimal_string
+
+    if not parsed.is_finite() or canonical_decimal_string(parsed) != text:
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {field} must be a canonical Decimal string"
+        )
+    return parsed
+
+
+def _http_url(value: object, field: str) -> str:
+    text = _text(value, field)
+    if not (text.startswith("https://") or text.startswith("http://")):
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {field} must be an HTTP source URL"
+        )
+    return text
+
+
 def _timestamp(value: object, field: str) -> datetime:
     text = _text(value, field)
     try:
@@ -195,6 +415,45 @@ def _date(value: object, field: str) -> date | None:
 def _file_hash(path: Path, contents: bytes, expected: str) -> None:
     if hashlib.sha256(contents).hexdigest() != expected:
         raise AlphabetGoldenCaseFixtureError(f"Alphabet fixture {path.name} content hash mismatch")
+
+
+def _raw_file_name(value: object, field: str) -> str:
+    name = _text(value, field)
+    path = Path(name)
+    if path.is_absolute() or path.parts != ("raw", path.name) or not name.endswith(".gz"):
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {field} must be a local raw/*.gz sidecar"
+        )
+    return name
+
+
+def _verified_raw_sidecar(
+    path: Path,
+    contents: bytes,
+    *,
+    expected_raw_hash: str,
+    expected_raw_size: object,
+) -> str:
+    if type(expected_raw_size) is not int or not 0 < expected_raw_size <= 10_000_000:
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {path.name} raw_size is invalid"
+        )
+    try:
+        raw = gzip.decompress(contents)
+    except (OSError, EOFError) as exc:
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {path.name} gzip sidecar is invalid"
+        ) from exc
+    if len(raw) != expected_raw_size:
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {path.name} decompressed size mismatch"
+        )
+    actual_raw_hash = hashlib.sha256(raw).hexdigest()
+    if actual_raw_hash != expected_raw_hash:
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {path.name} decompressed raw hash mismatch"
+        )
+    return actual_raw_hash
 
 
 def _content_hash(raw: dict[str, object], field: str) -> str:
@@ -287,6 +546,386 @@ def _gap(raw: object) -> ResearchGap:
     return ResearchGap(_text(item.get("gap_key"), "research gap.gap_key"), module, _text(item.get("reason"), "research gap.reason"))
 
 
+def _provenance(
+    item: dict[str, object],
+    field: str,
+    *,
+    raw_sidecars: dict[str, str],
+) -> CapturedProvenance:
+    source_url = _http_url(item.get("source_url"), f"{field}.source_url")
+    source_locator = _text(item.get("source_locator"), f"{field}.source_locator")
+    raw_hash = _hash(item.get("raw_hash"), f"{field}.raw_hash")
+    values = item.get("raw_components")
+    if not isinstance(values, list) or not values:
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {field}.raw_components must not be empty"
+        )
+    components: list[CapturedRawComponent] = []
+    for index, value in enumerate(values):
+        component = _exact_object(
+            value, _RAW_COMPONENT_KEYS, f"{field}.raw_components[{index}]"
+        )
+        raw_file = _raw_file_name(
+            component.get("raw_file"), f"{field}.raw_components[{index}].raw_file"
+        )
+        component_hash = _hash(
+            component.get("raw_hash"), f"{field}.raw_components[{index}].raw_hash"
+        )
+        if raw_sidecars.get(raw_file) != component_hash:
+            raise AlphabetGoldenCaseFixtureError(
+                f"Alphabet fixture {field} references an unverified raw sidecar"
+            )
+        components.append(
+            CapturedRawComponent(
+                raw_file=raw_file,
+                raw_hash=component_hash,
+                source_url=_http_url(
+                    component.get("source_url"),
+                    f"{field}.raw_components[{index}].source_url",
+                ),
+                source_locator=_text(
+                    component.get("source_locator"),
+                    f"{field}.raw_components[{index}].source_locator",
+                ),
+            )
+        )
+    if len({item.raw_file for item in components}) != len(components):
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {field} raw component identity must be unique"
+        )
+    expected_capture_hash = (
+        components[0].raw_hash
+        if len(components) == 1
+        else canonical_hash([component.payload() for component in components])
+    )
+    if raw_hash != expected_capture_hash:
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {field} composite raw hash mismatch"
+        )
+    if len(components) == 1 and (
+        components[0].source_url != source_url
+        or components[0].source_locator != source_locator
+    ):
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {field} singular raw lineage is inconsistent"
+        )
+    return CapturedProvenance(
+        source_url=source_url,
+        source_locator=source_locator,
+        raw_hash=raw_hash,
+        provider_policy_version=_text(
+            item.get("provider_policy_version"),
+            f"{field}.provider_policy_version",
+        ),
+        raw_components=tuple(components),
+    )
+
+
+def _market_inputs(
+    raw: dict[str, object],
+    *,
+    cutoff: datetime,
+    raw_sidecars: dict[str, str],
+) -> AlphabetMarketInputBundle:
+    _exact_object(raw, _MARKET_INPUT_KEYS, "market inputs")
+    if raw.get("schema_version") != _MARKET_INPUTS_SCHEMA:
+        raise AlphabetGoldenCaseFixtureError(
+            "Alphabet fixture market inputs schema is unsupported"
+        )
+    content_hash = _content_hash(raw, "market inputs")
+    company_key = _text(raw.get("company_external_key"), "market inputs.company_external_key")
+    if company_key != "US:ALPHABET:COMPANY":
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture market inputs Company is invalid")
+    security_values = raw.get("security_external_keys")
+    if (
+        not isinstance(security_values, list)
+        or not all(isinstance(item, str) for item in security_values)
+        or tuple(security_values) != ("NASDAQ:GOOG", "NASDAQ:GOOGL")
+    ):
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture market input Securities are invalid")
+
+    prices_raw = raw.get("prices")
+    if not isinstance(prices_raw, list):
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture market input prices must be an array")
+    prices: list[CapturedMarketPrice] = []
+    for index, value in enumerate(prices_raw):
+        item = _exact_object(value, _PRICE_KEYS, f"market inputs.prices[{index}]")
+        if item.get("kind") != "price" or item.get("currency") != "USD":
+            raise AlphabetGoldenCaseFixtureError("Alphabet fixture market price kind or currency is invalid")
+        market_at = _timestamp(item.get("market_at"), f"market price[{index}].market_at")
+        available_at = _timestamp(item.get("available_at"), f"market price[{index}].available_at")
+        if market_at > available_at or available_at > cutoff:
+            raise AlphabetGoldenCaseFixtureError("Alphabet fixture market price is outside the cutoff")
+        prices.append(
+            CapturedMarketPrice(
+                security_external_key=_text(item.get("security_external_key"), f"market price[{index}].security_external_key"),
+                value=_canonical_decimal(item.get("value"), f"market price[{index}].value"),
+                currency="USD",
+                price_type=_text(item.get("price_type"), f"market price[{index}].price_type"),
+                adjustment_basis=_text(item.get("adjustment_basis"), f"market price[{index}].adjustment_basis"),
+                market_at=market_at,
+                available_at=available_at,
+                provenance=_provenance(
+                    item, f"market price[{index}]", raw_sidecars=raw_sidecars
+                ),
+            )
+        )
+    if tuple(item.security_external_key for item in prices) != tuple(security_values):
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture market prices must exactly cover Securities")
+
+    fx_item = _exact_object(raw.get("fx"), _FX_KEYS, "market inputs.fx")
+    fx_market_at = _timestamp(fx_item.get("market_at"), "market fx.market_at")
+    fx_available_at = _timestamp(fx_item.get("available_at"), "market fx.available_at")
+    if (
+        fx_item.get("kind") != "fx"
+        or fx_item.get("base_currency") != "USD"
+        or fx_item.get("quote_currency") != "CNY"
+        or fx_item.get("quote_direction") != "quote_per_base"
+        or fx_market_at > fx_available_at
+        or fx_available_at > cutoff
+    ):
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture USD/CNY FX is invalid")
+    fx = CapturedMarketFX(
+        base_currency="USD",
+        quote_currency="CNY",
+        rate=_canonical_decimal(fx_item.get("rate"), "market fx.rate"),
+        quote_direction="quote_per_base",
+        market_at=fx_market_at,
+        available_at=fx_available_at,
+        provenance=_provenance(fx_item, "market fx", raw_sidecars=raw_sidecars),
+    )
+
+    capital_item = _exact_object(
+        raw.get("capital_structure"), _CAPITAL_KEYS, "market inputs.capital_structure"
+    )
+    capital_times = {
+        name: _timestamp(capital_item.get(name), f"market capital_structure.{name}")
+        for name in (
+            "report_period_start", "report_period_end", "market_at", "available_at"
+        )
+    }
+    descriptors = capital_item.get("potential_dilution_descriptors")
+    exclusions = capital_item.get("policy_excluded_adjustments")
+    if (
+        capital_item.get("kind") != "capital_structure"
+        or capital_item.get("company_external_key") != company_key
+        or capital_item.get("currency") != "USD"
+        or not isinstance(descriptors, list)
+        or not all(isinstance(item, str) and item and item == item.strip() for item in descriptors)
+        or len(set(descriptors)) != len(descriptors)
+        or not isinstance(exclusions, list)
+        or tuple(exclusions) != ("pension_liabilities",)
+        or capital_times["report_period_start"] > capital_times["report_period_end"]
+        or capital_times["market_at"] > capital_times["available_at"]
+        or capital_times["available_at"] > cutoff
+    ):
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture capital structure is invalid")
+    capital_names = (
+        "cash", "debt", "minority_interest", "investments", "pension_liabilities",
+        "other_adjustments", "basic_shares", "diluted_shares",
+    )
+    capital_values = tuple(
+        (name, _canonical_decimal(capital_item.get(name), f"market capital_structure.{name}"))
+        for name in capital_names
+    )
+    if dict(capital_values)["basic_shares"] <= 0 or dict(capital_values)["diluted_shares"] < dict(capital_values)["basic_shares"]:
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture capital structure share counts are invalid")
+    capital = CapturedCapitalStructure(
+        company_external_key=company_key,
+        currency="USD",
+        values=capital_values,
+        potential_dilution_descriptors=tuple(descriptors),
+        report_period_start=capital_times["report_period_start"],
+        report_period_end=capital_times["report_period_end"],
+        market_at=capital_times["market_at"],
+        available_at=capital_times["available_at"],
+        provenance=_provenance(
+            capital_item, "market capital_structure", raw_sidecars=raw_sidecars
+        ),
+        capital_bridge_policy_version=_text(
+            capital_item.get("capital_bridge_policy_version"),
+            "market capital_structure.capital_bridge_policy_version",
+        ),
+        policy_excluded_adjustments=tuple(exclusions),
+    )
+
+    rights_raw = raw.get("security_rights")
+    if not isinstance(rights_raw, list):
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture security rights must be an array")
+    rights: list[CapturedSecurityRights] = []
+    rights_names = (
+        "economic_units", "votes_per_unit", "conversion_ratio", "adr_ratio",
+        "dividend_rights_per_unit",
+    )
+    for index, value in enumerate(rights_raw):
+        item = _exact_object(value, _RIGHTS_KEYS, f"market inputs.security_rights[{index}]")
+        effective_from = _timestamp(item.get("effective_from"), f"market rights[{index}].effective_from")
+        effective_to = (
+            _timestamp(item.get("effective_to"), f"market rights[{index}].effective_to")
+            if item.get("effective_to") is not None else None
+        )
+        values = tuple(
+            (name, _canonical_decimal(item.get(name), f"market rights[{index}].{name}"))
+            for name in rights_names
+        )
+        numbers = dict(values)
+        if (
+            item.get("kind") != "security_rights"
+            or effective_from > cutoff
+            or (effective_to is not None and effective_to <= effective_from)
+            or numbers["economic_units"] <= 0
+            or numbers["conversion_ratio"] <= 0
+            or numbers["adr_ratio"] <= 0
+            or numbers["votes_per_unit"] < 0
+            or numbers["dividend_rights_per_unit"] < 0
+        ):
+            raise AlphabetGoldenCaseFixtureError("Alphabet fixture security rights are invalid")
+        rights.append(
+            CapturedSecurityRights(
+                security_external_key=_text(item.get("security_external_key"), f"market rights[{index}].security_external_key"),
+                values=values,
+                effective_from=effective_from,
+                effective_to=effective_to,
+                provenance=_provenance(
+                    item, f"market rights[{index}]", raw_sidecars=raw_sidecars
+                ),
+            )
+        )
+    if tuple(item.security_external_key for item in rights) != tuple(security_values):
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture rights must exactly cover Securities")
+
+    referenced_raw_files = {
+        component.raw_file
+        for capture in (*prices, fx, capital, *rights)
+        for component in capture.provenance.raw_components
+    }
+    if referenced_raw_files != set(raw_sidecars):
+        raise AlphabetGoldenCaseFixtureError(
+            "Alphabet fixture raw sidecars do not exactly cover captures"
+        )
+    return AlphabetMarketInputBundle(
+        content_hash=content_hash,
+        company_external_key=company_key,
+        security_external_keys=tuple(security_values),
+        prices=tuple(prices),
+        fx=fx,
+        capital_structure=capital,
+        security_rights=tuple(rights),
+    )
+
+
+def _assumption_metadata(item: dict[str, object], field: str) -> tuple[str, str, str, str]:
+    state = _text(item.get("state"), f"{field}.state")
+    key = _text(item.get("assumption_key"), f"{field}.assumption_key")
+    rationale = _text(item.get("rationale"), f"{field}.rationale")
+    equation = _text(item.get("equation"), f"{field}.equation")
+    if state != "assumption" or ".v" not in key:
+        raise AlphabetGoldenCaseFixtureError(
+            f"Alphabet fixture {field} must be an explicit versioned assumption"
+        )
+    return state, key, rationale, equation
+
+
+def _assumption_number(raw: object, field: str) -> CapturedAssumptionNumber:
+    item = _exact_object(raw, _ASSUMPTION_NUMBER_KEYS, field)
+    state, key, rationale, equation = _assumption_metadata(item, field)
+    return CapturedAssumptionNumber(
+        value=_canonical_decimal(item.get("value"), f"{field}.value"),
+        state=state,
+        assumption_key=key,
+        rationale=rationale,
+        equation=equation,
+    )
+
+
+def _strategy_assumptions(raw: dict[str, object]) -> AlphabetStrategyAssumptionBundle:
+    _exact_object(raw, _STRATEGY_KEYS, "strategy assumptions")
+    if raw.get("schema_version") != _STRATEGY_ASSUMPTIONS_SCHEMA:
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture strategy schema is unsupported")
+    content_hash = _content_hash(raw, "strategy assumptions")
+    strategy_version = _text(raw.get("strategy_version"), "strategy.strategy_version")
+    if ".v" not in strategy_version:
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture strategy version is invalid")
+    first_year = raw.get("first_fiscal_year")
+    if type(first_year) is not int or first_year < 1900:
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture strategy first fiscal year is invalid")
+    paths_raw = raw.get("driver_paths")
+    if not isinstance(paths_raw, list):
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture strategy driver paths must be an array")
+    paths: list[CapturedStrategyDriverPath] = []
+    for index, value in enumerate(paths_raw):
+        item = _exact_object(value, _DRIVER_PATH_KEYS, f"strategy driver_paths[{index}]")
+        state, key, rationale, equation = _assumption_metadata(item, f"strategy driver_paths[{index}]")
+        values = item.get("values")
+        if not isinstance(values, list) or len(values) != 5:
+            raise AlphabetGoldenCaseFixtureError("Alphabet fixture strategy paths require five values")
+        paths.append(
+            CapturedStrategyDriverPath(
+                driver_key=_text(item.get("driver_key"), f"strategy driver_paths[{index}].driver_key"),
+                values=tuple(
+                    _canonical_decimal(number, f"strategy driver_paths[{index}].values")
+                    for number in values
+                ),
+                state=state,
+                assumption_key=key,
+                rationale=rationale,
+                equation=equation,
+            )
+        )
+    if tuple(item.driver_key for item in paths) != _FINANCIAL_DRIVER_KEYS:
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture strategy paths are incomplete")
+    if any(not item.assumption_key.startswith(f"{strategy_version}:") for item in paths):
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture strategy assumption keys are not versioned")
+
+    scenarios_raw = raw.get("scenario_overrides")
+    if not isinstance(scenarios_raw, list):
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture strategy scenarios must be an array")
+    scenarios: list[CapturedStrategyScenario] = []
+    for index, value in enumerate(scenarios_raw):
+        item = _exact_object(value, _SCENARIO_KEYS, f"strategy scenario[{index}]")
+        overrides_raw = item.get("driver_overrides")
+        if not isinstance(overrides_raw, list):
+            raise AlphabetGoldenCaseFixtureError("Alphabet fixture strategy overrides must be an array")
+        overrides = tuple(
+            (
+                _text(
+                    _exact_object(override, _OVERRIDE_KEYS, "strategy override").get("driver_key"),
+                    "strategy override.driver_key",
+                ),
+                _assumption_number(
+                    {key: value for key, value in override.items() if key != "driver_key"},
+                    "strategy override",
+                ),
+            )
+            for override in overrides_raw
+            if isinstance(override, dict)
+        )
+        if len(overrides) != len(overrides_raw) or tuple(key for key, _ in overrides) != _FINANCIAL_DRIVER_KEYS:
+            raise AlphabetGoldenCaseFixtureError("Alphabet fixture strategy overrides are incomplete")
+        if any(not number.assumption_key.startswith(f"{strategy_version}:") for _, number in overrides):
+            raise AlphabetGoldenCaseFixtureError("Alphabet fixture strategy override keys are not versioned")
+        scenarios.append(
+            CapturedStrategyScenario(
+                scenario_id=_text(item.get("scenario_id"), f"strategy scenario[{index}].scenario_id"),
+                mechanism_id=_text(item.get("mechanism_id"), f"strategy scenario[{index}].mechanism_id"),
+                driver_overrides=overrides,
+            )
+        )
+    if tuple(item.scenario_id for item in scenarios) != ("base", "bull", "bear") or len({item.mechanism_id for item in scenarios}) != 3:
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture strategy scenarios are not exact")
+    terminal = _assumption_number(raw.get("terminal_growth"), "strategy terminal_growth")
+    if not terminal.assumption_key.startswith(f"{strategy_version}:"):
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture terminal assumption key is not versioned")
+    return AlphabetStrategyAssumptionBundle(
+        content_hash=content_hash,
+        strategy_version=strategy_version,
+        first_fiscal_year=first_year,
+        driver_paths=tuple(paths),
+        scenario_overrides=tuple(scenarios),
+        terminal_growth=terminal,
+    )
+
+
 def load_alphabet_golden_case_fixture(root: Path | None = None) -> AlphabetGoldenCaseFixture:
     """Read a fully authenticated fixture; custom roots still verify all JSON hashes."""
     fixture_root = root or _ROOT
@@ -304,16 +943,55 @@ def load_alphabet_golden_case_fixture(root: Path | None = None) -> AlphabetGolde
     manifest_hash = _content_hash(manifest, "manifest")
     cutoff = _timestamp(manifest.get("cutoff"), "manifest.cutoff")
     files = manifest.get("files")
-    if not isinstance(files, list) or {item.get("name") for item in files if isinstance(item, dict)} != {"business_map.json", "source_facts.json"}:
+    allowed_json_names = {
+        "business_map.json",
+        "source_facts.json",
+        "market_inputs.json",
+        "strategy_assumptions.json",
+    }
+    if not isinstance(files, list):
+        raise AlphabetGoldenCaseFixtureError("Alphabet fixture manifest files are invalid")
+    file_names: list[str] = []
+    for entry in files:
+        if not isinstance(entry, dict):
+            raise AlphabetGoldenCaseFixtureError("Alphabet fixture manifest files are invalid")
+        name_value = entry.get("name")
+        if not isinstance(name_value, str):
+            raise AlphabetGoldenCaseFixtureError("Alphabet fixture manifest files are invalid")
+        if name_value not in allowed_json_names:
+            _raw_file_name(name_value, "manifest file.name")
+        file_names.append(name_value)
+    if (
+        not {"business_map.json", "source_facts.json"}.issubset(file_names)
+        or len(set(file_names)) != len(files)
+        or (("market_inputs.json" in file_names) != any(name.startswith("raw/") for name in file_names))
+    ):
         raise AlphabetGoldenCaseFixtureError("Alphabet fixture manifest files are invalid")
     parsed_files: dict[str, dict[str, object]] = {}
+    raw_sidecars: dict[str, str] = {}
     for entry in files:
-        item = _exact_object(entry, _FILE_KEYS, "manifest file")
+        assert isinstance(entry, dict)
+        name_value = entry.get("name")
+        assert isinstance(name_value, str)
+        is_raw = name_value.startswith("raw/")
+        item = _exact_object(
+            entry, _RAW_FILE_KEYS if is_raw else _JSON_FILE_KEYS, "manifest file"
+        )
         name = _text(item.get("name"), "manifest file.name")
         path = fixture_root / name
         contents = _read_bytes(path)
-        parsed_files[name] = _read_json(path, contents)
-        _file_hash(path, contents, _hash(item.get("content_hash"), "manifest file.content_hash"))
+        if is_raw:
+            _file_hash(path, contents, _hash(item.get("content_hash"), "manifest file.content_hash"))
+            raw_hash = _hash(item.get("raw_hash"), "manifest file.raw_hash")
+            raw_sidecars[name] = _verified_raw_sidecar(
+                path,
+                contents,
+                expected_raw_hash=raw_hash,
+                expected_raw_size=item.get("raw_size"),
+            )
+        else:
+            parsed_files[name] = _read_json(path, contents)
+            _file_hash(path, contents, _hash(item.get("content_hash"), "manifest file.content_hash"))
     business_map = _modules(parsed_files["business_map.json"])
     facts_raw = parsed_files["source_facts.json"]
     _exact_object(facts_raw, _SOURCE_FACTS_KEYS, "source facts")
@@ -345,8 +1023,23 @@ def load_alphabet_golden_case_fixture(root: Path | None = None) -> AlphabetGolde
         raise AlphabetGoldenCaseFixtureError("Alphabet fixture every business module needs a fact or gap")
     if {item.source_role for item in facts} < {"regulatory_filing", "company_material"}:
         raise AlphabetGoldenCaseFixtureError("Alphabet fixture primary source roles are incomplete")
+    market_inputs = (
+        _market_inputs(
+            parsed_files["market_inputs.json"],
+            cutoff=cutoff,
+            raw_sidecars=raw_sidecars,
+        )
+        if "market_inputs.json" in parsed_files
+        else None
+    )
+    strategy_assumptions = (
+        _strategy_assumptions(parsed_files["strategy_assumptions.json"])
+        if "strategy_assumptions.json" in parsed_files
+        else None
+    )
     return AlphabetGoldenCaseFixture(
         cutoff=cutoff, content_hash=manifest_hash, company_external_key=company_key,
         security_external_keys=tuple(sorted(security_keys_raw)), business_modules=business_map,
-        facts=facts, research_gaps=gaps,
+        facts=facts, research_gaps=gaps, market_inputs=market_inputs,
+        strategy_assumptions=strategy_assumptions,
     )

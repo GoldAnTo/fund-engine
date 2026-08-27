@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from threading import Barrier
 
 import pytest
@@ -33,6 +34,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 NOW = datetime(2026, 8, 25, 9, tzinfo=UTC)
+GOVERNED_CUTOFF = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
 
 
 def _initializer(session) -> tuple[CompanyResearchInitializer, object]:
@@ -140,6 +142,44 @@ def test_initialize_creates_the_complete_company_research_foundation(session) ->
         session.scalar(select(func.count()).select_from(CompanyResearchPreparation))
         == 1
     )
+
+
+def test_initializer_exposes_only_internal_governed_model_and_market_seam(session) -> None:
+    loaded = ProductFoundationFixtureService(session, now=lambda: GOVERNED_CUTOFF).load(
+        load_product_foundation_fixture()
+    )
+    company = loaded.objects["US:ALPHABET:COMPANY"]
+    initializer = CompanyResearchInitializer(session, now=lambda: GOVERNED_CUTOFF)
+    preview = initializer.preview(company_id=company.id, cutoff_at=GOVERNED_CUTOFF)
+    initialized = initializer.initialize(
+        preview_hash=preview.input_hash,
+        company_id=company.id,
+        cutoff_at=GOVERNED_CUTOFF,
+        idempotency_key="alphabet-governed-input-seam",
+    )
+
+    governed = initializer.governed_inputs(
+        project_id=initialized.project.id,
+        cutoff_at=GOVERNED_CUTOFF,
+    )
+
+    assert governed.model_template.company_external_key == "US:ALPHABET:COMPANY"
+    assert governed.strategy_assumptions.strategy_version == (
+        "alphabet.machine-candidate.v1"
+    )
+    assert governed.market_context is not None
+    assert governed.market_context.reverse_dcf_request.target_enterprise_value == Decimal(
+        "3975642.06"
+    )
+    assert tuple(
+        (item.component_key, item.economic_units, item.price_proxy_security_external_key)
+        for item in governed.market_context.equity_components
+    ) == (
+        ("class_a", Decimal("5868"), "NASDAQ:GOOGL"),
+        ("class_b", Decimal("835"), "NASDAQ:GOOGL"),
+        ("class_c", Decimal("5527"), "NASDAQ:GOOG"),
+    )
+    assert initialized.draft.content.price_snapshot_ids == ()
 
 
 def test_initialize_replays_the_original_foundation_for_the_same_key(session) -> None:

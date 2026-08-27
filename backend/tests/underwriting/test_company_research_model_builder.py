@@ -39,6 +39,7 @@ from app.underwriting.services.company_research_model_builder import (
     CompanyResearchOperatingBaselineRequirement,
     CompanyResearchScenarioMechanism,
     FrozenMarketContext,
+    FrozenMarketEquityComponent,
     FrozenMarketSnapshotBinding,
     FrozenMarketSnapshotRole,
     ScenarioAssumption,
@@ -267,6 +268,7 @@ def _market_context() -> FrozenMarketContext:
         key: _lineage(key, "frozen_market_snapshot")
         for key in (
             "capital_structure_usd",
+            "capital_bridge_policy",
             "security_rights_nasdaq_goog",
             "market_price_usd_nasdaq_goog",
             "security_rights_nasdaq_googl",
@@ -282,12 +284,20 @@ def _market_context() -> FrozenMarketContext:
             investments=Decimal("0"),
             pension_liabilities=Decimal("0"),
             other_adjustments=Decimal("0"),
+            basic_shares=Decimal("11600"),
+            diluted_shares=Decimal("12100"),
             source_ref=refs["capital_structure_usd"],
+            capital_bridge_policy_version="synthetic-capital-bridge.v1",
+            policy_ref=refs["capital_bridge_policy"],
+            policy_excluded_adjustments=("pension_liabilities",),
         ),
         securities=(
             SecurityValuationReference(
                 "NASDAQ:GOOG",
                 Decimal("5800"),
+                Decimal("1"),
+                Decimal("1"),
+                Decimal("1"),
                 Decimal("205"),
                 Decimal("7.18"),
                 refs["security_rights_nasdaq_goog"],
@@ -296,6 +306,9 @@ def _market_context() -> FrozenMarketContext:
             SecurityValuationReference(
                 "NASDAQ:GOOGL",
                 Decimal("5800"),
+                Decimal("1"),
+                Decimal("1"),
+                Decimal("1"),
                 Decimal("204"),
                 Decimal("7.18"),
                 refs["security_rights_nasdaq_googl"],
@@ -340,9 +353,26 @@ def _market_context() -> FrozenMarketContext:
         market_at=CUTOFF,
         market_bridge=market_bridge,
         snapshot_bindings=bindings,
+        equity_components=(
+            FrozenMarketEquityComponent(
+                "class_a", Decimal("5800"), "NASDAQ:GOOGL",
+                refs["security_rights_nasdaq_googl"], ids[1],
+                refs["market_price_usd_nasdaq_googl"],
+            ),
+            FrozenMarketEquityComponent(
+                "class_b", Decimal("0"), "NASDAQ:GOOGL",
+                refs["capital_structure_usd"], ids[1],
+                refs["market_price_usd_nasdaq_googl"],
+            ),
+            FrozenMarketEquityComponent(
+                "class_c", Decimal("5800"), "NASDAQ:GOOG",
+                refs["security_rights_nasdaq_goog"], ids[0],
+                refs["market_price_usd_nasdaq_goog"],
+            ),
+        ),
         reverse_dcf_request=ReverseDcfRequest(
             driver_key="fcff_multiplier",
-            target_enterprise_value=Decimal("1000000"),
+            target_enterprise_value=Decimal("2291904"),
             lower_bound=Decimal("0.01"),
             upper_bound=Decimal("10"),
             max_iterations=100,

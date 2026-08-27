@@ -114,6 +114,7 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
             "b",
             "c",
             "capital_structure_usd",
+            "capital_bridge_policy",
             "security_rights_nasdaq_googl",
             "market_price_usd_nasdaq_googl",
             "security_rights_nasdaq_goog",
@@ -230,11 +231,15 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
                 capital_structure=CapitalStructureReference(
                     cash=Decimal("10"), debt=Decimal("5"), minority_interest=Decimal("0"),
                     investments=Decimal("2"), pension_liabilities=Decimal("0"),
-                    other_adjustments=Decimal("0"), source_ref=source_by_key["capital_structure_usd"],
+                    other_adjustments=Decimal("0"), basic_shares=Decimal("10"),
+                    diluted_shares=Decimal("12"), source_ref=source_by_key["capital_structure_usd"],
+                    capital_bridge_policy_version="synthetic-capital-bridge.v1",
+                    policy_ref=source_by_key["capital_bridge_policy"],
+                    policy_excluded_adjustments=("pension_liabilities",),
                 ),
                 securities=(
-                    SecurityValuationReference("NASDAQ:GOOGL", Decimal("10"), Decimal("100"), Decimal("7.20"), source_by_key["security_rights_nasdaq_googl"], source_by_key["market_price_usd_nasdaq_googl"]),
-                    SecurityValuationReference("NASDAQ:GOOG", Decimal("10"), Decimal("100"), Decimal("7.20"), source_by_key["security_rights_nasdaq_goog"], source_by_key["market_price_usd_nasdaq_goog"]),
+                    SecurityValuationReference("NASDAQ:GOOGL", Decimal("6"), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("100"), Decimal("7.20"), source_by_key["security_rights_nasdaq_googl"], source_by_key["market_price_usd_nasdaq_googl"]),
+                    SecurityValuationReference("NASDAQ:GOOG", Decimal("4"), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("90"), Decimal("7.20"), source_by_key["security_rights_nasdaq_goog"], source_by_key["market_price_usd_nasdaq_goog"]),
                 ),
                 usd_cny_rate=Decimal("7.20"), fx_ref=source_by_key["usd_cny_fx"],
             )
@@ -845,11 +850,19 @@ def test_negative_cash_and_debt_adjustments_remain_exact_decimal_inputs() -> Non
     assert result.valuation_set is not None
 
 
+def test_equal_economic_rights_use_company_diluted_shares_not_listed_class_counts() -> None:
+    result = CompanyResearchEngine().compile(_input())
+
+    googl, goog = result.security_values
+    assert googl.value_range == goog.value_range
+    assert googl.cny_return_range != goog.cny_return_range
+
+
 @pytest.mark.parametrize("shares", (Decimal("0"), Decimal("-1")))
 def test_rejects_zero_or_negative_security_shares(shares: Decimal) -> None:
     model = _input()
     market = model.market_bridge
     assert market is not None
     first = market.securities[0]
-    with pytest.raises(CompanyResearchValidationError, match="share_count"):
-        SecurityValuationReference(first.security_external_key, shares, first.market_price_usd, first.usd_cny_rate, first.rights_ref, first.price_ref)
+    with pytest.raises(CompanyResearchValidationError, match="listed_class_economic_units"):
+        replace(first, listed_class_economic_units=shares)

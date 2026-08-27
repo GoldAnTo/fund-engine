@@ -55,6 +55,17 @@ from app.underwriting.services.workspace_draft import (
     WorkspaceDraftService,
     WorkspaceDraftView,
 )
+from app.underwriting.fixtures.alphabet_golden_case import (
+    load_alphabet_golden_case_fixture,
+)
+from app.underwriting.services.company_research_market_inputs import (
+    CompanyResearchMarketInputs,
+)
+from app.underwriting.services.company_research_model_builder import (
+    CompanyResearchModelTemplate,
+    FrozenMarketContext,
+    StrategyAssumptionSet,
+)
 
 _PREPARE_JOB_KIND = "prepare_company_research"
 _PREPARE_JOB_TARGET_TYPE = "company_research_preparation"
@@ -72,6 +83,15 @@ class CompanyResearchInitialization:
     draft: WorkspaceDraftView
     preparation: CompanyResearchPreparation
     job: Job
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchGovernedInputs:
+    """Internal typed seam; callers never submit market UUID/hash forms."""
+
+    model_template: CompanyResearchModelTemplate
+    strategy_assumptions: StrategyAssumptionSet
+    market_context: FrozenMarketContext | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,6 +430,49 @@ class CompanyResearchInitializer:
             company_id=company_id,
             cutoff_at=cutoff_at,
             idempotency_key=idempotency_key,
+        )
+
+    def governed_inputs(
+        self,
+        *,
+        project_id: UUID,
+        cutoff_at: datetime,
+    ) -> CompanyResearchGovernedInputs:
+        """Prepare/resolve only authenticated internal inputs for model compilation."""
+        project_id = self._uuid(project_id, "project_id")
+        cutoff = self._utc(cutoff_at, "cutoff_at")
+        project = self._products.project(project_id)
+        if project is None:
+            raise ValidationError("company research project not found")
+        company = self._product_repository.object(project.primary_company_id)
+        if company is None:
+            raise ValidationError("company research project Company is missing")
+        adapter = self._adapter_for(company.external_key)
+        fixture = load_alphabet_golden_case_fixture()
+        if fixture.cutoff != cutoff:
+            raise ValidationError("governed inputs require the exact fixture cutoff")
+        strategy = adapter.strategy_assumptions(fixture.strategy_assumptions)
+        resolver = CompanyResearchMarketInputs(self._session)
+        if fixture.market_inputs is not None:
+            market_context = resolver.prepare(
+                project_id=project_id,
+                cutoff_at=cutoff,
+                market_inputs=fixture.market_inputs,
+            )
+        else:
+            try:
+                market_context = resolver.resolve(
+                    project_id=project_id,
+                    cutoff_at=cutoff,
+                )
+            except ValidationError as exc:
+                if "market inputs are incomplete" not in str(exc):
+                    raise
+                market_context = None
+        return CompanyResearchGovernedInputs(
+            model_template=adapter.model_template(),
+            strategy_assumptions=strategy,
+            market_context=market_context,
         )
 
 

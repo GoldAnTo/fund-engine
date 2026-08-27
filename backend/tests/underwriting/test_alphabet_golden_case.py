@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime
+from decimal import Decimal
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -27,6 +29,7 @@ from app.underwriting.services.company_research_sources import (
 from app.underwriting.services.product_foundation_fixture import (
     ProductFoundationFixtureService,
 )
+from app.underwriting.services.company_research_model_builder import StrategyAssumptionSet
 
 
 NOW = datetime(2026, 8, 25, 9, tzinfo=UTC)
@@ -36,8 +39,17 @@ _FIXTURE_ROOT = Path(__file__).parents[2] / "app" / "underwriting" / "fixtures" 
 def _copy_fixture(tmp_path: Path) -> Path:
     copied = tmp_path / "alphabet"
     copied.mkdir(parents=True)
-    for name in ("manifest.json", "business_map.json", "source_facts.json"):
-        (copied / name).write_bytes((_FIXTURE_ROOT / name).read_bytes())
+    manifest = _read_json(_FIXTURE_ROOT / "manifest.json")
+    files = manifest["files"]
+    assert isinstance(files, list)
+    for name in (
+        "manifest.json",
+        *(item["name"] for item in files if isinstance(item, dict)),
+    ):
+        assert isinstance(name, str)
+        destination = copied / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((_FIXTURE_ROOT / name).read_bytes())
     return copied
 
 
@@ -74,6 +86,201 @@ def _refresh_manifest(root: Path) -> None:
     from app.underwriting.hashing import canonical_hash
 
     manifest["content_hash"] = canonical_hash(payload)
+    _write_json(root / "manifest.json", manifest)
+
+
+def _assumption_number(value: str, key: str) -> dict[str, object]:
+    return {
+        "value": value,
+        "state": "assumption",
+        "assumption_key": key,
+        "rationale": "Synthetic test-only candidate assumption.",
+        "equation": "candidate_input",
+    }
+
+
+def _add_synthetic_governed_inputs(root: Path) -> None:
+    from app.underwriting.hashing import canonical_hash
+
+    envelope = b"synthetic authenticated envelope"
+    raw_hash = hashlib.sha256(envelope).hexdigest()
+    raw_file = "raw/synthetic-envelope.txt.gz"
+    raw_path = root / raw_file
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.write_bytes(gzip.compress(envelope, mtime=0))
+    provenance = {
+        "source_url": "https://example.test/source",
+        "source_locator": "synthetic locator",
+        "raw_hash": raw_hash,
+        "provider_policy_version": "synthetic-provider.v1",
+        "raw_components": [
+            {
+                "raw_file": raw_file,
+                "raw_hash": raw_hash,
+                "source_url": "https://example.test/source",
+                "source_locator": "synthetic locator",
+            }
+        ],
+    }
+    market: dict[str, object] = {
+        "schema_version": "alphabet.golden-case.market-inputs.v1",
+        "content_hash": "",
+        "company_external_key": "US:ALPHABET:COMPANY",
+        "security_external_keys": ["NASDAQ:GOOG", "NASDAQ:GOOGL"],
+        "prices": [
+            {
+                "kind": "price",
+                "security_external_key": key,
+                "value": value,
+                "currency": "USD",
+                "price_type": "official_close",
+                "adjustment_basis": "unadjusted",
+                "market_at": "2026-08-25T20:00:00+00:00",
+                "available_at": "2026-08-25T23:00:00+00:00",
+                **provenance,
+            }
+            for key, value in (
+                ("NASDAQ:GOOG", "207.5"),
+                ("NASDAQ:GOOGL", "206.25"),
+            )
+        ],
+        "fx": {
+            "kind": "fx",
+            "base_currency": "USD",
+            "quote_currency": "CNY",
+            "rate": "7.18",
+            "quote_direction": "quote_per_base",
+            "market_at": "2026-08-24T16:00:00+00:00",
+            "available_at": "2026-08-25T22:00:00+00:00",
+            **provenance,
+        },
+        "capital_structure": {
+            "kind": "capital_structure",
+            "company_external_key": "US:ALPHABET:COMPANY",
+            "currency": "USD",
+            "cash": "30000",
+            "debt": "46000",
+            "minority_interest": "0",
+            "investments": "96000",
+            "pension_liabilities": "0",
+            "other_adjustments": "0",
+            "basic_shares": "12000",
+            "diluted_shares": "12100",
+            "potential_dilution_descriptors": ["unvested equity awards"],
+            "report_period_start": "2026-04-01T00:00:00+00:00",
+            "report_period_end": "2026-06-30T00:00:00+00:00",
+            "market_at": "2026-06-30T00:00:00+00:00",
+            "available_at": "2026-07-30T00:00:00+00:00",
+            "capital_bridge_policy_version": "alphabet-capital-bridge.v1",
+            "policy_excluded_adjustments": ["pension_liabilities"],
+            **provenance,
+        },
+        "security_rights": [
+            {
+                "kind": "security_rights",
+                "security_external_key": key,
+                "economic_units": "5800",
+                "votes_per_unit": votes,
+                "conversion_ratio": "1",
+                "adr_ratio": "1",
+                "dividend_rights_per_unit": "1",
+                "effective_from": "2026-01-01T00:00:00+00:00",
+                "effective_to": None,
+                **provenance,
+            }
+            for key, votes in (("NASDAQ:GOOG", "0"), ("NASDAQ:GOOGL", "1"))
+        ],
+    }
+    market["content_hash"] = canonical_hash(
+        {key: value for key, value in market.items() if key != "content_hash"}
+    )
+    _write_json(root / "market_inputs.json", market)
+
+    driver_keys = (
+        "revenue",
+        "operating_margin",
+        "cash_tax_rate",
+        "depreciation",
+        "capex",
+        "working_capital_change",
+    )
+    strategy: dict[str, object] = {
+        "schema_version": "alphabet.golden-case.strategy-assumptions.v1",
+        "content_hash": "",
+        "strategy_version": "alphabet-synthetic.v1",
+        "first_fiscal_year": 2027,
+        "driver_paths": [
+            {
+                "driver_key": key,
+                **_assumption_number("1", f"alphabet-synthetic.v1:{key}"),
+                "values": ["1", "1", "1", "1", "1"],
+            }
+            for key in driver_keys
+        ],
+        "scenario_overrides": [
+            {
+                "scenario_id": scenario,
+                "mechanism_id": mechanism,
+                "driver_overrides": [
+                    {
+                        "driver_key": key,
+                        **_assumption_number(
+                            "1" if scenario == "base" else ("1.1" if scenario == "bull" else "0.9"),
+                            f"alphabet-synthetic.v1:{scenario}:{key}",
+                        ),
+                    }
+                    for key in driver_keys
+                ],
+            }
+            for scenario, mechanism in (
+                ("base", "steady_operations"),
+                ("bull", "capacity_upside"),
+                ("bear", "demand_stress"),
+            )
+        ],
+        "terminal_growth": _assumption_number(
+            "0.03", "alphabet-synthetic.v1:terminal_growth"
+        ),
+    }
+    # Driver paths carry their five values in addition to the shared metadata;
+    # the single metadata value is not part of the path schema.
+    for item in strategy["driver_paths"]:  # type: ignore[index]
+        item.pop("value")  # type: ignore[union-attr]
+    strategy["content_hash"] = canonical_hash(
+        {key: value for key, value in strategy.items() if key != "content_hash"}
+    )
+    _write_json(root / "strategy_assumptions.json", strategy)
+
+    manifest = _read_json(root / "manifest.json")
+    files = manifest["files"]
+    assert isinstance(files, list)
+    files[:] = [
+        item
+        for item in files
+        if not (isinstance(item, dict) and str(item.get("name", "")).startswith("raw/"))
+    ]
+    for name in ("market_inputs.json", "strategy_assumptions.json"):
+        digest = hashlib.sha256((root / name).read_bytes()).hexdigest()
+        existing = next(
+            (item for item in files if isinstance(item, dict) and item.get("name") == name),
+            None,
+        )
+        if existing is None:
+            files.append({"name": name, "content_hash": digest})
+        else:
+            existing["content_hash"] = digest
+    compressed = raw_path.read_bytes()
+    files.append(
+        {
+            "name": raw_file,
+            "content_hash": hashlib.sha256(compressed).hexdigest(),
+            "raw_hash": raw_hash,
+            "raw_size": len(envelope),
+        }
+    )
+    manifest["content_hash"] = canonical_hash(
+        {key: value for key, value in manifest.items() if key != "content_hash"}
+    )
     _write_json(root / "manifest.json", manifest)
 
 
@@ -292,7 +499,7 @@ def test_loaded_fixture_keeps_official_lineage_modules_gaps_and_distinct_securit
         "other_bets",
         "corporate_capital_allocation",
     }
-    assert {gap.gap_key for gap in fixture.research_gaps} >= {
+    assert {gap.gap_key for gap in fixture.research_gaps} == {
         "market_price_missing",
         "usd_cny_fx_missing",
         "forward_model_missing",
@@ -307,6 +514,205 @@ def test_adapter_accepts_only_the_fixture_business_module_vocabulary() -> None:
     assert AlphabetCompanyResearchAdapter().validate_source_modules(
         fixture.company_external_key, fixture.business_modules
     ) == fixture.business_modules
+
+
+def test_bundled_strategy_is_an_explicit_machine_candidate_not_a_source_fact() -> None:
+    fixture = load_alphabet_golden_case_fixture()
+    assert fixture.strategy_assumptions is not None
+
+    assumptions = AlphabetCompanyResearchAdapter().strategy_assumptions(
+        fixture.strategy_assumptions
+    )
+
+    assert assumptions.strategy_version == "alphabet.machine-candidate.v1"
+    assert assumptions.first_fiscal_year == 2026
+    assert assumptions.driver_paths[0].values == (
+        Decimal("480000"),
+        Decimal("566400"),
+        Decimal("651360"),
+        Decimal("729523.2"),
+        Decimal("802475.52"),
+    )
+    assert all(item.state.value == "assumption" for item in assumptions.driver_paths)
+    assert all(not item.source_refs for item in assumptions.driver_paths)
+    assert tuple(item.mechanism_id for item in assumptions.scenario_overrides) == (
+        "search_cloud_resilience",
+        "ai_monetization_and_utilization",
+        "search_disruption_and_capital_drag",
+    )
+
+
+def test_bundled_market_inputs_pin_exact_abc_capital_and_raw_lineage() -> None:
+    fixture = load_alphabet_golden_case_fixture()
+    assert fixture.market_inputs is not None
+    market = fixture.market_inputs
+
+    assert tuple((item.security_external_key, item.value) for item in market.prices) == (
+        ("NASDAQ:GOOG", Decimal("343.34")),
+        ("NASDAQ:GOOGL", Decimal("346.96")),
+    )
+    assert market.fx.rate == Decimal("6.721")
+    assert market.capital_structure.value("basic_shares") == Decimal("12230")
+    assert market.capital_structure.value("diluted_shares") == Decimal("12309")
+    assert tuple(
+        (item.security_external_key, item.value("economic_units"))
+        for item in market.security_rights
+    ) == (
+        ("NASDAQ:GOOG", Decimal("5527")),
+        ("NASDAQ:GOOGL", Decimal("5868")),
+    )
+    assert len(market.capital_structure.provenance.raw_components) == 2
+    assert {
+        component.raw_file
+        for capture in (*market.prices, market.fx, market.capital_structure, *market.security_rights)
+        for component in capture.provenance.raw_components
+    } == {
+        "raw/nasdaq_goog_2026-08-25.json.gz",
+        "raw/nasdaq_googl_2026-08-25.json.gz",
+        "raw/federal_reserve_h10_usd_cny.csv.gz",
+        "raw/alphabet_q2_2026_exhibit_99_1.html.gz",
+        "raw/alphabet_q2_2026_10q.html.gz",
+        "raw/alphabet_2025_10k.html.gz",
+    }
+
+
+def test_optional_governed_files_load_closed_market_and_strategy_contracts(
+    tmp_path: Path,
+) -> None:
+    root = _copy_fixture(tmp_path)
+    _add_synthetic_governed_inputs(root)
+
+    fixture = load_alphabet_golden_case_fixture(root)
+
+    assert fixture.market_inputs is not None
+    assert fixture.market_inputs.security_external_keys == (
+        "NASDAQ:GOOG",
+        "NASDAQ:GOOGL",
+    )
+    assert fixture.strategy_assumptions is not None
+    assumptions = AlphabetCompanyResearchAdapter().strategy_assumptions(
+        fixture.strategy_assumptions
+    )
+    assert type(assumptions) is StrategyAssumptionSet
+    assert assumptions.strategy_version == "alphabet-synthetic.v1"
+    assert tuple(item.driver_key for item in assumptions.driver_paths) == (
+        "revenue",
+        "operating_margin",
+        "cash_tax_rate",
+        "depreciation",
+        "capex",
+        "working_capital_change",
+    )
+
+
+def test_governed_fixture_rejects_unknown_fields_noncanonical_decimals_and_bad_raw_sidecars(
+    tmp_path: Path,
+) -> None:
+    root = _copy_fixture(tmp_path / "unknown")
+    _add_synthetic_governed_inputs(root)
+    market = _read_json(root / "market_inputs.json")
+    market["unknown"] = True
+    _write_json(root / "market_inputs.json", market)
+    _refresh_manifest(root)
+    with pytest.raises(ValidationError, match="market inputs.*invalid fields"):
+        load_alphabet_golden_case_fixture(root)
+
+    root = _copy_fixture(tmp_path / "decimal")
+    _add_synthetic_governed_inputs(root)
+    market = _read_json(root / "market_inputs.json")
+    prices = market["prices"]
+    assert isinstance(prices, list) and isinstance(prices[0], dict)
+    prices[0]["value"] = "207.50"
+    from app.underwriting.hashing import canonical_hash
+
+    market["content_hash"] = canonical_hash(
+        {key: value for key, value in market.items() if key != "content_hash"}
+    )
+    _write_json(root / "market_inputs.json", market)
+    _refresh_manifest(root)
+    with pytest.raises(ValidationError, match="canonical Decimal"):
+        load_alphabet_golden_case_fixture(root)
+
+    root = _copy_fixture(tmp_path / "envelope")
+    _add_synthetic_governed_inputs(root)
+    raw_path = root / "raw" / "synthetic-envelope.txt.gz"
+    raw_path.write_bytes(gzip.compress(b"tampered", mtime=0))
+    _refresh_manifest(root)
+    with pytest.raises(ValidationError, match="decompressed (size|raw hash) mismatch"):
+        load_alphabet_golden_case_fixture(root)
+
+
+def test_governed_fixture_rejects_compressed_and_composite_raw_hash_drift(
+    tmp_path: Path,
+) -> None:
+    root = _copy_fixture(tmp_path / "compressed")
+    raw_path = root / "raw" / "nasdaq_goog_2026-08-25.json.gz"
+    raw_path.write_bytes(raw_path.read_bytes() + b"tampered")
+    with pytest.raises(ValidationError, match="content hash mismatch"):
+        load_alphabet_golden_case_fixture(root)
+
+    root = _copy_fixture(tmp_path / "composite")
+    market = _read_json(root / "market_inputs.json")
+    capital = market["capital_structure"]
+    assert isinstance(capital, dict)
+    capital["raw_hash"] = "0" * 64
+    from app.underwriting.hashing import canonical_hash
+
+    market["content_hash"] = canonical_hash(
+        {key: value for key, value in market.items() if key != "content_hash"}
+    )
+    _write_json(root / "market_inputs.json", market)
+    _refresh_manifest(root)
+    with pytest.raises(ValidationError, match="composite raw hash mismatch"):
+        load_alphabet_golden_case_fixture(root)
+
+
+def test_strategy_fixture_fails_closed_when_numeric_metadata_is_missing(
+    tmp_path: Path,
+) -> None:
+    root = _copy_fixture(tmp_path)
+    _add_synthetic_governed_inputs(root)
+    strategy = _read_json(root / "strategy_assumptions.json")
+    paths = strategy["driver_paths"]
+    assert isinstance(paths, list) and isinstance(paths[0], dict)
+    paths[0].pop("rationale")
+    from app.underwriting.hashing import canonical_hash
+
+    strategy["content_hash"] = canonical_hash(
+        {key: value for key, value in strategy.items() if key != "content_hash"}
+    )
+    _write_json(root / "strategy_assumptions.json", strategy)
+    _refresh_manifest(root)
+
+    with pytest.raises(ValidationError, match="strategy.*invalid fields"):
+        load_alphabet_golden_case_fixture(root)
+
+
+def test_alphabet_adapter_emits_six_module_model_template_without_forecasts() -> None:
+    template = AlphabetCompanyResearchAdapter().model_template()
+
+    assert tuple(item.module_key for item in template.modules) == (
+        "search_and_other_ads",
+        "youtube_ads_and_subscriptions",
+        "google_cloud",
+        "other_google_services",
+        "other_bets",
+        "corporate_capital_allocation",
+    )
+    assert {item.category for item in template.metric_classifications} == {
+        "revenue",
+        "cost",
+        "capital",
+    }
+    assert tuple(item.driver_key for item in template.financial_driver_ownership) == (
+        "revenue",
+        "operating_margin",
+        "cash_tax_rate",
+        "depreciation",
+        "capex",
+        "working_capital_change",
+    )
+    assert not hasattr(template, "forecast_values")
 
 
 def _preparation(session):

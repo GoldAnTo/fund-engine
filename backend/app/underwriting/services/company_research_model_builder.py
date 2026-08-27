@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from enum import StrEnum
 import re
 from typing import Any
@@ -43,6 +43,17 @@ from app.underwriting.domain.company_research import (
     ScenarioSetArtifact,
     SourceLineageReference,
     ValuationSetArtifact,
+)
+from app.underwriting.domain.company_research_contracts import (
+    CompanyResearchDriverBinding as _CompanyResearchDriverBindingContract,
+    CompanyResearchMetricClassification as _CompanyResearchMetricClassificationContract,
+    CompanyResearchModelModule as _CompanyResearchModelModuleContract,
+    CompanyResearchModelTemplate as _CompanyResearchModelTemplateContract,
+    CompanyResearchOperatingBaselineRequirement as _CompanyResearchOperatingBaselineRequirementContract,
+    CompanyResearchOperatingDriverBinding as _CompanyResearchOperatingDriverBindingContract,
+    CompanyResearchScenarioMechanism as _CompanyResearchScenarioMechanismContract,
+    ScenarioAssumption as _ScenarioAssumptionContract,
+    StrategyAssumptionSet as _StrategyAssumptionSetContract,
 )
 from app.underwriting.hashing import canonical_hash
 from app.underwriting.services.company_research_engine import CompanyResearchEngine
@@ -335,6 +346,34 @@ class FrozenMarketSnapshotBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class FrozenMarketEquityComponent:
+    """One market-cap component, including an explicit price-proxy policy."""
+
+    component_key: str
+    economic_units: Decimal
+    price_proxy_security_external_key: str
+    unit_source_ref: SourceLineageReference
+    price_snapshot_id: UUID
+    price_ref: SourceLineageReference
+
+    def __post_init__(self) -> None:
+        if self.component_key not in {"class_a", "class_b", "class_c"}:
+            raise ValidationError("market equity component key is invalid")
+        units = _decimal(self.economic_units, "market equity component economic_units")
+        if units < Decimal("0"):
+            raise ValidationError("market equity component economic_units must be nonnegative")
+        _text(
+            self.price_proxy_security_external_key,
+            "market equity component price proxy",
+        )
+        if type(self.unit_source_ref) is not SourceLineageReference:
+            raise ValidationError("market equity component unit source ref must be typed")
+        _uuid(self.price_snapshot_id, "market equity component price_snapshot_id")
+        if type(self.price_ref) is not SourceLineageReference:
+            raise ValidationError("market equity component price ref must be typed")
+
+
+@dataclass(frozen=True, slots=True)
 class FrozenMarketContext:
     """An exact, already-resolved market boundary; the builder never fetches it."""
 
@@ -346,7 +385,14 @@ class FrozenMarketContext:
     market_at: datetime
     market_bridge: MarketBridgeArtifact
     snapshot_bindings: tuple[FrozenMarketSnapshotBinding, ...]
+    equity_components: tuple[FrozenMarketEquityComponent, ...]
     reverse_dcf_request: ReverseDcfRequest
+
+    @property
+    def security_external_keys(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(item.security_external_key for item in self.market_bridge.securities)
+        )
 
     def __post_init__(self) -> None:
         price_ids = _uuid_tuple(self.price_snapshot_ids, "price_snapshot_ids")
@@ -398,8 +444,98 @@ class FrozenMarketContext:
         }
         if bindings != expected_refs:
             raise ValidationError("frozen market snapshot binding bridge refs do not match")
+        if (
+            not isinstance(self.equity_components, tuple)
+            or not all(
+                type(item) is FrozenMarketEquityComponent
+                for item in self.equity_components
+            )
+            or tuple(item.component_key for item in self.equity_components)
+            != ("class_a", "class_b", "class_c")
+        ):
+            raise ValidationError(
+                "frozen market context requires exact Class A-B-C equity components"
+            )
+        securities = {
+            item.security_external_key: item for item in self.market_bridge.securities
+        }
+        prices = {
+            item.security_external_key: item
+            for item in self.snapshot_bindings
+            if item.role is FrozenMarketSnapshotRole.PRICE
+        }
+        class_a, class_b, class_c = self.equity_components
+        expected_proxy = {
+            "class_a": "NASDAQ:GOOGL",
+            "class_b": "NASDAQ:GOOGL",
+            "class_c": "NASDAQ:GOOG",
+        }
+        if any(
+            item.price_proxy_security_external_key != expected_proxy[item.component_key]
+            for item in self.equity_components
+        ):
+            raise ValidationError("Class B price proxy policy must explicitly use GOOGL")
+        if (
+            set(securities) != {"NASDAQ:GOOG", "NASDAQ:GOOGL"}
+            or class_a.economic_units
+            != securities["NASDAQ:GOOGL"].listed_class_economic_units
+            or class_c.economic_units
+            != securities["NASDAQ:GOOG"].listed_class_economic_units
+            or class_a.unit_source_ref != securities["NASDAQ:GOOGL"].rights_ref
+            or class_c.unit_source_ref != securities["NASDAQ:GOOG"].rights_ref
+            or class_b.unit_source_ref != self.market_bridge.capital_structure.source_ref
+        ):
+            raise ValidationError(
+                "Class A/C units must match listed rights and Class B must remain separate"
+            )
+        expected_b = (
+            self.market_bridge.capital_structure.basic_shares
+            - class_a.economic_units
+            - class_c.economic_units
+        )
+        if expected_b < Decimal("0") or class_b.economic_units != expected_b:
+            raise ValidationError(
+                "Class B units must equal basic shares less listed Class A and C units"
+            )
+        for component in self.equity_components:
+            price_binding = prices.get(component.price_proxy_security_external_key)
+            if (
+                price_binding is None
+                or component.price_snapshot_id != price_binding.snapshot_id
+                or component.price_ref != price_binding.source_ref
+            ):
+                raise ValidationError(
+                    "market equity component must use its exact frozen price proxy"
+                )
         if type(self.reverse_dcf_request) is not ReverseDcfRequest:
             raise ValidationError("frozen market context requires governed reverse DCF")
+        market_prices = {
+            item.security_external_key: item.market_price_usd
+            for item in self.market_bridge.securities
+        }
+        capital = self.market_bridge.capital_structure
+        with localcontext() as context:
+            context.prec = 60
+            expected_enterprise_value = +(
+                sum(
+                    (
+                        item.economic_units
+                        * market_prices[item.price_proxy_security_external_key]
+                        for item in self.equity_components
+                    ),
+                    start=Decimal("0"),
+                )
+                + capital.debt
+                + capital.minority_interest
+                + capital.pension_liabilities
+                + capital.other_adjustments
+                - capital.cash
+                - capital.investments
+            )
+        if self.reverse_dcf_request.target_enterprise_value != expected_enterprise_value:
+            raise ValidationError(
+                "reverse DCF target must close to exact Class A-B-C market equity"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -545,6 +681,27 @@ class StrategyAssumptionSet:
                 "terminal_growth": canonical_decimal_string(terminal_growth),
             }
         )
+
+
+# These contracts live in the domain layer so company adapters never depend on
+# an orchestration service. Keep the service exports stable for existing callers.
+CompanyResearchModelModule = _CompanyResearchModelModuleContract  # noqa: F811
+CompanyResearchMetricClassification = (  # noqa: F811
+    _CompanyResearchMetricClassificationContract
+)
+CompanyResearchDriverBinding = _CompanyResearchDriverBindingContract  # noqa: F811
+CompanyResearchOperatingDriverBinding = (  # noqa: F811
+    _CompanyResearchOperatingDriverBindingContract
+)
+CompanyResearchOperatingBaselineRequirement = (  # noqa: F811
+    _CompanyResearchOperatingBaselineRequirementContract
+)
+CompanyResearchScenarioMechanism = (  # noqa: F811
+    _CompanyResearchScenarioMechanismContract
+)
+CompanyResearchModelTemplate = _CompanyResearchModelTemplateContract  # noqa: F811
+ScenarioAssumption = _ScenarioAssumptionContract  # noqa: F811
+StrategyAssumptionSet = _StrategyAssumptionSetContract  # noqa: F811
 
 
 @dataclass(frozen=True, slots=True)
@@ -1308,6 +1465,7 @@ class CompanyResearchModelBuilder:
             bridge = market_context.market_bridge
             market_refs = (
                 bridge.capital_structure.source_ref,
+                bridge.capital_structure.policy_ref,
                 bridge.fx_ref,
                 *(
                     ref

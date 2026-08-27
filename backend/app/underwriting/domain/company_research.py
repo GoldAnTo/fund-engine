@@ -1083,19 +1083,60 @@ class CapitalStructureReference:
     investments: Decimal
     pension_liabilities: Decimal
     other_adjustments: Decimal
+    basic_shares: Decimal
+    diluted_shares: Decimal
     source_ref: SourceLineageReference
+    capital_bridge_policy_version: str
+    policy_ref: SourceLineageReference
+    policy_excluded_adjustments: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        for name in ("cash", "debt", "minority_interest", "investments", "pension_liabilities", "other_adjustments"):
+        for name in ("cash", "debt", "minority_interest", "investments", "pension_liabilities", "other_adjustments", "basic_shares", "diluted_shares"):
             _artifact_decimal(getattr(self, name), f"capital_structure.{name}")
+        if self.basic_shares <= Decimal("0") or self.diluted_shares < self.basic_shares:
+            raise CompanyResearchValidationError(
+                "capital_structure requires positive basic_shares and diluted_shares >= basic_shares"
+            )
         if type(self.source_ref) is not SourceLineageReference:
             raise CompanyResearchValidationError("capital_structure.source_ref must be source lineage")
+        _artifact_text(
+            self.capital_bridge_policy_version,
+            "capital_structure.capital_bridge_policy_version",
+        )
+        if ".v" not in self.capital_bridge_policy_version:
+            raise CompanyResearchValidationError(
+                "capital structure bridge policy must be versioned"
+            )
+        if (
+            type(self.policy_ref) is not SourceLineageReference
+            or self.policy_ref.fact_key != "capital_bridge_policy"
+        ):
+            raise CompanyResearchValidationError(
+                "capital structure bridge policy requires exact lineage"
+            )
+        allowed_exclusions = {"pension_liabilities"}
+        if (
+            not isinstance(self.policy_excluded_adjustments, tuple)
+            or len(set(self.policy_excluded_adjustments))
+            != len(self.policy_excluded_adjustments)
+            or not set(self.policy_excluded_adjustments).issubset(allowed_exclusions)
+            or any(
+                getattr(self, name) != Decimal("0")
+                for name in self.policy_excluded_adjustments
+            )
+        ):
+            raise CompanyResearchValidationError(
+                "capital structure policy-excluded adjustments must be closed and zero"
+            )
 
 
 @dataclass(frozen=True, slots=True)
 class SecurityValuationReference:
     security_external_key: str
-    share_count: Decimal
+    listed_class_economic_units: Decimal
+    conversion_ratio: Decimal
+    adr_ratio: Decimal
+    dividend_rights_per_unit: Decimal
     market_price_usd: Decimal
     usd_cny_rate: Decimal
     rights_ref: SourceLineageReference
@@ -1103,10 +1144,23 @@ class SecurityValuationReference:
 
     def __post_init__(self) -> None:
         _artifact_text(self.security_external_key, "security.security_external_key")
-        for name in ("share_count", "market_price_usd", "usd_cny_rate"):
+        for name in (
+            "listed_class_economic_units", "conversion_ratio", "adr_ratio",
+            "dividend_rights_per_unit", "market_price_usd", "usd_cny_rate",
+        ):
             _artifact_decimal(getattr(self, name), f"security.{name}")
-        if self.share_count <= Decimal("0"):
-            raise CompanyResearchValidationError("security.share_count must be positive")
+        if self.listed_class_economic_units <= Decimal("0"):
+            raise CompanyResearchValidationError(
+                "security.listed_class_economic_units must be positive"
+            )
+        if self.conversion_ratio <= Decimal("0") or self.adr_ratio <= Decimal("0"):
+            raise CompanyResearchValidationError(
+                "security conversion_ratio and adr_ratio must be positive"
+            )
+        if self.dividend_rights_per_unit <= Decimal("0"):
+            raise CompanyResearchValidationError(
+                "security dividend_rights_per_unit must be positive for valuation"
+            )
         if self.market_price_usd <= Decimal("0"):
             raise CompanyResearchValidationError("security.market_price_usd must be positive")
         if self.usd_cny_rate <= Decimal("0"):
@@ -1136,6 +1190,7 @@ class MarketBridgeArtifact:
             raise CompanyResearchValidationError("market_bridge must have an exact positive FX reference")
         references = (
             self.capital_structure.source_ref,
+            self.capital_structure.policy_ref,
             self.fx_ref,
             *(reference for security in self.securities for reference in (security.rights_ref, security.price_ref)),
         )
