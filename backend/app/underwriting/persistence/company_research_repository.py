@@ -770,6 +770,11 @@ class CompanyResearchRepository:
             job=job,
             persisted=True,
         )
+        # Worker backoff has already reserved its next execution attempt by
+        # leaving the Job queued.  The synchronous source path leaves a failed
+        # Job at the attempt it just consumed, so a manual retry reserves the
+        # next attempt here.
+        reserve_next_attempt = job.status == "failed"
         preparation.status = (
             "building_model"
             if preparation.current_step == "model_bundle"
@@ -781,6 +786,9 @@ class CompanyResearchRepository:
         preparation.next_attempt_at = None
         preparation.last_error_code = None
         preparation.updated_at = self._stored_datetime(updated_at, "updated_at")
+        if reserve_next_attempt:
+            preparation.attempt += 1
+            job.attempt += 1
         job.status = "queued"
         job.progress = preparation.progress
         job.error = None

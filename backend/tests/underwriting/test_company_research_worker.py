@@ -523,7 +523,7 @@ def test_draft_change_while_model_provider_runs_discards_stale_output(session) -
         session.scalars(
             select(CompanyResearchEvent).where(
                 CompanyResearchEvent.preparation_id == initialized.preparation.id
-            )
+            ).order_by(CompanyResearchEvent.sequence)
         )
     )
     assert events[-1].event_type == "stale_output_discarded"
@@ -751,7 +751,9 @@ def test_unknown_source_provider_exception_rolls_back_and_escapes(session) -> No
     assert artifacts == ()
 
 
-def test_manual_retry_accepts_a_due_worker_scheduled_recoverable_job(session) -> None:
+def test_manual_retry_preserves_attempt_after_worker_scheduled_recoverable_failure(
+    session,
+) -> None:
     initialized = _initialized(session)
     current_time = NOW
     worker = CompanyResearchPreparationWorker(
@@ -764,6 +766,8 @@ def test_manual_retry_accepts_a_due_worker_scheduled_recoverable_job(session) ->
     claim = worker.claim_next()
     assert claim is not None
     assert worker.run_claim(claim) == "recoverable_failure"
+    assert initialized.job.status == "queued"
+    assert (initialized.job.attempt, initialized.preparation.attempt) == (2, 2)
 
     current_time = NOW + timedelta(seconds=30)
     retried = CompanyResearchPreparationService(
@@ -771,6 +775,34 @@ def test_manual_retry_accepts_a_due_worker_scheduled_recoverable_job(session) ->
     ).retry(project_id=initialized.project.id)
 
     assert retried.preparation.status == "queued"
+    assert (initialized.job.attempt, retried.preparation.attempt) == (2, 2)
+
+
+def test_manual_retry_advances_attempt_after_synchronous_source_failure(
+    session, monkeypatch
+) -> None:
+    initialized = _initialized(session)
+    source_service = CompanyResearchSourceService(session, now=lambda: NOW)
+
+    def unavailable_fixture():
+        raise ValidationError("source parser failed")
+
+    monkeypatch.setattr(source_service, "_load_fixture", unavailable_fixture)
+
+    failed = source_service.prepare_evidence_index(
+        preparation_id=initialized.preparation.id
+    )
+
+    assert failed.status == "recoverable_failure"
+    assert failed.job.status == "failed"
+    assert (failed.job.attempt, initialized.preparation.attempt) == (1, 1)
+
+    retried = CompanyResearchPreparationService(
+        session, now=lambda: NOW
+    ).retry(project_id=initialized.project.id)
+
+    assert retried.preparation.status == "queued"
+    assert (failed.job.attempt, retried.preparation.attempt) == (2, 2)
 
 
 def test_recoverable_provider_retries_stop_after_the_third_attempt(session) -> None:
