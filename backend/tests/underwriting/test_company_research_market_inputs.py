@@ -245,6 +245,20 @@ def test_market_inputs_reject_duplicate_latest_prices() -> None:
         )
 
 
+def test_market_inputs_reject_a_grandfathered_legacy_business_conflict(session) -> None:
+    initialized = _initialized(session)
+    _freeze_complete_market(session, initialized)
+    price = session.scalar(select(UnderwritingPriceSnapshot).limit(1))
+    assert price is not None
+    set_committed_value(price, "legacy_business_conflict", True)
+
+    with pytest.raises(ValidationError, match="grandfathered legacy business-time"):
+        CompanyResearchMarketInputs(session).resolve(
+            project_id=initialized.project.id,
+            cutoff_at=CUTOFF,
+        )
+
+
 def test_market_inputs_ignore_post_cutoff_rows_and_fail_closed(session) -> None:
     initialized = _initialized(session)
     security = _securities(session, initialized)["NASDAQ:GOOG"]

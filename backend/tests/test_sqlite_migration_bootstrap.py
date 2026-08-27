@@ -19,7 +19,13 @@ from types import SimpleNamespace
 
 import sqlalchemy as sa
 import pytest
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import registry, sessionmaker
+
+from tests.legacy_market_conflicts import (
+    TABLES as LEGACY_MARKET_TABLES,
+    clone_conflicting_insert_sql,
+    seed_0067_market_conflicts,
+)
 
 
 WAVE2_TABLES = {
@@ -331,10 +337,122 @@ def test_0068_backfills_legacy_market_capture_and_makes_it_immutable(tmp_path) -
             )
 
 
+def test_0068_grandfathers_every_legacy_market_business_time_conflict(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "market-conflicts-0067.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0067"],
+        cwd=backend,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.begin() as connection:
+        legacy_ids = seed_0067_market_conflicts(connection)
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0068"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    with engine.connect() as connection:
+        partial_indexes = connection.execute(
+            sa.text(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' "
+                "AND name LIKE 'uq_uw_%_business_time'"
+            )
+        ).scalars().all()
+        assert len(partial_indexes) == 4
+        assert all(
+            "where legacy_business_conflict = false" in sql.casefold()
+            for sql in partial_indexes
+        )
+        for table in LEGACY_MARKET_TABLES:
+            rows = connection.execute(
+                sa.text(
+                    f"SELECT id, content_hash, legacy_business_conflict FROM {table} "
+                    "ORDER BY id"
+                )
+            ).all()
+            assert {str(row.id) for row in rows} == set(legacy_ids[table])
+            assert {row.content_hash for row in rows} == {"3" * 64, "4" * 64}
+            assert [bool(row.legacy_business_conflict) for row in rows] == [True, True]
+
+    for table in LEGACY_MARKET_TABLES:
+        with pytest.raises(sa.exc.IntegrityError, match="append-only"):
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        f"UPDATE {table} SET legacy_business_conflict = false"
+                    )
+                )
+        for legacy in (False, True):
+            with pytest.raises(sa.exc.IntegrityError):
+                with engine.begin() as connection:
+                    connection.execute(
+                        sa.text(clone_conflicting_insert_sql(table)),
+                        {
+                            "id": str(UUID(int=UUID(legacy_ids[table][0]).int + 100)),
+                            "raw": "8" * 64,
+                            "content": "9" * 64,
+                            "legacy": legacy,
+                            "fresh_at": datetime(2026, 8, 25, 19, tzinfo=UTC),
+                        },
+                    )
+        with pytest.raises(sa.exc.IntegrityError, match="quarantined"):
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        clone_conflicting_insert_sql(
+                            table,
+                            fresh_business_key=True,
+                        )
+                    ),
+                    {
+                        "id": str(UUID(int=UUID(legacy_ids[table][0]).int + 200)),
+                        "raw": "7" * 64,
+                        "content": "6" * 64,
+                        "legacy": True,
+                        "fresh_at": datetime(2026, 8, 25, 19, tzinfo=UTC),
+                    },
+                )
+
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0067"],
+        cwd=backend,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    with engine.connect() as connection:
+        inspector = sa.inspect(connection)
+        assert connection.execute(
+            sa.text(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' "
+                "AND name LIKE 'reject_legacy_conflict_insert_%'"
+            )
+        ).scalar_one() == 0
+        for table in LEGACY_MARKET_TABLES:
+            assert "legacy_business_conflict" not in {
+                column["name"] for column in inspector.get_columns(table)
+            }
+            assert not any(
+                index["name"].endswith("_business_time")
+                for index in inspector.get_indexes(table)
+            )
+
+
 def test_0068_orm_naive_datetime_backfill_replays_through_production_capture(
     tmp_path,
 ) -> None:
-    from app.underwriting.persistence.product_models import UnderwritingFXSnapshot
     from app.underwriting.services.company_research_market_inputs import (
         CompanyResearchMarketInputs,
     )
@@ -351,10 +469,21 @@ def test_0068_orm_naive_datetime_backfill_replays_through_production_capture(
     )
     engine = sa.create_engine(environment["DATABASE_URL"])
     snapshot_id = UUID("22222222-2222-2222-2222-222222222222")
+    legacy_table = sa.Table(
+        "uw_fx_snapshots",
+        sa.MetaData(),
+        autoload_with=engine,
+    )
+    mapper_registry = registry()
+
+    class LegacyFXSnapshot:
+        pass
+
+    mapper_registry.map_imperatively(LegacyFXSnapshot, legacy_table)
     with sessionmaker(engine)() as session:
         session.add(
-            UnderwritingFXSnapshot(
-                id=snapshot_id,
+            LegacyFXSnapshot(
+                id=snapshot_id.hex,
                 base_currency="USD",
                 quote_currency="CNY",
                 rate=Decimal("7.18"),

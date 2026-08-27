@@ -91,6 +91,10 @@ def _latest_exact(
     values = tuple(rows)
     if not values:
         raise ValidationError(f"market inputs are incomplete: missing {label}")
+    if any(getattr(row, "legacy_business_conflict", False) for row in values):
+        raise ValidationError(
+            f"market inputs contain a grandfathered legacy business-time conflict for {label}"
+        )
     latest_at = max(_stored_utc(getattr(row, time_field)) for row in values)
     latest = tuple(
         row

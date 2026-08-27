@@ -12,6 +12,12 @@ from pathlib import Path
 import pytest
 import sqlalchemy as sa
 
+from tests.legacy_market_conflicts import (
+    TABLES as LEGACY_MARKET_TABLES,
+    clone_conflicting_insert_sql,
+    seed_0067_market_conflicts,
+)
+
 
 TABLES = {
     "uw_research_objects",
@@ -58,6 +64,139 @@ MANIFEST_SCHEMA = "underwriting.research-revision-manifest.v1"
 def _schema_url(database_url: str, schema: str) -> str:
     separator = "&" if "?" in database_url else "?"
     return f"{database_url}{separator}options=-csearch_path={schema}"
+
+
+@pytest.mark.pg_only
+def test_0068_postgres_grandfathers_all_legacy_market_business_conflicts() -> None:
+    database_url = os.environ["TEST_DATABASE_URL"]
+    schema = f"underwriting_0068_market_conflicts_{uuid.uuid4().hex}"
+    migration_url = _schema_url(database_url, schema)
+    admin = sa.create_engine(database_url, future=True)
+    isolated = sa.create_engine(migration_url, future=True)
+    backend = Path(__file__).parents[2]
+    try:
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "0067"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            check=True,
+            capture_output=True,
+        )
+        with isolated.begin() as connection:
+            legacy_ids = seed_0067_market_conflicts(connection)
+        upgraded = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "0068"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert upgraded.returncode == 0, upgraded.stderr
+        with isolated.connect() as connection:
+            partial_indexes = connection.execute(
+                sa.text(
+                    "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+                    "AND indexname LIKE 'uq_uw_%_business_time'"
+                )
+            ).scalars().all()
+            assert len(partial_indexes) == 4
+            assert all(
+                "where" in definition.casefold()
+                and "legacy_business_conflict" in definition.casefold()
+                for definition in partial_indexes
+            )
+            for table in LEGACY_MARKET_TABLES:
+                rows = connection.execute(
+                    sa.text(
+                        f"SELECT id, content_hash, legacy_business_conflict FROM {table} "
+                        "ORDER BY id"
+                    )
+                ).all()
+                assert {str(row.id) for row in rows} == set(legacy_ids[table])
+                assert {row.content_hash for row in rows} == {"3" * 64, "4" * 64}
+                assert all(row.legacy_business_conflict for row in rows)
+
+        for table in LEGACY_MARKET_TABLES:
+            with pytest.raises(sa.exc.DBAPIError, match="append-only"):
+                with isolated.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            f"UPDATE {table} SET legacy_business_conflict = false"
+                        )
+                    )
+            for legacy in (False, True):
+                with pytest.raises(sa.exc.DBAPIError, match="quarantined"):
+                    with isolated.begin() as connection:
+                        connection.execute(
+                            sa.text(clone_conflicting_insert_sql(table)),
+                            {
+                                "id": uuid.uuid4(),
+                                "raw": "8" * 64,
+                                "content": "9" * 64,
+                                "legacy": legacy,
+                                "fresh_at": "2026-08-25T19:00:00+00:00",
+                            },
+                        )
+            with pytest.raises(sa.exc.DBAPIError, match="quarantined"):
+                with isolated.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            clone_conflicting_insert_sql(
+                                table,
+                                fresh_business_key=True,
+                            )
+                        ),
+                        {
+                            "id": uuid.uuid4(),
+                            "raw": "7" * 64,
+                            "content": "6" * 64,
+                            "legacy": True,
+                            "fresh_at": "2026-08-25T19:00:00+00:00",
+                        },
+                    )
+
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "downgrade", "0067"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            check=True,
+            capture_output=True,
+        )
+        with isolated.connect() as connection:
+            inspector = sa.inspect(connection)
+            assert connection.execute(
+                sa.text(
+                    "SELECT COUNT(*) FROM pg_trigger AS t "
+                    "JOIN pg_class AS relation ON relation.oid = t.tgrelid "
+                    "JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace "
+                    "WHERE namespace.nspname = current_schema() "
+                    "AND t.tgname LIKE 'reject_legacy_conflict_insert_%'"
+                )
+            ).scalar_one() == 0
+            assert connection.execute(
+                sa.text(
+                    "SELECT COUNT(*) FROM pg_proc AS p "
+                    "JOIN pg_namespace AS namespace ON namespace.oid = p.pronamespace "
+                    "WHERE namespace.nspname = current_schema() "
+                    "AND p.proname LIKE 'reject_legacy_conflict_insert_%'"
+                )
+            ).scalar_one() == 0
+            for table in LEGACY_MARKET_TABLES:
+                assert "legacy_business_conflict" not in {
+                    column["name"] for column in inspector.get_columns(table)
+                }
+                assert not any(
+                    index["name"].endswith("_business_time")
+                    for index in inspector.get_indexes(table)
+                )
+    finally:
+        isolated.dispose()
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin.dispose()
 
 
 def _assert_0065_product_uniqueness(

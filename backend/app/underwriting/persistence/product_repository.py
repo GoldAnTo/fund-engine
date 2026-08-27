@@ -1599,6 +1599,7 @@ class ProductRepository:
             created_at=created_at,
         )
         existing = select(UnderwritingPriceSnapshot).where(
+            UnderwritingPriceSnapshot.legacy_business_conflict.is_(False),
             UnderwritingPriceSnapshot.security_identity_id == security_identity_id,
             UnderwritingPriceSnapshot.price_type == price_type,
             UnderwritingPriceSnapshot.adjustment_basis == adjustment_basis,
@@ -1647,6 +1648,7 @@ class ProductRepository:
             created_at=created_at,
         )
         existing = select(UnderwritingFXSnapshot).where(
+            UnderwritingFXSnapshot.legacy_business_conflict.is_(False),
             UnderwritingFXSnapshot.base_currency == base_currency,
             UnderwritingFXSnapshot.quote_currency == quote_currency,
             UnderwritingFXSnapshot.quote_direction == quote_direction,
@@ -1737,6 +1739,7 @@ class ProductRepository:
             created_at=created_at,
         )
         existing = select(UnderwritingCapitalStructureSnapshot).where(
+            UnderwritingCapitalStructureSnapshot.legacy_business_conflict.is_(False),
             UnderwritingCapitalStructureSnapshot.company_id == company_id,
             UnderwritingCapitalStructureSnapshot.report_period_start
             == report_period_start,

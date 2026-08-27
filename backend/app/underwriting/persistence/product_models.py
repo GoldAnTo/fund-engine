@@ -6,6 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     event,
@@ -342,12 +343,15 @@ class UnderwritingPriceSnapshot(Base):
         ),
         CheckConstraint("length(raw_hash) = 64", name="ck_uw_price_snapshot_raw_hash"),
         CheckConstraint(_HASH_CHECK, name="ck_uw_price_snapshot_content_hash"),
-        UniqueConstraint(
+        Index(
+            "uq_uw_price_snapshot_business_time",
             "security_identity_id",
             "price_type",
             "adjustment_basis",
             "market_at",
-            name="uq_uw_price_snapshot_business_time",
+            unique=True,
+            sqlite_where=text("legacy_business_conflict = 0"),
+            postgresql_where=text("legacy_business_conflict = false"),
         ),
         Index(
             "ix_uw_price_snapshot_security_market",
@@ -372,6 +376,9 @@ class UnderwritingPriceSnapshot(Base):
     raw_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    legacy_business_conflict: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
 
 class UnderwritingFXSnapshot(Base):
@@ -392,12 +399,15 @@ class UnderwritingFXSnapshot(Base):
         CheckConstraint("market_at <= available_at", name="ck_uw_fx_snapshot_available"),
         CheckConstraint("length(raw_hash) = 64", name="ck_uw_fx_snapshot_raw_hash"),
         CheckConstraint(_HASH_CHECK, name="ck_uw_fx_snapshot_content_hash"),
-        UniqueConstraint(
+        Index(
+            "uq_uw_fx_snapshot_business_time",
             "base_currency",
             "quote_currency",
             "quote_direction",
             "market_at",
-            name="uq_uw_fx_snapshot_business_time",
+            unique=True,
+            sqlite_where=text("legacy_business_conflict = 0"),
+            postgresql_where=text("legacy_business_conflict = false"),
         ),
         Index("ix_uw_fx_snapshot_pair_market", "base_currency", "quote_currency", "market_at"),
     )
@@ -415,6 +425,9 @@ class UnderwritingFXSnapshot(Base):
     raw_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    legacy_business_conflict: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
 
 class UnderwritingCapitalStructureSnapshot(Base):
@@ -438,12 +451,15 @@ class UnderwritingCapitalStructureSnapshot(Base):
             "length(raw_hash) = 64", name="ck_uw_capital_structure_raw_hash"
         ),
         CheckConstraint(_HASH_CHECK, name="ck_uw_capital_structure_content_hash"),
-        UniqueConstraint(
+        Index(
+            "uq_uw_capital_structure_business_time",
             "company_id",
             "report_period_start",
             "report_period_end",
             "market_at",
-            name="uq_uw_capital_structure_business_time",
+            unique=True,
+            sqlite_where=text("legacy_business_conflict = 0"),
+            postgresql_where=text("legacy_business_conflict = false"),
         ),
         Index("ix_uw_capital_structure_company_market", "company_id", "market_at"),
     )
@@ -478,6 +494,9 @@ class UnderwritingCapitalStructureSnapshot(Base):
     raw_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    legacy_business_conflict: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
 
 class UnderwritingSecurityRightsVersion(Base):
@@ -506,10 +525,13 @@ class UnderwritingSecurityRightsVersion(Base):
         UniqueConstraint(
             "supersedes_id", name="uq_uw_security_rights_successor"
         ),
-        UniqueConstraint(
+        Index(
+            "uq_uw_security_rights_business_time",
             "security_identity_id",
             "effective_from",
-            name="uq_uw_security_rights_business_time",
+            unique=True,
+            sqlite_where=text("legacy_business_conflict = 0"),
+            postgresql_where=text("legacy_business_conflict = false"),
         ),
         Index(
             "ix_uw_security_rights_security_effective",
@@ -543,6 +565,9 @@ class UnderwritingSecurityRightsVersion(Base):
     )
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    legacy_business_conflict: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
 
 class UnderwritingMarketCaptureEnvelope(Base):

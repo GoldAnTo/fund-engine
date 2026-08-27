@@ -28,24 +28,109 @@ _BUSINESS_UNIQUE_INDEXES = (
     (
         "uq_uw_price_snapshot_business_time",
         "uw_price_snapshots",
-        "security_identity_id, price_type, adjustment_basis, market_at",
+        ("security_identity_id", "price_type", "adjustment_basis", "market_at"),
     ),
     (
         "uq_uw_fx_snapshot_business_time",
         "uw_fx_snapshots",
-        "base_currency, quote_currency, quote_direction, market_at",
+        ("base_currency", "quote_currency", "quote_direction", "market_at"),
     ),
     (
         "uq_uw_capital_structure_business_time",
         "uw_capital_structure_snapshots",
-        "company_id, report_period_start, report_period_end, market_at",
+        ("company_id", "report_period_start", "report_period_end", "market_at"),
     ),
     (
         "uq_uw_security_rights_business_time",
         "uw_security_rights_versions",
-        "security_identity_id, effective_from",
+        ("security_identity_id", "effective_from"),
     ),
 )
+
+
+def _snapshot_update_trigger(dialect: str, table: str, *, install: bool) -> None:
+    name = f"no_update_{table}"
+    suffix = f" ON {table}" if dialect == "postgresql" else ""
+    op.execute(f"DROP TRIGGER IF EXISTS {name}{suffix}")
+    if not install:
+        return
+    if dialect == "sqlite":
+        op.execute(f"""
+            CREATE TRIGGER {name}
+            BEFORE UPDATE ON {table}
+            BEGIN
+                SELECT RAISE(ABORT, 'immutable product table is append-only');
+            END
+        """)
+        return
+    op.execute(
+        f"CREATE TRIGGER {name} BEFORE UPDATE ON {table} "
+        "FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger()"
+    )
+
+
+def _grandfather_legacy_business_conflicts(dialect: str) -> None:
+    for _name, table, columns in _BUSINESS_UNIQUE_INDEXES:
+        _snapshot_update_trigger(dialect, table, install=False)
+        column_list = ", ".join(columns)
+        op.execute(f"""
+            UPDATE {table}
+            SET legacy_business_conflict = true
+            WHERE ({column_list}) IN (
+                SELECT {column_list}
+                FROM {table}
+                GROUP BY {column_list}
+                HAVING COUNT(*) > 1
+            )
+        """)
+        _snapshot_update_trigger(dialect, table, install=True)
+
+
+def _install_legacy_conflict_insert_guards(dialect: str) -> None:
+    for _name, table, columns in _BUSINESS_UNIQUE_INDEXES:
+        trigger = f"reject_legacy_conflict_insert_{table}"
+        identity = " AND ".join(f"existing.{column} = NEW.{column}" for column in columns)
+        conflict_exists = (
+            f"EXISTS (SELECT 1 FROM {table} AS existing "
+            f"WHERE existing.legacy_business_conflict = true AND {identity})"
+        )
+        if dialect == "sqlite":
+            op.execute(f"""
+                CREATE TRIGGER {trigger}
+                BEFORE INSERT ON {table}
+                BEGIN
+                    SELECT CASE WHEN NEW.legacy_business_conflict <> 0
+                        OR {conflict_exists}
+                    THEN RAISE(ABORT, 'legacy market conflict keys are quarantined') END;
+                END
+            """)
+            continue
+        function = f"{trigger}_fn"
+        op.execute(f"""
+            CREATE OR REPLACE FUNCTION {function}()
+            RETURNS trigger AS $$
+            BEGIN
+                IF NEW.legacy_business_conflict OR {conflict_exists} THEN
+                    RAISE EXCEPTION 'legacy market conflict keys are quarantined';
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+        """)
+        op.execute(f"""
+            CREATE TRIGGER {trigger}
+            BEFORE INSERT ON {table}
+            FOR EACH ROW EXECUTE FUNCTION {function}()
+        """)
+
+
+def _drop_legacy_conflict_insert_guards(dialect: str) -> None:
+    for _name, table, _columns in _BUSINESS_UNIQUE_INDEXES:
+        trigger = f"reject_legacy_conflict_insert_{table}"
+        suffix = f" ON {table}" if dialect == "postgresql" else ""
+        op.execute(f"DROP TRIGGER IF EXISTS {trigger}{suffix}")
+        if dialect == "postgresql":
+            op.execute(f"DROP FUNCTION IF EXISTS {trigger}_fn()")
 
 
 def _canonical_hash(value: object) -> str:
@@ -221,6 +306,16 @@ def _backfill_legacy_rows() -> None:
 
 def upgrade() -> None:
     dialect = op.get_bind().dialect.name
+    for _name, table, _columns in _BUSINESS_UNIQUE_INDEXES:
+        op.add_column(
+            table,
+            sa.Column(
+                "legacy_business_conflict",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.false(),
+            ),
+        )
     op.create_table(
         _TABLE,
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -265,8 +360,13 @@ def upgrade() -> None:
         ["snapshot_kind", "snapshot_id"],
     )
     _backfill_legacy_rows()
+    _grandfather_legacy_business_conflicts(dialect)
     for name, table, columns in _BUSINESS_UNIQUE_INDEXES:
-        op.execute(f"CREATE UNIQUE INDEX {name} ON {table} ({columns})")
+        op.execute(
+            f"CREATE UNIQUE INDEX {name} ON {table} ({', '.join(columns)}) "
+            "WHERE legacy_business_conflict = false"
+        )
+    _install_legacy_conflict_insert_guards(dialect)
     _install_capture_reference_trigger(dialect)
     _install_immutable_triggers(dialect)
 
@@ -275,7 +375,10 @@ def downgrade() -> None:
     dialect = op.get_bind().dialect.name
     _drop_immutable_triggers(dialect)
     _drop_capture_reference_trigger(dialect)
+    _drop_legacy_conflict_insert_guards(dialect)
     for name, table, _columns in reversed(_BUSINESS_UNIQUE_INDEXES):
         op.drop_index(name, table_name=table)
+    for _name, table, _columns in reversed(_BUSINESS_UNIQUE_INDEXES):
+        op.drop_column(table, "legacy_business_conflict")
     op.drop_index("ix_uw_market_capture_snapshot", table_name=_TABLE)
     op.drop_table(_TABLE)
