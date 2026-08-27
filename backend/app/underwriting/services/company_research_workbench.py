@@ -380,12 +380,14 @@ class CompanyResearchWorkbench:
                 raise ValidationError(
                     "company research cross-artifact lineage is invalid"
                 )
-            expected_input_hash = canonical_hash(
-                {
-                    "request_hash": preparation.request_hash,
-                    "artifact_refs": refs,
-                    "market_snapshot_ids": snapshot_ids,
-                }
+            parsed_bindings = tuple(
+                CompanyResearchRepository.market_binding_from_payload(value)
+                for value in bindings
+            )
+            expected_input_hash = self._company._model_artifact_input_hash(
+                request_hash=preparation.request_hash,
+                artifact_refs=refs,
+                market_snapshot_bindings=parsed_bindings,
             )
             if row.input_hash != expected_input_hash:
                 raise ValidationError(

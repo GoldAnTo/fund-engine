@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 import json
 import uuid
@@ -26,6 +27,9 @@ from app.underwriting.persistence.product_models import (
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchInitializer,
+)
+from app.underwriting.services.company_research_model_builder import (
+    FrozenMarketSnapshotRole,
 )
 from app.underwriting.services.company_research_preparation import (
     CompanyResearchPreparationWorker,
@@ -63,7 +67,7 @@ def _prepared(session):
     return initialized
 
 
-def _model_workspace(session):
+def _model_workspace(session, *, binding_mutation=None):
     initialized = _prepared(session)
     workbench = CompanyResearchWorkbench(session, now=lambda: NOW)
     workspace = workbench.workspace(project_id=initialized.project.id)
@@ -97,6 +101,9 @@ def _model_workspace(session):
         cutoff_at=MARKET_CUTOFF,
     )
     assert governed.market_context is not None
+    bindings = governed.market_context.snapshot_bindings
+    if binding_mutation is not None:
+        bindings = (binding_mutation(bindings[0]), *bindings[1:])
     bundle = CompanyResearchPersistedBundle(
         evidence_artifact_id=current.id,
         evidence_content_hash=current.content_hash,
@@ -113,7 +120,7 @@ def _model_workspace(session):
         research_gaps=dict(prior_gaps.payload),
         memo={"candidate_status": "machine_draft"},
         source_refs=source_refs,
-        market_snapshot_bindings=governed.market_context.snapshot_bindings,
+        market_snapshot_bindings=bindings,
     )
     repository.complete_model_bundle(
         preparation.id,
@@ -126,21 +133,24 @@ def _model_workspace(session):
     return initialized, workbench, repository
 
 
-def _rewrite_payload(session, row, payload: dict) -> None:
+def _rewrite_payload(
+    session, row, payload: dict, *, input_hash: str | None = None
+) -> None:
+    rewritten_input_hash = input_hash or row.input_hash
     content_hash = CompanyResearchRepository.artifact_content_hash(
         project_id=row.project_id,
         kind=row.kind,
         version=row.version,
         supersedes_id=row.supersedes_id,
         parent_content_hash=row.parent_content_hash,
-        input_hash=row.input_hash,
+        input_hash=rewritten_input_hash,
         payload=payload,
         source_refs=row.source_refs,
     )
     session.connection().exec_driver_sql(
         "UPDATE uw_company_research_artifact_versions "
-        "SET payload = ?, content_hash = ? WHERE id = ?",
-        (json.dumps(payload), content_hash, row.id.hex),
+        "SET payload = ?, input_hash = ?, content_hash = ? WHERE id = ?",
+        (json.dumps(payload), rewritten_input_hash, content_hash, row.id.hex),
     )
     session.expire_all()
 
@@ -267,6 +277,9 @@ def test_workbench_accepts_one_closed_model_bundle(session) -> None:
                 "request_hash": preparation.request_hash,
                 "artifact_refs": row.payload["_lineage"]["artifact_refs"],
                 "market_snapshot_ids": market_ids,
+                "market_snapshot_bindings": row.payload["_lineage"][
+                    "market_snapshot_bindings"
+                ],
             }
         )
 
@@ -340,6 +353,173 @@ def test_market_binding_validation_requires_the_exact_governed_role_set(
             project_id=initialized.project.id,
             bindings=governed.market_context.snapshot_bindings[:1],
         )
+
+
+@pytest.mark.parametrize("field", ("source_role", "fact_key", "source_url"))
+def test_model_bundle_rejects_non_governed_source_identity_before_writing(
+    session, field: str
+) -> None:
+    def mutate(binding):
+        value = {
+            "source_role": "third_party_snapshot",
+            "fact_key": "wrong_market_fact",
+            "source_url": "https://attacker.invalid/source",
+        }[field]
+        return replace(
+            binding,
+            source_ref=replace(binding.source_ref, **{field: value}),
+        )
+
+    with pytest.raises(ValidationError, match="market snapshot binding"):
+        _model_workspace(session, binding_mutation=mutate)
+
+    assert (
+        tuple(
+            session.scalars(
+                select(CompanyResearchArtifactVersion).where(
+                    CompanyResearchArtifactVersion.kind == "business_map"
+                )
+            )
+        )
+        == ()
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "snapshot_content_hash",
+        "snapshot_id",
+        "snapshot_kind",
+        "security_external_key",
+        "capture_envelope_id",
+        "capture_content_hash",
+        "provider_policy_version",
+        "source_role",
+        "fact_key",
+        "source_url",
+        "source_locator",
+        "raw_hash",
+        "raw_components",
+    ),
+)
+def test_model_artifact_input_hash_is_sensitive_to_every_market_binding_field(
+    session, field: str
+) -> None:
+    initialized = _prepared(session)
+    governed = CompanyResearchInitializer(session, now=lambda: NOW).governed_inputs(
+        project_id=initialized.project.id,
+        cutoff_at=MARKET_CUTOFF,
+    )
+    assert governed.market_context is not None
+    binding = (
+        next(
+            value
+            for value in governed.market_context.snapshot_bindings
+            if value.role is FrozenMarketSnapshotRole.PRICE
+        )
+        if field == "security_external_key"
+        else governed.market_context.snapshot_bindings[0]
+    )
+    original = CompanyResearchRepository._model_artifact_input_hash(
+        request_hash="a" * 64,
+        artifact_refs=(),
+        market_snapshot_bindings=(binding,),
+    )
+    if field in {
+        "source_role",
+        "fact_key",
+        "source_url",
+        "source_locator",
+        "raw_hash",
+    }:
+        changed = replace(
+            binding,
+            source_ref=replace(
+                binding.source_ref,
+                **{
+                    field: {
+                        "source_role": "other_role",
+                        "fact_key": "other_fact",
+                        "source_url": "https://other.invalid/source",
+                        "source_locator": "other locator",
+                        "raw_hash": "c" * 64,
+                    }[field]
+                },
+            ),
+        )
+    elif field == "snapshot_kind":
+        changed_role = (
+            FrozenMarketSnapshotRole.SECURITY_RIGHTS
+            if binding.role is not FrozenMarketSnapshotRole.SECURITY_RIGHTS
+            else FrozenMarketSnapshotRole.PRICE
+        )
+        changed = replace(
+            binding,
+            role=changed_role,
+            security_external_key=binding.security_external_key or "NASDAQ:OTHER",
+        )
+    elif field == "raw_components":
+        assert binding.raw_components
+        changed = replace(
+            binding,
+            raw_components=(
+                replace(binding.raw_components[0], raw_file="other.raw.gz"),
+                *binding.raw_components[1:],
+            ),
+        )
+    else:
+        changed = replace(
+            binding,
+            **{
+                field: {
+                    "snapshot_content_hash": "e" * 64,
+                    "snapshot_id": uuid.uuid4(),
+                    "security_external_key": "NASDAQ:OTHER",
+                    "capture_envelope_id": uuid.uuid4(),
+                    "capture_content_hash": "d" * 64,
+                    "provider_policy_version": "other-provider.v1",
+                }[field]
+            },
+        )
+    mutated = CompanyResearchRepository._model_artifact_input_hash(
+        request_hash="a" * 64,
+        artifact_refs=(),
+        market_snapshot_bindings=(changed,),
+    )
+
+    assert mutated != original
+
+
+def test_workbench_rejects_source_identity_tamper_even_with_rehashed_artifact(
+    session,
+) -> None:
+    initialized, workbench, repository = _model_workspace(session)
+    driver = repository.current_artifact(initialized.project.id, "driver_map")
+    preparation = repository.preparation_for_project(initialized.project.id)
+    assert driver is not None and preparation is not None
+    payload = dict(driver.payload)
+    lineage = dict(payload["_lineage"])
+    bindings = [dict(value) for value in lineage["market_snapshot_bindings"]]
+    bindings[0] = dict(bindings[0])
+    bindings[0]["source_ref"] = {
+        **bindings[0]["source_ref"],
+        "source_role": "third_party_snapshot",
+    }
+    lineage["market_snapshot_bindings"] = bindings
+    payload["_lineage"] = lineage
+    input_hash = canonical_hash(
+        {
+            "request_hash": preparation.request_hash,
+            "artifact_refs": lineage["artifact_refs"],
+            "market_snapshot_ids": lineage["market_snapshot_ids"],
+            "market_snapshot_bindings": bindings,
+        }
+    )
+    _rewrite_payload(session, driver, payload, input_hash=input_hash)
+
+    with pytest.raises(ValidationError, match="cross-artifact lineage"):
+        workbench.workspace(project_id=initialized.project.id)
 
 
 @pytest.mark.parametrize("mutation", ("tampered", "missing", "duplicate"))

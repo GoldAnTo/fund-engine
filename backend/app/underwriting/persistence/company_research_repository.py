@@ -845,13 +845,20 @@ class CompanyResearchRepository:
         *,
         request_hash: str,
         artifact_refs: Sequence[Mapping[str, str]],
-        market_snapshot_ids: Sequence[UUID] = (),
+        market_snapshot_bindings: Sequence[FrozenMarketSnapshotBinding] = (),
     ) -> str:
+        binding_payloads = [
+            CompanyResearchRepository._market_binding_payload(value)
+            for value in market_snapshot_bindings
+        ]
         return canonical_hash(
             {
                 "request_hash": request_hash,
                 "artifact_refs": list(artifact_refs),
-                "market_snapshot_ids": [str(value) for value in market_snapshot_ids],
+                "market_snapshot_ids": [
+                    str(value.snapshot_id) for value in market_snapshot_bindings
+                ],
+                "market_snapshot_bindings": binding_payloads,
             }
         )
 
@@ -888,6 +895,25 @@ class CompanyResearchRepository:
         }
         if actual_roles != expected_roles or len(bindings) != len(expected_roles):
             raise ValidationError("company research market snapshot binding is invalid")
+        expected_fact_keys = {
+            (FrozenMarketSnapshotRole.FX, None): "usd_cny_fx",
+            (
+                FrozenMarketSnapshotRole.CAPITAL_STRUCTURE,
+                None,
+            ): "capital_structure_usd",
+            **{
+                (FrozenMarketSnapshotRole.PRICE, key): (
+                    "market_price_usd_" + key.lower().replace(":", "_")
+                )
+                for key in securities
+            },
+            **{
+                (FrozenMarketSnapshotRole.SECURITY_RIGHTS, key): (
+                    "security_rights_" + key.lower().replace(":", "_")
+                )
+                for key in securities
+            },
+        }
         role_contracts = {
             FrozenMarketSnapshotRole.PRICE: (
                 UnderwritingPriceSnapshot,
@@ -907,6 +933,14 @@ class CompanyResearchRepository:
             ),
         }
         for binding in bindings:
+            if (
+                binding.source_ref.source_role != "frozen_market_snapshot"
+                or binding.source_ref.fact_key
+                != expected_fact_keys[(binding.role, binding.security_external_key)]
+            ):
+                raise ValidationError(
+                    "company research market snapshot binding is invalid"
+                )
             model, hasher = role_contracts[binding.role]
             row = self._session.get(model, binding.snapshot_id)
             if (
@@ -1047,7 +1081,6 @@ class CompanyResearchRepository:
             expected_request_hash, "expected_request_hash"
         )
         market_snapshot_bindings = bundle.market_snapshot_bindings
-        market_snapshot_ids = bundle.market_snapshot_ids
         self.validate_market_snapshot_bindings(
             project_id=preparation.project_id,
             bindings=market_snapshot_bindings,
@@ -1071,7 +1104,7 @@ class CompanyResearchRepository:
                     input_hash=self._model_artifact_input_hash(
                         request_hash=request_hash,
                         artifact_refs=refs,
-                        market_snapshot_ids=market_snapshot_ids,
+                        market_snapshot_bindings=market_snapshot_bindings,
                     ),
                     payload=self._model_artifact_payload(
                         payload,
@@ -1119,7 +1152,7 @@ class CompanyResearchRepository:
             gap_input_hash = self._model_artifact_input_hash(
                 request_hash=request_hash,
                 artifact_refs=gap_refs,
-                market_snapshot_ids=market_snapshot_ids,
+                market_snapshot_bindings=market_snapshot_bindings,
             )
             planned_gap_id = uuid4()
             planned_gap_version = current_gaps.version + 1

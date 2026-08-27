@@ -267,6 +267,7 @@ def test_complete_model_bundle_persists_exact_dependency_refs_and_input_hashes(
                 "request_hash": preparation.request_hash,
                 "artifact_refs": lineage["artifact_refs"],
                 "market_snapshot_ids": lineage["market_snapshot_ids"],
+                "market_snapshot_bindings": lineage["market_snapshot_bindings"],
             }
         )
 
