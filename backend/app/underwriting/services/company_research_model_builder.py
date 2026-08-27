@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation, localcontext
 from enum import StrEnum
@@ -57,6 +57,9 @@ from app.underwriting.domain.company_research_contracts import (
     StrategyAssumptionSet as _StrategyAssumptionSetContract,
 )
 from app.underwriting.hashing import canonical_hash
+from app.underwriting.services.company_research_artifact_codec import (
+    CompanyResearchArtifactCodec,
+)
 from app.underwriting.services.company_research_engine import CompanyResearchEngine
 
 
@@ -1746,7 +1749,8 @@ class CompanyResearchModelBuilder:
     ) -> CompanyResearchMemoArtifact:
         def reference(kind: str, artifact: Any) -> CompanyResearchArtifactReference:
             return CompanyResearchArtifactReference(
-                kind, canonical_hash(asdict(artifact))
+                kind,
+                canonical_hash(CompanyResearchArtifactCodec.encode(kind, artifact)),
             )
 
         return CompanyResearchMemoArtifact(

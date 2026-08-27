@@ -12,6 +12,10 @@ from sqlalchemy import select
 
 from app.models.ledger import ConflictError, ValidationError
 from app.models.operational import Job
+from app.underwriting.domain.company_research import (
+    CompanyResearchMemoArtifact,
+    JudgmentContextArtifact,
+)
 from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.models import UnderwritingResearchVersion
 from app.underwriting.persistence.company_research_models import (
@@ -22,9 +26,13 @@ from app.underwriting.persistence.company_research_repository import (
     CompanyResearchRepository,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
+from app.underwriting.services.company_research_artifact_codec import (
+    CompanyResearchArtifactCodec,
+)
 from app.underwriting.services.workspace_draft import WorkspaceDraftService
 
 ModuleState = Literal["not_started", "preparing", "needs_review", "ready", "blocked"]
+_MAX_ARTIFACT_HISTORY = 2048
 
 _MODULE_ARTIFACTS = {
     "overview": "evidence_index",
@@ -141,6 +149,11 @@ class CompanyResearchWorkbench:
                 "company research artifact source refs are duplicated"
             )
         closed_model_artifact = "_lineage" in row.payload
+        if closed_model_artifact:
+            CompanyResearchArtifactCodec.validate_payload(
+                row.kind,
+                {key: value for key, value in row.payload.items() if key != "_lineage"},
+            )
         if row.kind == "evidence_index":
             if set(row.payload) != {
                 "fixture_content_hash",
@@ -399,20 +412,83 @@ class CompanyResearchWorkbench:
             CompanyResearchRepository.market_binding_from_payload(value)
             for value in (expected_market_bindings or [])
         )
+        cutoff = self._company.validate_workspace_market_boundary(
+            project_id=project_id,
+            bindings=parsed,
+            expected_cutoff_at=self._company.evidence_cutoff(heads["evidence_index"]),
+        )
         self._company.validate_market_snapshot_bindings(
             project_id=project_id,
             bindings=parsed,
+            cutoff_at=cutoff,
         )
+        memo = CompanyResearchArtifactCodec.decode(
+            "memo",
+            {
+                key: value
+                for key, value in heads["memo"].payload.items()
+                if key != "_lineage"
+            },
+        )
+        judgment = CompanyResearchArtifactCodec.decode(
+            "judgment_context",
+            {
+                key: value
+                for key, value in heads["judgment_context"].payload.items()
+                if key != "_lineage"
+            },
+        )
+        assert type(memo) is CompanyResearchMemoArtifact
+        assert type(judgment) is JudgmentContextArtifact
+        has_valuation = "valuation_set" in heads
+        memo_refs = {
+            "business_map": memo.business_map_ref,
+            "driver_map": memo.driver_map_ref,
+            "financial_bridge": memo.financial_bridge_ref,
+            "scenario_set": memo.scenario_set_ref,
+        }
+        if any(
+            reference.content_hash
+            != canonical_hash(
+                {
+                    key: value
+                    for key, value in heads[kind].payload.items()
+                    if key != "_lineage"
+                }
+            )
+            for kind, reference in memo_refs.items()
+        ):
+            raise ValidationError("company research memo references are invalid")
+        if has_valuation and (
+            memo.valuation_set_ref is None
+            or memo.valuation_set_ref.content_hash
+            != canonical_hash(
+                {
+                    key: value
+                    for key, value in heads["valuation_set"].payload.items()
+                    if key != "_lineage"
+                }
+            )
+        ):
+            raise ValidationError("company research memo references are invalid")
+        if has_valuation != (memo.valuation_set_ref is not None) or has_valuation != (
+            judgment.market_security_bridge_available
+        ):
+            raise ValidationError("company research valuation state is invalid")
+        if not has_valuation and memo.assessment_status != "not_answerable":
+            raise ValidationError("company research valuation state is invalid")
 
     def _heads(self, project_id: UUID) -> dict[str, WorkbenchArtifact]:
         """Materialize all artifact families once; never query once per module."""
         rows = tuple(
             self._session.scalars(
-                select(CompanyResearchArtifactVersion).where(
-                    CompanyResearchArtifactVersion.project_id == project_id
-                )
+                select(CompanyResearchArtifactVersion)
+                .where(CompanyResearchArtifactVersion.project_id == project_id)
+                .limit(_MAX_ARTIFACT_HISTORY + 1)
             )
         )
+        if len(rows) > _MAX_ARTIFACT_HISTORY:
+            raise ValidationError("company research artifact history limit exceeded")
         by_id = {row.id: row for row in rows}
         successor_ids = {
             row.supersedes_id for row in rows if row.supersedes_id is not None
@@ -453,6 +529,13 @@ class CompanyResearchWorkbench:
                     )
                 current, expected_version = parent, expected_version - 1
             head_rows[row.kind] = row
+        judgment_head = head_rows.get("judgment_context")
+        if judgment_head is not None:
+            refs, _snapshot_ids, _bindings = self._validate_closed_lineage_shape(
+                judgment_head
+            )
+            if not any(ref["artifact_kind"] == "valuation_set" for ref in refs):
+                head_rows.pop("valuation_set", None)
         self._validate_cross_artifact_lineage(project_id, head_rows)
         heads = {
             kind: self._artifact(row, project_id) for kind, row in head_rows.items()
@@ -522,6 +605,8 @@ class CompanyResearchWorkbench:
                 state = "needs_review"
             elif artifact is not None:
                 state: ModuleState = "ready"
+            elif kind == "valuation_set" and "judgment_context" in heads:
+                state = "blocked"
             elif preparation.status in {"blocked", "recoverable_failure"}:
                 state = "blocked"
             elif preparation.status in {"preparing_sources", "building_model"}:

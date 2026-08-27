@@ -16,7 +16,11 @@ from sqlalchemy.orm import Session
 
 from app.models.ledger import ConflictError, ValidationError
 from app.models.operational import Job
-from app.underwriting.domain.company_research import SourceLineageReference
+from app.underwriting.domain.company_research import (
+    CompanyResearchMemoArtifact,
+    JudgmentContextArtifact,
+    SourceLineageReference,
+)
 from app.underwriting.persistence.company_research_models import (
     COMPANY_RESEARCH_ARTIFACT_KINDS,
     COMPANY_RESEARCH_PREPARATION_STATUSES,
@@ -25,13 +29,17 @@ from app.underwriting.persistence.company_research_models import (
     CompanyResearchEvent,
     CompanyResearchPreparation,
 )
-from app.underwriting.persistence.models import UnderwritingResearchObject
+from app.underwriting.persistence.models import (
+    UnderwritingMandateVersion,
+    UnderwritingResearchObject,
+)
 from app.underwriting.persistence.product_models import (
     UnderwritingCapitalStructureSnapshot,
     UnderwritingFXSnapshot,
     UnderwritingMarketCaptureEnvelope,
     UnderwritingPriceSnapshot,
     UnderwritingSecurityRightsVersion,
+    UnderwritingWorkspaceDraft,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.persistence.repository import StaleParentError
@@ -41,6 +49,10 @@ from app.underwriting.services.company_research_model_builder import (
     FrozenMarketSnapshotRole,
     FrozenRawComponentReference,
 )
+from app.underwriting.services.company_research_artifact_codec import (
+    CompanyResearchArtifactCodec,
+    MODEL_ARTIFACT_KINDS,
+)
 from app.underwriting.services.market_snapshots import (
     capital_structure_snapshot_hash,
     fx_snapshot_hash,
@@ -48,6 +60,7 @@ from app.underwriting.services.market_snapshots import (
     price_snapshot_hash,
     security_rights_hash,
 )
+from app.underwriting.services.workspace_draft import WorkspaceDraftService
 
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _PREPARE_JOB_KIND = "prepare_company_research"
@@ -66,6 +79,8 @@ class CompanyResearchPersistedBundle:
     evidence_content_hash: str
     research_gaps_artifact_id: UUID
     research_gaps_content_hash: str
+    workspace_draft_id: UUID
+    workspace_draft_lock_version: int
     business_map: Mapping[str, object]
     driver_map: Mapping[str, object]
     financial_bridge: Mapping[str, object]
@@ -96,8 +111,11 @@ class CompanyResearchPersistedBundle:
         if (
             type(self.evidence_artifact_id) is not UUID
             or type(self.research_gaps_artifact_id) is not UUID
+            or type(self.workspace_draft_id) is not UUID
+            or type(self.workspace_draft_lock_version) is not int
+            or self.workspace_draft_lock_version < 1
         ):
-            raise ValidationError("company research model bundle head ids are invalid")
+            raise ValidationError("company research model bundle boundary is invalid")
         for value in (
             self.evidence_content_hash,
             self.research_gaps_content_hash,
@@ -138,6 +156,70 @@ class CompanyResearchPersistedBundle:
         ):
             raise ValidationError(
                 "company research model bundle market snapshot bindings must be canonical"
+            )
+        canonical_payloads = {
+            kind: CompanyResearchArtifactCodec.validate_payload(kind, payload)
+            for kind, payload in (
+                ("business_map", self.business_map),
+                ("driver_map", self.driver_map),
+                ("financial_bridge", self.financial_bridge),
+                ("scenario_set", self.scenario_set),
+                ("judgment_context", self.judgment_context),
+                ("research_gaps", self.research_gaps),
+                ("memo", self.memo),
+            )
+        }
+        for kind, payload in canonical_payloads.items():
+            object.__setattr__(self, kind, payload)
+        if self.valuation_set is not None:
+            object.__setattr__(
+                self,
+                "valuation_set",
+                CompanyResearchArtifactCodec.validate_payload(
+                    "valuation_set", self.valuation_set
+                ),
+            )
+        memo = CompanyResearchArtifactCodec.decode("memo", self.memo)
+        judgment = CompanyResearchArtifactCodec.decode(
+            "judgment_context", self.judgment_context
+        )
+        assert type(memo) is CompanyResearchMemoArtifact
+        assert type(judgment) is JudgmentContextArtifact
+        memo_refs = {
+            "business_map": memo.business_map_ref,
+            "driver_map": memo.driver_map_ref,
+            "financial_bridge": memo.financial_bridge_ref,
+            "scenario_set": memo.scenario_set_ref,
+        }
+        if any(
+            reference.content_hash != canonical_hash(canonical_payloads[kind])
+            for kind, reference in memo_refs.items()
+        ):
+            raise ValidationError(
+                "company research memo artifact references are inconsistent"
+            )
+        if self.valuation_set is not None and (
+            memo.valuation_set_ref is None
+            or memo.valuation_set_ref.content_hash != canonical_hash(self.valuation_set)
+        ):
+            raise ValidationError(
+                "company research memo artifact references are inconsistent"
+            )
+        if self.valuation_set is None:
+            if (
+                memo.assessment_status != "not_answerable"
+                or memo.valuation_set_ref is not None
+                or judgment.market_security_bridge_available
+            ):
+                raise ValidationError(
+                    "company research bundle without valuation must be not_answerable"
+                )
+        elif (
+            memo.valuation_set_ref is None
+            or not judgment.market_security_bridge_available
+        ):
+            raise ValidationError(
+                "company research bundle valuation state is inconsistent"
             )
 
     @property
@@ -203,6 +285,104 @@ class CompanyResearchRepository:
         if populate_existing:
             statement = statement.execution_options(populate_existing=True)
         return self._session.scalar(statement)
+
+    def _workspace_draft_for_update(
+        self, project_id: UUID
+    ) -> UnderwritingWorkspaceDraft | None:
+        return self._session.scalar(
+            select(UnderwritingWorkspaceDraft)
+            .where(UnderwritingWorkspaceDraft.project_id == project_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
+    def validate_workspace_market_boundary(
+        self,
+        *,
+        project_id: UUID,
+        bindings: Sequence[FrozenMarketSnapshotBinding],
+        expected_cutoff_at: datetime,
+        expected_draft_id: UUID | None = None,
+        expected_lock_version: int | None = None,
+        lock: bool = False,
+    ) -> datetime:
+        draft = (
+            self._workspace_draft_for_update(project_id)
+            if lock
+            else ProductRepository(self._session).workspace_draft(project_id)
+        )
+        if (
+            draft is None
+            or (expected_draft_id is not None and draft.id != expected_draft_id)
+            or (
+                expected_lock_version is not None
+                and draft.lock_version != expected_lock_version
+            )
+        ):
+            raise ValidationError("company research workspace draft is stale")
+        content = WorkspaceDraftService._content(draft.content)
+        if content.mandate_id is None:
+            raise ValidationError("company research preparation cutoff is missing")
+        mandate = self._session.get(UnderwritingMandateVersion, content.mandate_id)
+        if (
+            mandate is None
+            or mandate.project_id != project_id
+            or mandate.effective_at is None
+        ):
+            raise ValidationError("company research preparation cutoff is invalid")
+        cutoff = self._persisted_utc(mandate.effective_at)
+        expected_cutoff = self._stored_datetime(
+            expected_cutoff_at, "expected_cutoff_at"
+        )
+        if cutoff != expected_cutoff:
+            raise ValidationError(
+                "company research preparation cutoff does not match reviewed evidence"
+            )
+        bindings_by_role = {
+            role: tuple(
+                sorted(
+                    (
+                        binding.snapshot_id
+                        for binding in bindings
+                        if binding.role is role
+                    ),
+                    key=str,
+                )
+            )
+            for role in FrozenMarketSnapshotRole
+        }
+        if (
+            bindings_by_role[FrozenMarketSnapshotRole.PRICE]
+            != content.price_snapshot_ids
+            or bindings_by_role[FrozenMarketSnapshotRole.FX] != content.fx_snapshot_ids
+            or bindings_by_role[FrozenMarketSnapshotRole.SECURITY_RIGHTS]
+            != content.security_rights_ids
+            or bindings_by_role[FrozenMarketSnapshotRole.CAPITAL_STRUCTURE]
+            != (
+                (content.capital_structure_snapshot_id,)
+                if content.capital_structure_snapshot_id is not None
+                else ()
+            )
+        ):
+            raise ValidationError(
+                "company research market bindings do not match workspace draft"
+            )
+        return expected_cutoff
+
+    @classmethod
+    def evidence_cutoff(cls, artifact: CompanyResearchArtifactVersion) -> datetime:
+        value = (
+            artifact.payload.get("cutoff")
+            if isinstance(artifact.payload, dict)
+            else None
+        )
+        if not isinstance(value, str):
+            raise ValidationError("reviewed evidence cutoff is invalid")
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValidationError("reviewed evidence cutoff is invalid") from exc
+        return cls._stored_datetime(parsed, "reviewed evidence cutoff")
 
     def _locked_prepare_job(
         self,
@@ -284,6 +464,75 @@ class CompanyResearchRepository:
         ):
             raise ValidationError(f"{field} must be timezone-aware")
         return value.astimezone(UTC)
+
+    @staticmethod
+    def _persisted_utc(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    @staticmethod
+    def _validate_typed_artifact_payload(
+        *,
+        kind: str,
+        payload: Mapping[str, object],
+        supersedes_id: UUID | None,
+    ) -> None:
+        if kind not in MODEL_ARTIFACT_KINDS:
+            return
+        has_lineage = "_lineage" in payload
+        modules = payload.get("modules")
+        legacy_business_map = (
+            kind == "business_map"
+            and supersedes_id is None
+            and not has_lineage
+            and set(payload)
+            == {"evidence_index_id", "evidence_content_hash", "modules"}
+            and isinstance(payload.get("evidence_index_id"), str)
+            and isinstance(payload.get("evidence_content_hash"), str)
+            and _HASH.fullmatch(payload["evidence_content_hash"]) is not None
+            and isinstance(modules, list)
+            and bool(modules)
+            and all(
+                isinstance(module, dict)
+                and set(module) == {"key", "fact_keys"}
+                and isinstance(module["key"], str)
+                and bool(module["key"])
+                and isinstance(module["fact_keys"], list)
+                and bool(module["fact_keys"])
+                and all(
+                    isinstance(fact_key, str) and bool(fact_key)
+                    for fact_key in module["fact_keys"]
+                )
+                for module in modules
+            )
+        )
+        gaps = payload.get("gaps")
+        source_gap_contract = (
+            kind == "research_gaps"
+            and supersedes_id is None
+            and not has_lineage
+            and set(payload) == {"fixture_content_hash", "company_external_key", "gaps"}
+            and isinstance(payload.get("fixture_content_hash"), str)
+            and _HASH.fullmatch(payload["fixture_content_hash"]) is not None
+            and isinstance(payload.get("company_external_key"), str)
+            and bool(payload["company_external_key"])
+            and isinstance(gaps, list)
+            and all(
+                isinstance(gap, dict)
+                and set(gap) == {"gap_key", "business_module", "reason"}
+                and all(
+                    isinstance(value, str) and bool(value) for value in gap.values()
+                )
+                for gap in gaps
+            )
+        )
+        if legacy_business_map or source_gap_contract:
+            return
+        CompanyResearchArtifactCodec.validate_payload(
+            kind,
+            {key: value for key, value in payload.items() if key != "_lineage"},
+        )
 
     @staticmethod
     def _require_nonempty_text(value: str, field: str, maximum: int) -> str:
@@ -867,9 +1116,15 @@ class CompanyResearchRepository:
         *,
         project_id: UUID,
         bindings: Sequence[FrozenMarketSnapshotBinding],
+        cutoff_at: datetime | None = None,
     ) -> None:
         if not bindings:
             return
+        cutoff = (
+            self._stored_datetime(cutoff_at, "cutoff_at")
+            if cutoff_at is not None
+            else None
+        )
         project_record = ProductRepository(self._session).project(project_id)
         if project_record is None:
             raise ValidationError("company research market snapshot binding is invalid")
@@ -951,6 +1206,21 @@ class CompanyResearchRepository:
                 raise ValidationError(
                     "company research market snapshot binding is invalid"
                 )
+            if cutoff is not None:
+                for field in ("market_at", "available_at"):
+                    value = getattr(row, field, None)
+                    if value is not None and self._persisted_utc(value) > cutoff:
+                        raise ValidationError(
+                            "company research market snapshot exceeds preparation cutoff"
+                        )
+                effective_from = getattr(row, "effective_from", None)
+                if (
+                    effective_from is not None
+                    and self._persisted_utc(effective_from) > cutoff
+                ):
+                    raise ValidationError(
+                        "company research market snapshot exceeds preparation cutoff"
+                    )
             if binding.role is FrozenMarketSnapshotRole.PRICE and (
                 row.security_identity_id
                 != securities.get(binding.security_external_key)
@@ -1011,6 +1281,13 @@ class CompanyResearchRepository:
                 raise ValidationError(
                     "company research market snapshot binding is invalid"
                 )
+            if (
+                cutoff is not None
+                and self._persisted_utc(capture.authenticated_available_at) > cutoff
+            ):
+                raise ValidationError(
+                    "company research market snapshot exceeds preparation cutoff"
+                )
 
     def complete_model_bundle(
         self,
@@ -1061,6 +1338,15 @@ class CompanyResearchRepository:
             or current_gaps.content_hash != bundle.research_gaps_content_hash
         ):
             raise ValidationError("company research model inputs are stale")
+        evidence_cutoff = self.evidence_cutoff(evidence)
+        preparation_cutoff = self.validate_workspace_market_boundary(
+            project_id=preparation.project_id,
+            bindings=bundle.market_snapshot_bindings,
+            expected_cutoff_at=evidence_cutoff,
+            expected_draft_id=bundle.workspace_draft_id,
+            expected_lock_version=bundle.workspace_draft_lock_version,
+            lock=True,
+        )
         facts = (
             evidence.payload.get("facts")
             if isinstance(evidence.payload, dict)
@@ -1084,6 +1370,7 @@ class CompanyResearchRepository:
         self.validate_market_snapshot_bindings(
             project_id=preparation.project_id,
             bindings=market_snapshot_bindings,
+            cutoff_at=preparation_cutoff,
         )
         artifacts: list[CompanyResearchArtifactVersion] = []
 
@@ -1298,6 +1585,15 @@ class CompanyResearchRepository:
             raise CompanyResearchIntegrityError(
                 "company research artifact content hash mismatch"
             )
+        if not isinstance(row.payload, dict):
+            raise CompanyResearchIntegrityError(
+                "company research artifact payload is invalid"
+            )
+        CompanyResearchRepository._validate_typed_artifact_payload(
+            kind=row.kind,
+            payload=row.payload,
+            supersedes_id=row.supersedes_id,
+        )
 
     @staticmethod
     def _validate_event_row(row: CompanyResearchEvent) -> None:
@@ -1346,6 +1642,11 @@ class CompanyResearchRepository:
         actual_parent_id = parent.id if parent is not None else None
         if actual_parent_id != expected_parent_id:
             raise StaleParentError("expected parent is not the company artifact head")
+        self._validate_typed_artifact_payload(
+            kind=kind,
+            payload=payload,
+            supersedes_id=actual_parent_id,
+        )
         version = 1 if parent is None else parent.version + 1
         copied_payload = deepcopy(dict(payload))
         copied_refs = deepcopy(list(source_refs))

@@ -1,6 +1,7 @@
 from dataclasses import replace
-from datetime import UTC, datetime
-import json
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+import sys
 import uuid
 
 import pytest
@@ -10,6 +11,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 from app.models.ledger import ValidationError
 from app.models.operational import Job
 from app.underwriting.hashing import canonical_hash
+from app.underwriting.domain.types import InvestmentMandateInput
 from app.underwriting.persistence.company_research_repository import (
     CompanyResearchPersistedBundle,
     CompanyResearchRepository,
@@ -28,7 +30,11 @@ from app.underwriting.fixtures.product_foundation import load_product_foundation
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchInitializer,
 )
+from app.underwriting.services.company_research_artifact_codec import (
+    CompanyResearchArtifactCodec,
+)
 from app.underwriting.services.company_research_model_builder import (
+    CompanyResearchModelBuilder,
     FrozenMarketSnapshotRole,
 )
 from app.underwriting.services.company_research_preparation import (
@@ -40,6 +46,16 @@ from app.underwriting.services.company_research_workbench import (
 from app.underwriting.services.product_foundation_fixture import (
     ProductFoundationFixtureService,
 )
+from app.underwriting.services.product_project import ResearchProjectService
+from app.underwriting.services.market_snapshots import (
+    market_capture_envelope_hash,
+    price_snapshot_hash,
+)
+from app.underwriting.services.workspace_draft import (
+    WorkspaceDraftPatch,
+    WorkspaceDraftService,
+)
+from tests.underwriting.test_company_research_model_builder import _build_input
 
 
 NOW = datetime(2026, 8, 26, tzinfo=UTC)
@@ -52,12 +68,12 @@ def _prepared(session):
     )
     initializer = CompanyResearchInitializer(session, now=lambda: NOW)
     preview = initializer.preview(
-        company_id=loaded.objects["US:ALPHABET:COMPANY"].id, cutoff_at=NOW
+        company_id=loaded.objects["US:ALPHABET:COMPANY"].id, cutoff_at=MARKET_CUTOFF
     )
     initialized = initializer.initialize(
         preview_hash=preview.input_hash,
         company_id=preview.company.object_id,
-        cutoff_at=NOW,
+        cutoff_at=MARKET_CUTOFF,
         idempotency_key="company-workbench-alphabet",
     )
     worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
@@ -67,7 +83,9 @@ def _prepared(session):
     return initialized
 
 
-def _model_workspace(session, *, binding_mutation=None):
+def _model_workspace(
+    session, *, binding_mutation=None, bindings_mutation=None, before_commit=None
+):
     initialized = _prepared(session)
     workbench = CompanyResearchWorkbench(session, now=lambda: NOW)
     workspace = workbench.workspace(project_id=initialized.project.id)
@@ -104,24 +122,46 @@ def _model_workspace(session, *, binding_mutation=None):
     bindings = governed.market_context.snapshot_bindings
     if binding_mutation is not None:
         bindings = (binding_mutation(bindings[0]), *bindings[1:])
+    if bindings_mutation is not None:
+        bindings = bindings_mutation(bindings, initialized)
+    result = CompanyResearchModelBuilder().build(_build_input())
+    payloads = {
+        kind: CompanyResearchArtifactCodec.encode(kind, artifact)
+        for kind, artifact in {
+            "business_map": result.business_map,
+            "driver_map": result.driver_map,
+            "financial_bridge": result.financial_bridge,
+            "scenario_set": result.scenario_set,
+            "valuation_set": result.valuation_set,
+            "judgment_context": result.judgment_context,
+            "research_gaps": result.gaps,
+            "memo": result.memo,
+        }.items()
+    }
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(initialized.project.id)
+    assert draft is not None
     bundle = CompanyResearchPersistedBundle(
         evidence_artifact_id=current.id,
         evidence_content_hash=current.content_hash,
         research_gaps_artifact_id=prior_gaps.id,
         research_gaps_content_hash=prior_gaps.content_hash,
-        business_map={
-            "modules": [{"key": "search", "fact_keys": ["revenue"]}],
-        },
-        driver_map={"drivers": [{"driver_key": "queries"}]},
-        financial_bridge={"scenario_id": "base", "rows": []},
-        scenario_set={"scenarios": [{"scenario_id": "base"}]},
-        valuation_set={"security_value_ranges": []},
-        judgment_context={"assessment_status": "answerable"},
-        research_gaps=dict(prior_gaps.payload),
-        memo={"candidate_status": "machine_draft"},
+        workspace_draft_id=draft.id,
+        workspace_draft_lock_version=draft.lock_version,
+        business_map=payloads["business_map"],
+        driver_map=payloads["driver_map"],
+        financial_bridge=payloads["financial_bridge"],
+        scenario_set=payloads["scenario_set"],
+        valuation_set=payloads["valuation_set"],
+        judgment_context=payloads["judgment_context"],
+        research_gaps=payloads["research_gaps"],
+        memo=payloads["memo"],
         source_refs=source_refs,
         market_snapshot_bindings=bindings,
     )
+    if before_commit is not None:
+        replacement = before_commit(initialized, bundle)
+        if replacement is not None:
+            bundle = replacement
     repository.complete_model_bundle(
         preparation.id,
         bundle=bundle,
@@ -147,12 +187,9 @@ def _rewrite_payload(
         payload=payload,
         source_refs=row.source_refs,
     )
-    session.connection().exec_driver_sql(
-        "UPDATE uw_company_research_artifact_versions "
-        "SET payload = ?, input_hash = ?, content_hash = ? WHERE id = ?",
-        (json.dumps(payload), rewritten_input_hash, content_hash, row.id.hex),
-    )
-    session.expire_all()
+    set_committed_value(row, "payload", payload)
+    set_committed_value(row, "input_hash", rewritten_input_hash)
+    set_committed_value(row, "content_hash", content_hash)
 
 
 def test_workspace_is_a_closed_snapshot_of_the_review_gate(session) -> None:
@@ -179,6 +216,19 @@ def test_workspace_is_a_closed_snapshot_of_the_review_gate(session) -> None:
     assert workspace.gap_count >= 0
     assert workspace.draft.lock_version == 1
     assert workspace.selected_revision is None
+
+
+def test_workbench_fails_closed_when_artifact_history_exceeds_its_bound(
+    session, monkeypatch
+) -> None:
+    initialized = _prepared(session)
+    workbench_module = sys.modules[CompanyResearchWorkbench.__module__]
+    monkeypatch.setattr(workbench_module, "_MAX_ARTIFACT_HISTORY", 1)
+
+    with pytest.raises(ValidationError, match="artifact history limit exceeded"):
+        CompanyResearchWorkbench(session, now=lambda: NOW).workspace(
+            project_id=initialized.project.id
+        )
 
 
 def test_evidence_review_appends_exact_successor_and_is_idempotent(session) -> None:
@@ -284,6 +334,140 @@ def test_workbench_accepts_one_closed_model_bundle(session) -> None:
         )
 
 
+def test_optional_valuation_tracks_the_current_model_epoch_across_rebuilds(
+    session,
+) -> None:
+    initialized, workbench, repository = _model_workspace(session)
+    project_id = initialized.project.id
+    first_valuation = repository.current_artifact(project_id, "valuation_set")
+    assert first_valuation is not None
+    lineage = first_valuation.payload["_lineage"]
+    bindings = tuple(
+        CompanyResearchRepository.market_binding_from_payload(value)
+        for value in lineage["market_snapshot_bindings"]
+    )
+    drafts = WorkspaceDraftService(session, now=lambda: NOW)
+    original_draft = drafts.read(project_id)
+    assert original_draft is not None
+    original_refs = original_draft.content
+
+    def publish(*, with_valuation: bool, epoch_bindings=()) -> None:
+        preparation = repository.preparation_for_project(project_id)
+        evidence = repository.current_artifact(project_id, "evidence_index")
+        gaps = repository.current_artifact(project_id, "research_gaps")
+        assert preparation is not None and preparation.job_id is not None
+        assert evidence is not None and gaps is not None
+        job = session.get(Job, preparation.job_id)
+        assert job is not None
+        preparation.status = "building_model"
+        preparation.current_step = "model_bundle"
+        preparation.progress = 25
+        job.status = "running"
+        job.step = "model_bundle"
+        job.progress = 25
+        job.claim_token = "model-claim"
+        session.flush([preparation, job])
+        build_input = _build_input()
+        if not with_valuation:
+            build_input = replace(build_input, market_context=None)
+        result = CompanyResearchModelBuilder().build(build_input)
+        values = {
+            "business_map": result.business_map,
+            "driver_map": result.driver_map,
+            "financial_bridge": result.financial_bridge,
+            "scenario_set": result.scenario_set,
+            "judgment_context": result.judgment_context,
+            "research_gaps": result.gaps,
+            "memo": result.memo,
+        }
+        if result.valuation_set is not None:
+            values["valuation_set"] = result.valuation_set
+        payloads = {
+            kind: CompanyResearchArtifactCodec.encode(kind, artifact)
+            for kind, artifact in values.items()
+        }
+        draft = drafts.read(project_id)
+        assert draft is not None
+        repository.complete_model_bundle(
+            preparation.id,
+            bundle=CompanyResearchPersistedBundle(
+                evidence_artifact_id=evidence.id,
+                evidence_content_hash=evidence.content_hash,
+                research_gaps_artifact_id=gaps.id,
+                research_gaps_content_hash=gaps.content_hash,
+                workspace_draft_id=draft.id,
+                workspace_draft_lock_version=draft.lock_version,
+                business_map=payloads["business_map"],
+                driver_map=payloads["driver_map"],
+                financial_bridge=payloads["financial_bridge"],
+                scenario_set=payloads["scenario_set"],
+                valuation_set=payloads.get("valuation_set"),
+                judgment_context=payloads["judgment_context"],
+                research_gaps=payloads["research_gaps"],
+                memo=payloads["memo"],
+                source_refs=tuple(evidence.source_refs),
+                market_snapshot_bindings=tuple(epoch_bindings),
+            ),
+            expected_claim_token="model-claim",
+            expected_request_hash=preparation.request_hash,
+            expected_strategy_version=preparation.strategy_version,
+            created_at=NOW,
+        )
+
+    drafts.save(
+        project_id,
+        expected_lock_version=original_draft.lock_version,
+        patch=WorkspaceDraftPatch(
+            price_snapshot_ids=(),
+            fx_snapshot_ids=(),
+            capital_structure_snapshot_id=None,
+            security_rights_ids=(),
+        ),
+    )
+    publish(with_valuation=False)
+    no_valuation_preparation = repository.preparation_for_project(project_id)
+    assert no_valuation_preparation is not None
+    no_valuation_preparation.status = "completed"
+    session.flush([no_valuation_preparation])
+
+    without_valuation = workbench.workspace(project_id=project_id)
+    valuation_module = next(
+        item
+        for item in without_valuation.modules
+        if item.key == "scenarios_valuation_implied_expectations"
+    )
+    assert valuation_module.state == "blocked"
+    assert valuation_module.artifact is None
+    assert "valuation_set" not in without_valuation.change_summary["artifact_versions"]
+    historical_valuation = repository.current_artifact(project_id, "valuation_set")
+    assert historical_valuation is not None
+    assert historical_valuation.id == first_valuation.id
+
+    cleared = drafts.read(project_id)
+    assert cleared is not None
+    drafts.save(
+        project_id,
+        expected_lock_version=cleared.lock_version,
+        patch=WorkspaceDraftPatch(
+            price_snapshot_ids=original_refs.price_snapshot_ids,
+            fx_snapshot_ids=original_refs.fx_snapshot_ids,
+            capital_structure_snapshot_id=original_refs.capital_structure_snapshot_id,
+            security_rights_ids=original_refs.security_rights_ids,
+        ),
+    )
+    publish(with_valuation=True, epoch_bindings=bindings)
+
+    restored = workbench.workspace(project_id=project_id)
+    restored_module = next(
+        item
+        for item in restored.modules
+        if item.key == "scenarios_valuation_implied_expectations"
+    )
+    assert restored_module.state == "ready"
+    assert restored_module.artifact is not None
+    assert restored_module.artifact.version == first_valuation.version + 1
+
+
 def test_model_bundle_rolls_back_when_valuation_append_fails(
     session, monkeypatch
 ) -> None:
@@ -382,6 +566,194 @@ def test_model_bundle_rejects_non_governed_source_identity_before_writing(
             )
         )
         == ()
+    )
+
+
+@pytest.mark.parametrize("replacement", ((), (uuid.UUID(int=999),)))
+def test_model_bundle_rejects_cleared_or_replaced_draft_market_refs_without_writing(
+    session, replacement: tuple[uuid.UUID, ...]
+) -> None:
+    def change_draft(initialized, _bundle) -> None:
+        drafts = WorkspaceDraftService(session, now=lambda: NOW)
+        draft = drafts.read(initialized.project.id)
+        assert draft is not None
+        drafts.save(
+            initialized.project.id,
+            expected_lock_version=draft.lock_version,
+            patch=WorkspaceDraftPatch(price_snapshot_ids=replacement),
+        )
+
+    with pytest.raises(ValidationError, match="workspace draft is stale"):
+        _model_workspace(session, before_commit=change_draft)
+
+    assert (
+        session.scalar(
+            select(CompanyResearchArtifactVersion).where(
+                CompanyResearchArtifactVersion.kind == "business_map"
+            )
+        )
+        is None
+    )
+
+
+def test_model_bundle_rejects_a_newer_draft_mandate_as_a_cutoff_substitute(
+    session,
+) -> None:
+    later_cutoff = datetime(2026, 8, 28, tzinfo=UTC)
+
+    def substitute_mandate(initialized, bundle):
+        drafts = WorkspaceDraftService(session, now=lambda: later_cutoff)
+        current = drafts.read(initialized.project.id)
+        assert current is not None and current.content.mandate_id is not None
+        later = ResearchProjectService(
+            session, now=lambda: later_cutoff
+        ).append_product_mandate(
+            project_id=initialized.project.id,
+            value=InvestmentMandateInput(
+                mandate_key="company-research-default",
+                horizon_years=5,
+                base_currency="CNY",
+                required_return=Decimal("0.12"),
+                permanent_loss_limit=Decimal("0.25"),
+                comparison_set=("absolute_intrinsic_value",),
+            ),
+            benchmark_key=None,
+            required_excess_return=None,
+            effective_at=later_cutoff,
+            expires_at=None,
+            expected_parent_id=current.content.mandate_id,
+        )
+        changed = drafts.save(
+            initialized.project.id,
+            expected_lock_version=current.lock_version,
+            patch=WorkspaceDraftPatch(mandate_id=later.id),
+        )
+        return replace(
+            bundle,
+            workspace_draft_id=changed.id,
+            workspace_draft_lock_version=changed.lock_version,
+        )
+
+    with pytest.raises(
+        ValidationError, match="cutoff does not match reviewed evidence"
+    ):
+        _model_workspace(session, before_commit=substitute_mandate)
+
+    assert (
+        session.scalar(
+            select(CompanyResearchArtifactVersion).where(
+                CompanyResearchArtifactVersion.kind == "business_map"
+            )
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "timestamp_field", ("market_at", "available_at", "authenticated_available_at")
+)
+def test_model_bundle_rejects_market_data_after_the_preparation_cutoff(
+    session, timestamp_field: str
+) -> None:
+    after_cutoff = datetime(2026, 8, 27, tzinfo=UTC)
+
+    def move_after_cutoff(bindings, initialized):
+        values = list(bindings)
+        price_index = next(
+            index
+            for index, binding in enumerate(values)
+            if binding.role is FrozenMarketSnapshotRole.PRICE
+        )
+        binding = values[price_index]
+        row = session.get(UnderwritingPriceSnapshot, binding.snapshot_id)
+        capture = session.get(
+            UnderwritingMarketCaptureEnvelope, binding.capture_envelope_id
+        )
+        assert row is not None and capture is not None
+        market_at = (
+            after_cutoff
+            if timestamp_field == "market_at"
+            else row.market_at - timedelta(seconds=1)
+        )
+        available_at = (
+            after_cutoff
+            if timestamp_field in {"market_at", "available_at"}
+            else row.available_at
+        )
+        successor = UnderwritingPriceSnapshot(
+            security_identity_id=row.security_identity_id,
+            price=row.price,
+            currency=row.currency,
+            price_type=row.price_type,
+            adjustment_basis=row.adjustment_basis,
+            market_at=market_at,
+            available_at=available_at,
+            source_id=row.source_id,
+            raw_hash=row.raw_hash,
+            content_hash="0" * 64,
+            created_at=NOW,
+            legacy_business_conflict=False,
+        )
+        successor.content_hash = price_snapshot_hash(successor)
+        session.add(successor)
+        session.flush([successor])
+        successor_capture = UnderwritingMarketCaptureEnvelope(
+            snapshot_kind=capture.snapshot_kind,
+            snapshot_id=successor.id,
+            provenance_role=capture.provenance_role,
+            source_url=capture.source_url,
+            source_locator=capture.source_locator,
+            provider_policy_version=capture.provider_policy_version,
+            raw_hash=capture.raw_hash,
+            raw_components=capture.raw_components,
+            content_hash="0" * 64,
+            authenticated_available_at=(
+                after_cutoff
+                if timestamp_field == "authenticated_available_at"
+                else capture.authenticated_available_at
+            ),
+            acquired_at=capture.acquired_at,
+        )
+        successor_capture.content_hash = market_capture_envelope_hash(successor_capture)
+        session.add(successor_capture)
+        session.flush([successor_capture])
+        values[price_index] = replace(
+            binding,
+            snapshot_id=successor.id,
+            snapshot_content_hash=successor.content_hash,
+            capture_envelope_id=successor_capture.id,
+            capture_content_hash=successor_capture.content_hash,
+        )
+        drafts = WorkspaceDraftService(session, now=lambda: NOW)
+        draft = drafts.read(initialized.project.id)
+        assert draft is not None
+        drafts.save(
+            initialized.project.id,
+            expected_lock_version=draft.lock_version,
+            patch=WorkspaceDraftPatch(
+                price_snapshot_ids=tuple(
+                    sorted(
+                        (
+                            successor.id if value == row.id else value
+                            for value in draft.content.price_snapshot_ids
+                        ),
+                        key=str,
+                    )
+                )
+            ),
+        )
+        return tuple(sorted(values, key=lambda value: str(value.snapshot_id)))
+
+    with pytest.raises(ValidationError, match="exceeds preparation cutoff"):
+        _model_workspace(session, bindings_mutation=move_after_cutoff)
+
+    assert (
+        session.scalar(
+            select(CompanyResearchArtifactVersion).where(
+                CompanyResearchArtifactVersion.kind == "business_map"
+            )
+        )
+        is None
     )
 
 
@@ -522,6 +894,35 @@ def test_workbench_rejects_source_identity_tamper_even_with_rehashed_artifact(
         workbench.workspace(project_id=initialized.project.id)
 
 
+def test_workbench_rejects_a_rehashed_malformed_domain_artifact(session) -> None:
+    initialized, workbench, repository = _model_workspace(session)
+    memo = repository.current_artifact(initialized.project.id, "memo")
+    assert memo is not None
+    payload = dict(memo.payload)
+    payload.pop("candidate_status")
+    _rewrite_payload(session, memo, payload)
+
+    with pytest.raises(ValidationError, match="memo payload is invalid"):
+        workbench.workspace(project_id=initialized.project.id)
+
+
+def test_workbench_rejects_a_rehashed_memo_ref_to_the_wrong_domain_payload(
+    session,
+) -> None:
+    initialized, workbench, repository = _model_workspace(session)
+    memo = repository.current_artifact(initialized.project.id, "memo")
+    assert memo is not None
+    payload = dict(memo.payload)
+    payload["business_map_ref"] = {
+        **payload["business_map_ref"],
+        "content_hash": "a" * 64,
+    }
+    _rewrite_payload(session, memo, payload)
+
+    with pytest.raises(ValidationError, match="memo references are invalid"):
+        workbench.workspace(project_id=initialized.project.id)
+
+
 @pytest.mark.parametrize("mutation", ("tampered", "missing", "duplicate"))
 def test_workbench_rejects_tampered_missing_or_duplicate_cross_artifact_refs(
     session, mutation: str
@@ -570,7 +971,9 @@ def test_workbench_rejects_a_cross_artifact_ref_to_a_foreign_project(session) ->
         project_id=foreign_project.id,
         kind="business_map",
         input_hash="e" * 64,
-        payload={"modules": []},
+        payload={
+            key: value for key, value in business.payload.items() if key != "_lineage"
+        },
         source_refs=driver.source_refs,
         expected_parent_id=None,
         created_at=NOW,

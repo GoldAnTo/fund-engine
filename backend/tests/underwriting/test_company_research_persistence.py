@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine, event, select, update
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.ledger import Base, ConflictError, ImmutableLedgerError, ValidationError
 from app.models.operational import Job
@@ -24,8 +27,43 @@ from app.underwriting.persistence.company_research_repository import (
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.persistence.models import UnderwritingResearchObject
 from app.underwriting.persistence.product_models import UnderwritingResearchProject
+from app.underwriting.domain.types import InvestmentMandateInput
+from app.underwriting.services.company_research_artifact_codec import (
+    CompanyResearchArtifactCodec,
+)
+from app.underwriting.services.company_research_model_builder import (
+    CompanyResearchModelBuilder,
+)
+from app.underwriting.services.product_project import ResearchProjectService
+from app.underwriting.services.workspace_draft import (
+    WorkspaceDraftContent,
+    WorkspaceDraftService,
+)
+from tests.underwriting.test_company_research_model_builder import _build_input
 
 NOW = datetime(2026, 8, 25, tzinfo=UTC)
+
+
+def _valid_model_payloads(*, with_valuation: bool) -> dict[str, dict[str, object]]:
+    build_input = _build_input()
+    if not with_valuation:
+        build_input = replace(build_input, market_context=None)
+    result = CompanyResearchModelBuilder().build(build_input)
+    values = {
+        "business_map": result.business_map,
+        "driver_map": result.driver_map,
+        "financial_bridge": result.financial_bridge,
+        "scenario_set": result.scenario_set,
+        "judgment_context": result.judgment_context,
+        "research_gaps": result.gaps,
+        "memo": result.memo,
+    }
+    if result.valuation_set is not None:
+        values["valuation_set"] = result.valuation_set
+    return {
+        kind: CompanyResearchArtifactCodec.encode(kind, artifact)
+        for kind, artifact in values.items()
+    }
 
 
 def _project(session) -> UnderwritingResearchProject:
@@ -49,6 +87,26 @@ def _project(session) -> UnderwritingResearchProject:
 
 def _repository_with_preparation(session):
     project = _project(session)
+    mandate = ResearchProjectService(session, now=lambda: NOW).append_product_mandate(
+        project_id=project.id,
+        value=InvestmentMandateInput(
+            mandate_key="company-research-default",
+            horizon_years=5,
+            base_currency="CNY",
+            required_return=Decimal("0.12"),
+            permanent_loss_limit=Decimal("0.25"),
+            comparison_set=("absolute_intrinsic_value",),
+        ),
+        benchmark_key=None,
+        required_excess_return=None,
+        effective_at=NOW,
+        expires_at=None,
+        expected_parent_id=None,
+    )
+    WorkspaceDraftService(session, now=lambda: NOW).create(
+        project.id,
+        initial_content=WorkspaceDraftContent(mandate_id=mandate.id),
+    )
     repository = CompanyResearchRepository(session)
     preparation = repository.add_preparation(
         project_id=project.id,
@@ -101,7 +159,10 @@ def _repository_with_model_job(session):
         project_id=project.id,
         kind="evidence_index",
         input_hash="2" * 64,
-        payload={"facts": [{"fact_key": "revenue", "review_decision": "confirmed"}]},
+        payload={
+            "cutoff": NOW.isoformat(),
+            "facts": [{"fact_key": "revenue", "review_decision": "confirmed"}],
+        },
         source_refs=source_refs,
         expected_parent_id=None,
         created_at=NOW,
@@ -110,7 +171,11 @@ def _repository_with_model_job(session):
         project_id=project.id,
         kind="research_gaps",
         input_hash="3" * 64,
-        payload={"gaps": []},
+        payload={
+            "fixture_content_hash": "4" * 64,
+            "company_external_key": "US:TEST:COMPANY",
+            "gaps": [],
+        },
         source_refs=source_refs,
         expected_parent_id=None,
         created_at=NOW,
@@ -123,19 +188,24 @@ def _repository_with_model_job(session):
     job.progress = 25
     job.claim_token = "model-claim"
     session.flush([preparation, job])
+    payloads = _valid_model_payloads(with_valuation=False)
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(project.id)
+    assert draft is not None
     bundle = CompanyResearchPersistedBundle(
         evidence_artifact_id=evidence.id,
         evidence_content_hash=evidence.content_hash,
         research_gaps_artifact_id=gaps.id,
         research_gaps_content_hash=gaps.content_hash,
-        business_map={"modules": [{"key": "search"}]},
-        driver_map={"drivers": [{"driver_key": "queries"}]},
-        financial_bridge={"scenario_id": "base", "rows": []},
-        scenario_set={"scenarios": [{"scenario_id": "base"}]},
+        workspace_draft_id=draft.id,
+        workspace_draft_lock_version=draft.lock_version,
+        business_map=payloads["business_map"],
+        driver_map=payloads["driver_map"],
+        financial_bridge=payloads["financial_bridge"],
+        scenario_set=payloads["scenario_set"],
         valuation_set=None,
-        judgment_context={"assessment_status": "answerable"},
-        research_gaps={"gaps": []},
-        memo={"candidate_status": "machine_draft"},
+        judgment_context=payloads["judgment_context"],
+        research_gaps=payloads["research_gaps"],
+        memo=payloads["memo"],
         source_refs=source_refs,
         market_snapshot_bindings=(),
     )
@@ -290,6 +360,79 @@ def test_complete_model_bundle_rejects_a_stale_claim_without_writing(session) ->
     assert repository.current_artifact(project.id, "business_map") is None
 
 
+@pytest.mark.parametrize("kind", ("driver_map", "scenario_set", "memo"))
+def test_append_artifact_rejects_untyped_model_payload_without_lineage(
+    session, kind: str
+) -> None:
+    repository, project, _preparation = _repository_with_preparation(session)
+
+    with pytest.raises(ValidationError, match=rf"{kind} payload is invalid"):
+        repository.append_artifact(
+            project_id=project.id,
+            kind=kind,
+            input_hash="d" * 64,
+            payload={"fabricated": True},
+            source_refs=(),
+            expected_parent_id=None,
+            created_at=NOW,
+        )
+
+    assert repository.current_artifact(project.id, kind) is None
+
+
+def test_artifact_read_rejects_an_untyped_model_payload_without_lineage(
+    session,
+) -> None:
+    repository, project, _preparation = _repository_with_preparation(session)
+    payload = _valid_model_payloads(with_valuation=False)["driver_map"]
+    artifact = repository.append_artifact(
+        project_id=project.id,
+        kind="driver_map",
+        input_hash="d" * 64,
+        payload=payload,
+        source_refs=(),
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    malformed = {"fabricated": True}
+    set_committed_value(artifact, "payload", malformed)
+    set_committed_value(
+        artifact,
+        "content_hash",
+        CompanyResearchRepository.artifact_content_hash(
+            project_id=artifact.project_id,
+            kind=artifact.kind,
+            version=artifact.version,
+            supersedes_id=artifact.supersedes_id,
+            parent_content_hash=artifact.parent_content_hash,
+            input_hash=artifact.input_hash,
+            payload=malformed,
+            source_refs=artifact.source_refs,
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="driver_map payload is invalid"):
+        repository.artifact(artifact.id)
+
+
+def test_model_bundle_rejects_a_memo_ref_that_does_not_match_its_payload(
+    session,
+) -> None:
+    repository, project, _preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    memo = {**bundle.memo}
+    memo["business_map_ref"] = {
+        **memo["business_map_ref"],
+        "content_hash": "a" * 64,
+    }
+
+    with pytest.raises(ValidationError, match="memo artifact references"):
+        replace(bundle, memo=memo)
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
 def test_complete_model_bundle_rejects_a_stale_evidence_head_without_writing(
     session,
 ) -> None:
@@ -324,7 +467,7 @@ def test_complete_model_bundle_rejects_a_stale_gap_head_without_writing(
         project_id=project.id,
         kind="research_gaps",
         input_hash="4" * 64,
-        payload={"gaps": [{"gap_key": "new"}]},
+        payload=bundle.research_gaps,
         source_refs=gaps.source_refs,
         expected_parent_id=gaps.id,
         created_at=NOW,
@@ -347,6 +490,8 @@ def test_complete_model_bundle_omits_optional_valuation_and_keeps_lineage_closed
         evidence_content_hash=bundle.evidence_content_hash,
         research_gaps_artifact_id=bundle.research_gaps_artifact_id,
         research_gaps_content_hash=bundle.research_gaps_content_hash,
+        workspace_draft_id=bundle.workspace_draft_id,
+        workspace_draft_lock_version=bundle.workspace_draft_lock_version,
         business_map=bundle.business_map,
         driver_map=bundle.driver_map,
         financial_bridge=bundle.financial_bridge,
@@ -419,7 +564,7 @@ def test_artifacts_are_immutable_and_replayed_from_a_strict_parent_chain(
     repository, project, _ = _repository_with_preparation(session)
     first = repository.append_artifact(
         project_id=project.id,
-        kind="business_map",
+        kind="evidence_index",
         input_hash="1" * 64,
         payload={"segments": ["search"]},
         source_refs=[{"source_id": "annual-report"}],
@@ -428,7 +573,7 @@ def test_artifacts_are_immutable_and_replayed_from_a_strict_parent_chain(
     )
     second = repository.append_artifact(
         project_id=project.id,
-        kind="business_map",
+        kind="evidence_index",
         input_hash="2" * 64,
         payload={"segments": ["search", "cloud"]},
         source_refs=[{"source_id": "annual-report"}],
@@ -440,7 +585,7 @@ def test_artifacts_are_immutable_and_replayed_from_a_strict_parent_chain(
         first.id,
         second.id,
     )
-    assert repository.current_artifact(project.id, "business_map").id == second.id
+    assert repository.current_artifact(project.id, "evidence_index").id == second.id
     with pytest.raises(ImmutableLedgerError):
         session.execute(
             CompanyResearchArtifactVersion.__table__.update().values(version=9)
@@ -470,7 +615,7 @@ def test_artifact_chain_rejects_an_admin_rewrite_of_parent_content(session) -> N
     repository, project, _ = _repository_with_preparation(session)
     first = repository.append_artifact(
         project_id=project.id,
-        kind="business_map",
+        kind="evidence_index",
         input_hash="1" * 64,
         payload={"segments": ["search"]},
         source_refs=[],
@@ -479,7 +624,7 @@ def test_artifact_chain_rejects_an_admin_rewrite_of_parent_content(session) -> N
     )
     second = repository.append_artifact(
         project_id=project.id,
-        kind="business_map",
+        kind="evidence_index",
         input_hash="2" * 64,
         payload={"segments": ["search", "cloud"]},
         source_refs=[],
@@ -549,7 +694,7 @@ def test_artifact_reads_fail_closed_on_hash_tamper_and_duplicate_heads(session) 
     repository, project, _ = _repository_with_preparation(session)
     artifact = repository.append_artifact(
         project_id=project.id,
-        kind="driver_map",
+        kind="evidence_index",
         input_hash="3" * 64,
         payload={"driver": "query volume"},
         source_refs=[],
@@ -575,7 +720,7 @@ def test_artifact_reads_fail_closed_on_hash_tamper_and_duplicate_heads(session) 
     session.expire_all()
     duplicate = CompanyResearchArtifactVersion(
         project_id=project.id,
-        kind="driver_map",
+        kind="evidence_index",
         version=2,
         supersedes_id=None,
         input_hash="4" * 64,
@@ -583,7 +728,7 @@ def test_artifact_reads_fail_closed_on_hash_tamper_and_duplicate_heads(session) 
         source_refs=[],
         content_hash=CompanyResearchRepository.artifact_content_hash(
             project_id=project.id,
-            kind="driver_map",
+            kind="evidence_index",
             version=2,
             supersedes_id=None,
             input_hash="4" * 64,
@@ -595,7 +740,7 @@ def test_artifact_reads_fail_closed_on_hash_tamper_and_duplicate_heads(session) 
     session.add(duplicate)
     session.flush()
     with pytest.raises(ConflictError, match="multiple current artifact heads"):
-        repository.current_artifact(project.id, "driver_map")
+        repository.current_artifact(project.id, "evidence_index")
 
 
 def test_job_lookup_requires_exact_company_research_ownership(session) -> None:
@@ -1078,7 +1223,7 @@ def test_sqlite_concurrent_artifact_append_returns_a_stale_parent_error(
         repository, project, _ = _repository_with_preparation(bootstrap)
         root = repository.append_artifact(
             project_id=project.id,
-            kind="business_map",
+            kind="evidence_index",
             input_hash="9" * 64,
             payload={"segments": ["search"]},
             source_refs=[],
@@ -1106,7 +1251,7 @@ def test_sqlite_concurrent_artifact_append_returns_a_stale_parent_error(
             try:
                 CompanyResearchRepository(rival).append_artifact(
                     project_id=project_id,
-                    kind="business_map",
+                    kind="evidence_index",
                     input_hash="a" * 64,
                     payload={"segments": ["cloud"]},
                     source_refs=[],
@@ -1120,7 +1265,7 @@ def test_sqlite_concurrent_artifact_append_returns_a_stale_parent_error(
     try:
         appended = CompanyResearchRepository(primary).append_artifact(
             project_id=project_id,
-            kind="business_map",
+            kind="evidence_index",
             input_hash="b" * 64,
             payload={"segments": ["youtube"]},
             source_refs=[],
@@ -1155,7 +1300,7 @@ def test_current_artifact_rejects_a_foreign_scope_successor(
     repository, project, _ = _repository_with_preparation(session)
     first = repository.append_artifact(
         project_id=project.id,
-        kind="business_map",
+        kind="evidence_index",
         input_hash="5" * 64,
         payload={"segment": "search"},
         source_refs=[],
@@ -1163,12 +1308,20 @@ def test_current_artifact_rejects_a_foreign_scope_successor(
         created_at=NOW,
     )
     foreign_project = _project(session) if foreign_scope == "project" else project
-    foreign_kind = "business_map" if foreign_scope == "project" else "driver_map"
+    foreign_kind = "evidence_index" if foreign_scope == "project" else "research_gaps"
     foreign = repository.append_artifact(
         project_id=foreign_project.id,
         kind=foreign_kind,
         input_hash="6" * 64,
-        payload={"segment": "cloud"},
+        payload=(
+            {"segment": "cloud"}
+            if foreign_kind == "evidence_index"
+            else {
+                "fixture_content_hash": "6" * 64,
+                "company_external_key": "US:FOREIGN:COMPANY",
+                "gaps": [],
+            }
+        ),
         source_refs=[],
         expected_parent_id=None,
         created_at=NOW,
@@ -1190,8 +1343,8 @@ def test_current_artifact_rejects_a_foreign_scope_successor(
     )
     session.expire_all()
 
-    with pytest.raises(CompanyResearchIntegrityError, match="successor"):
-        repository.current_artifact(project.id, "business_map")
+    with pytest.raises(ValidationError, match="successor|payload is invalid"):
+        repository.current_artifact(project.id, "evidence_index")
 
 
 def test_current_artifact_rejects_a_cycle_instead_of_returning_no_current(
@@ -1200,7 +1353,7 @@ def test_current_artifact_rejects_a_cycle_instead_of_returning_no_current(
     repository, project, _ = _repository_with_preparation(session)
     first = repository.append_artifact(
         project_id=project.id,
-        kind="business_map",
+        kind="evidence_index",
         input_hash="7" * 64,
         payload={"segment": "search"},
         source_refs=[],
@@ -1209,7 +1362,7 @@ def test_current_artifact_rejects_a_cycle_instead_of_returning_no_current(
     )
     second = repository.append_artifact(
         project_id=project.id,
-        kind="business_map",
+        kind="evidence_index",
         input_hash="8" * 64,
         payload={"segment": "cloud"},
         source_refs=[],
@@ -1234,7 +1387,7 @@ def test_current_artifact_rejects_a_cycle_instead_of_returning_no_current(
     session.expire_all()
 
     with pytest.raises(CompanyResearchIntegrityError, match="cycle"):
-        repository.current_artifact(project.id, "business_map")
+        repository.current_artifact(project.id, "evidence_index")
 
 
 def test_repository_writes_remain_owned_by_the_callers_transaction(session) -> None:
