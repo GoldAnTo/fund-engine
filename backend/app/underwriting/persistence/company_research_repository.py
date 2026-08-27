@@ -129,7 +129,7 @@ class CompanyResearchPersistedBundle:
                 raise ValidationError(
                     "company research model bundle head hashes are invalid"
                 )
-        if bool(self.market_snapshot_bindings) != (self.valuation_set is not None):
+        if self.valuation_set is not None and not self.market_snapshot_bindings:
             raise ValidationError(
                 "company research model bundle valuation market refs are invalid"
             )
@@ -196,6 +196,10 @@ class CompanyResearchPersistedBundle:
         )
         assert type(memo) is CompanyResearchMemoArtifact
         assert type(judgment) is JudgmentContextArtifact
+        if bool(self.market_snapshot_bindings) != judgment.market_security_bridge_available:
+            raise ValidationError(
+                "company research bundle market availability is inconsistent"
+            )
         memo_refs = {
             "business_map": memo.business_map_ref,
             "driver_map": memo.driver_map_ref,
@@ -220,7 +224,6 @@ class CompanyResearchPersistedBundle:
             if (
                 memo.assessment_status != "not_answerable"
                 or memo.valuation_set_ref is not None
-                or judgment.market_security_bridge_available
             ):
                 raise ValidationError(
                     "company research bundle without valuation must be not_answerable"
@@ -767,14 +770,20 @@ class CompanyResearchRepository:
             job=job,
             persisted=True,
         )
-        preparation.status = "queued"
-        preparation.progress = 0
+        preparation.status = (
+            "building_model"
+            if preparation.current_step == "model_bundle"
+            else "queued"
+        )
+        preparation.progress = (
+            25 if preparation.current_step == "model_bundle" else 0
+        )
         preparation.attempt += 1
         preparation.next_attempt_at = None
         preparation.last_error_code = None
         preparation.updated_at = self._stored_datetime(updated_at, "updated_at")
         job.status = "queued"
-        job.progress = 0
+        job.progress = preparation.progress
         job.attempt += 1
         job.error = None
         job.started_at = None

@@ -408,7 +408,14 @@ class CompanyResearchWorkbench:
                 raise ValidationError(
                     "company research cross-artifact lineage is invalid"
                 )
-        if bool(expected_market_ids) != ("valuation_set" in heads):
+        market_available = heads["judgment_context"].payload.get(
+            "market_security_bridge_available"
+        )
+        if (
+            type(market_available) is not bool
+            or bool(expected_market_ids) != market_available
+            or ("valuation_set" in heads and not expected_market_ids)
+        ):
             raise ValidationError("company research cross-artifact lineage is invalid")
         parsed = tuple(
             CompanyResearchRepository.market_binding_from_payload(value)
@@ -500,8 +507,8 @@ class CompanyResearchWorkbench:
             )
         ):
             raise ValidationError("company research memo references are invalid")
-        if has_valuation != (memo.valuation_set_ref is not None) or has_valuation != (
-            judgment.market_security_bridge_available
+        if has_valuation != (memo.valuation_set_ref is not None) or (
+            has_valuation and not judgment.market_security_bridge_available
         ):
             raise ValidationError("company research valuation state is invalid")
         if not has_valuation and memo.assessment_status != "not_answerable":
@@ -810,13 +817,13 @@ class CompanyResearchWorkbench:
         if all_reviewed:
             job.status, job.step, job.progress, job.claim_token = (
                 "queued",
-                "business_map",
+                "model_bundle",
                 25,
                 None,
             )
             preparation.status, preparation.current_step, preparation.progress = (
                 "building_model",
-                "business_map",
+                "model_bundle",
                 25,
             )
         else:

@@ -317,7 +317,7 @@ def test_evidence_review_appends_exact_successor_and_is_idempotent(session) -> N
     assert first.evidence_artifact.payload["facts"][0]["review_decision"] == "confirmed"
 
 
-def test_last_evidence_review_enqueues_business_map_for_the_worker(session) -> None:
+def test_last_evidence_review_enqueues_model_bundle_for_the_worker(session) -> None:
     initialized = _prepared(session)
     workbench = CompanyResearchWorkbench(session, now=lambda: NOW)
     artifact = next(
@@ -341,7 +341,7 @@ def test_last_evidence_review_enqueues_business_map_for_the_worker(session) -> N
     worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
     claim = worker.claim_next()
 
-    assert claim is not None
+    assert claim is not None and claim.step == "model_bundle"
     assert worker.run_claim(claim) == "awaiting_judgment_review"
     workspace = workbench.workspace(project_id=initialized.project.id)
     assert workspace.preparation.current_step == "judgment_context"

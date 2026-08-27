@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.models.ledger import ValidationError
 from app.models.operational import Job, JobEvent
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
 from app.underwriting.persistence.company_research_models import (
@@ -25,11 +26,19 @@ from app.underwriting.services.company_research_initializer import (
 from app.underwriting.services.company_research_preparation import (
     CompanyResearchPreparationWorker,
 )
+from app.underwriting.services.company_research_workbench import (
+    CompanyResearchWorkbench,
+)
 from app.underwriting.services.company_research_sources import CompanyResearchSourceService
 from app.underwriting.services.product_foundation_fixture import ProductFoundationFixtureService
+from app.underwriting.services.workspace_draft import (
+    WorkspaceDraftPatch,
+    WorkspaceDraftService,
+)
 
 
 NOW = datetime(2026, 8, 26, tzinfo=UTC)
+CUTOFF = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
 
 
 def _initialized(session):
@@ -38,14 +47,43 @@ def _initialized(session):
     )
     initializer = CompanyResearchInitializer(session, now=lambda: NOW)
     preview = initializer.preview(
-        company_id=loaded.objects["US:ALPHABET:COMPANY"].id, cutoff_at=NOW
+        company_id=loaded.objects["US:ALPHABET:COMPANY"].id, cutoff_at=CUTOFF
     )
     return initializer.initialize(
         preview_hash=preview.input_hash,
         company_id=preview.company.object_id,
-        cutoff_at=NOW,
+        cutoff_at=CUTOFF,
         idempotency_key="company-worker-alphabet",
     )
+
+
+def _review_all_evidence(session, initialized):
+    workbench = CompanyResearchWorkbench(session, now=lambda: NOW)
+    workspace = workbench.workspace(project_id=initialized.project.id)
+    evidence = next(
+        item.artifact for item in workspace.modules if item.key == "evidence_and_gaps"
+    )
+    assert evidence is not None
+    current = evidence
+    for fact in evidence.payload["facts"]:
+        current = workbench.review_evidence(
+            project_id=initialized.project.id,
+            evidence_artifact_id=current.id,
+            fact_key=fact["fact_key"],
+            decision="confirmed",
+            expected_head_id=current.id,
+        ).evidence_artifact
+    return current
+
+
+def _ready_for_model(session):
+    initialized = _initialized(session)
+    source_worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    source_claim = source_worker.claim_next()
+    assert source_claim is not None
+    assert source_worker.run_claim(source_claim) == "awaiting_evidence_review"
+    _review_all_evidence(session, initialized)
+    return initialized
 
 
 def test_claim_is_exclusive_and_success_stops_at_evidence_review(session) -> None:
@@ -71,6 +109,341 @@ def test_claim_is_exclusive_and_success_stops_at_evidence_review(session) -> Non
             )
         )
     } == {"evidence_index", "research_gaps"}
+
+
+def test_worker_builds_all_model_artifacts_after_last_evidence_review(session) -> None:
+    initialized = _ready_for_model(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+
+    claim = worker.claim_next()
+
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "awaiting_judgment_review"
+    repository = CompanyResearchRepository(session)
+    heads = {
+        kind: repository.current_artifact(initialized.project.id, kind)
+        for kind in (
+            "business_map",
+            "driver_map",
+            "financial_bridge",
+            "scenario_set",
+            "judgment_context",
+            "research_gaps",
+            "memo",
+        )
+    }
+    assert all(row is not None for row in heads.values())
+    # The governed market boundary is complete, but the reviewed golden-case
+    # evidence still has explicit critical operating-baseline gaps.  The
+    # pipeline therefore persists the full non-valuation bundle and remains
+    # honestly not answerable rather than manufacturing a valuation.
+    assert repository.current_artifact(initialized.project.id, "valuation_set") is None
+    judgment = heads["judgment_context"]
+    memo = heads["memo"]
+    assert judgment is not None and judgment.payload["market_security_bridge_available"]
+    assert memo is not None and memo.payload["assessment_status"] == "not_answerable"
+    assert judgment.payload["_lineage"]["market_snapshot_ids"]
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None
+    assert (preparation.status, preparation.current_step, preparation.progress) == (
+        "awaiting_judgment_review",
+        "judgment_context",
+        85,
+    )
+    assert job is not None
+    assert (job.status, job.step, job.progress, job.claim_token) == (
+        "waiting_for_review",
+        "judgment_context",
+        85,
+        None,
+    )
+
+
+def test_missing_market_inputs_complete_with_not_answerable_and_gaps(
+    session, monkeypatch
+) -> None:
+    initialized = _ready_for_model(session)
+    session.commit()
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    governed = worker._governed_inputs(
+        project_id=initialized.project.id,
+        cutoff_at=worker._repository.evidence_cutoff(
+            worker._repository.current_artifact(
+                initialized.project.id, "evidence_index"
+            )
+        ),
+    )
+    session.rollback()
+    drafts = WorkspaceDraftService(session, now=lambda: NOW)
+    draft = drafts.read(initialized.project.id)
+    assert draft is not None
+    drafts.save(
+        initialized.project.id,
+        expected_lock_version=draft.lock_version,
+        patch=WorkspaceDraftPatch(
+            price_snapshot_ids=(),
+            fx_snapshot_ids=(),
+            capital_structure_snapshot_id=None,
+            security_rights_ids=(),
+        ),
+    )
+    session.commit()
+    monkeypatch.setattr(
+        worker,
+        "_governed_inputs",
+        lambda **_kwargs: replace(governed, market_context=None),
+    )
+
+    claim = worker.claim_next()
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "awaiting_judgment_review"
+
+    repository = CompanyResearchRepository(session)
+    assert repository.current_artifact(initialized.project.id, "valuation_set") is None
+    memo = repository.current_artifact(initialized.project.id, "memo")
+    gaps = repository.current_artifact(initialized.project.id, "research_gaps")
+    assert memo is not None and memo.payload["assessment_status"] == "not_answerable"
+    assert gaps is not None
+    assert {item["code"] for item in gaps.payload["gaps"]} >= {
+        "market_price_missing",
+        "usd_cny_fx_missing",
+    }
+
+
+def test_model_provider_failure_is_requeued_with_bounded_backoff(session) -> None:
+    initialized = _ready_for_model(session)
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=lambda _input: (_ for _ in ()).throw(
+            TimeoutError("provider secret")
+        ),
+    )
+    claim = worker.claim_next()
+    assert claim is not None and claim.step == "model_bundle"
+
+    assert worker.run_claim(claim) == "recoverable_failure"
+
+    job = session.get(Job, initialized.job.id)
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    assert job is not None
+    assert (job.status, job.step, job.attempt, job.error) == (
+        "queued",
+        "model_bundle",
+        2,
+        "provider_unavailable",
+    )
+    assert preparation is not None
+    assert preparation.status == "recoverable_failure"
+    assert preparation.current_step == "model_bundle"
+    assert preparation.next_attempt_at == NOW + timedelta(seconds=30)
+    assert CompanyResearchRepository(session).current_artifact(
+        initialized.project.id, "business_map"
+    ) is None
+
+
+def test_manual_retry_keeps_a_model_failure_on_the_model_bundle_step(session) -> None:
+    initialized = _ready_for_model(session)
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=lambda _input: (_ for _ in ()).throw(OSError("secret")),
+    )
+    claim = worker.claim_next()
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "recoverable_failure"
+
+    retried = CompanyResearchPreparationService(
+        session, now=lambda: NOW + timedelta(seconds=30)
+    ).retry(project_id=initialized.project.id)
+
+    assert retried.preparation.status == "building_model"
+    retry = CompanyResearchPreparationWorker(
+        session, now=lambda: NOW + timedelta(seconds=30)
+    ).claim_next()
+    assert retry is not None and retry.step == "model_bundle"
+
+
+@pytest.mark.parametrize(
+    "error",
+    (
+        ValidationError("schema invalid"),
+        ValidationError("hash invalid"),
+        ValidationError("lineage invalid"),
+        ValidationError("financial bridge does not close"),
+    ),
+)
+def test_invalid_model_output_is_blocked_without_partial_artifacts(session, error) -> None:
+    initialized = _ready_for_model(session)
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=lambda _input: (_ for _ in ()).throw(error),
+    )
+    claim = worker.claim_next()
+    assert claim is not None
+
+    assert worker.run_claim(claim) == "discarded"
+
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and preparation.status == "blocked"
+    assert job is not None and job.status == "failed"
+    assert CompanyResearchRepository(session).current_artifact(
+        initialized.project.id, "business_map"
+    ) is None
+
+
+def test_stale_model_claim_is_recovered_and_reuses_the_same_job(session) -> None:
+    initialized = _ready_for_model(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None and claim.step == "model_bundle"
+    job = session.get(Job, initialized.job.id)
+    assert job is not None
+    job.started_at = NOW - timedelta(minutes=31)
+    session.flush()
+
+    assert worker.recover_stale_claims(before=NOW - timedelta(minutes=30)) == 1
+    assert job.status == "queued"
+    assert job.claim_token is None
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    assert preparation is not None
+    assert (preparation.status, preparation.current_step, preparation.progress) == (
+        "building_model",
+        "model_bundle",
+        25,
+    )
+    retry = worker.claim_next()
+    assert retry is not None and retry.job_id == claim.job_id
+
+
+def test_model_crash_before_bundle_commit_recovers_without_partial_heads(
+    session, monkeypatch
+) -> None:
+    initialized = _ready_for_model(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None
+
+    monkeypatch.setattr(
+        worker._repository,
+        "complete_model_bundle",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            SystemExit("simulated model worker crash")
+        ),
+    )
+    with pytest.raises(SystemExit, match="simulated model worker crash"):
+        worker.run_claim(claim)
+
+    repository = CompanyResearchRepository(session)
+    assert repository.current_artifact(initialized.project.id, "business_map") is None
+    job = session.get(Job, initialized.job.id)
+    assert job is not None and job.status == "running"
+    job.started_at = NOW - timedelta(minutes=31)
+    session.flush()
+    retry_worker = CompanyResearchPreparationWorker(
+        session, now=lambda: NOW + timedelta(minutes=31)
+    )
+    assert retry_worker.recover_stale_claims(before=NOW) == 1
+    retry = retry_worker.claim_next()
+    assert retry is not None and retry.job_id == claim.job_id
+    assert retry_worker.run_claim(retry) == "awaiting_judgment_review"
+
+
+def test_committed_model_bundle_survives_crash_and_duplicate_worker_converges(
+    session,
+) -> None:
+    initialized = _ready_for_model(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None
+    assert worker.run_claim(claim) == "awaiting_judgment_review"
+    session.commit()
+
+    bind = session.get_bind()
+    restarted = Session(bind=bind, future=True)
+    try:
+        duplicate = CompanyResearchPreparationWorker(
+            restarted, now=lambda: NOW + timedelta(hours=1)
+        )
+        assert duplicate.claim_next() is None
+        assert duplicate.recover_stale_claims(
+            before=NOW + timedelta(hours=1)
+        ) == 0
+        rows = tuple(
+            restarted.scalars(
+                select(CompanyResearchArtifactVersion).where(
+                    CompanyResearchArtifactVersion.project_id
+                    == initialized.project.id
+                )
+            )
+        )
+        kinds = [row.kind for row in rows]
+        assert kinds.count("business_map") == 1
+        assert kinds.count("memo") == 1
+    finally:
+        restarted.rollback()
+        restarted.close()
+
+
+def test_model_provider_runs_without_claim_lock_and_stale_output_is_discarded(
+    session,
+) -> None:
+    initialized = _ready_for_model(session)
+    session.commit()
+
+    def provider(build_input):
+        external = Session(bind=session.get_bind(), future=True)
+        try:
+            changed = external.get(
+                CompanyResearchPreparation, initialized.preparation.id
+            )
+            assert changed is not None
+            changed.strategy_version = "changed-while-provider-ran.v1"
+            external.commit()
+        finally:
+            external.close()
+        from app.underwriting.services.company_research_model_builder import (
+            CompanyResearchModelBuilder,
+        )
+
+        return CompanyResearchModelBuilder().build(build_input)
+
+    worker = CompanyResearchPreparationWorker(
+        session, now=lambda: NOW, model_provider=provider
+    )
+    claim = worker.claim_next()
+    session.commit()
+    assert claim is not None
+
+    assert worker.run_claim(claim) == "discarded"
+    assert CompanyResearchRepository(session).current_artifact(
+        initialized.project.id, "business_map"
+    ) is None
+
+
+def test_model_commit_receives_exact_claim_request_and_strategy_fence(
+    session, monkeypatch
+) -> None:
+    _ready_for_model(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None
+    original = worker._repository.complete_model_bundle
+    observed = {}
+
+    def fenced(*args, **kwargs):
+        observed.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(worker._repository, "complete_model_bundle", fenced)
+
+    assert worker.run_claim(claim) == "awaiting_judgment_review"
+    assert observed["expected_claim_token"] == claim.claim_token
+    assert observed["expected_request_hash"] == claim.request_hash
+    assert observed["expected_strategy_version"] == claim.strategy_version
 
 
 def test_stale_claim_discards_provider_output_without_artifact(session) -> None:

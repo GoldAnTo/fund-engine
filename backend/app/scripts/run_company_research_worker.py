@@ -1,4 +1,4 @@
-"""Run the recoverable, review-gated company-research source worker."""
+"""Run the recoverable, review-gated company-research preparation worker."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def _touch(*, mode: str, state: str) -> None:
 
 
 def run_once(*, recover_after_minutes: int = 30, session_factory=SessionLocal) -> bool:
-    """Claim and execute one company-research stage, if source work is due."""
+    """Claim and execute one source or model-bundle stage when work is due."""
     with session_factory() as session:
         worker = CompanyResearchPreparationWorker(session, now=_utcnow)
         recovered = worker.recover_stale_claims(

@@ -1,9 +1,4 @@
-"""Lease-fenced execution of the review-gated company-research source stage.
-
-Only ``prepare_sources`` is currently executable: it produces the immutable
-evidence index and research gaps, then deliberately stops for human review.
-The remaining model stages are never inferred from unreviewed source material.
-"""
+"""Lease-fenced execution of review-gated company-research preparation."""
 
 from __future__ import annotations
 
@@ -24,6 +19,7 @@ from app.underwriting.persistence.company_research_models import (
     CompanyResearchPreparation,
 )
 from app.underwriting.persistence.company_research_repository import (
+    CompanyResearchPersistedBundle,
     CompanyResearchRepository,
 )
 from app.underwriting.persistence.repository import StaleParentError
@@ -32,6 +28,21 @@ from app.underwriting.services.company_research_sources import (
     CompanyResearchProviderInput,
     CompanyResearchSourceCompiler,
 )
+from app.underwriting.services.company_research_artifact_codec import (
+    CompanyResearchArtifactCodec,
+)
+from app.underwriting.services.company_research_initializer import (
+    CompanyResearchGovernedInputs,
+    CompanyResearchInitializer,
+)
+from app.underwriting.services.company_research_model_builder import (
+    CompanyResearchBuildInput,
+    CompanyResearchBuildResult,
+    CompanyResearchModelBuilder,
+)
+from app.underwriting.services.workspace_draft import WorkspaceDraftService
+from app.underwriting.domain.company_research import CompanyResearchIdentitySet
+from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.models import UnderwritingResearchObject
 from app.underwriting.persistence.product_models import UnderwritingResearchProject
 from app.underwriting.fixtures.alphabet_golden_case import (
@@ -42,12 +53,7 @@ from app.underwriting.domain.company_research import CompanyResearchValidationEr
 
 COMPANY_RESEARCH_STAGES = (
     "prepare_sources",
-    "build_business_map",
-    "build_driver_map",
-    "build_financial_bridge",
-    "build_scenarios",
-    "build_valuation",
-    "evaluate_readiness",
+    "model_bundle",
 )
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = (30, 120, 600)
@@ -66,6 +72,20 @@ class CompanyResearchClaim:
     step: str
 
 
+@dataclass(frozen=True, slots=True)
+class _ModelBuildBoundary:
+    """Immutable model inputs plus exact publication parents."""
+
+    build_input: CompanyResearchBuildInput
+    evidence_artifact_id: UUID
+    evidence_content_hash: str
+    research_gaps_artifact_id: UUID
+    research_gaps_content_hash: str
+    workspace_draft_id: UUID
+    workspace_draft_lock_version: int
+    source_refs: tuple[dict[str, str], ...]
+
+
 class CompanyResearchPreparationWorker:
     """Claim, compile outside a transaction, then commit one fenced output."""
 
@@ -78,12 +98,17 @@ class CompanyResearchPreparationWorker:
             [CompanyResearchProviderInput], CompanyResearchEvidenceCompilation
         ]
         | None = None,
+        model_provider: Callable[
+            [CompanyResearchBuildInput], CompanyResearchBuildResult
+        ]
+        | None = None,
     ) -> None:
         self._session = session
         self._now = now
         self._repository = CompanyResearchRepository(session)
         self._jobs = JobRepository(session)
         self._provider = provider
+        self._model_provider = model_provider
 
     def _utcnow(self) -> datetime:
         value = self._now()
@@ -117,9 +142,11 @@ class CompanyResearchPreparationWorker:
                         CompanyResearchPreparation.current_step == "evidence_index",
                     ),
                     and_(
-                        Job.step == "business_map",
-                        CompanyResearchPreparation.status == "building_model",
-                        CompanyResearchPreparation.current_step == "business_map",
+                        Job.step == "model_bundle",
+                        CompanyResearchPreparation.status.in_(
+                            ("building_model", "recoverable_failure")
+                        ),
+                        CompanyResearchPreparation.current_step == "model_bundle",
                     ),
                 ),
                 (CompanyResearchPreparation.next_attempt_at.is_(None))
@@ -185,11 +212,21 @@ class CompanyResearchPreparationWorker:
                     Job.target_id == CompanyResearchPreparation.id,
                     Job.research_case_id.is_(None),
                     Job.status == "running",
-                    Job.step == "evidence_index",
+                    Job.step.in_(("evidence_index", "model_bundle")),
                     Job.started_at.is_not(None),
                     Job.started_at < before,
-                    CompanyResearchPreparation.status == "preparing_sources",
-                    CompanyResearchPreparation.current_step == "evidence_index",
+                    or_(
+                        and_(
+                            CompanyResearchPreparation.status
+                            == "preparing_sources",
+                            CompanyResearchPreparation.current_step
+                            == "evidence_index",
+                        ),
+                        and_(
+                            CompanyResearchPreparation.status == "building_model",
+                            CompanyResearchPreparation.current_step == "model_bundle",
+                        ),
+                    ),
                 )
                 .with_for_update(skip_locked=True)
             )
@@ -207,10 +244,16 @@ class CompanyResearchPreparationWorker:
                 job.status = "queued"
                 job.error = None
                 job.started_at = None
-                preparation.status = "queued"
-                preparation.progress = 0
+                preparation.status = (
+                    "queued" if job.step == "evidence_index" else "building_model"
+                )
+                preparation.progress = 0 if job.step == "evidence_index" else 25
                 preparation.last_error_code = None
-                event_type = "source_claim_recovered"
+                event_type = (
+                    "source_claim_recovered"
+                    if job.step == "evidence_index"
+                    else "model_claim_recovered"
+                )
             job.claim_token = None
             job.finished_at = now if job.status == "cancelled" else None
             preparation.updated_at = now
@@ -218,13 +261,13 @@ class CompanyResearchPreparationWorker:
                 job_id=job.id,
                 seq=self._jobs.next_event_seq(job.id),
                 status=job.status,
-                step="evidence_index",
+                step=job.step,
                 message=event_type,
             )
             self._repository.append_event(
                 preparation_id=preparation.id,
                 event_type=event_type,
-                payload={"stage": "prepare_sources"},
+                payload={"stage": job.step},
                 created_at=now,
             )
             recovered += 1
@@ -247,11 +290,22 @@ class CompanyResearchPreparationWorker:
                     Job.research_case_id.is_(None),
                     Job.status == "queued",
                     Job.cancel_requested.is_(True),
-                    Job.step == "evidence_index",
-                    CompanyResearchPreparation.status.in_(
-                        ("queued", "recoverable_failure")
+                    Job.step.in_(("evidence_index", "model_bundle")),
+                    or_(
+                        and_(
+                            CompanyResearchPreparation.status.in_(
+                                ("queued", "recoverable_failure")
+                            ),
+                            CompanyResearchPreparation.current_step
+                            == "evidence_index",
+                        ),
+                        and_(
+                            CompanyResearchPreparation.status.in_(
+                                ("building_model", "recoverable_failure")
+                            ),
+                            CompanyResearchPreparation.current_step == "model_bundle",
+                        ),
                     ),
-                    CompanyResearchPreparation.current_step == "evidence_index",
                 )
                 .with_for_update(skip_locked=True)
             )
@@ -269,13 +323,13 @@ class CompanyResearchPreparationWorker:
                 job_id=job.id,
                 seq=self._jobs.next_event_seq(job.id),
                 status="cancelled",
-                step="evidence_index",
+                step=job.step,
                 message=_SAFE_STALE_ERROR,
             )
             self._repository.append_event(
                 preparation_id=preparation.id,
                 event_type="stale_output_discarded",
-                payload={"stage": "prepare_sources"},
+                payload={"stage": job.step},
                 created_at=now,
             )
             cancelled += 1
@@ -393,12 +447,16 @@ class CompanyResearchPreparationWorker:
             job_id=job.id,
             seq=self._jobs.next_event_seq(job.id),
             status=job.status,
-            step="evidence_index",
+            step=claim.step,
             message=_SAFE_PROVIDER_ERROR,
         )
         self._repository.append_event(
             preparation_id=preparation.id,
-            event_type="source_provider_failed",
+            event_type=(
+                "source_provider_failed"
+                if claim.step == "evidence_index"
+                else "model_provider_failed"
+            ),
             payload={
                 "code": _SAFE_PROVIDER_ERROR,
                 "recoverable": job.status == "queued",
@@ -426,12 +484,16 @@ class CompanyResearchPreparationWorker:
             job_id=job.id,
             seq=self._jobs.next_event_seq(job.id),
             status="failed",
-            step="evidence_index",
+            step=claim.step,
             message=error_code,
         )
         self._repository.append_event(
             preparation_id=preparation.id,
-            event_type="source_preparation_blocked",
+            event_type=(
+                "source_preparation_blocked"
+                if claim.step == "evidence_index"
+                else "model_preparation_blocked"
+            ),
             payload={"code": error_code},
             created_at=now,
         )
@@ -465,6 +527,150 @@ class CompanyResearchPreparationWorker:
             return self._provider(provider_input)
         return CompanyResearchSourceCompiler().compile_evidence_index(provider_input)
 
+    def _governed_inputs(
+        self, *, project_id: UUID, cutoff_at: datetime
+    ) -> CompanyResearchGovernedInputs:
+        return CompanyResearchInitializer(
+            self._session, now=self._now
+        ).governed_inputs(project_id=project_id, cutoff_at=cutoff_at)
+
+    def _model_input(self, claim: CompanyResearchClaim) -> _ModelBuildBoundary:
+        preparation = self._session.get(
+            CompanyResearchPreparation, claim.preparation_id
+        )
+        if preparation is None:
+            raise ValidationError("company research preparation is missing")
+        project = self._session.get(
+            UnderwritingResearchProject, preparation.project_id
+        )
+        if project is None:
+            raise ValidationError("company research preparation project is missing")
+        evidence = self._repository.current_artifact(
+            preparation.project_id, "evidence_index"
+        )
+        gaps = self._repository.current_artifact(
+            preparation.project_id, "research_gaps"
+        )
+        if evidence is None or gaps is None:
+            raise ValidationError("reviewed evidence and research gaps are required")
+        cutoff = self._repository.evidence_cutoff(evidence)
+        initializer = CompanyResearchInitializer(self._session, now=self._now)
+        preview = initializer.preview(
+            company_id=project.primary_company_id,
+            cutoff_at=cutoff,
+        )
+        governed = self._governed_inputs(
+            project_id=preparation.project_id,
+            cutoff_at=cutoff,
+        )
+        draft = WorkspaceDraftService(self._session, now=self._now).read(
+            preparation.project_id
+        )
+        if draft is None:
+            raise ValidationError("company research workspace draft is missing")
+        bindings = (
+            governed.market_context.snapshot_bindings
+            if governed.market_context is not None
+            else ()
+        )
+        source_refs = self._repository.expected_model_source_refs(
+            evidence=evidence,
+            predecessor_gaps=gaps,
+            market_snapshot_bindings=bindings,
+        )
+        build_input = CompanyResearchBuildInput(
+            project_id=preparation.project_id,
+            identity_set=CompanyResearchIdentitySet(
+                company=preview.company,
+                securities=preview.securities,
+            ),
+            cutoff_at=cutoff,
+            required_return=preview.required_return,
+            evidence_artifact_id=evidence.id,
+            evidence_content_hash=canonical_hash(evidence.payload),
+            evidence_payload=evidence.payload,
+            gap_payload=gaps.payload,
+            source_refs=tuple(dict(value) for value in evidence.source_refs),
+            model_template=governed.model_template,
+            strategy_assumptions=governed.strategy_assumptions,
+            market_context=governed.market_context,
+        )
+        return _ModelBuildBoundary(
+            build_input=build_input,
+            evidence_artifact_id=evidence.id,
+            evidence_content_hash=evidence.content_hash,
+            research_gaps_artifact_id=gaps.id,
+            research_gaps_content_hash=gaps.content_hash,
+            workspace_draft_id=draft.id,
+            workspace_draft_lock_version=draft.lock_version,
+            source_refs=source_refs,
+        )
+
+    def _compile_model(
+        self, build_input: CompanyResearchBuildInput
+    ) -> CompanyResearchBuildResult:
+        if self._model_provider is not None:
+            return self._model_provider(build_input)
+        return CompanyResearchModelBuilder().build(build_input)
+
+    @staticmethod
+    def _persisted_bundle(
+        boundary: _ModelBuildBoundary,
+        result: CompanyResearchBuildResult,
+    ) -> CompanyResearchPersistedBundle:
+        if type(result) is not CompanyResearchBuildResult:
+            raise ValidationError("company research model result is invalid")
+        values: dict[str, object] = {
+            "business_map": result.business_map,
+            "driver_map": result.driver_map,
+            "financial_bridge": result.financial_bridge,
+            "scenario_set": result.scenario_set,
+            "judgment_context": result.judgment_context,
+            "research_gaps": result.gaps,
+            "memo": result.memo,
+        }
+        if result.valuation_set is not None:
+            values["valuation_set"] = result.valuation_set
+        payloads = {
+            kind: CompanyResearchArtifactCodec.encode(kind, artifact)
+            for kind, artifact in values.items()
+        }
+        market_context = boundary.build_input.market_context
+        return CompanyResearchPersistedBundle(
+            evidence_artifact_id=boundary.evidence_artifact_id,
+            evidence_content_hash=boundary.evidence_content_hash,
+            research_gaps_artifact_id=boundary.research_gaps_artifact_id,
+            research_gaps_content_hash=boundary.research_gaps_content_hash,
+            workspace_draft_id=boundary.workspace_draft_id,
+            workspace_draft_lock_version=boundary.workspace_draft_lock_version,
+            business_map=payloads["business_map"],
+            driver_map=payloads["driver_map"],
+            financial_bridge=payloads["financial_bridge"],
+            scenario_set=payloads["scenario_set"],
+            valuation_set=payloads.get("valuation_set"),
+            judgment_context=payloads["judgment_context"],
+            research_gaps=payloads["research_gaps"],
+            memo=payloads["memo"],
+            source_refs=boundary.source_refs,
+            market_snapshot_bindings=(
+                market_context.snapshot_bindings
+                if market_context is not None
+                else ()
+            ),
+        )
+
+    @staticmethod
+    def _is_stale_model_error(exc: ValidationError) -> bool:
+        message = str(exc)
+        return any(
+            marker in message
+            for marker in (
+                "claim is stale",
+                "model inputs are stale",
+                "market bindings do not match workspace draft",
+            )
+        )
+
     def run_claim(
         self, claim: CompanyResearchClaim
     ) -> Literal[
@@ -479,19 +685,54 @@ class CompanyResearchPreparationWorker:
             self._discard(claim)
             return "discarded"
         _job, preparation = current
-        if claim.step == "business_map":
+        if claim.step == "model_bundle":
+            # The claimed lease is durable before governed/provider reads.  No
+            # Job or preparation row lock is held while the model is compiled.
+            self._session.commit()
             try:
-                self._repository.complete_business_map_preparation(
+                boundary = self._model_input(claim)
+                # Governed market preparation may append exact snapshot inputs;
+                # publish those immutable inputs and release their transaction
+                # before invoking a potentially slow provider.
+                self._session.commit()
+                result = self._compile_model(boundary.build_input)
+                bundle = self._persisted_bundle(boundary, result)
+            except (OSError, TimeoutError, ConnectionError):
+                self._session.rollback()
+                self._recoverable_failure(claim)
+                return "recoverable_failure"
+            except (
+                AlphabetGoldenCaseFixtureError,
+                CompanyResearchValidationError,
+                ValidationError,
+            ):
+                self._session.rollback()
+                self._block(claim)
+                return "discarded"
+            except Exception:
+                self._session.rollback()
+                self._block(claim, error_code=_SAFE_UNKNOWN_PROVIDER_ERROR)
+                return "discarded"
+            try:
+                self._repository.complete_model_bundle(
                     claim.preparation_id,
+                    bundle=bundle,
                     created_at=self._utcnow(),
                     expected_claim_token=claim.claim_token,
                     expected_request_hash=claim.request_hash,
                     expected_strategy_version=claim.strategy_version,
                 )
                 self._session.commit()
-            except (StaleParentError, ValidationError):
+            except StaleParentError:
                 self._session.rollback()
                 self._discard(claim)
+                return "discarded"
+            except ValidationError as exc:
+                self._session.rollback()
+                if self._is_stale_model_error(exc):
+                    self._discard(claim)
+                else:
+                    self._block(claim)
                 return "discarded"
             return "awaiting_judgment_review"
         if claim.step != "evidence_index":
