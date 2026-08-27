@@ -3,6 +3,8 @@ import json
 import uuid
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.ledger import ValidationError
 from app.models.operational import Job
@@ -11,8 +13,15 @@ from app.underwriting.persistence.company_research_repository import (
     CompanyResearchPersistedBundle,
     CompanyResearchRepository,
 )
+from app.underwriting.persistence.company_research_models import (
+    CompanyResearchArtifactVersion,
+)
 from app.underwriting.persistence.models import UnderwritingResearchObject
-from app.underwriting.persistence.product_models import UnderwritingResearchProject
+from app.underwriting.persistence.product_models import (
+    UnderwritingMarketCaptureEnvelope,
+    UnderwritingPriceSnapshot,
+    UnderwritingResearchProject,
+)
 
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
 from app.underwriting.services.company_research_initializer import (
@@ -30,6 +39,7 @@ from app.underwriting.services.product_foundation_fixture import (
 
 
 NOW = datetime(2026, 8, 26, tzinfo=UTC)
+MARKET_CUTOFF = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
 
 
 def _prepared(session):
@@ -82,8 +92,16 @@ def _model_workspace(session):
     source_refs = tuple(current.source_refs)
     prior_gaps = repository.current_artifact(initialized.project.id, "research_gaps")
     assert prior_gaps is not None
-    market_snapshot_ids = tuple(sorted((uuid.uuid4(), uuid.uuid4()), key=str))
+    governed = CompanyResearchInitializer(session, now=lambda: NOW).governed_inputs(
+        project_id=initialized.project.id,
+        cutoff_at=MARKET_CUTOFF,
+    )
+    assert governed.market_context is not None
     bundle = CompanyResearchPersistedBundle(
+        evidence_artifact_id=current.id,
+        evidence_content_hash=current.content_hash,
+        research_gaps_artifact_id=prior_gaps.id,
+        research_gaps_content_hash=prior_gaps.content_hash,
         business_map={
             "modules": [{"key": "search", "fact_keys": ["revenue"]}],
         },
@@ -95,7 +113,7 @@ def _model_workspace(session):
         research_gaps=dict(prior_gaps.payload),
         memo={"candidate_status": "machine_draft"},
         source_refs=source_refs,
-        market_snapshot_ids=market_snapshot_ids,
+        market_snapshot_bindings=governed.market_context.snapshot_bindings,
     )
     repository.complete_model_bundle(
         preparation.id,
@@ -218,12 +236,110 @@ def test_last_evidence_review_enqueues_business_map_for_the_worker(session) -> N
 
 
 def test_workbench_accepts_one_closed_model_bundle(session) -> None:
-    initialized, workbench, _repository = _model_workspace(session)
+    initialized, workbench, repository = _model_workspace(session)
 
     workspace = workbench.workspace(project_id=initialized.project.id)
 
     assert workspace.preparation.status == "awaiting_judgment_review"
     assert all(module.state == "ready" for module in workspace.modules)
+    heads = {
+        kind: repository.current_artifact(initialized.project.id, kind)
+        for kind in (
+            "business_map",
+            "driver_map",
+            "financial_bridge",
+            "scenario_set",
+            "valuation_set",
+            "judgment_context",
+            "research_gaps",
+            "memo",
+        )
+    }
+    assert all(row is not None for row in heads.values())
+    market_ids = heads["valuation_set"].payload["_lineage"]["market_snapshot_ids"]
+    assert market_ids
+    preparation = repository.preparation_for_project(initialized.project.id)
+    assert preparation is not None
+    for row in heads.values():
+        assert row.payload["_lineage"]["market_snapshot_ids"] == market_ids
+        assert row.input_hash == canonical_hash(
+            {
+                "request_hash": preparation.request_hash,
+                "artifact_refs": row.payload["_lineage"]["artifact_refs"],
+                "market_snapshot_ids": market_ids,
+            }
+        )
+
+
+def test_model_bundle_rolls_back_when_valuation_append_fails(
+    session, monkeypatch
+) -> None:
+    original = CompanyResearchRepository.append_artifact
+
+    def fail_valuation(self, *args, kind, **kwargs):
+        if kind == "valuation_set":
+            raise RuntimeError("injected valuation failure")
+        return original(self, *args, kind=kind, **kwargs)
+
+    monkeypatch.setattr(CompanyResearchRepository, "append_artifact", fail_valuation)
+    with pytest.raises(RuntimeError, match="injected valuation failure"):
+        _model_workspace(session)
+
+    model_rows = tuple(
+        session.scalars(
+            select(CompanyResearchArtifactVersion).where(
+                CompanyResearchArtifactVersion.kind.in_(
+                    (
+                        "business_map",
+                        "driver_map",
+                        "financial_bridge",
+                        "scenario_set",
+                        "valuation_set",
+                        "judgment_context",
+                        "memo",
+                    )
+                )
+            )
+        )
+    )
+    assert model_rows == ()
+
+
+@pytest.mark.parametrize("tamper", ("snapshot", "capture"))
+def test_workbench_rejects_market_binding_when_immutable_source_changed(
+    session, tamper: str
+) -> None:
+    initialized, workbench, _repository = _model_workspace(session)
+    if tamper == "snapshot":
+        row = session.scalar(select(UnderwritingPriceSnapshot).limit(1))
+    else:
+        row = session.scalar(
+            select(UnderwritingMarketCaptureEnvelope)
+            .where(UnderwritingMarketCaptureEnvelope.snapshot_kind == "price")
+            .limit(1)
+        )
+    assert row is not None
+    set_committed_value(row, "content_hash", "f" * 64)
+
+    with pytest.raises(ValidationError, match="market snapshot binding"):
+        workbench.workspace(project_id=initialized.project.id)
+
+
+def test_market_binding_validation_requires_the_exact_governed_role_set(
+    session,
+) -> None:
+    initialized = _prepared(session)
+    governed = CompanyResearchInitializer(session, now=lambda: NOW).governed_inputs(
+        project_id=initialized.project.id,
+        cutoff_at=MARKET_CUTOFF,
+    )
+    assert governed.market_context is not None
+
+    with pytest.raises(ValidationError, match="market snapshot binding"):
+        CompanyResearchRepository(session).validate_market_snapshot_bindings(
+            project_id=initialized.project.id,
+            bindings=governed.market_context.snapshot_bindings[:1],
+        )
 
 
 @pytest.mark.parametrize("mutation", ("tampered", "missing", "duplicate"))

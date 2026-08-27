@@ -111,9 +111,7 @@ def _overrides(scenario: str, **changes: str) -> tuple[ScenarioDriverOverride, .
 def _strategy_assumptions() -> StrategyAssumptionSet:
     driver_paths = _driver_paths()
     scenarios = (
-        ScenarioAssumption(
-            "base", "steady_operations", _overrides("base")
-        ),
+        ScenarioAssumption("base", "steady_operations", _overrides("base")),
         ScenarioAssumption(
             "bull",
             "capacity_upside",
@@ -238,15 +236,9 @@ def _model_template() -> CompanyResearchModelTemplate:
             ),
         ),
         scenario_mechanisms=(
-            CompanyResearchScenarioMechanism(
-                "base", "steady_operations"
-            ),
-            CompanyResearchScenarioMechanism(
-                "bull", "capacity_upside"
-            ),
-            CompanyResearchScenarioMechanism(
-                "bear", "demand_stress"
-            ),
+            CompanyResearchScenarioMechanism("base", "steady_operations"),
+            CompanyResearchScenarioMechanism("bull", "capacity_upside"),
+            CompanyResearchScenarioMechanism("bear", "demand_stress"),
         ),
     )
 
@@ -335,28 +327,49 @@ def _market_context() -> FrozenMarketContext:
         fx_ref=refs["usd_cny_fx"],
     )
     ids = tuple(UUID(int=value) for value in range(1, 7))
+
+    def binding(index, role, security_key, source_ref):
+        return FrozenMarketSnapshotBinding(
+            snapshot_id=ids[index],
+            role=role,
+            security_external_key=security_key,
+            source_ref=source_ref,
+            snapshot_content_hash=f"{index + 1}" * 64,
+            capture_envelope_id=UUID(int=100 + index),
+            capture_content_hash="a" * 64,
+            provenance_role="primary",
+        )
+
     bindings = (
-        FrozenMarketSnapshotBinding(
-            ids[0], FrozenMarketSnapshotRole.PRICE, "NASDAQ:GOOG",
+        binding(
+            0,
+            FrozenMarketSnapshotRole.PRICE,
+            "NASDAQ:GOOG",
             refs["market_price_usd_nasdaq_goog"],
         ),
-        FrozenMarketSnapshotBinding(
-            ids[1], FrozenMarketSnapshotRole.PRICE, "NASDAQ:GOOGL",
+        binding(
+            1,
+            FrozenMarketSnapshotRole.PRICE,
+            "NASDAQ:GOOGL",
             refs["market_price_usd_nasdaq_googl"],
         ),
-        FrozenMarketSnapshotBinding(
-            ids[2], FrozenMarketSnapshotRole.FX, None, refs["usd_cny_fx"],
-        ),
-        FrozenMarketSnapshotBinding(
-            ids[3], FrozenMarketSnapshotRole.CAPITAL_STRUCTURE, None,
+        binding(2, FrozenMarketSnapshotRole.FX, None, refs["usd_cny_fx"]),
+        binding(
+            3,
+            FrozenMarketSnapshotRole.CAPITAL_STRUCTURE,
+            None,
             refs["capital_structure_usd"],
         ),
-        FrozenMarketSnapshotBinding(
-            ids[4], FrozenMarketSnapshotRole.SECURITY_RIGHTS, "NASDAQ:GOOG",
+        binding(
+            4,
+            FrozenMarketSnapshotRole.SECURITY_RIGHTS,
+            "NASDAQ:GOOG",
             refs["security_rights_nasdaq_goog"],
         ),
-        FrozenMarketSnapshotBinding(
-            ids[5], FrozenMarketSnapshotRole.SECURITY_RIGHTS, "NASDAQ:GOOGL",
+        binding(
+            5,
+            FrozenMarketSnapshotRole.SECURITY_RIGHTS,
+            "NASDAQ:GOOGL",
             refs["security_rights_nasdaq_googl"],
         ),
     )
@@ -371,16 +384,25 @@ def _market_context() -> FrozenMarketContext:
         snapshot_bindings=bindings,
         equity_components=(
             FrozenMarketEquityComponent(
-                "class_a", Decimal("5800"), "NASDAQ:GOOGL",
-                refs["security_rights_nasdaq_googl"], ids[1],
+                "class_a",
+                Decimal("5800"),
+                "NASDAQ:GOOGL",
+                refs["security_rights_nasdaq_googl"],
+                ids[1],
                 refs["market_price_usd_nasdaq_googl"],
             ),
             FrozenMarketEquityComponent(
-                "class_b", Decimal("0"), "NASDAQ:GOOGL",
+                "class_b",
+                Decimal("0"),
+                "NASDAQ:GOOGL",
                 SourceLineageReference(
-                    "economic_units_class_b", "frozen_market_snapshot",
-                    "https://example.com/sec", "Class B units", "2" * 64,
-                ), ids[1],
+                    "economic_units_class_b",
+                    "frozen_market_snapshot",
+                    "https://example.com/sec",
+                    "Class B units",
+                    "2" * 64,
+                ),
+                ids[1],
                 refs["market_price_usd_nasdaq_googl"],
                 votes_per_unit=Decimal("10"),
                 conversion_to_security_external_key="NASDAQ:GOOGL",
@@ -388,18 +410,27 @@ def _market_context() -> FrozenMarketContext:
                 dividend_rights_per_unit=Decimal("1"),
                 economic_rights_per_unit=Decimal("1"),
                 legal_rights_ref=SourceLineageReference(
-                    "security_rights_class_b", "frozen_market_snapshot",
-                    "https://example.com/sec", "Class B legal rights", "3" * 64,
+                    "security_rights_class_b",
+                    "frozen_market_snapshot",
+                    "https://example.com/sec",
+                    "Class B legal rights",
+                    "3" * 64,
                 ),
                 price_proxy_ref=SourceLineageReference(
-                    "market_price_proxy_class_b", "frozen_market_snapshot",
-                    "https://example.com/price", "GOOGL proxy", "1" * 64,
+                    "market_price_proxy_class_b",
+                    "frozen_market_snapshot",
+                    "https://example.com/price",
+                    "GOOGL proxy",
+                    "1" * 64,
                 ),
                 price_proxy_policy_version="alphabet_class_b_googl_proxy.v1",
             ),
             FrozenMarketEquityComponent(
-                "class_c", Decimal("5800"), "NASDAQ:GOOG",
-                refs["security_rights_nasdaq_goog"], ids[0],
+                "class_c",
+                Decimal("5800"),
+                "NASDAQ:GOOG",
+                refs["security_rights_nasdaq_goog"],
+                ids[0],
                 refs["market_price_usd_nasdaq_goog"],
             ),
         ),
@@ -540,7 +571,9 @@ def test_builder_keeps_missing_market_inputs_as_blocking_gaps() -> None:
     assert result.financial_bridge.rows[0].revenue == Decimal("410000")
 
 
-def test_builder_emits_a_critical_gap_for_each_missing_minimum_operating_driver() -> None:
+def test_builder_emits_a_critical_gap_for_each_missing_minimum_operating_driver() -> (
+    None
+):
     value = _build_input()
     result = CompanyResearchModelBuilder().build(value)
     available = {
@@ -565,13 +598,13 @@ def test_builder_emits_a_critical_gap_for_each_missing_minimum_operating_driver(
     )
 
 
-def test_builder_does_not_invent_market_gap_ownership_when_governed_gaps_are_missing() -> None:
+def test_builder_does_not_invent_market_gap_ownership_when_governed_gaps_are_missing() -> (
+    None
+):
     value = _build_input()
     gap_payload = deepcopy(value.gap_payload)
     gap_payload["gaps"] = [
-        gap
-        for gap in gap_payload["gaps"]
-        if gap["gap_key"] != "market_price_missing"
+        gap for gap in gap_payload["gaps"] if gap["gap_key"] != "market_price_missing"
     ]
 
     with pytest.raises(ValidationError, match="market gap contract"):
@@ -606,6 +639,7 @@ def test_builder_rejects_unknown_evidence_fields() -> None:
                 evidence_content_hash=canonical_hash(unknown),
             )
         )
+
 
 def test_strict_contracts_reject_naive_datetimes_duplicates_and_uuid_order() -> None:
     value = _build_input()
@@ -646,13 +680,17 @@ def test_frozen_market_context_requires_one_price_and_rights_ref_per_security() 
         )
 
 
-def test_strategy_assumption_set_is_required_hash_addressed_and_never_reported() -> None:
+def test_strategy_assumption_set_is_required_hash_addressed_and_never_reported() -> (
+    None
+):
     value = _build_input()
     with pytest.raises(ValidationError, match="strategy assumptions"):
         replace(value, strategy_assumptions=None)  # type: ignore[arg-type]
 
     assumptions = value.strategy_assumptions
-    with pytest.raises(CompanyResearchValidationError, match="versioned assumption_key"):
+    with pytest.raises(
+        CompanyResearchValidationError, match="versioned assumption_key"
+    ):
         replace(
             assumptions.driver_paths[0],
             assumption_key="unversioned-revenue",
@@ -722,7 +760,9 @@ def test_company_model_template_is_required() -> None:
         replace(_build_input(), model_template=None)  # type: ignore[arg-type]
 
 
-def test_company_model_template_requires_revenue_cost_and_capital_classifications() -> None:
+def test_company_model_template_requires_revenue_cost_and_capital_classifications() -> (
+    None
+):
     template = _model_template()
     with pytest.raises(ValidationError, match="revenue, cost, and capital"):
         replace(
@@ -809,9 +849,7 @@ def test_template_preserves_gap_only_modules_and_classifies_capex_as_capital() -
 
     modules = {item.module_key: item for item in result.business_map.modules}
     assert "distribution_risk" in modules
-    assert modules["distribution_risk"].gap_refs == (
-        "distribution_evidence_missing",
-    )
+    assert modules["distribution_risk"].gap_refs == ("distribution_evidence_missing",)
     assert modules["distribution_risk"].fact_refs == ()
     corporate = modules["corporate_capital_allocation"]
     assert "capital_expenditures" not in corporate.revenue_sources
@@ -870,9 +908,9 @@ def test_generic_builder_consumes_fully_synthetic_module_vocabulary() -> None:
     assert {module.module_key for module in result.business_map.modules} == set(
         module_map.values()
     )
-    assert {
-        driver.module_key for driver in result.driver_map.drivers
-    } <= set(module_map.values())
+    assert {driver.module_key for driver in result.driver_map.drivers} <= set(
+        module_map.values()
+    )
 
 
 def test_template_driver_bindings_and_candidate_provenance_survive_build() -> None:
@@ -952,11 +990,14 @@ def test_metric_classification_routes_numeric_evidence_and_swaps_executably() ->
         for item in swapped.business_map.modules
         if item.module_key == "corporate_capital_allocation"
     )
-    assert next(
-        item
-        for item in swapped_corporate.classified_evidence
-        if item.metric_key == "capital_expenditures"
-    ).category == "cost"
+    assert (
+        next(
+            item
+            for item in swapped_corporate.classified_evidence
+            if item.metric_key == "capital_expenditures"
+        ).category
+        == "cost"
+    )
 
 
 def test_template_only_empty_module_gets_explicit_blocking_gap() -> None:
@@ -1120,7 +1161,9 @@ def test_mixed_review_decisions_filter_rejected_nonrequired_facts() -> None:
     )
 
 
-def test_missing_required_reviewed_baseline_creates_gap_and_blocks_answerability() -> None:
+def test_missing_required_reviewed_baseline_creates_gap_and_blocks_answerability() -> (
+    None
+):
     value = _build_input()
     payload = deepcopy(value.evidence_payload)
     for fact in payload["facts"]:
@@ -1198,7 +1241,9 @@ def test_strategy_mechanisms_must_match_template_scenario_mapping_exactly() -> N
         )
 
 
-def test_frozen_market_bindings_reject_arbitrary_ids_and_mismatched_bridge_refs() -> None:
+def test_frozen_market_bindings_reject_arbitrary_ids_and_mismatched_bridge_refs() -> (
+    None
+):
     market = _market_context()
     with pytest.raises(ValidationError, match="snapshot bindings"):
         replace(

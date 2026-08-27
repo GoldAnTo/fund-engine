@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.models.ledger import ConflictError, ValidationError
 from app.models.operational import Job
+from app.underwriting.domain.company_research import SourceLineageReference
 from app.underwriting.persistence.company_research_models import (
     COMPANY_RESEARCH_ARTIFACT_KINDS,
     COMPANY_RESEARCH_PREPARATION_STATUSES,
@@ -24,8 +25,29 @@ from app.underwriting.persistence.company_research_models import (
     CompanyResearchEvent,
     CompanyResearchPreparation,
 )
+from app.underwriting.persistence.models import UnderwritingResearchObject
+from app.underwriting.persistence.product_models import (
+    UnderwritingCapitalStructureSnapshot,
+    UnderwritingFXSnapshot,
+    UnderwritingMarketCaptureEnvelope,
+    UnderwritingPriceSnapshot,
+    UnderwritingSecurityRightsVersion,
+)
+from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.hashing import canonical_hash
+from app.underwriting.services.company_research_model_builder import (
+    FrozenMarketSnapshotBinding,
+    FrozenMarketSnapshotRole,
+    FrozenRawComponentReference,
+)
+from app.underwriting.services.market_snapshots import (
+    capital_structure_snapshot_hash,
+    fx_snapshot_hash,
+    market_capture_envelope_hash,
+    price_snapshot_hash,
+    security_rights_hash,
+)
 
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _PREPARE_JOB_KIND = "prepare_company_research"
@@ -40,6 +62,10 @@ class CompanyResearchIntegrityError(ValidationError):
 class CompanyResearchPersistedBundle:
     """Complete JSON-ready model candidate passed to one atomic publication."""
 
+    evidence_artifact_id: UUID
+    evidence_content_hash: str
+    research_gaps_artifact_id: UUID
+    research_gaps_content_hash: str
     business_map: Mapping[str, object]
     driver_map: Mapping[str, object]
     financial_bridge: Mapping[str, object]
@@ -49,7 +75,7 @@ class CompanyResearchPersistedBundle:
     research_gaps: Mapping[str, object]
     memo: Mapping[str, object]
     source_refs: tuple[dict[str, str], ...]
-    market_snapshot_ids: tuple[UUID, ...]
+    market_snapshot_bindings: tuple[FrozenMarketSnapshotBinding, ...]
 
     def __post_init__(self) -> None:
         required = (
@@ -67,7 +93,20 @@ class CompanyResearchPersistedBundle:
             self.valuation_set, Mapping
         ):
             raise ValidationError("company research model bundle valuation is invalid")
-        if bool(self.market_snapshot_ids) != (self.valuation_set is not None):
+        if (
+            type(self.evidence_artifact_id) is not UUID
+            or type(self.research_gaps_artifact_id) is not UUID
+        ):
+            raise ValidationError("company research model bundle head ids are invalid")
+        for value in (
+            self.evidence_content_hash,
+            self.research_gaps_content_hash,
+        ):
+            if not isinstance(value, str) or _HASH.fullmatch(value) is None:
+                raise ValidationError(
+                    "company research model bundle head hashes are invalid"
+                )
+        if bool(self.market_snapshot_bindings) != (self.valuation_set is not None):
             raise ValidationError(
                 "company research model bundle valuation market refs are invalid"
             )
@@ -82,15 +121,28 @@ class CompanyResearchPersistedBundle:
                 "company research model bundle source refs are invalid"
             )
         if (
-            not isinstance(self.market_snapshot_ids, tuple)
-            or not all(type(item) is UUID for item in self.market_snapshot_ids)
-            or len(set(self.market_snapshot_ids)) != len(self.market_snapshot_ids)
-            or tuple(sorted(self.market_snapshot_ids, key=str))
-            != self.market_snapshot_ids
+            not isinstance(self.market_snapshot_bindings, tuple)
+            or not all(
+                type(item) is FrozenMarketSnapshotBinding
+                for item in self.market_snapshot_bindings
+            )
+            or len({item.snapshot_id for item in self.market_snapshot_bindings})
+            != len(self.market_snapshot_bindings)
+            or tuple(
+                sorted(
+                    self.market_snapshot_bindings,
+                    key=lambda item: str(item.snapshot_id),
+                )
+            )
+            != self.market_snapshot_bindings
         ):
             raise ValidationError(
-                "company research model bundle market snapshot ids must be canonical"
+                "company research model bundle market snapshot bindings must be canonical"
             )
+
+    @property
+    def market_snapshot_ids(self) -> tuple[UUID, ...]:
+        return tuple(item.snapshot_id for item in self.market_snapshot_bindings)
 
 
 class CompanyResearchRepository:
@@ -705,16 +757,88 @@ class CompanyResearchRepository:
         payload: Mapping[str, object],
         *,
         artifact_refs: Sequence[Mapping[str, str]],
-        market_snapshot_ids: Sequence[UUID] = (),
+        market_snapshot_bindings: Sequence[FrozenMarketSnapshotBinding] = (),
     ) -> dict[str, object]:
         copied = deepcopy(dict(payload))
         if "_lineage" in copied:
             raise ValidationError("company research model bundle lineage is reserved")
         copied["_lineage"] = {
             "artifact_refs": deepcopy(list(artifact_refs)),
-            "market_snapshot_ids": [str(value) for value in market_snapshot_ids],
+            "market_snapshot_ids": [
+                str(value.snapshot_id) for value in market_snapshot_bindings
+            ],
+            "market_snapshot_bindings": [
+                CompanyResearchRepository._market_binding_payload(value)
+                for value in market_snapshot_bindings
+            ],
         }
         return copied
+
+    @staticmethod
+    def _market_binding_payload(
+        value: FrozenMarketSnapshotBinding,
+    ) -> dict[str, object]:
+        return {
+            "snapshot_id": str(value.snapshot_id),
+            "snapshot_kind": value.role.value,
+            "snapshot_content_hash": value.snapshot_content_hash,
+            "security_external_key": value.security_external_key,
+            "source_ref": value.source_ref.canonical_payload(),
+            "capture_envelope_id": str(value.capture_envelope_id),
+            "capture_content_hash": value.capture_content_hash,
+            "provenance_role": value.provenance_role,
+            "provider_policy_version": value.provider_policy_version,
+            "raw_components": [
+                {
+                    "raw_file": item.raw_file,
+                    "raw_hash": item.raw_hash,
+                    "source_url": item.source_url,
+                    "source_locator": item.source_locator,
+                }
+                for item in value.raw_components
+            ],
+        }
+
+    @staticmethod
+    def market_binding_from_payload(
+        value: object,
+    ) -> FrozenMarketSnapshotBinding:
+        if not isinstance(value, Mapping) or set(value) != {
+            "snapshot_id",
+            "snapshot_kind",
+            "snapshot_content_hash",
+            "security_external_key",
+            "source_ref",
+            "capture_envelope_id",
+            "capture_content_hash",
+            "provenance_role",
+            "provider_policy_version",
+            "raw_components",
+        }:
+            raise ValidationError("company research market snapshot binding is invalid")
+        source_ref = value["source_ref"]
+        components = value["raw_components"]
+        if not isinstance(source_ref, Mapping) or not isinstance(components, list):
+            raise ValidationError("company research market snapshot binding is invalid")
+        try:
+            return FrozenMarketSnapshotBinding(
+                snapshot_id=UUID(str(value["snapshot_id"])),
+                role=FrozenMarketSnapshotRole(str(value["snapshot_kind"])),
+                security_external_key=value["security_external_key"],
+                source_ref=SourceLineageReference(**dict(source_ref)),
+                snapshot_content_hash=value["snapshot_content_hash"],
+                capture_envelope_id=UUID(str(value["capture_envelope_id"])),
+                capture_content_hash=value["capture_content_hash"],
+                provenance_role=value["provenance_role"],
+                provider_policy_version=value["provider_policy_version"],
+                raw_components=tuple(
+                    FrozenRawComponentReference(**dict(item)) for item in components
+                ),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(
+                "company research market snapshot binding is invalid"
+            ) from exc
 
     @staticmethod
     def _model_artifact_input_hash(
@@ -730,6 +854,129 @@ class CompanyResearchRepository:
                 "market_snapshot_ids": [str(value) for value in market_snapshot_ids],
             }
         )
+
+    def validate_market_snapshot_bindings(
+        self,
+        *,
+        project_id: UUID,
+        bindings: Sequence[FrozenMarketSnapshotBinding],
+    ) -> None:
+        if not bindings:
+            return
+        project_record = ProductRepository(self._session).project(project_id)
+        if project_record is None:
+            raise ValidationError("company research market snapshot binding is invalid")
+        project, security_ids = project_record
+        securities = {
+            row.external_key: row.id
+            for row in (
+                self._session.get(UnderwritingResearchObject, value)
+                for value in security_ids
+            )
+            if row is not None and row.kind == "security"
+        }
+        expected_roles = (
+            {(FrozenMarketSnapshotRole.PRICE, key) for key in securities}
+            | {(FrozenMarketSnapshotRole.SECURITY_RIGHTS, key) for key in securities}
+            | {
+                (FrozenMarketSnapshotRole.FX, None),
+                (FrozenMarketSnapshotRole.CAPITAL_STRUCTURE, None),
+            }
+        )
+        actual_roles = {
+            (binding.role, binding.security_external_key) for binding in bindings
+        }
+        if actual_roles != expected_roles or len(bindings) != len(expected_roles):
+            raise ValidationError("company research market snapshot binding is invalid")
+        role_contracts = {
+            FrozenMarketSnapshotRole.PRICE: (
+                UnderwritingPriceSnapshot,
+                price_snapshot_hash,
+            ),
+            FrozenMarketSnapshotRole.FX: (
+                UnderwritingFXSnapshot,
+                fx_snapshot_hash,
+            ),
+            FrozenMarketSnapshotRole.CAPITAL_STRUCTURE: (
+                UnderwritingCapitalStructureSnapshot,
+                capital_structure_snapshot_hash,
+            ),
+            FrozenMarketSnapshotRole.SECURITY_RIGHTS: (
+                UnderwritingSecurityRightsVersion,
+                security_rights_hash,
+            ),
+        }
+        for binding in bindings:
+            model, hasher = role_contracts[binding.role]
+            row = self._session.get(model, binding.snapshot_id)
+            if (
+                row is None
+                or row.content_hash != binding.snapshot_content_hash
+                or row.content_hash != hasher(row)
+            ):
+                raise ValidationError(
+                    "company research market snapshot binding is invalid"
+                )
+            if binding.role is FrozenMarketSnapshotRole.PRICE and (
+                row.security_identity_id
+                != securities.get(binding.security_external_key)
+                or row.currency != "USD"
+                or row.price_type != "official_close"
+                or row.adjustment_basis != "unadjusted"
+            ):
+                raise ValidationError(
+                    "company research market snapshot binding is invalid"
+                )
+            if binding.role is FrozenMarketSnapshotRole.SECURITY_RIGHTS and (
+                row.security_identity_id
+                != securities.get(binding.security_external_key)
+            ):
+                raise ValidationError(
+                    "company research market snapshot binding is invalid"
+                )
+            if binding.role is FrozenMarketSnapshotRole.FX and (
+                row.base_currency != "USD"
+                or row.quote_currency != "CNY"
+                or row.quote_direction != "quote_per_base"
+            ):
+                raise ValidationError(
+                    "company research market snapshot binding is invalid"
+                )
+            if binding.role is FrozenMarketSnapshotRole.CAPITAL_STRUCTURE and (
+                row.company_id != project.primary_company_id or row.currency != "USD"
+            ):
+                raise ValidationError(
+                    "company research market snapshot binding is invalid"
+                )
+            capture = self._session.get(
+                UnderwritingMarketCaptureEnvelope,
+                binding.capture_envelope_id,
+            )
+            expected_components = [
+                {
+                    "raw_file": item.raw_file,
+                    "raw_hash": item.raw_hash,
+                    "source_url": item.source_url,
+                    "source_locator": item.source_locator,
+                }
+                for item in binding.raw_components
+            ]
+            if (
+                capture is None
+                or capture.snapshot_kind != binding.role.value
+                or capture.snapshot_id != binding.snapshot_id
+                or capture.provenance_role != binding.provenance_role
+                or capture.content_hash != binding.capture_content_hash
+                or capture.content_hash != market_capture_envelope_hash(capture)
+                or capture.provider_policy_version != binding.provider_policy_version
+                or capture.raw_components != expected_components
+                or capture.source_url != binding.source_ref.source_url
+                or capture.source_locator != binding.source_ref.source_locator
+                or capture.raw_hash != binding.source_ref.raw_hash
+            ):
+                raise ValidationError(
+                    "company research market snapshot binding is invalid"
+                )
 
     def complete_model_bundle(
         self,
@@ -773,6 +1020,13 @@ class CompanyResearchRepository:
         )
         if evidence is None or current_gaps is None:
             raise ValidationError("reviewed evidence and research gaps are required")
+        if (
+            evidence.id != bundle.evidence_artifact_id
+            or evidence.content_hash != bundle.evidence_content_hash
+            or current_gaps.id != bundle.research_gaps_artifact_id
+            or current_gaps.content_hash != bundle.research_gaps_content_hash
+        ):
+            raise ValidationError("company research model inputs are stale")
         facts = (
             evidence.payload.get("facts")
             if isinstance(evidence.payload, dict)
@@ -792,7 +1046,12 @@ class CompanyResearchRepository:
         request_hash = self._require_hash(
             expected_request_hash, "expected_request_hash"
         )
+        market_snapshot_bindings = bundle.market_snapshot_bindings
         market_snapshot_ids = bundle.market_snapshot_ids
+        self.validate_market_snapshot_bindings(
+            project_id=preparation.project_id,
+            bindings=market_snapshot_bindings,
+        )
         artifacts: list[CompanyResearchArtifactVersion] = []
 
         with self._session.begin_nested():
@@ -802,7 +1061,6 @@ class CompanyResearchRepository:
                 payload: Mapping[str, object],
                 parents: Sequence[CompanyResearchArtifactVersion],
                 *,
-                snapshots: Sequence[UUID] = (),
                 artifact_id: UUID | None = None,
             ) -> CompanyResearchArtifactVersion:
                 refs = tuple(self._artifact_reference(parent) for parent in parents)
@@ -813,12 +1071,12 @@ class CompanyResearchRepository:
                     input_hash=self._model_artifact_input_hash(
                         request_hash=request_hash,
                         artifact_refs=refs,
-                        market_snapshot_ids=snapshots,
+                        market_snapshot_ids=market_snapshot_ids,
                     ),
                     payload=self._model_artifact_payload(
                         payload,
                         artifact_refs=refs,
-                        market_snapshot_ids=snapshots,
+                        market_snapshot_bindings=market_snapshot_bindings,
                     ),
                     source_refs=bundle.source_refs,
                     expected_parent_id=current.id if current is not None else None,
@@ -839,7 +1097,6 @@ class CompanyResearchRepository:
                     "valuation_set",
                     bundle.valuation_set,
                     (scenario_set, financial_bridge),
-                    snapshots=market_snapshot_ids,
                 )
                 if bundle.valuation_set is not None
                 else None
@@ -855,10 +1112,14 @@ class CompanyResearchRepository:
             gap_parents = (evidence, *model_rows)
             gap_refs = tuple(self._artifact_reference(parent) for parent in gap_parents)
             gap_payload = self._model_artifact_payload(
-                bundle.research_gaps, artifact_refs=gap_refs
+                bundle.research_gaps,
+                artifact_refs=gap_refs,
+                market_snapshot_bindings=market_snapshot_bindings,
             )
             gap_input_hash = self._model_artifact_input_hash(
-                request_hash=request_hash, artifact_refs=gap_refs
+                request_hash=request_hash,
+                artifact_refs=gap_refs,
+                market_snapshot_ids=market_snapshot_ids,
             )
             planned_gap_id = uuid4()
             planned_gap_version = current_gaps.version + 1

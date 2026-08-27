@@ -123,18 +123,21 @@ def _repository_with_model_job(session):
     job.progress = 25
     job.claim_token = "model-claim"
     session.flush([preparation, job])
-    market_snapshot_ids = tuple(sorted((uuid.uuid4(), uuid.uuid4()), key=str))
     bundle = CompanyResearchPersistedBundle(
+        evidence_artifact_id=evidence.id,
+        evidence_content_hash=evidence.content_hash,
+        research_gaps_artifact_id=gaps.id,
+        research_gaps_content_hash=gaps.content_hash,
         business_map={"modules": [{"key": "search"}]},
         driver_map={"drivers": [{"driver_key": "queries"}]},
         financial_bridge={"scenario_id": "base", "rows": []},
         scenario_set={"scenarios": [{"scenario_id": "base"}]},
-        valuation_set={"security_value_ranges": []},
+        valuation_set=None,
         judgment_context={"assessment_status": "answerable"},
         research_gaps={"gaps": []},
         memo={"candidate_status": "machine_draft"},
         source_refs=source_refs,
-        market_snapshot_ids=market_snapshot_ids,
+        market_snapshot_bindings=(),
     )
     return repository, project, preparation, job, evidence, gaps, bundle
 
@@ -157,7 +160,6 @@ def _complete_model_bundle(repository, preparation, bundle):
         "driver_map",
         "financial_bridge",
         "scenario_set",
-        "valuation_set",
         "judgment_context",
         "research_gaps",
         "memo",
@@ -214,7 +216,6 @@ def test_complete_model_bundle_persists_exact_dependency_refs_and_input_hashes(
         "driver_map",
         "financial_bridge",
         "scenario_set",
-        "valuation_set",
         "judgment_context",
         "research_gaps",
         "memo",
@@ -243,14 +244,12 @@ def test_complete_model_bundle_persists_exact_dependency_refs_and_input_hashes(
             by_kind["business_map"].content_hash,
         )
     }
-    assert set(refs("valuation_set")) == {"financial_bridge", "scenario_set"}
     assert set(refs("judgment_context")) == {
         "evidence_index",
         "business_map",
         "driver_map",
         "financial_bridge",
         "scenario_set",
-        "valuation_set",
         "research_gaps",
     }
     assert refs("memo") == {
@@ -259,11 +258,10 @@ def test_complete_model_bundle_persists_exact_dependency_refs_and_input_hashes(
             by_kind["judgment_context"].content_hash,
         )
     }
-    assert by_kind["valuation_set"].payload["_lineage"][
-        "market_snapshot_ids"
-    ] == sorted(str(value) for value in bundle.market_snapshot_ids)
+    expected_market_ids: list[str] = []
     for row in rows:
         lineage = row.payload["_lineage"]
+        assert lineage["market_snapshot_ids"] == expected_market_ids
         assert row.input_hash == canonical_hash(
             {
                 "request_hash": preparation.request_hash,
@@ -291,6 +289,52 @@ def test_complete_model_bundle_rejects_a_stale_claim_without_writing(session) ->
     assert repository.current_artifact(project.id, "business_map") is None
 
 
+def test_complete_model_bundle_rejects_a_stale_evidence_head_without_writing(
+    session,
+) -> None:
+    repository, project, preparation, _job, evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    successor_payload = dict(evidence.payload)
+    successor_payload["review_generation"] = 2
+    repository.append_artifact(
+        project_id=project.id,
+        kind="evidence_index",
+        input_hash="4" * 64,
+        payload=successor_payload,
+        source_refs=evidence.source_refs,
+        expected_parent_id=evidence.id,
+        created_at=NOW,
+    )
+
+    with pytest.raises(ValidationError, match="model inputs are stale"):
+        _complete_model_bundle(repository, preparation, bundle)
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
+def test_complete_model_bundle_rejects_a_stale_gap_head_without_writing(
+    session,
+) -> None:
+    repository, project, preparation, _job, _evidence, gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    repository.append_artifact(
+        project_id=project.id,
+        kind="research_gaps",
+        input_hash="4" * 64,
+        payload={"gaps": [{"gap_key": "new"}]},
+        source_refs=gaps.source_refs,
+        expected_parent_id=gaps.id,
+        created_at=NOW,
+    )
+
+    with pytest.raises(ValidationError, match="model inputs are stale"):
+        _complete_model_bundle(repository, preparation, bundle)
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
 def test_complete_model_bundle_omits_optional_valuation_and_keeps_lineage_closed(
     session,
 ) -> None:
@@ -298,6 +342,10 @@ def test_complete_model_bundle_omits_optional_valuation_and_keeps_lineage_closed
         _repository_with_model_job(session)
     )
     without_valuation = CompanyResearchPersistedBundle(
+        evidence_artifact_id=bundle.evidence_artifact_id,
+        evidence_content_hash=bundle.evidence_content_hash,
+        research_gaps_artifact_id=bundle.research_gaps_artifact_id,
+        research_gaps_content_hash=bundle.research_gaps_content_hash,
         business_map=bundle.business_map,
         driver_map=bundle.driver_map,
         financial_bridge=bundle.financial_bridge,
@@ -307,7 +355,7 @@ def test_complete_model_bundle_omits_optional_valuation_and_keeps_lineage_closed
         research_gaps=bundle.research_gaps,
         memo=bundle.memo,
         source_refs=bundle.source_refs,
-        market_snapshot_ids=(),
+        market_snapshot_bindings=(),
     )
 
     _updated, rows = _complete_model_bundle(repository, preparation, without_valuation)
@@ -319,28 +367,6 @@ def test_complete_model_bundle_omits_optional_valuation_and_keeps_lineage_closed
         for item in by_kind["judgment_context"].payload["_lineage"]["artifact_refs"]
     }
     assert "valuation_set" not in judgment_kinds
-
-
-def test_complete_model_bundle_requires_a_successor_for_the_existing_gap_head(
-    session,
-) -> None:
-    repository, _project, preparation, _job, _evidence, gaps, bundle = (
-        _repository_with_model_job(session)
-    )
-    successor = repository.append_artifact(
-        project_id=preparation.project_id,
-        kind="research_gaps",
-        input_hash="4" * 64,
-        payload={"gaps": [{"gap_key": "new"}]},
-        source_refs=bundle.source_refs,
-        expected_parent_id=gaps.id,
-        created_at=NOW,
-    )
-
-    _updated, rows = _complete_model_bundle(repository, preparation, bundle)
-    persisted_gaps = next(row for row in rows if row.kind == "research_gaps")
-
-    assert persisted_gaps.supersedes_id == successor.id
 
 
 def test_preparation_is_mutable_but_idempotency_and_project_are_unique(session) -> None:

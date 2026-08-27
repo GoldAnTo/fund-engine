@@ -250,15 +250,17 @@ class CompanyResearchWorkbench:
     @staticmethod
     def _validate_closed_lineage_shape(
         row: CompanyResearchArtifactVersion,
-    ) -> tuple[list[dict[str, str]], list[str]]:
+    ) -> tuple[list[dict[str, str]], list[str], list[dict[str, object]]]:
         lineage = row.payload.get("_lineage")
         if not isinstance(lineage, dict) or set(lineage) != {
             "artifact_refs",
             "market_snapshot_ids",
+            "market_snapshot_bindings",
         }:
             raise ValidationError("company research cross-artifact lineage is invalid")
         refs = lineage["artifact_refs"]
         snapshot_ids = lineage["market_snapshot_ids"]
+        bindings = lineage["market_snapshot_bindings"]
         if (
             not isinstance(refs, list)
             or any(
@@ -274,6 +276,8 @@ class CompanyResearchWorkbench:
             or any(not isinstance(value, str) for value in snapshot_ids)
             or len(set(snapshot_ids)) != len(snapshot_ids)
             or sorted(snapshot_ids) != snapshot_ids
+            or not isinstance(bindings, list)
+            or len(bindings) != len(snapshot_ids)
         ):
             raise ValidationError("company research cross-artifact lineage is invalid")
         try:
@@ -283,7 +287,13 @@ class CompanyResearchWorkbench:
             raise ValidationError(
                 "company research cross-artifact lineage is invalid"
             ) from exc
-        return refs, snapshot_ids
+        parsed_bindings = tuple(
+            CompanyResearchRepository.market_binding_from_payload(value)
+            for value in bindings
+        )
+        if [str(value.snapshot_id) for value in parsed_bindings] != snapshot_ids:
+            raise ValidationError("company research cross-artifact lineage is invalid")
+        return refs, snapshot_ids, bindings
 
     def _validate_cross_artifact_lineage(
         self,
@@ -321,11 +331,11 @@ class CompanyResearchWorkbench:
         def expected(*kinds: str) -> list[dict[str, str]]:
             return [self._lineage_reference(heads[kind]) for kind in kinds]
 
-        expectations: dict[str, tuple[list[dict[str, str]], bool]] = {
-            "business_map": (expected("evidence_index"), False),
-            "driver_map": (expected("business_map"), False),
-            "financial_bridge": (expected("driver_map"), False),
-            "scenario_set": (expected("driver_map"), False),
+        expectations: dict[str, list[dict[str, str]]] = {
+            "business_map": expected("evidence_index"),
+            "driver_map": expected("business_map"),
+            "financial_bridge": expected("driver_map"),
+            "scenario_set": expected("driver_map"),
             "research_gaps": (
                 expected(
                     "evidence_index",
@@ -334,8 +344,7 @@ class CompanyResearchWorkbench:
                     "financial_bridge",
                     "scenario_set",
                     *(("valuation_set",) if "valuation_set" in heads else ()),
-                ),
-                False,
+                )
             ),
             "judgment_context": (
                 expected(
@@ -346,20 +355,28 @@ class CompanyResearchWorkbench:
                     "scenario_set",
                     *(("valuation_set",) if "valuation_set" in heads else ()),
                     "research_gaps",
-                ),
-                False,
+                )
             ),
-            "memo": (expected("judgment_context"), False),
+            "memo": expected("judgment_context"),
         }
         if "valuation_set" in heads:
-            expectations["valuation_set"] = (
-                expected("scenario_set", "financial_bridge"),
-                True,
-            )
-        for kind, (expected_refs, requires_snapshots) in expectations.items():
+            expectations["valuation_set"] = expected("scenario_set", "financial_bridge")
+        expected_market_ids: list[str] | None = None
+        expected_market_bindings: list[dict[str, object]] | None = None
+        for kind, expected_refs in expectations.items():
             row = heads[kind]
-            refs, snapshot_ids = self._validate_closed_lineage_shape(row)
-            if refs != expected_refs or bool(snapshot_ids) != requires_snapshots:
+            refs, snapshot_ids, bindings = self._validate_closed_lineage_shape(row)
+            if refs != expected_refs:
+                raise ValidationError(
+                    "company research cross-artifact lineage is invalid"
+                )
+            if expected_market_ids is None:
+                expected_market_ids = snapshot_ids
+                expected_market_bindings = bindings
+            elif (
+                snapshot_ids != expected_market_ids
+                or bindings != expected_market_bindings
+            ):
                 raise ValidationError(
                     "company research cross-artifact lineage is invalid"
                 )
@@ -374,6 +391,16 @@ class CompanyResearchWorkbench:
                 raise ValidationError(
                     "company research cross-artifact lineage is invalid"
                 )
+        if bool(expected_market_ids) != ("valuation_set" in heads):
+            raise ValidationError("company research cross-artifact lineage is invalid")
+        parsed = tuple(
+            CompanyResearchRepository.market_binding_from_payload(value)
+            for value in (expected_market_bindings or [])
+        )
+        self._company.validate_market_snapshot_bindings(
+            project_id=project_id,
+            bindings=parsed,
+        )
 
     def _heads(self, project_id: UUID) -> dict[str, WorkbenchArtifact]:
         """Materialize all artifact families once; never query once per module."""

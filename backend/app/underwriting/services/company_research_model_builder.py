@@ -138,9 +138,7 @@ def _uuid_tuple(
 
 
 def _mapping(value: object, field_name: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping) or not all(
-        isinstance(key, str) for key in value
-    ):
+    if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
         raise ValidationError(f"{field_name} must be a string-keyed mapping")
     return value
 
@@ -164,8 +162,12 @@ def _decimal(value: object, field_name: str) -> Decimal:
 
 
 def _text_tuple(value: object, field_name: str) -> tuple[str, ...]:
-    if not isinstance(value, tuple) or not value or not all(
-        isinstance(item, str) and item and item == item.strip() for item in value
+    if (
+        not isinstance(value, tuple)
+        or not value
+        or not all(
+            isinstance(item, str) and item and item == item.strip() for item in value
+        )
     ):
         raise ValidationError(f"{field_name} must be non-empty canonical text")
     return value
@@ -223,10 +225,15 @@ class CompanyResearchOperatingDriverBinding:
         ):
             _text(value, f"operating driver {name}")
         if self.driver_key in SCENARIO_FINANCIAL_DRIVER_KEYS:
-            raise ValidationError("operating drivers must be separate from financial drivers")
+            raise ValidationError(
+                "operating drivers must be separate from financial drivers"
+            )
         if self.input_state not in {ModelInputState.REPORTED, ModelInputState.DERIVED}:
             raise ValidationError("operating driver state must be reported or derived")
-        if self.input_state is ModelInputState.REPORTED and self.equation_id is not None:
+        if (
+            self.input_state is ModelInputState.REPORTED
+            and self.equation_id is not None
+        ):
             raise ValidationError("reported operating driver cannot carry equation_id")
         if self.input_state is ModelInputState.DERIVED and not self.equation_id:
             raise ValidationError("derived operating driver requires equation_id")
@@ -266,11 +273,16 @@ class CompanyResearchModelTemplate:
     metric_classifications: tuple[CompanyResearchMetricClassification, ...]
     operating_driver_bindings: tuple[CompanyResearchOperatingDriverBinding, ...]
     financial_driver_ownership: tuple[CompanyResearchDriverBinding, ...]
-    operating_baseline_requirements: tuple[CompanyResearchOperatingBaselineRequirement, ...]
+    operating_baseline_requirements: tuple[
+        CompanyResearchOperatingBaselineRequirement, ...
+    ]
     scenario_mechanisms: tuple[CompanyResearchScenarioMechanism, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.template_version, str) or _VERSIONED_STRATEGY.fullmatch(self.template_version) is None:
+        if (
+            not isinstance(self.template_version, str)
+            or _VERSIONED_STRATEGY.fullmatch(self.template_version) is None
+        ):
             raise ValidationError("company model template must be versioned")
         _text(self.company_external_key, "company model template company identity")
         security_keys = _text_tuple(
@@ -281,14 +293,39 @@ class CompanyResearchModelTemplate:
             raise ValidationError(
                 "company model template security identity must be canonical"
             )
-        if not isinstance(self.modules, tuple) or not self.modules or not all(type(item) is CompanyResearchModelModule for item in self.modules):
+        if (
+            not isinstance(self.modules, tuple)
+            or not self.modules
+            or not all(
+                type(item) is CompanyResearchModelModule for item in self.modules
+            )
+        ):
             raise ValidationError("company model template modules must be typed")
         module_keys = tuple(item.module_key for item in self.modules)
         if len(set(module_keys)) != len(module_keys):
             raise ValidationError("company model template modules must be unique")
-        if not isinstance(self.metric_classifications, tuple) or not self.metric_classifications or not all(type(item) is CompanyResearchMetricClassification for item in self.metric_classifications) or len({(item.module_key, item.metric_key) for item in self.metric_classifications}) != len(self.metric_classifications):
-            raise ValidationError("company model template metric classifications must be unique")
-        if any(item.module_key not in set(module_keys) for item in self.metric_classifications):
+        if (
+            not isinstance(self.metric_classifications, tuple)
+            or not self.metric_classifications
+            or not all(
+                type(item) is CompanyResearchMetricClassification
+                for item in self.metric_classifications
+            )
+            or len(
+                {
+                    (item.module_key, item.metric_key)
+                    for item in self.metric_classifications
+                }
+            )
+            != len(self.metric_classifications)
+        ):
+            raise ValidationError(
+                "company model template metric classifications must be unique"
+            )
+        if any(
+            item.module_key not in set(module_keys)
+            for item in self.metric_classifications
+        ):
             raise ValidationError("metric classification references unknown module")
         if {item.category for item in self.metric_classifications} != {
             "revenue",
@@ -298,26 +335,85 @@ class CompanyResearchModelTemplate:
             raise ValidationError(
                 "company model template must classify revenue, cost, and capital metrics"
             )
-        if not isinstance(self.operating_driver_bindings, tuple) or not self.operating_driver_bindings or not all(type(item) is CompanyResearchOperatingDriverBinding for item in self.operating_driver_bindings) or len({item.driver_key for item in self.operating_driver_bindings}) != len(self.operating_driver_bindings):
-            raise ValidationError("company model template operating drivers must be unique")
-        if not isinstance(self.financial_driver_ownership, tuple) or not all(type(item) is CompanyResearchDriverBinding for item in self.financial_driver_ownership) or tuple(item.driver_key for item in self.financial_driver_ownership) != SCENARIO_FINANCIAL_DRIVER_KEYS:
-            raise ValidationError("company model template must bind all six drivers canonically")
-        if any(item.module_key not in set(module_keys) for item in (*self.operating_driver_bindings, *self.financial_driver_ownership)):
-            raise ValidationError("company model template driver references unknown module")
-        if not isinstance(self.operating_baseline_requirements, tuple) or not self.operating_baseline_requirements or not all(type(item) is CompanyResearchOperatingBaselineRequirement for item in self.operating_baseline_requirements):
-            raise ValidationError("company model template requires an operating baseline")
-        if len({item.requirement_key for item in self.operating_baseline_requirements}) != len(self.operating_baseline_requirements):
+        if (
+            not isinstance(self.operating_driver_bindings, tuple)
+            or not self.operating_driver_bindings
+            or not all(
+                type(item) is CompanyResearchOperatingDriverBinding
+                for item in self.operating_driver_bindings
+            )
+            or len({item.driver_key for item in self.operating_driver_bindings})
+            != len(self.operating_driver_bindings)
+        ):
+            raise ValidationError(
+                "company model template operating drivers must be unique"
+            )
+        if (
+            not isinstance(self.financial_driver_ownership, tuple)
+            or not all(
+                type(item) is CompanyResearchDriverBinding
+                for item in self.financial_driver_ownership
+            )
+            or tuple(item.driver_key for item in self.financial_driver_ownership)
+            != SCENARIO_FINANCIAL_DRIVER_KEYS
+        ):
+            raise ValidationError(
+                "company model template must bind all six drivers canonically"
+            )
+        if any(
+            item.module_key not in set(module_keys)
+            for item in (
+                *self.operating_driver_bindings,
+                *self.financial_driver_ownership,
+            )
+        ):
+            raise ValidationError(
+                "company model template driver references unknown module"
+            )
+        if (
+            not isinstance(self.operating_baseline_requirements, tuple)
+            or not self.operating_baseline_requirements
+            or not all(
+                type(item) is CompanyResearchOperatingBaselineRequirement
+                for item in self.operating_baseline_requirements
+            )
+        ):
+            raise ValidationError(
+                "company model template requires an operating baseline"
+            )
+        if len(
+            {item.requirement_key for item in self.operating_baseline_requirements}
+        ) != len(self.operating_baseline_requirements):
             raise ValidationError("operating baseline requirements must be unique")
         metrics = {
-            (item.module_key, item.metric_key)
-            for item in self.metric_classifications
+            (item.module_key, item.metric_key) for item in self.metric_classifications
         }
-        if any((item.module_key, item.metric_key) not in metrics for item in self.operating_driver_bindings):
+        if any(
+            (item.module_key, item.metric_key) not in metrics
+            for item in self.operating_driver_bindings
+        ):
             raise ValidationError("operating driver metric is outside the template")
-        if any(item.module_key not in set(module_keys) or (item.module_key, item.metric_key) not in metrics for item in self.operating_baseline_requirements):
-            raise ValidationError("operating baseline requirement is outside the template")
-        if not isinstance(self.scenario_mechanisms, tuple) or not all(type(item) is CompanyResearchScenarioMechanism for item in self.scenario_mechanisms) or tuple(item.scenario_id for item in self.scenario_mechanisms) != _SCENARIO_ORDER or len({item.mechanism_id for item in self.scenario_mechanisms}) != 3:
-            raise ValidationError("company model template scenario mapping must be exact")
+        if any(
+            item.module_key not in set(module_keys)
+            or (item.module_key, item.metric_key) not in metrics
+            for item in self.operating_baseline_requirements
+        ):
+            raise ValidationError(
+                "operating baseline requirement is outside the template"
+            )
+        if (
+            not isinstance(self.scenario_mechanisms, tuple)
+            or not all(
+                type(item) is CompanyResearchScenarioMechanism
+                for item in self.scenario_mechanisms
+            )
+            or tuple(item.scenario_id for item in self.scenario_mechanisms)
+            != _SCENARIO_ORDER
+            or len({item.mechanism_id for item in self.scenario_mechanisms}) != 3
+        ):
+            raise ValidationError(
+                "company model template scenario mapping must be exact"
+            )
 
 
 class FrozenMarketSnapshotRole(StrEnum):
@@ -347,6 +443,10 @@ class FrozenMarketSnapshotBinding:
     role: FrozenMarketSnapshotRole
     security_external_key: str | None
     source_ref: SourceLineageReference
+    snapshot_content_hash: str
+    capture_envelope_id: UUID
+    capture_content_hash: str
+    provenance_role: str
     provider_policy_version: str = "legacy_snapshot_without_exact_provenance.v1"
     raw_components: tuple[FrozenRawComponentReference, ...] = ()
 
@@ -354,12 +454,22 @@ class FrozenMarketSnapshotBinding:
         _uuid(self.snapshot_id, "market snapshot binding snapshot_id")
         if type(self.role) is not FrozenMarketSnapshotRole:
             raise ValidationError("market snapshot binding role must be typed")
-        if self.role in {FrozenMarketSnapshotRole.PRICE, FrozenMarketSnapshotRole.SECURITY_RIGHTS}:
+        if self.role in {
+            FrozenMarketSnapshotRole.PRICE,
+            FrozenMarketSnapshotRole.SECURITY_RIGHTS,
+        }:
             _text(self.security_external_key, "market snapshot binding security key")
         elif self.security_external_key is not None:
             raise ValidationError("non-security market binding cannot name a security")
         if type(self.source_ref) is not SourceLineageReference:
             raise ValidationError("market snapshot binding source ref must be typed")
+        _hash(self.snapshot_content_hash, "market snapshot binding content hash")
+        _uuid(self.capture_envelope_id, "market snapshot capture envelope id")
+        _hash(self.capture_content_hash, "market snapshot capture content hash")
+        if self.provenance_role != "primary":
+            raise ValidationError(
+                "market snapshot binding provenance role must be primary"
+            )
         _text(self.provider_policy_version, "market snapshot provider policy version")
         if not isinstance(self.raw_components, tuple) or not all(
             type(item) is FrozenRawComponentReference for item in self.raw_components
@@ -391,20 +501,23 @@ class FrozenMarketEquityComponent:
             raise ValidationError("market equity component key is invalid")
         units = _decimal(self.economic_units, "market equity component economic_units")
         if units < Decimal("0"):
-            raise ValidationError("market equity component economic_units must be nonnegative")
+            raise ValidationError(
+                "market equity component economic_units must be nonnegative"
+            )
         _text(
             self.price_proxy_security_external_key,
             "market equity component price proxy",
         )
         if type(self.unit_source_ref) is not SourceLineageReference:
-            raise ValidationError("market equity component unit source ref must be typed")
+            raise ValidationError(
+                "market equity component unit source ref must be typed"
+            )
         _uuid(self.price_snapshot_id, "market equity component price_snapshot_id")
         if type(self.price_ref) is not SourceLineageReference:
             raise ValidationError("market equity component price ref must be typed")
         if self.component_key == "class_b":
             if (
-                _decimal(self.votes_per_unit, "Class B votes_per_unit")
-                != Decimal("10")
+                _decimal(self.votes_per_unit, "Class B votes_per_unit") != Decimal("10")
                 or self.conversion_to_security_external_key != "NASDAQ:GOOGL"
                 or _decimal(self.conversion_ratio, "Class B conversion_ratio")
                 != Decimal("1")
@@ -420,10 +533,11 @@ class FrozenMarketEquityComponent:
                 != Decimal("1")
                 or type(self.legal_rights_ref) is not SourceLineageReference
                 or type(self.price_proxy_ref) is not SourceLineageReference
-                or self.price_proxy_policy_version
-                != "alphabet_class_b_googl_proxy.v1"
+                or self.price_proxy_policy_version != "alphabet_class_b_googl_proxy.v1"
             ):
-                raise ValidationError("Class B legal rights and price proxy must be explicit")
+                raise ValidationError(
+                    "Class B legal rights and price proxy must be explicit"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -458,14 +572,18 @@ class FrozenMarketContext:
         )
         expected = (*price_ids, *fx_ids, capital_id, *rights_ids)
         if len(set(expected)) != len(expected):
-            raise ValidationError("frozen market snapshot refs must not contain duplicates")
+            raise ValidationError(
+                "frozen market snapshot refs must not contain duplicates"
+            )
         if set(snapshot_ids) != set(expected) or len(snapshot_ids) != len(expected):
             raise ValidationError(
                 "snapshot_ids must exactly cover the frozen market references"
             )
         object.__setattr__(self, "market_at", _aware_utc(self.market_at, "market_at"))
         if type(self.market_bridge) is not MarketBridgeArtifact:
-            raise ValidationError("frozen market context requires a typed market bridge")
+            raise ValidationError(
+                "frozen market context requires a typed market bridge"
+            )
         security_count = len(self.market_bridge.securities)
         if (
             len(price_ids) != security_count
@@ -475,28 +593,58 @@ class FrozenMarketContext:
             raise ValidationError(
                 "frozen market context requires one price and rights ref per security and one FX ref"
             )
-        if not isinstance(self.snapshot_bindings, tuple) or not all(type(item) is FrozenMarketSnapshotBinding for item in self.snapshot_bindings):
+        if not isinstance(self.snapshot_bindings, tuple) or not all(
+            type(item) is FrozenMarketSnapshotBinding for item in self.snapshot_bindings
+        ):
             raise ValidationError("frozen market snapshot bindings must be typed")
         if tuple(item.snapshot_id for item in self.snapshot_bindings) != snapshot_ids:
-            raise ValidationError("snapshot bindings must exactly follow canonical snapshot_ids")
+            raise ValidationError(
+                "snapshot bindings must exactly follow canonical snapshot_ids"
+            )
         role_ids = {
             FrozenMarketSnapshotRole.PRICE: price_ids,
             FrozenMarketSnapshotRole.FX: fx_ids,
             FrozenMarketSnapshotRole.CAPITAL_STRUCTURE: (capital_id,),
             FrozenMarketSnapshotRole.SECURITY_RIGHTS: rights_ids,
         }
-        if any({item.snapshot_id for item in self.snapshot_bindings if item.role is role} != set(ids) for role, ids in role_ids.items()):
-            raise ValidationError("snapshot bindings must exactly cover each market role")
-        bindings = {(item.role, item.security_external_key): item.source_ref for item in self.snapshot_bindings}
+        if any(
+            {item.snapshot_id for item in self.snapshot_bindings if item.role is role}
+            != set(ids)
+            for role, ids in role_ids.items()
+        ):
+            raise ValidationError(
+                "snapshot bindings must exactly cover each market role"
+            )
+        bindings = {
+            (item.role, item.security_external_key): item.source_ref
+            for item in self.snapshot_bindings
+        }
         bridge = self.market_bridge
         expected_refs = {
-            (FrozenMarketSnapshotRole.CAPITAL_STRUCTURE, None): bridge.capital_structure.source_ref,
+            (
+                FrozenMarketSnapshotRole.CAPITAL_STRUCTURE,
+                None,
+            ): bridge.capital_structure.source_ref,
             (FrozenMarketSnapshotRole.FX, None): bridge.fx_ref,
-            **{(FrozenMarketSnapshotRole.PRICE, item.security_external_key): item.price_ref for item in bridge.securities},
-            **{(FrozenMarketSnapshotRole.SECURITY_RIGHTS, item.security_external_key): item.rights_ref for item in bridge.securities},
+            **{
+                (
+                    FrozenMarketSnapshotRole.PRICE,
+                    item.security_external_key,
+                ): item.price_ref
+                for item in bridge.securities
+            },
+            **{
+                (
+                    FrozenMarketSnapshotRole.SECURITY_RIGHTS,
+                    item.security_external_key,
+                ): item.rights_ref
+                for item in bridge.securities
+            },
         }
         if bindings != expected_refs:
-            raise ValidationError("frozen market snapshot binding bridge refs do not match")
+            raise ValidationError(
+                "frozen market snapshot binding bridge refs do not match"
+            )
         if (
             not isinstance(self.equity_components, tuple)
             or not all(
@@ -527,7 +675,9 @@ class FrozenMarketContext:
             item.price_proxy_security_external_key != expected_proxy[item.component_key]
             for item in self.equity_components
         ):
-            raise ValidationError("Class B price proxy policy must explicitly use GOOGL")
+            raise ValidationError(
+                "Class B price proxy policy must explicitly use GOOGL"
+            )
         if (
             set(securities) != {"NASDAQ:GOOG", "NASDAQ:GOOGL"}
             or class_a.economic_units
@@ -584,7 +734,10 @@ class FrozenMarketContext:
                 - capital.cash
                 - capital.investments
             )
-        if self.reverse_dcf_request.target_enterprise_value != expected_enterprise_value:
+        if (
+            self.reverse_dcf_request.target_enterprise_value
+            != expected_enterprise_value
+        ):
             raise ValidationError(
                 "reverse DCF target must close to exact Class A-B-C market equity"
             )
@@ -618,7 +771,9 @@ class ScenarioAssumption:
         if self.scenario_id != "base" and all(
             item.value == Decimal("1") for item in self.driver_overrides
         ):
-            raise ValidationError("non-base strategy scenarios must change their mechanism")
+            raise ValidationError(
+                "non-base strategy scenarios must change their mechanism"
+            )
 
     def canonical_payload(self) -> dict[str, object]:
         return {
@@ -790,7 +945,10 @@ class CompanyResearchBuildInput:
             raise ValidationError("company model template is required")
         if type(self.strategy_assumptions) is not StrategyAssumptionSet:
             raise ValidationError("strategy assumptions are required")
-        if self.market_context is not None and type(self.market_context) is not FrozenMarketContext:
+        if (
+            self.market_context is not None
+            and type(self.market_context) is not FrozenMarketContext
+        ):
             raise ValidationError("market_context must be a frozen market context")
         if (
             self.market_context is not None
@@ -809,16 +967,25 @@ class CompanyResearchBuildInput:
             security.external_key for security in self.identity_set.securities
         )
         if self.evidence_payload.get("company_external_key") != company_key:
-            raise ValidationError("evidence company identity does not match target identity")
-        if tuple(self.evidence_payload.get("security_external_keys", ())) != security_keys:
-            raise ValidationError("evidence security identity does not match target identity")
+            raise ValidationError(
+                "evidence company identity does not match target identity"
+            )
+        if (
+            tuple(self.evidence_payload.get("security_external_keys", ()))
+            != security_keys
+        ):
+            raise ValidationError(
+                "evidence security identity does not match target identity"
+            )
         if self.gap_payload.get("company_external_key") != company_key:
             raise ValidationError("gap company identity does not match target identity")
         if (
             self.model_template.company_external_key != company_key
             or self.model_template.security_external_keys != security_keys
         ):
-            raise ValidationError("company model template identity does not match target identity")
+            raise ValidationError(
+                "company model template identity does not match target identity"
+            )
         if self.market_context is not None:
             market_keys = tuple(
                 sorted(
@@ -875,9 +1042,13 @@ def _model_fact_decimal(fact: Mapping[str, object]) -> Decimal:
     try:
         parsed = Decimal(raw)
     except InvalidOperation as exc:
-        raise ValidationError("model fact value must be a canonical Decimal string") from exc
+        raise ValidationError(
+            "model fact value must be a canonical Decimal string"
+        ) from exc
     if not parsed.is_finite() or canonical_decimal_string(parsed) != raw:
-        raise ValidationError("model fact value must be a canonical finite Decimal string")
+        raise ValidationError(
+            "model fact value must be a canonical finite Decimal string"
+        )
     return parsed
 
 
@@ -936,7 +1107,9 @@ def _validate_evidence_payload(
             raise ValidationError("evidence facts must not contain duplicate refs")
         keys.add(fact_key)
         if fact.get("company_external_key") != company_key:
-            raise ValidationError("evidence fact company does not match evidence payload")
+            raise ValidationError(
+                "evidence fact company does not match evidence payload"
+            )
         for field in (
             "business_module",
             "metric_key",
@@ -978,9 +1151,7 @@ def _validate_evidence_payload(
             if fact["metric_key"] == metric_key
         }
         units = {
-            str(fact["unit"])
-            for fact in confirmed
-            if fact["metric_key"] == metric_key
+            str(fact["unit"]) for fact in confirmed if fact["metric_key"] == metric_key
         }
         if len(currencies) != 1 or len(units) != 1:
             raise ValidationError(
@@ -1049,9 +1220,7 @@ class CompanyResearchModelBuilder:
         )
         evidence_refs = self._evidence_refs(confirmed)
         baseline_gaps = self._baseline_gaps(value.model_template, confirmed)
-        active_gaps = self._active_gaps(
-            raw_gaps, value.market_context, baseline_gaps
-        )
+        active_gaps = self._active_gaps(raw_gaps, value.market_context, baseline_gaps)
         active_gaps = tuple(
             sorted(
                 (
@@ -1226,12 +1395,16 @@ class CompanyResearchModelBuilder:
             for item in template.metric_classifications
         }
         if any(str(item["business_module"]) not in modules for item in (*facts, *gaps)):
-            raise ValidationError("evidence module is outside the company model template")
+            raise ValidationError(
+                "evidence module is outside the company model template"
+            )
         if any(
             (str(item["business_module"]), str(item["metric_key"])) not in metrics
             for item in facts
         ):
-            raise ValidationError("evidence metric is outside the company model template")
+            raise ValidationError(
+                "evidence metric is outside the company model template"
+            )
 
     @staticmethod
     def _validate_scenario_mapping(
@@ -1257,8 +1430,7 @@ class CompanyResearchModelBuilder:
         facts: tuple[Mapping[str, object], ...],
     ) -> tuple[ResearchGap, ...]:
         available = {
-            (str(item["business_module"]), str(item["metric_key"]))
-            for item in facts
+            (str(item["business_module"]), str(item["metric_key"])) for item in facts
         }
         return tuple(
             ResearchGap(
@@ -1320,8 +1492,7 @@ class CompanyResearchModelBuilder:
         generated = tuple(
             ResearchGap(
                 code=(
-                    f"{_BUILDER_GAP_PREFIX}missing_module_evidence_"
-                    f"{module.module_key}"
+                    f"{_BUILDER_GAP_PREFIX}missing_module_evidence_{module.module_key}"
                 ),
                 module_key=module.module_key,
                 severity=ResearchGapSeverity.CRITICAL,
@@ -1338,8 +1509,7 @@ class CompanyResearchModelBuilder:
         facts: tuple[Mapping[str, object], ...],
     ) -> tuple[ResearchGap, ...]:
         available = {
-            (str(item["business_module"]), str(item["metric_key"]))
-            for item in facts
+            (str(item["business_module"]), str(item["metric_key"])) for item in facts
         }
         return tuple(
             ResearchGap(
@@ -1433,9 +1603,7 @@ class CompanyResearchModelBuilder:
         evidence_by_key = {item.fact_key: item for item in evidence_refs}
         refs_by_driver = {
             path.driver_key: ref
-            for path, ref in zip(
-                assumptions.driver_paths, assumption_refs, strict=True
-            )
+            for path, ref in zip(assumptions.driver_paths, assumption_refs, strict=True)
         }
         operating = tuple(
             DriverMetricArtifact(
@@ -1472,22 +1640,22 @@ class CompanyResearchModelBuilder:
             )
         )
         financial = tuple(
-                DriverMetricArtifact(
-                    driver_key=path.driver_key,
-                    module_key=modules_by_driver[path.driver_key],
-                    fact_refs=(),
-                    assumption_refs=(refs_by_driver[path.driver_key],),
-                    equation=SCENARIO_FINANCIAL_DRIVER_EQUATIONS[path.driver_key],
-                    output_metric=path.driver_key,
-                    input_state=path.state,
-                    assumption_key=path.assumption_key,
-                    equation_id=path.equation_id,
-                    values=path.values,
-                    assumption_rationale=path.assumption_rationale,
-                    assumption_equation=path.assumption_equation,
-                )
-                for path in assumptions.driver_paths
+            DriverMetricArtifact(
+                driver_key=path.driver_key,
+                module_key=modules_by_driver[path.driver_key],
+                fact_refs=(),
+                assumption_refs=(refs_by_driver[path.driver_key],),
+                equation=SCENARIO_FINANCIAL_DRIVER_EQUATIONS[path.driver_key],
+                output_metric=path.driver_key,
+                input_state=path.state,
+                assumption_key=path.assumption_key,
+                equation_id=path.equation_id,
+                values=path.values,
+                assumption_rationale=path.assumption_rationale,
+                assumption_equation=path.assumption_equation,
             )
+            for path in assumptions.driver_paths
+        )
         return DriverMapArtifact(drivers=(*operating, *financial))
 
     @staticmethod
@@ -1559,7 +1727,9 @@ class CompanyResearchModelBuilder:
             )
         values = (*evidence_refs, *assumption_refs, gap_ref, *market_refs)
         if len({item.fact_key for item in values}) != len(values):
-            raise ValidationError("model source lineage must not contain duplicate refs")
+            raise ValidationError(
+                "model source lineage must not contain duplicate refs"
+            )
         return tuple(values)
 
     @staticmethod
@@ -1575,7 +1745,9 @@ class CompanyResearchModelBuilder:
         assessment: CompanyResearchAssessment,
     ) -> CompanyResearchMemoArtifact:
         def reference(kind: str, artifact: Any) -> CompanyResearchArtifactReference:
-            return CompanyResearchArtifactReference(kind, canonical_hash(asdict(artifact)))
+            return CompanyResearchArtifactReference(
+                kind, canonical_hash(asdict(artifact))
+            )
 
         return CompanyResearchMemoArtifact(
             assessment_status=assessment.status,

@@ -51,6 +51,7 @@ from app.underwriting.services.market_snapshots import (
     MarketSnapshotService,
     capital_structure_snapshot_hash,
     fx_snapshot_hash,
+    market_capture_envelope_hash,
     price_snapshot_hash,
     security_rights_hash,
 )
@@ -97,9 +98,7 @@ def _latest_exact(
         )
     latest_at = max(_stored_utc(getattr(row, time_field)) for row in values)
     latest = tuple(
-        row
-        for row in values
-        if _stored_utc(getattr(row, time_field)) == latest_at
+        row for row in values if _stored_utc(getattr(row, time_field)) == latest_at
     )
     if len(latest) != 1:
         raise ValidationError(f"market inputs contain duplicate {label}")
@@ -148,12 +147,16 @@ class CompanyResearchMarketInputs:
         """Install one authenticated bundle atomically, then resolve exact refs."""
         cutoff = _utc(cutoff_at, "cutoff_at")
         if type(market_inputs) is not AlphabetMarketInputBundle:
-            raise ValidationError("market_inputs must be an authenticated Alphabet bundle")
+            raise ValidationError(
+                "market_inputs must be an authenticated Alphabet bundle"
+            )
         if (
             market_inputs.company_external_key != _ALPHABET_COMPANY_KEY
             or market_inputs.security_external_keys != _ALPHABET_SECURITY_KEYS
         ):
-            raise ValidationError("market input bundle identity does not match Alphabet")
+            raise ValidationError(
+                "market input bundle identity does not match Alphabet"
+            )
         project_record = self._repository.project(project_id)
         if project_record is None:
             raise ValidationError("company research project not found")
@@ -161,16 +164,18 @@ class CompanyResearchMarketInputs:
         objects = tuple(
             self._session.get(UnderwritingResearchObject, item) for item in security_ids
         )
-        by_key = {
-            item.external_key: item for item in objects if item is not None
-        }
-        company = self._session.get(UnderwritingResearchObject, project.primary_company_id)
+        by_key = {item.external_key: item for item in objects if item is not None}
+        company = self._session.get(
+            UnderwritingResearchObject, project.primary_company_id
+        )
         if (
             company is None
             or company.external_key != market_inputs.company_external_key
             or tuple(sorted(by_key)) != market_inputs.security_external_keys
         ):
-            raise ValidationError("market input bundle does not match the project identity")
+            raise ValidationError(
+                "market input bundle does not match the project identity"
+            )
 
         market = MarketSnapshotService(self._session, now=self._clock)
         drafts = WorkspaceDraftService(self._session, now=self._clock)
@@ -273,9 +278,11 @@ class CompanyResearchMarketInputs:
                     lambda value=value: market.freeze_price(value),
                     UnderwritingPriceSnapshot,
                     (
-                        UnderwritingPriceSnapshot.security_identity_id == value.security_identity_id,
+                        UnderwritingPriceSnapshot.security_identity_id
+                        == value.security_identity_id,
                         UnderwritingPriceSnapshot.price_type == value.price_type,
-                        UnderwritingPriceSnapshot.adjustment_basis == value.adjustment_basis,
+                        UnderwritingPriceSnapshot.adjustment_basis
+                        == value.adjustment_basis,
                         UnderwritingPriceSnapshot.market_at == value.market_at,
                     ),
                     price_snapshot_hash(value),
@@ -288,7 +295,8 @@ class CompanyResearchMarketInputs:
                 (
                     UnderwritingFXSnapshot.base_currency == fx_value.base_currency,
                     UnderwritingFXSnapshot.quote_currency == fx_value.quote_currency,
-                    UnderwritingFXSnapshot.quote_direction == fx_value.quote_direction.value,
+                    UnderwritingFXSnapshot.quote_direction
+                    == fx_value.quote_direction.value,
                     UnderwritingFXSnapshot.market_at == fx_value.market_at,
                 ),
                 fx_snapshot_hash(fx_value),
@@ -296,19 +304,24 @@ class CompanyResearchMarketInputs:
             if (
                 capital_item.capital_bridge_policy_version
                 != "alphabet-capital-bridge.v1"
-                or capital_item.policy_excluded_adjustments
-                != ("pension_liabilities",)
+                or capital_item.policy_excluded_adjustments != ("pension_liabilities",)
                 or capital_item.value("pension_liabilities") != Decimal("0")
             ):
-                raise ValidationError("capital bridge policy is unsupported or not closed")
+                raise ValidationError(
+                    "capital bridge policy is unsupported or not closed"
+                )
             capital_row = self._converge_snapshot_insert(
                 lambda: market.freeze_capital_structure(capital_value),
                 UnderwritingCapitalStructureSnapshot,
                 (
-                    UnderwritingCapitalStructureSnapshot.company_id == capital_value.company_id,
-                    UnderwritingCapitalStructureSnapshot.report_period_start == capital_value.report_period_start,
-                    UnderwritingCapitalStructureSnapshot.report_period_end == capital_value.report_period_end,
-                    UnderwritingCapitalStructureSnapshot.market_at == capital_value.market_at,
+                    UnderwritingCapitalStructureSnapshot.company_id
+                    == capital_value.company_id,
+                    UnderwritingCapitalStructureSnapshot.report_period_start
+                    == capital_value.report_period_start,
+                    UnderwritingCapitalStructureSnapshot.report_period_end
+                    == capital_value.report_period_end,
+                    UnderwritingCapitalStructureSnapshot.market_at
+                    == capital_value.market_at,
                 ),
                 capital_structure_snapshot_hash(capital_value),
             )
@@ -317,8 +330,10 @@ class CompanyResearchMarketInputs:
                     lambda value=value: self._freeze_rights(market, value),
                     UnderwritingSecurityRightsVersion,
                     (
-                        UnderwritingSecurityRightsVersion.security_identity_id == value.security_identity_id,
-                        UnderwritingSecurityRightsVersion.effective_from == value.effective_from,
+                        UnderwritingSecurityRightsVersion.security_identity_id
+                        == value.security_identity_id,
+                        UnderwritingSecurityRightsVersion.effective_from
+                        == value.effective_from,
                     ),
                     security_rights_hash(value),
                 )
@@ -389,7 +404,10 @@ class CompanyResearchMarketInputs:
         head = market.security_rights_head(value.security_identity_id)
         if head is not None and head.content_hash == expected_hash:
             return head
-        if head is not None and _stored_utc(head.effective_from) == value.effective_from:
+        if (
+            head is not None
+            and _stored_utc(head.effective_from) == value.effective_from
+        ):
             raise ConflictError(
                 "different security-rights hash already exists for the same identity/time"
             )
@@ -411,9 +429,11 @@ class CompanyResearchMarketInputs:
                 (
                     UnderwritingPriceSnapshot,
                     (
-                        UnderwritingPriceSnapshot.security_identity_id == value.security_identity_id,
+                        UnderwritingPriceSnapshot.security_identity_id
+                        == value.security_identity_id,
                         UnderwritingPriceSnapshot.price_type == value.price_type,
-                        UnderwritingPriceSnapshot.adjustment_basis == value.adjustment_basis,
+                        UnderwritingPriceSnapshot.adjustment_basis
+                        == value.adjustment_basis,
                         UnderwritingPriceSnapshot.market_at == value.market_at,
                     ),
                     price_snapshot_hash(value),
@@ -433,9 +453,12 @@ class CompanyResearchMarketInputs:
             (
                 UnderwritingCapitalStructureSnapshot,
                 (
-                    UnderwritingCapitalStructureSnapshot.company_id == capital.company_id,
-                    UnderwritingCapitalStructureSnapshot.report_period_start == capital.report_period_start,
-                    UnderwritingCapitalStructureSnapshot.report_period_end == capital.report_period_end,
+                    UnderwritingCapitalStructureSnapshot.company_id
+                    == capital.company_id,
+                    UnderwritingCapitalStructureSnapshot.report_period_start
+                    == capital.report_period_start,
+                    UnderwritingCapitalStructureSnapshot.report_period_end
+                    == capital.report_period_end,
                     UnderwritingCapitalStructureSnapshot.market_at == capital.market_at,
                 ),
                 capital_structure_snapshot_hash(capital),
@@ -444,8 +467,10 @@ class CompanyResearchMarketInputs:
                 (
                     UnderwritingSecurityRightsVersion,
                     (
-                        UnderwritingSecurityRightsVersion.security_identity_id == value.security_identity_id,
-                        UnderwritingSecurityRightsVersion.effective_from == value.effective_from,
+                        UnderwritingSecurityRightsVersion.security_identity_id
+                        == value.security_identity_id,
+                        UnderwritingSecurityRightsVersion.effective_from
+                        == value.effective_from,
                     ),
                     security_rights_hash(value),
                 )
@@ -458,9 +483,7 @@ class CompanyResearchMarketInputs:
                     select(model).where(*predicates).with_for_update()
                 )
             )
-            if rows and (
-                len(rows) != 1 or rows[0].content_hash != expected_hash
-            ):
+            if rows and (len(rows) != 1 or rows[0].content_hash != expected_hash):
                 raise ConflictError(
                     "different content already exists for the same business identity/time"
                 )
@@ -545,7 +568,8 @@ class CompanyResearchMarketInputs:
                 select(UnderwritingMarketCaptureEnvelope).where(
                     UnderwritingMarketCaptureEnvelope.snapshot_kind == snapshot_kind,
                     UnderwritingMarketCaptureEnvelope.snapshot_id == snapshot_id,
-                    UnderwritingMarketCaptureEnvelope.provenance_role == provenance_role,
+                    UnderwritingMarketCaptureEnvelope.provenance_role
+                    == provenance_role,
                 )
             )
             if existing is None or existing.content_hash != content_hash:
@@ -564,7 +588,9 @@ class CompanyResearchMarketInputs:
         if project_record is None:
             raise ValidationError("company research project not found")
         project, security_ids = project_record
-        company = self._session.get(UnderwritingResearchObject, project.primary_company_id)
+        company = self._session.get(
+            UnderwritingResearchObject, project.primary_company_id
+        )
         securities = tuple(
             self._session.get(UnderwritingResearchObject, security_id)
             for security_id in security_ids
@@ -577,9 +603,7 @@ class CompanyResearchMarketInputs:
         ):
             raise ValidationError("market inputs do not match the project Company")
         security_by_key = {
-            item.external_key: item
-            for item in securities
-            if item is not None
+            item.external_key: item for item in securities if item is not None
         }
         if tuple(sorted(security_by_key)) != _ALPHABET_SECURITY_KEYS:
             raise ValidationError("market inputs do not match the project Securities")
@@ -622,9 +646,7 @@ class CompanyResearchMarketInputs:
                 "capital_structure",
                 capital.id,
                 "class_b_legal_rights",
-            ): self._capture(
-                "capital_structure", capital.id, "class_b_legal_rights"
-            ),
+            ): self._capture("capital_structure", capital.id, "class_b_legal_rights"),
             ("capital_structure", capital.id, "class_b_units"): self._capture(
                 "capital_structure", capital.id, "class_b_units"
             ),
@@ -648,7 +670,8 @@ class CompanyResearchMarketInputs:
                 select(UnderwritingMarketCaptureEnvelope).where(
                     UnderwritingMarketCaptureEnvelope.snapshot_kind == snapshot_kind,
                     UnderwritingMarketCaptureEnvelope.snapshot_id == snapshot_id,
-                    UnderwritingMarketCaptureEnvelope.provenance_role == provenance_role,
+                    UnderwritingMarketCaptureEnvelope.provenance_role
+                    == provenance_role,
                 )
             )
         )
@@ -657,22 +680,7 @@ class CompanyResearchMarketInputs:
                 "market inputs require one exact persisted capture provenance envelope"
             )
         row = rows[0]
-        expected_hash = canonical_hash(
-            {
-                "schema_version": "product.market-capture-envelope.v1",
-                "snapshot_kind": row.snapshot_kind,
-                "snapshot_id": str(row.snapshot_id),
-                "provenance_role": row.provenance_role,
-                "source_url": row.source_url,
-                "source_locator": row.source_locator,
-                "provider_policy_version": row.provider_policy_version,
-                "raw_hash": row.raw_hash,
-                "raw_components": row.raw_components,
-                "authenticated_available_at": _stored_utc(
-                    row.authenticated_available_at
-                ).isoformat(),
-            }
-        )
+        expected_hash = market_capture_envelope_hash(row)
         if row.content_hash != expected_hash:
             raise ValidationError("market capture provenance envelope hash is invalid")
         return row
@@ -682,7 +690,10 @@ class CompanyResearchMarketInputs:
             select(UnderwritingPriceSnapshot)
             .join(
                 UnderwritingMarketCaptureEnvelope,
-                (UnderwritingMarketCaptureEnvelope.snapshot_id == UnderwritingPriceSnapshot.id)
+                (
+                    UnderwritingMarketCaptureEnvelope.snapshot_id
+                    == UnderwritingPriceSnapshot.id
+                )
                 & (UnderwritingMarketCaptureEnvelope.snapshot_kind == "price")
                 & (UnderwritingMarketCaptureEnvelope.provenance_role == "primary"),
             )
@@ -700,11 +711,15 @@ class CompanyResearchMarketInputs:
             )
             .limit(2)
         )
-        row = _latest_exact(rows, time_field="market_at", label=f"price for {security_key}")
+        row = _latest_exact(
+            rows, time_field="market_at", label=f"price for {security_key}"
+        )
         if row.security_identity_id != security_id:
             raise ValidationError("market inputs contain a cross-security price")
         if row.currency != "USD":
-            raise ValidationError(f"market inputs use the wrong currency for {security_key}")
+            raise ValidationError(
+                f"market inputs use the wrong currency for {security_key}"
+            )
         return row
 
     def _fx(self, cutoff: datetime):
@@ -712,7 +727,10 @@ class CompanyResearchMarketInputs:
             select(UnderwritingFXSnapshot)
             .join(
                 UnderwritingMarketCaptureEnvelope,
-                (UnderwritingMarketCaptureEnvelope.snapshot_id == UnderwritingFXSnapshot.id)
+                (
+                    UnderwritingMarketCaptureEnvelope.snapshot_id
+                    == UnderwritingFXSnapshot.id
+                )
                 & (UnderwritingMarketCaptureEnvelope.snapshot_kind == "fx")
                 & (UnderwritingMarketCaptureEnvelope.provenance_role == "primary"),
             )
@@ -741,7 +759,10 @@ class CompanyResearchMarketInputs:
                     UnderwritingMarketCaptureEnvelope.snapshot_id
                     == UnderwritingCapitalStructureSnapshot.id
                 )
-                & (UnderwritingMarketCaptureEnvelope.snapshot_kind == "capital_structure")
+                & (
+                    UnderwritingMarketCaptureEnvelope.snapshot_kind
+                    == "capital_structure"
+                )
                 & (UnderwritingMarketCaptureEnvelope.provenance_role == "primary"),
             )
             .where(
@@ -758,9 +779,13 @@ class CompanyResearchMarketInputs:
         )
         row = _latest_exact(rows, time_field="market_at", label="capital structure")
         if row.company_id != company_id:
-            raise ValidationError("market inputs contain a cross-company capital structure")
+            raise ValidationError(
+                "market inputs contain a cross-company capital structure"
+            )
         if row.currency != "USD":
-            raise ValidationError("market inputs use the wrong capital-structure currency")
+            raise ValidationError(
+                "market inputs use the wrong capital-structure currency"
+            )
         return row
 
     def _rights(self, *, security_id: UUID, security_key: str, cutoff: datetime):
@@ -772,10 +797,7 @@ class CompanyResearchMarketInputs:
                     UnderwritingMarketCaptureEnvelope.snapshot_id
                     == UnderwritingSecurityRightsVersion.id
                 )
-                & (
-                    UnderwritingMarketCaptureEnvelope.snapshot_kind
-                    == "security_rights"
-                )
+                & (UnderwritingMarketCaptureEnvelope.snapshot_kind == "security_rights")
                 & (UnderwritingMarketCaptureEnvelope.provenance_role == "primary"),
             )
             .where(
@@ -1002,6 +1024,7 @@ class CompanyResearchMarketInputs:
         snapshot_ids = tuple(
             sorted((*price_ids, *fx_ids, capital.id, *rights_ids), key=str)
         )
+        snapshot_by_id = {row.id: row for row in (*prices, fx, capital, *rights)}
         capture_kind = {
             FrozenMarketSnapshotRole.PRICE: "price",
             FrozenMarketSnapshotRole.FX: "fx",
@@ -1010,23 +1033,35 @@ class CompanyResearchMarketInputs:
         }
         bindings = tuple(
             FrozenMarketSnapshotBinding(
-                snapshot_id,
-                *role_by_id[snapshot_id],
+                snapshot_id=snapshot_id,
+                role=role_by_id[snapshot_id][0],
+                security_external_key=role_by_id[snapshot_id][1],
+                source_ref=role_by_id[snapshot_id][2],
+                snapshot_content_hash=snapshot_by_id[snapshot_id].content_hash,
+                capture_envelope_id=captures[
+                    (capture_kind[role_by_id[snapshot_id][0]], snapshot_id, "primary")
+                ].id,
+                capture_content_hash=captures[
+                    (capture_kind[role_by_id[snapshot_id][0]], snapshot_id, "primary")
+                ].content_hash,
+                provenance_role="primary",
                 provider_policy_version=captures[
                     (capture_kind[role_by_id[snapshot_id][0]], snapshot_id, "primary")
                 ].provider_policy_version,
                 raw_components=tuple(
                     FrozenRawComponentReference(**component)
                     for component in captures[
-                        (capture_kind[role_by_id[snapshot_id][0]], snapshot_id, "primary")
+                        (
+                            capture_kind[role_by_id[snapshot_id][0]],
+                            snapshot_id,
+                            "primary",
+                        )
                     ].raw_components
                 ),
             )
             for snapshot_id in snapshot_ids
         )
-        market_at = max(
-            _stored_utc(row.market_at) for row in (*prices, fx, capital)
-        )
+        market_at = max(_stored_utc(row.market_at) for row in (*prices, fx, capital))
         equity_components = tuple(
             FrozenMarketEquityComponent(
                 component_key=component_key,
