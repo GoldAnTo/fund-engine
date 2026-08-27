@@ -332,6 +332,16 @@ class CompanyResearchMarketInputs:
 
 The resolver reads only immutable `PriceSnapshot`, `FXSnapshot`, `CapitalStructureSnapshot`, and `SecurityRightsVersion` rows. It rejects missing, duplicate, post-cutoff, cross-company, cross-security, wrong-currency, or hash-invalid rows.
 
+Snapshot provenance remains replayable after installation: the immutable rows
+or a content-addressed capture-envelope artifact retain the exact source
+locator, provider-policy version, and component raw-file references. The
+resolver restores those fields verbatim instead of synthesizing a locator from
+timestamps. `created_at` records the real installation clock; historical
+eligibility is decided by authenticated `available_at`, never by backdating row
+creation to the research cutoff. Before insert, prepare checks the business
+identity/time without `raw_hash`: identical content is idempotent and different
+content raises `ConflictError` for price, FX, capital, and rights.
+
 - [ ] **Step 3: Add a byte-authenticated fixed-cutoff market-input bundle**
 
 `market_inputs.json` uses a closed schema with one GOOGL price, one GOOG price,
@@ -370,12 +380,30 @@ or equation, and remain visibly distinct from source facts. Missing or invalid
 strategy assumptions fail the model stage closed; neither the loader nor the
 Alphabet adapter derives replacement forecasts from historical facts.
 
+Driver paths, every scenario override, and terminal growth keep their own
+typed `state`, versioned assumption key, rationale, and equation through the
+adapter and builder seams. The original fixture candidate digest is preserved;
+an adapter must not silently re-hash a metadata-stripped projection.
+
 The Alphabet adapter also emits the concrete `CompanyResearchModelTemplate`:
 all six business modules, metric classifications, minimum operating-driver map,
 financial-driver ownership, and exact scenario-to-mechanism mapping. This is
 vocabulary and structure only; it contains no forecast numbers. A reviewed fact
 marked `rejected` is excluded, and any now-unsatisfied required template input
 becomes an explicit gap and keeps the candidate `not_answerable`.
+
+The minimum operating-driver map is the complete set approved in the Alphabet
+design (Search/query intensity, ad monetization, TAC, YouTube use/ads/
+subscriptions, Cloud workload/growth/margin, AI/data-center capex,
+depreciation/infrastructure opex/FCF, and SBC/repurchase/dilution). Every
+unavailable required binding generates its own critical gap; placeholder module
+copy is not sufficient.
+
+Class B remains an independent, non-listed legal-rights component with ten
+votes per unit and 1:1 conversion to Class A. Its 835 million units may use the
+GOOGL price only through an explicit price-proxy field. They must never be
+merged into the GOOGL rights row. The frozen bridge separately preserves Class
+A, B, and C quantities, legal-rights lineage, and proxy lineage.
 
 For the frozen Alphabet acceptance set, capture source envelopes from:
 
