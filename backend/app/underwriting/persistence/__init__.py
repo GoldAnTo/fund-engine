@@ -1,5 +1,17 @@
-"""Persistence layer for the underwriting bounded context."""
+"""Stable persistence exports without application-service dependencies.
 
+The company-research repository is intentionally imported from its concrete
+module: eagerly loading it here would make ORM model registration depend on
+the application-service graph while ``app.models`` is still initializing.
+"""
+
+from app.underwriting.persistence.company_research_models import (
+    COMPANY_RESEARCH_ARTIFACT_KINDS,
+    COMPANY_RESEARCH_PREPARATION_STATUSES,
+    CompanyResearchArtifactVersion,
+    CompanyResearchEvent,
+    CompanyResearchPreparation,
+)
 from app.underwriting.persistence.models import (
     UnderwritingAnswerabilityEvaluation,
     UnderwritingHistoricalBasis,
@@ -13,11 +25,11 @@ from app.underwriting.persistence.product_models import (
     UnderwritingCapitalStructureSnapshot,
     UnderwritingFXSnapshot,
     UnderwritingObjectIdentityVersion,
-    UnderwritingResearchObjectAlias,
-    UnderwritingResearchObjectSearchTerm,
     UnderwritingPriceSnapshot,
     UnderwritingResearchAgendaVersion,
     UnderwritingResearchAssessmentVersion,
+    UnderwritingResearchObjectAlias,
+    UnderwritingResearchObjectSearchTerm,
     UnderwritingResearchProject,
     UnderwritingResearchProjectSecurity,
     UnderwritingResearchScopeVersion,
@@ -25,6 +37,10 @@ from app.underwriting.persistence.product_models import (
     UnderwritingRevisionManifest,
     UnderwritingSecurityRightsVersion,
     UnderwritingWorkspaceDraft,
+)
+from app.underwriting.persistence.repository import (
+    StaleParentError,
+    UnderwritingRepository,
 )
 from app.underwriting.persistence.research_models import (
     UnderwritingCompanyExposureVersion,
@@ -40,23 +56,8 @@ from app.underwriting.persistence.research_models import (
     UnderwritingMetricObservation,
     UnderwritingSourceManifestVersion,
 )
-from app.underwriting.persistence.repository import (
-    StaleParentError,
-    UnderwritingRepository,
-)
 from app.underwriting.persistence.research_repository import (
     UnderwritingResearchRepository,
-)
-from app.underwriting.persistence.company_research_models import (
-    COMPANY_RESEARCH_ARTIFACT_KINDS,
-    COMPANY_RESEARCH_PREPARATION_STATUSES,
-    CompanyResearchArtifactVersion,
-    CompanyResearchEvent,
-    CompanyResearchPreparation,
-)
-from app.underwriting.persistence.company_research_repository import (
-    CompanyResearchIntegrityError,
-    CompanyResearchRepository,
 )
 
 __all__ = [
@@ -102,6 +103,4 @@ __all__ = [
     "CompanyResearchArtifactVersion",
     "CompanyResearchEvent",
     "CompanyResearchPreparation",
-    "CompanyResearchIntegrityError",
-    "CompanyResearchRepository",
 ]

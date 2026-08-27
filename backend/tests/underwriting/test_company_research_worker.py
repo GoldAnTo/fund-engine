@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+import subprocess
+import sys
 from uuid import uuid4
 
 import pytest
@@ -35,6 +38,7 @@ from app.underwriting.services.workspace_draft import (
     WorkspaceDraftPatch,
     WorkspaceDraftService,
 )
+from app.scripts import run_company_research_worker
 
 
 NOW = datetime(2026, 8, 26, tzinfo=UTC)
@@ -248,7 +252,9 @@ def test_manual_retry_keeps_a_model_failure_on_the_model_bundle_step(session) ->
     worker = CompanyResearchPreparationWorker(
         session,
         now=lambda: NOW,
-        model_provider=lambda _input: (_ for _ in ()).throw(OSError("secret")),
+        model_provider=lambda _input: (_ for _ in ()).throw(
+            ConnectionError("secret")
+        ),
     )
     claim = worker.claim_next()
     assert claim is not None and claim.step == "model_bundle"
@@ -263,6 +269,45 @@ def test_manual_retry_keeps_a_model_failure_on_the_model_bundle_step(session) ->
         session, now=lambda: NOW + timedelta(seconds=30)
     ).claim_next()
     assert retry is not None and retry.step == "model_bundle"
+
+
+def test_manual_retry_does_not_consume_the_three_execution_attempt_budget(session) -> None:
+    initialized = _ready_for_model(session)
+    current_time = NOW
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: current_time,
+        model_provider=lambda _input: (_ for _ in ()).throw(
+            ConnectionError("secret")
+        ),
+    )
+    first = worker.claim_next()
+    assert first is not None
+    assert worker.run_claim(first) == "recoverable_failure"
+    job = session.get(Job, initialized.job.id)
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    assert job is not None and preparation is not None
+    assert (job.attempt, preparation.attempt) == (2, 2)
+    assert preparation.next_attempt_at == NOW + timedelta(seconds=30)
+
+    current_time = NOW + timedelta(seconds=30)
+    CompanyResearchPreparationService(
+        session, now=lambda: current_time
+    ).retry(project_id=initialized.project.id)
+    assert (job.attempt, preparation.attempt) == (2, 2)
+    second = worker.claim_next()
+    assert second is not None
+    assert worker.run_claim(second) == "recoverable_failure"
+    assert (job.attempt, preparation.attempt) == (3, 3)
+    assert preparation.next_attempt_at == current_time + timedelta(seconds=120)
+
+    current_time += timedelta(seconds=120)
+    third = worker.claim_next()
+    assert third is not None
+    assert worker.run_claim(third) == "recoverable_failure"
+    assert job.status == "failed"
+    assert preparation.status == "blocked"
+    assert (job.attempt, preparation.attempt) == (3, 3)
 
 
 @pytest.mark.parametrize(
@@ -424,6 +469,173 @@ def test_model_provider_runs_without_claim_lock_and_stale_output_is_discarded(
     ) is None
 
 
+def test_draft_change_while_model_provider_runs_discards_stale_output(session) -> None:
+    initialized = _ready_for_model(session)
+    session.commit()
+    artifact_ids_before = tuple(
+        session.scalars(
+            select(CompanyResearchArtifactVersion.id).where(
+                CompanyResearchArtifactVersion.project_id == initialized.project.id
+            )
+        )
+    )
+
+    def provider(build_input):
+        external = Session(bind=session.get_bind(), future=True)
+        try:
+            drafts = WorkspaceDraftService(external, now=lambda: NOW)
+            draft = drafts.read(initialized.project.id)
+            assert draft is not None
+            drafts.save(
+                initialized.project.id,
+                expected_lock_version=draft.lock_version,
+                patch=WorkspaceDraftPatch(user_focus="changed while building"),
+            )
+            external.commit()
+        finally:
+            external.close()
+        from app.underwriting.services.company_research_model_builder import (
+            CompanyResearchModelBuilder,
+        )
+
+        return CompanyResearchModelBuilder().build(build_input)
+
+    worker = CompanyResearchPreparationWorker(
+        session, now=lambda: NOW, model_provider=provider
+    )
+    claim = worker.claim_next()
+    session.commit()
+    assert claim is not None
+
+    assert worker.run_claim(claim) == "discarded"
+
+    repository = CompanyResearchRepository(session)
+    assert repository.current_artifact(initialized.project.id, "business_map") is None
+    artifact_ids_after = tuple(
+        session.scalars(
+            select(CompanyResearchArtifactVersion.id).where(
+                CompanyResearchArtifactVersion.project_id == initialized.project.id
+            )
+        )
+    )
+    assert artifact_ids_after == artifact_ids_before
+    events = tuple(
+        session.scalars(
+            select(CompanyResearchEvent).where(
+                CompanyResearchEvent.preparation_id == initialized.preparation.id
+            )
+        )
+    )
+    assert events[-1].event_type == "stale_output_discarded"
+    assert all(event.event_type != "model_preparation_blocked" for event in events)
+
+
+@pytest.mark.parametrize(
+    "error",
+    (
+        FileNotFoundError("missing governed file"),
+        PermissionError("governed file forbidden"),
+        TypeError("provider contract bug"),
+        AttributeError("provider implementation bug"),
+        RuntimeError("unknown deterministic bug"),
+    ),
+)
+def test_deterministic_provider_errors_rollback_and_escape(session, error) -> None:
+    initialized = _ready_for_model(session)
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=lambda _input: (_ for _ in ()).throw(error),
+    )
+    claim = worker.claim_next()
+    assert claim is not None
+
+    with pytest.raises(type(error), match=str(error)):
+        worker.run_claim(claim)
+
+    assert CompanyResearchRepository(session).current_artifact(
+        initialized.project.id, "business_map"
+    ) is None
+    job = session.get(Job, initialized.job.id)
+    assert job is not None and job.status == "running"
+    assert job.claim_token == claim.claim_token
+
+
+def test_worker_cli_exits_nonzero_and_logs_a_deterministic_provider_error() -> None:
+    backend_root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+from unittest.mock import patch
+from app.scripts import run_company_research_worker as worker
+
+sys.argv = ["run_company_research_worker", "--once"]
+with patch.object(worker, "_touch", lambda **kwargs: None), patch.object(
+    worker, "run_once", side_effect=TypeError("visible provider bug")
+):
+    worker.main()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=backend_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "visible provider bug" in result.stderr
+
+
+def test_entrypoint_crash_after_commit_converges_without_duplicate_artifacts(
+    session, monkeypatch
+) -> None:
+    initialized = _ready_for_model(session)
+    session.commit()
+    sessions = sessionmaker(bind=session.get_bind(), future=True)
+    original = CompanyResearchPreparationWorker.run_claim
+
+    def crash_after_commit(self, claim):
+        result = original(self, claim)
+        raise SystemExit(f"crash after durable {result}")
+
+    monkeypatch.setattr(
+        CompanyResearchPreparationWorker, "run_claim", crash_after_commit
+    )
+    with pytest.raises(SystemExit, match="crash after durable"):
+        run_company_research_worker.run_once(session_factory=sessions)
+    monkeypatch.setattr(CompanyResearchPreparationWorker, "run_claim", original)
+
+    assert not run_company_research_worker.run_once(session_factory=sessions)
+    with sessions() as restarted:
+        rows = tuple(
+            restarted.scalars(
+                select(CompanyResearchArtifactVersion).where(
+                    CompanyResearchArtifactVersion.project_id
+                    == initialized.project.id
+                )
+            )
+        )
+        assert sum(row.kind == "business_map" for row in rows) == 1
+        assert sum(row.kind == "memo" for row in rows) == 1
+
+
+def test_company_research_preparation_imports_in_a_clean_python_process() -> None:
+    backend_root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import app.underwriting.services.company_research_preparation",
+        ],
+        cwd=backend_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_model_commit_receives_exact_claim_request_and_strategy_fence(
     session, monkeypatch
 ) -> None:
@@ -474,7 +686,7 @@ def test_recoverable_provider_failure_is_requeued_with_bounded_backoff(session) 
         nonlocal provider_attempts
         provider_attempts += 1
         if provider_attempts == 1:
-            raise OSError("secret")
+            raise ConnectionError("secret")
         return CompanyResearchSourceService(
             session, now=lambda: current_time
         ).compile_evidence_index(preparation_id=provider_input.preparation_id)
@@ -510,7 +722,7 @@ def test_recoverable_provider_failure_is_requeued_with_bounded_backoff(session) 
     assert provider_attempts == 2
 
 
-def test_unknown_provider_exception_is_blocked_without_leaking_its_message(session) -> None:
+def test_unknown_source_provider_exception_rolls_back_and_escapes(session) -> None:
     initialized = _initialized(session)
     worker = CompanyResearchPreparationWorker(
         session,
@@ -522,14 +734,13 @@ def test_unknown_provider_exception_is_blocked_without_leaking_its_message(sessi
     claim = worker.claim_next()
     assert claim is not None
 
-    assert worker.run_claim(claim) == "discarded"
-    session.flush()
+    with pytest.raises(RuntimeError, match="provider secret token must not escape"):
+        worker.run_claim(claim)
+
     job = session.get(Job, initialized.job.id)
     preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
-    assert job is not None and job.status == "failed" and job.error == "provider_failed"
-    assert preparation is not None
-    assert preparation.status == "blocked"
-    assert preparation.last_error_code == "provider_failed"
+    assert job is not None and job.status == "running" and job.error is None
+    assert preparation is not None and preparation.status == "preparing_sources"
     artifacts = tuple(
         session.scalars(
             select(CompanyResearchArtifactVersion).where(
@@ -538,21 +749,6 @@ def test_unknown_provider_exception_is_blocked_without_leaking_its_message(sessi
         )
     )
     assert artifacts == ()
-    events = tuple(
-        session.scalars(
-            select(CompanyResearchEvent).where(
-                CompanyResearchEvent.preparation_id == initialized.preparation.id
-            )
-        )
-    )
-    assert events[-1].event_type == "source_preparation_blocked"
-    assert events[-1].payload == {"code": "provider_failed"}
-    assert "provider secret token" not in repr(events)
-    job_events = tuple(
-        session.scalars(select(JobEvent).where(JobEvent.job_id == initialized.job.id))
-    )
-    assert job_events[-1].message == "provider_failed"
-    assert "provider secret token" not in repr(job_events)
 
 
 def test_manual_retry_accepts_a_due_worker_scheduled_recoverable_job(session) -> None:
@@ -561,7 +757,9 @@ def test_manual_retry_accepts_a_due_worker_scheduled_recoverable_job(session) ->
     worker = CompanyResearchPreparationWorker(
         session,
         now=lambda: current_time,
-        provider=lambda _preparation: (_ for _ in ()).throw(OSError("secret")),
+        provider=lambda _preparation: (_ for _ in ()).throw(
+            ConnectionError("secret")
+        ),
     )
     claim = worker.claim_next()
     assert claim is not None
@@ -581,7 +779,9 @@ def test_recoverable_provider_retries_stop_after_the_third_attempt(session) -> N
     worker = CompanyResearchPreparationWorker(
         session,
         now=lambda: current_time,
-        provider=lambda _preparation: (_ for _ in ()).throw(OSError("secret")),
+        provider=lambda _preparation: (_ for _ in ()).throw(
+            ConnectionError("secret")
+        ),
     )
 
     first_claim = worker.claim_next()

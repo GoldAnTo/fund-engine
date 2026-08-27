@@ -49,12 +49,12 @@ from app.underwriting.persistence.product_models import (
 from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.hashing import canonical_hash
-from app.underwriting.services.company_research_model_builder import (
+from app.underwriting.domain.company_research_market_contracts import (
     FrozenMarketSnapshotBinding,
     FrozenMarketSnapshotRole,
     FrozenRawComponentReference,
 )
-from app.underwriting.services.company_research_artifact_codec import (
+from app.underwriting.domain.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
     MODEL_ARTIFACT_KINDS,
 )
@@ -778,13 +778,11 @@ class CompanyResearchRepository:
         preparation.progress = (
             25 if preparation.current_step == "model_bundle" else 0
         )
-        preparation.attempt += 1
         preparation.next_attempt_at = None
         preparation.last_error_code = None
         preparation.updated_at = self._stored_datetime(updated_at, "updated_at")
         job.status = "queued"
         job.progress = preparation.progress
-        job.attempt += 1
         job.error = None
         job.started_at = None
         job.finished_at = None

@@ -31,6 +31,11 @@ from app.underwriting.domain.company_research import (
     SecurityValuationReference,
     SourceLineageReference,
 )
+from app.underwriting.domain.company_research_market_contracts import (
+    FrozenMarketSnapshotBinding,
+    FrozenMarketSnapshotRole,
+    FrozenRawComponentReference,
+)
 from app.underwriting.persistence.models import UnderwritingResearchObject
 from app.underwriting.persistence.product_models import (
     UnderwritingCapitalStructureSnapshot,
@@ -43,9 +48,6 @@ from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.services.company_research_model_builder import (
     FrozenMarketContext,
     FrozenMarketEquityComponent,
-    FrozenRawComponentReference,
-    FrozenMarketSnapshotBinding,
-    FrozenMarketSnapshotRole,
 )
 from app.underwriting.services.market_snapshots import (
     MarketSnapshotService,

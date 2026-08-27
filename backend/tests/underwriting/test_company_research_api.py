@@ -190,7 +190,7 @@ def test_retry_requeues_only_a_recoverable_preparation(api_client, session) -> N
     assert body["preparation"]["status"] == "queued"
     assert body["preparation"]["current_step"] == "evidence_index"
     assert body["preparation"]["progress"] == 0
-    assert body["preparation"]["attempt"] == 2
+    assert body["preparation"]["attempt"] == 1
     assert body["preparation"]["request_hash"] == preview["preview_hash"]
 
 

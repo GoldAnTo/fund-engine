@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation, localcontext
-from enum import StrEnum
 import re
 from typing import Any
 from uuid import UUID
@@ -56,9 +55,14 @@ from app.underwriting.domain.company_research_contracts import (
     ScenarioAssumption as _ScenarioAssumptionContract,
     StrategyAssumptionSet as _StrategyAssumptionSetContract,
 )
+from app.underwriting.domain.company_research_market_contracts import (
+    FrozenMarketSnapshotBinding,
+    FrozenMarketSnapshotRole,
+    FrozenRawComponentReference as _FrozenRawComponentReferenceContract,
+)
 from app.underwriting.hashing import canonical_hash
 from app.underwriting.domain.company_research_provenance import canonical_source_refs
-from app.underwriting.services.company_research_artifact_codec import (
+from app.underwriting.domain.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
 )
 from app.underwriting.services.company_research_engine import CompanyResearchEngine
@@ -104,6 +108,9 @@ _SCENARIO_ORDER = ("base", "bull", "bear")
 _CLOSED_BY_STRATEGY = frozenset({"forward_model_missing"})
 _CLOSED_BY_MARKET = frozenset({"market_price_missing", "usd_cny_fx_missing"})
 _BUILDER_GAP_PREFIX = "builder_generated_"
+
+# Compatibility export: new code imports the persistence-neutral contract seam.
+FrozenRawComponentReference = _FrozenRawComponentReferenceContract
 
 
 def _aware_utc(value: object, field_name: str) -> datetime:
@@ -415,67 +422,6 @@ class CompanyResearchModelTemplate:
             raise ValidationError(
                 "company model template scenario mapping must be exact"
             )
-
-
-class FrozenMarketSnapshotRole(StrEnum):
-    PRICE = "price"
-    FX = "fx"
-    CAPITAL_STRUCTURE = "capital_structure"
-    SECURITY_RIGHTS = "security_rights"
-
-
-@dataclass(frozen=True, slots=True)
-class FrozenRawComponentReference:
-    raw_file: str
-    raw_hash: str
-    source_url: str
-    source_locator: str
-
-    def __post_init__(self) -> None:
-        _text(self.raw_file, "frozen raw component file")
-        _hash(self.raw_hash, "frozen raw component hash")
-        _text(self.source_url, "frozen raw component URL")
-        _text(self.source_locator, "frozen raw component locator")
-
-
-@dataclass(frozen=True, slots=True)
-class FrozenMarketSnapshotBinding:
-    snapshot_id: UUID
-    role: FrozenMarketSnapshotRole
-    security_external_key: str | None
-    source_ref: SourceLineageReference
-    snapshot_content_hash: str
-    capture_envelope_id: UUID
-    capture_content_hash: str
-    provenance_role: str
-    provider_policy_version: str = "legacy_snapshot_without_exact_provenance.v1"
-    raw_components: tuple[FrozenRawComponentReference, ...] = ()
-
-    def __post_init__(self) -> None:
-        _uuid(self.snapshot_id, "market snapshot binding snapshot_id")
-        if type(self.role) is not FrozenMarketSnapshotRole:
-            raise ValidationError("market snapshot binding role must be typed")
-        if self.role in {
-            FrozenMarketSnapshotRole.PRICE,
-            FrozenMarketSnapshotRole.SECURITY_RIGHTS,
-        }:
-            _text(self.security_external_key, "market snapshot binding security key")
-        elif self.security_external_key is not None:
-            raise ValidationError("non-security market binding cannot name a security")
-        if type(self.source_ref) is not SourceLineageReference:
-            raise ValidationError("market snapshot binding source ref must be typed")
-        _hash(self.snapshot_content_hash, "market snapshot binding content hash")
-        _uuid(self.capture_envelope_id, "market snapshot capture envelope id")
-        _hash(self.capture_content_hash, "market snapshot capture content hash")
-        if self.provenance_role != "primary":
-            raise ValidationError(
-                "market snapshot binding provenance role must be primary"
-            )
-        _text(self.provider_policy_version, "market snapshot provider policy version")
-        if not isinstance(self.raw_components, tuple) or not all(
-            type(item) is FrozenRawComponentReference for item in self.raw_components
-        ):
-            raise ValidationError("market snapshot raw components must be immutable")
 
 
 @dataclass(frozen=True, slots=True)

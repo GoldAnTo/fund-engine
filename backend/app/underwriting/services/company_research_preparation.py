@@ -28,7 +28,7 @@ from app.underwriting.services.company_research_sources import (
     CompanyResearchProviderInput,
     CompanyResearchSourceCompiler,
 )
-from app.underwriting.services.company_research_artifact_codec import (
+from app.underwriting.domain.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
 )
 from app.underwriting.services.company_research_initializer import (
@@ -58,8 +58,8 @@ COMPANY_RESEARCH_STAGES = (
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = (30, 120, 600)
 _SAFE_PROVIDER_ERROR = "provider_unavailable"
-_SAFE_UNKNOWN_PROVIDER_ERROR = "provider_failed"
 _SAFE_STALE_ERROR = "stale_output_discarded"
+RETRYABLE_PROVIDER_ERRORS = (TimeoutError, ConnectionError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -667,6 +667,7 @@ class CompanyResearchPreparationWorker:
             for marker in (
                 "claim is stale",
                 "model inputs are stale",
+                "workspace draft is stale",
                 "market bindings do not match workspace draft",
             )
         )
@@ -697,7 +698,7 @@ class CompanyResearchPreparationWorker:
                 self._session.commit()
                 result = self._compile_model(boundary.build_input)
                 bundle = self._persisted_bundle(boundary, result)
-            except (OSError, TimeoutError, ConnectionError):
+            except RETRYABLE_PROVIDER_ERRORS:
                 self._session.rollback()
                 self._recoverable_failure(claim)
                 return "recoverable_failure"
@@ -711,8 +712,7 @@ class CompanyResearchPreparationWorker:
                 return "discarded"
             except Exception:
                 self._session.rollback()
-                self._block(claim, error_code=_SAFE_UNKNOWN_PROVIDER_ERROR)
-                return "discarded"
+                raise
             try:
                 self._repository.complete_model_bundle(
                     claim.preparation_id,
@@ -744,7 +744,7 @@ class CompanyResearchPreparationWorker:
         self._session.commit()
         try:
             compiled = self._compile(provider_input)
-        except (OSError, TimeoutError, ConnectionError):
+        except RETRYABLE_PROVIDER_ERRORS:
             self._recoverable_failure(claim)
             return "recoverable_failure"
         except (
@@ -755,8 +755,8 @@ class CompanyResearchPreparationWorker:
             self._block(claim)
             return "discarded"
         except Exception:
-            self._block(claim, error_code=_SAFE_UNKNOWN_PROVIDER_ERROR)
-            return "discarded"
+            self._session.rollback()
+            raise
 
         # The provider/result boundary is explicit: publish no database write
         # until the output has been assembled, then reacquire the claim fence.

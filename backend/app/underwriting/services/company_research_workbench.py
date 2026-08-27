@@ -27,7 +27,7 @@ from app.underwriting.persistence.company_research_repository import (
     CompanyResearchRepository,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
-from app.underwriting.services.company_research_artifact_codec import (
+from app.underwriting.domain.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
 )
 from app.underwriting.services.workspace_draft import WorkspaceDraftService
