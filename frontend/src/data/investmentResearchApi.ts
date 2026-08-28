@@ -673,6 +673,7 @@ const COMPANY_RESEARCH_STEPS = [
   "judgment_context",
   "memo",
 ] as const;
+const COMPANY_RESEARCH_PREPARATION_STEPS = [...COMPANY_RESEARCH_STEPS, "model_bundle"] as const;
 
 function isCompanyResearchIdentity(value: unknown): boolean {
   return isProductDto(value)
@@ -717,7 +718,7 @@ function isCompanyResearchPreview(value: unknown): value is CompanyResearchPrevi
 function isPreparationStateAndStep(value: Record<string, unknown>): boolean {
   const step = value.current_step;
   if (value.status === "queued") {
-    return step === "evidence_index" && value.progress === 0
+    return typeof step === "string" && COMPANY_RESEARCH_STEPS.includes(step as typeof COMPANY_RESEARCH_STEPS[number]) && value.progress === 0
       && value.next_attempt_at === null && value.last_error_code === null;
   }
   if (value.status === "completed") {
@@ -729,13 +730,13 @@ function isPreparationStateAndStep(value: Record<string, unknown>): boolean {
       && value.last_error_code === null;
   }
   if (value.status === "building_model") {
-    return typeof step === "string" && COMPANY_RESEARCH_STEPS.includes(step as typeof COMPANY_RESEARCH_STEPS[number])
+    return typeof step === "string" && COMPANY_RESEARCH_PREPARATION_STEPS.includes(step as typeof COMPANY_RESEARCH_PREPARATION_STEPS[number])
       && step !== "evidence_index" && value.last_error_code === null;
   }
   if (value.status === "awaiting_judgment_review") return step === "judgment_context" && value.last_error_code === null;
   if (value.status === "ready_to_freeze") return step === "memo" && value.last_error_code === null;
   if (value.status === "recoverable_failure" || value.status === "blocked") {
-    return typeof step === "string" && COMPANY_RESEARCH_STEPS.includes(step as typeof COMPANY_RESEARCH_STEPS[number])
+    return typeof step === "string" && COMPANY_RESEARCH_PREPARATION_STEPS.includes(step as typeof COMPANY_RESEARCH_PREPARATION_STEPS[number])
       && isNonEmptyString(value.last_error_code);
   }
   return false;

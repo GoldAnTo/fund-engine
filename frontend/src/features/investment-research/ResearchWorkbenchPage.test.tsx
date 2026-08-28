@@ -4,6 +4,7 @@ import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  InvestmentResearchApi,
   investmentResearchApi,
   type CompanyResearchWorkspace,
   type ProductProject,
@@ -45,6 +46,11 @@ function source(factKey = "revenue_2025") {
   return { kind: "external", fact_key: factKey, source_role: "filing", source_url: "https://abc.xyz/investor/10-k", source_locator: "2025 10-K, p. 32", raw_hash: hash } as const;
 }
 
+function lineageSource(factKey = "revenue_2025") {
+  const { kind: _kind, ...ref } = source(factKey);
+  return ref;
+}
+
 function observation(key: string, value: string, state: "reported" | "derived" | "assumption" = "reported") {
   return {
     key, value, unit: key.includes("return") || key.includes("rate") ? "ratio" : "USD million", currency: key.includes("return") || key.includes("rate") ? "N/A" : "USD",
@@ -61,6 +67,24 @@ function artifact(kind: string, payload: object, version = 1) {
 
 function registryRef(item: ReturnType<typeof artifact>) {
   return { id: item.id, kind: item.kind as CompanyResearchWorkspace["modules"][number]["artifact_refs"][number]["kind"], content_hash: item.content_hash };
+}
+
+function parentRef(item: ReturnType<typeof artifact>) {
+  return { artifact_id: item.id, artifact_kind: item.kind, content_hash: item.content_hash };
+}
+
+function lineage(parents: ReturnType<typeof artifact>[], marketSnapshotIds: string[] = [], marketSnapshotBindings: object[] = []) {
+  return { artifact_refs: parents.map(parentRef), market_snapshot_ids: marketSnapshotIds, market_snapshot_bindings: marketSnapshotBindings };
+}
+
+function computedObservation(key: string, value: string, parents: ReturnType<typeof artifact>[], marketSnapshotIds: string[]) {
+  return {
+    key, value, unit: key.includes("return") || key.includes("rate") || key === "residual" ? "ratio" : "USD million",
+    currency: key.includes("return") || key.includes("rate") || key === "residual" ? "N/A" : "USD",
+    period: "FY2025 / cutoff 2026-02-05", state: "derived" as const,
+    source_ref: { kind: "artifact_computation" as const, artifact_refs: parents.map(parentRef), market_snapshot_ids: marketSnapshotIds, equation_id: "dcf.v1" },
+    gap_key: null, assumption_key: null,
+  };
 }
 
 function evidenceFact(reviewDecision?: "confirmed" | "rejected") {
@@ -90,23 +114,52 @@ function workspace(options: {
   });
   const artifacts: ReturnType<typeof artifact>[] = [evidence, gaps];
   if (options.rich) {
-    artifacts.push(
-      artifact("business_map", { modules: [{ module_key: "google_services", revenue_sources: ["Search", "YouTube"], cost_structure: ["TAC", "基础设施"], capital_needs: ["AI 数据中心"], fact_refs: [source()], gap_refs: ["youtube_margin_gap"], classified_evidence: [] }], _lineage: {} }),
-      artifact("driver_map", { drivers: [{ driver_key: "search_growth", module_key: "google_services", fact_refs: [source()], assumption_refs: [], equation: "revenue × growth", output_metric: "revenue", equation_id: "driver.v1", values: [observation("search_growth", "0.11", "assumption")], assumption_rationale: "查询量与变现率", assumption_equation: "volume × monetization" }], _lineage: {} }),
-      artifact("financial_bridge", { rows: [{ period: "FY2025", revenue: observation("revenue", "350018"), operating_income: observation("operating_income", "112390"), cash_tax_rate: observation("cash_tax_rate", "0.17", "assumption"), depreciation: observation("depreciation", "21400"), capex: observation("capex", "52500"), working_capital_change: observation("working_capital_change", "2200"), fcff: observation("fcff", "79100", "derived"), fact_refs: [source()], assumption_refs: [] }], _lineage: {} }),
-      artifact("scenario_set", { scenarios: ["base", "bull", "bear"].map((scenarioId, index) => ({ scenario_id: scenarioId, mechanism_id: `${scenarioId}_search_ai`, driver_overrides: [{ driver_key: "fcff_multiplier", observation: observation("fcff_multiplier", String([1, 1.2, 0.75][index]), "assumption"), rationale: `${scenarioId} case mechanism`, equation: "baseline × multiplier" }] })), _lineage: {} }),
-      artifact("valuation_set", {
-        scenario_dcf_values: ["base", "bull", "bear"].map((scenarioId, index) => ({ scenario_id: scenarioId, enterprise_value: observation(`${scenarioId}_dcf`, String([2400000, 2900000, 1700000][index]), "derived") })),
-        reverse_dcf: { driver_key: "fcff_multiplier", implied_value: observation("implied_fcff_multiplier", "1.08", "derived"), achieved_residual: observation("residual", "0.0001", "derived"), iteration_count: observation("iterations", "7", "derived") },
-        security_value_ranges: [
-          { security_external_key: "NASDAQ:GOOGL", usd_per_share: { minimum: observation("googl_min", "165", "derived"), maximum: observation("googl_max", "225", "derived") }, cny_return: { minimum: observation("googl_return_min", "0.04", "derived"), maximum: observation("googl_return_max", "0.41", "derived") } },
-          { security_external_key: "NASDAQ:GOOG", usd_per_share: { minimum: observation("goog_min", "166", "derived"), maximum: observation("goog_max", "227", "derived") }, cny_return: { minimum: observation("goog_return_min", "0.03", "derived"), maximum: observation("goog_return_max", "0.40", "derived") } },
-        ],
-        required_return: observation("required_return", "0.12", "assumption"), required_return_comparisons: [], _lineage: {},
-      }),
-      artifact("judgment_context", { operating_baseline_available: true, financial_bridge_closed: true, market_security_bridge_available: true, strongest_counterevidence: [{ ...source("ai_capex_risk"), fact_key: "ai_capex_risk" }], next_verification_events: ["Q3 Cloud backlog 与 AI capex 回报验证"], _lineage: {} }),
-      artifact("memo", { assessment_status: "answerable", business_map_ref: {}, driver_map_ref: {}, financial_bridge_ref: {}, scenario_set_ref: {}, valuation_set_ref: {}, gap_keys: ["youtube_margin_gap"], strongest_counterevidence: [{ ...source("ai_capex_risk"), fact_key: "ai_capex_risk" }], next_verification_events: ["Q3 Cloud backlog 与 AI capex 回报验证"], candidate_status: "machine_draft", _lineage: {} }),
-    );
+    const richFacts = (evidence.payload as { facts: ReturnType<typeof evidenceFact>[] }).facts;
+    richFacts[0] = evidenceFact(options.factDecision ?? "confirmed");
+    richFacts.push({ ...evidenceFact("confirmed"), fact_key: "ai_capex_risk", observation: observation("ai_capex_risk", "1") });
+    const business = artifact("business_map", { modules: [{ module_key: "google_services", revenue_sources: ["Search", "YouTube"], cost_structure: ["TAC", "基础设施"], capital_needs: ["AI 数据中心"], fact_refs: [lineageSource()], gap_refs: ["youtube_margin_gap"], classified_evidence: [] }], _lineage: lineage([evidence]) });
+    const driver = artifact("driver_map", { drivers: [{ driver_key: "search_growth", module_key: "google_services", fact_refs: [lineageSource()], assumption_refs: [], equation: "revenue × growth", output_metric: "revenue", equation_id: "driver.v1", values: [observation("search_growth", "0.11", "assumption")], assumption_rationale: "查询量与变现率", assumption_equation: "volume × monetization" }], _lineage: lineage([business]) });
+    const financial = artifact("financial_bridge", {
+      rows: Array.from({ length: 5 }, (_, index) => ({
+        period: `FY${2025 + index}`,
+        revenue: index === 0 ? observation("revenue_2025", "350018") : observation(`revenue_${2025 + index}`, String(350018 + index * 20000), "assumption"),
+        operating_income: observation(`operating_income_${2025 + index}`, String(112390 + index * 8000), "assumption"),
+        cash_tax_rate: observation(`cash_tax_rate_${2025 + index}`, "0.17", "assumption"),
+        depreciation: observation(`depreciation_${2025 + index}`, "21400", "assumption"), capex: observation(`capex_${2025 + index}`, "52500", "assumption"),
+        working_capital_change: observation(`working_capital_change_${2025 + index}`, "2200", "assumption"), fcff: observation(`fcff_${2025 + index}`, "79100", "assumption"),
+        fact_refs: [lineageSource()], assumption_refs: [],
+      })), _lineage: lineage([driver]),
+    });
+    const scenario = artifact("scenario_set", { scenarios: ["base", "bull", "bear"].map((scenarioId, index) => ({ scenario_id: scenarioId, mechanism_id: `${scenarioId}_search_ai`, driver_overrides: [{ driver_key: "fcff_multiplier", observation: { ...observation("fcff_multiplier", String([1, 1.2, 0.75][index]), "assumption"), unit: "multiplier", currency: "N/A" }, rationale: `${scenarioId} case mechanism`, equation: "baseline × multiplier" }] })), _lineage: lineage([driver]) });
+    const marketIds = [uid(30), uid(31), uid(32), uid(33)];
+    const marketBindings = (["price", "fx", "capital_structure", "security_rights"] as const).map((snapshotKind, index) => ({
+      snapshot_id: marketIds[index], snapshot_kind: snapshotKind, snapshot_content_hash: hash,
+      security_external_key: snapshotKind === "fx" || snapshotKind === "capital_structure" ? null : "NASDAQ:GOOGL",
+      source_ref: lineageSource(), capture_envelope_id: uid(40 + index), capture_content_hash: hash,
+      provenance_role: "primary", provider_policy_version: "fixture.v1",
+      raw_components: [{ raw_file: `${snapshotKind}.json`, raw_hash: hash, source_url: "https://abc.xyz/investor/10-k", source_locator: "2025 10-K, p. 32" }],
+    }));
+    const valuationParents = [scenario, financial];
+    const derived = (key: string, value: string) => computedObservation(key, value, valuationParents, marketIds);
+    const range = (prefix: string, min: string, max: string) => ({ minimum: derived(`${prefix}_min`, min), maximum: derived(`${prefix}_max`, max) });
+    const valuation = artifact("valuation_set", {
+      scenario_dcf_values: ["base", "bull", "bear"].map((scenarioId, index) => ({ scenario_id: scenarioId, enterprise_value: derived(`${scenarioId}_dcf`, String([2400000, 2900000, 1700000][index])) })),
+      reverse_dcf: { driver_key: "fcff_multiplier", implied_value: derived("implied_fcff_multiplier", "1.08"), achieved_residual: derived("residual", "0.0001"), iteration_count: derived("iterations", "7") },
+      security_value_ranges: [
+        { security_external_key: "NASDAQ:GOOGL", usd_per_share: range("googl", "165", "225"), cny_return: range("googl_return", "0.04", "0.41") },
+        { security_external_key: "NASDAQ:GOOG", usd_per_share: range("goog", "166", "227"), cny_return: range("goog_return", "0.03", "0.4") },
+      ],
+      required_return: observation("required_return", "0.12", "assumption"),
+      required_return_comparisons: [
+        { security_external_key: "NASDAQ:GOOGL", required_return: observation("googl_required_return", "0.12", "assumption"), achieved_return_range: range("googl_return", "0.04", "0.41"), meets_required_return: true },
+        { security_external_key: "NASDAQ:GOOG", required_return: observation("goog_required_return", "0.12", "assumption"), achieved_return_range: range("goog_return", "0.03", "0.4"), meets_required_return: true },
+      ], _lineage: lineage(valuationParents, marketIds, marketBindings),
+    });
+    const counterevidence = lineageSource("ai_capex_risk");
+    const judgment = artifact("judgment_context", { operating_baseline_available: true, financial_bridge_closed: true, market_security_bridge_available: true, strongest_counterevidence: [counterevidence], next_verification_events: ["Q3 Cloud backlog 与 AI capex 回报验证"], _lineage: lineage([evidence, business, driver, financial, scenario, valuation, gaps]) });
+    const memoRef = (item: ReturnType<typeof artifact>) => ({ artifact_kind: item.kind, content_hash: item.content_hash });
+    const memo = artifact("memo", { assessment_status: "answerable", business_map_ref: memoRef(business), driver_map_ref: memoRef(driver), financial_bridge_ref: memoRef(financial), scenario_set_ref: memoRef(scenario), valuation_set_ref: memoRef(valuation), gap_keys: ["youtube_margin_gap"], strongest_counterevidence: [counterevidence], next_verification_events: ["Q3 Cloud backlog 与 AI capex 回报验证"], candidate_status: "machine_draft", _lineage: lineage([judgment]) });
+    artifacts.push(business, driver, financial, scenario, valuation, judgment, memo);
   }
   const moduleStates = options.rich ? "ready" : "preparing";
   return {
@@ -132,7 +185,7 @@ function workspace(options: {
     }) as CompanyResearchWorkspace["modules"],
     source_count: 1, gap_count: 1,
     draft: { schema_version: "underwriting.v1", id: ids.draft, lock_version: options.factDecision ? 2 : 1, base_revision_id: null }, selected_revision: null,
-    change_summary: { artifact_versions: Object.fromEntries(artifacts.map((item) => [item.kind, item.version])), reviewed_fact_count: options.factDecision ? 1 : 0 },
+    change_summary: { artifact_versions: Object.fromEntries(artifacts.map((item) => [item.kind, item.version])), reviewed_fact_count: options.rich ? 2 : options.factDecision ? 1 : 0 },
   };
 }
 
@@ -182,6 +235,18 @@ describe("Alphabet company research workbench", () => {
     expect(screen.getByText("判断尚在准备")).toBeVisible();
     expect(screen.queryByText(/当前正式证据不足/)).not.toBeInTheDocument();
     expect(preview).not.toHaveBeenCalled();
+  }, 10_000);
+
+  it("rejects an initial workspace for a different company without rendering mixed identities", async () => {
+    const mixed = workspace();
+    mixed.company = { ...mixed.company, id: uid(90), canonical_name: "Other Company" };
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(mixed);
+    renderPage();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("工作区公司身份与研究项目不一致");
+    expect(screen.queryByRole("heading", { name: "Other Company" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/GOOGL · Class A/)).not.toBeInTheDocument();
   });
 
   it("shows formal not-answerable copy only when the memo explicitly assesses it", async () => {
@@ -238,7 +303,7 @@ describe("Alphabet company research workbench", () => {
     const changes = screen.getByRole("heading", { name: "制品版本变化" }).closest("div");
     expect(changes).not.toBeNull();
     expect(changes).toHaveTextContent("valuation_set");
-    expect(changes).toHaveTextContent("证据审核累计 0 项");
+    expect(changes).toHaveTextContent("证据审核累计 2 项");
   });
 
   it.each(["confirmed", "rejected"] as const)("writes a %s review, displays the exact successor, and refreshes stale downstream modules", async (decision) => {
@@ -358,6 +423,21 @@ describe("Alphabet company research workbench", () => {
     expect(screen.getByText("草稿版本 4")).toBeVisible();
   });
 
+  it("retains the current company when retry synchronization returns another company", async () => {
+    const failed = workspace({ status: "recoverable_failure" });
+    const mixed = workspace({ status: "building_model" });
+    mixed.company = { ...mixed.company, id: uid(90), canonical_name: "Other Company" };
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(failed).mockResolvedValueOnce(mixed);
+    vi.spyOn(investmentResearchApi, "retryCompanyResearchProject").mockResolvedValue({ project_id: ids.project } as never);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "重试 model_bundle" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("工作区公司身份不一致");
+    expect(screen.getByRole("heading", { name: "Alphabet Inc." })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Other Company" })).not.toBeInTheDocument();
+  });
+
   it("polls active preparation with bounded backoff and stops after completion", async () => {
     vi.useFakeTimers();
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
@@ -377,6 +457,28 @@ describe("Alphabet company research workbench", () => {
     expect(workspaceRead).toHaveBeenCalledTimes(3);
     await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
     expect(workspaceRead).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects a polled workspace for another company and preserves the accepted identity", async () => {
+    vi.useFakeTimers();
+    const mixed = workspace();
+    mixed.company = { ...mixed.company, id: uid(90), canonical_name: "Other Company" };
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(workspace()).mockResolvedValueOnce(mixed);
+    renderPage();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("工作区同步失败：公司身份不一致");
+    expect(screen.getByRole("heading", { name: "Alphabet Inc." })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Other Company" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the rich ready-state fixture aligned with the production response decoder", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(workspace({ status: "completed", rich: true })), {
+      status: 200, headers: { "content-type": "application/json" },
+    })));
+    await expect(new InvestmentResearchApi().companyResearchWorkspace(ids.project)).resolves.toMatchObject({ project_id: ids.project });
   });
 
   it("caps repeated preparation polling delays at eight seconds", async () => {

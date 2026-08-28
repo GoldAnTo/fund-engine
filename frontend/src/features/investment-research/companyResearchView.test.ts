@@ -110,6 +110,7 @@ describe("company research view model", () => {
   it("rejects component-wise workspace regressions when evidence heads are equal or absent", () => {
     const base = {
       project_id: "project-1",
+      company: { id: "company-1" },
       preparation: { status: "building_model", current_step: "financial_bridge", progress: 60 },
       artifacts: [
         { kind: "evidence_index", id: "evidence-2", content_hash: "hash-2", version: 2 },
@@ -153,6 +154,7 @@ describe("company research view model", () => {
   it("accepts downstream staleness only across a strictly newer evidence head", () => {
     const current = {
       project_id: "project-1", preparation: { status: "awaiting_evidence_review", progress: 40 },
+      company: { id: "company-1" },
       artifacts: [{ kind: "evidence_index", id: "evidence-1", content_hash: "hash-1", version: 1 }],
       modules: [{ key: "overview", state: "ready", valuation_state: "not_applicable" }],
       draft: { lock_version: 1, base_revision_id: null }, selected_revision: null,
@@ -170,6 +172,7 @@ describe("company research view model", () => {
   it("does not let a newer evidence head hide independent workspace regressions", () => {
     const current = {
       project_id: "project-1",
+      company: { id: "company-1" },
       preparation: { id: "preparation-1", status: "awaiting_evidence_review", current_step: "research_gaps", progress: 25 },
       artifacts: [
         { kind: "evidence_index", id: "evidence-1", content_hash: "hash-1", version: 1 },
@@ -211,11 +214,20 @@ describe("company research view model", () => {
   });
 
   it.each([
-    ["evidence retry", "evidence_index", "queued", 0],
-    ["model retry", "model_bundle", "building_model", 25],
-  ] as const)("accepts the documented %s progress reset without relaxing other invariants", (_label, failedStep, status, progress) => {
+    ["evidence retry", "evidence_index", "queued", 0, "not_started"],
+    ["business retry", "business_map", "queued", 0, "not_started"],
+    ["driver retry", "driver_map", "queued", 0, "not_started"],
+    ["financial retry", "financial_bridge", "queued", 0, "not_started"],
+    ["scenario retry", "scenario_set", "queued", 0, "not_started"],
+    ["valuation retry", "valuation_set", "queued", 0, "not_started"],
+    ["gaps retry", "research_gaps", "queued", 0, "not_started"],
+    ["judgment retry", "judgment_context", "queued", 0, "not_started"],
+    ["memo retry", "memo", "queued", 0, "not_started"],
+    ["model retry", "model_bundle", "building_model", 25, "preparing"],
+  ] as const)("accepts the documented %s progress reset without relaxing other invariants", (_label, failedStep, status, progress, moduleState) => {
     const failed = {
       project_id: "project-1",
+      company: { id: "company-1" },
       preparation: { id: "preparation-1", status: "recoverable_failure", current_step: failedStep, progress: 80 },
       artifacts: [{ kind: "research_gaps", id: "gaps-2", content_hash: "gaps-2", version: 2 }],
       modules: [{ key: "overview", state: "blocked", valuation_state: "not_applicable" }],
@@ -224,10 +236,34 @@ describe("company research view model", () => {
     } as unknown as CompanyResearchWorkspace;
     const resumed = structuredClone(failed);
     Object.assign(resumed.preparation, { status, current_step: failedStep, progress });
-    resumed.modules[0].state = "preparing";
+    resumed.modules[0].state = moduleState;
 
     expect(workspaceSnapshotIsMonotonic(failed, resumed, { allowRecovery: true })).toBe(true);
     resumed.draft.id = "draft-2";
     expect(workspaceSnapshotIsMonotonic(failed, resumed, { allowRecovery: true })).toBe(false);
+  });
+
+  it("rejects company identity changes and undocumented recovery shapes", () => {
+    const failed = {
+      project_id: "project-1", company: { id: "company-1" },
+      preparation: { id: "preparation-1", status: "recoverable_failure", current_step: "financial_bridge", progress: 80 },
+      artifacts: [{ kind: "research_gaps", id: "gaps-2", content_hash: "gaps-2", version: 2 }],
+      modules: [{ key: "overview", state: "blocked", valuation_state: "not_applicable" }],
+      draft: { id: "draft-1", lock_version: 4, base_revision_id: null }, selected_revision: null,
+      change_summary: { reviewed_fact_count: 1, artifact_versions: { research_gaps: 2 } },
+    } as unknown as CompanyResearchWorkspace;
+    for (const mutate of [
+      (next: CompanyResearchWorkspace) => { next.company.id = "company-2"; },
+      (next: CompanyResearchWorkspace) => { next.preparation.status = "building_model"; },
+      (next: CompanyResearchWorkspace) => { next.preparation.progress = 25; },
+      (next: CompanyResearchWorkspace) => { next.preparation.current_step = "scenario_set"; },
+      (next: CompanyResearchWorkspace) => { next.modules[0].state = "preparing"; },
+    ]) {
+      const next = structuredClone(failed);
+      Object.assign(next.preparation, { status: "queued", progress: 0 });
+      next.modules[0].state = "not_started";
+      mutate(next);
+      expect(workspaceSnapshotIsMonotonic(failed, next, { allowRecovery: true })).toBe(false);
+    }
   });
 });

@@ -218,7 +218,9 @@ export default function ResearchWorkbenchPage() {
     const lifecycle = ++lifecycleRef.current; pollGenerationRef.current += 1; mutationGenerationRef.current += 1; mutationActiveRef.current = false; let active = true;
     setLoading(true); setLoadError(null); setActionError(null); setLastSuccess(null); setProject(null); workspaceRef.current = null; setWorkspace(null); setActiveModule("overview"); setReviewingFact(null); setCommittedReview(null); setRetrying(false); pollAttemptRef.current = 0;
     void Promise.all([investmentResearchApi.project(projectId), investmentResearchApi.companyResearchWorkspace(projectId)]).then(([nextProject, nextWorkspace]) => {
-      if (!active || lifecycleRef.current !== lifecycle || nextWorkspace.project_id !== projectId || nextProject.id !== projectId) return;
+      if (!active || lifecycleRef.current !== lifecycle) return;
+      if (nextWorkspace.project_id !== projectId || nextProject.id !== projectId) throw new Error("工作区项目身份与研究项目不一致");
+      if (nextWorkspace.company.id !== nextProject.primary_company_id) throw new Error("工作区公司身份与研究项目不一致");
       setProject(nextProject); commitWorkspace(nextWorkspace);
     }).catch((error: unknown) => { if (active && lifecycleRef.current === lifecycle) setLoadError(errorMessage(error, "研究工作区无法读取")); }).finally(() => { if (active && lifecycleRef.current === lifecycle) setLoading(false); });
     return () => { active = false; if (lifecycleRef.current === lifecycle) lifecycleRef.current += 1; pollGenerationRef.current += 1; mutationGenerationRef.current += 1; mutationActiveRef.current = false; };
@@ -232,7 +234,10 @@ export default function ResearchWorkbenchPage() {
       void investmentResearchApi.companyResearchWorkspace(projectId).then((nextWorkspace) => {
         if (!active || lifecycleRef.current !== lifecycle || pollGenerationRef.current !== pollGeneration || document.visibilityState === "hidden" || mutationActiveRef.current || nextWorkspace.project_id !== projectId) return;
         pollAttemptRef.current += 1;
-        if (workspaceRef.current === null || workspaceSnapshotIsMonotonic(workspaceRef.current, nextWorkspace)) commitWorkspace(nextWorkspace); else setPollTick((value) => value + 1);
+        if (workspaceRef.current !== null && nextWorkspace.company.id !== workspaceRef.current.company.id) {
+          setActionError("工作区同步失败：公司身份不一致；已保留当前工作区。");
+          setPollTick((value) => value + 1);
+        } else if (workspaceRef.current === null || workspaceSnapshotIsMonotonic(workspaceRef.current, nextWorkspace)) commitWorkspace(nextWorkspace); else setPollTick((value) => value + 1);
       }).catch(() => {
         if (active && lifecycleRef.current === lifecycle && pollGenerationRef.current === pollGeneration && document.visibilityState !== "hidden" && !mutationActiveRef.current) { pollAttemptRef.current += 1; setPollTick((value) => value + 1); }
       });
@@ -288,7 +293,7 @@ export default function ResearchWorkbenchPage() {
   async function retryPreparation() {
     if (!workspace?.preparation.error?.retryable || mutationActiveRef.current) return;
     mutationActiveRef.current = true; pollGenerationRef.current += 1; const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current; setRetrying(true); setActionError(null);
-    try { await investmentResearchApi.retryCompanyResearchProject(projectId); const refreshed = await investmentResearchApi.companyResearchWorkspace(projectId); if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { if (refreshed.project_id !== projectId || workspaceRef.current === null || !workspaceSnapshotIsMonotonic(workspaceRef.current, refreshed, { allowRecovery: true })) throw new Error("重试已提交，但工作区同步响应无效"); pollAttemptRef.current = 0; commitWorkspace(refreshed); } }
+    try { await investmentResearchApi.retryCompanyResearchProject(projectId); const refreshed = await investmentResearchApi.companyResearchWorkspace(projectId); if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { if (workspaceRef.current !== null && refreshed.company.id !== workspaceRef.current.company.id) throw new Error("重试已提交，但工作区公司身份不一致"); if (refreshed.project_id !== projectId || workspaceRef.current === null || !workspaceSnapshotIsMonotonic(workspaceRef.current, refreshed, { allowRecovery: true })) throw new Error("重试已提交，但工作区同步响应无效"); pollAttemptRef.current = 0; commitWorkspace(refreshed); } }
     catch (error) { if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) setActionError(errorMessage(error, "准备阶段无法重试")); }
     finally { if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { mutationActiveRef.current = false; setRetrying(false); } }
   }

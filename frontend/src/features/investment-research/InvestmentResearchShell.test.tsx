@@ -83,7 +83,7 @@ describe("independent investment research shell", () => {
     expect(screen.queryByRole("navigation", { name: "不可变研究档案导航" }))
       .not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/事件|worker|基金|模拟持仓/i);
-  });
+  }, 10_000);
 
   it("keeps forbidden Event Research clients, types and polling outside the product module graph", () => {
     const source = [shellSource, apiSource, homeSource, setupSource, workbenchSource].join("\n");

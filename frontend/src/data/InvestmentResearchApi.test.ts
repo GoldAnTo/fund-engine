@@ -62,7 +62,7 @@ function companyResearchPreviewBody() {
   };
 }
 
-function companyResearchProjectBody(status = "queued", currentStep: string | null = "evidence_index") {
+function companyResearchProjectBody(status = "queued", currentStep: string | null = "evidence_index", progress = 0) {
   return {
     schema_version: "underwriting.v1",
     project_id: ids.project,
@@ -75,7 +75,7 @@ function companyResearchProjectBody(status = "queued", currentStep: string | nul
       strategy_version: "company-research-default.v1",
       status,
       current_step: currentStep,
-      progress: 0,
+      progress,
       attempt: 1,
       next_attempt_at: null,
       last_error_code: null,
@@ -473,6 +473,18 @@ describe("InvestmentResearchApi", () => {
       [`/api/underwriting/v1/product/company-research/projects/${ids.project}/retry`, "POST"],
     ]);
     expect(fetchSpy.mock.calls[1][1]?.headers).toMatchObject({ "Idempotency-Key": "company-research-key" });
+  });
+
+  it.each([
+    ["evidence_index", "queued", 0], ["business_map", "queued", 0], ["driver_map", "queued", 0],
+    ["financial_bridge", "queued", 0], ["scenario_set", "queued", 0], ["valuation_set", "queued", 0],
+    ["research_gaps", "queued", 0], ["judgment_context", "queued", 0], ["memo", "queued", 0],
+    ["model_bundle", "building_model", 25],
+  ] as const)("accepts the repository retry response for %s", async (step, status, progress) => {
+    vi.stubGlobal("fetch", vi.fn(async () => response(companyResearchProjectBody(status, step, progress), 202)));
+    await expect(new InvestmentResearchApi().retryCompanyResearchProject(ids.project)).resolves.toMatchObject({
+      preparation: { current_step: step, status, progress },
+    });
   });
 
   it("rejects company-research response identity and preparation-state drift", async () => {

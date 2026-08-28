@@ -21,6 +21,10 @@ const EVIDENCE_DOWNSTREAM_MODULES = new Set<CompanyResearchWorkspace["modules"][
   "financials_cash_flow_capital_allocation", "scenarios_valuation_implied_expectations",
   "counterevidence_risks_next_checks", "versions_changes_memo",
 ]);
+const RETRYABLE_ARTIFACT_STEPS = new Set([
+  "evidence_index", "business_map", "driver_map", "financial_bridge", "scenario_set",
+  "valuation_set", "research_gaps", "judgment_context", "memo",
+]);
 
 export const COMPANY_RESEARCH_MODULES = [
   { key: "overview", label: "概览与当前判断" },
@@ -98,7 +102,8 @@ function versionsAreMonotonic(current: Readonly<Record<string, number>>, next: R
 
 function isDocumentedRecovery(current: CompanyResearchWorkspace, next: CompanyResearchWorkspace): boolean {
   if (current.preparation.status !== "recoverable_failure" || next.preparation.current_step !== current.preparation.current_step) return false;
-  return (current.preparation.current_step === "evidence_index" && next.preparation.status === "queued" && next.preparation.progress === 0)
+  return (current.preparation.current_step !== null && RETRYABLE_ARTIFACT_STEPS.has(current.preparation.current_step)
+      && next.preparation.status === "queued" && next.preparation.progress === 0)
     || (current.preparation.current_step === "model_bundle" && next.preparation.status === "building_model" && next.preparation.progress === 25);
 }
 
@@ -112,6 +117,7 @@ function artifactHeadsAreMonotonic(current: CompanyResearchWorkspace, next: Comp
 
 export function workspaceSnapshotIsMonotonic(current: CompanyResearchWorkspace, next: CompanyResearchWorkspace, options: WorkspaceMonotonicOptions = {}): boolean {
   if (current.project_id !== next.project_id) return false;
+  if (current.company.id !== next.company.id) return false;
   if (current.preparation.id !== next.preparation.id || current.draft.id !== next.draft.id) return false;
   const currentEvidence = artifactByKind(current, "evidence_index");
   const nextEvidence = artifactByKind(next, "evidence_index");
@@ -134,7 +140,10 @@ export function workspaceSnapshotIsMonotonic(current: CompanyResearchWorkspace, 
   return current.modules.every((module) => {
     const candidate = next.modules.find((item) => item.key === module.key);
     if (!candidate) return false;
-    if (recovery && module.state === "blocked" && candidate.state === "preparing") return true;
+    if (recovery && module.state === "blocked") {
+      const expectedState = next.preparation.current_step === "model_bundle" ? "preparing" : "not_started";
+      return candidate.state === expectedState;
+    }
     if (evidenceAdvanced && EVIDENCE_DOWNSTREAM_MODULES.has(module.key) && candidate.state === "preparing") return true;
     return MODULE_RANK[candidate.state] >= MODULE_RANK[module.state] && VALUATION_RANK[candidate.valuation_state] >= VALUATION_RANK[module.valuation_state];
   });
