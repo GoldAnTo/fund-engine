@@ -341,6 +341,9 @@ class CompanyResearchWorkbench:
         project_id: UUID,
         heads: dict[str, CompanyResearchArtifactVersion],
         history_by_id: Mapping[UUID, CompanyResearchArtifactVersion],
+        *,
+        expected_draft_id: UUID,
+        expected_draft_lock_version: int,
     ) -> None:
         """Reject a partial, substituted, or cross-project model bundle."""
         model_kinds = {
@@ -444,25 +447,19 @@ class CompanyResearchWorkbench:
         evidence_source_manifest_hash = self._company.evidence_source_manifest_hash(
             evidence
         )
-        cutoff = self._company.validate_workspace_market_boundary(
+        workspace_boundary = self._company.validate_workspace_market_boundary(
             project_id=project_id,
             bindings=parsed,
             expected_cutoff_at=evidence_cutoff,
             expected_source_manifest_hash=evidence_source_manifest_hash,
+            expected_draft_id=expected_draft_id,
+            expected_lock_version=expected_draft_lock_version,
         )
         self._company.validate_market_snapshot_bindings(
             project_id=project_id,
             bindings=parsed,
-            cutoff_at=cutoff,
+            cutoff_at=workspace_boundary.cutoff_at,
         )
-        draft = WorkspaceDraftService(self._session, now=self._now).read(project_id)
-        if draft is None or draft.content.historical_basis_id is None:
-            raise ValidationError("company research historical basis is invalid")
-        basis = ProductRepository(self._session).product_basis(
-            draft.content.historical_basis_id
-        )
-        if basis is None:
-            raise ValidationError("company research historical basis is invalid")
         for kind, expected_refs in expectations.items():
             row = heads[kind]
             refs, _snapshot_ids, bindings = self._validate_closed_lineage_shape(row)
@@ -477,8 +474,10 @@ class CompanyResearchWorkbench:
             expected_input_hash = self._company._model_artifact_input_hash(
                 request_hash=preparation.request_hash,
                 artifact_refs=refs,
-                historical_basis_id=basis.id,
-                historical_basis_content_hash=basis.content_hash,
+                historical_basis_id=workspace_boundary.historical_basis_id,
+                historical_basis_content_hash=(
+                    workspace_boundary.historical_basis_content_hash
+                ),
                 market_snapshot_bindings=parsed_bindings,
             )
             if row.input_hash != expected_input_hash:
@@ -568,7 +567,13 @@ class CompanyResearchWorkbench:
         if not has_valuation and memo.assessment_status != "not_answerable":
             raise ValidationError("company research valuation state is invalid")
 
-    def _heads(self, project_id: UUID) -> dict[str, WorkbenchArtifact]:
+    def _heads(
+        self,
+        project_id: UUID,
+        *,
+        expected_draft_id: UUID,
+        expected_draft_lock_version: int,
+    ) -> dict[str, WorkbenchArtifact]:
         """Materialize all artifact families once; never query once per module."""
         rows = tuple(
             self._session.scalars(
@@ -626,7 +631,13 @@ class CompanyResearchWorkbench:
             )
             if not any(ref["artifact_kind"] == "valuation_set" for ref in refs):
                 head_rows.pop("valuation_set", None)
-        self._validate_cross_artifact_lineage(project_id, head_rows, by_id)
+        self._validate_cross_artifact_lineage(
+            project_id,
+            head_rows,
+            by_id,
+            expected_draft_id=expected_draft_id,
+            expected_draft_lock_version=expected_draft_lock_version,
+        )
         heads = {
             kind: self._artifact(row, project_id) for kind, row in head_rows.items()
         }
@@ -683,7 +694,11 @@ class CompanyResearchWorkbench:
             raise ValidationError(
                 "frozen company research workspace replay is not implemented"
             )
-        heads = self._heads(project_id)
+        heads = self._heads(
+            project_id,
+            expected_draft_id=draft.id,
+            expected_draft_lock_version=draft.lock_version,
+        )
         modules = []
         for key, kinds in _MODULE_ARTIFACTS.items():
             artifacts = tuple(heads[kind] for kind in kinds if kind in heads)

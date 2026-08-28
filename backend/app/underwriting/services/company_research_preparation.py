@@ -582,18 +582,18 @@ class CompanyResearchPreparationWorker:
         )
         if basis is None:
             raise ValidationError("company research historical basis is invalid")
+        authenticated_basis = self._repository.authenticate_historical_basis(basis)
         historical_basis_id = draft.content.historical_basis_id
         if (
-            basis.id != historical_basis_id
-            or self._repository._persisted_utc(basis.cutoff)
-            != expected_boundary.cutoff_at
-            or basis.source_manifest_hash
+            authenticated_basis.id != historical_basis_id
+            or authenticated_basis.cutoff_at != expected_boundary.cutoff_at
+            or authenticated_basis.source_manifest_hash
             != expected_boundary.basis_input.source_manifest_hash
-            or basis.definition_bundle_hash
+            or authenticated_basis.definition_bundle_hash
             != expected_boundary.basis_input.definition_bundle_hash
-            or basis.parser_bundle_hash
+            or authenticated_basis.parser_bundle_hash
             != expected_boundary.basis_input.parser_bundle_hash
-            or basis.content_hash != expected_boundary.basis_content_hash
+            or authenticated_basis.content_hash != expected_boundary.basis_content_hash
         ):
             raise ValidationError(
                 "company research historical basis does not match governed model contract"
@@ -634,7 +634,7 @@ class CompanyResearchPreparationWorker:
             workspace_draft_id=draft.id,
             workspace_draft_lock_version=draft.lock_version,
             historical_basis_id=historical_basis_id,
-            historical_basis_content_hash=basis.content_hash,
+            historical_basis_content_hash=authenticated_basis.content_hash,
             source_refs=source_refs,
         )
 

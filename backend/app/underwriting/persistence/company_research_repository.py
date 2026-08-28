@@ -35,6 +35,7 @@ from app.underwriting.persistence.company_research_models import (
     CompanyResearchPreparation,
 )
 from app.underwriting.persistence.models import (
+    UnderwritingHistoricalBasis,
     UnderwritingResearchObject,
 )
 from app.underwriting.persistence.product_models import (
@@ -73,6 +74,29 @@ _PREPARE_JOB_TARGET_TYPE = "company_research_preparation"
 
 class CompanyResearchIntegrityError(ValidationError):
     """A persisted immutable company-research record cannot be trusted."""
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchAuthenticatedHistoricalBasis:
+    """One freshly loaded product basis whose immutable fields authenticate."""
+
+    id: UUID
+    cutoff_at: datetime
+    source_manifest_hash: str
+    definition_bundle_hash: str
+    parser_bundle_hash: str
+    content_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchValidatedWorkspaceBoundary:
+    """One draft/basis snapshot accepted for company-model validation."""
+
+    draft_id: UUID
+    draft_lock_version: int
+    cutoff_at: datetime
+    historical_basis_id: UUID
+    historical_basis_content_hash: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,6 +337,51 @@ class CompanyResearchRepository:
             .execution_options(populate_existing=True)
         )
 
+    def authenticate_historical_basis(
+        self,
+        basis: UnderwritingHistoricalBasis,
+    ) -> CompanyResearchAuthenticatedHistoricalBasis:
+        """Authenticate immutable basis fields from a freshly loaded row."""
+        try:
+            cutoff = self._persisted_utc(basis.cutoff)
+            source_manifest_hash = self._require_hash(
+                basis.source_manifest_hash,
+                "historical basis source manifest hash",
+            )
+            definition_bundle_hash = self._require_hash(
+                basis.definition_bundle_hash,
+                "historical basis definition bundle hash",
+            )
+            parser_bundle_hash = self._require_hash(
+                basis.parser_bundle_hash,
+                "historical basis parser bundle hash",
+            )
+        except ValidationError as exc:
+            raise CompanyResearchIntegrityError(
+                "company research historical basis is invalid"
+            ) from exc
+        content_hash = canonical_hash(
+            {
+                "schema_version": "product.historical-basis.v1",
+                "cutoff_at": cutoff.isoformat(),
+                "source_manifest_hash": source_manifest_hash,
+                "definition_bundle_hash": definition_bundle_hash,
+                "parser_bundle_hash": parser_bundle_hash,
+            }
+        )
+        if basis.content_hash != content_hash:
+            raise CompanyResearchIntegrityError(
+                "company research historical basis is invalid"
+            )
+        return CompanyResearchAuthenticatedHistoricalBasis(
+            id=basis.id,
+            cutoff_at=cutoff,
+            source_manifest_hash=source_manifest_hash,
+            definition_bundle_hash=definition_bundle_hash,
+            parser_bundle_hash=parser_bundle_hash,
+            content_hash=content_hash,
+        )
+
     def validate_workspace_market_boundary(
         self,
         *,
@@ -325,7 +394,7 @@ class CompanyResearchRepository:
         expected_draft_id: UUID | None = None,
         expected_lock_version: int | None = None,
         lock: bool = False,
-    ) -> datetime:
+    ) -> CompanyResearchValidatedWorkspaceBoundary:
         draft = (
             self._workspace_draft_for_update(project_id)
             if lock
@@ -348,45 +417,16 @@ class CompanyResearchRepository:
         )
         if basis is None:
             raise ValidationError("company research historical basis is invalid")
-        try:
-            cutoff = self._persisted_utc(basis.cutoff)
-            source_manifest_hash = self._require_hash(
-                basis.source_manifest_hash,
-                "historical basis source manifest hash",
-            )
-            definition_bundle_hash = self._require_hash(
-                basis.definition_bundle_hash,
-                "historical basis definition bundle hash",
-            )
-            parser_bundle_hash = self._require_hash(
-                basis.parser_bundle_hash,
-                "historical basis parser bundle hash",
-            )
-        except ValidationError as exc:
-            raise CompanyResearchIntegrityError(
-                "company research historical basis is invalid"
-            ) from exc
-        if basis.content_hash != canonical_hash(
-            {
-                "schema_version": "product.historical-basis.v1",
-                "cutoff_at": cutoff.isoformat(),
-                "source_manifest_hash": source_manifest_hash,
-                "definition_bundle_hash": definition_bundle_hash,
-                "parser_bundle_hash": parser_bundle_hash,
-            }
-        ):
-            raise CompanyResearchIntegrityError(
-                "company research historical basis is invalid"
-            )
+        authenticated_basis = self.authenticate_historical_basis(basis)
         if (
             expected_historical_basis_id is not None
-            and basis.id != expected_historical_basis_id
+            and authenticated_basis.id != expected_historical_basis_id
         ):
             raise ValidationError("company research historical basis is stale")
         expected_cutoff = self._stored_datetime(
             expected_cutoff_at, "expected_cutoff_at"
         )
-        if cutoff != expected_cutoff:
+        if authenticated_basis.cutoff_at != expected_cutoff:
             raise ValidationError(
                 "company research historical basis cutoff does not match reviewed evidence"
             )
@@ -394,13 +434,13 @@ class CompanyResearchRepository:
             expected_source_manifest_hash,
             "expected_source_manifest_hash",
         )
-        if basis.source_manifest_hash != expected_source_manifest_hash:
+        if authenticated_basis.source_manifest_hash != expected_source_manifest_hash:
             raise ValidationError(
                 "company research historical basis source does not match reviewed evidence"
             )
         if (
             expected_historical_basis_content_hash is not None
-            and basis.content_hash != expected_historical_basis_content_hash
+            and authenticated_basis.content_hash != expected_historical_basis_content_hash
         ):
             raise ValidationError("company research historical basis is stale")
         bindings_by_role = {
@@ -432,7 +472,13 @@ class CompanyResearchRepository:
             raise ValidationError(
                 "company research market bindings do not match workspace draft"
             )
-        return cutoff
+        return CompanyResearchValidatedWorkspaceBoundary(
+            draft_id=draft.id,
+            draft_lock_version=draft.lock_version,
+            cutoff_at=authenticated_basis.cutoff_at,
+            historical_basis_id=authenticated_basis.id,
+            historical_basis_content_hash=authenticated_basis.content_hash,
+        )
 
     @classmethod
     def evidence_cutoff(cls, artifact: CompanyResearchArtifactVersion) -> datetime:
@@ -1469,7 +1515,7 @@ class CompanyResearchRepository:
             raise ValidationError("company research model inputs are stale")
         evidence_cutoff = self.evidence_cutoff(evidence)
         evidence_source_manifest_hash = self.evidence_source_manifest_hash(evidence)
-        basis_cutoff = self.validate_workspace_market_boundary(
+        workspace_boundary = self.validate_workspace_market_boundary(
             project_id=preparation.project_id,
             bindings=bundle.market_snapshot_bindings,
             expected_cutoff_at=evidence_cutoff,
@@ -1503,7 +1549,7 @@ class CompanyResearchRepository:
         self.validate_market_snapshot_bindings(
             project_id=preparation.project_id,
             bindings=market_snapshot_bindings,
-            cutoff_at=basis_cutoff,
+            cutoff_at=workspace_boundary.cutoff_at,
         )
         model_source_refs = self.expected_model_source_refs(
             evidence=evidence,
@@ -1533,9 +1579,9 @@ class CompanyResearchRepository:
                     input_hash=self._model_artifact_input_hash(
                         request_hash=request_hash,
                         artifact_refs=refs,
-                        historical_basis_id=bundle.historical_basis_id,
+                        historical_basis_id=workspace_boundary.historical_basis_id,
                         historical_basis_content_hash=(
-                            bundle.historical_basis_content_hash
+                            workspace_boundary.historical_basis_content_hash
                         ),
                         market_snapshot_bindings=market_snapshot_bindings,
                     ),
@@ -1585,8 +1631,10 @@ class CompanyResearchRepository:
             gap_input_hash = self._model_artifact_input_hash(
                 request_hash=request_hash,
                 artifact_refs=gap_refs,
-                historical_basis_id=bundle.historical_basis_id,
-                historical_basis_content_hash=bundle.historical_basis_content_hash,
+                historical_basis_id=workspace_boundary.historical_basis_id,
+                historical_basis_content_hash=(
+                    workspace_boundary.historical_basis_content_hash
+                ),
                 market_snapshot_bindings=market_snapshot_bindings,
             )
             planned_gap_id = uuid4()

@@ -8,7 +8,7 @@ import sys
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import bindparam, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.ledger import ValidationError
@@ -21,8 +21,10 @@ from app.underwriting.persistence.company_research_models import (
     CompanyResearchPreparation,
 )
 from app.underwriting.persistence.company_research_repository import (
+    CompanyResearchIntegrityError,
     CompanyResearchRepository,
 )
+from app.underwriting.persistence.models import UnderwritingHistoricalBasis
 from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchInitializer,
@@ -223,6 +225,78 @@ def test_worker_blocks_a_contract_incompatible_historical_basis_before_model_pro
     assert (job.status, job.step, job.error, job.claim_token) == (
         "failed",
         "model_bundle",
+        "validation_failed",
+        None,
+    )
+    repository = CompanyResearchRepository(session)
+    assert all(
+        repository.current_artifact(initialized.project.id, kind) is None
+        for kind in (
+            "business_map",
+            "driver_map",
+            "financial_bridge",
+            "scenario_set",
+            "valuation_set",
+            "judgment_context",
+            "memo",
+        )
+    )
+
+
+def test_worker_blocks_a_durably_corrupted_historical_basis_before_model_provider(
+    session,
+) -> None:
+    initialized = _ready_for_model(session)
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert draft is not None and draft.content.historical_basis_id is not None
+    basis = ProductRepository(session).product_basis(draft.content.historical_basis_id)
+    assert basis is not None
+    tamper = text(
+        "UPDATE uw_historical_bases "
+        "SET content_hash = :content_hash WHERE id = :basis_id"
+    ).bindparams(
+        bindparam(
+            "content_hash",
+            type_=UnderwritingHistoricalBasis.__table__.c.content_hash.type,
+        ),
+        bindparam(
+            "basis_id",
+            type_=UnderwritingHistoricalBasis.__table__.c.id.type,
+        ),
+    )
+    tampered = session.connection().execute(
+        tamper,
+        {"content_hash": "0" * 64, "basis_id": basis.id},
+    )
+    assert tampered.rowcount == 1
+    model_calls = []
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=lambda build_input: model_calls.append(build_input),
+    )
+    claim = worker.claim_next()
+
+    assert claim is not None and claim.step == "model_bundle"
+    with pytest.raises(
+        CompanyResearchIntegrityError,
+        match="historical basis is invalid",
+    ):
+        worker._model_input(claim)
+    assert worker.run_claim(claim) == "discarded"
+    assert model_calls == []
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None
+    assert (preparation.status, preparation.last_error_code) == (
+        "blocked",
+        "validation_failed",
+    )
+    assert job is not None
+    assert (job.status, job.error, job.claim_token) == (
+        "failed",
         "validation_failed",
         None,
     )

@@ -469,6 +469,38 @@ def test_workbench_rejects_a_durably_tampered_historical_basis_source_as_integri
         workbench.workspace(project_id=initialized.project.id)
 
 
+def test_workbench_rejects_a_market_draft_cas_change_after_outer_capture(
+    session, monkeypatch
+) -> None:
+    initialized, workbench, _repository = _model_workspace(session)
+    original = workbench._company.validate_workspace_market_boundary
+    validation_calls = 0
+
+    def mutate_draft_before_validation(**kwargs):
+        nonlocal validation_calls
+        validation_calls += 1
+        drafts = WorkspaceDraftService(session, now=lambda: NOW)
+        draft = drafts.read(initialized.project.id)
+        assert draft is not None
+        drafts.save(
+            initialized.project.id,
+            expected_lock_version=draft.lock_version,
+            patch=WorkspaceDraftPatch(price_snapshot_ids=()),
+        )
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        workbench._company,
+        "validate_workspace_market_boundary",
+        mutate_draft_before_validation,
+    )
+
+    with pytest.raises(ValidationError, match="workspace draft is stale"):
+        workbench.workspace(project_id=initialized.project.id)
+
+    assert validation_calls == 1
+
+
 def test_workbench_rejects_a_substitute_historical_basis_after_publication(
     session,
 ) -> None:
