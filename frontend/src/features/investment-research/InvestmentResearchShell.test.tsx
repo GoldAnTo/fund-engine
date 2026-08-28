@@ -9,6 +9,7 @@ import routeEntrySource from "../../app/routes.tsx?raw";
 import mainEntrySource from "../../main.tsx?raw";
 import shellSource from "../../app/InvestmentResearchShell.tsx?raw";
 import apiSource from "../../data/investmentResearchApi.ts?raw";
+import { investmentResearchApi, type CompanyResearchWorkspace, type ProductProject } from "../../data/investmentResearchApi";
 import homeSource from "./ResearchHomePage.tsx?raw";
 import setupSource from "./NewResearchPage.tsx?raw";
 import workbenchSource from "./ResearchWorkbenchPage.tsx?raw";
@@ -17,7 +18,7 @@ const hash = "a".repeat(64);
 const uid = (value: number) => `10000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 const shellIds = { older: uid(1), newer: uid(2), project: uid(3), company: uid(4), security: uid(5), companyVersion: uid(6), securityVersion: uid(7), industry: uid(8), industryVersion: uid(9), draft: uid(10), mandate: uid(11), scope: uid(12), agenda: uid(13), basis: uid(14), price: uid(15), capital: uid(16), rights: uid(17), membership: uid(18) };
 
-function shellProject(id = shellIds.project, createdAt = "2026-08-24T08:00:00Z") {
+function shellProject(id = shellIds.project, createdAt = "2026-08-24T08:00:00Z"): ProductProject {
   return { schema_version: "underwriting.v1", id, primary_company_id: shellIds.company, target_security_ids: [shellIds.security], company_identity: { schema_version: "underwriting.v1", object_id: shellIds.company, identity_version_id: shellIds.companyVersion, canonical_name: "宁德时代" }, security_identities: [{ schema_version: "underwriting.v1", object_id: shellIds.security, identity_version_id: shellIds.securityVersion, canonical_name: "宁德时代 A 股", symbol: "300750", exchange: "SZSE", share_class: "A", trading_currency: "CNY" }], content_hash: hash, created_at: createdAt };
 }
 
@@ -27,6 +28,14 @@ function shellDraft() {
 
 function shellPreview() {
   return { schema_version: "underwriting.v1", project_id: shellIds.project, expected_lock_version: 4, boundary_as_of: "2026-08-24T08:05:00Z", assessment: { schema_version: "underwriting.v1", answerability: "not_answerable", direction: null, confidence: null, publication_status: "user_frozen", blockers: ["missing_key_baseline"], resolution_requirements: ["核验行业有效产能与利用率口径"], next_review_at: null, parent_assessment_id: null, content_hash: hash }, boundary: { schema_version: "underwriting.v1", historical_basis_id: shellIds.basis, mandate_id: shellIds.mandate, scope_id: shellIds.scope, agenda_id: shellIds.agenda, price_snapshot_ids: [shellIds.price], fx_snapshot_ids: [], capital_structure_snapshot_id: shellIds.capital, security_rights_ids: [shellIds.rights], parent_revision_id: null }, boundary_hash: hash, manifest: { schema_version: "underwriting.research-revision-manifest.v1", project_id: shellIds.project, project_ref: { project_id: shellIds.project, content_hash: hash }, project_membership_refs: [{ membership_id: shellIds.membership, security_id: shellIds.security, content_hash: hash }], primary_object_id: shellIds.company, boundary_ref: "$boundary", mandate_id: shellIds.mandate, scope_id: shellIds.scope, agenda_id: shellIds.agenda, historical_basis_id: shellIds.basis, price_snapshot_ids: [shellIds.price], fx_snapshot_ids: [], capital_structure_snapshot_id: shellIds.capital, security_rights_ids: [shellIds.rights], market_snapshot_refs: [`price:${shellIds.price}`, `capital_structure:${shellIds.capital}`, `security_rights:${shellIds.rights}`], model_refs: [], assessment_ref: "$assessment", memo_ref: null, parent_revision_id: null }, manifest_hash: hash };
+}
+
+function shellWorkspace(projectId = shellIds.project): CompanyResearchWorkspace {
+  const source = { kind: "external", fact_key: "reported_revenue", source_role: "filing", source_url: "https://example.test/filing", source_locator: "annual report p. 10", raw_hash: hash };
+  const evidence = { schema_version: "underwriting.v1", id: shellIds.agenda, project_id: projectId, kind: "evidence_index", version: 1, input_hash: hash, content_hash: hash, source_refs: [{ source_role: "filing", source_url: source.source_url, source_locator: source.source_locator, raw_hash: hash }], payload: { fixture_content_hash: hash, cutoff: "2026-08-24T08:05:00Z", company_external_key: "CATL:COMPANY", security_external_keys: ["SZSE:300750"], facts: [{ fact_key: "reported_revenue", company_external_key: "CATL:COMPANY", business_module: "battery", metric_key: "revenue", observation: { key: "revenue", value: "362013", unit: "CNY million", currency: "CNY", period: "FY2025", state: "reported", source_ref: source, gap_key: null, assumption_key: null }, period_start: "2025-01-01", period_end: "2025-12-31", published_at: "2026-03-01T00:00:00Z", available_at: "2026-03-01T00:00:00Z", source_role: "filing", source_url: source.source_url, source_locator: source.source_locator, raw_hash: hash }] } };
+  const gaps = { schema_version: "underwriting.v1", id: shellIds.scope, project_id: projectId, kind: "research_gaps", version: 1, input_hash: hash, content_hash: hash, source_refs: [{ source_role: "filing", source_url: source.source_url, source_locator: source.source_locator, raw_hash: hash }], payload: { fixture_content_hash: hash, company_external_key: "CATL:COMPANY", gaps: [{ gap_key: "missing_key_baseline", business_module: "battery", reason: "核验行业有效产能与利用率口径" }] } };
+  const keys = ["overview", "business_map", "operating_drivers", "evidence_and_gaps", "industry_competition_regulation", "financials_cash_flow_capital_allocation", "scenarios_valuation_implied_expectations", "counterevidence_risks_next_checks", "versions_changes_memo"];
+  return { schema_version: "underwriting.v1", project_id: projectId, company: { schema_version: "underwriting.v1", object_id: shellIds.company, id: shellIds.company, external_key: "CATL:COMPANY", canonical_name: "宁德时代" }, preparation: { schema_version: "underwriting.v1", id: shellIds.draft, status: "completed", current_step: null, progress: 100, error: null }, artifacts: [evidence, gaps] as CompanyResearchWorkspace["artifacts"], modules: keys.map((key) => ({ schema_version: "underwriting.v1", key, state: key === "evidence_and_gaps" ? "needs_review" : "preparing", artifact_refs: [], valuation_state: key === "scenarios_valuation_implied_expectations" ? "pending" : "not_applicable" })) as CompanyResearchWorkspace["modules"], source_count: 1, gap_count: 1, draft: { schema_version: "underwriting.v1", id: shellIds.draft, lock_version: 4, base_revision_id: null }, selected_revision: null, change_summary: { artifact_versions: { evidence_index: 1, research_gaps: 1 }, reviewed_fact_count: 0 } };
 }
 
 function json(body: object, status = 200): Response {
@@ -43,6 +52,7 @@ function ProjectSwitcher({ projectId }: { projectId: string }) {
 
 describe("independent investment research shell", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -145,8 +155,11 @@ describe("independent investment research shell", () => {
     expect(within(results).getByRole("link", { name: /查看相关公司/ })).toBeVisible();
   });
 
-  it("renders the honest nine-module workbench and an insufficient-evidence preview", async () => {
+  it("renders the honest nine-module company workbench without requesting publication preview", async () => {
     const user = userEvent.setup();
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(shellProject());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(shellWorkspace());
+    const previewSpy = vi.spyOn(investmentResearchApi, "preview");
     const fetchSpy = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.endsWith(`/product/projects/${shellIds.project}`)) return json(shellProject());
@@ -254,31 +267,28 @@ describe("independent investment research shell", () => {
     expect(await screen.findByRole("heading", { name: "研究工作台" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "宁德时代" })).toBeVisible();
     expect(screen.getByText(/300750 · A · SZSE/)).toBeVisible();
-    const modules = [
-      "概览", "来源与证据", "行业", "公司模型", "预测与情景",
-      "估值", "判断与反证", "版本与变化", "研究备忘录",
-    ];
+    const modules = ["概览与当前判断", "Google 如何赚钱", "关键经营变量", "来源、事实与缺口", "行业、竞争与监管", "财务、现金流与资本配置", "情景、估值与当前价格隐含", "反证、风险与下一验证", "版本、变化与研究备忘录"];
     for (const module of modules) {
       expect(screen.getByRole("button", { name: new RegExp(module) })).toBeVisible();
     }
-    for (const module of modules.filter((item) => !["概览", "版本与变化"].includes(item))) {
-      expect(screen.getByRole("button", { name: new RegExp(module) })).toBeDisabled();
-    }
-    expect(screen.getAllByText("尚未建立").length).toBeGreaterThanOrEqual(7);
-    expect(screen.getByText("insufficient_evidence")).toBeVisible();
-    expect(screen.getByText("missing_key_baseline")).toBeVisible();
-    expect(screen.getByText("核验行业有效产能与利用率口径")).toBeVisible();
-    expect(screen.getByText(/方向尚未形成/)).toBeVisible();
-    expect(screen.getByText(/置信度尚未形成/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    expect(screen.getByText(/missing_key_baseline/)).toBeVisible();
+    expect(screen.getByText(/核验行业有效产能与利用率口径/)).toBeVisible();
     expect(document.body).not.toHaveTextContent(/target_price|action|推荐|仓位/i);
 
-    await user.click(screen.getByRole("button", { name: /版本与变化/ }));
+    await user.click(screen.getByRole("button", { name: /版本、变化与研究备忘录/ }));
     expect(screen.getByText(/当前草稿版本 4/)).toBeVisible();
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(3));
+    expect(previewSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("never carries preview or revision state across project route changes", async () => {
+  it("never carries company workspace state across project route changes", async () => {
     const projectB = shellIds.newer;
+    vi.spyOn(investmentResearchApi, "project").mockImplementation(async (projectId) => shellProject(projectId));
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockImplementation(async (projectId) => {
+      if (projectId === projectB) throw new Error("B 项目工作区读取失败");
+      return shellWorkspace(projectId);
+    });
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.endsWith(`/projects/${shellIds.project}`)) return json(shellProject());
@@ -296,10 +306,12 @@ describe("independent investment research shell", () => {
         <ResearchOsRoutes />
       </MemoryRouter>,
     );
-    expect(await screen.findByText("missing_key_baseline")).toBeVisible();
+    await screen.findByRole("heading", { name: "宁德时代" });
+    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    expect(screen.getByText(/missing_key_baseline/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "切换项目" }));
-    expect(await screen.findByText("B 项目预览读取失败")).toBeVisible();
-    expect(screen.queryByText("missing_key_baseline")).not.toBeInTheDocument();
+    expect(await screen.findByText("B 项目工作区读取失败")).toBeVisible();
+    expect(screen.queryByText(/missing_key_baseline/)).not.toBeInTheDocument();
   });
 
   it("keeps unknown research URLs inside the product shell", async () => {
@@ -361,10 +373,12 @@ describe("independent investment research shell", () => {
     expect(screen.getByRole("button", { name: "研究 宁德时代" })).toBeVisible();
   });
 
-  it("retries workbench and publication preview reads in place", async () => {
+  it("retries the company workbench read in place", async () => {
     let projectAttempts = 0;
     let previewAttempts = 0;
     const user = userEvent.setup();
+    vi.spyOn(investmentResearchApi, "project").mockRejectedValueOnce(new Error("项目读取失败")).mockResolvedValue(shellProject());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(shellWorkspace());
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.endsWith(`/projects/${shellIds.project}`)) {
@@ -384,8 +398,6 @@ describe("independent investment research shell", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("项目读取失败");
     await user.click(screen.getByRole("button", { name: "重试读取研究项目" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("预览读取失败");
-    await user.click(screen.getByRole("button", { name: "重试读取 publication preview" }));
-    expect(await screen.findByText("missing_key_baseline")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "宁德时代" })).toBeVisible();
   });
 });
