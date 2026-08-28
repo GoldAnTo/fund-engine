@@ -511,7 +511,7 @@ def test_complete_model_bundle_rejects_a_substitute_historical_basis_captured_fo
     assert repository.current_artifact(project.id, "business_map") is None
 
 
-def test_complete_model_bundle_refreshes_a_durably_tampered_cached_basis(
+def test_complete_model_bundle_rejects_a_durably_tampered_cached_basis_source_as_integrity_error(
     session,
 ) -> None:
     repository, project, preparation, _job, _evidence, _gaps, bundle = (
@@ -529,8 +529,34 @@ def test_complete_model_bundle_refreshes_a_durably_tampered_cached_basis(
     assert basis.source_manifest_hash == original_source_manifest_hash
 
     with pytest.raises(
-        ValidationError,
-        match="historical basis source does not match reviewed evidence",
+        CompanyResearchIntegrityError,
+        match="historical basis is invalid",
+    ):
+        _complete_model_bundle(repository, preparation, bundle)
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
+def test_complete_model_bundle_rejects_a_durably_tampered_cached_basis_cutoff_as_integrity_error(
+    session,
+) -> None:
+    repository, project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    basis = _basis_for_workspace(session, project)
+    original_cutoff = basis.cutoff
+    _tamper_row(
+        session,
+        UnderwritingHistoricalBasis,
+        basis.id,
+        expire=False,
+        cutoff=NOW + timedelta(days=2),
+    )
+    assert basis.cutoff == original_cutoff
+
+    with pytest.raises(
+        CompanyResearchIntegrityError,
+        match="historical basis is invalid",
     ):
         _complete_model_bundle(repository, preparation, bundle)
 
@@ -633,8 +659,8 @@ def test_complete_model_bundle_rejects_a_historical_basis_source_that_differs_fr
     )
 
     with pytest.raises(
-        ValidationError,
-        match="historical basis source does not match reviewed evidence",
+        CompanyResearchIntegrityError,
+        match="historical basis is invalid",
     ):
         _complete_model_bundle(repository, preparation, bundle)
 

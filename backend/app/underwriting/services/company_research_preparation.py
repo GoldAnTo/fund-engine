@@ -35,6 +35,9 @@ from app.underwriting.services.company_research_initializer import (
     CompanyResearchGovernedInputs,
     CompanyResearchInitializer,
 )
+from app.underwriting.services.company_research_boundary import (
+    resolve_alphabet_company_research_boundary,
+)
 from app.underwriting.services.company_research_model_builder import (
     CompanyResearchBuildInput,
     CompanyResearchBuildResult,
@@ -566,6 +569,7 @@ class CompanyResearchPreparationWorker:
             project_id=preparation.project_id,
             cutoff_at=cutoff,
         )
+        expected_boundary = resolve_alphabet_company_research_boundary(cutoff)
         draft = WorkspaceDraftService(self._session, now=self._now).read(
             preparation.project_id
         )
@@ -578,15 +582,22 @@ class CompanyResearchPreparationWorker:
         )
         if basis is None:
             raise ValidationError("company research historical basis is invalid")
-        try:
-            historical_basis_content_hash = self._repository._require_hash(
-                basis.content_hash,
-                "company research historical basis content hash",
-            )
-        except ValidationError as exc:
+        historical_basis_id = draft.content.historical_basis_id
+        if (
+            basis.id != historical_basis_id
+            or self._repository._persisted_utc(basis.cutoff)
+            != expected_boundary.cutoff_at
+            or basis.source_manifest_hash
+            != expected_boundary.basis_input.source_manifest_hash
+            or basis.definition_bundle_hash
+            != expected_boundary.basis_input.definition_bundle_hash
+            or basis.parser_bundle_hash
+            != expected_boundary.basis_input.parser_bundle_hash
+            or basis.content_hash != expected_boundary.basis_content_hash
+        ):
             raise ValidationError(
-                "company research historical basis is invalid"
-            ) from exc
+                "company research historical basis does not match governed model contract"
+            )
         bindings = (
             governed.market_context.snapshot_bindings
             if governed.market_context is not None
@@ -622,8 +633,8 @@ class CompanyResearchPreparationWorker:
             research_gaps_content_hash=gaps.content_hash,
             workspace_draft_id=draft.id,
             workspace_draft_lock_version=draft.lock_version,
-            historical_basis_id=basis.id,
-            historical_basis_content_hash=historical_basis_content_hash,
+            historical_basis_id=historical_basis_id,
+            historical_basis_content_hash=basis.content_hash,
             source_refs=source_refs,
         )
 

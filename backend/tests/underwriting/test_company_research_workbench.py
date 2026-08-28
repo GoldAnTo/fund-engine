@@ -14,6 +14,7 @@ from app.underwriting.hashing import canonical_hash
 from app.underwriting.domain.product_contracts import ProductHistoricalBasisInput
 from app.underwriting.domain.types import InvestmentMandateInput
 from app.underwriting.persistence.company_research_repository import (
+    CompanyResearchIntegrityError,
     CompanyResearchPersistedBundle,
     CompanyResearchRepository,
 )
@@ -447,7 +448,7 @@ def test_workbench_accepts_one_closed_model_bundle(session) -> None:
         )
 
 
-def test_workbench_fails_closed_when_historical_basis_source_differs_from_evidence(
+def test_workbench_rejects_a_durably_tampered_historical_basis_source_as_integrity_error(
     session,
 ) -> None:
     initialized, workbench, _repository = _model_workspace(session)
@@ -462,8 +463,8 @@ def test_workbench_fails_closed_when_historical_basis_source_differs_from_eviden
     assert basis.source_manifest_hash != "0" * 64
 
     with pytest.raises(
-        ValidationError,
-        match="historical basis source does not match reviewed evidence",
+        CompanyResearchIntegrityError,
+        match="historical basis is invalid",
     ):
         workbench.workspace(project_id=initialized.project.id)
 

@@ -348,28 +348,12 @@ class CompanyResearchRepository:
         )
         if basis is None:
             raise ValidationError("company research historical basis is invalid")
-        if (
-            expected_historical_basis_id is not None
-            and basis.id != expected_historical_basis_id
-        ):
-            raise ValidationError("company research historical basis is stale")
-        cutoff = self._persisted_utc(basis.cutoff)
-        expected_cutoff = self._stored_datetime(
-            expected_cutoff_at, "expected_cutoff_at"
-        )
-        if cutoff != expected_cutoff:
-            raise ValidationError(
-                "company research historical basis cutoff does not match reviewed evidence"
-            )
-        expected_source_manifest_hash = self._require_hash(
-            expected_source_manifest_hash,
-            "expected_source_manifest_hash",
-        )
-        if basis.source_manifest_hash != expected_source_manifest_hash:
-            raise ValidationError(
-                "company research historical basis source does not match reviewed evidence"
-            )
         try:
+            cutoff = self._persisted_utc(basis.cutoff)
+            source_manifest_hash = self._require_hash(
+                basis.source_manifest_hash,
+                "historical basis source manifest hash",
+            )
             definition_bundle_hash = self._require_hash(
                 basis.definition_bundle_hash,
                 "historical basis definition bundle hash",
@@ -386,13 +370,33 @@ class CompanyResearchRepository:
             {
                 "schema_version": "product.historical-basis.v1",
                 "cutoff_at": cutoff.isoformat(),
-                "source_manifest_hash": basis.source_manifest_hash,
+                "source_manifest_hash": source_manifest_hash,
                 "definition_bundle_hash": definition_bundle_hash,
                 "parser_bundle_hash": parser_bundle_hash,
             }
         ):
             raise CompanyResearchIntegrityError(
                 "company research historical basis is invalid"
+            )
+        if (
+            expected_historical_basis_id is not None
+            and basis.id != expected_historical_basis_id
+        ):
+            raise ValidationError("company research historical basis is stale")
+        expected_cutoff = self._stored_datetime(
+            expected_cutoff_at, "expected_cutoff_at"
+        )
+        if cutoff != expected_cutoff:
+            raise ValidationError(
+                "company research historical basis cutoff does not match reviewed evidence"
+            )
+        expected_source_manifest_hash = self._require_hash(
+            expected_source_manifest_hash,
+            "expected_source_manifest_hash",
+        )
+        if basis.source_manifest_hash != expected_source_manifest_hash:
+            raise ValidationError(
+                "company research historical basis source does not match reviewed evidence"
             )
         if (
             expected_historical_basis_content_hash is not None

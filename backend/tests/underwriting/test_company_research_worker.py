@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.ledger import ValidationError
 from app.models.operational import Job, JobEvent
+from app.underwriting.domain.product_contracts import ProductHistoricalBasisInput
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
@@ -22,6 +23,7 @@ from app.underwriting.persistence.company_research_models import (
 from app.underwriting.persistence.company_research_repository import (
     CompanyResearchRepository,
 )
+from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchInitializer,
     CompanyResearchPreparationService,
@@ -34,6 +36,7 @@ from app.underwriting.services.company_research_workbench import (
 )
 from app.underwriting.services.company_research_sources import CompanyResearchSourceService
 from app.underwriting.services.product_foundation_fixture import ProductFoundationFixtureService
+from app.underwriting.services.product_project import ResearchProjectService
 from app.underwriting.services.workspace_draft import (
     WorkspaceDraftPatch,
     WorkspaceDraftService,
@@ -161,6 +164,80 @@ def test_worker_builds_all_model_artifacts_after_last_evidence_review(session) -
         "judgment_context",
         85,
         None,
+    )
+
+
+def test_worker_blocks_a_contract_incompatible_historical_basis_before_model_provider(
+    session,
+) -> None:
+    initialized = _ready_for_model(session)
+    drafts = WorkspaceDraftService(session, now=lambda: NOW)
+    draft = drafts.read(initialized.project.id)
+    assert draft is not None and draft.content.historical_basis_id is not None
+    original = ProductRepository(session).product_basis(draft.content.historical_basis_id)
+    assert original is not None
+    substitute = ResearchProjectService(
+        session, now=lambda: NOW
+    ).create_historical_basis(
+        ProductHistoricalBasisInput(
+            cutoff_at=CompanyResearchRepository._persisted_utc(original.cutoff),
+            source_manifest_hash=original.source_manifest_hash,
+            definition_bundle_hash="d" * 64,
+            parser_bundle_hash="e" * 64,
+        )
+    )
+    drafts.save(
+        initialized.project.id,
+        expected_lock_version=draft.lock_version,
+        patch=WorkspaceDraftPatch(historical_basis_id=substitute.id),
+    )
+    model_calls = []
+
+    def model_provider(build_input):
+        from app.underwriting.services.company_research_model_builder import (
+            CompanyResearchModelBuilder,
+        )
+
+        model_calls.append(build_input)
+        return CompanyResearchModelBuilder().build(build_input)
+
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=model_provider,
+    )
+    claim = worker.claim_next()
+
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "discarded"
+    assert model_calls == []
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None
+    assert (preparation.status, preparation.current_step, preparation.last_error_code) == (
+        "blocked",
+        "model_bundle",
+        "validation_failed",
+    )
+    assert job is not None
+    assert (job.status, job.step, job.error, job.claim_token) == (
+        "failed",
+        "model_bundle",
+        "validation_failed",
+        None,
+    )
+    repository = CompanyResearchRepository(session)
+    assert all(
+        repository.current_artifact(initialized.project.id, kind) is None
+        for kind in (
+            "business_map",
+            "driver_map",
+            "financial_bridge",
+            "scenario_set",
+            "valuation_set",
+            "judgment_context",
+            "memo",
+        )
     )
 
 
