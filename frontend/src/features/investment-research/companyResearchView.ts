@@ -16,6 +16,11 @@ const MODULE_RANK: Record<CompanyResearchWorkspace["modules"][number]["state"], 
 const VALUATION_RANK: Record<CompanyResearchWorkspace["modules"][number]["valuation_state"], number> = {
   not_applicable: 0, pending: 1, ready: 2, blocked: 3,
 };
+const EVIDENCE_DOWNSTREAM_MODULES = new Set<CompanyResearchWorkspace["modules"][number]["key"]>([
+  "overview", "business_map", "operating_drivers", "industry_competition_regulation",
+  "financials_cash_flow_capital_allocation", "scenarios_valuation_implied_expectations",
+  "counterevidence_risks_next_checks", "versions_changes_memo",
+]);
 
 export const COMPANY_RESEARCH_MODULES = [
   { key: "overview", label: "概览与当前判断" },
@@ -91,33 +96,46 @@ function versionsAreMonotonic(current: Readonly<Record<string, number>>, next: R
   return Object.entries(current).every(([kind, version]) => next[kind] !== undefined && next[kind] >= version);
 }
 
+function isDocumentedRecovery(current: CompanyResearchWorkspace, next: CompanyResearchWorkspace): boolean {
+  if (current.preparation.status !== "recoverable_failure" || next.preparation.current_step !== current.preparation.current_step) return false;
+  return (current.preparation.current_step === "evidence_index" && next.preparation.status === "queued" && next.preparation.progress === 0)
+    || (current.preparation.current_step === "model_bundle" && next.preparation.status === "building_model" && next.preparation.progress === 25);
+}
+
+function artifactHeadsAreMonotonic(current: CompanyResearchWorkspace, next: CompanyResearchWorkspace): boolean {
+  return current.artifacts.every((artifact) => {
+    const candidate = next.artifacts.find((item) => item.kind === artifact.kind);
+    return candidate !== undefined && candidate.version >= artifact.version
+      && (candidate.version !== artifact.version || (candidate.id === artifact.id && candidate.content_hash === artifact.content_hash));
+  });
+}
+
 export function workspaceSnapshotIsMonotonic(current: CompanyResearchWorkspace, next: CompanyResearchWorkspace, options: WorkspaceMonotonicOptions = {}): boolean {
   if (current.project_id !== next.project_id) return false;
+  if (current.preparation.id !== next.preparation.id || current.draft.id !== next.draft.id) return false;
   const currentEvidence = artifactByKind(current, "evidence_index");
   const nextEvidence = artifactByKind(next, "evidence_index");
+  const evidenceAdvanced = nextEvidence !== null && (currentEvidence === null || nextEvidence.version > currentEvidence.version);
   if (currentEvidence !== null) {
     if (nextEvidence === null || nextEvidence.version < currentEvidence.version) return false;
-    if (nextEvidence.version > currentEvidence.version) return true;
-    if (nextEvidence.id !== currentEvidence.id || nextEvidence.content_hash !== currentEvidence.content_hash) return false;
-  } else if (nextEvidence !== null) {
-    return true;
+    if (nextEvidence.version === currentEvidence.version && (nextEvidence.id !== currentEvidence.id || nextEvidence.content_hash !== currentEvidence.content_hash)) return false;
   }
 
-  const recovery = options.allowRecovery === true && (current.preparation.status === "recoverable_failure" || current.preparation.status === "blocked");
-  if (next.preparation.progress < current.preparation.progress || (!recovery && PREPARATION_RANK[next.preparation.status] < PREPARATION_RANK[current.preparation.status])) return false;
+  const recovery = options.allowRecovery === true && isDocumentedRecovery(current, next);
+  if (options.allowRecovery === true && current.preparation.status === "recoverable_failure" && !recovery) return false;
+  if (!recovery && (next.preparation.progress < current.preparation.progress || PREPARATION_RANK[next.preparation.status] < PREPARATION_RANK[current.preparation.status])) return false;
   if (!recovery && next.preparation.progress === current.preparation.progress && next.preparation.status === current.preparation.status && next.preparation.current_step !== current.preparation.current_step) return false;
   if (next.draft.lock_version < current.draft.lock_version) return false;
-  if (next.draft.lock_version === current.draft.lock_version && current.draft.base_revision_id !== null && next.draft.base_revision_id !== current.draft.base_revision_id) return false;
+  if (next.draft.lock_version === current.draft.lock_version && next.draft.base_revision_id !== current.draft.base_revision_id) return false;
   if (current.selected_revision !== null && next.selected_revision !== current.selected_revision) return false;
   if (next.change_summary.reviewed_fact_count < current.change_summary.reviewed_fact_count) return false;
   if (!versionsAreMonotonic(current.change_summary.artifact_versions, next.change_summary.artifact_versions)) return false;
-  const currentArtifactVersions = Object.fromEntries(current.artifacts.map((artifact) => [artifact.kind, artifact.version]));
-  const nextArtifactVersions = Object.fromEntries(next.artifacts.map((artifact) => [artifact.kind, artifact.version]));
-  if (!versionsAreMonotonic(currentArtifactVersions, nextArtifactVersions)) return false;
+  if (!artifactHeadsAreMonotonic(current, next)) return false;
   return current.modules.every((module) => {
     const candidate = next.modules.find((item) => item.key === module.key);
     if (!candidate) return false;
-    if (recovery) return true;
+    if (recovery && module.state === "blocked" && candidate.state === "preparing") return true;
+    if (evidenceAdvanced && EVIDENCE_DOWNSTREAM_MODULES.has(module.key) && candidate.state === "preparing") return true;
     return MODULE_RANK[candidate.state] >= MODULE_RANK[module.state] && VALUATION_RANK[candidate.valuation_state] >= VALUATION_RANK[module.valuation_state];
   });
 }

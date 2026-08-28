@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { investmentResearchApi, type CompanyResearchWorkspace, type ProductProject } from "../../data/investmentResearchApi";
+import { COMPANY_RESEARCH_MODULE_ARTIFACTS, investmentResearchApi, type CompanyResearchWorkspace, type ProductProject } from "../../data/investmentResearchApi";
 import { COMPANY_RESEARCH_MODULES, answerabilityView, artifactByKind, type CompanyResearchModuleKey, numericObservationView, preparationIsActive, workspaceSnapshotIsMonotonic } from "./companyResearchView";
 
 type WorkspaceArtifact = CompanyResearchWorkspace["artifacts"][number];
@@ -25,22 +25,29 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-function factWithoutDecision(fact: EvidenceFact): Omit<EvidenceFact, "review_decision"> {
-  const { review_decision: _decision, ...rest } = fact as EvidenceFact & { review_decision?: ReviewDecision };
-  return rest;
+function jsonValueIsEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length
+      && left.every((item, index) => jsonValueIsEqual(item, right[index]));
+  }
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
+  const leftRecord = left as Record<string, unknown>; const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord).sort(); const rightKeys = Object.keys(rightRecord).sort();
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key, index) => key === rightKeys[index] && jsonValueIsEqual(leftRecord[key], rightRecord[key]));
 }
 
 function reviewSuccessorIsExact(projectId: string, previous: EvidenceArtifact, successor: EvidenceArtifact, factKey: string, decision: ReviewDecision): boolean {
-  if (successor.project_id !== projectId || successor.version !== previous.version + 1) return false;
-  const reviewed = successor.payload.facts.find((item) => item.fact_key === factKey);
-  if (!reviewed || !("review_decision" in reviewed) || reviewed.review_decision !== decision) return false;
   const submitted = previous.payload.facts.find((item) => item.fact_key === factKey);
-  if (!submitted || JSON.stringify(factWithoutDecision(reviewed)) !== JSON.stringify(factWithoutDecision(submitted))) return false;
-  return previous.payload.facts.every((currentFact) => {
-    if (currentFact.fact_key === factKey) return true;
-    const nextFact = successor.payload.facts.find((item) => item.fact_key === currentFact.fact_key);
-    return nextFact !== undefined && JSON.stringify(nextFact) === JSON.stringify(currentFact);
-  });
+  if (!submitted || "review_decision" in submitted || successor.project_id !== projectId || successor.version !== previous.version + 1
+    || successor.schema_version !== previous.schema_version || successor.kind !== previous.kind
+    || !jsonValueIsEqual(successor.source_refs, previous.source_refs)) return false;
+  const expectedPayload = {
+    ...previous.payload,
+    facts: previous.payload.facts.map((fact) => fact.fact_key === factKey ? { ...fact, review_decision: decision } : fact),
+  };
+  return jsonValueIsEqual(successor.payload, expectedPayload);
 }
 
 function workspaceCutoff(workspace: CompanyResearchWorkspace): string | null {
@@ -88,6 +95,7 @@ function OverviewPanel({ workspace }: { workspace: CompanyResearchWorkspace }) {
     {answerability.status === "preparing" ? <p>正式研究备忘录尚未建立；当前不推断可回答性。</p> : answerability.status === "not_answerable" ? <p>当前正式证据不足，不形成投资方向、置信度、目标价或预期回报。</p> : answerability.status === "partially_answerable" ? <p>当前判断为暂定结论，必须先解除下列阻塞项。</p> : hasRanges ? <p>价值与回报范围已建立；仍需持续核验最强反证。</p> : <p>备忘录标记为可回答，但价值与回报范围未提供或不一致。</p>}
     {answerability.blockers.length > 0 ? <section><h3>阻塞项</h3><ul>{answerability.blockers.map((item) => <li key={item}>{item}</li>)}</ul></section> : null}
     {answerability.status === "partially_answerable" && answerability.blockers.length === 0 ? <p>未提供阻塞项。</p> : null}
+    {answerability.status === "preparing" && judgment ? <section><h3>已建立的判断上下文</h3>{judgment.payload.strongest_counterevidence.length > 0 ? <SourceRefList refs={judgment.payload.strongest_counterevidence} /> : <p>最强反证未提供。</p>}{judgment.payload.next_verification_events.length > 0 ? <ul>{judgment.payload.next_verification_events.map((item) => <li key={item}>{item}</li>)}</ul> : <p>下一验证事件未提供。</p>}</section> : null}
     {answerability.status === "answerable" && valuation && valuation.payload.security_value_ranges.length > 0 ? <section><h3>价值与回报范围</h3><div className="ir-numeric-grid">{valuation.payload.security_value_ranges.flatMap((range) => [<NumericCard artifact={valuation} key={`${range.security_external_key}-value-min`} label={`${range.security_external_key} 价值下限`} observation={range.usd_per_share.minimum} cutoff={cutoff} />, <NumericCard artifact={valuation} key={`${range.security_external_key}-value-max`} label={`${range.security_external_key} 价值上限`} observation={range.usd_per_share.maximum} cutoff={cutoff} />, <NumericCard artifact={valuation} key={`${range.security_external_key}-return-min`} label={`${range.security_external_key} 回报下限`} observation={range.cny_return.minimum} cutoff={cutoff} />, <NumericCard artifact={valuation} key={`${range.security_external_key}-return-max`} label={`${range.security_external_key} 回报上限`} observation={range.cny_return.maximum} cutoff={cutoff} />])}</div></section> : answerability.status === "answerable" ? <p>价值与回报范围未提供或不一致。</p> : null}
     {answerability.status === "answerable" ? <section><h3>最强反证与下一验证</h3>{judgment && judgment.payload.strongest_counterevidence.length > 0 ? <SourceRefList refs={judgment.payload.strongest_counterevidence} /> : <p>最强反证未提供。</p>}{judgment && judgment.payload.next_verification_events.length > 0 ? <ul>{judgment.payload.next_verification_events.map((item) => <li key={item}>{item}</li>)}</ul> : <p>下一验证事件未提供。</p>}</section> : null}
   </div>;
@@ -156,12 +164,7 @@ function ModulePanel({ activeModule, moduleState, valuationState, workspace, rev
   const canRender = moduleState === "ready" || (activeModule === "evidence_and_gaps" && moduleState === "needs_review");
   if (!canRender) return activeModule === "overview" ? <div className="ir-answerability"><strong>判断尚在准备</strong><EmptyModule message={moduleUnavailableCopy(label, moduleState)} /></div> : <EmptyModule message={moduleUnavailableCopy(label, moduleState)} />;
   if (activeModule === "industry_competition_regulation") return <IndustryPanel state={moduleState} />;
-  const requiredKind: Partial<Record<CompanyResearchModuleKey, WorkspaceArtifact["kind"]>> = {
-    overview: "memo", business_map: "business_map", operating_drivers: "driver_map", evidence_and_gaps: "evidence_index",
-    financials_cash_flow_capital_allocation: "financial_bridge", scenarios_valuation_implied_expectations: "scenario_set",
-    counterevidence_risks_next_checks: "judgment_context",
-  };
-  const required = requiredKind[activeModule];
+  const required = COMPANY_RESEARCH_MODULE_ARTIFACTS[activeModule]?.[0] as WorkspaceArtifact["kind"] | undefined;
   if (required && artifactByKind(workspace, required) === null) {
     return activeModule === "overview" ? <div className="ir-answerability"><strong>判断尚在准备</strong><EmptyModule message={moduleUnavailableCopy(label, moduleState)} /></div> : <EmptyModule message={moduleUnavailableCopy(label, moduleState)} />;
   }

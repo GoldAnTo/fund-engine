@@ -1086,7 +1086,7 @@ function isCompanyResearchArtifact(value: unknown): boolean {
   return value.kind === "memo" && isMemoPayload(value.payload);
 }
 
-const COMPANY_RESEARCH_MODULE_ARTIFACTS: Record<string, readonly string[]> = {
+export const COMPANY_RESEARCH_MODULE_ARTIFACTS: Readonly<Record<string, readonly string[]>> = {
   overview: ["judgment_context"],
   business_map: ["business_map"],
   operating_drivers: ["driver_map"],

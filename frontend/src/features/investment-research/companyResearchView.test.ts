@@ -166,4 +166,68 @@ describe("company research view model", () => {
     predecessor.artifacts[0] = current.artifacts[0];
     expect(workspaceSnapshotIsMonotonic(successor, predecessor)).toBe(false);
   });
+
+  it("does not let a newer evidence head hide independent workspace regressions", () => {
+    const current = {
+      project_id: "project-1",
+      preparation: { id: "preparation-1", status: "awaiting_evidence_review", current_step: "research_gaps", progress: 25 },
+      artifacts: [
+        { kind: "evidence_index", id: "evidence-1", content_hash: "hash-1", version: 1 },
+        { kind: "research_gaps", id: "gaps-2", content_hash: "gaps-hash-2", version: 2 },
+      ],
+      modules: [{ key: "evidence_and_gaps", state: "needs_review", valuation_state: "not_applicable" }],
+      draft: { id: "draft-1", lock_version: 4, base_revision_id: null }, selected_revision: null,
+      change_summary: { reviewed_fact_count: 1, artifact_versions: { evidence_index: 1, research_gaps: 2 } },
+    } as unknown as CompanyResearchWorkspace;
+    const successor = () => {
+      const next = structuredClone(current);
+      Object.assign(next.artifacts[0], { id: "evidence-2", content_hash: "hash-2", version: 2 });
+      next.change_summary.artifact_versions.evidence_index = 2;
+      next.change_summary.reviewed_fact_count = 2;
+      next.draft.lock_version = 5;
+      return next;
+    };
+    const regressions = [
+      ["preparation progress", (next: CompanyResearchWorkspace) => { next.preparation.progress = 24; }],
+      ["preparation identity", (next: CompanyResearchWorkspace) => { next.preparation.id = "preparation-2"; }],
+      ["draft identity", (next: CompanyResearchWorkspace) => { next.draft.id = "draft-2"; }],
+      ["draft version", (next: CompanyResearchWorkspace) => { next.draft.lock_version = 3; }],
+      ["draft base without lock advance", (next: CompanyResearchWorkspace) => { next.draft.lock_version = 4; next.draft.base_revision_id = "revision-2"; }],
+      ["review count", (next: CompanyResearchWorkspace) => { next.change_summary.reviewed_fact_count = 0; }],
+      ["unrelated summary artifact", (next: CompanyResearchWorkspace) => { next.change_summary.artifact_versions.research_gaps = 1; }],
+      ["unrelated artifact head", (next: CompanyResearchWorkspace) => { next.artifacts[1].version = 1; }],
+    ] as const;
+    for (const [_label, regress] of regressions) {
+      const next = successor();
+      regress(next);
+      expect(workspaceSnapshotIsMonotonic(current, next)).toBe(false);
+    }
+    const beforeEvidence = structuredClone(current);
+    beforeEvidence.artifacts = beforeEvidence.artifacts.filter((item) => item.kind !== "evidence_index");
+    delete beforeEvidence.change_summary.artifact_versions.evidence_index;
+    const firstEvidenceWithStaleDraft = successor();
+    firstEvidenceWithStaleDraft.draft.lock_version = 3;
+    expect(workspaceSnapshotIsMonotonic(beforeEvidence, firstEvidenceWithStaleDraft)).toBe(false);
+  });
+
+  it.each([
+    ["evidence retry", "evidence_index", "queued", 0],
+    ["model retry", "model_bundle", "building_model", 25],
+  ] as const)("accepts the documented %s progress reset without relaxing other invariants", (_label, failedStep, status, progress) => {
+    const failed = {
+      project_id: "project-1",
+      preparation: { id: "preparation-1", status: "recoverable_failure", current_step: failedStep, progress: 80 },
+      artifacts: [{ kind: "research_gaps", id: "gaps-2", content_hash: "gaps-2", version: 2 }],
+      modules: [{ key: "overview", state: "blocked", valuation_state: "not_applicable" }],
+      draft: { id: "draft-1", lock_version: 4, base_revision_id: null }, selected_revision: null,
+      change_summary: { reviewed_fact_count: 1, artifact_versions: { research_gaps: 2 } },
+    } as unknown as CompanyResearchWorkspace;
+    const resumed = structuredClone(failed);
+    Object.assign(resumed.preparation, { status, current_step: failedStep, progress });
+    resumed.modules[0].state = "preparing";
+
+    expect(workspaceSnapshotIsMonotonic(failed, resumed, { allowRecovery: true })).toBe(true);
+    resumed.draft.id = "draft-2";
+    expect(workspaceSnapshotIsMonotonic(failed, resumed, { allowRecovery: true })).toBe(false);
+  });
 });
