@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -474,6 +474,9 @@ def _successor_rows(
         "version": 3,
         "supersedes_id": parent_id,
     }
+    if table_name == "uw_security_rights_versions":
+        first_successor["effective_from"] = now + timedelta(days=1)
+        duplicate_successor["effective_from"] = now + timedelta(days=2)
     return parent, first_successor, duplicate_successor
 
 
@@ -545,7 +548,7 @@ def test_versioned_product_family_rejects_a_second_successor(
         Base.metadata.drop_all(engine, tables=tables)
 
 
-def test_product_natural_identities_and_revision_retry_identity_are_unique() -> None:
+def test_product_business_identities_and_revision_retry_identity_are_unique() -> None:
     assert ("project_id", "security_id") in _unique_columns(
         "uw_research_project_securities"
     )
@@ -554,30 +557,38 @@ def test_product_natural_identities_and_revision_retry_identity_are_unique() -> 
         "uw_revision_manifests"
     )
     assert ("boundary_id",) in _unique_columns("uw_revision_manifests")
-    assert (
-        "security_identity_id",
-        "price_type",
-        "adjustment_basis",
-        "market_at",
-        "source_id",
-        "raw_hash",
-    ) in _unique_columns("uw_price_snapshots")
-    assert (
-        "base_currency",
-        "quote_currency",
-        "quote_direction",
-        "market_at",
-        "source_id",
-        "raw_hash",
-    ) in _unique_columns("uw_fx_snapshots")
-    assert (
-        "company_id",
-        "report_period_start",
-        "report_period_end",
-        "market_at",
-        "source_id",
-        "raw_hash",
-    ) in _unique_columns("uw_capital_structure_snapshots")
+    business_indexes = {
+        "uw_price_snapshots": (
+            "uq_uw_price_snapshot_business_time",
+            ("security_identity_id", "price_type", "adjustment_basis", "market_at"),
+        ),
+        "uw_fx_snapshots": (
+            "uq_uw_fx_snapshot_business_time",
+            ("base_currency", "quote_currency", "quote_direction", "market_at"),
+        ),
+        "uw_capital_structure_snapshots": (
+            "uq_uw_capital_structure_business_time",
+            ("company_id", "report_period_start", "report_period_end", "market_at"),
+        ),
+        "uw_security_rights_versions": (
+            "uq_uw_security_rights_business_time",
+            ("security_identity_id", "effective_from"),
+        ),
+    }
+    for table_name, (index_name, expected_columns) in business_indexes.items():
+        table = Base.metadata.tables[table_name]
+        index = next(item for item in table.indexes if item.name == index_name)
+
+        assert index.unique
+        assert tuple(index.columns.keys()) == expected_columns
+        assert str(index.dialect_options["sqlite"]["where"]) == (
+            "legacy_business_conflict = 0"
+        )
+        assert str(index.dialect_options["postgresql"]["where"]) == (
+            "legacy_business_conflict = false"
+        )
+        assert not table.c.legacy_business_conflict.nullable
+        assert str(table.c.legacy_business_conflict.server_default.arg) == "false"
 
 
 @pytest.mark.parametrize(
