@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import re
 from threading import Barrier
+from uuid import uuid4
 
 import pytest
 from app.models.ledger import Base, ConflictError, ValidationError
@@ -35,6 +36,7 @@ from app.underwriting.services.company_research_boundary import (
 from app.underwriting.services.product_foundation_fixture import (
     ProductFoundationFixtureService,
 )
+from app.underwriting.services.workspace_draft import WorkspaceDraftService
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
@@ -231,6 +233,99 @@ def test_initialize_replays_the_original_foundation_for_the_same_key(session) ->
     assert session.scalar(select(func.count()).select_from(UnderwritingHistoricalBasis)) == 1
 
 
+def test_initialize_replay_fails_closed_when_the_draft_basis_is_cleared(
+    session,
+) -> None:
+    initializer, alphabet = _initializer(session)
+    preview = initializer.preview(company_id=alphabet.id, cutoff_at=NOW)
+    result = initializer.initialize(
+        preview_hash=preview.input_hash,
+        company_id=alphabet.id,
+        cutoff_at=NOW,
+        idempotency_key="alphabet-cleared-basis",
+    )
+    initializer._drafts.save(
+        result.project.id,
+        expected_lock_version=result.draft.lock_version,
+        patch={"historical_basis_id": None},
+    )
+
+    with pytest.raises(
+        ConflictError, match="company research initialization foundation is incomplete"
+    ):
+        initializer.initialize(
+            preview_hash=preview.input_hash,
+            company_id=alphabet.id,
+            cutoff_at=NOW,
+            idempotency_key="alphabet-cleared-basis",
+        )
+
+
+def test_initialize_replay_fails_closed_when_the_draft_basis_is_unknown(session) -> None:
+    initializer, alphabet = _initializer(session)
+    preview = initializer.preview(company_id=alphabet.id, cutoff_at=NOW)
+    result = initializer.initialize(
+        preview_hash=preview.input_hash,
+        company_id=alphabet.id,
+        cutoff_at=NOW,
+        idempotency_key="alphabet-unknown-basis",
+    )
+    initializer._drafts.save(
+        result.project.id,
+        expected_lock_version=result.draft.lock_version,
+        patch={"historical_basis_id": uuid4()},
+    )
+
+    with pytest.raises(
+        ConflictError, match="company research initialization foundation is incomplete"
+    ):
+        initializer.initialize(
+            preview_hash=preview.input_hash,
+            company_id=alphabet.id,
+            cutoff_at=NOW,
+            idempotency_key="alphabet-unknown-basis",
+        )
+
+
+def test_initialize_replay_fails_closed_when_draft_basis_is_not_a_product_basis(
+    session,
+) -> None:
+    initializer, alphabet = _initializer(session)
+    preview = initializer.preview(company_id=alphabet.id, cutoff_at=NOW)
+    result = initializer.initialize(
+        preview_hash=preview.input_hash,
+        company_id=alphabet.id,
+        cutoff_at=NOW,
+        idempotency_key="alphabet-legacy-basis",
+    )
+    legacy_basis = UnderwritingHistoricalBasis(
+        cutoff=GOVERNED_CUTOFF,
+        source_manifest_hash="0" * 64,
+        definition_bundle_hash=None,
+        parser_bundle_hash=None,
+        boundary_schema_version=None,
+        content_hash=None,
+        created_at=NOW,
+    )
+    session.add(legacy_basis)
+    session.flush([legacy_basis])
+    initializer._drafts.save(
+        result.project.id,
+        expected_lock_version=result.draft.lock_version,
+        patch={"historical_basis_id": legacy_basis.id},
+    )
+
+    with pytest.raises(
+        ConflictError, match="company research initialization foundation is incomplete"
+    ):
+        initializer.initialize(
+            preview_hash=preview.input_hash,
+            company_id=alphabet.id,
+            cutoff_at=NOW,
+            idempotency_key="alphabet-legacy-basis",
+        )
+
+
 def test_initialize_recovers_a_lost_response_in_a_fresh_session(tmp_path) -> None:
     engine, sessions = _seeded_session_factory(tmp_path)
     try:
@@ -327,6 +422,26 @@ def test_concurrent_different_keys_converge_or_conflict_without_raw_sqlite_error
                 )
                 == 1
             )
+            assert (
+                observer.scalar(
+                    select(func.count()).select_from(UnderwritingHistoricalBasis)
+                )
+                == 1
+            )
+            assert (
+                observer.scalar(
+                    select(func.count()).select_from(UnderwritingWorkspaceDraft)
+                )
+                == 1
+            )
+            project = observer.scalar(select(UnderwritingResearchProject))
+            basis = observer.scalar(select(UnderwritingHistoricalBasis))
+            assert project is not None
+            assert basis is not None
+            draft = WorkspaceDraftService(observer, now=lambda: NOW).read(project.id)
+            assert draft is not None
+            assert draft.content.historical_basis_id == basis.id
+            assert observer.get(UnderwritingHistoricalBasis, draft.content.historical_basis_id) == basis
     finally:
         engine.dispose()
 
