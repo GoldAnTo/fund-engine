@@ -37,6 +37,9 @@ from app.underwriting.persistence.models import (
     UnderwritingResearchObject,
     UnderwritingResearchVersion,
 )
+from app.underwriting.persistence.company_research_models import (
+    CompanyResearchPreparation,
+)
 from app.underwriting.persistence.product_models import (
     UnderwritingResearchAssessmentVersion,
     UnderwritingPriceSnapshot,
@@ -484,6 +487,73 @@ def test_foundation_golden_path_publishes_only_insufficient_evidence(session) ->
     assert summary.direction is None
     assert summary.confidence is None
     assert summary.publication_status is PublicationStatus.USER_FROZEN
+
+
+def _mark_as_company_research(session, project_id: UUID) -> None:
+    session.add(
+        CompanyResearchPreparation(
+            project_id=project_id,
+            idempotency_key=f"company-publication-guard:{project_id}",
+            request_hash=A64,
+            strategy_version="alphabet.machine-candidate.v1",
+            status="queued",
+            current_step="evidence_index",
+            progress=0,
+            attempt=1,
+            next_attempt_at=None,
+            last_error_code=None,
+            job_id=None,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    session.flush()
+
+
+def test_generic_publication_rejects_company_research_projects(session) -> None:
+    graph = _ready_graph(session, suffix="company-publication-guard")
+    _mark_as_company_research(session, graph["project"].id)
+    publisher = RevisionPublisher(session, now=lambda: NOW)
+
+    with pytest.raises(
+        ValidationError,
+        match="generic publication is not available for company research projects",
+    ):
+        publisher.preview(graph["project"].id, graph["draft"].lock_version)
+    with pytest.raises(
+        ValidationError,
+        match="generic publication is not available for company research projects",
+    ):
+        publisher.publish(
+            graph["project"].id,
+            graph["draft"].lock_version,
+            idempotency_key="company-publication-guard",
+        )
+
+
+def test_generic_revision_replay_rejects_company_research_projects(session) -> None:
+    graph = _ready_graph(session, suffix="company-replay-guard")
+    revision = RevisionPublisher(session, now=lambda: NOW).publish(
+        graph["project"].id,
+        graph["draft"].lock_version,
+        idempotency_key="company-replay-before-guard",
+    )
+    _mark_as_company_research(session, graph["project"].id)
+
+    with pytest.raises(
+        ValidationError,
+        match="generic publication is not available for company research projects",
+    ):
+        RevisionPublisher(session, now=lambda: NOW).publish(
+            graph["project"].id,
+            graph["draft"].lock_version,
+            idempotency_key="company-replay-before-guard",
+        )
+    with pytest.raises(
+        ValidationError,
+        match="generic revision replay is not available for company research projects",
+    ):
+        ResearchRevisionDiffService(session).revision_summary(revision.id)
 
 
 def test_publisher_validates_the_historical_basis_with_the_canonical_helper(
@@ -1253,9 +1323,10 @@ def test_public_product_read_walks_1200_parents_once_without_recursion(
     nodes = []
     for index in range(1200):
         nodes.append(
-            SimpleNamespace(
-                id=UUID(int=index + 1),
-                supersedes_id=nodes[-1].id if nodes else None,
+                SimpleNamespace(
+                    id=UUID(int=index + 1),
+                    project_id=UUID(int=9999),
+                    supersedes_id=nodes[-1].id if nodes else None,
                 manifest_schema=PRODUCT_MANIFEST_SCHEMA,
             )
         )
@@ -1294,11 +1365,13 @@ def test_public_product_read_detects_parent_cycle_before_replay(
 ) -> None:
     first = SimpleNamespace(
         id=UUID(int=1),
+        project_id=UUID(int=9999),
         supersedes_id=UUID(int=2),
         manifest_schema=PRODUCT_MANIFEST_SCHEMA,
     )
     second = SimpleNamespace(
         id=UUID(int=2),
+        project_id=UUID(int=9999),
         supersedes_id=first.id,
         manifest_schema=PRODUCT_MANIFEST_SCHEMA,
     )

@@ -25,6 +25,9 @@ from app.underwriting.domain.product_contracts import (
 )
 from app.underwriting.domain.types import AnswerabilityState, ResearchObjectKind
 from app.underwriting.persistence.product_repository import ProductRepository
+from app.underwriting.persistence.company_research_repository import (
+    CompanyResearchRepository,
+)
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.services.kernel import canonical_hash
 from app.underwriting.services.market_snapshots import (
@@ -396,6 +399,12 @@ class RevisionPublisher:
         project_id = _uuid(project_id, "project_id")
         expected_lock_version = self._lock_version(expected_lock_version)
         with self._session.no_autoflush:
+            if CompanyResearchRepository(self._session).preparation_for_project(
+                project_id
+            ) is not None:
+                raise ValidationError(
+                    "generic publication is not available for company research projects"
+                )
             record = self.repository.project(project_id)
             if record is None:
                 raise ValidationError("research project does not exist")
@@ -604,6 +613,12 @@ class RevisionPublisher:
         key = self._idempotency_key(idempotency_key)
         with self._session.no_autoflush:
             self.repository.lock_project(project_id)
+            if CompanyResearchRepository(self._session).preparation_for_project(
+                project_id
+            ) is not None:
+                raise ValidationError(
+                    "generic publication is not available for company research projects"
+                )
             if existing := self._verified_existing(project_id, key):
                 return existing
         try:

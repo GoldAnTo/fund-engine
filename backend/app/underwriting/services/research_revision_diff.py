@@ -53,6 +53,9 @@ from app.underwriting.persistence.models import (
     UnderwritingResearchObject,
     UnderwritingResearchVersion,
 )
+from app.underwriting.persistence.company_research_repository import (
+    CompanyResearchRepository,
+)
 from app.underwriting.persistence.product_models import (
     UnderwritingCapitalStructureSnapshot,
     UnderwritingFXSnapshot,
@@ -1925,6 +1928,12 @@ class ResearchRevisionDiffService:
         """Describe only parents explicitly frozen into ``revision_id``."""
         with self._session.no_autoflush:
             revision = self._revision(revision_id)
+            if CompanyResearchRepository(self._session).preparation_for_project(
+                revision.project_id
+            ) is not None:
+                raise ValidationError(
+                    "generic revision replay is not available for company research projects"
+                )
             if revision.manifest_schema is not None:
                 if revision.manifest_schema != PRODUCT_MANIFEST_SCHEMA:
                     raise ValidationError("research revision manifest schema is unsupported")
