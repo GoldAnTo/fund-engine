@@ -659,6 +659,242 @@ def _rewrite_head_decision_as_malformed(session, head_id: UUID) -> None:
     session.expire_all()
 
 
+def _rewrite_evidence_fact_field(
+    session, head_id: UUID, *, field: str, value: object
+) -> None:
+    repository = CompanyResearchRepository(session)
+    head = session.get(CompanyResearchArtifactVersion, head_id)
+    assert head is not None and head.kind == "evidence_index"
+    payload = deepcopy(head.payload)
+    payload["facts"][0][field] = value
+    content_hash = repository.artifact_content_hash(
+        project_id=head.project_id,
+        kind=head.kind,
+        version=head.version,
+        supersedes_id=head.supersedes_id,
+        parent_content_hash=head.parent_content_hash,
+        input_hash=head.input_hash,
+        payload=payload,
+        source_refs=head.source_refs,
+    )
+    statement = text(
+        "UPDATE uw_company_research_artifact_versions "
+        "SET payload = :payload, content_hash = :content_hash WHERE id = :id"
+    ).bindparams(
+        bindparam(
+            "payload", type_=CompanyResearchArtifactVersion.__table__.c.payload.type
+        ),
+        bindparam(
+            "content_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.content_hash.type,
+        ),
+        bindparam("id", type_=CompanyResearchArtifactVersion.__table__.c.id.type),
+    )
+    assert session.execute(
+        statement,
+        {"payload": payload, "content_hash": content_hash, "id": head.id},
+    ).rowcount == 1
+    session.expire_all()
+
+
+def _rewrite_complete_evidence_chain_company_key(session, head_id: UUID) -> None:
+    repository = CompanyResearchRepository(session)
+    chain = repository.artifact_chain(head_id)
+    rewritten_hashes: dict[UUID, str] = {}
+    statement = text(
+        "UPDATE uw_company_research_artifact_versions SET "
+        "parent_content_hash = :parent_content_hash, payload = :payload, "
+        "input_hash = :input_hash, content_hash = :content_hash WHERE id = :id"
+    ).bindparams(
+        bindparam(
+            "parent_content_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.parent_content_hash.type,
+        ),
+        bindparam(
+            "payload", type_=CompanyResearchArtifactVersion.__table__.c.payload.type
+        ),
+        bindparam(
+            "input_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.input_hash.type,
+        ),
+        bindparam(
+            "content_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.content_hash.type,
+        ),
+        bindparam("id", type_=CompanyResearchArtifactVersion.__table__.c.id.type),
+    )
+    for index, row in enumerate(chain):
+        payload = deepcopy(row.payload)
+        payload["company_external_key"] = "US:SUBSTITUTED:COMPANY"
+        for fact in payload["facts"]:
+            fact["company_external_key"] = "US:SUBSTITUTED:COMPANY"
+        parent_content_hash = (
+            rewritten_hashes[chain[index - 1].id] if index else None
+        )
+        input_hash = row.input_hash
+        if index:
+            parent = chain[index - 1]
+            changes = [
+                after
+                for before, after in zip(
+                    parent.payload["facts"], row.payload["facts"], strict=True
+                )
+                if before != after
+            ]
+            assert len(changes) == 1
+            input_hash = canonical_hash(
+                {
+                    "parent": parent_content_hash,
+                    "fact_key": changes[0]["fact_key"],
+                    "decision": changes[0]["review_decision"],
+                }
+            )
+        content_hash = repository.artifact_content_hash(
+            project_id=row.project_id,
+            kind=row.kind,
+            version=row.version,
+            supersedes_id=row.supersedes_id,
+            parent_content_hash=parent_content_hash,
+            input_hash=input_hash,
+            payload=payload,
+            source_refs=row.source_refs,
+        )
+        assert session.execute(
+            statement,
+            {
+                "parent_content_hash": parent_content_hash,
+                "payload": payload,
+                "input_hash": input_hash,
+                "content_hash": content_hash,
+                "id": row.id,
+            },
+        ).rowcount == 1
+        rewritten_hashes[row.id] = content_hash
+    session.expire_all()
+
+
+def test_workspace_returns_422_for_hash_consistent_malformed_evidence_timestamp(
+    api_client, session
+) -> None:
+    company_id = _alphabet_id(session)
+    preview = _preview(api_client, company_id)
+    initialized = _initialize(api_client, company_id, preview["preview_hash"])
+    assert initialized.status_code == 201, initialized.text
+    project_id = UUID(initialized.json()["project_id"])
+    worker = CompanyResearchPreparationWorker(session, now=lambda: datetime.now(UTC))
+    claim = worker.claim_next()
+    assert claim is not None
+    assert worker.run_claim(claim) == "awaiting_evidence_review"
+    evidence = CompanyResearchRepository(session).current_artifact(
+        project_id, "evidence_index"
+    )
+    assert evidence is not None
+    _rewrite_evidence_fact_field(
+        session, evidence.id, field="published_at", value={}
+    )
+    session.commit()
+
+    response = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["message"] == (
+        "evidence fact published_at must be canonical non-empty text"
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("value", []),
+        ("value", {}),
+        ("currency", ""),
+        ("period_start", "not-a-date"),
+        ("value_kind", "unsupported"),
+        ("published_at", "2030-01-01T00:00:00+00:00"),
+    ),
+)
+def test_workspace_returns_422_for_hash_consistent_malformed_rejected_fact(
+    api_client, session, field: str, value: object
+) -> None:
+    company_id = _alphabet_id(session)
+    preview = _preview(api_client, company_id)
+    initialized = _initialize(api_client, company_id, preview["preview_hash"])
+    assert initialized.status_code == 201, initialized.text
+    project_id = UUID(initialized.json()["project_id"])
+    worker = CompanyResearchPreparationWorker(session, now=lambda: datetime.now(UTC))
+    claim = worker.claim_next()
+    assert claim is not None
+    assert worker.run_claim(claim) == "awaiting_evidence_review"
+    workspace = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    evidence = next(
+        item
+        for item in workspace.json()["artifacts"]
+        if item["kind"] == "evidence_index"
+    )
+    reviewed = api_client.post(
+        f"{BASE}/projects/{project_id}/evidence-reviews",
+        json={
+            "evidence_artifact_id": evidence["id"],
+            "fact_key": evidence["payload"]["facts"][0]["fact_key"],
+            "decision": "rejected",
+            "expected_head_id": evidence["id"],
+        },
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    reviewed_id = UUID(reviewed.json()["evidence_artifact"]["id"])
+    _rewrite_evidence_fact_field(
+        session, reviewed_id, field=field, value=value
+    )
+    session.commit()
+
+    response = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["message"]
+
+
+def test_workspace_rejects_a_rehashed_substituted_evidence_review_chain(
+    api_client, session
+) -> None:
+    company_id = _alphabet_id(session)
+    preview = _preview(api_client, company_id)
+    initialized = _initialize(api_client, company_id, preview["preview_hash"])
+    assert initialized.status_code == 201, initialized.text
+    project_id = UUID(initialized.json()["project_id"])
+    worker = CompanyResearchPreparationWorker(session, now=lambda: datetime.now(UTC))
+    claim = worker.claim_next()
+    assert claim is not None
+    assert worker.run_claim(claim) == "awaiting_evidence_review"
+    workspace = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    evidence = next(
+        item
+        for item in workspace.json()["artifacts"]
+        if item["kind"] == "evidence_index"
+    )
+    current = evidence
+    for fact in evidence["payload"]["facts"][:2]:
+        reviewed = api_client.post(
+            f"{BASE}/projects/{project_id}/evidence-reviews",
+            json={
+                "evidence_artifact_id": current["id"],
+                "fact_key": fact["fact_key"],
+                "decision": "confirmed",
+                "expected_head_id": current["id"],
+            },
+        )
+        assert reviewed.status_code == 200, reviewed.text
+        current = reviewed.json()["evidence_artifact"]
+    _rewrite_complete_evidence_chain_company_key(session, UUID(current["id"]))
+    session.commit()
+
+    response = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["message"] == (
+        "company research evidence lineage is invalid"
+    )
+
+
 def test_public_pipeline_exposes_every_current_artifact_once_and_references_them_from_modules(
     api_client, session
 ) -> None:

@@ -34,6 +34,13 @@ from app.underwriting.domain.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
 )
 from app.underwriting.services.workspace_draft import WorkspaceDraftService
+from app.underwriting.services.company_research_model_builder import (
+    validate_company_research_evidence_payload_for_read,
+)
+from app.underwriting.services.company_research_sources import (
+    CompanyResearchProviderInput,
+    CompanyResearchSourceCompiler,
+)
 
 ModuleState = Literal["not_started", "preparing", "needs_review", "ready", "blocked"]
 _MAX_ARTIFACT_HISTORY = 2048
@@ -186,6 +193,7 @@ class CompanyResearchWorkbench:
                 {key: value for key, value in row.payload.items() if key != "_lineage"},
             )
         if row.kind == "evidence_index":
+            validate_company_research_evidence_payload_for_read(row.payload)
             if set(row.payload) != {
                 "fixture_content_hash",
                 "cutoff",
@@ -282,6 +290,95 @@ class CompanyResearchWorkbench:
             row.payload,
             tuple(row.source_refs),
         )
+
+    @staticmethod
+    def _validate_evidence_review_chain(
+        chain: tuple[CompanyResearchArtifactVersion, ...],
+        *,
+        preparation: CompanyResearchPreparation,
+        company_external_key: str,
+    ) -> None:
+        if not chain:
+            raise ValidationError("company research evidence lineage is invalid")
+        for row in chain:
+            validate_company_research_evidence_payload_for_read(row.payload)
+        expected = CompanyResearchSourceCompiler().compile_evidence_index(
+            CompanyResearchProviderInput(
+                preparation_id=preparation.id,
+                project_id=preparation.project_id,
+                company_external_key=company_external_key,
+                request_hash=preparation.request_hash,
+                strategy_version=preparation.strategy_version,
+            )
+        )
+        root = chain[0]
+        if (
+            root.input_hash != expected.input_hash
+            or root.payload != expected.evidence_index_payload
+            or root.source_refs != list(expected.source_refs)
+        ):
+            raise ValidationError("company research evidence lineage is invalid")
+        root_facts = chain[0].payload.get("facts")
+        if not isinstance(root_facts, list) or any(
+            isinstance(fact, Mapping) and "review_decision" in fact
+            for fact in root_facts
+        ):
+            raise ValidationError("company research evidence lineage is invalid")
+        for parent, successor in zip(chain, chain[1:], strict=False):
+            if successor.source_refs != parent.source_refs:
+                raise ValidationError("company research evidence lineage is invalid")
+            before_facts = parent.payload.get("facts")
+            after_facts = successor.payload.get("facts")
+            if (
+                not isinstance(before_facts, list)
+                or not isinstance(after_facts, list)
+                or len(before_facts) != len(after_facts)
+            ):
+                raise ValidationError("company research evidence lineage is invalid")
+            changed: list[tuple[int, str, str, dict[str, object]]] = []
+            for index, (before, after) in enumerate(
+                zip(before_facts, after_facts, strict=True)
+            ):
+                if before == after:
+                    continue
+                if not isinstance(before, Mapping) or not isinstance(after, Mapping):
+                    raise ValidationError(
+                        "company research evidence lineage is invalid"
+                    )
+                decision = after.get("review_decision")
+                fact_key = after.get("fact_key")
+                expected = dict(before)
+                if (
+                    "review_decision" in before
+                    or not isinstance(decision, str)
+                    or decision not in {"confirmed", "rejected"}
+                    or not isinstance(fact_key, str)
+                    or not fact_key
+                ):
+                    raise ValidationError(
+                        "company research evidence lineage is invalid"
+                    )
+                expected["review_decision"] = decision
+                if dict(after) != expected:
+                    raise ValidationError(
+                        "company research evidence lineage is invalid"
+                    )
+                changed.append((index, fact_key, decision, expected))
+            if len(changed) != 1:
+                raise ValidationError("company research evidence lineage is invalid")
+            index, fact_key, decision, expected_fact = changed[0]
+            expected_payload = dict(parent.payload)
+            expected_facts = [dict(fact) for fact in before_facts]
+            expected_facts[index] = expected_fact
+            expected_payload["facts"] = expected_facts
+            if successor.payload != expected_payload or successor.input_hash != canonical_hash(
+                {
+                    "parent": parent.content_hash,
+                    "fact_key": fact_key,
+                    "decision": decision,
+                }
+            ):
+                raise ValidationError("company research evidence lineage is invalid")
 
     @staticmethod
     def _lineage_reference(row: CompanyResearchArtifactVersion) -> dict[str, str]:
@@ -622,6 +719,8 @@ class CompanyResearchWorkbench:
         *,
         expected_draft_id: UUID,
         expected_draft_lock_version: int,
+        preparation: CompanyResearchPreparation,
+        company_external_key: str,
     ) -> tuple[dict[str, WorkbenchArtifact], tuple[dict, ...]]:
         """Materialize all artifact families once; never query once per module."""
         rows = tuple(
@@ -649,6 +748,7 @@ class CompanyResearchWorkbench:
             current = row
             expected_version = row.version
             seen: set[UUID] = set()
+            chain = []
             while True:
                 if (
                     current.id in seen
@@ -660,6 +760,7 @@ class CompanyResearchWorkbench:
                         "company research artifact lineage is invalid"
                     )
                 seen.add(current.id)
+                chain.append(current)
                 if current.supersedes_id is None:
                     if current.version != 1 or current.parent_content_hash is not None:
                         raise ValidationError(
@@ -672,6 +773,12 @@ class CompanyResearchWorkbench:
                         "company research artifact lineage is invalid"
                     )
                 current, expected_version = parent, expected_version - 1
+            if row.kind == "evidence_index":
+                self._validate_evidence_review_chain(
+                    tuple(reversed(chain)),
+                    preparation=preparation,
+                    company_external_key=company_external_key,
+                )
             head_rows[row.kind] = row
         judgment_head = head_rows.get("judgment_context")
         if judgment_head is not None:
@@ -755,6 +862,8 @@ class CompanyResearchWorkbench:
             project_id,
             expected_draft_id=draft.id,
             expected_draft_lock_version=draft.lock_version,
+            preparation=preparation,
+            company_external_key=company_object.external_key,
         )
         modules = []
         for key, kinds in _MODULE_ARTIFACTS.items():

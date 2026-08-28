@@ -634,23 +634,28 @@ def _validate_evidence_payload(
         available_at = _parse_timestamp(
             fact.get("available_at"), "evidence fact available_at"
         )
-        _parse_timestamp(fact.get("published_at"), "evidence fact published_at")
+        published_at = _parse_timestamp(
+            fact.get("published_at"), "evidence fact published_at"
+        )
+        if published_at > available_at:
+            raise ValidationError(
+                "evidence fact published_at must not be after available_at"
+            )
         if available_at > cutoff_at:
             raise ValidationError("evidence fact is unavailable at model cutoff")
         review = fact.get("review_decision")
         if review not in {"confirmed", "rejected"}:
             raise ValidationError("evidence must be reviewed before model input")
-        if review == "confirmed":
-            _model_fact_decimal(fact)
-            if fact.get("value_kind") not in {
-                "reported",
-                "derived",
-                "management_guidance",
-            }:
-                raise ValidationError("model fact value_kind is unsupported")
-            _text(fact.get("currency"), "model fact currency")
-            _text(fact.get("unit"), "model fact unit")
-            _model_fact_period(fact)
+        _model_fact_decimal(fact)
+        if fact.get("value_kind") not in {
+            "reported",
+            "derived",
+            "management_guidance",
+        }:
+            raise ValidationError("model fact value_kind is unsupported")
+        _text(fact.get("currency"), "model fact currency")
+        _text(fact.get("unit"), "model fact unit")
+        _model_fact_period(fact)
         reviewed.append(fact)
     confirmed = tuple(
         fact for fact in reviewed if fact["review_decision"] == "confirmed"
@@ -669,6 +674,28 @@ def _validate_evidence_payload(
                 "model fact currency and unit must be consistent per metric"
             )
     return tuple(reviewed)
+
+
+def validate_company_research_evidence_payload_for_read(
+    payload_value: object,
+) -> None:
+    """Validate a durable source/review payload without requiring all reviews."""
+    payload = _mapping(payload_value, "evidence_payload")
+    cutoff = _parse_timestamp(payload.get("cutoff"), "evidence cutoff")
+    facts = payload.get("facts")
+    if not isinstance(facts, list):
+        raise ValidationError("evidence facts must be an array")
+    normalized = dict(payload)
+    normalized_facts: list[object] = []
+    for value in facts:
+        if not isinstance(value, Mapping):
+            normalized_facts.append(value)
+            continue
+        fact = dict(value)
+        fact.setdefault("review_decision", "confirmed")
+        normalized_facts.append(fact)
+    normalized["facts"] = normalized_facts
+    _validate_evidence_payload(normalized, cutoff)
 
 
 def _validate_gap_payload(
