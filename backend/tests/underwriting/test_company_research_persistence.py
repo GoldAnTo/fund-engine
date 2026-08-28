@@ -650,19 +650,34 @@ def test_complete_model_bundle_rejects_a_historical_basis_source_that_differs_fr
     repository, project, preparation, _job, _evidence, _gaps, bundle = (
         _repository_with_model_job(session)
     )
-    basis = _basis_for_workspace(session, project)
-    _tamper_row(
+    original = _basis_for_workspace(session, project)
+    alternate = ResearchProjectService(
+        session, now=lambda: NOW
+    ).create_historical_basis(
+        ProductHistoricalBasisInput(
+            cutoff_at=CompanyResearchRepository._persisted_utc(original.cutoff),
+            source_manifest_hash="7" * 64,
+            definition_bundle_hash=original.definition_bundle_hash,
+            parser_bundle_hash=original.parser_bundle_hash,
+        )
+    )
+    changed = _save_workspace_draft(
         session,
-        UnderwritingHistoricalBasis,
-        basis.id,
-        source_manifest_hash="7" * 64,
+        project,
+        bundle,
+        {"historical_basis_id": alternate.id},
+    )
+    changed = replace(
+        changed,
+        historical_basis_id=alternate.id,
+        historical_basis_content_hash=alternate.content_hash,
     )
 
     with pytest.raises(
-        CompanyResearchIntegrityError,
-        match="historical basis is invalid",
+        ValidationError,
+        match="historical basis source does not match reviewed evidence",
     ):
-        _complete_model_bundle(repository, preparation, bundle)
+        _complete_model_bundle(repository, preparation, changed)
 
     assert repository.current_artifact(project.id, "business_map") is None
 

@@ -16,12 +16,15 @@ import json
 import re
 from uuid import UUID
 
+from app.underwriting.hashing import canonical_hash
+
 from .types import AnswerabilityState
 
 
 _CURRENCY_CODE = re.compile(r"[A-Z]{3}")
 _SUPPORTED_PRODUCT_CURRENCIES = frozenset({"CNY", "USD"})
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+PRODUCT_HISTORICAL_BASIS_SCHEMA = "product.historical-basis.v1"
 
 
 class ValueNature(StrEnum):
@@ -270,6 +273,23 @@ class ProductHistoricalBasisInput:
         _require_sha256(self.source_manifest_hash, "source_manifest_hash")
         _require_sha256(self.definition_bundle_hash, "definition_bundle_hash")
         _require_sha256(self.parser_bundle_hash, "parser_bundle_hash")
+
+
+def product_historical_basis_payload_and_hash(
+    value: ProductHistoricalBasisInput,
+) -> tuple[dict[str, str], str]:
+    """Normalize one product basis into its canonical immutable payload/hash."""
+    if type(value) is not ProductHistoricalBasisInput:
+        raise ValueError("value must be a ProductHistoricalBasisInput")
+    cutoff = value.cutoff_at.astimezone(UTC)
+    payload = {
+        "schema_version": PRODUCT_HISTORICAL_BASIS_SCHEMA,
+        "cutoff_at": cutoff.isoformat(),
+        "source_manifest_hash": value.source_manifest_hash,
+        "definition_bundle_hash": value.definition_bundle_hash,
+        "parser_bundle_hash": value.parser_bundle_hash,
+    }
+    return payload, canonical_hash(payload)
 
 
 @dataclass(frozen=True, slots=True)

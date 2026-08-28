@@ -9,14 +9,16 @@ from enum import Enum
 
 from app.models.ledger import ValidationError
 from app.underwriting.adapters.company_research import AlphabetCompanyResearchAdapter
-from app.underwriting.domain.product_contracts import ProductHistoricalBasisInput
+from app.underwriting.domain.product_contracts import (
+    ProductHistoricalBasisInput,
+    product_historical_basis_payload_and_hash,
+)
 from app.underwriting.fixtures.alphabet_golden_case import (
     load_alphabet_golden_case_fixture,
 )
 from app.underwriting.hashing import canonical_hash
 
 
-_BASIS_SCHEMA = "product.historical-basis.v1"
 _DEFINITION_SCHEMA = "company-research.definition-bundle.v1"
 _PARSER_SCHEMA = "company-research.parser-bundle.v1"
 _PARSER_STRATEGY = "alphabet-golden-case-parser.v1"
@@ -95,14 +97,8 @@ def resolve_alphabet_company_research_boundary(
         definition_bundle_hash=definition_bundle_hash,
         parser_bundle_hash=parser_bundle_hash,
     )
-    basis_content_hash = canonical_hash(
-        {
-            "schema_version": _BASIS_SCHEMA,
-            "cutoff_at": fixture.cutoff.isoformat(),
-            "source_manifest_hash": basis_input.source_manifest_hash,
-            "definition_bundle_hash": basis_input.definition_bundle_hash,
-            "parser_bundle_hash": basis_input.parser_bundle_hash,
-        }
+    _basis_payload, basis_content_hash = product_historical_basis_payload_and_hash(
+        basis_input
     )
     return CompanyResearchHistoricalBoundary(
         cutoff_at=fixture.cutoff,

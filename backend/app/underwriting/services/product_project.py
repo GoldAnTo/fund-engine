@@ -12,9 +12,11 @@ from sqlalchemy.orm import Session
 
 from app.models.ledger import ConflictError, ValidationError
 from app.underwriting.domain.product_contracts import (
+    PRODUCT_HISTORICAL_BASIS_SCHEMA,
     ProductHistoricalBasisInput,
     ResearchAgendaInput,
     ResearchScopeInput,
+    product_historical_basis_payload_and_hash,
 )
 from app.underwriting.domain.search_terms import normalize_search_term
 from app.underwriting.domain.types import InvestmentMandateInput, ResearchObjectKind
@@ -27,7 +29,6 @@ from app.underwriting.services.kernel import canonical_hash
 
 
 _SUPPORTED_PRODUCT_CURRENCIES = frozenset({"CNY", "USD"})
-_PRODUCT_BASIS_SCHEMA = "product.historical-basis.v1"
 _INDUSTRY_COMPANY_RELATION = "industry_exposes_company"
 _COMPANY_SECURITY_RELATION = "company_has_security"
 # Product returns are fractions. A required excess return in [0, 1) permits
@@ -705,20 +706,14 @@ class ResearchProjectService:
         if type(value) is not ProductHistoricalBasisInput:
             raise ValidationError("value must be a ProductHistoricalBasisInput")
         cutoff = self._utc(value.cutoff_at, "cutoff_at")
-        payload = {
-            "schema_version": _PRODUCT_BASIS_SCHEMA,
-            "cutoff_at": cutoff.isoformat(),
-            "source_manifest_hash": value.source_manifest_hash,
-            "definition_bundle_hash": value.definition_bundle_hash,
-            "parser_bundle_hash": value.parser_bundle_hash,
-        }
+        _payload, content_hash = product_historical_basis_payload_and_hash(value)
         return self._repository.create_product_basis(
             cutoff=cutoff,
             source_manifest_hash=value.source_manifest_hash,
             definition_bundle_hash=value.definition_bundle_hash,
             parser_bundle_hash=value.parser_bundle_hash,
-            boundary_schema_version=_PRODUCT_BASIS_SCHEMA,
-            content_hash=canonical_hash(payload),
+            boundary_schema_version=PRODUCT_HISTORICAL_BASIS_SCHEMA,
+            content_hash=content_hash,
             created_at=self._created_at(),
         )
 

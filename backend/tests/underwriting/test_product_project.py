@@ -4,7 +4,7 @@ import ast
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier
@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 import app.underwriting.fixtures.product_foundation as product_foundation_fixture
+import app.underwriting.domain.product_contracts as product_contracts
 import app.underwriting.persistence.product_repository as product_repository
 from app.models.ledger import Base, ConflictError, ValidationError
 from app.underwriting.domain.product_contracts import (
@@ -1238,6 +1239,28 @@ def test_product_historical_basis_has_exact_boundary_hashes_and_no_price(
     assert session.get(UnderwritingHistoricalBasis, basis.id) is basis
     assert service.historical_basis(basis.id) is basis
     assert service.historical_basis(uuid4()) is None
+
+
+def test_product_historical_basis_payload_and_hash_normalizes_cutoff_to_utc() -> None:
+    value = ProductHistoricalBasisInput(
+        datetime(2026, 8, 26, 8, tzinfo=timezone(timedelta(hours=8))),
+        A64,
+        B64,
+        C64,
+    )
+
+    payload, content_hash = product_contracts.product_historical_basis_payload_and_hash(
+        value
+    )
+
+    assert payload == {
+        "schema_version": "product.historical-basis.v1",
+        "cutoff_at": "2026-08-26T00:00:00+00:00",
+        "source_manifest_hash": A64,
+        "definition_bundle_hash": B64,
+        "parser_bundle_hash": C64,
+    }
+    assert content_hash == canonical_hash(payload)
 
 
 def test_historical_basis_read_rejects_legacy_and_non_product_rows(
