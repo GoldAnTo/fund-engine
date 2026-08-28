@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 from threading import Barrier
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -39,6 +40,7 @@ from app.underwriting.persistence.product_models import (
     UnderwritingPriceSnapshot,
     UnderwritingResearchAgendaVersion,
     UnderwritingResearchProject,
+    UnderwritingResearchProjectSecurity,
     UnderwritingResearchScopeVersion,
     UnderwritingSecurityRightsVersion,
     UnderwritingWorkspaceDraft,
@@ -50,6 +52,10 @@ from app.underwriting.services.company_research_initializer import (
 )
 from app.underwriting.services.company_research_basis_recovery import (
     CompanyResearchHistoricalBasisRecovery,
+)
+from app.underwriting.services.company_research_foundation import (
+    alphabet_company_research_foundation_contract,
+    build_alphabet_company_research_preview_at_cutoff,
 )
 from app.underwriting.services.company_research_boundary import (
     resolve_alphabet_company_research_boundary,
@@ -67,8 +73,13 @@ from app.underwriting.services.company_research_workbench import (
 )
 from app.underwriting.services.company_research_sources import CompanyResearchSourceService
 from app.underwriting.services.product_foundation_fixture import ProductFoundationFixtureService
-from app.underwriting.services.product_project import ResearchProjectService
+from app.underwriting.services.product_project import (
+    ResearchProjectService,
+    research_agenda_content_hash,
+    research_project_security_content_hash,
+)
 from app.underwriting.services.workspace_draft import (
+    WorkspaceDraftContent,
     WorkspaceDraftPatch,
     WorkspaceDraftService,
 )
@@ -77,6 +88,10 @@ from app.scripts import run_company_research_worker
 
 NOW = datetime(2026, 8, 26, tzinfo=UTC)
 CUTOFF = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
+LEGACY_REQUEST_CUTOFF = datetime(2026, 8, 28, 4, 8, 33, 490000, tzinfo=UTC)
+LEGACY_PROJECT_CREATED = datetime(2026, 8, 28, 4, 8, 35, 304392, tzinfo=UTC)
+LEGACY_MANDATE_CREATED = datetime(2026, 8, 28, 4, 8, 35, 512718, tzinfo=UTC)
+LEGACY_PREPARATION_CREATED = datetime(2026, 8, 28, 4, 8, 35, 743556, tzinfo=UTC)
 
 
 def _initialized(session, *, idempotency_key="company-worker-alphabet"):
@@ -92,6 +107,110 @@ def _initialized(session, *, idempotency_key="company-worker-alphabet"):
         company_id=preview.company.object_id,
         cutoff_at=CUTOFF,
         idempotency_key=idempotency_key,
+    )
+
+
+def _genuine_legacy_initialized(session):
+    loaded = ProductFoundationFixtureService(
+        session, now=lambda: LEGACY_PROJECT_CREATED
+    ).load(load_product_foundation_fixture())
+    company = loaded.objects["US:ALPHABET:COMPANY"]
+    preview = build_alphabet_company_research_preview_at_cutoff(
+        session,
+        company_id=company.id,
+        cutoff_at=LEGACY_REQUEST_CUTOFF,
+    )
+    project = ResearchProjectService(
+        session, now=lambda: LEGACY_PROJECT_CREATED
+    ).create_project(
+        primary_company_id=company.id,
+        target_security_ids=tuple(row.object_id for row in preview.securities),
+    )
+    foundation = alphabet_company_research_foundation_contract(
+        company_external_key=preview.company.external_key,
+        company_id=preview.company.object_id,
+        security_ids=tuple(row.object_id for row in preview.securities),
+        request_hash=preview.input_hash,
+        strategy_version=preview.strategy_version,
+    )
+    mandate = ResearchProjectService(
+        session, now=lambda: LEGACY_MANDATE_CREATED
+    ).append_product_mandate(
+        project_id=project.id,
+        value=foundation.mandate,
+        benchmark_key=None,
+        required_excess_return=None,
+        effective_at=LEGACY_REQUEST_CUTOFF,
+        expires_at=None,
+        expected_parent_id=None,
+    )
+    scope = ResearchProjectService(
+        session, now=lambda: LEGACY_MANDATE_CREATED + timedelta(milliseconds=50)
+    ).append_scope(project.id, foundation.scope, expected_parent_id=None)
+    agenda = ResearchProjectService(
+        session, now=lambda: LEGACY_MANDATE_CREATED + timedelta(milliseconds=100)
+    ).append_agenda(
+        project.id,
+        foundation.agenda(scope.id),
+        expected_parent_id=None,
+    )
+    draft = WorkspaceDraftService(
+        session, now=lambda: LEGACY_MANDATE_CREATED + timedelta(milliseconds=150)
+    ).create(
+        project.id,
+        initial_content=WorkspaceDraftContent(
+            mandate_id=mandate.id,
+            scope_id=scope.id,
+            agenda_id=agenda.id,
+            historical_basis_id=None,
+        ),
+    )
+    preparation_id = uuid4()
+    job = Job(
+        id=uuid4(),
+        kind="prepare_company_research",
+        status="queued",
+        progress=0,
+        attempt=1,
+        step="evidence_index",
+        target_type="company_research_preparation",
+        target_id=preparation_id,
+        research_case_id=None,
+        created_at=LEGACY_PREPARATION_CREATED,
+    )
+    session.add(job)
+    session.flush([job])
+    repository = CompanyResearchRepository(session)
+    preparation = repository.add_preparation(
+        project_id=project.id,
+        idempotency_key="genuine-pre-7707036",
+        request_hash=preview.input_hash,
+        strategy_version=preview.strategy_version,
+        status="queued",
+        current_step="evidence_index",
+        progress=0,
+        attempt=1,
+        next_attempt_at=None,
+        last_error_code=None,
+        job_id=job.id,
+        created_at=LEGACY_PREPARATION_CREATED,
+        updated_at=LEGACY_PREPARATION_CREATED,
+    )
+    repository.append_event(
+        preparation_id=preparation.id,
+        event_type="initialized",
+        payload={"request_hash": preview.input_hash},
+        created_at=LEGACY_PREPARATION_CREATED,
+    )
+    return SimpleNamespace(
+        project=project,
+        basis=None,
+        mandate=mandate,
+        scope=scope,
+        agenda=agenda,
+        draft=draft,
+        preparation=preparation,
+        job=job,
     )
 
 
@@ -114,8 +233,8 @@ def _review_all_evidence(session, initialized):
     return current
 
 
-def _review_evidence_with_one_rejection(session, initialized):
-    workbench = CompanyResearchWorkbench(session, now=lambda: NOW)
+def _review_evidence_with_one_rejection(session, initialized, *, now=NOW):
+    workbench = CompanyResearchWorkbench(session, now=lambda: now)
     workspace = workbench.workspace(project_id=initialized.project.id)
     evidence = next(
         item.artifact for item in workspace.modules if item.key == "evidence_and_gaps"
@@ -143,24 +262,25 @@ def _ready_for_model(session):
     return initialized
 
 
-def _legacy_blocked_missing_basis(session):
-    initialized = _initialized(session)
-    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+def _legacy_blocked_missing_basis(session, *, initialized=None, now=NOW):
+    initialized = initialized or _initialized(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: now)
     source_claim = worker.claim_next()
     assert source_claim is not None
     assert worker.run_claim(source_claim) == "awaiting_evidence_review"
-    reviewed = _review_evidence_with_one_rejection(session, initialized)
+    reviewed = _review_evidence_with_one_rejection(session, initialized, now=now)
     repository = CompanyResearchRepository(session)
     gaps = repository.current_artifact(initialized.project.id, "research_gaps")
     assert gaps is not None
-    drafts = WorkspaceDraftService(session, now=lambda: NOW)
+    drafts = WorkspaceDraftService(session, now=lambda: now)
     draft = drafts.read(initialized.project.id)
-    assert draft is not None and draft.content.historical_basis_id is not None
-    drafts.save(
-        initialized.project.id,
-        expected_lock_version=draft.lock_version,
-        patch=WorkspaceDraftPatch(historical_basis_id=None),
-    )
+    assert draft is not None
+    if draft.content.historical_basis_id is not None:
+        drafts.save(
+            initialized.project.id,
+            expected_lock_version=draft.lock_version,
+            patch=WorkspaceDraftPatch(historical_basis_id=None),
+        )
     model_claim = worker.claim_next()
     assert model_claim is not None and model_claim.step == "model_bundle"
     assert worker.run_claim(model_claim) == "discarded"
@@ -186,6 +306,34 @@ def _legacy_blocked_missing_basis(session):
         "validation_failed: company research historical basis is missing",
     )
     return initialized, reviewed, gaps, blocked_draft
+
+
+def test_historical_basis_recovery_accepts_a_genuine_pre_7707036_request_cutoff(
+    session,
+) -> None:
+    initialized = _genuine_legacy_initialized(session)
+    assert initialized.mandate.effective_at == LEGACY_REQUEST_CUTOFF
+    assert initialized.project.id is not None
+    boundary = resolve_alphabet_company_research_boundary(CUTOFF)
+    assert ProductRepository(session).product_basis_by_content_hash(
+        boundary.basis_content_hash
+    ) is None
+    initialized, _reviewed, _gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session,
+        initialized=initialized,
+        now=LEGACY_PREPARATION_CREATED + timedelta(seconds=1),
+    )
+
+    recovered_basis_id = CompanyResearchHistoricalBasisRecovery(
+        session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=1)
+    ).recover(initialized.preparation.id)
+    recovered = WorkspaceDraftService(
+        session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=1)
+    ).read(initialized.project.id)
+
+    assert recovered is not None
+    assert recovered.content.historical_basis_id == recovered_basis_id
+    assert recovered.lock_version == blocked_draft.lock_version + 1
 
 
 def test_missing_historical_basis_validation_diagnostic_is_safe_and_actionable(
@@ -1932,6 +2080,149 @@ def test_historical_basis_recovery_bounds_mandate_effective_at_by_lifecycle(
         ).recover(initialized.preparation.id)
 
 
+def test_historical_basis_recovery_anchors_legacy_request_to_initialized_event(
+    session,
+) -> None:
+    initialized, _reviewed, _gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    mandate = ProductRepository(session).product_mandate(
+        initialized.project.id, blocked_draft.content.mandate_id
+    )
+    agenda = ProductRepository(session).agenda(
+        initialized.project.id, blocked_draft.content.agenda_id
+    )
+    assert mandate is not None and agenda is not None
+    wrong_cutoff = CUTOFF - timedelta(days=1)
+    wrong_preview = build_alphabet_company_research_preview_at_cutoff(
+        session,
+        company_id=initialized.project.primary_company_id,
+        cutoff_at=wrong_cutoff,
+    )
+    generator = deepcopy(agenda.generator_provenance)
+    generator["input_summary_hash"] = wrong_preview.input_hash
+    agenda_hash = research_agenda_content_hash(
+        project_id=agenda.project_id,
+        scope_id=agenda.scope_id,
+        payload=agenda.payload,
+        generator_provenance=generator,
+    )
+    session.execute(
+        text(
+            "UPDATE uw_company_research_preparations SET request_hash = :hash "
+            "WHERE id = :id"
+        ).bindparams(
+            bindparam(
+                "id", type_=CompanyResearchPreparation.__table__.c.id.type
+            )
+        ),
+        {"hash": wrong_preview.input_hash, "id": initialized.preparation.id},
+    )
+    session.execute(
+        text(
+            "UPDATE uw_mandate_versions SET effective_at = :effective_at, "
+            "content_hash = :content_hash WHERE id = :id"
+        ).bindparams(
+            bindparam(
+                "effective_at",
+                type_=UnderwritingMandateVersion.__table__.c.effective_at.type,
+            ),
+            bindparam("id", type_=UnderwritingMandateVersion.__table__.c.id.type),
+        ),
+        {
+            "effective_at": wrong_cutoff,
+            "content_hash": _mandate_content_hash(
+                mandate, effective_at=wrong_cutoff
+            ),
+            "id": mandate.id,
+        },
+    )
+    session.execute(
+        text(
+            "UPDATE uw_research_agenda_versions SET generator_provenance = :generator, "
+            "content_hash = :content_hash WHERE id = :id"
+        ).bindparams(
+            bindparam(
+                "generator",
+                type_=UnderwritingResearchAgendaVersion.__table__.c.generator_provenance.type,
+            ),
+            bindparam(
+                "id", type_=UnderwritingResearchAgendaVersion.__table__.c.id.type
+            ),
+        ),
+        {"generator": generator, "content_hash": agenda_hash, "id": agenda.id},
+    )
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="recovery draft is incomplete"):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+
+@pytest.mark.parametrize("mode", ["missing", "duplicate", "malformed"])
+def test_historical_basis_recovery_requires_one_authentic_initialized_event(
+    session, mode: str
+) -> None:
+    initialized, _reviewed, _gaps, _blocked_draft = (
+        _legacy_blocked_missing_basis(session)
+    )
+    repository = CompanyResearchRepository(session)
+    if mode == "missing":
+        session.connection().exec_driver_sql(
+            "DELETE FROM uw_company_research_events WHERE preparation_id = ?",
+            (initialized.preparation.id.hex,),
+        )
+    elif mode == "duplicate":
+        repository.append_event(
+            preparation_id=initialized.preparation.id,
+            event_type="initialized",
+            payload={"request_hash": initialized.preparation.request_hash},
+            created_at=NOW + timedelta(seconds=2),
+        )
+    else:
+        events = repository.events(initialized.preparation.id)
+        previous_hash = None
+        statement = text(
+            "UPDATE uw_company_research_events SET previous_event_hash = :previous, "
+            "payload = :payload, content_hash = :content_hash WHERE id = :id"
+        ).bindparams(
+            bindparam(
+                "previous",
+                type_=CompanyResearchEvent.__table__.c.previous_event_hash.type,
+            ),
+            bindparam("payload", type_=CompanyResearchEvent.__table__.c.payload.type),
+            bindparam("id", type_=CompanyResearchEvent.__table__.c.id.type),
+        )
+        for event in events:
+            payload = (
+                {"request_hash": []} if event.sequence == 1 else event.payload
+            )
+            content_hash = repository.event_content_hash(
+                preparation_id=event.preparation_id,
+                sequence=event.sequence,
+                previous_event_hash=previous_hash,
+                event_type=event.event_type,
+                payload=payload,
+            )
+            session.execute(
+                statement,
+                {
+                    "previous": previous_hash,
+                    "payload": payload,
+                    "content_hash": content_hash,
+                    "id": event.id,
+                },
+            )
+            previous_hash = content_hash
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="recovery draft is incomplete"):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=3)
+        ).recover(initialized.preparation.id)
+
+
 @pytest.mark.parametrize(
     ("kind", "malformed"),
     (
@@ -2638,6 +2929,89 @@ def test_historical_basis_recovery_rejects_a_wrong_project_security_identity(
     assert repository.events(initialized.preparation.id) == events_before
 
 
+@pytest.mark.parametrize("recomputed_wrong_membership", [False, True])
+def test_historical_basis_recovery_authenticates_project_membership_hashes(
+    session, recomputed_wrong_membership: bool
+) -> None:
+    initialized, _reviewed, _gaps, _blocked_draft = (
+        _legacy_blocked_missing_basis(session)
+    )
+    membership = session.scalar(
+        select(UnderwritingResearchProjectSecurity)
+        .where(
+            UnderwritingResearchProjectSecurity.project_id == initialized.project.id
+        )
+        .limit(1)
+    )
+    assert membership is not None
+    wrong_hash = (
+        research_project_security_content_hash(
+            project_id=initialized.project.id,
+            security_id=uuid4(),
+        )
+        if recomputed_wrong_membership
+        else "f" * 64
+    )
+    statement = text(
+        "UPDATE uw_research_project_securities "
+        "SET content_hash = :content_hash WHERE project_id = :project_id "
+        "AND security_id = :security_id"
+    ).bindparams(
+        bindparam(
+            "project_id",
+            type_=UnderwritingResearchProjectSecurity.__table__.c.project_id.type,
+        ),
+        bindparam(
+            "security_id",
+            type_=UnderwritingResearchProjectSecurity.__table__.c.security_id.type,
+        ),
+    )
+    assert session.execute(
+        statement,
+        {
+            "content_hash": wrong_hash,
+            "project_id": membership.project_id,
+            "security_id": membership.security_id,
+        },
+    ).rowcount == 1
+    session.expire_all()
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery project identity is invalid",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=1)
+        ).recover(initialized.preparation.id)
+
+
+def test_historical_basis_recovery_locks_project_before_mutable_ownership_rows(
+    session, monkeypatch
+) -> None:
+    initialized, _reviewed, _gaps, _blocked_draft = (
+        _legacy_blocked_missing_basis(session)
+    )
+    repository = CompanyResearchRepository(session)
+    calls: list[str] = []
+    for name, label in (
+        ("_project_for_update", "project"),
+        ("_preparation_for_update", "preparation"),
+        ("_job_for_update", "job"),
+        ("_workspace_draft_for_update", "draft"),
+    ):
+        original = getattr(repository, name)
+
+        def wrapped(*args, _original=original, _label=label, **kwargs):
+            calls.append(_label)
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(repository, name, wrapped)
+
+    repository.lock_basis_recovery_state(initialized.preparation.id)
+
+    assert calls[:4] == ["project", "preparation", "job", "draft"]
+
+
 def test_historical_basis_recovery_rejects_a_wrong_gaps_fixture_hash(
     session,
 ) -> None:
@@ -2993,6 +3367,64 @@ def test_sqlite_two_retries_recover_one_basis_and_queue_one_attempt(
                 "memo",
             )
         )
+    Base.metadata.drop_all(engine)
+    engine.dispose()
+
+
+def test_sqlite_two_ordinary_retries_queue_one_attempt_and_one_event(
+    tmp_path,
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'company-research-ordinary-retry.sqlite'}",
+        future=True,
+        connect_args={"check_same_thread": False, "timeout": 3},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    with sessions() as bootstrap:
+        initialized = _initialized(bootstrap, idempotency_key="ordinary-concurrent")
+        initialized.preparation.status = "recoverable_failure"
+        initialized.preparation.last_error_code = "source_unavailable"
+        initialized.preparation.next_attempt_at = NOW - timedelta(seconds=1)
+        initialized.job.status = "failed"
+        initialized.job.error = "source_unavailable"
+        project_id = initialized.project.id
+        preparation_id = initialized.preparation.id
+        bootstrap.commit()
+
+    barrier = Barrier(2)
+
+    def retry_once():
+        with sessions() as competing:
+            barrier.wait()
+            try:
+                result = CompanyResearchPreparationService(
+                    competing, now=lambda: NOW
+                ).retry(project_id=project_id)
+                competing.commit()
+                return result.preparation.status
+            except ValidationError as exc:
+                competing.rollback()
+                return str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = tuple(pool.map(lambda _: retry_once(), range(2)))
+
+    assert outcomes.count("queued") == 1
+    assert sum("recoverable" in outcome for outcome in outcomes) == 1
+    with sessions() as observer:
+        repository = CompanyResearchRepository(observer)
+        preparation = observer.get(CompanyResearchPreparation, preparation_id)
+        job = repository.prepare_job(preparation_id)
+        assert preparation is not None and job is not None
+        assert (preparation.status, preparation.attempt) == ("queued", 2)
+        assert (job.status, job.attempt) == ("queued", 2)
+        assert [
+            event.event_type
+            for event in repository.events(preparation_id)
+            if event.event_type == "retry_queued"
+        ] == ["retry_queued"]
+
     Base.metadata.drop_all(engine)
     engine.dispose()
 

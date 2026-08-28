@@ -30,12 +30,16 @@ from app.underwriting.services.company_research_market_inputs import (
 from app.underwriting.services.company_research_foundation import (
     alphabet_company_research_foundation_contract,
     authenticate_company_research_foundation,
+    build_alphabet_company_research_preview_at_cutoff,
 )
 from app.underwriting.services.market_snapshots import (
     MarketSnapshotService,
     WorkspaceMarketReferences,
 )
-from app.underwriting.services.product_project import ResearchProjectService
+from app.underwriting.services.product_project import (
+    ResearchProjectService,
+    research_project_security_content_hash,
+)
 from app.underwriting.services.company_research_sources import (
     CompanyResearchProviderInput,
     CompanyResearchSourceCompiler,
@@ -54,6 +58,7 @@ class CompanyResearchHistoricalBasisRecovery:
     """Repair only the missing basis of one authenticated legacy workspace."""
 
     def __init__(self, session: Session, *, now: Callable[[], datetime]) -> None:
+        self._session = session
         self._now = now
         self._company = CompanyResearchRepository(session)
         self._product_repository = ProductRepository(session)
@@ -70,6 +75,20 @@ class CompanyResearchHistoricalBasisRecovery:
             or value.utcoffset() is None
         ):
             raise ValidationError("clock must be a timezone-aware datetime")
+        return value.astimezone(UTC)
+
+    @staticmethod
+    def _stored_utc(value: object) -> datetime:
+        if not isinstance(value, datetime):
+            raise ValidationError(
+                "company research historical basis recovery project identity is invalid"
+            )
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        if value.utcoffset() is None:
+            raise ValidationError(
+                "company research historical basis recovery project identity is invalid"
+            )
         return value.astimezone(UTC)
 
     @staticmethod
@@ -96,6 +115,9 @@ class CompanyResearchHistoricalBasisRecovery:
             )
         company = state.company
         securities = state.securities
+        memberships = state.memberships
+        project_created_at = self._stored_utc(project.created_at)
+        preparation_created_at = self._stored_utc(state.preparation.created_at)
         if (
             company is None
             or company.kind != "company"
@@ -106,6 +128,24 @@ class CompanyResearchHistoricalBasisRecovery:
                 security.kind != "security"
                 for security in securities
                 if security is not None
+            )
+            or len(memberships) != len(securities)
+            or {row.security_id for row in memberships}
+            != {security.id for security in securities}
+            or any(row.project_id != project.id for row in memberships)
+            or any(
+                row.content_hash
+                != research_project_security_content_hash(
+                    project_id=project.id,
+                    security_id=row.security_id,
+                )
+                for row in memberships
+            )
+            or any(
+                not project_created_at
+                <= self._stored_utc(row.created_at)
+                <= preparation_created_at
+                for row in memberships
             )
         ):
             raise ValidationError(
@@ -325,6 +365,41 @@ class CompanyResearchHistoricalBasisRecovery:
             security_rights_ids=content.security_rights_ids,
         )
         try:
+            initialized_events = tuple(
+                event for event in state.events if event.event_type == "initialized"
+            )
+            if (
+                len(initialized_events) != 1
+                or initialized_events[0].sequence != 1
+                or initialized_events[0].payload
+                != {"request_hash": state.preparation.request_hash}
+                or self._stored_utc(initialized_events[0].created_at)
+                < self._stored_utc(state.preparation.created_at)
+            ):
+                raise ValidationError(
+                    "company research initialization request history is invalid"
+                )
+            mandate_effective_at = self._stored_utc(state.mandate.effective_at)
+            legacy_preview = build_alphabet_company_research_preview_at_cutoff(
+                self._session,
+                company_id=state.company.id,
+                cutoff_at=mandate_effective_at,
+            )
+            authenticated_legacy_cutoff = (
+                mandate_effective_at
+                if legacy_preview.input_hash
+                == initialized_events[0].payload["request_hash"]
+                == state.preparation.request_hash
+                and legacy_preview.company.object_id == state.company.id
+                and tuple(
+                    sorted(
+                        (row.object_id for row in legacy_preview.securities),
+                        key=str,
+                    )
+                )
+                == tuple(sorted((row.id for row in state.securities), key=str))
+                else None
+            )
             foundation = alphabet_company_research_foundation_contract(
                 company_external_key=state.company.external_key,
                 company_id=state.company.id,
@@ -339,6 +414,7 @@ class CompanyResearchHistoricalBasisRecovery:
                 mandate=state.mandate,
                 scope=state.scope,
                 agenda=state.agenda,
+                authenticated_legacy_request_cutoff_at=authenticated_legacy_cutoff,
             )
             self._market_snapshots.workspace_reference_context(
                 state.preparation.project_id,

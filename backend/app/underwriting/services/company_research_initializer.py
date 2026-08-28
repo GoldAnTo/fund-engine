@@ -230,7 +230,10 @@ class CompanyResearchInitializer:
         )
 
     def _existing_result(
-        self, preparation: CompanyResearchPreparation
+        self,
+        preparation: CompanyResearchPreparation,
+        *,
+        cutoff_at: datetime,
     ) -> CompanyResearchInitialization:
         project = self._products.project(preparation.project_id)
         if project is None:
@@ -254,6 +257,17 @@ class CompanyResearchInitializer:
             raise ConflictError(
                 "company research initialization foundation is incomplete"
             )
+        boundary = resolve_alphabet_company_research_boundary(cutoff_at)
+        try:
+            self._company_repository.authenticate_governed_historical_basis(
+                basis,
+                expected_input=boundary.basis_input,
+                expected_content_hash=boundary.basis_content_hash,
+            )
+        except ValidationError as exc:
+            raise ConflictError(
+                "company research initialization foundation is invalid"
+            ) from exc
         return CompanyResearchInitialization(
             project=project,
             basis=basis,
@@ -287,7 +301,10 @@ class CompanyResearchInitializer:
                 raise ConflictError(
                     "idempotency_key is already bound to another request"
                 )
-            return self._existing_result(existing_by_key)
+            return self._existing_result(
+                existing_by_key,
+                cutoff_at=preview.cutoff_at,
+            )
 
         existing_by_request = self._session.scalar(
             select(CompanyResearchPreparation)

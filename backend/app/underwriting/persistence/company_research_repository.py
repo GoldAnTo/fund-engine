@@ -167,6 +167,7 @@ class CompanyResearchBasisRecoveryState:
     project: UnderwritingResearchProject | None
     company: UnderwritingResearchObject | None
     securities: tuple[UnderwritingResearchObject, ...]
+    memberships: tuple[UnderwritingResearchProjectSecurity, ...]
     mandate: UnderwritingMandateVersion | None
     scope: UnderwritingResearchScopeVersion | None
     agenda: UnderwritingResearchAgendaVersion | None
@@ -177,6 +178,7 @@ class CompanyResearchBasisRecoveryState:
     research_gaps: CompanyResearchArtifactVersion
     evidence_chain: tuple[CompanyResearchArtifactVersion, ...]
     research_gaps_chain: tuple[CompanyResearchArtifactVersion, ...]
+    events: tuple[CompanyResearchEvent, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -431,6 +433,16 @@ class CompanyResearchRepository:
         return self._session.scalar(
             select(UnderwritingWorkspaceDraft)
             .where(UnderwritingWorkspaceDraft.project_id == project_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
+    def _project_for_update(
+        self, project_id: UUID
+    ) -> UnderwritingResearchProject | None:
+        return self._session.scalar(
+            select(UnderwritingResearchProject)
+            .where(UnderwritingResearchProject.id == project_id)
             .with_for_update()
             .execution_options(populate_existing=True)
         )
@@ -993,29 +1005,31 @@ class CompanyResearchRepository:
         self, preparation_id: UUID
     ) -> CompanyResearchBasisRecoveryState:
         """Lock the complete legacy-recovery snapshot in one transaction."""
+        project_id = self._session.scalar(
+            select(CompanyResearchPreparation.project_id).where(
+                CompanyResearchPreparation.id == preparation_id
+            )
+        )
+        if project_id is None:
+            raise ValidationError("company research preparation not found")
         self._reserve_sqlite_writer_before_ownership_read()
+        project = self._project_for_update(project_id)
         preparation = self._preparation_for_update(
             preparation_id, populate_existing=True
         )
-        if preparation is None:
+        if preparation is None or preparation.project_id != project_id:
             raise ValidationError("company research preparation not found")
         if preparation.job_id is None:
             raise ValidationError(
                 "company research historical basis recovery inputs are incomplete"
             )
         job = self._job_for_update(preparation.job_id, populate_existing=True)
-        draft = self._workspace_draft_for_update(preparation.project_id)
+        draft = self._workspace_draft_for_update(project_id)
         if draft is None:
             raise ValidationError(
                 "company research historical basis recovery inputs are incomplete"
             )
         draft_content = WorkspaceDraftService.decode_content(draft.content)
-        project = self._session.scalar(
-            select(UnderwritingResearchProject)
-            .where(UnderwritingResearchProject.id == preparation.project_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
         memberships = tuple(
             self._session.scalars(
                 select(UnderwritingResearchProjectSecurity)
@@ -1112,6 +1126,7 @@ class CompanyResearchRepository:
             )
         evidence_chain = self.artifact_chain(evidence.id, lock=True)
         research_gaps_chain = self.artifact_chain(research_gaps.id, lock=True)
+        events = self.events(preparation.id, lock=True)
         return CompanyResearchBasisRecoveryState(
             preparation=preparation,
             job=job,
@@ -1120,6 +1135,7 @@ class CompanyResearchRepository:
             project=project,
             company=company,
             securities=securities,
+            memberships=memberships,
             mandate=foundation_heads[0],
             scope=foundation_heads[1],
             agenda=foundation_heads[2],
@@ -1136,6 +1152,7 @@ class CompanyResearchRepository:
             research_gaps=research_gaps,
             evidence_chain=evidence_chain,
             research_gaps_chain=research_gaps_chain,
+            events=events,
         )
 
     def requeue_recoverable_preparation(
@@ -1146,10 +1163,9 @@ class CompanyResearchRepository:
         expected_recovered_basis_id: UUID | None = None,
     ) -> CompanyResearchPreparation:
         """Return one recoverable preparation to its initial queued step."""
-        if expected_recovered_basis_id is not None:
-            self._reserve_sqlite_writer_before_ownership_read()
+        self._reserve_sqlite_writer_before_ownership_read()
         preparation = self._preparation_for_update(
-            preparation_id, populate_existing=expected_recovered_basis_id is not None
+            preparation_id, populate_existing=True
         )
         if preparation is None:
             raise ValidationError("company research preparation not found")
@@ -1164,15 +1180,7 @@ class CompanyResearchRepository:
             raise ValidationError(
                 "company research preparation is not eligible for basis recovery"
             )
-        job = (
-            self._locked_prepare_job(preparation, populate_existing=True)
-            if expected_recovered_basis_id is not None
-            else self.prepare_job(preparation.id)
-        )
-        if job is None:
-            raise CompanyResearchIntegrityError(
-                "company research preparation job is missing"
-            )
+        job = self._locked_prepare_job(preparation, populate_existing=True)
         if expected_recovered_basis_id is not None:
             draft = self._workspace_draft_for_update(preparation.project_id)
             if (
@@ -2327,14 +2335,19 @@ class CompanyResearchRepository:
             )
         )
 
-    def events(self, preparation_id: UUID) -> tuple[CompanyResearchEvent, ...]:
-        rows = tuple(
-            self._session.scalars(
-                select(CompanyResearchEvent)
-                .where(CompanyResearchEvent.preparation_id == preparation_id)
-                .order_by(CompanyResearchEvent.sequence)
-            )
+    def events(
+        self, preparation_id: UUID, *, lock: bool = False
+    ) -> tuple[CompanyResearchEvent, ...]:
+        statement = (
+            select(CompanyResearchEvent)
+            .where(CompanyResearchEvent.preparation_id == preparation_id)
+            .order_by(CompanyResearchEvent.sequence)
         )
+        if lock:
+            statement = statement.with_for_update().execution_options(
+                populate_existing=True
+            )
+        rows = tuple(self._session.scalars(statement))
         previous_hash: str | None = None
         for expected_sequence, row in enumerate(rows, start=1):
             self._validate_event_row(row)

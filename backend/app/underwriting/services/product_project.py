@@ -129,6 +129,19 @@ def research_project_content_hash(
     )
 
 
+def research_project_security_content_hash(
+    *, project_id: UUID, security_id: UUID
+) -> str:
+    """Hash one immutable project/security membership descriptor."""
+    return canonical_hash(
+        {
+            "schema_version": "product.research-project-security.v1",
+            "project_id": str(project_id),
+            "security_id": str(security_id),
+        }
+    )
+
+
 def research_scope_content_hash(
     *, project_id: UUID, payload: Mapping[str, object]
 ) -> str:
@@ -579,12 +592,9 @@ class ResearchProjectService:
             target_security_ids=normalized_security_ids,
         )
         membership_hashes = {
-            security_id: canonical_hash(
-                {
-                    "schema_version": "product.research-project-security.v1",
-                    "project_id": str(project_id),
-                    "security_id": str(security_id),
-                }
+            security_id: research_project_security_content_hash(
+                project_id=project_id,
+                security_id=security_id,
             )
             for security_id in normalized_security_ids
         }

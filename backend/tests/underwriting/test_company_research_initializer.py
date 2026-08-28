@@ -33,6 +33,10 @@ from app.underwriting.services.company_research_initializer import (
 from app.underwriting.services.company_research_boundary import (
     resolve_alphabet_company_research_boundary,
 )
+from app.underwriting.domain.product_contracts import (
+    ProductHistoricalBasisInput,
+    product_historical_basis_content_hash,
+)
 from app.underwriting.services.product_foundation_fixture import (
     ProductFoundationFixtureService,
 )
@@ -233,6 +237,47 @@ def test_initialize_replays_the_original_foundation_for_the_same_key(session) ->
     assert session.scalar(select(func.count()).select_from(UnderwritingHistoricalBasis)) == 1
 
 
+@pytest.mark.parametrize("recomputed_hash", [False, True])
+def test_initialize_replay_rejects_a_durably_corrupted_governed_basis(
+    session, recomputed_hash: bool
+) -> None:
+    initializer, alphabet = _initializer(session)
+    preview = initializer.preview(company_id=alphabet.id, cutoff_at=NOW)
+    first = initializer.initialize(
+        preview_hash=preview.input_hash,
+        company_id=alphabet.id,
+        cutoff_at=NOW,
+        idempotency_key=f"alphabet-corrupt-basis-{recomputed_hash}",
+    )
+    wrong = ProductHistoricalBasisInput(
+        cutoff_at=first.basis.cutoff,
+        source_manifest_hash="f" * 64,
+        definition_bundle_hash=first.basis.definition_bundle_hash,
+        parser_bundle_hash=first.basis.parser_bundle_hash,
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_historical_bases "
+        "SET source_manifest_hash = ?, content_hash = ? WHERE id = ?",
+        (
+            wrong.source_manifest_hash,
+            product_historical_basis_content_hash(wrong)
+            if recomputed_hash
+            else first.basis.content_hash,
+            first.basis.id.hex,
+        ),
+    )
+
+    with pytest.raises(
+        ConflictError, match="company research initialization foundation is invalid"
+    ):
+        initializer.initialize(
+            preview_hash=preview.input_hash,
+            company_id=alphabet.id,
+            cutoff_at=NOW,
+            idempotency_key=f"alphabet-corrupt-basis-{recomputed_hash}",
+        )
+
+
 def test_initialize_replay_fails_closed_when_the_draft_basis_is_cleared(
     session,
 ) -> None:
@@ -323,6 +368,43 @@ def test_initialize_replay_fails_closed_when_draft_basis_is_not_a_product_basis(
             company_id=alphabet.id,
             cutoff_at=NOW,
             idempotency_key="alphabet-legacy-basis",
+        )
+
+
+def test_initialize_replay_rejects_a_valid_but_substituted_product_basis(
+    session,
+) -> None:
+    initializer, alphabet = _initializer(session)
+    preview = initializer.preview(company_id=alphabet.id, cutoff_at=NOW)
+    result = initializer.initialize(
+        preview_hash=preview.input_hash,
+        company_id=alphabet.id,
+        cutoff_at=NOW,
+        idempotency_key="alphabet-substituted-valid-basis",
+    )
+    boundary = resolve_alphabet_company_research_boundary(NOW)
+    substituted = initializer._products.create_historical_basis(
+        ProductHistoricalBasisInput(
+            cutoff_at=boundary.cutoff_at,
+            source_manifest_hash=boundary.basis_input.source_manifest_hash,
+            definition_bundle_hash="e" * 64,
+            parser_bundle_hash=boundary.basis_input.parser_bundle_hash,
+        )
+    )
+    initializer._drafts.save(
+        result.project.id,
+        expected_lock_version=result.draft.lock_version,
+        patch={"historical_basis_id": substituted.id},
+    )
+
+    with pytest.raises(
+        ConflictError, match="company research initialization foundation is invalid"
+    ):
+        initializer.initialize(
+            preview_hash=preview.input_hash,
+            company_id=alphabet.id,
+            cutoff_at=NOW,
+            idempotency_key="alphabet-substituted-valid-basis",
         )
 
 

@@ -8,9 +8,20 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from app.models.ledger import ValidationError
 from app.underwriting.adapters.company_research import AlphabetCompanyResearchAdapter
-from app.underwriting.domain.company_research import CompanyResearchDefaultPolicy
+from app.underwriting.domain.company_research import (
+    CompanyResearchCompany,
+    CompanyResearchDefaultPolicy,
+    CompanyResearchIdentitySet,
+    CompanyResearchPreview,
+    CompanyResearchSecurity,
+    build_company_research_preview,
+)
+from app.underwriting.domain.types import ResearchObjectKind
 from app.underwriting.domain.product_contracts import (
     AgendaGenerationMethod,
     AgendaGeneratorInput,
@@ -20,6 +31,8 @@ from app.underwriting.domain.product_contracts import (
 )
 from app.underwriting.domain.types import InvestmentMandateInput
 from app.underwriting.persistence.models import UnderwritingMandateVersion
+from app.underwriting.persistence.models import UnderwritingResearchObject
+from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.persistence.product_models import (
     UnderwritingResearchAgendaVersion,
     UnderwritingResearchProject,
@@ -36,6 +49,62 @@ from app.underwriting.services.product_project import (
 )
 
 _AGENDA_TEMPLATE_KEY = "company-research-default"
+
+
+def build_alphabet_company_research_preview_at_cutoff(
+    session: Session, *, company_id: UUID, cutoff_at: datetime
+) -> CompanyResearchPreview:
+    """Rebuild the exact canonical preview at a caller-supplied historical cutoff."""
+    repository = ProductRepository(session)
+    company = session.scalar(
+        select(UnderwritingResearchObject)
+        .where(UnderwritingResearchObject.id == company_id)
+        .execution_options(populate_existing=True)
+    )
+    if company is None or company.kind != ResearchObjectKind.COMPANY.value:
+        raise ValidationError("company research foundation identity is invalid")
+    adapter = AlphabetCompanyResearchAdapter()
+    if not adapter.supports(company.external_key):
+        raise ValidationError("company research foundation identity is invalid")
+    company_identity = repository.effective_identity(company_id, cutoff_at)
+    if company_identity is None:
+        raise ValidationError("company research foundation identity is invalid")
+    rows = tuple(
+        session.execute(
+            repository._effective_company_children_statement(
+                {company_id}, cutoff_at
+            )
+            .order_by("parent_id", "id")
+            .execution_options(populate_existing=True)
+        ).tuples()
+    )
+    if not rows:
+        raise ValidationError("company research foundation identity is invalid")
+    identities = CompanyResearchIdentitySet(
+        company=CompanyResearchCompany(
+            object_id=company_id,
+            external_key=company.external_key,
+            canonical_name=company_identity.canonical_name,
+        ),
+        securities=tuple(
+            CompanyResearchSecurity(
+                object_id=security.id,
+                company_id=company_id,
+                external_key=security.external_key,
+                canonical_name=identity.canonical_name,
+                symbol=identity.symbol,
+                exchange=identity.exchange,
+                share_class=identity.share_class,
+                trading_currency=identity.trading_currency,
+            )
+            for _parent_id, security, identity in rows
+        ),
+    )
+    return build_company_research_preview(
+        adapter=adapter,
+        identities=identities,
+        cutoff_at=cutoff_at,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +177,7 @@ def authenticate_company_research_foundation(
     mandate: UnderwritingMandateVersion,
     scope: UnderwritingResearchScopeVersion,
     agenda: UnderwritingResearchAgendaVersion,
+    authenticated_legacy_request_cutoff_at: datetime | None = None,
 ) -> None:
     """Authenticate immutable hashes and the exact governed first-version values."""
     def invalid() -> ValidationError:
@@ -173,6 +243,11 @@ def authenticate_company_research_foundation(
     company_id = uuid(project.primary_company_id)
     project_created_at = stored_utc(project.created_at)
     preparation_time = stored_utc(preparation_created_at)
+    legacy_request_cutoff = (
+        stored_utc(authenticated_legacy_request_cutoff_at)
+        if authenticated_legacy_request_cutoff_at is not None
+        else None
+    )
     project_hash = text(project.content_hash)
 
     mandate_project_id = uuid(mandate.project_id)
@@ -267,9 +342,11 @@ def authenticate_company_research_foundation(
             primary_company_id=contract.scope.primary_company_id,
             target_security_ids=contract.scope.target_security_ids,
         )
-        and project_created_at
-        <= mandate_effective_at
-        <= mandate_created_at
+        and (
+            project_created_at <= mandate_effective_at
+            or mandate_effective_at == legacy_request_cutoff
+        )
+        and mandate_effective_at <= mandate_created_at
         <= scope_created_at
         <= agenda_created_at
         <= preparation_time
