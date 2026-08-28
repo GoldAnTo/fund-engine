@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -22,14 +21,7 @@ from app.underwriting.domain.company_research import (
     CompanyResearchSecurity,
     build_company_research_preview,
 )
-from app.underwriting.domain.product_contracts import (
-    AgendaGenerationMethod,
-    AgendaGeneratorInput,
-    ResearchAgendaInput,
-    ResearchScopeInput,
-    agenda_items_hash,
-)
-from app.underwriting.domain.types import InvestmentMandateInput, ResearchObjectKind
+from app.underwriting.domain.types import ResearchObjectKind
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchPreparation,
 )
@@ -46,7 +38,6 @@ from app.underwriting.persistence.product_models import (
     UnderwritingResearchScopeVersion,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
-from app.underwriting.services.kernel import canonical_hash
 from app.underwriting.services.product_project import (
     ResearchProjectService,
     ResearchProjectView,
@@ -68,6 +59,9 @@ from app.underwriting.services.company_research_boundary import (
 from app.underwriting.services.company_research_basis_recovery import (
     CompanyResearchHistoricalBasisRecovery,
 )
+from app.underwriting.services.company_research_foundation import (
+    alphabet_company_research_foundation_contract,
+)
 from app.underwriting.services.company_research_model_builder import (
     CompanyResearchModelTemplate,
     FrozenMarketContext,
@@ -76,7 +70,6 @@ from app.underwriting.services.company_research_model_builder import (
 
 _PREPARE_JOB_KIND = "prepare_company_research"
 _PREPARE_JOB_TARGET_TYPE = "company_research_preparation"
-_AGENDA_TEMPLATE_KEY = "company-research-default"
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,13 +265,6 @@ class CompanyResearchInitializer:
             job=job,
         )
 
-    @staticmethod
-    def _agenda_items(preview: CompanyResearchPreview) -> tuple[str, ...]:
-        return tuple(
-            module.key
-            for module in (*preview.generic_modules, *preview.business_modules)
-        )
-
     def _initialize(
         self,
         *,
@@ -331,17 +317,17 @@ class CompanyResearchInitializer:
                 security.object_id for security in preview.securities
             ),
         )
+        foundation = alphabet_company_research_foundation_contract(
+            company_external_key=preview.company.external_key,
+            company_id=preview.company.object_id,
+            security_ids=tuple(security.object_id for security in preview.securities),
+            request_hash=preview.input_hash,
+            strategy_version=preview.strategy_version,
+        )
         basis = self._products.create_historical_basis(boundary.basis_input)
         mandate = self._products.append_product_mandate(
             project_id=project.id,
-            value=InvestmentMandateInput(
-                mandate_key="company-research-default",
-                horizon_years=5,
-                base_currency="CNY",
-                required_return=Decimal("0.12"),
-                permanent_loss_limit=Decimal("0.25"),
-                comparison_set=("absolute_intrinsic_value",),
-            ),
+            value=foundation.mandate,
             benchmark_key=None,
             required_excess_return=None,
             effective_at=self._created_at(),
@@ -350,34 +336,12 @@ class CompanyResearchInitializer:
         )
         scope = self._products.append_scope(
             project.id,
-            ResearchScopeInput(
-                primary_company_id=preview.company.object_id,
-                target_security_ids=tuple(
-                    security.object_id for security in preview.securities
-                ),
-                industry_ids=(),
-                covered_segments=(),
-                user_focus=None,
-                exclusions=(),
-            ),
+            foundation.scope,
             expected_parent_id=None,
         )
-        agenda_items = self._agenda_items(preview)
         agenda = self._products.append_agenda(
             project.id,
-            ResearchAgendaInput(
-                scope_id=scope.id,
-                items=agenda_items,
-                generator=AgendaGeneratorInput(
-                    method=AgendaGenerationMethod.DETERMINISTIC_TEMPLATE,
-                    template_key=_AGENDA_TEMPLATE_KEY,
-                    template_version=preview.strategy_version,
-                    model_name=None,
-                    prompt_template_version=None,
-                    input_summary_hash=canonical_hash(preview.canonical_payload()),
-                    output_hash=agenda_items_hash(agenda_items),
-                ),
-            ),
+            foundation.agenda(scope.id),
             expected_parent_id=None,
         )
         draft = self._drafts.create(

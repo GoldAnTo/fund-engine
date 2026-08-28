@@ -126,6 +126,9 @@ class CompanyResearchBasisRecoveryState:
     project: UnderwritingResearchProject | None
     company: UnderwritingResearchObject | None
     securities: tuple[UnderwritingResearchObject, ...]
+    mandate: UnderwritingMandateVersion | None
+    scope: UnderwritingResearchScopeVersion | None
+    agenda: UnderwritingResearchAgendaVersion | None
     mandate_head_id: UUID | None
     scope_head_id: UUID | None
     agenda_head_id: UUID | None
@@ -1058,6 +1061,9 @@ class CompanyResearchRepository:
             project=project,
             company=company,
             securities=securities,
+            mandate=foundation_heads[0],
+            scope=foundation_heads[1],
+            agenda=foundation_heads[2],
             mandate_head_id=(
                 foundation_heads[0].id if foundation_heads[0] is not None else None
             ),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -25,6 +26,10 @@ from app.underwriting.services.company_research_boundary import (
 )
 from app.underwriting.services.company_research_market_inputs import (
     CompanyResearchMarketInputs,
+)
+from app.underwriting.services.company_research_foundation import (
+    alphabet_company_research_foundation_contract,
+    authenticate_company_research_foundation,
 )
 from app.underwriting.services.market_snapshots import (
     MarketSnapshotService,
@@ -179,8 +184,10 @@ class CompanyResearchHistoricalBasisRecovery:
                 raise ValidationError(
                     "company research historical basis recovery evidence is invalid"
                 )
-            changes: list[tuple[str, str]] = []
-            for before, after in zip(parent_facts, successor_facts, strict=True):
+            changes: list[tuple[int, str, str, dict[str, object]]] = []
+            for index, (before, after) in enumerate(
+                zip(parent_facts, successor_facts, strict=True)
+            ):
                 if before == after:
                     continue
                 if not isinstance(before, Mapping) or not isinstance(after, Mapping):
@@ -201,12 +208,22 @@ class CompanyResearchHistoricalBasisRecovery:
                     raise ValidationError(
                         "company research historical basis recovery evidence is invalid"
                     )
-                changes.append((str(after.get("fact_key")), str(decision)))
+                changes.append(
+                    (index, str(after.get("fact_key")), str(decision), expected_after)
+                )
             if len(changes) != 1:
                 raise ValidationError(
                     "company research historical basis recovery evidence is invalid"
                 )
-            fact_key, decision = changes[0]
+            fact_index, fact_key, decision, expected_fact = changes[0]
+            expected_payload = dict(parent.payload)
+            expected_facts = deepcopy(parent_facts)
+            expected_facts[fact_index] = expected_fact
+            expected_payload["facts"] = expected_facts
+            if canonical_hash(successor.payload) != canonical_hash(expected_payload):
+                raise ValidationError(
+                    "company research historical basis recovery evidence is invalid"
+                )
             if successor.input_hash != canonical_hash(
                 {
                     "parent": parent.content_hash,
@@ -275,6 +292,15 @@ class CompanyResearchHistoricalBasisRecovery:
             raise ValidationError(
                 "company research historical basis recovery draft is incomplete"
             )
+        if (
+            state.company is None
+            or state.mandate is None
+            or state.scope is None
+            or state.agenda is None
+        ):
+            raise ValidationError(
+                "company research historical basis recovery draft is incomplete"
+            )
         references = WorkspaceMarketReferences(
             mandate_id=content.mandate_id,
             scope_id=content.scope_id,
@@ -285,6 +311,20 @@ class CompanyResearchHistoricalBasisRecovery:
             security_rights_ids=content.security_rights_ids,
         )
         try:
+            foundation = alphabet_company_research_foundation_contract(
+                company_external_key=state.company.external_key,
+                company_id=state.company.id,
+                security_ids=tuple(row.id for row in state.securities),
+                request_hash=state.preparation.request_hash,
+                strategy_version=state.preparation.strategy_version,
+            )
+            authenticate_company_research_foundation(
+                project_id=state.preparation.project_id,
+                contract=foundation,
+                mandate=state.mandate,
+                scope=state.scope,
+                agenda=state.agenda,
+            )
             self._market_snapshots.workspace_reference_context(
                 state.preparation.project_id,
                 references,

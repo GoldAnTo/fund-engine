@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models.ledger import ConflictError, ValidationError
 from app.underwriting.domain.product_contracts import (
+    AgendaGeneratorInput,
     PRODUCT_HISTORICAL_BASIS_SCHEMA,
     ProductHistoricalBasisInput,
     ResearchAgendaInput,
@@ -36,6 +37,134 @@ _COMPANY_SECURITY_RELATION = "company_has_security"
 _MAX_REQUIRED_EXCESS_RETURN = Decimal("1")
 _MANDATE_NUMERIC_QUANTUM = Decimal("0.00000001")
 _MANDATE_NUMERIC_ZERO = Decimal("0.00000000")
+
+
+def _canonical_time_text(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat()
+
+
+def product_mandate_payload(
+    *,
+    project_id: UUID,
+    mandate_key: str,
+    horizon_years: int,
+    base_currency: str,
+    required_return: Decimal,
+    permanent_loss_limit: Decimal,
+    comparison_set: tuple[str, ...] | list[str],
+    benchmark_key: str | None,
+    required_excess_return: Decimal | None,
+    effective_at: datetime,
+    expires_at: datetime | None,
+) -> dict[str, object]:
+    """Canonical immutable payload committed by a product mandate row."""
+    return {
+        "schema_version": "product.investment-mandate.v1",
+        "project_id": str(project_id),
+        "mandate_key": mandate_key,
+        "horizon_years": horizon_years,
+        "base_currency": base_currency,
+        "required_return": format(required_return, ".8f"),
+        "permanent_loss_limit": format(permanent_loss_limit, ".8f"),
+        "comparison_set": list(comparison_set),
+        "benchmark_key": benchmark_key,
+        "required_excess_return": (
+            format(required_excess_return, ".8f")
+            if required_excess_return is not None
+            else None
+        ),
+        "effective_at": _canonical_time_text(effective_at),
+        "expires_at": _canonical_time_text(expires_at),
+    }
+
+
+def product_mandate_record_content_hash(row: object) -> str:
+    return canonical_hash(
+        product_mandate_payload(
+            project_id=getattr(row, "project_id"),
+            mandate_key=getattr(row, "mandate_key"),
+            horizon_years=getattr(row, "horizon_years"),
+            base_currency=getattr(row, "base_currency"),
+            required_return=getattr(row, "required_return"),
+            permanent_loss_limit=getattr(row, "permanent_loss_limit"),
+            comparison_set=getattr(row, "comparison_set"),
+            benchmark_key=getattr(row, "benchmark_key"),
+            required_excess_return=getattr(row, "required_excess_return"),
+            effective_at=getattr(row, "effective_at"),
+            expires_at=getattr(row, "expires_at"),
+        )
+    )
+
+
+def research_scope_content_hash(
+    *, project_id: UUID, payload: Mapping[str, object]
+) -> str:
+    return canonical_hash(
+        {
+            "schema_version": "product.research-scope.v1",
+            "project_id": str(project_id),
+            "scope": dict(payload),
+        }
+    )
+
+
+def research_scope_payload(
+    *,
+    primary_company_id: UUID,
+    target_security_ids: tuple[UUID, ...],
+    industry_ids: tuple[UUID, ...],
+    covered_segments: tuple[str, ...],
+    user_focus: str | None,
+    exclusions: tuple[str, ...],
+) -> dict[str, object]:
+    return {
+        "primary_company_id": str(primary_company_id),
+        "target_security_ids": [str(target) for target in target_security_ids],
+        "industry_ids": [str(industry) for industry in industry_ids],
+        "covered_segments": list(covered_segments),
+        "user_focus": user_focus,
+        "exclusions": list(exclusions),
+    }
+
+
+def research_agenda_payload(items: tuple[str, ...]) -> dict[str, object]:
+    return {"items": list(items)}
+
+
+def agenda_generator_provenance(
+    generator: AgendaGeneratorInput,
+) -> dict[str, object]:
+    return {
+        "method": generator.method.value,
+        "template_key": generator.template_key,
+        "template_version": generator.template_version,
+        "model_name": generator.model_name,
+        "prompt_template_version": generator.prompt_template_version,
+        "input_summary_hash": generator.input_summary_hash,
+        "output_hash": generator.output_hash,
+    }
+
+
+def research_agenda_content_hash(
+    *,
+    project_id: UUID,
+    scope_id: UUID,
+    payload: Mapping[str, object],
+    generator_provenance: Mapping[str, object],
+) -> str:
+    return canonical_hash(
+        {
+            "schema_version": "product.research-agenda.v1",
+            "project_id": str(project_id),
+            "scope_id": str(scope_id),
+            "items": payload.get("items"),
+            "generator": dict(generator_provenance),
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -537,28 +666,19 @@ class ResearchProjectService:
                 raise ValidationError("mandate effective_at must advance")
 
         mandate_key = f"product.project:{project_id}"
-        payload = {
-            "schema_version": "product.investment-mandate.v1",
-            "project_id": str(project_id),
-            "mandate_key": mandate_key,
-            "horizon_years": value.horizon_years,
-            "base_currency": base_currency,
-            "required_return": format(required_return, ".8f"),
-            "permanent_loss_limit": format(permanent_loss_limit, ".8f"),
-            "comparison_set": list(comparison_set),
-            "benchmark_key": normalized_benchmark,
-            "required_excess_return": (
-                format(normalized_excess, ".8f")
-                if normalized_excess is not None
-                else None
-            ),
-            "effective_at": normalized_effective.isoformat(),
-            "expires_at": (
-                normalized_expires.isoformat()
-                if normalized_expires is not None
-                else None
-            ),
-        }
+        payload = product_mandate_payload(
+            project_id=project_id,
+            mandate_key=mandate_key,
+            horizon_years=value.horizon_years,
+            base_currency=base_currency,
+            required_return=required_return,
+            permanent_loss_limit=permanent_loss_limit,
+            comparison_set=comparison_set,
+            benchmark_key=normalized_benchmark,
+            required_excess_return=normalized_excess,
+            effective_at=normalized_effective,
+            expires_at=normalized_expires,
+        )
         return self._as_conflict(
             lambda: self._repository.append_product_mandate(
                 project_id=project_id,
@@ -619,24 +739,20 @@ class ResearchProjectService:
         )
         exclusions = self._normalized_string_set(value.exclusions, "exclusions item")
         user_focus = value.user_focus.strip() if value.user_focus is not None else None
-        payload: dict[str, object] = {
-            "primary_company_id": str(project.primary_company_id),
-            "target_security_ids": [str(target) for target in targets],
-            "industry_ids": [str(industry) for industry in industries],
-            "covered_segments": list(covered_segments),
-            "user_focus": user_focus,
-            "exclusions": list(exclusions),
-        }
+        payload = research_scope_payload(
+            primary_company_id=project.primary_company_id,
+            target_security_ids=targets,
+            industry_ids=industries,
+            covered_segments=covered_segments,
+            user_focus=user_focus,
+            exclusions=exclusions,
+        )
         return self._as_conflict(
             lambda: self._repository.append_scope(
                 project_id=project_id,
                 payload=payload,
-                content_hash=canonical_hash(
-                    {
-                        "schema_version": "product.research-scope.v1",
-                        "project_id": str(project_id),
-                        "scope": payload,
-                    }
+                content_hash=research_scope_content_hash(
+                    project_id=project_id, payload=payload
                 ),
                 expected_parent_id=expected_parent_id,
                 created_at=self._created_at(),
@@ -666,31 +782,20 @@ class ResearchProjectService:
             raise ValidationError("agenda scope must belong to the same project")
 
         generator = value.generator
-        provenance: dict[str, object] = {
-            "method": generator.method.value,
-            "template_key": generator.template_key,
-            "template_version": generator.template_version,
-            "model_name": generator.model_name,
-            "prompt_template_version": generator.prompt_template_version,
-            "input_summary_hash": generator.input_summary_hash,
-            "output_hash": generator.output_hash,
-        }
-        items = list(value.items)
-        payload: dict[str, object] = {"items": items}
+        provenance = agenda_generator_provenance(generator)
+        items = tuple(value.items)
+        payload = research_agenda_payload(items)
         return self._as_conflict(
             lambda: self._repository.append_agenda(
                 project_id=project_id,
                 scope_id=scope.id,
                 payload=payload,
                 generator_provenance=provenance,
-                content_hash=canonical_hash(
-                    {
-                        "schema_version": "product.research-agenda.v1",
-                        "project_id": str(project_id),
-                        "scope_id": str(scope.id),
-                        "items": items,
-                        "generator": provenance,
-                    }
+                content_hash=research_agenda_content_hash(
+                    project_id=project_id,
+                    scope_id=scope.id,
+                    payload=payload,
+                    generator_provenance=provenance,
                 ),
                 expected_parent_id=expected_parent_id,
                 created_at=self._created_at(),
