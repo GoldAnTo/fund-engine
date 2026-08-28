@@ -117,6 +117,15 @@ class CompanyResearchHistoricalBasisRecovery:
             raise ValidationError(
                 "company research preparation is not ready to retry"
             )
+        if state.events and (
+            CompanyResearchHistoricalBasisRecovery._stored_utc(
+                state.events[-1].created_at
+            )
+            > retry_at
+        ):
+            raise ValidationError(
+                "company research preparation is not ready to retry"
+            )
 
     def _project_security_keys(
         self, state: CompanyResearchBasisRecoveryState
@@ -490,30 +499,31 @@ class CompanyResearchHistoricalBasisRecovery:
                 content.historical_basis_id, boundary
             ).id
 
-        basis = self._product_repository.product_basis_by_content_hash(
-            boundary.basis_content_hash
-        )
-        if basis is None:
-            basis = self._products.create_historical_basis(boundary.basis_input)
-        authenticated = self._authenticate_exact_basis(basis.id, boundary)
-        created_at = when
-        prior_lock_version = state.draft.lock_version
-        recovered = self._drafts.save(
-            state.preparation.project_id,
-            expected_lock_version=prior_lock_version,
-            patch=WorkspaceDraftPatch(historical_basis_id=authenticated.id),
-        )
-        self._company.append_event(
-            preparation_id=state.preparation.id,
-            event_type="historical_basis_recovered",
-            payload={
-                "basis_id": str(authenticated.id),
-                "cutoff": boundary.cutoff_at.isoformat(),
-                "source_manifest_hash": boundary.basis_input.source_manifest_hash,
-                "prior_lock_version": prior_lock_version,
-                "new_lock_version": recovered.lock_version,
-                "created_at": created_at.isoformat(),
-            },
-            created_at=created_at,
-        )
+        with self._session.begin_nested():
+            basis = self._product_repository.product_basis_by_content_hash(
+                boundary.basis_content_hash
+            )
+            if basis is None:
+                basis = self._products.create_historical_basis(boundary.basis_input)
+            authenticated = self._authenticate_exact_basis(basis.id, boundary)
+            created_at = when
+            prior_lock_version = state.draft.lock_version
+            recovered = self._drafts.save(
+                state.preparation.project_id,
+                expected_lock_version=prior_lock_version,
+                patch=WorkspaceDraftPatch(historical_basis_id=authenticated.id),
+            )
+            self._company.append_event(
+                preparation_id=state.preparation.id,
+                event_type="historical_basis_recovered",
+                payload={
+                    "basis_id": str(authenticated.id),
+                    "cutoff": boundary.cutoff_at.isoformat(),
+                    "source_manifest_hash": boundary.basis_input.source_manifest_hash,
+                    "prior_lock_version": prior_lock_version,
+                    "new_lock_version": recovered.lock_version,
+                    "created_at": created_at.isoformat(),
+                },
+                created_at=created_at,
+            )
         return authenticated.id

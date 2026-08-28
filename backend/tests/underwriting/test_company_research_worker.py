@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import bindparam, create_engine, func, select, text
+from sqlalchemy import bindparam, create_engine, event as sa_event, func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.ledger import Base, ConflictError, ValidationError
@@ -3220,6 +3220,74 @@ def test_claim_next_skips_a_locked_candidate_and_claims_the_next_job(
     assert all(call[2] == {"skip_locked": True} for call in calls)
 
 
+def test_claim_next_keyset_pages_beyond_a_fully_locked_first_batch(
+    session, monkeypatch
+) -> None:
+    from app.underwriting.services import company_research_preparation as module
+
+    initialized = []
+    for index in range(3):
+        if initialized:
+            initialized[-1].preparation.request_hash = f"{index:064x}"
+            session.flush()
+        initialized.append(
+            _initialized(session, idempotency_key=f"claim-page-{index}")
+        )
+    ordered = tuple(
+        session.execute(
+            select(Job.id, CompanyResearchPreparation.id)
+            .join(
+                CompanyResearchPreparation,
+                CompanyResearchPreparation.job_id == Job.id,
+            )
+            .where(
+                CompanyResearchPreparation.id.in_(
+                    tuple(item.preparation.id for item in initialized)
+                )
+            )
+            .order_by(Job.created_at, Job.id)
+        )
+    )
+    monkeypatch.setattr(module, "_WORKER_CANDIDATE_PAGE_SIZE", 2)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    real_lock = worker._repository.lock_worker_claim_state
+    calls = []
+
+    def skip_first_page(*, preparation_id, job_id, **kwargs):
+        calls.append((job_id, preparation_id, kwargs))
+        if (job_id, preparation_id) in ordered[:2]:
+            return None
+        return real_lock(
+            preparation_id=preparation_id, job_id=job_id, **kwargs
+        )
+
+    monkeypatch.setattr(
+        worker._repository, "lock_worker_claim_state", skip_first_page
+    )
+    candidate_sql: list[str] = []
+
+    def capture(_connection, _cursor, statement, _parameters, _context, _many):
+        if (
+            "SELECT jobs.id" in statement
+            and "uw_company_research_preparations.id" in statement
+            and "jobs.created_at" in statement
+        ):
+            candidate_sql.append(statement)
+
+    sa_event.listen(session.bind, "before_cursor_execute", capture)
+    try:
+        claim = worker.claim_next()
+    finally:
+        sa_event.remove(session.bind, "before_cursor_execute", capture)
+
+    assert claim is not None
+    assert (claim.job_id, claim.preparation_id) == ordered[2]
+    assert [call[:2] for call in calls] == list(ordered)
+    assert len(candidate_sql) == 2
+    assert all("LIMIT" in statement for statement in candidate_sql)
+    assert "jobs.created_at >" in candidate_sql[1]
+
+
 def test_retry_boundary_locks_project_before_preparation_and_job(
     session, monkeypatch
 ) -> None:
@@ -3295,6 +3363,89 @@ def test_worker_maintenance_transitions_use_project_first_ownership_boundary(
     assert calls == [
         (preparation.id, job.id, {"skip_locked": True})
     ]
+
+
+@pytest.mark.parametrize("operation", ("recover_stale", "cancel_queued"))
+def test_worker_maintenance_keyset_pages_beyond_a_fully_locked_first_batch(
+    session, monkeypatch, operation: str
+) -> None:
+    from app.underwriting.services import company_research_preparation as module
+
+    initialized = []
+    for index in range(3):
+        if initialized:
+            initialized[-1].preparation.request_hash = f"{index + 10:064x}"
+            session.flush()
+        item = _initialized(
+            session, idempotency_key=f"maintenance-page-{operation}-{index}"
+        )
+        if operation == "recover_stale":
+            item.preparation.status = "preparing_sources"
+            item.preparation.progress = 5
+            item.job.status = "running"
+            item.job.step = "evidence_index"
+            item.job.started_at = NOW - timedelta(hours=1)
+            item.job.claim_token = f"stale-{index}"
+        else:
+            item.job.cancel_requested = True
+        initialized.append(item)
+        session.flush()
+    ordered = tuple(
+        session.execute(
+            select(Job.id, CompanyResearchPreparation.id)
+            .join(
+                CompanyResearchPreparation,
+                CompanyResearchPreparation.job_id == Job.id,
+            )
+            .where(
+                CompanyResearchPreparation.id.in_(
+                    tuple(item.preparation.id for item in initialized)
+                )
+            )
+            .order_by(Job.created_at, Job.id)
+        )
+    )
+    monkeypatch.setattr(module, "_WORKER_CANDIDATE_PAGE_SIZE", 2)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    real_lock = worker._repository.lock_worker_claim_state
+    calls = []
+
+    def skip_first_page(*, preparation_id, job_id, **kwargs):
+        calls.append((job_id, preparation_id, kwargs))
+        if (job_id, preparation_id) in ordered[:2]:
+            return None
+        return real_lock(
+            preparation_id=preparation_id, job_id=job_id, **kwargs
+        )
+
+    monkeypatch.setattr(
+        worker._repository, "lock_worker_claim_state", skip_first_page
+    )
+    candidate_sql: list[str] = []
+
+    def capture(_connection, _cursor, statement, _parameters, _context, _many):
+        if (
+            "SELECT jobs.id" in statement
+            and "uw_company_research_preparations.id" in statement
+            and "jobs.created_at" in statement
+        ):
+            candidate_sql.append(statement)
+
+    sa_event.listen(session.bind, "before_cursor_execute", capture)
+    try:
+        changed = (
+            worker.recover_stale_claims(before=NOW)
+            if operation == "recover_stale"
+            else worker.cancel_queued_claims()
+        )
+    finally:
+        sa_event.remove(session.bind, "before_cursor_execute", capture)
+
+    assert changed == 1
+    assert [call[:2] for call in calls] == list(ordered)
+    assert len(candidate_sql) == 2
+    assert all("LIMIT" in statement for statement in candidate_sql)
+    assert "jobs.created_at >" in candidate_sql[1]
 
 
 def test_historical_basis_recovery_rejects_a_wrong_gaps_fixture_hash(
@@ -3767,6 +3918,145 @@ def test_blocked_retry_deadline_rejects_before_recovery_writes_even_if_committed
     assert tuple(
         (event.id, event.sequence, event.event_type, event.content_hash)
         for event in repository.events(preparation.id)
+    ) == event_snapshot
+
+
+def test_blocked_retry_future_event_tail_rejects_before_recovery_writes_even_if_committed(
+    session,
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    repository = CompanyResearchRepository(session)
+    events = repository.events(initialized.preparation.id)
+    tail = events[-1]
+    future = NOW + timedelta(minutes=5)
+    future_hash = repository.event_content_hash_v2(
+        preparation_id=tail.preparation_id,
+        sequence=tail.sequence,
+        previous_event_hash=tail.previous_event_hash,
+        event_type=tail.event_type,
+        payload=tail.payload,
+        created_at=future,
+    )
+    assert session.execute(
+        text(
+            "UPDATE uw_company_research_events SET created_at = :created_at, "
+            "content_hash = :content_hash WHERE id = :id"
+        ).bindparams(
+            bindparam(
+                "created_at", type_=CompanyResearchEvent.__table__.c.created_at.type
+            ),
+            bindparam("id", type_=CompanyResearchEvent.__table__.c.id.type),
+        ),
+        {"created_at": future, "content_hash": future_hash, "id": tail.id},
+    ).rowcount == 1
+    session.expire_all()
+    basis_count = session.scalar(
+        select(func.count()).select_from(UnderwritingHistoricalBasis)
+    )
+    event_snapshot = tuple(
+        (event.id, event.sequence, event.created_at, event.content_hash)
+        for event in repository.events(initialized.preparation.id)
+    )
+
+    with pytest.raises(ValidationError, match="not ready to retry"):
+        CompanyResearchPreparationService(session, now=lambda: NOW).retry(
+            project_id=initialized.project.id
+        )
+    session.commit()
+
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert draft is not None
+    assert draft.id == blocked_draft.id
+    assert draft.lock_version == blocked_draft.lock_version
+    assert draft.content.historical_basis_id is None
+    assert session.scalar(
+        select(func.count()).select_from(UnderwritingHistoricalBasis)
+    ) == basis_count
+    assert repository.current_artifact(
+        initialized.project.id, "evidence_index"
+    ).id == reviewed.id
+    assert repository.current_artifact(
+        initialized.project.id, "research_gaps"
+    ).id == gaps.id
+    assert tuple(
+        (event.id, event.sequence, event.created_at, event.content_hash)
+        for event in repository.events(initialized.preparation.id)
+    ) == event_snapshot
+
+
+@pytest.mark.parametrize("failure", ("draft_cas", "recovery_event"))
+def test_basis_recovery_savepoint_rolls_back_every_write_when_later_step_fails(
+    session, monkeypatch, failure: str
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    assert session.execute(
+        text("DELETE FROM uw_historical_bases WHERE id = :basis_id").bindparams(
+            bindparam(
+                "basis_id", type_=UnderwritingHistoricalBasis.__table__.c.id.type
+            )
+        ),
+        {"basis_id": initialized.basis.id},
+    ).rowcount == 1
+    session.expire_all()
+    recovery = CompanyResearchHistoricalBasisRecovery(
+        session, now=lambda: NOW + timedelta(seconds=1)
+    )
+    repository = CompanyResearchRepository(session)
+    basis_count = session.scalar(
+        select(func.count()).select_from(UnderwritingHistoricalBasis)
+    )
+    event_snapshot = tuple(
+        (event.id, event.sequence, event.content_hash)
+        for event in repository.events(initialized.preparation.id)
+    )
+    if failure == "draft_cas":
+        monkeypatch.setattr(
+            recovery._drafts,
+            "save",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                ConflictError("workspace draft changed")
+            ),
+        )
+        expected_error = ConflictError
+    else:
+        monkeypatch.setattr(
+            recovery._company,
+            "append_event",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                ValidationError("forced recovery event failure")
+            ),
+        )
+        expected_error = ValidationError
+
+    with pytest.raises(expected_error):
+        recovery.recover(initialized.preparation.id)
+    session.commit()
+
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert draft is not None
+    assert draft.id == blocked_draft.id
+    assert draft.lock_version == blocked_draft.lock_version
+    assert draft.content == blocked_draft.content
+    assert session.scalar(
+        select(func.count()).select_from(UnderwritingHistoricalBasis)
+    ) == basis_count
+    assert repository.current_artifact(
+        initialized.project.id, "evidence_index"
+    ).id == reviewed.id
+    assert repository.current_artifact(
+        initialized.project.id, "research_gaps"
+    ).id == gaps.id
+    assert tuple(
+        (event.id, event.sequence, event.content_hash)
+        for event in repository.events(initialized.preparation.id)
     ) == event_snapshot
 
 

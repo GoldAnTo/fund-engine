@@ -66,6 +66,7 @@ COMPANY_RESEARCH_STAGES = (
 )
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = (30, 120, 600)
+_WORKER_CANDIDATE_PAGE_SIZE = 100
 _SAFE_PROVIDER_ERROR = "provider_unavailable"
 _SAFE_STALE_ERROR = "stale_output_discarded"
 _VALIDATION_MESSAGE_LIMIT = 512
@@ -137,289 +138,314 @@ class CompanyResearchPreparationWorker:
             raise ValidationError("clock must be a timezone-aware datetime")
         return value.astimezone(UTC)
 
+    def _candidate_pages(self, statement):
+        cursor_created_at: datetime | None = None
+        cursor_job_id: UUID | None = None
+        while True:
+            page_statement = statement
+            if cursor_created_at is not None and cursor_job_id is not None:
+                page_statement = page_statement.where(
+                    or_(
+                        Job.created_at > cursor_created_at,
+                        and_(
+                            Job.created_at == cursor_created_at,
+                            Job.id > cursor_job_id,
+                        ),
+                    )
+                )
+            rows = tuple(
+                self._session.execute(
+                    page_statement.order_by(Job.created_at, Job.id).limit(
+                        _WORKER_CANDIDATE_PAGE_SIZE
+                    )
+                )
+            )
+            if not rows:
+                return
+            cursor_job_id, _, cursor_created_at = rows[-1]
+            yield tuple((job_id, preparation_id) for job_id, preparation_id, _ in rows)
+            if len(rows) < _WORKER_CANDIDATE_PAGE_SIZE:
+                return
+
     def claim_next(self) -> CompanyResearchClaim | None:
         """Atomically claim only an explicitly executable company stage."""
         self._repository._reserve_sqlite_writer_before_ownership_read()
         now = self._utcnow()
-        candidates = tuple(
-            self._session.execute(
-                select(Job.id, CompanyResearchPreparation.id)
-                .join(
-                    CompanyResearchPreparation,
-                    CompanyResearchPreparation.job_id == Job.id,
-                )
-                .where(
-                    Job.kind == "prepare_company_research",
-                    Job.target_type == "company_research_preparation",
-                    Job.target_id == CompanyResearchPreparation.id,
-                    Job.research_case_id.is_(None),
-                    Job.status == "queued",
-                    Job.cancel_requested.is_(False),
-                    or_(
-                        and_(
-                            Job.step == "evidence_index",
-                            CompanyResearchPreparation.status.in_(
-                                ("queued", "recoverable_failure")
-                            ),
-                            CompanyResearchPreparation.current_step == "evidence_index",
+        candidate_statement = (
+            select(Job.id, CompanyResearchPreparation.id, Job.created_at)
+            .join(
+                CompanyResearchPreparation,
+                CompanyResearchPreparation.job_id == Job.id,
+            )
+            .where(
+                Job.kind == "prepare_company_research",
+                Job.target_type == "company_research_preparation",
+                Job.target_id == CompanyResearchPreparation.id,
+                Job.research_case_id.is_(None),
+                Job.status == "queued",
+                Job.cancel_requested.is_(False),
+                or_(
+                    and_(
+                        Job.step == "evidence_index",
+                        CompanyResearchPreparation.status.in_(
+                            ("queued", "recoverable_failure")
                         ),
-                        and_(
-                            Job.step == "model_bundle",
-                            CompanyResearchPreparation.status.in_(
-                                ("building_model", "recoverable_failure")
-                            ),
-                            CompanyResearchPreparation.current_step == "model_bundle",
-                        ),
+                        CompanyResearchPreparation.current_step == "evidence_index",
                     ),
-                    (CompanyResearchPreparation.next_attempt_at.is_(None))
-                    | (CompanyResearchPreparation.next_attempt_at <= now),
-                )
-                .order_by(Job.created_at, Job.id)
+                    and_(
+                        Job.step == "model_bundle",
+                        CompanyResearchPreparation.status.in_(
+                            ("building_model", "recoverable_failure")
+                        ),
+                        CompanyResearchPreparation.current_step == "model_bundle",
+                    ),
+                ),
+                (CompanyResearchPreparation.next_attempt_at.is_(None))
+                | (CompanyResearchPreparation.next_attempt_at <= now),
             )
         )
-        for job_id, preparation_id in candidates:
-            locked = self._repository.lock_worker_claim_state(
-                preparation_id=preparation_id,
-                job_id=job_id,
-                skip_locked=True,
-            )
-            if locked is None:
-                continue
-            preparation, job = locked
-            if (
-                job.target_id != preparation.id
-                or job.status != "queued"
-                or job.cancel_requested
-                or job.step not in {"evidence_index", "model_bundle"}
-                or preparation.current_step != job.step
-                or preparation.status
-                not in (
-                    {"queued", "recoverable_failure"}
-                    if job.step == "evidence_index"
-                    else {"building_model", "recoverable_failure"}
+        for candidates in self._candidate_pages(candidate_statement):
+            for job_id, preparation_id in candidates:
+                locked = self._repository.lock_worker_claim_state(
+                    preparation_id=preparation_id,
+                    job_id=job_id,
+                    skip_locked=True,
                 )
-                or (
-                    preparation.next_attempt_at is not None
-                    and self._repository._persisted_utc(preparation.next_attempt_at)
-                    > now
+                if locked is None:
+                    continue
+                preparation, job = locked
+                if (
+                    job.target_id != preparation.id
+                    or job.status != "queued"
+                    or job.cancel_requested
+                    or job.step not in {"evidence_index", "model_bundle"}
+                    or preparation.current_step != job.step
+                    or preparation.status
+                    not in (
+                        {"queued", "recoverable_failure"}
+                        if job.step == "evidence_index"
+                        else {"building_model", "recoverable_failure"}
+                    )
+                    or (
+                        preparation.next_attempt_at is not None
+                        and self._repository._persisted_utc(preparation.next_attempt_at)
+                        > now
+                    )
+                ):
+                    continue
+                token = secrets.token_hex(16)
+                job.status = "running"
+                job.started_at = now
+                job.claim_token = token
+                stage = job.step
+                preparation.status = (
+                    "preparing_sources"
+                    if stage == "evidence_index"
+                    else "building_model"
                 )
-            ):
-                continue
-            token = secrets.token_hex(16)
-            job.status = "running"
-            job.started_at = now
-            job.claim_token = token
-            stage = job.step
-            preparation.status = (
-                "preparing_sources" if stage == "evidence_index" else "building_model"
-            )
-            preparation.progress = 5 if stage == "evidence_index" else 30
-            preparation.updated_at = now
-            self._jobs.append_event(
-                job_id=job.id,
-                seq=self._jobs.next_event_seq(job.id),
-                status="running",
-                step=stage,
-                message=f"company research {stage} job claimed",
-            )
-            self._repository.append_event(
-                preparation_id=preparation.id,
-                event_type="source_stage_claimed"
-                if stage == "evidence_index"
-                else "model_stage_claimed",
-                payload={"stage": stage, "attempt": job.attempt},
-                created_at=now,
-            )
-            self._session.flush()
-            return CompanyResearchClaim(
-                job_id=job.id,
-                preparation_id=preparation.id,
-                claim_token=token,
-                request_hash=preparation.request_hash,
-                strategy_version=preparation.strategy_version,
-                step=stage,
-            )
+                preparation.progress = 5 if stage == "evidence_index" else 30
+                preparation.updated_at = now
+                self._jobs.append_event(
+                    job_id=job.id,
+                    seq=self._jobs.next_event_seq(job.id),
+                    status="running",
+                    step=stage,
+                    message=f"company research {stage} job claimed",
+                )
+                self._repository.append_event(
+                    preparation_id=preparation.id,
+                    event_type="source_stage_claimed"
+                    if stage == "evidence_index"
+                    else "model_stage_claimed",
+                    payload={"stage": stage, "attempt": job.attempt},
+                    created_at=now,
+                )
+                self._session.flush()
+                return CompanyResearchClaim(
+                    job_id=job.id,
+                    preparation_id=preparation.id,
+                    claim_token=token,
+                    request_hash=preparation.request_hash,
+                    strategy_version=preparation.strategy_version,
+                    step=stage,
+                )
         return None
 
     def recover_stale_claims(self, *, before: datetime) -> int:
         """Make an abandoned source claim eligible again without cloning it."""
         before = before.astimezone(UTC)
-        candidates = tuple(
-            self._session.execute(
-                select(Job.id, CompanyResearchPreparation.id)
-                .join(
-                    CompanyResearchPreparation,
-                    CompanyResearchPreparation.job_id == Job.id,
-                )
-                .where(
-                    Job.kind == "prepare_company_research",
-                    Job.target_type == "company_research_preparation",
-                    Job.target_id == CompanyResearchPreparation.id,
-                    Job.research_case_id.is_(None),
-                    Job.status == "running",
-                    Job.step.in_(("evidence_index", "model_bundle")),
-                    Job.started_at.is_not(None),
-                    Job.started_at < before,
-                    or_(
-                        and_(
-                            CompanyResearchPreparation.status == "preparing_sources",
-                            CompanyResearchPreparation.current_step == "evidence_index",
-                        ),
-                        and_(
-                            CompanyResearchPreparation.status == "building_model",
-                            CompanyResearchPreparation.current_step == "model_bundle",
-                        ),
+        candidate_statement = (
+            select(Job.id, CompanyResearchPreparation.id, Job.created_at)
+            .join(
+                CompanyResearchPreparation,
+                CompanyResearchPreparation.job_id == Job.id,
+            )
+            .where(
+                Job.kind == "prepare_company_research",
+                Job.target_type == "company_research_preparation",
+                Job.target_id == CompanyResearchPreparation.id,
+                Job.research_case_id.is_(None),
+                Job.status == "running",
+                Job.step.in_(("evidence_index", "model_bundle")),
+                Job.started_at.is_not(None),
+                Job.started_at < before,
+                or_(
+                    and_(
+                        CompanyResearchPreparation.status == "preparing_sources",
+                        CompanyResearchPreparation.current_step == "evidence_index",
                     ),
-                )
-                .order_by(Job.created_at, Job.id)
+                    and_(
+                        CompanyResearchPreparation.status == "building_model",
+                        CompanyResearchPreparation.current_step == "model_bundle",
+                    ),
+                ),
             )
         )
         recovered = 0
-        for job_id, preparation_id in candidates:
-            locked = self._repository.lock_worker_claim_state(
-                preparation_id=preparation_id,
-                job_id=job_id,
-                skip_locked=True,
-            )
-            if locked is None:
-                continue
-            preparation, job = locked
-            if (
-                not self._repository.is_exact_prepare_job_owner(job, preparation.id)
-                or job.status != "running"
-                or job.step not in {"evidence_index", "model_bundle"}
-                or job.started_at is None
-                or self._repository._persisted_utc(job.started_at) >= before
-                or preparation.current_step != job.step
-                or preparation.status
-                != (
-                    "preparing_sources"
-                    if job.step == "evidence_index"
-                    else "building_model"
+        for candidates in self._candidate_pages(candidate_statement):
+            for job_id, preparation_id in candidates:
+                locked = self._repository.lock_worker_claim_state(
+                    preparation_id=preparation_id,
+                    job_id=job_id,
+                    skip_locked=True,
                 )
-            ):
-                continue
-            now = self._utcnow()
-            if job.cancel_requested:
-                job.status = "cancelled"
-                job.error = _SAFE_STALE_ERROR
-                preparation.status = "blocked"
-                preparation.last_error_code = _SAFE_STALE_ERROR
-                event_type = "stale_output_discarded"
-            else:
-                job.status = "queued"
-                job.error = None
-                job.started_at = None
-                preparation.status = (
-                    "queued" if job.step == "evidence_index" else "building_model"
+                if locked is None:
+                    continue
+                preparation, job = locked
+                if (
+                    not self._repository.is_exact_prepare_job_owner(job, preparation.id)
+                    or job.status != "running"
+                    or job.step not in {"evidence_index", "model_bundle"}
+                    or job.started_at is None
+                    or self._repository._persisted_utc(job.started_at) >= before
+                    or preparation.current_step != job.step
+                    or preparation.status
+                    != (
+                        "preparing_sources"
+                        if job.step == "evidence_index"
+                        else "building_model"
+                    )
+                ):
+                    continue
+                now = self._utcnow()
+                if job.cancel_requested:
+                    job.status = "cancelled"
+                    job.error = _SAFE_STALE_ERROR
+                    preparation.status = "blocked"
+                    preparation.last_error_code = _SAFE_STALE_ERROR
+                    event_type = "stale_output_discarded"
+                else:
+                    job.status = "queued"
+                    job.error = None
+                    job.started_at = None
+                    preparation.status = (
+                        "queued" if job.step == "evidence_index" else "building_model"
+                    )
+                    preparation.progress = 0 if job.step == "evidence_index" else 25
+                    preparation.last_error_code = None
+                    event_type = (
+                        "source_claim_recovered"
+                        if job.step == "evidence_index"
+                        else "model_claim_recovered"
+                    )
+                job.claim_token = None
+                job.finished_at = now if job.status == "cancelled" else None
+                preparation.updated_at = now
+                self._jobs.append_event(
+                    job_id=job.id,
+                    seq=self._jobs.next_event_seq(job.id),
+                    status=job.status,
+                    step=job.step,
+                    message=event_type,
                 )
-                preparation.progress = 0 if job.step == "evidence_index" else 25
-                preparation.last_error_code = None
-                event_type = (
-                    "source_claim_recovered"
-                    if job.step == "evidence_index"
-                    else "model_claim_recovered"
+                self._repository.append_event(
+                    preparation_id=preparation.id,
+                    event_type=event_type,
+                    payload={"stage": job.step},
+                    created_at=now,
                 )
-            job.claim_token = None
-            job.finished_at = now if job.status == "cancelled" else None
-            preparation.updated_at = now
-            self._jobs.append_event(
-                job_id=job.id,
-                seq=self._jobs.next_event_seq(job.id),
-                status=job.status,
-                step=job.step,
-                message=event_type,
-            )
-            self._repository.append_event(
-                preparation_id=preparation.id,
-                event_type=event_type,
-                payload={"stage": job.step},
-                created_at=now,
-            )
-            recovered += 1
+                recovered += 1
         self._session.flush()
         return recovered
 
     def cancel_queued_claims(self) -> int:
         """Honor cancellation before a queued job can reach provider work."""
-        candidates = tuple(
-            self._session.execute(
-                select(Job.id, CompanyResearchPreparation.id)
-                .join(
-                    CompanyResearchPreparation,
-                    CompanyResearchPreparation.job_id == Job.id,
-                )
-                .where(
-                    Job.kind == "prepare_company_research",
-                    Job.target_type == "company_research_preparation",
-                    Job.target_id == CompanyResearchPreparation.id,
-                    Job.research_case_id.is_(None),
-                    Job.status == "queued",
-                    Job.cancel_requested.is_(True),
-                    Job.step.in_(("evidence_index", "model_bundle")),
-                    or_(
-                        and_(
-                            CompanyResearchPreparation.status.in_(
-                                ("queued", "recoverable_failure")
-                            ),
-                            CompanyResearchPreparation.current_step == "evidence_index",
+        candidate_statement = (
+            select(Job.id, CompanyResearchPreparation.id, Job.created_at)
+            .join(
+                CompanyResearchPreparation,
+                CompanyResearchPreparation.job_id == Job.id,
+            )
+            .where(
+                Job.kind == "prepare_company_research",
+                Job.target_type == "company_research_preparation",
+                Job.target_id == CompanyResearchPreparation.id,
+                Job.research_case_id.is_(None),
+                Job.status == "queued",
+                Job.cancel_requested.is_(True),
+                Job.step.in_(("evidence_index", "model_bundle")),
+                or_(
+                    and_(
+                        CompanyResearchPreparation.status.in_(
+                            ("queued", "recoverable_failure")
                         ),
-                        and_(
-                            CompanyResearchPreparation.status.in_(
-                                ("building_model", "recoverable_failure")
-                            ),
-                            CompanyResearchPreparation.current_step == "model_bundle",
-                        ),
+                        CompanyResearchPreparation.current_step == "evidence_index",
                     ),
-                )
-                .order_by(Job.created_at, Job.id)
+                    and_(
+                        CompanyResearchPreparation.status.in_(
+                            ("building_model", "recoverable_failure")
+                        ),
+                        CompanyResearchPreparation.current_step == "model_bundle",
+                    ),
+                ),
             )
         )
         cancelled = 0
-        for job_id, preparation_id in candidates:
-            locked = self._repository.lock_worker_claim_state(
-                preparation_id=preparation_id,
-                job_id=job_id,
-                skip_locked=True,
-            )
-            if locked is None:
-                continue
-            preparation, job = locked
-            if (
-                not self._repository.is_exact_prepare_job_owner(job, preparation.id)
-                or job.status != "queued"
-                or not job.cancel_requested
-                or job.step not in {"evidence_index", "model_bundle"}
-                or preparation.current_step != job.step
-                or preparation.status
-                not in (
-                    {"queued", "recoverable_failure"}
-                    if job.step == "evidence_index"
-                    else {"building_model", "recoverable_failure"}
+        for candidates in self._candidate_pages(candidate_statement):
+            for job_id, preparation_id in candidates:
+                locked = self._repository.lock_worker_claim_state(
+                    preparation_id=preparation_id,
+                    job_id=job_id,
+                    skip_locked=True,
                 )
-            ):
-                continue
-            now = self._utcnow()
-            job.status = "cancelled"
-            job.error = _SAFE_STALE_ERROR
-            job.finished_at = now
-            preparation.status = "blocked"
-            preparation.last_error_code = _SAFE_STALE_ERROR
-            preparation.updated_at = now
-            self._jobs.append_event(
-                job_id=job.id,
-                seq=self._jobs.next_event_seq(job.id),
-                status="cancelled",
-                step=job.step,
-                message=_SAFE_STALE_ERROR,
-            )
-            self._repository.append_event(
-                preparation_id=preparation.id,
-                event_type="stale_output_discarded",
-                payload={"stage": job.step},
-                created_at=now,
-            )
-            cancelled += 1
+                if locked is None:
+                    continue
+                preparation, job = locked
+                if (
+                    not self._repository.is_exact_prepare_job_owner(job, preparation.id)
+                    or job.status != "queued"
+                    or not job.cancel_requested
+                    or job.step not in {"evidence_index", "model_bundle"}
+                    or preparation.current_step != job.step
+                    or preparation.status
+                    not in (
+                        {"queued", "recoverable_failure"}
+                        if job.step == "evidence_index"
+                        else {"building_model", "recoverable_failure"}
+                    )
+                ):
+                    continue
+                now = self._utcnow()
+                job.status = "cancelled"
+                job.error = _SAFE_STALE_ERROR
+                job.finished_at = now
+                preparation.status = "blocked"
+                preparation.last_error_code = _SAFE_STALE_ERROR
+                preparation.updated_at = now
+                self._jobs.append_event(
+                    job_id=job.id,
+                    seq=self._jobs.next_event_seq(job.id),
+                    status="cancelled",
+                    step=job.step,
+                    message=_SAFE_STALE_ERROR,
+                )
+                self._repository.append_event(
+                    preparation_id=preparation.id,
+                    event_type="stale_output_discarded",
+                    payload={"stage": job.step},
+                    created_at=now,
+                )
+                cancelled += 1
         self._session.flush()
         return cancelled
 
