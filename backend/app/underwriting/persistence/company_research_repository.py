@@ -35,7 +35,6 @@ from app.underwriting.persistence.company_research_models import (
     CompanyResearchPreparation,
 )
 from app.underwriting.persistence.models import (
-    UnderwritingMandateVersion,
     UnderwritingResearchObject,
 )
 from app.underwriting.persistence.product_models import (
@@ -316,6 +315,7 @@ class CompanyResearchRepository:
         project_id: UUID,
         bindings: Sequence[FrozenMarketSnapshotBinding],
         expected_cutoff_at: datetime,
+        expected_source_manifest_hash: str,
         expected_draft_id: UUID | None = None,
         expected_lock_version: int | None = None,
         lock: bool = False,
@@ -335,23 +335,50 @@ class CompanyResearchRepository:
         ):
             raise ValidationError("company research workspace draft is stale")
         content = WorkspaceDraftService._content(draft.content)
-        if content.mandate_id is None:
-            raise ValidationError("company research preparation cutoff is missing")
-        mandate = self._session.get(UnderwritingMandateVersion, content.mandate_id)
-        if (
-            mandate is None
-            or mandate.project_id != project_id
-            or mandate.effective_at is None
-        ):
-            raise ValidationError("company research preparation cutoff is invalid")
-        cutoff = self._persisted_utc(mandate.effective_at)
+        if content.historical_basis_id is None:
+            raise ValidationError("company research historical basis is missing")
+        basis = ProductRepository(self._session).product_basis(
+            content.historical_basis_id
+        )
+        if basis is None:
+            raise ValidationError("company research historical basis is invalid")
+        cutoff = self._persisted_utc(basis.cutoff)
         expected_cutoff = self._stored_datetime(
             expected_cutoff_at, "expected_cutoff_at"
         )
         if cutoff != expected_cutoff:
             raise ValidationError(
-                "company research preparation cutoff does not match reviewed evidence"
+                "company research historical basis cutoff does not match reviewed evidence"
             )
+        expected_source_manifest_hash = self._require_hash(
+            expected_source_manifest_hash,
+            "expected_source_manifest_hash",
+        )
+        if basis.source_manifest_hash != expected_source_manifest_hash:
+            raise ValidationError(
+                "company research historical basis source does not match reviewed evidence"
+            )
+        try:
+            definition_bundle_hash = self._require_hash(
+                basis.definition_bundle_hash,
+                "historical basis definition bundle hash",
+            )
+            parser_bundle_hash = self._require_hash(
+                basis.parser_bundle_hash,
+                "historical basis parser bundle hash",
+            )
+        except ValidationError as exc:
+            raise ValidationError("company research historical basis is invalid") from exc
+        if basis.content_hash != canonical_hash(
+            {
+                "schema_version": "product.historical-basis.v1",
+                "cutoff_at": cutoff.isoformat(),
+                "source_manifest_hash": basis.source_manifest_hash,
+                "definition_bundle_hash": definition_bundle_hash,
+                "parser_bundle_hash": parser_bundle_hash,
+            }
+        ):
+            raise ValidationError("company research historical basis is invalid")
         bindings_by_role = {
             role: tuple(
                 sorted(
@@ -381,7 +408,7 @@ class CompanyResearchRepository:
             raise ValidationError(
                 "company research market bindings do not match workspace draft"
             )
-        return expected_cutoff
+        return cutoff
 
     @classmethod
     def evidence_cutoff(cls, artifact: CompanyResearchArtifactVersion) -> datetime:
@@ -397,6 +424,19 @@ class CompanyResearchRepository:
         except ValueError as exc:
             raise ValidationError("reviewed evidence cutoff is invalid") from exc
         return cls._stored_datetime(parsed, "reviewed evidence cutoff")
+
+    @classmethod
+    def evidence_source_manifest_hash(
+        cls, artifact: CompanyResearchArtifactVersion
+    ) -> str:
+        value = (
+            artifact.payload.get("fixture_content_hash")
+            if isinstance(artifact.payload, dict)
+            else None
+        )
+        if not isinstance(value, str) or _HASH.fullmatch(value) is None:
+            raise ValidationError("reviewed evidence source manifest is invalid")
+        return value
 
     def _locked_prepare_job(
         self,
@@ -1394,10 +1434,12 @@ class CompanyResearchRepository:
         ):
             raise ValidationError("company research model inputs are stale")
         evidence_cutoff = self.evidence_cutoff(evidence)
-        preparation_cutoff = self.validate_workspace_market_boundary(
+        evidence_source_manifest_hash = self.evidence_source_manifest_hash(evidence)
+        basis_cutoff = self.validate_workspace_market_boundary(
             project_id=preparation.project_id,
             bindings=bundle.market_snapshot_bindings,
             expected_cutoff_at=evidence_cutoff,
+            expected_source_manifest_hash=evidence_source_manifest_hash,
             expected_draft_id=bundle.workspace_draft_id,
             expected_lock_version=bundle.workspace_draft_lock_version,
             lock=True,
@@ -1425,7 +1467,7 @@ class CompanyResearchRepository:
         self.validate_market_snapshot_bindings(
             project_id=preparation.project_id,
             bindings=market_snapshot_bindings,
-            cutoff_at=preparation_cutoff,
+            cutoff_at=basis_cutoff,
         )
         model_source_refs = self.expected_model_source_refs(
             evidence=evidence,

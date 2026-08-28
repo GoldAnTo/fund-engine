@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -26,8 +26,13 @@ from app.underwriting.persistence.company_research_repository import (
     CompanyResearchRepository,
 )
 from app.underwriting.persistence.repository import StaleParentError
-from app.underwriting.persistence.models import UnderwritingResearchObject
+from app.underwriting.persistence.models import (
+    UnderwritingHistoricalBasis,
+    UnderwritingResearchObject,
+)
 from app.underwriting.persistence.product_models import UnderwritingResearchProject
+from app.underwriting.persistence.product_repository import ProductRepository
+from app.underwriting.domain.product_contracts import ProductHistoricalBasisInput
 from app.underwriting.domain.types import InvestmentMandateInput
 from app.underwriting.services.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
@@ -43,6 +48,10 @@ from app.underwriting.services.workspace_draft import (
 from tests.underwriting.test_company_research_model_builder import _build_input
 
 NOW = datetime(2026, 8, 25, tzinfo=UTC)
+MANDATE_EFFECTIVE_AT = NOW + timedelta(days=1)
+EVIDENCE_SOURCE_MANIFEST_HASH = "4" * 64
+DEFINITION_BUNDLE_HASH = "5" * 64
+PARSER_BUNDLE_HASH = "6" * 64
 
 
 def _valid_model_payloads(*, with_valuation: bool) -> dict[str, dict[str, object]]:
@@ -88,7 +97,8 @@ def _project(session) -> UnderwritingResearchProject:
 
 def _repository_with_preparation(session):
     project = _project(session)
-    mandate = ResearchProjectService(session, now=lambda: NOW).append_product_mandate(
+    projects = ResearchProjectService(session, now=lambda: NOW)
+    mandate = projects.append_product_mandate(
         project_id=project.id,
         value=InvestmentMandateInput(
             mandate_key="company-research-default",
@@ -100,13 +110,24 @@ def _repository_with_preparation(session):
         ),
         benchmark_key=None,
         required_excess_return=None,
-        effective_at=NOW,
+        effective_at=MANDATE_EFFECTIVE_AT,
         expires_at=None,
         expected_parent_id=None,
     )
+    basis = projects.create_historical_basis(
+        ProductHistoricalBasisInput(
+            cutoff_at=NOW,
+            source_manifest_hash=EVIDENCE_SOURCE_MANIFEST_HASH,
+            definition_bundle_hash=DEFINITION_BUNDLE_HASH,
+            parser_bundle_hash=PARSER_BUNDLE_HASH,
+        )
+    )
     WorkspaceDraftService(session, now=lambda: NOW).create(
         project.id,
-        initial_content=WorkspaceDraftContent(mandate_id=mandate.id),
+        initial_content=WorkspaceDraftContent(
+            mandate_id=mandate.id,
+            historical_basis_id=basis.id,
+        ),
     )
     repository = CompanyResearchRepository(session)
     preparation = repository.add_preparation(
@@ -162,6 +183,7 @@ def _repository_with_model_job(session):
         input_hash="2" * 64,
         payload={
             "cutoff": NOW.isoformat(),
+            "fixture_content_hash": EVIDENCE_SOURCE_MANIFEST_HASH,
             "facts": [
                 {
                     "fact_key": "revenue",
@@ -179,7 +201,7 @@ def _repository_with_model_job(session):
         kind="research_gaps",
         input_hash="3" * 64,
         payload={
-            "fixture_content_hash": "4" * 64,
+            "fixture_content_hash": EVIDENCE_SOURCE_MANIFEST_HASH,
             "company_external_key": "US:TEST:COMPANY",
             "gaps": [],
         },
@@ -227,6 +249,31 @@ def _complete_model_bundle(repository, preparation, bundle):
         expected_request_hash=preparation.request_hash,
         expected_strategy_version=preparation.strategy_version,
         created_at=NOW,
+    )
+
+
+def _basis_for_workspace(session, project):
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(project.id)
+    assert draft is not None
+    assert draft.content.historical_basis_id is not None
+    basis = ProductRepository(session).product_basis(draft.content.historical_basis_id)
+    assert basis is not None
+    return basis
+
+
+def _save_workspace_draft(session, project, bundle, patch):
+    drafts = WorkspaceDraftService(session, now=lambda: NOW)
+    draft = drafts.read(project.id)
+    assert draft is not None
+    updated = drafts.save(
+        project.id,
+        expected_lock_version=draft.lock_version,
+        patch=patch,
+    )
+    return replace(
+        bundle,
+        workspace_draft_id=updated.id,
+        workspace_draft_lock_version=updated.lock_version,
     )
 
 
@@ -327,7 +374,7 @@ def test_model_bundle_rolls_back_every_artifact_on_failure(
     assert existing == {"evidence_index", "research_gaps"}
 
 
-def test_complete_model_bundle_persists_exact_dependency_refs_and_input_hashes(
+def test_complete_model_bundle_succeeds_when_mandate_effective_at_differs_from_evidence(
     session,
 ) -> None:
     repository, _project, preparation, job, evidence, old_gaps, bundle = (
@@ -397,6 +444,231 @@ def test_complete_model_bundle_persists_exact_dependency_refs_and_input_hashes(
                 "market_snapshot_bindings": lineage["market_snapshot_bindings"],
             }
         )
+
+
+def test_complete_model_bundle_requires_a_historical_basis(session) -> None:
+    repository, project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    changed = _save_workspace_draft(
+        session,
+        project,
+        bundle,
+        {"historical_basis_id": None},
+    )
+
+    with pytest.raises(ValidationError, match="historical basis is missing"):
+        _complete_model_bundle(repository, preparation, changed)
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
+@pytest.mark.parametrize("basis_state", ("unknown", "non_product"))
+def test_complete_model_bundle_rejects_an_unknown_or_non_product_historical_basis(
+    session, basis_state: str
+) -> None:
+    repository, project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    if basis_state == "unknown":
+        basis_id = uuid.uuid4()
+    else:
+        basis = _basis_for_workspace(session, project)
+        _tamper_row(
+            session,
+            UnderwritingHistoricalBasis,
+            basis.id,
+            price_as_of=NOW,
+        )
+        basis_id = basis.id
+    changed = _save_workspace_draft(
+        session,
+        project,
+        bundle,
+        {"historical_basis_id": basis_id},
+    )
+
+    with pytest.raises(ValidationError, match="historical basis is invalid"):
+        _complete_model_bundle(repository, preparation, changed)
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
+def test_complete_model_bundle_rejects_a_historical_basis_cutoff_that_differs_from_evidence(
+    session,
+) -> None:
+    repository, project, preparation, _job, evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    reviewed = repository.append_artifact(
+        project_id=project.id,
+        kind="evidence_index",
+        input_hash="4" * 64,
+        payload={
+            **evidence.payload,
+            "cutoff": (NOW + timedelta(days=2)).isoformat(),
+        },
+        source_refs=evidence.source_refs,
+        expected_parent_id=evidence.id,
+        created_at=NOW,
+    )
+    changed = replace(
+        bundle,
+        evidence_artifact_id=reviewed.id,
+        evidence_content_hash=reviewed.content_hash,
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis cutoff does not match reviewed evidence",
+    ):
+        _complete_model_bundle(repository, preparation, changed)
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
+def test_complete_model_bundle_rejects_a_historical_basis_source_that_differs_from_evidence(
+    session,
+) -> None:
+    repository, project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    basis = _basis_for_workspace(session, project)
+    _tamper_row(
+        session,
+        UnderwritingHistoricalBasis,
+        basis.id,
+        source_manifest_hash="7" * 64,
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis source does not match reviewed evidence",
+    ):
+        _complete_model_bundle(repository, preparation, bundle)
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("definition_bundle_hash", None),
+        ("definition_bundle_hash", "not-a-hash"),
+        ("parser_bundle_hash", None),
+        ("parser_bundle_hash", "not-a-hash"),
+    ),
+)
+def test_complete_model_bundle_rejects_a_historical_basis_with_invalid_bundle_hashes(
+    session, field: str, value: str | None
+) -> None:
+    repository, project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    basis = _basis_for_workspace(session, project)
+    _tamper_row(session, UnderwritingHistoricalBasis, basis.id, **{field: value})
+
+    with pytest.raises(ValidationError, match="historical basis is invalid"):
+        _complete_model_bundle(repository, preparation, bundle)
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
+def test_complete_model_bundle_rejects_a_historical_basis_with_a_corrupted_content_hash(
+    session,
+) -> None:
+    repository, project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    basis = _basis_for_workspace(session, project)
+    _tamper_row(
+        session,
+        UnderwritingHistoricalBasis,
+        basis.id,
+        content_hash="0" * 64,
+    )
+
+    with pytest.raises(ValidationError, match="historical basis is invalid"):
+        _complete_model_bundle(repository, preparation, bundle)
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
+def test_complete_model_bundle_does_not_substitute_a_newer_mandate_for_a_missing_basis(
+    session,
+) -> None:
+    repository, project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(project.id)
+    assert draft is not None
+    assert draft.content.mandate_id is not None
+    newer_mandate = ResearchProjectService(
+        session, now=lambda: NOW
+    ).append_product_mandate(
+        project_id=project.id,
+        value=InvestmentMandateInput(
+            mandate_key="company-research-default",
+            horizon_years=5,
+            base_currency="CNY",
+            required_return=Decimal("0.12"),
+            permanent_loss_limit=Decimal("0.25"),
+            comparison_set=("absolute_intrinsic_value",),
+        ),
+        benchmark_key=None,
+        required_excess_return=None,
+        effective_at=MANDATE_EFFECTIVE_AT + timedelta(days=1),
+        expires_at=None,
+        expected_parent_id=draft.content.mandate_id,
+    )
+    changed = _save_workspace_draft(
+        session,
+        project,
+        bundle,
+        {
+            "mandate_id": newer_mandate.id,
+            "historical_basis_id": None,
+        },
+    )
+
+    with pytest.raises(ValidationError, match="historical basis is missing"):
+        _complete_model_bundle(repository, preparation, changed)
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
+def test_complete_model_bundle_rejects_evidence_without_a_valid_source_manifest_hash(
+    session,
+) -> None:
+    repository, project, preparation, _job, evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    reviewed = repository.append_artifact(
+        project_id=project.id,
+        kind="evidence_index",
+        input_hash="4" * 64,
+        payload={
+            key: value
+            for key, value in evidence.payload.items()
+            if key != "fixture_content_hash"
+        },
+        source_refs=evidence.source_refs,
+        expected_parent_id=evidence.id,
+        created_at=NOW,
+    )
+    changed = replace(
+        bundle,
+        evidence_artifact_id=reviewed.id,
+        evidence_content_hash=reviewed.content_hash,
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="reviewed evidence source manifest is invalid",
+    ):
+        _complete_model_bundle(repository, preparation, changed)
+
+    assert repository.current_artifact(project.id, "business_map") is None
 
 
 @pytest.mark.parametrize(
