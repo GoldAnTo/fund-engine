@@ -401,15 +401,14 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                     raise ValidationError(
                         "scenario override cannot claim reported provenance without a fact ref"
                     )
-                unit, currency = _metric_metadata(override["driver_key"])
                 overrides.append(
                     {
                         "driver_key": override["driver_key"],
                         "observation": _observation(
                             key=override["driver_key"],
                             value=override["value"],
-                            unit=unit,
-                            currency=currency,
+                            unit="multiplier",
+                            currency="N/A",
                             period=period,
                             state=state,
                             **provenance,

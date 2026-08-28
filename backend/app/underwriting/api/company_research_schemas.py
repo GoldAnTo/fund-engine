@@ -219,7 +219,7 @@ class CompanyResearchMarketSnapshotBindingResponse(_ClosedCompanyResearchPayload
     source_ref: CompanyResearchLineageSourceReferenceResponse
     capture_envelope_id: UUID
     capture_content_hash: str = Field(pattern=SHA256_PATTERN)
-    provenance_role: Literal["primary", "fallback"]
+    provenance_role: Literal["primary"]
     provider_policy_version: StrictStr = Field(min_length=1)
     raw_components: tuple[CompanyResearchRawComponentResponse, ...]
 
@@ -482,6 +482,12 @@ class CompanyResearchScenarioOverrideResponse(_ClosedCompanyResearchPayloadModel
     observation: CompanyResearchNumericObservationResponse
     rationale: StrictStr | None
     equation: StrictStr | None
+
+    @model_validator(mode="after")
+    def normalized_multiplier(self):
+        if self.observation.unit != "multiplier" or self.observation.currency != "N/A":
+            raise ValueError("scenario overrides must use dimensionless multipliers")
+        return self
 
 
 class CompanyResearchScenarioResponse(_ClosedCompanyResearchPayloadModel):
@@ -1046,12 +1052,14 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
             (wrapper.root for wrapper in self.artifacts if wrapper.root.kind == "evidence_index"),
             None,
         )
-        fact_registry = {
-            fact.fact_key: fact.observation
-            for fact in evidence.payload.facts
-        } if isinstance(evidence, CompanyResearchEvidenceIndexArtifactResponse) else {}
+        evidence_facts = (
+            evidence.payload.facts
+            if isinstance(evidence, CompanyResearchEvidenceIndexArtifactResponse)
+            else ()
+        )
+        fact_registry = {fact.fact_key: fact for fact in evidence_facts}
 
-        def validate_reported_observations(item):
+        def validate_reported_observations(item, *, require_confirmed):
             if isinstance(item, CompanyResearchNumericObservationResponse):
                 if item.state != "reported":
                     return
@@ -1059,35 +1067,75 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
                 if not isinstance(source, CompanyResearchExternalNumericSourceResponse):
                     raise ValueError("reported observation requires exact evidence fact")
                 fact = fact_registry.get(source.fact_key)
-                if fact is None or (
+                if fact is None:
+                    raise ValueError("reported observation requires exact evidence fact")
+                if require_confirmed and getattr(fact, "review_decision", None) != "confirmed":
+                    raise ValueError("downstream reported observation requires confirmed fact")
+                fact_observation = fact.observation
+                if (
                     item.value,
                     item.unit,
                     item.currency,
                     item.period,
                     item.source_ref,
                 ) != (
-                    fact.value,
-                    fact.unit,
-                    fact.currency,
-                    fact.period,
-                    fact.source_ref,
+                    fact_observation.value,
+                    fact_observation.unit,
+                    fact_observation.currency,
+                    fact_observation.period,
+                    fact_observation.source_ref,
                 ):
                     raise ValueError("reported observation differs from its evidence fact")
                 return
             if isinstance(item, BaseModel):
                 for child in item.__dict__.values():
-                    validate_reported_observations(child)
+                    validate_reported_observations(
+                        child, require_confirmed=require_confirmed
+                    )
             elif isinstance(item, (tuple, list)):
                 for child in item:
-                    validate_reported_observations(child)
+                    validate_reported_observations(
+                        child, require_confirmed=require_confirmed
+                    )
             elif isinstance(item, dict):
                 for child in item.values():
-                    validate_reported_observations(child)
+                    validate_reported_observations(
+                        child, require_confirmed=require_confirmed
+                    )
 
         for wrapper in self.artifacts:
-            validate_reported_observations(wrapper.root.payload)
-        if set(self.change_summary.artifact_versions) != kinds:
-            raise ValueError("change summary must describe every registry artifact")
+            validate_reported_observations(
+                wrapper.root.payload,
+                require_confirmed=wrapper.root.kind != "evidence_index",
+            )
+        expected_versions = {
+            wrapper.root.kind: wrapper.root.version for wrapper in self.artifacts
+        }
+        if self.change_summary.artifact_versions != expected_versions:
+            raise ValueError("change summary versions must match every current head")
+        expected_reviewed = sum(
+            getattr(fact, "review_decision", None) in {"confirmed", "rejected"}
+            for fact in evidence_facts
+        )
+        if self.change_summary.reviewed_fact_count != expected_reviewed:
+            raise ValueError("reviewed fact count must equal decided evidence facts")
+        source_identities = {
+            (ref.source_role, ref.source_url, ref.source_locator, ref.raw_hash)
+            for wrapper in self.artifacts
+            for ref in wrapper.root.source_refs
+        }
+        if self.source_count != len(source_identities):
+            raise ValueError("source count must equal unique current-head sources")
+        gaps = next(
+            (
+                wrapper.root.payload.gaps
+                for wrapper in self.artifacts
+                if wrapper.root.kind == "research_gaps"
+            ),
+            (),
+        )
+        if self.gap_count != len(gaps):
+            raise ValueError("gap count must equal current research gaps")
         return self
 
 

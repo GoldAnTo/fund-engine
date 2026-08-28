@@ -116,6 +116,8 @@ function companyResearchWorkspaceBody(): any {
 function addReportedBusinessArtifact(workspace: any): any {
   const evidence = workspace.artifacts.find((item: any) => item.kind === "evidence_index");
   const fact = evidence.payload.facts[0];
+  fact.review_decision = "confirmed";
+  workspace.change_summary.reviewed_fact_count = 1;
   const source = { ...fact.observation.source_ref };
   delete source.kind;
   const business = {
@@ -137,6 +139,50 @@ function addReportedBusinessArtifact(workspace: any): any {
     module.state = "ready";
     module.artifact_refs = [{ id: business.id, kind: business.kind, content_hash: business.content_hash }];
   }
+  return workspace;
+}
+
+function addScenarioArtifact(workspace: any): any {
+  addReportedBusinessArtifact(workspace);
+  const evidence = workspace.artifacts.find((item: any) => item.kind === "evidence_index");
+  const business = workspace.artifacts.find((item: any) => item.kind === "business_map");
+  const fact = evidence.payload.facts[0];
+  const factRef = { ...fact.observation.source_ref };
+  delete factRef.kind;
+  const driver = {
+    schema_version: "underwriting.v1", id: ids.basis, project_id: ids.project, kind: "driver_map", version: 1,
+    input_hash: hash, content_hash: companyResearchHash,
+    payload: {
+      drivers: [{
+        driver_key: "revenue", module_key: "search", fact_refs: [factRef], assumption_refs: [],
+        equation: "revenue", output_metric: "revenue", equation_id: null,
+        values: [{ ...fact.observation }], assumption_rationale: null, assumption_equation: null,
+      }],
+      _lineage: { artifact_refs: [{ artifact_id: business.id, artifact_kind: business.kind, content_hash: business.content_hash }], market_snapshot_ids: [], market_snapshot_bindings: [] },
+    },
+    source_refs: [...business.source_refs],
+  };
+  const scenario = {
+    schema_version: "underwriting.v1", id: ids.boundary, project_id: ids.project, kind: "scenario_set", version: 1,
+    input_hash: hash, content_hash: hash,
+    payload: {
+      scenarios: ["base", "bull", "bear"].map((scenarioId) => ({
+        scenario_id: scenarioId, mechanism_id: `${scenarioId}.v1`,
+        driver_overrides: ["revenue", "capex"].map((driverKey) => ({
+          driver_key: driverKey,
+          observation: { key: driverKey, value: "1", unit: "multiplier", currency: "N/A", period: "FY2026/FY2030", state: "assumption", source_ref: null, gap_key: null, assumption_key: `${scenarioId}.${driverKey}` },
+          rationale: "scenario input", equation: null,
+        })),
+      })),
+      _lineage: { artifact_refs: [{ artifact_id: driver.id, artifact_kind: driver.kind, content_hash: driver.content_hash }], market_snapshot_ids: [], market_snapshot_bindings: [] },
+    },
+    source_refs: [...driver.source_refs],
+  };
+  workspace.artifacts.push(driver, scenario);
+  workspace.change_summary.artifact_versions.driver_map = 1;
+  workspace.change_summary.artifact_versions.scenario_set = 1;
+  Object.assign(workspace.modules.find((item: any) => item.key === "operating_drivers"), { state: "ready", artifact_refs: [{ id: driver.id, kind: driver.kind, content_hash: driver.content_hash }] });
+  Object.assign(workspace.modules.find((item: any) => item.key === "scenarios_valuation_implied_expectations"), { state: "ready", valuation_state: "blocked", artifact_refs: [{ id: scenario.id, kind: scenario.kind, content_hash: scenario.content_hash }] });
   return workspace;
 }
 
@@ -599,6 +645,71 @@ describe("InvestmentResearchApi", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("counts rejected evidence as reviewed when it is only displayed in the registry", async () => {
+    const workspace = companyResearchWorkspaceBody();
+    workspace.artifacts.find((item: any) => item.kind === "evidence_index").payload.facts[0].review_decision = "rejected";
+    workspace.change_summary.reviewed_fact_count = 1;
+    vi.stubGlobal("fetch", vi.fn(async () => response(workspace)));
+
+    await expect(new InvestmentResearchApi().companyResearchWorkspace(ids.project))
+      .resolves.toMatchObject({ change_summary: { reviewed_fact_count: 1 } });
+  });
+
+  it("rejects downstream reported observations backed by rejected or pending facts", async () => {
+    const rejected = addReportedBusinessArtifact(companyResearchWorkspaceBody());
+    rejected.artifacts.find((item: any) => item.kind === "evidence_index").payload.facts[0].review_decision = "rejected";
+    const pending = addReportedBusinessArtifact(companyResearchWorkspaceBody());
+    delete pending.artifacts.find((item: any) => item.kind === "evidence_index").payload.facts[0].review_decision;
+    pending.change_summary.reviewed_fact_count = 0;
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(response(rejected))
+      .mockResolvedValueOnce(response(pending));
+    const api = new InvestmentResearchApi();
+
+    await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a change summary that differs from the response registry", async () => {
+    const wrongVersion = companyResearchWorkspaceBody();
+    wrongVersion.change_summary.artifact_versions.evidence_index = 2;
+    const wrongReviewed = companyResearchWorkspaceBody();
+    wrongReviewed.change_summary.reviewed_fact_count = 1;
+    const wrongSources = companyResearchWorkspaceBody();
+    wrongSources.source_count = 2;
+    const wrongGaps = companyResearchWorkspaceBody();
+    wrongGaps.gap_count = 1;
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(response(wrongVersion))
+      .mockResolvedValueOnce(response(wrongReviewed))
+      .mockResolvedValueOnce(response(wrongSources))
+      .mockResolvedValueOnce(response(wrongGaps));
+    const api = new InvestmentResearchApi();
+
+    for (let index = 0; index < 4; index += 1) {
+      await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    }
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+  });
+
+  it("rejects scenario overrides that claim currency units instead of multipliers", async () => {
+    const valid = addScenarioArtifact(companyResearchWorkspaceBody());
+    const invalid = addScenarioArtifact(companyResearchWorkspaceBody());
+    const scenario = invalid.artifacts.find((item: any) => item.kind === "scenario_set");
+    const revenue = scenario.payload.scenarios[0].driver_overrides.find((item: any) => item.driver_key === "revenue");
+    revenue.observation.unit = "USD_million";
+    revenue.observation.currency = "USD";
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(response(valid))
+      .mockResolvedValueOnce(response(invalid));
+    const api = new InvestmentResearchApi();
+
+    await expect(api.companyResearchWorkspace(ids.project)).resolves.toMatchObject({ project_id: ids.project });
+    await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects ready or needs-review modules missing a static required head", async () => {
     const missingGap = companyResearchWorkspaceBody();
     missingGap.artifacts = missingGap.artifacts.filter((item: any) => item.kind !== "research_gaps");
@@ -667,6 +778,7 @@ describe("InvestmentResearchApi", () => {
     const recoverable = companyResearchWorkspaceBody();
     recoverable.preparation = { schema_version: "underwriting.v1", id: ids.draft, status: "recoverable_failure", current_step: "evidence_index", progress: 10, error: { schema_version: "underwriting.v1", code: "source_unavailable", failed_step: "evidence_index", retryable: true, next_attempt_at: now } };
     recoverable.artifacts = [];
+    recoverable.source_count = 0;
     recoverable.change_summary.artifact_versions = {};
     recoverable.modules = recoverable.modules.map((item: any) => ({ ...item, state: "blocked", artifact_refs: [] }));
     vi.stubGlobal("fetch", vi.fn(async () => response(recoverable)));

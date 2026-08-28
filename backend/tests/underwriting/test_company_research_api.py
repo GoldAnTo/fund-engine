@@ -412,6 +412,53 @@ def test_workspace_response_rejects_nonexistent_foreign_or_substituted_registry_
         if observation["state"] == "reported"
     )
     reported_observation["value"] = "999"
+    rejected_downstream_fact = deepcopy(body)
+    rejected_driver = next(
+        item
+        for item in rejected_downstream_fact["artifacts"]
+        if item["kind"] == "driver_map"
+    )
+    rejected_observation = next(
+        observation
+        for driver in rejected_driver["payload"]["drivers"]
+        for observation in driver["values"]
+        if observation["state"] == "reported"
+    )
+    rejected_evidence = next(
+        item
+        for item in rejected_downstream_fact["artifacts"]
+        if item["kind"] == "evidence_index"
+    )
+    rejected_fact = next(
+        fact
+        for fact in rejected_evidence["payload"]["facts"]
+        if fact["fact_key"] == rejected_observation["source_ref"]["fact_key"]
+    )
+    rejected_fact["review_decision"] = "rejected"
+    wrong_version = deepcopy(body)
+    wrong_version["change_summary"]["artifact_versions"]["driver_map"] += 1
+    wrong_reviewed_count = deepcopy(body)
+    wrong_reviewed_count["change_summary"]["reviewed_fact_count"] += 1
+    wrong_source_count = deepcopy(body)
+    wrong_source_count["source_count"] += 1
+    wrong_gap_count = deepcopy(body)
+    wrong_gap_count["gap_count"] += 1
+    fallback_market_provenance = deepcopy(body)
+    valuation = next(
+        item
+        for item in fallback_market_provenance["artifacts"]
+        if item["kind"] == "valuation_set"
+    )
+    valuation["payload"]["_lineage"]["market_snapshot_bindings"][0][
+        "provenance_role"
+    ] = "fallback"
+    wrong_scenario_unit = deepcopy(body)
+    scenario = next(
+        item for item in wrong_scenario_unit["artifacts"] if item["kind"] == "scenario_set"
+    )
+    scenario["payload"]["scenarios"][0]["driver_overrides"][0]["observation"][
+        "unit"
+    ] = "USD_million"
 
     for invalid in (
         nonexistent,
@@ -420,6 +467,13 @@ def test_workspace_response_rejects_nonexistent_foreign_or_substituted_registry_
         lineage_substitution,
         duplicate,
         reported_value_substitution,
+        rejected_downstream_fact,
+        wrong_version,
+        wrong_reviewed_count,
+        wrong_source_count,
+        wrong_gap_count,
+        fallback_market_provenance,
+        wrong_scenario_unit,
     ):
         with pytest.raises(PydanticValidationError):
             CompanyResearchWorkspaceResponse.model_validate(invalid)
@@ -563,6 +617,28 @@ def test_public_pipeline_exposes_every_current_artifact_once_and_references_them
     ]
     assert scenario_module["state"] == "ready"
     assert scenario_module["valuation_state"] == "blocked"
+    scenario = next(
+        item for item in body["artifacts"] if item["kind"] == "scenario_set"
+    )
+    scenario_observations = [
+        override["observation"]
+        for item in scenario["payload"]["scenarios"]
+        for override in item["driver_overrides"]
+    ]
+    assert len(scenario_observations) == 18
+    assert {item["unit"] for item in scenario_observations} == {"multiplier"}
+    assert {item["currency"] for item in scenario_observations} == {"N/A"}
+    assert all(item["state"] == "assumption" for item in scenario_observations)
+    for driver_key in ("revenue", "capex"):
+        observations = [
+            override["observation"]
+            for item in scenario["payload"]["scenarios"]
+            for override in item["driver_overrides"]
+            if override["driver_key"] == driver_key
+        ]
+        assert observations
+        assert all(item["unit"] == "multiplier" for item in observations)
+        assert all(item["currency"] == "N/A" for item in observations)
     overview = next(module for module in body["modules"] if module["key"] == "overview")
     assert [ref["kind"] for ref in overview["artifact_refs"]] == [
         "judgment_context"
@@ -1014,3 +1090,43 @@ def test_workspace_and_evidence_review_routes_are_closed(api_client, session) ->
         ).status_code
         == 422
     )
+
+
+def test_rejected_evidence_counts_as_reviewed_but_cannot_feed_downstream(
+    api_client, session
+) -> None:
+    company_id = _alphabet_id(session)
+    preview = _preview(api_client, company_id)
+    initialized = _initialize(api_client, company_id, preview["preview_hash"])
+    assert initialized.status_code == 201
+    project_id = initialized.json()["project_id"]
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None and worker.run_claim(claim) == "awaiting_evidence_review"
+    before = api_client.get(f"{BASE}/projects/{project_id}/workspace").json()
+    evidence = next(
+        item for item in before["artifacts"] if item["kind"] == "evidence_index"
+    )
+
+    reviewed = api_client.post(
+        f"{BASE}/projects/{project_id}/evidence-reviews",
+        json={
+            "evidence_artifact_id": evidence["id"],
+            "fact_key": evidence["payload"]["facts"][0]["fact_key"],
+            "decision": "rejected",
+            "expected_head_id": evidence["id"],
+        },
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    after = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    assert after.status_code == 200, after.text
+    body = after.json()
+    assert body["change_summary"]["reviewed_fact_count"] == 1
+    reviewed_evidence = next(
+        item for item in body["artifacts"] if item["kind"] == "evidence_index"
+    )
+    assert reviewed_evidence["payload"]["facts"][0]["review_decision"] == "rejected"
+    assert {item["kind"] for item in body["artifacts"]} == {
+        "evidence_index",
+        "research_gaps",
+    }

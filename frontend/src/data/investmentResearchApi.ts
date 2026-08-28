@@ -994,6 +994,8 @@ function isScenarioSetPayload(value: unknown): boolean {
       && scenario.driver_overrides.every((override) => isRecord(override)
         && hasExactKeys(override, ["driver_key", "observation", "rationale", "equation"])
         && isNonEmptyString(override.driver_key) && isNumericObservation(override.observation)
+        && isRecord(override.observation) && override.observation.unit === "multiplier"
+        && override.observation.currency === "N/A"
         && (override.rationale === null || isNonEmptyString(override.rationale))
         && (override.equation === null || isNonEmptyString(override.equation))));
 }
@@ -1175,9 +1177,10 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
     if (value.preparation.status === "blocked" && error.next_attempt_at !== null) return false;
   } else if (error !== null) return false;
   const summary = value.change_summary;
+  const artifactVersions = isRecord(summary) ? summary.artifact_versions : null;
   if (!hasExactKeys(summary, ["artifact_versions", "reviewed_fact_count"])
-    || !isRecord(summary.artifact_versions)
-    || !Object.values(summary.artifact_versions).every(isPositiveInteger)
+    || !isRecord(artifactVersions)
+    || !Object.values(artifactVersions).every(isPositiveInteger)
     || !isNonNegativeInteger(summary.reviewed_fact_count)) return false;
   const artifacts = value.artifacts.filter(isRecord);
   const registry = new Map<string, Record<string, unknown>>();
@@ -1188,7 +1191,8 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
     kinds.add(String(artifact.kind));
   }
   if (kinds.has("valuation_set") && !kinds.has("scenario_set")) return false;
-  if (!sameStringSets(Object.keys(summary.artifact_versions), [...kinds])) return false;
+  if (!sameStringSets(Object.keys(artifactVersions), [...kinds])) return false;
+  if (artifacts.some((artifact) => artifactVersions[String(artifact.kind)] !== artifact.version)) return false;
   const exactRef = (ref: Record<string, unknown>, registryShape: boolean): boolean => {
     const id = String(registryShape ? ref.id : ref.artifact_id);
     const kind = String(registryShape ? ref.kind : ref.artifact_kind);
@@ -1210,22 +1214,34 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
   const factRegistry = new Map<string, Record<string, unknown>>(
     facts.map((fact) => [String(fact.fact_key), fact]),
   );
-  for (const observation of artifacts.flatMap((artifact) => collectNumericObservations(artifact.payload))) {
-    if (observation.state !== "reported" || !isRecord(observation.source_ref)) continue;
-    const fact = factRegistry.get(String(observation.source_ref.fact_key));
-    const factObservation = fact && isRecord(fact.observation) ? fact.observation : null;
-    const source = factObservation && isRecord(factObservation.source_ref) ? factObservation.source_ref : null;
-    if (factObservation === null || source === null
-      || observation.value !== factObservation.value
-      || observation.unit !== factObservation.unit
-      || observation.currency !== factObservation.currency
-      || observation.period !== factObservation.period
-      || observation.source_ref.kind !== source.kind
-      || observation.source_ref.fact_key !== source.fact_key
-      || observation.source_ref.source_role !== source.source_role
-      || observation.source_ref.source_url !== source.source_url
-      || observation.source_ref.source_locator !== source.source_locator
-      || observation.source_ref.raw_hash !== source.raw_hash) return false;
+  const reviewedFactCount = facts.filter((fact) => fact.review_decision === "confirmed" || fact.review_decision === "rejected").length;
+  if (summary.reviewed_fact_count !== reviewedFactCount) return false;
+  const sourceIdentities = new Set(artifacts.flatMap((artifact) => Array.isArray(artifact.source_refs)
+    ? artifact.source_refs.filter(isRecord).map(sourceRefIdentity) : []));
+  if (value.source_count !== sourceIdentities.size) return false;
+  const gapArtifact = artifacts.find((artifact) => artifact.kind === "research_gaps");
+  const gapPayload = gapArtifact && isRecord(gapArtifact.payload) ? gapArtifact.payload : null;
+  const gaps = gapPayload && Array.isArray(gapPayload.gaps) ? gapPayload.gaps : [];
+  if (value.gap_count !== gaps.length) return false;
+  for (const artifact of artifacts) {
+    for (const observation of collectNumericObservations(artifact.payload)) {
+      if (observation.state !== "reported" || !isRecord(observation.source_ref)) continue;
+      const fact = factRegistry.get(String(observation.source_ref.fact_key));
+      const factObservation = fact && isRecord(fact.observation) ? fact.observation : null;
+      const source = factObservation && isRecord(factObservation.source_ref) ? factObservation.source_ref : null;
+      if (factObservation === null || source === null
+        || (artifact.kind !== "evidence_index" && fact?.review_decision !== "confirmed")
+        || observation.value !== factObservation.value
+        || observation.unit !== factObservation.unit
+        || observation.currency !== factObservation.currency
+        || observation.period !== factObservation.period
+        || observation.source_ref.kind !== source.kind
+        || observation.source_ref.fact_key !== source.fact_key
+        || observation.source_ref.source_role !== source.source_role
+        || observation.source_ref.source_url !== source.source_url
+        || observation.source_ref.source_locator !== source.source_locator
+        || observation.source_ref.raw_hash !== source.raw_hash) return false;
+    }
   }
   return value.modules.every((item) => {
     if (!isProductDto(item)

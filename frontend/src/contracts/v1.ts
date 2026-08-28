@@ -5297,9 +5297,9 @@ export interface components {
             capture_content_hash: string;
             /**
              * Provenance Role
-             * @enum {string}
+             * @constant
              */
-            provenance_role: "primary" | "fallback";
+            provenance_role: "primary";
             /** Provider Policy Version */
             provider_policy_version: string;
             /** Raw Components */
