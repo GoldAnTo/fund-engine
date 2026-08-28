@@ -174,13 +174,35 @@ class CompanyResearchPreparationWorker:
                 | (CompanyResearchPreparation.next_attempt_at <= now),
             )
             .order_by(Job.created_at, Job.id)
-            .with_for_update(skip_locked=True)
             .limit(1)
         ).first()
         if row is None:
             return None
-        job, preparation = row
-        if job.target_id != preparation.id:
+        candidate_job, candidate_preparation = row
+        locked = self._repository.lock_worker_claim_state(
+            preparation_id=candidate_preparation.id,
+            job_id=candidate_job.id,
+        )
+        if locked is None:
+            return None
+        preparation, job = locked
+        if (
+            job.target_id != preparation.id
+            or job.status != "queued"
+            or job.cancel_requested
+            or job.step not in {"evidence_index", "model_bundle"}
+            or preparation.current_step != job.step
+            or preparation.status
+            not in (
+                {"queued", "recoverable_failure"}
+                if job.step == "evidence_index"
+                else {"building_model", "recoverable_failure"}
+            )
+            or (
+                preparation.next_attempt_at is not None
+                and self._repository._persisted_utc(preparation.next_attempt_at) > now
+            )
+        ):
             return None
         token = secrets.token_hex(16)
         job.status = "running"
@@ -360,14 +382,13 @@ class CompanyResearchPreparationWorker:
     def _current_claim(
         self, claim: CompanyResearchClaim
     ) -> tuple[Job, CompanyResearchPreparation] | None:
-        job = self._session.scalar(
-            select(Job).where(Job.id == claim.job_id).with_for_update()
+        locked = self._repository.lock_worker_claim_state(
+            preparation_id=claim.preparation_id,
+            job_id=claim.job_id,
         )
-        preparation = self._session.scalar(
-            select(CompanyResearchPreparation)
-            .where(CompanyResearchPreparation.id == claim.preparation_id)
-            .with_for_update()
-        )
+        if locked is None:
+            return None
+        preparation, job = locked
         if (
             job is None
             or preparation is None
@@ -391,14 +412,13 @@ class CompanyResearchPreparationWorker:
         return job, preparation
 
     def _discard(self, claim: CompanyResearchClaim) -> None:
-        job = self._session.scalar(
-            select(Job).where(Job.id == claim.job_id).with_for_update()
+        locked = self._repository.lock_worker_claim_state(
+            preparation_id=claim.preparation_id,
+            job_id=claim.job_id,
         )
-        preparation = self._session.scalar(
-            select(CompanyResearchPreparation)
-            .where(CompanyResearchPreparation.id == claim.preparation_id)
-            .with_for_update()
-        )
+        if locked is None:
+            return
+        preparation, job = locked
         if (
             job is None
             or preparation is None

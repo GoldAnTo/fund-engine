@@ -508,11 +508,6 @@ class CompanyResearchPreparationService:
 
     def retry(self, *, project_id: UUID) -> CompanyResearchProjectStatus:
         current = self.status(project_id=project_id)
-        if (
-            current.preparation.next_attempt_at is not None
-            and self._stored_utc(current.preparation.next_attempt_at) > self._now_utc()
-        ):
-            raise ValidationError("company research preparation is not ready to retry")
         expected_recovered_basis_id = (
             self._basis_recovery.recover(current.preparation.id)
             if current.preparation.status == "blocked"

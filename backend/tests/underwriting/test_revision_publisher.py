@@ -489,7 +489,9 @@ def test_foundation_golden_path_publishes_only_insufficient_evidence(session) ->
     assert summary.publication_status is PublicationStatus.USER_FROZEN
 
 
-def _mark_as_company_research(session, project_id: UUID) -> None:
+def _mark_as_company_research(
+    session, project_id: UUID, *, flush: bool = True
+) -> None:
     session.add(
         CompanyResearchPreparation(
             project_id=project_id,
@@ -507,7 +509,8 @@ def _mark_as_company_research(session, project_id: UUID) -> None:
             updated_at=NOW,
         )
     )
-    session.flush()
+    if flush:
+        session.flush()
 
 
 def test_generic_publication_rejects_company_research_projects(session) -> None:
@@ -528,6 +531,31 @@ def test_generic_publication_rejects_company_research_projects(session) -> None:
             graph["project"].id,
             graph["draft"].lock_version,
             idempotency_key="company-publication-guard",
+        )
+
+
+def test_generic_publication_rejects_a_pending_company_research_preparation(
+    session,
+) -> None:
+    graph = _ready_graph(session, suffix="pending-company-publication-guard")
+    _mark_as_company_research(session, graph["project"].id, flush=False)
+    publisher = RevisionPublisher(session, now=lambda: NOW)
+
+    with pytest.raises(
+        ValidationError,
+        match="generic publication is not available for company research projects",
+    ):
+        publisher.preview(
+            graph["project"].id, graph["draft"].lock_version
+        )
+    with pytest.raises(
+        ValidationError,
+        match="generic publication is not available for company research projects",
+    ):
+        publisher.publish(
+            graph["project"].id,
+            graph["draft"].lock_version,
+            idempotency_key="pending-company-publication-guard",
         )
 
 

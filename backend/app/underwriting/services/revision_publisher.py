@@ -28,6 +28,9 @@ from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.persistence.company_research_repository import (
     CompanyResearchRepository,
 )
+from app.underwriting.persistence.company_research_models import (
+    CompanyResearchPreparation,
+)
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.services.kernel import canonical_hash
 from app.underwriting.services.market_snapshots import (
@@ -145,6 +148,15 @@ class RevisionPublisher:
         self.repository = ProductRepository(session)
         self._market = MarketSnapshotService(session, now)
         self._now = now
+
+    def _is_company_research_project(self, project_id: UUID) -> bool:
+        return any(
+            isinstance(row, CompanyResearchPreparation)
+            and row.project_id == project_id
+            for row in self._session.new
+        ) or CompanyResearchRepository(self._session).preparation_for_project(
+            project_id, fresh=True
+        ) is not None
 
     @staticmethod
     def _lock_version(value: int) -> int:
@@ -399,9 +411,7 @@ class RevisionPublisher:
         project_id = _uuid(project_id, "project_id")
         expected_lock_version = self._lock_version(expected_lock_version)
         with self._session.no_autoflush:
-            if CompanyResearchRepository(self._session).preparation_for_project(
-                project_id
-            ) is not None:
+            if self._is_company_research_project(project_id):
                 raise ValidationError(
                     "generic publication is not available for company research projects"
                 )
@@ -613,9 +623,7 @@ class RevisionPublisher:
         key = self._idempotency_key(idempotency_key)
         with self._session.no_autoflush:
             self.repository.lock_project(project_id)
-            if CompanyResearchRepository(self._session).preparation_for_project(
-                project_id
-            ) is not None:
+            if self._is_company_research_project(project_id):
                 raise ValidationError(
                     "generic publication is not available for company research projects"
                 )

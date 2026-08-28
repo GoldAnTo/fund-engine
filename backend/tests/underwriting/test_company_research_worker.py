@@ -1590,6 +1590,76 @@ def _durably_rewrite_first_review_decision(session, head, decision) -> None:
     session.expire_all()
 
 
+def _durably_rewrite_review_events(session, preparation_id, mode: str) -> None:
+    repository = CompanyResearchRepository(session)
+    events = list(repository.events(preparation_id))
+    review_indexes = [
+        index
+        for index, event in enumerate(events)
+        if event.event_type == "evidence_reviewed"
+    ]
+    assert len(review_indexes) >= 2
+    if mode == "duplicate":
+        last = events[review_indexes[0]]
+        repository.append_event(
+            preparation_id=preparation_id,
+            event_type="evidence_reviewed",
+            payload=last.payload,
+            created_at=events[-1].created_at.replace(tzinfo=UTC)
+            + timedelta(seconds=1),
+        )
+        return
+    payloads = [deepcopy(event.payload) for event in events]
+    first = review_indexes[0]
+    if mode == "wrong_artifact":
+        payloads[first]["evidence_artifact_id"] = str(uuid4())
+    elif mode == "wrong_fact":
+        payloads[first]["fact_key"] = "substituted_fact"
+    elif mode == "wrong_decision":
+        payloads[first]["decision"] = (
+            "rejected"
+            if payloads[first]["decision"] == "confirmed"
+            else "confirmed"
+        )
+    elif mode == "reordered":
+        second = review_indexes[1]
+        payloads[first], payloads[second] = payloads[second], payloads[first]
+    else:
+        raise AssertionError(mode)
+    statement = text(
+        "UPDATE uw_company_research_events SET previous_event_hash = :previous, "
+        "payload = :payload, content_hash = :content_hash WHERE id = :id"
+    ).bindparams(
+        bindparam(
+            "previous",
+            type_=CompanyResearchEvent.__table__.c.previous_event_hash.type,
+        ),
+        bindparam("payload", type_=CompanyResearchEvent.__table__.c.payload.type),
+        bindparam("id", type_=CompanyResearchEvent.__table__.c.id.type),
+    )
+    previous_hash = None
+    for event, payload in zip(events, payloads, strict=True):
+        content_hash = repository.event_content_hash_v2(
+            preparation_id=event.preparation_id,
+            sequence=event.sequence,
+            previous_event_hash=previous_hash,
+            event_type=event.event_type,
+            payload=payload,
+            created_at=event.created_at,
+        )
+        session.execute(
+            statement,
+            {
+                "previous": previous_hash,
+                "payload": payload,
+                "content_hash": content_hash,
+                "id": event.id,
+            },
+        )
+        previous_hash = content_hash
+    session.expire_all()
+
+
 @pytest.mark.parametrize("decision", ([], {}, None, 1))
 def test_historical_basis_recovery_rejects_malformed_review_decision(
     session, decision
@@ -2154,7 +2224,7 @@ def test_historical_basis_recovery_anchors_legacy_request_to_initialized_event(
     )
     session.expire_all()
 
-    with pytest.raises(ValidationError, match="recovery draft is incomplete"):
+    with pytest.raises(ValidationError, match="recovery evidence is invalid"):
         CompanyResearchHistoricalBasisRecovery(
             session, now=lambda: NOW + timedelta(seconds=2)
         ).recover(initialized.preparation.id)
@@ -2217,7 +2287,7 @@ def test_historical_basis_recovery_requires_one_authentic_initialized_event(
             previous_hash = content_hash
     session.expire_all()
 
-    with pytest.raises(ValidationError, match="recovery draft is incomplete"):
+    with pytest.raises(ValidationError, match="recovery evidence is invalid"):
         CompanyResearchHistoricalBasisRecovery(
             session, now=lambda: NOW + timedelta(seconds=3)
         ).recover(initialized.preparation.id)
@@ -3012,6 +3082,66 @@ def test_historical_basis_recovery_locks_project_before_mutable_ownership_rows(
     assert calls[:4] == ["project", "preparation", "job", "draft"]
 
 
+def test_worker_claim_boundary_locks_project_before_preparation_and_job(
+    session, monkeypatch
+) -> None:
+    initialized = _initialized(session, idempotency_key="worker-lock-order")
+    repository = CompanyResearchRepository(session)
+    calls: list[str] = []
+    for name, label in (
+        ("_project_for_update", "project"),
+        ("_preparation_for_update", "preparation"),
+        ("_job_for_update", "job"),
+    ):
+        original = getattr(repository, name)
+
+        def wrapped(*args, _original=original, _label=label, **kwargs):
+            calls.append(_label)
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(repository, name, wrapped)
+
+    locked = repository.lock_worker_claim_state(
+        preparation_id=initialized.preparation.id,
+        job_id=initialized.job.id,
+    )
+
+    assert locked is not None
+    assert calls == ["project", "preparation", "job"]
+
+
+def test_retry_boundary_locks_project_before_preparation_and_job(
+    session, monkeypatch
+) -> None:
+    initialized = _initialized(session, idempotency_key="retry-lock-order")
+    initialized.preparation.status = "recoverable_failure"
+    initialized.preparation.last_error_code = "source_unavailable"
+    initialized.job.status = "failed"
+    initialized.job.error = "source_unavailable"
+    session.flush()
+    repository = CompanyResearchRepository(session)
+    calls: list[str] = []
+    for name, label in (
+        ("_project_for_update", "project"),
+        ("_preparation_for_update", "preparation"),
+        ("_job_for_update", "job"),
+    ):
+        original = getattr(repository, name)
+
+        def wrapped(*args, _original=original, _label=label, **kwargs):
+            calls.append(_label)
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(repository, name, wrapped)
+
+    queued = repository.requeue_recoverable_preparation(
+        initialized.preparation.id, updated_at=NOW
+    )
+
+    assert queued.status == "queued"
+    assert calls == ["project", "preparation", "job"]
+
+
 def test_historical_basis_recovery_rejects_a_wrong_gaps_fixture_hash(
     session,
 ) -> None:
@@ -3075,6 +3205,54 @@ def test_historical_basis_recovery_rejects_a_wrong_gaps_fixture_hash(
     assert repository.current_artifact(initialized.project.id, "evidence_index").id == reviewed.id
     assert repository.current_artifact(initialized.project.id, "research_gaps").id == gaps.id
     assert repository.events(initialized.preparation.id) == events_before
+
+
+def test_rehashed_evidence_decision_must_match_review_audit_event(session) -> None:
+    initialized, reviewed, _gaps, _blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    _durably_rewrite_first_review_decision(session, reviewed, "rejected")
+
+    with pytest.raises(ValidationError, match="evidence audit history is invalid"):
+        CompanyResearchWorkbench(session, now=lambda: NOW).workspace(
+            project_id=initialized.project.id
+        )
+    with pytest.raises(ValidationError, match="recovery evidence is invalid"):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=1)
+        ).recover(initialized.preparation.id)
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ("deleted", "duplicate", "reordered", "wrong_artifact", "wrong_fact", "wrong_decision"),
+)
+def test_evidence_review_audit_reconciliation_fails_closed(
+    session, mode: str
+) -> None:
+    initialized, _reviewed, _gaps, _blocked_draft = (
+        _legacy_blocked_missing_basis(session)
+    )
+    if mode == "deleted":
+        session.connection().exec_driver_sql(
+            "DELETE FROM uw_company_research_events "
+            "WHERE preparation_id = ? AND sequence > 1",
+            (initialized.preparation.id.hex,),
+        )
+        session.expire_all()
+    else:
+        _durably_rewrite_review_events(
+            session, initialized.preparation.id, mode
+        )
+
+    with pytest.raises(ValidationError, match="evidence audit history is invalid"):
+        CompanyResearchWorkbench(session, now=lambda: NOW).workspace(
+            project_id=initialized.project.id
+        )
+    with pytest.raises(ValidationError, match="recovery evidence is invalid"):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=1)
+        ).recover(initialized.preparation.id)
 
 
 @pytest.mark.parametrize(
@@ -3424,6 +3602,62 @@ def test_sqlite_two_ordinary_retries_queue_one_attempt_and_one_event(
             for event in repository.events(preparation_id)
             if event.event_type == "retry_queued"
         ] == ["retry_queued"]
+
+    Base.metadata.drop_all(engine)
+    engine.dispose()
+
+
+@pytest.mark.parametrize("cached_state", ["future_then_due", "due_then_future"])
+def test_retry_deadline_is_decided_from_fresh_locked_state(
+    tmp_path, cached_state: str
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / f'company-retry-deadline-{cached_state}.sqlite'}",
+        future=True,
+        connect_args={"check_same_thread": False, "timeout": 3},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True, expire_on_commit=False)
+    with sessions() as bootstrap:
+        initialized = _initialized(
+            bootstrap, idempotency_key=f"retry-deadline-{cached_state}"
+        )
+        initialized.preparation.status = "recoverable_failure"
+        initialized.preparation.last_error_code = "source_unavailable"
+        initialized.preparation.next_attempt_at = (
+            NOW + timedelta(minutes=5)
+            if cached_state == "future_then_due"
+            else NOW - timedelta(seconds=1)
+        )
+        initialized.job.status = "failed"
+        initialized.job.error = "source_unavailable"
+        project_id = initialized.project.id
+        preparation_id = initialized.preparation.id
+        bootstrap.commit()
+
+    with sessions() as cached, sessions() as mutator:
+        service = CompanyResearchPreparationService(cached, now=lambda: NOW)
+        stale = service.status(project_id=project_id).preparation
+        cached.commit()
+        changed = mutator.get(CompanyResearchPreparation, preparation_id)
+        assert changed is not None
+        changed.next_attempt_at = (
+            NOW - timedelta(seconds=1)
+            if cached_state == "future_then_due"
+            else NOW + timedelta(minutes=5)
+        )
+        mutator.commit()
+        assert stale.next_attempt_at != changed.next_attempt_at
+
+        if cached_state == "future_then_due":
+            assert service.retry(project_id=project_id).preparation.status == "queued"
+            cached.commit()
+        else:
+            with pytest.raises(
+                ValidationError, match="not ready to retry"
+            ):
+                service.retry(project_id=project_id)
+            cached.rollback()
 
     Base.metadata.drop_all(engine)
     engine.dispose()
