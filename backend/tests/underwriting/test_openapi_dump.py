@@ -9,7 +9,6 @@ from pathlib import Path
 
 from app.main import app
 
-
 REVISION_PATHS = {
     "/api/underwriting/v1/objects/{object_id}/research-versions/{version_kind}",
     "/api/underwriting/v1/research-versions/{revision_id}",
@@ -89,6 +88,18 @@ PRODUCT_OPERATIONS = {
     "/api/underwriting/v1/product/projects/{project_id}/publication-preview": {"post"},
     "/api/underwriting/v1/product/projects/{project_id}/publish": {"post"},
     "/api/underwriting/v1/product/revisions/{revision_id}": {"get"},
+}
+COMPANY_RESEARCH_OPERATIONS = {
+    "/api/underwriting/v1/product/company-research/preview": {"post"},
+    "/api/underwriting/v1/product/company-research/initializations": {"post"},
+    "/api/underwriting/v1/product/company-research/projects/{project_id}": {"get"},
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/retry": {
+        "post"
+    },
+}
+COMPANY_RESEARCH_REQUEST_SCHEMAS = {
+    "CompanyResearchPreviewRequest",
+    "InitializeCompanyResearchRequest",
 }
 PRODUCT_REQUEST_SCHEMAS = {
     "CreateResearchProjectRequest",
@@ -227,6 +238,55 @@ def test_product_openapi_is_exact_strict_and_has_idempotency_header() -> None:
         "capital_structure_snapshot_id",
         "security_rights_ids",
     } <= set(schemas["ProductRevisionResponse"]["properties"])
+
+
+def test_company_research_openapi_is_closed_and_hides_internal_foundation_ids() -> None:
+    openapi = app.openapi()
+    schemas = openapi["components"]["schemas"]
+
+    for path, methods in COMPANY_RESEARCH_OPERATIONS.items():
+        assert set(openapi["paths"][path]) == methods
+    for name in COMPANY_RESEARCH_REQUEST_SCHEMAS:
+        assert schemas[name]["additionalProperties"] is False
+
+    initialize = openapi["paths"][
+        "/api/underwriting/v1/product/company-research/initializations"
+    ]["post"]
+    idempotency = next(
+        parameter
+        for parameter in initialize["parameters"]
+        if parameter["name"] == "Idempotency-Key"
+    )
+    assert idempotency["in"] == "header"
+    assert idempotency["required"] is True
+
+    preview = schemas["CompanyResearchPreviewResponse"]
+    assert set(preview["properties"]) == {
+        "schema_version",
+        "company",
+        "securities",
+        "strategy_version",
+        "horizon_years",
+        "base_currency",
+        "required_return",
+        "permanent_loss_limit",
+        "cutoff_at",
+        "agenda",
+        "preview_hash",
+    }
+    assert not {"mandate_id", "scope_id", "agenda_id", "source_manifest_hash"} & set(
+        preview["properties"]
+    )
+    assert schemas["CompanyResearchPreviewResponse"]["additionalProperties"] is False
+    assert schemas["CompanyResearchProjectResponse"]["additionalProperties"] is False
+
+    retry = openapi["paths"][
+        "/api/underwriting/v1/product/company-research/projects/{project_id}/retry"
+    ]["post"]
+    assert set(retry["responses"]) == {"202", "404", "409", "422"}
+    assert retry["responses"]["404"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].endswith("/UnderwritingErrorEnvelope")
 
 
 def test_product_openapi_paths_follow_all_legacy_underwriting_paths() -> None:

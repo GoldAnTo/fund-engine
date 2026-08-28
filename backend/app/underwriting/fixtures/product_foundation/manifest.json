@@ -1,6 +1,6 @@
 {
   "schema_version": "product.foundation-identities.v1",
-  "content_hash": "bcf4fe19ec98a28ea249bcb6a8bfbdbb3ac77af9d1d0cca8fb26e8b5d71aca55",
+  "content_hash": "56c79ae3ebfedcaf4ec77bb9555f7b8b1122de9ad4f135c72b4bff7a9beac5b0",
   "companies": [
     {
       "external_key": "CN:300750:COMPANY",
@@ -10,6 +10,13 @@
     {
       "external_key": "US:ALPHABET:COMPANY",
       "canonical_name": "Alphabet Inc.",
+      "effective_from": "2015-10-02T00:00:00-04:00"
+    }
+  ],
+  "industries": [
+    {
+      "external_key": "GLOBAL:INTERNET_SERVICES:INDUSTRY",
+      "canonical_name": "Internet Services",
       "effective_from": "2015-10-02T00:00:00-04:00"
     }
   ],
@@ -43,6 +50,24 @@
       "currency": "USD",
       "share_class": "Class C",
       "effective_from": "2015-10-02T00:00:00-04:00"
+    }
+  ],
+  "industry_company_relations": [
+    {
+      "industry_key": "GLOBAL:INTERNET_SERVICES:INDUSTRY",
+      "company_key": "US:ALPHABET:COMPANY"
+    }
+  ],
+  "aliases": [
+    {
+      "object_key": "US:ALPHABET:COMPANY",
+      "alias": "Google",
+      "locale": "en"
+    },
+    {
+      "object_key": "US:ALPHABET:COMPANY",
+      "alias": "谷歌",
+      "locale": "zh-CN"
     }
   ],
   "rights": [

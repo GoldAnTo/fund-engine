@@ -16,6 +16,7 @@ from app.underwriting.domain.product_contracts import (
     ResearchAgendaInput,
     ResearchScopeInput,
 )
+from app.underwriting.domain.search_terms import normalize_search_term
 from app.underwriting.domain.types import InvestmentMandateInput, ResearchObjectKind
 from app.underwriting.persistence.product_models import (
     UnderwritingObjectIdentityVersion,
@@ -254,7 +255,8 @@ class ResearchProjectService:
         as_of: datetime,
         limit: int = 20,
     ) -> tuple[ObjectSearchResult, ...]:
-        normalized_query = self._text(query, "query").casefold()
+        raw_query = self._text(query, "query")
+        normalized_query = normalize_search_term(raw_query)
         normalized_as_of = self._utc(as_of, "as_of")
         if (
             not isinstance(limit, int)
@@ -262,6 +264,22 @@ class ResearchProjectService:
             or not 1 <= limit <= 100
         ):
             raise ValidationError("limit must be between 1 and 100")
+        outcome = self._repository.search_objects(
+            raw_query,
+            normalized_as_of,
+            limit,
+        )
+        if (
+            not outcome.rows
+            and not outcome.had_raw_match
+            and normalized_query.endswith("公司")
+            and len(normalized_query) > len("公司")
+        ):
+            outcome = self._repository.search_objects(
+                normalized_query[: -len("公司")].rstrip(),
+                normalized_as_of,
+                limit,
+            )
         return tuple(
             ObjectSearchResult(
                 object_id=research_object.id,
@@ -274,11 +292,41 @@ class ResearchProjectService:
                 share_class=identity.share_class,
                 trading_currency=identity.trading_currency,
             )
-            for research_object, identity in self._repository.search_objects(
-                normalized_query,
-                normalized_as_of,
-                limit,
+            for research_object, identity in outcome.rows
+        )
+
+    def industry_companies(
+        self,
+        industry_id: UUID,
+        as_of: datetime,
+        limit: int = 20,
+    ) -> tuple[ObjectSearchResult, ...] | None:
+        industry_id = self._uuid(industry_id, "industry_id")
+        normalized_as_of = self._utc(as_of, "as_of")
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or not 1 <= limit <= 100
+        ):
+            raise ValidationError("limit must be between 1 and 100")
+        rows = self._repository.industry_company_groups(
+            industry_id, normalized_as_of, limit
+        )
+        if rows is None:
+            return None
+        return tuple(
+            ObjectSearchResult(
+                object_id=research_object.id,
+                identity_version_id=identity.id,
+                kind=ResearchObjectKind(research_object.kind),
+                external_key=research_object.external_key,
+                canonical_name=identity.canonical_name,
+                symbol=identity.symbol,
+                exchange=identity.exchange,
+                share_class=identity.share_class,
+                trading_currency=identity.trading_currency,
             )
+            for research_object, identity in rows
         )
 
     def _project_view(self, record) -> ResearchProjectView:

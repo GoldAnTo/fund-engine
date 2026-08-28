@@ -54,6 +54,7 @@ from app.underwriting.api.schemas import (
 )
 from app.errors import NotFoundError
 from app.underwriting.api.product_router import router as product_router
+from app.underwriting.api.company_research_router import router as company_research_router
 from app.underwriting.api.transactions import commit_write
 from app.underwriting.persistence.models import UnderwritingAnswerabilityEvaluation, UnderwritingHistoricalBasis, UnderwritingResearchVersion, UnderwritingLedgerEntry, UnderwritingObjectRelation
 from app.underwriting.persistence.research_models import UnderwritingMechanismPackVersion, UnderwritingMetricDefinitionVersion, UnderwritingMetricObservation, UnderwritingSourceManifestVersion
@@ -658,3 +659,4 @@ def get_evidence_only_economic_model(object_id: UUID, basis_id: UUID, db: Sessio
 
 
 router.include_router(product_router)
+router.include_router(company_research_router)

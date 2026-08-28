@@ -2534,6 +2534,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/underwriting/v1/product/industries/{industry_id}/companies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Industry Companies */
+        get: operations["list_industry_companies_api_underwriting_v1_product_industries__industry_id__companies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/underwriting/v1/product/projects": {
         parameters: {
             query?: never;
@@ -2785,6 +2802,108 @@ export interface paths {
         get: operations["get_product_revision_api_underwriting_v1_product_revisions__revision_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Company Research */
+        post: operations["preview_company_research_api_underwriting_v1_product_company_research_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/initializations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Initialize Company Research */
+        post: operations["initialize_company_research_api_underwriting_v1_product_company_research_initializations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Company Research Project */
+        get: operations["get_company_research_project_api_underwriting_v1_product_company_research_projects__project_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Company Research Project */
+        post: operations["retry_company_research_project_api_underwriting_v1_product_company_research_projects__project_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Company Research Workspace */
+        get: operations["get_company_research_workspace_api_underwriting_v1_product_company_research_projects__project_id__workspace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/evidence-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Company Evidence */
+        post: operations["review_company_evidence_api_underwriting_v1_product_company_research_projects__project_id__evidence_reviews_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4638,6 +4757,1184 @@ export interface components {
             /** Items */
             items: components["schemas"]["CompanyListItemDTO"][];
             page: components["schemas"]["CursorPage"];
+        };
+        /** CompanyResearchAgendaModuleResponse */
+        CompanyResearchAgendaModuleResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+        };
+        /** CompanyResearchArtifactLineageResponse */
+        CompanyResearchArtifactLineageResponse: {
+            /** Artifact Refs */
+            artifact_refs: components["schemas"]["CompanyResearchArtifactParentResponse"][];
+            /** Market Snapshot Ids */
+            market_snapshot_ids: string[];
+            /** Market Snapshot Bindings */
+            market_snapshot_bindings: components["schemas"]["CompanyResearchMarketSnapshotBindingResponse"][];
+        };
+        /** CompanyResearchArtifactParentResponse */
+        CompanyResearchArtifactParentResponse: {
+            /**
+             * Artifact Id
+             * Format: uuid
+             */
+            artifact_id: string;
+            /**
+             * Artifact Kind
+             * @enum {string}
+             */
+            artifact_kind: "evidence_index" | "research_gaps" | "business_map" | "driver_map" | "financial_bridge" | "scenario_set" | "valuation_set" | "judgment_context" | "memo";
+            /** Content Hash */
+            content_hash: string;
+        };
+        /** CompanyResearchArtifactRegistryReferenceResponse */
+        CompanyResearchArtifactRegistryReferenceResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "evidence_index" | "research_gaps" | "business_map" | "driver_map" | "financial_bridge" | "scenario_set" | "valuation_set" | "judgment_context" | "memo";
+            /** Content Hash */
+            content_hash: string;
+        };
+        /** CompanyResearchArtifactResponse */
+        CompanyResearchArtifactResponse: components["schemas"]["CompanyResearchEvidenceIndexArtifactResponse"] | components["schemas"]["CompanyResearchGapsArtifactResponse"] | components["schemas"]["CompanyResearchBusinessMapArtifactResponse"] | components["schemas"]["CompanyResearchDriverMapArtifactResponse"] | components["schemas"]["CompanyResearchFinancialBridgeArtifactResponse"] | components["schemas"]["CompanyResearchScenarioSetArtifactResponse"] | components["schemas"]["CompanyResearchValuationSetArtifactResponse"] | components["schemas"]["CompanyResearchJudgmentContextArtifactResponse"] | components["schemas"]["CompanyResearchMemoArtifactResponse"];
+        /** CompanyResearchBusinessMapArtifactResponse */
+        CompanyResearchBusinessMapArtifactResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Version */
+            version: number;
+            /** Input Hash */
+            input_hash: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Source Refs */
+            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "business_map";
+            /** Payload */
+            payload: components["schemas"]["CompanyResearchLegacyBusinessMapPayloadResponse"] | components["schemas"]["CompanyResearchBusinessMapPayloadResponse"];
+        };
+        /** CompanyResearchBusinessMapPayloadResponse */
+        CompanyResearchBusinessMapPayloadResponse: {
+            /** Modules */
+            modules: components["schemas"]["CompanyResearchBusinessModuleResponse"][];
+            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
+        };
+        /** CompanyResearchBusinessModuleResponse */
+        CompanyResearchBusinessModuleResponse: {
+            /** Module Key */
+            module_key: string;
+            /** Revenue Sources */
+            revenue_sources: string[];
+            /** Cost Structure */
+            cost_structure: string[];
+            /** Capital Needs */
+            capital_needs: string[];
+            /** Fact Refs */
+            fact_refs: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
+            /** Gap Refs */
+            gap_refs: string[];
+            /** Classified Evidence */
+            classified_evidence: components["schemas"]["CompanyResearchClassifiedEvidenceResponse"][];
+        };
+        /** CompanyResearchChangeSummaryResponse */
+        CompanyResearchChangeSummaryResponse: {
+            /** Artifact Versions */
+            artifact_versions: {
+                [key: string]: number;
+            };
+            /** Reviewed Fact Count */
+            reviewed_fact_count: number;
+        };
+        /** CompanyResearchClassifiedEvidenceResponse */
+        CompanyResearchClassifiedEvidenceResponse: {
+            fact_ref: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"];
+            /** Metric Key */
+            metric_key: string;
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "revenue" | "cost" | "capital";
+            observation: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            /**
+             * Period Start
+             * Format: date
+             */
+            period_start: string;
+            /**
+             * Period End
+             * Format: date
+             */
+            period_end: string;
+        };
+        /** CompanyResearchComputationNumericSourceResponse */
+        CompanyResearchComputationNumericSourceResponse: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "artifact_computation";
+            /** Artifact Refs */
+            artifact_refs: components["schemas"]["CompanyResearchArtifactParentResponse"][];
+            /** Market Snapshot Ids */
+            market_snapshot_ids: string[];
+            /** Equation Id */
+            equation_id: string;
+        };
+        /** CompanyResearchDriverMapArtifactResponse */
+        CompanyResearchDriverMapArtifactResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Version */
+            version: number;
+            /** Input Hash */
+            input_hash: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Source Refs */
+            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "driver_map";
+            payload: components["schemas"]["CompanyResearchDriverMapPayloadResponse"];
+        };
+        /** CompanyResearchDriverMapPayloadResponse */
+        CompanyResearchDriverMapPayloadResponse: {
+            /** Drivers */
+            drivers: components["schemas"]["CompanyResearchDriverResponse"][];
+            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
+        };
+        /** CompanyResearchDriverResponse */
+        CompanyResearchDriverResponse: {
+            /** Driver Key */
+            driver_key: string;
+            /** Module Key */
+            module_key: string;
+            /** Fact Refs */
+            fact_refs: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
+            /** Assumption Refs */
+            assumption_refs: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
+            /** Equation */
+            equation: string;
+            /** Output Metric */
+            output_metric: string;
+            /** Equation Id */
+            equation_id: string | null;
+            /** Values */
+            values: components["schemas"]["CompanyResearchNumericObservationResponse"][];
+            /** Assumption Rationale */
+            assumption_rationale: string | null;
+            /** Assumption Equation */
+            assumption_equation: string | null;
+        };
+        /** CompanyResearchEvidenceIndexArtifactResponse */
+        CompanyResearchEvidenceIndexArtifactResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Version */
+            version: number;
+            /** Input Hash */
+            input_hash: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Source Refs */
+            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "evidence_index";
+            payload: components["schemas"]["CompanyResearchEvidenceIndexPayloadResponse"];
+        };
+        /** CompanyResearchEvidenceIndexPayloadResponse */
+        CompanyResearchEvidenceIndexPayloadResponse: {
+            /** Fixture Content Hash */
+            fixture_content_hash: string;
+            /**
+             * Cutoff
+             * Format: date-time
+             */
+            cutoff: string;
+            /** Company External Key */
+            company_external_key: string;
+            /** Security External Keys */
+            security_external_keys: string[];
+            /** Facts */
+            facts: (components["schemas"]["CompanyResearchReviewedEvidenceFactResponse"] | components["schemas"]["CompanyResearchUnreviewedEvidenceFactResponse"])[];
+        };
+        /** CompanyResearchEvidenceReviewResponse */
+        CompanyResearchEvidenceReviewResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            evidence_artifact: components["schemas"]["CompanyResearchEvidenceIndexArtifactResponse"];
+        };
+        /** CompanyResearchExternalNumericSourceResponse */
+        CompanyResearchExternalNumericSourceResponse: {
+            /** Raw Hash */
+            raw_hash: string;
+            /** Source Locator */
+            source_locator: string;
+            /** Source Role */
+            source_role: string;
+            /** Source Url */
+            source_url: string;
+            /** Fact Key */
+            fact_key: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "external";
+        };
+        /** CompanyResearchFinancialBridgeArtifactResponse */
+        CompanyResearchFinancialBridgeArtifactResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Version */
+            version: number;
+            /** Input Hash */
+            input_hash: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Source Refs */
+            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "financial_bridge";
+            payload: components["schemas"]["CompanyResearchFinancialBridgePayloadResponse"];
+        };
+        /** CompanyResearchFinancialBridgePayloadResponse */
+        CompanyResearchFinancialBridgePayloadResponse: {
+            /** Rows */
+            rows: components["schemas"]["CompanyResearchFinancialBridgeRowResponse"][];
+            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
+        };
+        /** CompanyResearchFinancialBridgeRowResponse */
+        CompanyResearchFinancialBridgeRowResponse: {
+            /** Period */
+            period: string;
+            revenue: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            operating_income: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            cash_tax_rate: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            depreciation: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            capex: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            working_capital_change: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            fcff: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            /** Fact Refs */
+            fact_refs: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
+            /** Assumption Refs */
+            assumption_refs: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
+        };
+        /** CompanyResearchGapResponse */
+        CompanyResearchGapResponse: {
+            /** Code */
+            code: string;
+            /** Module Key */
+            module_key: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "low" | "medium" | "high" | "critical";
+            /** Message */
+            message: string;
+        };
+        /** CompanyResearchGapsArtifactResponse */
+        CompanyResearchGapsArtifactResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Version */
+            version: number;
+            /** Input Hash */
+            input_hash: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Source Refs */
+            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "research_gaps";
+            /** Payload */
+            payload: components["schemas"]["CompanyResearchLegacyGapsPayloadResponse"] | components["schemas"]["CompanyResearchModelGapsPayloadResponse"];
+        };
+        /** CompanyResearchIdentityResponse */
+        CompanyResearchIdentityResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /** External Key */
+            external_key: string;
+            /** Canonical Name */
+            canonical_name: string;
+        };
+        /** CompanyResearchJudgmentContextArtifactResponse */
+        CompanyResearchJudgmentContextArtifactResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Version */
+            version: number;
+            /** Input Hash */
+            input_hash: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Source Refs */
+            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "judgment_context";
+            payload: components["schemas"]["CompanyResearchJudgmentContextPayloadResponse"];
+        };
+        /** CompanyResearchJudgmentContextPayloadResponse */
+        CompanyResearchJudgmentContextPayloadResponse: {
+            /** Operating Baseline Available */
+            operating_baseline_available: boolean;
+            /** Financial Bridge Closed */
+            financial_bridge_closed: boolean;
+            /** Market Security Bridge Available */
+            market_security_bridge_available: boolean;
+            /** Strongest Counterevidence */
+            strongest_counterevidence: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
+            /** Next Verification Events */
+            next_verification_events: string[];
+            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
+        };
+        /** CompanyResearchLegacyBusinessMapPayloadResponse */
+        CompanyResearchLegacyBusinessMapPayloadResponse: {
+            /**
+             * Evidence Index Id
+             * Format: uuid
+             */
+            evidence_index_id: string;
+            /** Evidence Content Hash */
+            evidence_content_hash: string;
+            /** Modules */
+            modules: components["schemas"]["CompanyResearchLegacyBusinessModuleResponse"][];
+        };
+        /** CompanyResearchLegacyBusinessModuleResponse */
+        CompanyResearchLegacyBusinessModuleResponse: {
+            /** Key */
+            key: string;
+            /** Fact Keys */
+            fact_keys: string[];
+        };
+        /** CompanyResearchLegacyGapResponse */
+        CompanyResearchLegacyGapResponse: {
+            /** Gap Key */
+            gap_key: string;
+            /** Business Module */
+            business_module: string;
+            /** Reason */
+            reason: string;
+        };
+        /** CompanyResearchLegacyGapsPayloadResponse */
+        CompanyResearchLegacyGapsPayloadResponse: {
+            /** Fixture Content Hash */
+            fixture_content_hash: string;
+            /** Company External Key */
+            company_external_key: string;
+            /** Gaps */
+            gaps: components["schemas"]["CompanyResearchLegacyGapResponse"][];
+        };
+        /** CompanyResearchLineageSourceReferenceResponse */
+        CompanyResearchLineageSourceReferenceResponse: {
+            /** Raw Hash */
+            raw_hash: string;
+            /** Source Locator */
+            source_locator: string;
+            /** Source Role */
+            source_role: string;
+            /** Source Url */
+            source_url: string;
+            /** Fact Key */
+            fact_key: string;
+        };
+        /** CompanyResearchMarketSnapshotBindingResponse */
+        CompanyResearchMarketSnapshotBindingResponse: {
+            /**
+             * Snapshot Id
+             * Format: uuid
+             */
+            snapshot_id: string;
+            /**
+             * Snapshot Kind
+             * @enum {string}
+             */
+            snapshot_kind: "price" | "fx" | "capital_structure" | "security_rights";
+            /** Snapshot Content Hash */
+            snapshot_content_hash: string;
+            /** Security External Key */
+            security_external_key: string | null;
+            source_ref: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"];
+            /**
+             * Capture Envelope Id
+             * Format: uuid
+             */
+            capture_envelope_id: string;
+            /** Capture Content Hash */
+            capture_content_hash: string;
+            /**
+             * Provenance Role
+             * @constant
+             */
+            provenance_role: "primary";
+            /** Provider Policy Version */
+            provider_policy_version: string;
+            /** Raw Components */
+            raw_components: components["schemas"]["CompanyResearchRawComponentResponse"][];
+        };
+        /** CompanyResearchMemoArtifactReferenceResponse */
+        CompanyResearchMemoArtifactReferenceResponse: {
+            /**
+             * Artifact Kind
+             * @enum {string}
+             */
+            artifact_kind: "business_map" | "driver_map" | "financial_bridge" | "scenario_set" | "valuation_set";
+            /** Content Hash */
+            content_hash: string;
+        };
+        /** CompanyResearchMemoArtifactResponse */
+        CompanyResearchMemoArtifactResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Version */
+            version: number;
+            /** Input Hash */
+            input_hash: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Source Refs */
+            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "memo";
+            payload: components["schemas"]["CompanyResearchMemoPayloadResponse"];
+        };
+        /** CompanyResearchMemoPayloadResponse */
+        CompanyResearchMemoPayloadResponse: {
+            /**
+             * Assessment Status
+             * @enum {string}
+             */
+            assessment_status: "not_answerable" | "partially_answerable" | "answerable";
+            business_map_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
+            driver_map_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
+            financial_bridge_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
+            scenario_set_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
+            valuation_set_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"] | null;
+            /** Gap Keys */
+            gap_keys: string[];
+            /** Strongest Counterevidence */
+            strongest_counterevidence: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
+            /** Next Verification Events */
+            next_verification_events: string[];
+            /**
+             * Candidate Status
+             * @constant
+             */
+            candidate_status: "machine_draft";
+            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
+        };
+        /** CompanyResearchModelGapsPayloadResponse */
+        CompanyResearchModelGapsPayloadResponse: {
+            /** Gaps */
+            gaps: components["schemas"]["CompanyResearchGapResponse"][];
+            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
+        };
+        /** CompanyResearchNumericObservationResponse */
+        CompanyResearchNumericObservationResponse: {
+            /** Key */
+            key: string;
+            /** Value */
+            value: string;
+            /** Unit */
+            unit: string;
+            /** Currency */
+            currency: string;
+            /** Period */
+            period: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "reported" | "derived" | "assumption" | "gap";
+            /** Source Ref */
+            source_ref: (components["schemas"]["CompanyResearchExternalNumericSourceResponse"] | components["schemas"]["CompanyResearchComputationNumericSourceResponse"]) | null;
+            /** Gap Key */
+            gap_key: string | null;
+            /** Assumption Key */
+            assumption_key: string | null;
+        };
+        /** CompanyResearchPreparationErrorResponse */
+        CompanyResearchPreparationErrorResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Code */
+            code: string;
+            /**
+             * Failed Step
+             * @enum {string}
+             */
+            failed_step: "evidence_index" | "research_gaps" | "business_map" | "driver_map" | "financial_bridge" | "scenario_set" | "valuation_set" | "judgment_context" | "memo" | "model_bundle";
+            /** Retryable */
+            retryable: boolean;
+            /** Next Attempt At */
+            next_attempt_at: string | null;
+        };
+        /** CompanyResearchPreparationResponse */
+        CompanyResearchPreparationResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Request Hash */
+            request_hash: string;
+            /** Strategy Version */
+            strategy_version: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "preparing_sources" | "awaiting_evidence_review" | "building_model" | "awaiting_judgment_review" | "ready_to_freeze" | "recoverable_failure" | "blocked" | "completed";
+            /** Current Step */
+            current_step: string | null;
+            /** Progress */
+            progress: number;
+            /** Attempt */
+            attempt: number;
+            /** Next Attempt At */
+            next_attempt_at: string | null;
+            /** Last Error Code */
+            last_error_code: string | null;
+        };
+        /** CompanyResearchPreviewRequest */
+        CompanyResearchPreviewRequest: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Company Id
+             * Format: uuid
+             */
+            company_id: string;
+            /**
+             * Cutoff At
+             * Format: date-time
+             */
+            cutoff_at: string;
+        };
+        /** CompanyResearchPreviewResponse */
+        CompanyResearchPreviewResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            company: components["schemas"]["CompanyResearchIdentityResponse"];
+            /** Securities */
+            securities: components["schemas"]["CompanyResearchSecurityIdentityResponse"][];
+            /** Strategy Version */
+            strategy_version: string;
+            /** Horizon Years */
+            horizon_years: number;
+            /**
+             * Base Currency
+             * @constant
+             */
+            base_currency: "CNY";
+            /** Required Return */
+            required_return: string;
+            /** Permanent Loss Limit */
+            permanent_loss_limit: string;
+            /**
+             * Cutoff At
+             * Format: date-time
+             */
+            cutoff_at: string;
+            /** Agenda */
+            agenda: components["schemas"]["CompanyResearchAgendaModuleResponse"][];
+            /** Preview Hash */
+            preview_hash: string;
+        };
+        /** CompanyResearchProjectResponse */
+        CompanyResearchProjectResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Company Id
+             * Format: uuid
+             */
+            company_id: string;
+            preparation: components["schemas"]["CompanyResearchPreparationResponse"];
+        };
+        /** CompanyResearchRawComponentResponse */
+        CompanyResearchRawComponentResponse: {
+            /** Raw File */
+            raw_file: string;
+            /** Raw Hash */
+            raw_hash: string;
+            /** Source Url */
+            source_url: string;
+            /** Source Locator */
+            source_locator: string;
+        };
+        /** CompanyResearchRequiredReturnComparisonResponse */
+        CompanyResearchRequiredReturnComparisonResponse: {
+            /** Security External Key */
+            security_external_key: string;
+            required_return: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            achieved_return_range: components["schemas"]["CompanyResearchValueRangeResponse"];
+            /** Meets Required Return */
+            meets_required_return: boolean;
+        };
+        /** CompanyResearchReverseDcfResponse */
+        CompanyResearchReverseDcfResponse: {
+            /**
+             * Driver Key
+             * @constant
+             */
+            driver_key: "fcff_multiplier";
+            implied_value: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            achieved_residual: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            iteration_count: components["schemas"]["CompanyResearchNumericObservationResponse"];
+        };
+        /** CompanyResearchReviewedEvidenceFactResponse */
+        CompanyResearchReviewedEvidenceFactResponse: {
+            /** Fact Key */
+            fact_key: string;
+            /** Company External Key */
+            company_external_key: string;
+            /** Business Module */
+            business_module: string;
+            /** Metric Key */
+            metric_key: string;
+            observation: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            /**
+             * Period Start
+             * Format: date
+             */
+            period_start: string;
+            /**
+             * Period End
+             * Format: date
+             */
+            period_end: string;
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /** Source Role */
+            source_role: string;
+            /** Source Url */
+            source_url: string;
+            /** Source Locator */
+            source_locator: string;
+            /** Raw Hash */
+            raw_hash: string;
+            /**
+             * Review Decision
+             * @enum {string}
+             */
+            review_decision: "confirmed" | "rejected";
+        };
+        /** CompanyResearchScenarioDcfValueResponse */
+        CompanyResearchScenarioDcfValueResponse: {
+            /**
+             * Scenario Id
+             * @enum {string}
+             */
+            scenario_id: "base" | "bull" | "bear";
+            enterprise_value: components["schemas"]["CompanyResearchNumericObservationResponse"];
+        };
+        /** CompanyResearchScenarioOverrideResponse */
+        CompanyResearchScenarioOverrideResponse: {
+            /** Driver Key */
+            driver_key: string;
+            observation: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            /** Rationale */
+            rationale: string | null;
+            /** Equation */
+            equation: string | null;
+        };
+        /** CompanyResearchScenarioResponse */
+        CompanyResearchScenarioResponse: {
+            /**
+             * Scenario Id
+             * @enum {string}
+             */
+            scenario_id: "base" | "bull" | "bear";
+            /** Mechanism Id */
+            mechanism_id: string;
+            /** Driver Overrides */
+            driver_overrides: components["schemas"]["CompanyResearchScenarioOverrideResponse"][];
+        };
+        /** CompanyResearchScenarioSetArtifactResponse */
+        CompanyResearchScenarioSetArtifactResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Version */
+            version: number;
+            /** Input Hash */
+            input_hash: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Source Refs */
+            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "scenario_set";
+            payload: components["schemas"]["CompanyResearchScenarioSetPayloadResponse"];
+        };
+        /** CompanyResearchScenarioSetPayloadResponse */
+        CompanyResearchScenarioSetPayloadResponse: {
+            /** Scenarios */
+            scenarios: components["schemas"]["CompanyResearchScenarioResponse"][];
+            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
+        };
+        /** CompanyResearchSecurityIdentityResponse */
+        CompanyResearchSecurityIdentityResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /** External Key */
+            external_key: string;
+            /** Canonical Name */
+            canonical_name: string;
+            /** Symbol */
+            symbol: string;
+            /** Exchange */
+            exchange: string;
+            /** Share Class */
+            share_class: string;
+            /**
+             * Trading Currency
+             * @enum {string}
+             */
+            trading_currency: "CNY" | "USD";
+        };
+        /** CompanyResearchSecurityValueRangeResponse */
+        CompanyResearchSecurityValueRangeResponse: {
+            /** Security External Key */
+            security_external_key: string;
+            usd_per_share: components["schemas"]["CompanyResearchValueRangeResponse"];
+            cny_return: components["schemas"]["CompanyResearchValueRangeResponse"];
+        };
+        /** CompanyResearchSourceReferenceResponse */
+        CompanyResearchSourceReferenceResponse: {
+            /** Raw Hash */
+            raw_hash: string;
+            /** Source Locator */
+            source_locator: string;
+            /** Source Role */
+            source_role: string;
+            /** Source Url */
+            source_url: string;
+        };
+        /** CompanyResearchUnreviewedEvidenceFactResponse */
+        CompanyResearchUnreviewedEvidenceFactResponse: {
+            /** Fact Key */
+            fact_key: string;
+            /** Company External Key */
+            company_external_key: string;
+            /** Business Module */
+            business_module: string;
+            /** Metric Key */
+            metric_key: string;
+            observation: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            /**
+             * Period Start
+             * Format: date
+             */
+            period_start: string;
+            /**
+             * Period End
+             * Format: date
+             */
+            period_end: string;
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /** Source Role */
+            source_role: string;
+            /** Source Url */
+            source_url: string;
+            /** Source Locator */
+            source_locator: string;
+            /** Raw Hash */
+            raw_hash: string;
+        };
+        /** CompanyResearchValuationSetArtifactResponse */
+        CompanyResearchValuationSetArtifactResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Version */
+            version: number;
+            /** Input Hash */
+            input_hash: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Source Refs */
+            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "valuation_set";
+            payload: components["schemas"]["CompanyResearchValuationSetPayloadResponse"];
+        };
+        /** CompanyResearchValuationSetPayloadResponse */
+        CompanyResearchValuationSetPayloadResponse: {
+            /** Scenario Dcf Values */
+            scenario_dcf_values: components["schemas"]["CompanyResearchScenarioDcfValueResponse"][];
+            reverse_dcf: components["schemas"]["CompanyResearchReverseDcfResponse"] | null;
+            /** Security Value Ranges */
+            security_value_ranges: components["schemas"]["CompanyResearchSecurityValueRangeResponse"][];
+            required_return: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            /** Required Return Comparisons */
+            required_return_comparisons: components["schemas"]["CompanyResearchRequiredReturnComparisonResponse"][];
+            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
+        };
+        /** CompanyResearchValueRangeResponse */
+        CompanyResearchValueRangeResponse: {
+            minimum: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            maximum: components["schemas"]["CompanyResearchNumericObservationResponse"];
+        };
+        /** CompanyResearchWorkbenchModuleResponse */
+        CompanyResearchWorkbenchModuleResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "overview" | "business_map" | "operating_drivers" | "evidence_and_gaps" | "industry_competition_regulation" | "financials_cash_flow_capital_allocation" | "scenarios_valuation_implied_expectations" | "counterevidence_risks_next_checks" | "versions_changes_memo";
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "not_started" | "preparing" | "needs_review" | "ready" | "blocked";
+            /** Artifact Refs */
+            artifact_refs: components["schemas"]["CompanyResearchArtifactRegistryReferenceResponse"][];
+            /**
+             * Valuation State
+             * @enum {string}
+             */
+            valuation_state: "not_applicable" | "pending" | "ready" | "blocked";
+        };
+        /** CompanyResearchWorkspaceCompanyResponse */
+        CompanyResearchWorkspaceCompanyResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /** External Key */
+            external_key: string;
+            /** Canonical Name */
+            canonical_name: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+        };
+        /** CompanyResearchWorkspaceDraftResponse */
+        CompanyResearchWorkspaceDraftResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Lock Version */
+            lock_version: number;
+            /** Base Revision Id */
+            base_revision_id: string | null;
+        };
+        /** CompanyResearchWorkspacePreparationResponse */
+        CompanyResearchWorkspacePreparationResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "preparing_sources" | "awaiting_evidence_review" | "building_model" | "awaiting_judgment_review" | "ready_to_freeze" | "recoverable_failure" | "blocked" | "completed";
+            /** Current Step */
+            current_step: string | null;
+            /** Progress */
+            progress: number;
+            error: components["schemas"]["CompanyResearchPreparationErrorResponse"] | null;
+        };
+        /** CompanyResearchWorkspaceResponse */
+        CompanyResearchWorkspaceResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            company: components["schemas"]["CompanyResearchWorkspaceCompanyResponse"];
+            preparation: components["schemas"]["CompanyResearchWorkspacePreparationResponse"];
+            /** Artifacts */
+            artifacts: components["schemas"]["CompanyResearchArtifactResponse"][];
+            /** Modules */
+            modules: components["schemas"]["CompanyResearchWorkbenchModuleResponse"][];
+            /** Source Count */
+            source_count: number;
+            /** Gap Count */
+            gap_count: number;
+            draft: components["schemas"]["CompanyResearchWorkspaceDraftResponse"];
+            /** Selected Revision */
+            selected_revision: string | null;
+            change_summary: components["schemas"]["CompanyResearchChangeSummaryResponse"];
         };
         /** CompareLinkDTO */
         CompareLinkDTO: {
@@ -7330,6 +8627,56 @@ export interface components {
             link_modified: number;
         };
         /**
+         * IndustryCompanyBrowseItemResponse
+         * @description Public identity projection for an Industry's directly related companies.
+         */
+        IndustryCompanyBrowseItemResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Object Id
+             * Format: uuid
+             */
+            object_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "industry" | "company" | "security";
+            /** External Key */
+            external_key: string;
+            /** Canonical Name */
+            canonical_name: string;
+            /** Symbol */
+            symbol: string | null;
+            /** Exchange */
+            exchange: string | null;
+            /** Share Class */
+            share_class: string | null;
+            /** Trading Currency */
+            trading_currency: ("CNY" | "USD") | null;
+        };
+        /** IndustryCompanyBrowseResponse */
+        IndustryCompanyBrowseResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Industry Id
+             * Format: uuid
+             */
+            industry_id: string;
+            /** Items */
+            items: components["schemas"]["IndustryCompanyBrowseItemResponse"][];
+        };
+        /**
          * IngestRequest
          * @description Trigger a Gildata ingest run.
          *
@@ -7383,6 +8730,27 @@ export interface components {
             stock_id: string | null;
             /** Case Id */
             case_id: string | null;
+        };
+        /** InitializeCompanyResearchRequest */
+        InitializeCompanyResearchRequest: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Company Id
+             * Format: uuid
+             */
+            company_id: string;
+            /**
+             * Cutoff At
+             * Format: date-time
+             */
+            cutoff_at: string;
+            /** Preview Hash */
+            preview_hash: string;
         };
         /** JobDTO */
         JobDTO: {
@@ -10175,6 +11543,32 @@ export interface components {
             revision: number;
             /** Actor */
             actor: string;
+        };
+        /** ReviewCompanyEvidenceRequest */
+        ReviewCompanyEvidenceRequest: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Evidence Artifact Id
+             * Format: uuid
+             */
+            evidence_artifact_id: string;
+            /** Fact Key */
+            fact_key: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "confirmed" | "rejected";
+            /**
+             * Expected Head Id
+             * Format: uuid
+             */
+            expected_head_id: string;
         };
         /** ReviewDecisionRequest */
         ReviewDecisionRequest: {
@@ -16504,7 +17898,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16546,7 +17940,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16588,7 +17982,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16630,7 +18024,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16674,7 +18068,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16718,7 +18112,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16759,7 +18153,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16800,7 +18194,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16840,7 +18234,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16880,7 +18274,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16920,7 +18314,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16961,7 +18355,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -16995,7 +18389,7 @@ export interface operations {
                     "application/json": components["schemas"]["ResearchArchiveListResponse"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17036,7 +18430,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17069,7 +18463,50 @@ export interface operations {
                     "application/json": components["schemas"]["ProductObjectSearchResponse"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_industry_companies_api_underwriting_v1_product_industries__industry_id__companies_get: {
+        parameters: {
+            query?: {
+                as_of?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                industry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndustryCompanyBrowseResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17100,7 +18537,7 @@ export interface operations {
                     "application/json": components["schemas"]["ResearchProjectListResponse"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17142,7 +18579,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17182,7 +18619,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17226,7 +18663,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17270,7 +18707,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17314,7 +18751,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17356,7 +18793,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17398,7 +18835,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17440,7 +18877,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17482,7 +18919,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17523,7 +18960,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17565,7 +19002,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17605,7 +19042,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17649,7 +19086,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17693,7 +19130,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17739,7 +19176,7 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -17779,7 +19216,275 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
-            /** @description Unprocessable Content */
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    preview_company_research_api_underwriting_v1_product_company_research_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanyResearchPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResearchPreviewResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    initialize_company_research_api_underwriting_v1_product_company_research_initializations_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InitializeCompanyResearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResearchProjectResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_company_research_project_api_underwriting_v1_product_company_research_projects__project_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResearchProjectResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    retry_company_research_project_api_underwriting_v1_product_company_research_projects__project_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResearchProjectResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_company_research_workspace_api_underwriting_v1_product_company_research_projects__project_id__workspace_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResearchWorkspaceResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    review_company_evidence_api_underwriting_v1_product_company_research_projects__project_id__evidence_reviews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewCompanyEvidenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResearchEvidenceReviewResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;

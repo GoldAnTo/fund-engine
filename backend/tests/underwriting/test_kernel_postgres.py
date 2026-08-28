@@ -1,6 +1,8 @@
 """PostgreSQL migration and immutable-trigger coverage for underwriting."""
+
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -9,6 +11,12 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
+
+from tests.legacy_market_conflicts import (
+    TABLES as LEGACY_MARKET_TABLES,
+    clone_conflicting_insert_sql,
+    seed_0067_market_conflicts,
+)
 
 
 TABLES = {
@@ -56,6 +64,139 @@ MANIFEST_SCHEMA = "underwriting.research-revision-manifest.v1"
 def _schema_url(database_url: str, schema: str) -> str:
     separator = "&" if "?" in database_url else "?"
     return f"{database_url}{separator}options=-csearch_path={schema}"
+
+
+@pytest.mark.pg_only
+def test_0068_postgres_grandfathers_all_legacy_market_business_conflicts() -> None:
+    database_url = os.environ["TEST_DATABASE_URL"]
+    schema = f"underwriting_0068_market_conflicts_{uuid.uuid4().hex}"
+    migration_url = _schema_url(database_url, schema)
+    admin = sa.create_engine(database_url, future=True)
+    isolated = sa.create_engine(migration_url, future=True)
+    backend = Path(__file__).parents[2]
+    try:
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "0067"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            check=True,
+            capture_output=True,
+        )
+        with isolated.begin() as connection:
+            legacy_ids = seed_0067_market_conflicts(connection)
+        upgraded = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "0068"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert upgraded.returncode == 0, upgraded.stderr
+        with isolated.connect() as connection:
+            partial_indexes = connection.execute(
+                sa.text(
+                    "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+                    "AND indexname LIKE 'uq_uw_%_business_time'"
+                )
+            ).scalars().all()
+            assert len(partial_indexes) == 4
+            assert all(
+                "where" in definition.casefold()
+                and "legacy_business_conflict" in definition.casefold()
+                for definition in partial_indexes
+            )
+            for table in LEGACY_MARKET_TABLES:
+                rows = connection.execute(
+                    sa.text(
+                        f"SELECT id, content_hash, legacy_business_conflict FROM {table} "
+                        "ORDER BY id"
+                    )
+                ).all()
+                assert {str(row.id) for row in rows} == set(legacy_ids[table])
+                assert {row.content_hash for row in rows} == {"3" * 64, "4" * 64}
+                assert all(row.legacy_business_conflict for row in rows)
+
+        for table in LEGACY_MARKET_TABLES:
+            with pytest.raises(sa.exc.DBAPIError, match="append-only"):
+                with isolated.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            f"UPDATE {table} SET legacy_business_conflict = false"
+                        )
+                    )
+            for legacy in (False, True):
+                with pytest.raises(sa.exc.DBAPIError, match="quarantined"):
+                    with isolated.begin() as connection:
+                        connection.execute(
+                            sa.text(clone_conflicting_insert_sql(table)),
+                            {
+                                "id": uuid.uuid4(),
+                                "raw": "8" * 64,
+                                "content": "9" * 64,
+                                "legacy": legacy,
+                                "fresh_at": "2026-08-25T19:00:00+00:00",
+                            },
+                        )
+            with pytest.raises(sa.exc.DBAPIError, match="quarantined"):
+                with isolated.begin() as connection:
+                    connection.execute(
+                        sa.text(
+                            clone_conflicting_insert_sql(
+                                table,
+                                fresh_business_key=True,
+                            )
+                        ),
+                        {
+                            "id": uuid.uuid4(),
+                            "raw": "7" * 64,
+                            "content": "6" * 64,
+                            "legacy": True,
+                            "fresh_at": "2026-08-25T19:00:00+00:00",
+                        },
+                    )
+
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "downgrade", "0067"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            check=True,
+            capture_output=True,
+        )
+        with isolated.connect() as connection:
+            inspector = sa.inspect(connection)
+            assert connection.execute(
+                sa.text(
+                    "SELECT COUNT(*) FROM pg_trigger AS t "
+                    "JOIN pg_class AS relation ON relation.oid = t.tgrelid "
+                    "JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace "
+                    "WHERE namespace.nspname = current_schema() "
+                    "AND t.tgname LIKE 'reject_legacy_conflict_insert_%'"
+                )
+            ).scalar_one() == 0
+            assert connection.execute(
+                sa.text(
+                    "SELECT COUNT(*) FROM pg_proc AS p "
+                    "JOIN pg_namespace AS namespace ON namespace.oid = p.pronamespace "
+                    "WHERE namespace.nspname = current_schema() "
+                    "AND p.proname LIKE 'reject_legacy_conflict_insert_%'"
+                )
+            ).scalar_one() == 0
+            for table in LEGACY_MARKET_TABLES:
+                assert "legacy_business_conflict" not in {
+                    column["name"] for column in inspector.get_columns(table)
+                }
+                assert not any(
+                    index["name"].endswith("_business_time")
+                    for index in inspector.get_indexes(table)
+                )
+    finally:
+        isolated.dispose()
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin.dispose()
 
 
 def _assert_0065_product_uniqueness(
@@ -768,6 +909,178 @@ def test_0065_product_tables_install_precise_immutable_and_draft_delete_triggers
                 connection.execute(
                     sa.text("DELETE FROM uw_workspace_drafts WHERE id = :id"),
                     {"id": ids["draft"]},
+                )
+    finally:
+        isolated.dispose()
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        admin.dispose()
+
+
+@pytest.mark.pg_only
+def test_0066_search_terms_backfill_unicode_and_install_immutable_triggers() -> None:
+    database_url = os.environ["TEST_DATABASE_URL"]
+    schema = f"underwriting_0066_{uuid.uuid4().hex}"
+    migration_url = _schema_url(database_url, schema)
+    admin = sa.create_engine(database_url, future=True)
+    isolated = sa.create_engine(migration_url, future=True)
+    backend = Path(__file__).parents[2]
+    object_id = uuid.uuid4()
+    identity_id = uuid.uuid4()
+    long_object_id = uuid.uuid4()
+    long_identity_id = uuid.uuid4()
+    long_value = "".join(
+        hashlib.sha256(str(index).encode("ascii")).hexdigest() for index in range(256)
+    )
+    long_digest = hashlib.sha256(long_value.encode("utf-8")).hexdigest()
+    try:
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+        migrated = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "0065"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert migrated.returncode == 0, migrated.stderr
+        with isolated.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_research_objects "
+                    "(id, kind, external_key, canonical_name, created_at) "
+                    "VALUES (:id, 'company', 'FR:TEST:COMPANY', 'Unrelated', now())"
+                ),
+                {"id": object_id},
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_object_identity_versions "
+                    "(id, object_id, version, canonical_name, effective_from, "
+                    "content_hash, created_at) VALUES "
+                    "(:id, :object_id, 1, 'ÉCOLE Holdings', now(), :digest, now())"
+                ),
+                {"id": identity_id, "object_id": object_id, "digest": "a" * 64},
+            )
+        migrated = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "0066"],
+            cwd=backend,
+            env={**os.environ, "DATABASE_URL": migration_url},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert migrated.returncode == 0, migrated.stderr
+        with isolated.begin() as connection:
+            assert connection.execute(
+                sa.text(
+                    "SELECT term_kind, normalized_value, normalized_digest "
+                    "FROM uw_research_object_search_terms ORDER BY term_kind"
+                )
+            ).all() == [
+                (
+                    "canonical_name",
+                    "école holdings",
+                    hashlib.sha256("école holdings".encode("utf-8")).hexdigest(),
+                ),
+                (
+                    "external_key",
+                    "fr:test:company",
+                    hashlib.sha256("fr:test:company".encode("utf-8")).hexdigest(),
+                ),
+            ]
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_research_objects "
+                    "(id, kind, external_key, canonical_name, created_at) "
+                    "VALUES (:id, 'company', 'LONG:TEST:COMPANY', 'Long', now())"
+                ),
+                {"id": long_object_id},
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_object_identity_versions "
+                    "(id, object_id, version, canonical_name, effective_from, "
+                    "content_hash, created_at) VALUES "
+                    "(:id, :object_id, 1, :canonical_name, now(), :digest, now())"
+                ),
+                {
+                    "id": long_identity_id,
+                    "object_id": long_object_id,
+                    "canonical_name": long_value,
+                    "digest": "b" * 64,
+                },
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_research_object_search_terms "
+                    "(id, object_id, identity_version_id, term_kind, raw_value, "
+                    "normalized_value, normalized_digest, created_at) VALUES "
+                    "(:id, :object_id, :identity_id, 'canonical_name', "
+                    ":raw_value, :normalized_value, :normalized_digest, now())"
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "object_id": long_object_id,
+                    "identity_id": long_identity_id,
+                    "raw_value": long_value,
+                    "normalized_value": long_value,
+                    "normalized_digest": long_digest,
+                },
+            )
+            assert connection.execute(
+                sa.text(
+                    "SELECT length(normalized_value) "
+                    "FROM uw_research_object_search_terms "
+                    "WHERE normalized_digest = :digest "
+                    "AND normalized_value = :normalized_value"
+                ),
+                {"digest": long_digest, "normalized_value": long_value},
+            ).scalar_one() == len(long_value)
+            index_definitions = tuple(
+                connection.execute(
+                    sa.text(
+                        "SELECT indexdef FROM pg_indexes "
+                        "WHERE schemaname = current_schema() "
+                        "AND tablename = 'uw_research_object_search_terms'"
+                    )
+                ).scalars()
+            )
+            assert any("normalized_digest" in value for value in index_definitions)
+            assert all("normalized_value" not in value for value in index_definitions)
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_research_object_aliases "
+                    "(id, object_id, alias, normalized_alias, locale, created_at) "
+                    "VALUES (:id, :object_id, 'ÉCOLE', 'école', 'fr', now())"
+                ),
+                {"id": uuid.uuid4(), "object_id": object_id},
+            )
+            triggered = set(
+                connection.execute(
+                    sa.text(
+                        "SELECT c.relname FROM pg_trigger t "
+                        "JOIN pg_class c ON c.oid = t.tgrelid "
+                        "WHERE NOT t.tgisinternal AND c.relname IN "
+                        "('uw_research_object_aliases', "
+                        "'uw_research_object_search_terms')"
+                    )
+                ).scalars()
+            )
+            assert triggered == {
+                "uw_research_object_aliases",
+                "uw_research_object_search_terms",
+            }
+        with pytest.raises(sa.exc.IntegrityError):
+            with isolated.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO uw_research_object_aliases "
+                        "(id, object_id, alias, normalized_alias, locale, created_at) "
+                        "VALUES (:id, :object_id, 'Google', 'unrelated', 'en', now())"
+                    ),
+                    {"id": uuid.uuid4(), "object_id": object_id},
                 )
     finally:
         isolated.dispose()

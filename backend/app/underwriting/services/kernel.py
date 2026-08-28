@@ -6,8 +6,6 @@ import copy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-import hashlib
-import json
 import re
 import uuid
 
@@ -29,6 +27,7 @@ from app.underwriting.domain.types import (
     LedgerEntryInput,
     ResearchObjectKind,
 )
+from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.models import UnderwritingLedgerEntry
 from app.underwriting.persistence.repository import StaleParentError, UnderwritingRepository
 
@@ -54,18 +53,6 @@ class KernelSnapshot:
     cutoff: datetime
     entries: tuple[UnderwritingLedgerEntry, ...]
     snapshot_hash: str
-
-
-def canonical_hash(value: object) -> str:
-    """Return the stable SHA-256 digest for a JSON-compatible value."""
-    serialized = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
-    return hashlib.sha256(serialized).hexdigest()
 
 
 def frozen_research_version_content_hash(

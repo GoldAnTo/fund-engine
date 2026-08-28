@@ -2,24 +2,25 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import json
 from typing import Literal
 from uuid import UUID, uuid4
 
 from pydantic import (
     BaseModel,
     ConfigDict,
-    ValidationError as PydanticValidationError,
     field_validator,
+)
+from pydantic import (
+    ValidationError as PydanticValidationError,
 )
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
 from app.underwriting.persistence.product_repository import ProductRepository
-
 
 _DRAFT_SCHEMA = "product.workspace-draft.v1"
 _REFERENCE_TUPLE_FIELDS = frozenset(
@@ -193,7 +194,12 @@ class WorkspaceDraftService:
         except PydanticValidationError as exc:
             raise ValidationError("workspace draft patch is invalid") from exc
 
-    def create(self, project_id: UUID) -> WorkspaceDraftView:
+    def create(
+        self,
+        project_id: UUID,
+        *,
+        initial_content: WorkspaceDraftContent | None = None,
+    ) -> WorkspaceDraftView:
         project_id = self._uuid(project_id, "project_id")
         if self._repository.project(project_id) is None:
             raise ValidationError("research project does not exist")
@@ -201,7 +207,12 @@ class WorkspaceDraftService:
         if existing is not None:
             return self._view(existing)
         created_at = self._utc(self._now(), "clock")
-        content = WorkspaceDraftContent()
+        if (
+            initial_content is not None
+            and type(initial_content) is not WorkspaceDraftContent
+        ):
+            raise ValidationError("initial_content must be a WorkspaceDraftContent")
+        content = initial_content or WorkspaceDraftContent()
         row = self._repository.create_workspace_draft(
             draft_id=uuid4(),
             project_id=project_id,

@@ -6,16 +6,26 @@ history used by the application and retain a durable revision marker.
 """
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import os
 import subprocess
 import sys
+from uuid import UUID
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
 import sqlalchemy as sa
 import pytest
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import registry, sessionmaker
+
+from tests.legacy_market_conflicts import (
+    TABLES as LEGACY_MARKET_TABLES,
+    clone_conflicting_insert_sql,
+    seed_0067_market_conflicts,
+)
 
 
 WAVE2_TABLES = {
@@ -30,6 +40,122 @@ WAVE2_TABLES = {
     "uw_forecast_input_versions",
     "uw_falsifier_versions",
 }
+
+
+def _search_term_digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def test_0066_migration_freezes_search_normalization_without_app_imports() -> None:
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0066_research_object_aliases.py"
+    )
+    source = migration_path.read_text(encoding="utf-8")
+
+    assert "from app." not in source
+    assert "import app." not in source
+    assert "unicodedata.normalize" in source
+
+
+def test_0066_migration_freezes_search_digest_without_app_imports() -> None:
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0066_research_object_aliases.py"
+    )
+    source = migration_path.read_text(encoding="utf-8")
+
+    assert "from app." not in source
+    assert "import app." not in source
+    assert "hashlib.sha256" in source
+
+
+def test_0066_backfill_keeps_server_side_cursor_option_off_the_shared_bind() -> None:
+    """Later PostgreSQL DDL must not inherit a streaming server cursor.
+
+    SQLAlchemy 2.x mutates a ``Connection`` when its ``execution_options``
+    method is called.  PostgreSQL cannot DECLARE a cursor for ``CREATE
+    TRIGGER``, so the backfill must attach ``stream_results`` to each SELECT,
+    rather than to Alembic's shared migration bind.
+    """
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0066_research_object_aliases.py"
+    )
+    module_spec = importlib.util.spec_from_file_location(
+        "migration_0066_backfill_execution_options",
+        migration_path,
+    )
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    migration = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(migration)
+
+    metadata = sa.MetaData()
+    objects = sa.Table(
+        "uw_research_objects",
+        metadata,
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("external_key", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    identities = sa.Table(
+        "uw_object_identity_versions",
+        metadata,
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("object_id", sa.String(), nullable=False),
+        sa.Column("canonical_name", sa.String(), nullable=False),
+        sa.Column("symbol", sa.String(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    terms = sa.Table(
+        "uw_research_object_search_terms",
+        metadata,
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("object_id", sa.String(), nullable=False),
+        sa.Column("identity_version_id", sa.String(), nullable=True),
+        sa.Column("term_kind", sa.String(), nullable=False),
+        sa.Column("raw_value", sa.String(), nullable=False),
+        sa.Column("normalized_value", sa.String(), nullable=False),
+        sa.Column("normalized_digest", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    engine = sa.create_engine("sqlite://")
+    metadata.create_all(engine)
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            objects.insert(),
+            {"id": "object", "external_key": "US:EXAMPLE", "created_at": now},
+        )
+        connection.execute(
+            identities.insert(),
+            {
+                "id": "identity",
+                "object_id": "object",
+                "canonical_name": "Example",
+                "symbol": "EX",
+                "created_at": now,
+            },
+        )
+        migration.op = SimpleNamespace(get_bind=lambda: connection)
+
+        migration._backfill_search_terms()
+
+        assert "stream_results" not in connection.get_execution_options()
+        assert (
+            connection.execute(
+                sa.select(sa.func.count()).select_from(terms)
+            ).scalar_one()
+            == 3
+        )
+
 
 CANDIDATE_EVIDENCE_TABLES = {
     "uw_evidence_candidate_dossier_versions",
@@ -57,8 +183,9 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             connection.execute(
                 sa.text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "0065"
+            == "0068"
         )
+        assert "uw_market_capture_envelopes" in sa.inspect(connection).get_table_names()
         assessment_columns = {
             column["name"]
             for column in sa.inspect(connection).get_columns("ai_assessments")
@@ -104,6 +231,631 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             )
         ).scalar_one()
         assert trigger_count == 1
+        assert {
+            "uw_company_research_preparations",
+            "uw_company_research_artifact_versions",
+            "uw_company_research_events",
+        }.issubset(sa.inspect(connection).get_table_names())
+        inspector = sa.inspect(connection)
+        assert "parent_content_hash" in {
+            column["name"]
+            for column in inspector.get_columns(
+                "uw_company_research_artifact_versions"
+            )
+        }
+        assert {"sequence", "previous_event_hash"}.issubset(
+            {
+                column["name"]
+                for column in inspector.get_columns("uw_company_research_events")
+            }
+        )
+        assert {
+            tuple(constraint["column_names"])
+            for constraint in inspector.get_unique_constraints(
+                "uw_company_research_preparations"
+            )
+        } >= {("job_id",)}
+        immutable_company_research_trigger_count = connection.execute(
+            sa.text(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type = 'trigger' AND name IN ("
+                "'no_update_uw_company_research_artifact_versions', "
+                "'no_delete_uw_company_research_artifact_versions', "
+                "'no_update_uw_company_research_events', "
+                "'no_delete_uw_company_research_events')"
+            )
+        ).scalar_one()
+        assert immutable_company_research_trigger_count == 4
+
+
+def test_0068_backfills_legacy_market_capture_and_makes_it_immutable(tmp_path) -> None:
+    database_path = tmp_path / "market-provenance-0067.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    initial = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0067"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert initial.returncode == 0, initial.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    snapshot_id = "11111111111111111111111111111111"
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_fx_snapshots ("
+                "id, base_currency, quote_currency, rate, quote_direction, "
+                "market_at, available_at, source_id, raw_hash, content_hash, created_at"
+                ") VALUES ("
+                ":id, 'USD', 'CNY', 7.18, 'quote_per_base', :market_at, "
+                ":available_at, :source_id, :raw_hash, :content_hash, :created_at)"
+            ),
+            {
+                "id": snapshot_id,
+                "market_at": datetime(2026, 8, 21, tzinfo=UTC),
+                "available_at": datetime(2026, 8, 24, tzinfo=UTC),
+                "source_id": "https://legacy.example/fx",
+                "raw_hash": "1" * 64,
+                "content_hash": "2" * 64,
+                "created_at": datetime(2026, 8, 27, 12, tzinfo=UTC),
+            },
+        )
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0068"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    with engine.connect() as connection:
+        row = connection.execute(
+            sa.text(
+                "SELECT snapshot_kind, snapshot_id, provenance_role, source_url, "
+                "source_locator, provider_policy_version, raw_hash, raw_components, "
+                "content_hash FROM uw_market_capture_envelopes"
+            )
+        ).one()
+        assert row[:4] == ("fx", snapshot_id, "primary", "https://legacy.example/fx")
+        assert row[4:7] == (
+            "legacy snapshot: exact source locator was not captured",
+            "legacy_snapshot_without_exact_provenance.v1",
+            "1" * 64,
+        )
+        assert row[7] == "[]"
+        assert len(row[8]) == 64
+        with pytest.raises(sa.exc.IntegrityError):
+            connection.execute(
+                sa.text(
+                    "UPDATE uw_market_capture_envelopes "
+                    "SET source_locator = 'rewritten'"
+                )
+            )
+
+
+def test_0068_grandfathers_every_legacy_market_business_time_conflict(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "market-conflicts-0067.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0067"],
+        cwd=backend,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.begin() as connection:
+        legacy_ids = seed_0067_market_conflicts(connection)
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0068"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    with engine.connect() as connection:
+        partial_indexes = connection.execute(
+            sa.text(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' "
+                "AND name LIKE 'uq_uw_%_business_time'"
+            )
+        ).scalars().all()
+        assert len(partial_indexes) == 4
+        assert all(
+            "where legacy_business_conflict = false" in sql.casefold()
+            for sql in partial_indexes
+        )
+        for table in LEGACY_MARKET_TABLES:
+            rows = connection.execute(
+                sa.text(
+                    f"SELECT id, content_hash, legacy_business_conflict FROM {table} "
+                    "ORDER BY id"
+                )
+            ).all()
+            assert {str(row.id) for row in rows} == set(legacy_ids[table])
+            assert {row.content_hash for row in rows} == {"3" * 64, "4" * 64}
+            assert [bool(row.legacy_business_conflict) for row in rows] == [True, True]
+
+    for table in LEGACY_MARKET_TABLES:
+        with pytest.raises(sa.exc.IntegrityError, match="append-only"):
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        f"UPDATE {table} SET legacy_business_conflict = false"
+                    )
+                )
+        for legacy in (False, True):
+            with pytest.raises(sa.exc.IntegrityError):
+                with engine.begin() as connection:
+                    connection.execute(
+                        sa.text(clone_conflicting_insert_sql(table)),
+                        {
+                            "id": str(UUID(int=UUID(legacy_ids[table][0]).int + 100)),
+                            "raw": "8" * 64,
+                            "content": "9" * 64,
+                            "legacy": legacy,
+                            "fresh_at": datetime(2026, 8, 25, 19, tzinfo=UTC),
+                        },
+                    )
+        with pytest.raises(sa.exc.IntegrityError, match="quarantined"):
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        clone_conflicting_insert_sql(
+                            table,
+                            fresh_business_key=True,
+                        )
+                    ),
+                    {
+                        "id": str(UUID(int=UUID(legacy_ids[table][0]).int + 200)),
+                        "raw": "7" * 64,
+                        "content": "6" * 64,
+                        "legacy": True,
+                        "fresh_at": datetime(2026, 8, 25, 19, tzinfo=UTC),
+                    },
+                )
+
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0067"],
+        cwd=backend,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    with engine.connect() as connection:
+        inspector = sa.inspect(connection)
+        assert connection.execute(
+            sa.text(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' "
+                "AND name LIKE 'reject_legacy_conflict_insert_%'"
+            )
+        ).scalar_one() == 0
+        for table in LEGACY_MARKET_TABLES:
+            assert "legacy_business_conflict" not in {
+                column["name"] for column in inspector.get_columns(table)
+            }
+            assert not any(
+                index["name"].endswith("_business_time")
+                for index in inspector.get_indexes(table)
+            )
+
+
+def test_0068_orm_naive_datetime_backfill_replays_through_production_capture(
+    tmp_path,
+) -> None:
+    from app.underwriting.services.company_research_market_inputs import (
+        CompanyResearchMarketInputs,
+    )
+
+    database_path = tmp_path / "orm-market-provenance-0067.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0067"],
+        cwd=backend,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    snapshot_id = UUID("22222222-2222-2222-2222-222222222222")
+    legacy_table = sa.Table(
+        "uw_fx_snapshots",
+        sa.MetaData(),
+        autoload_with=engine,
+    )
+    mapper_registry = registry()
+
+    class LegacyFXSnapshot:
+        pass
+
+    mapper_registry.map_imperatively(LegacyFXSnapshot, legacy_table)
+    with sessionmaker(engine)() as session:
+        session.add(
+            LegacyFXSnapshot(
+                id=snapshot_id.hex,
+                base_currency="USD",
+                quote_currency="CNY",
+                rate=Decimal("7.18"),
+                quote_direction="quote_per_base",
+                market_at=datetime(2026, 8, 21, tzinfo=UTC),
+                available_at=datetime(2026, 8, 24, tzinfo=UTC),
+                source_id="https://legacy.example/orm-fx",
+                raw_hash="3" * 64,
+                content_hash="4" * 64,
+                created_at=datetime(2026, 8, 27, 12, tzinfo=UTC),
+            )
+        )
+        session.commit()
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0068"],
+        cwd=backend,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    with sessionmaker(engine)() as session:
+        capture = CompanyResearchMarketInputs(session)._capture("fx", snapshot_id)
+        assert capture.authenticated_available_at.replace(tzinfo=UTC) == datetime(
+            2026, 8, 24, tzinfo=UTC
+        )
+        for kind, target_id, role in (
+            ("price", UUID("33333333-3333-3333-3333-333333333333"), "primary"),
+            ("price", snapshot_id, "primary"),
+            ("fx", snapshot_id, "class_b_units"),
+        ):
+            with pytest.raises(sa.exc.IntegrityError):
+                session.execute(
+                    sa.text(
+                        "INSERT INTO uw_market_capture_envelopes ("
+                        "id,snapshot_kind,snapshot_id,provenance_role,source_url,"
+                        "source_locator,provider_policy_version,raw_hash,raw_components,"
+                        "content_hash,authenticated_available_at,acquired_at) VALUES ("
+                        ":id,:kind,:snapshot_id,:role,'https://example.test','locator',"
+                        "'policy.v1',:hash,'[]',:hash,:now,:now)"
+                    ),
+                    {
+                        "id": UUID(int=target_id.int + 1).hex,
+                        "kind": kind,
+                        "snapshot_id": target_id.hex,
+                        "role": role,
+                        "hash": "5" * 64,
+                        "now": datetime(2026, 8, 27, tzinfo=UTC),
+                    },
+                )
+            session.rollback()
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0067"],
+        cwd=backend,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    with engine.connect() as connection:
+        inspector = sa.inspect(connection)
+        assert "uw_market_capture_envelopes" not in inspector.get_table_names()
+        assert "uq_uw_fx_snapshot_business_time" not in {
+            item["name"] for item in inspector.get_indexes("uw_fx_snapshots")
+        }
+
+
+def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "research-object-aliases.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0065"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    object_id = "11111111111111111111111111111111"
+    identity_id = "12121212121212121212121212121212"
+    security_id = "13131313131313131313131313131313"
+    security_identity_id = "14141414141414141414141414141414"
+    alias_id = "22222222222222222222222222222222"
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_research_objects "
+                "(id, kind, external_key, canonical_name, created_at) "
+                "VALUES (:id, 'company', 'US:TEST:COMPANY', 'Test Inc.', :now)"
+            ),
+            {"id": object_id, "now": datetime.now(UTC)},
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_object_identity_versions "
+                "(id, object_id, version, canonical_name, symbol, exchange, "
+                "share_class, trading_currency, effective_from, effective_to, "
+                "supersedes_id, content_hash, created_at) VALUES "
+                "(:id, :object_id, 1, '  ÉCOLE Holdings  ', NULL, NULL, NULL, NULL, "
+                ":now, NULL, NULL, :digest, :now)"
+            ),
+            {
+                "id": identity_id,
+                "object_id": object_id,
+                "digest": "a" * 64,
+                "now": datetime.now(UTC),
+            },
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_research_objects "
+                "(id, kind, external_key, canonical_name, created_at) "
+                "VALUES (:id, 'security', 'FR:TEST:A', 'Unrelated Share', :now)"
+            ),
+            {"id": security_id, "now": datetime.now(UTC)},
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_object_identity_versions "
+                "(id, object_id, version, canonical_name, symbol, exchange, "
+                "share_class, trading_currency, effective_from, effective_to, "
+                "supersedes_id, content_hash, created_at) VALUES "
+                "(:id, :object_id, 1, 'Unrelated Share', 'ÉCOLE', 'TEST', "
+                "'ordinary', 'USD', :now, NULL, NULL, :digest, :now)"
+            ),
+            {
+                "id": security_identity_id,
+                "object_id": security_id,
+                "digest": "b" * 64,
+                "now": datetime.now(UTC),
+            },
+        )
+
+    migrated = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0066"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert migrated.returncode == 0, migrated.stderr
+
+    with engine.begin() as connection:
+        inspector = sa.inspect(connection)
+        assert "uw_research_object_aliases" in inspector.get_table_names()
+        assert "uw_research_object_search_terms" in inspector.get_table_names()
+        assert {
+            column["name"]
+            for column in inspector.get_columns("uw_research_object_aliases")
+        } == {
+            "id",
+            "object_id",
+            "alias",
+            "normalized_alias",
+            "locale",
+            "created_at",
+        }
+        assert {
+            index["name"]
+            for index in inspector.get_indexes("uw_research_object_aliases")
+        } == {"ix_uw_object_alias_normalized"}
+        assert {
+            constraint["name"]
+            for constraint in inspector.get_unique_constraints(
+                "uw_research_object_aliases"
+            )
+        } == {"uq_uw_object_alias_object_value"}
+        assert {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints(
+                "uw_research_object_aliases"
+            )
+        } == {
+            "ck_uw_object_alias_text",
+            "ck_uw_object_alias_normalized",
+            "ck_uw_object_alias_normalized_text",
+        }
+        assert {
+            column["name"]
+            for column in inspector.get_columns("uw_research_object_search_terms")
+        } == {
+            "id",
+            "object_id",
+            "identity_version_id",
+            "term_kind",
+            "raw_value",
+            "normalized_value",
+            "normalized_digest",
+            "created_at",
+        }
+        term_indexes = {
+            index["name"]: tuple(index["column_names"])
+            for index in inspector.get_indexes("uw_research_object_search_terms")
+        }
+        assert term_indexes["ix_uw_search_term_normalized_digest"] == (
+            "normalized_digest",
+        )
+        assert all(
+            "normalized_value" not in columns for columns in term_indexes.values()
+        )
+        assert set(
+            connection.execute(
+                sa.text(
+                    "SELECT term_kind, raw_value, normalized_value, normalized_digest "
+                    "FROM uw_research_object_search_terms ORDER BY term_kind"
+                )
+            ).all()
+        ) == {
+            (
+                "canonical_name",
+                "  ÉCOLE Holdings  ",
+                "école holdings",
+                _search_term_digest("école holdings"),
+            ),
+            (
+                "canonical_name",
+                "Unrelated Share",
+                "unrelated share",
+                _search_term_digest("unrelated share"),
+            ),
+            (
+                "external_key",
+                "US:TEST:COMPANY",
+                "us:test:company",
+                _search_term_digest("us:test:company"),
+            ),
+            (
+                "external_key",
+                "FR:TEST:A",
+                "fr:test:a",
+                _search_term_digest("fr:test:a"),
+            ),
+            ("symbol", "ÉCOLE", "école", _search_term_digest("école")),
+        }
+        explain = connection.exec_driver_sql(
+            "EXPLAIN QUERY PLAN SELECT object_id "
+            "FROM uw_research_object_search_terms "
+            "WHERE normalized_digest = :digest AND normalized_value = 'école holdings'",
+            {"digest": _search_term_digest("école holdings")},
+        ).all()
+        assert any(
+            "ix_uw_search_term_normalized_digest" in str(detail) for detail in explain
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_research_object_aliases "
+                "(id, object_id, alias, normalized_alias, locale, created_at) "
+                "VALUES (:id, :object_id, 'Google', 'google', 'en', :now)"
+            ),
+            {"id": alias_id, "object_id": object_id, "now": datetime.now(UTC)},
+        )
+        assert connection.execute(
+            sa.text(
+                "SELECT alias, normalized_alias, locale "
+                "FROM uw_research_object_aliases WHERE id = :id"
+            ),
+            {"id": alias_id},
+        ).one() == ("Google", "google", "en")
+
+    with pytest.raises(sa.exc.IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_research_object_aliases "
+                    "(id, object_id, alias, normalized_alias, locale, created_at) "
+                    "VALUES (:id, :object_id, 'Bad', ' BAD ', 'en', :now)"
+                ),
+                {
+                    "id": "33333333333333333333333333333333",
+                    "object_id": object_id,
+                    "now": datetime.now(UTC),
+                },
+            )
+    for duplicate_id, alias, normalized_alias in (
+        ("44444444444444444444444444444444", "GOOGLE", "google"),
+        ("55555555555555555555555555555555", "   ", "empty"),
+        ("66666666666666666666666666666666", "Google", "unrelated"),
+    ):
+        with pytest.raises(sa.exc.IntegrityError):
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO uw_research_object_aliases "
+                        "(id, object_id, alias, normalized_alias, locale, created_at) "
+                        "VALUES (:id, :object_id, :alias, :normalized_alias, 'en', :now)"
+                    ),
+                    {
+                        "id": duplicate_id,
+                        "object_id": object_id,
+                        "alias": alias,
+                        "normalized_alias": normalized_alias,
+                        "now": datetime.now(UTC),
+                    },
+                )
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_research_object_aliases "
+                "(id, object_id, alias, normalized_alias, locale, created_at) "
+                "VALUES (:id, :object_id, 'Straße', 'straße', 'de', :now)"
+            ),
+            {
+                "id": "77777777777777777777777777777777",
+                "object_id": object_id,
+                "now": datetime.now(UTC),
+            },
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_research_object_aliases "
+                "(id, object_id, alias, normalized_alias, locale, created_at) "
+                "VALUES (:id, :object_id, 'ÉCOLE', 'école', 'fr', :now)"
+            ),
+            {
+                "id": "88888888888888888888888888888888",
+                "object_id": object_id,
+                "now": datetime.now(UTC),
+            },
+        )
+    for mutation in (
+        "UPDATE uw_research_object_aliases SET alias = 'Changed' WHERE id = :id",
+        "DELETE FROM uw_research_object_aliases WHERE id = :id",
+    ):
+        with pytest.raises(sa.exc.DBAPIError, match="append-only|immutable"):
+            with engine.begin() as connection:
+                connection.execute(sa.text(mutation), {"id": alias_id})
+    for mutation in (
+        "UPDATE uw_research_object_search_terms SET raw_value = 'Changed'",
+        "DELETE FROM uw_research_object_search_terms",
+    ):
+        with pytest.raises(sa.exc.DBAPIError, match="append-only|immutable"):
+            with engine.begin() as connection:
+                connection.execute(sa.text(mutation))
+
+    downgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0065"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert downgraded.returncode == 0, downgraded.stderr
+    with engine.connect() as connection:
+        assert (
+            "uw_research_object_aliases" not in sa.inspect(connection).get_table_names()
+        )
+        assert (
+            "uw_research_object_search_terms"
+            not in sa.inspect(connection).get_table_names()
+        )
+        assert (
+            connection.execute(
+                sa.text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            == "0065"
+        )
+        assert (
+            connection.execute(
+                sa.text(
+                    "SELECT canonical_name FROM uw_research_objects WHERE id = :id"
+                ),
+                {"id": object_id},
+            ).scalar_one()
+            == "Test Inc."
+        )
+    engine.dispose()
 
 
 def test_0061_downgrade_removes_only_wave2_economic_model_tables(tmp_path) -> None:
@@ -674,7 +1426,7 @@ with SessionLocal() as session:
 
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0065"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0068"
         assert {
             "research_preparations",
             "research_preparation_artifacts",
@@ -1438,7 +2190,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0065"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0068"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -1492,7 +2244,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0065"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0068"
 
 
 def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> None:
@@ -1549,7 +2301,7 @@ def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> 
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == "0065"
+        ).scalar_one() == "0068"
         assert connection.execute(
             sa.text(
                 "SELECT research_source_type FROM source_contracts WHERE id = :id"

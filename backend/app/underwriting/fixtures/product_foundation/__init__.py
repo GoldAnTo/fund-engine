@@ -8,11 +8,13 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from pathlib import Path
+import re
 from types import MappingProxyType
 from collections.abc import Mapping
 import unicodedata
 
 from app.models.ledger import ValidationError
+from app.underwriting.domain.search_terms import normalize_search_term
 from app.underwriting.services.kernel import canonical_hash
 
 
@@ -20,12 +22,22 @@ _ROOT = Path(__file__).resolve().parent
 _SCHEMA_VERSION = "product.foundation-identities.v1"
 # SHA-256 over the exact bundled UTF-8 bytes, independent of its self-declared hash.
 BUNDLED_MANIFEST_CONTENT_SHA256 = (
-    "97cfba971bfbc995dfead4e76c4f2eacb1b76bdd2de18d2c51039c46324b8add"
+    "8b3ea1a046bcaa9f8c7e163ffe18fe8254def969509559556ce6565c97c61f05"
 )
 _TOP_LEVEL_KEYS = frozenset(
-    {"schema_version", "content_hash", "companies", "securities", "rights"}
+    {
+        "schema_version",
+        "content_hash",
+        "companies",
+        "industries",
+        "securities",
+        "industry_company_relations",
+        "aliases",
+        "rights",
+    }
 )
 _COMPANY_KEYS = frozenset({"external_key", "canonical_name", "effective_from"})
+_INDUSTRY_KEYS = frozenset({"external_key", "canonical_name", "effective_from"})
 _SECURITY_KEYS = frozenset(
     {
         "external_key",
@@ -38,9 +50,12 @@ _SECURITY_KEYS = frozenset(
         "effective_from",
     }
 )
+_INDUSTRY_COMPANY_RELATION_KEYS = frozenset({"industry_key", "company_key"})
 _RIGHTS_KEYS = frozenset(
     {"security_key", "economic_units", "votes_per_unit", "effective_from"}
 )
+_ALIAS_KEYS = frozenset({"object_key", "alias", "locale"})
+_LOCALE_PATTERN = re.compile(r"[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*")
 
 
 def _exact_object(value: object, keys: frozenset[str], field: str) -> dict:
@@ -105,6 +120,13 @@ class FoundationCompany:
 
 
 @dataclass(frozen=True, slots=True)
+class FoundationIndustry:
+    external_key: str
+    canonical_name: str
+    effective_from: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class FoundationSecurity:
     external_key: str
     company_key: str
@@ -127,11 +149,28 @@ class FoundationRights:
 
 
 @dataclass(frozen=True, slots=True)
+class FoundationAlias:
+    object_key: str
+    alias: str
+    normalized_alias: str
+    locale: str
+
+
+@dataclass(frozen=True, slots=True)
+class FoundationIndustryCompanyRelation:
+    industry_key: str
+    company_key: str
+
+
+@dataclass(frozen=True, slots=True)
 class ProductFoundationFixture:
     schema_version: str
     content_hash: str
     companies: tuple[FoundationCompany, ...]
+    industries: tuple[FoundationIndustry, ...]
     securities: tuple[FoundationSecurity, ...]
+    industry_company_relations: tuple[FoundationIndustryCompanyRelation, ...]
+    aliases: tuple[FoundationAlias, ...]
     rights: tuple[FoundationRights, ...]
     raw: Mapping[str, object]
     manifest_path: Path
@@ -141,6 +180,13 @@ def _sequence(value: object, field: str) -> list:
     if not isinstance(value, list) or not value:
         raise ValidationError(f"product foundation {field} must be a nonempty array")
     return value
+
+
+def _typed_external_key(value: object, field: str, kind: str) -> str:
+    key = _text(value, field)
+    if not key.endswith(f":{kind}"):
+        raise ValidationError(f"product foundation {field} has wrong object kind")
+    return key
 
 
 def load_product_foundation_fixture(
@@ -174,12 +220,25 @@ def load_product_foundation_fixture(
 
     companies = tuple(
         FoundationCompany(
-            external_key=_text(item["external_key"], "company.external_key"),
+            external_key=_typed_external_key(
+                item["external_key"], "company.external_key", "COMPANY"
+            ),
             canonical_name=_text(item["canonical_name"], "company.canonical_name"),
             effective_from=_timestamp(item["effective_from"], "company.effective_from"),
         )
         for raw_item in _sequence(raw["companies"], "companies")
         for item in (_exact_object(raw_item, _COMPANY_KEYS, "company"),)
+    )
+    industries = tuple(
+        FoundationIndustry(
+            external_key=_typed_external_key(
+                item["external_key"], "industry.external_key", "INDUSTRY"
+            ),
+            canonical_name=_text(item["canonical_name"], "industry.canonical_name"),
+            effective_from=_timestamp(item["effective_from"], "industry.effective_from"),
+        )
+        for raw_item in _sequence(raw["industries"], "industries")
+        for item in (_exact_object(raw_item, _INDUSTRY_KEYS, "industry"),)
     )
     securities = tuple(
         FoundationSecurity(
@@ -198,13 +257,82 @@ def load_product_foundation_fixture(
         for item in (_exact_object(raw_item, _SECURITY_KEYS, "security"),)
     )
     company_keys = {item.external_key for item in companies}
+    industry_keys = {item.external_key for item in industries}
     security_by_key = {item.external_key: item for item in securities}
-    if len(company_keys) != len(companies) or len(security_by_key) != len(securities):
+    if (
+        len(company_keys) != len(companies)
+        or len(industry_keys) != len(industries)
+        or len(security_by_key) != len(securities)
+        or company_keys & industry_keys
+        or company_keys & set(security_by_key)
+        or industry_keys & set(security_by_key)
+    ):
         raise ValidationError("product foundation external keys must be unique")
     if any(item.company_key not in company_keys for item in securities):
         raise ValidationError("product foundation Security references unknown Company")
     if any(item.currency not in {"CNY", "USD"} for item in securities):
         raise ValidationError("product foundation Security currency is unsupported")
+
+    industry_company_relations = tuple(
+        FoundationIndustryCompanyRelation(
+            industry_key=_text(item["industry_key"], "industry relation.industry_key"),
+            company_key=_text(item["company_key"], "industry relation.company_key"),
+        )
+        for raw_item in _sequence(
+            raw["industry_company_relations"], "industry_company_relations"
+        )
+        for item in (
+            _exact_object(
+                raw_item,
+                _INDUSTRY_COMPANY_RELATION_KEYS,
+                "industry company relation",
+            ),
+        )
+    )
+    relation_pairs = {
+        (item.industry_key, item.company_key) for item in industry_company_relations
+    }
+    if len(relation_pairs) != len(industry_company_relations):
+        raise ValidationError(
+            "product foundation contains duplicate industry company relation"
+        )
+    if any(
+        item.industry_key not in industry_keys
+        or item.company_key not in company_keys
+        for item in industry_company_relations
+    ):
+        raise ValidationError(
+            "product foundation industry company relation references wrong object kind"
+        )
+
+    object_keys = company_keys | industry_keys | set(security_by_key)
+    aliases: list[FoundationAlias] = []
+    normalized_aliases: set[str] = set()
+    for raw_item in _sequence(raw["aliases"], "aliases"):
+        item = _exact_object(raw_item, _ALIAS_KEYS, "alias")
+        object_key = _text(item["object_key"], "alias.object_key")
+        if object_key not in object_keys:
+            raise ValidationError("product foundation alias references unknown object")
+        alias = _text(item["alias"], "alias.alias")
+        if len(alias) > 160:
+            raise ValidationError("product foundation alias.alias is too long")
+        locale = _text(item["locale"], "alias.locale")
+        if len(locale) > 16 or _LOCALE_PATTERN.fullmatch(locale) is None:
+            raise ValidationError("product foundation alias.locale is invalid")
+        normalized_alias = normalize_search_term(alias)
+        if len(normalized_alias) > 160:
+            raise ValidationError("product foundation normalized alias is too long")
+        if normalized_alias in normalized_aliases:
+            raise ValidationError("product foundation contains duplicate alias")
+        normalized_aliases.add(normalized_alias)
+        aliases.append(
+            FoundationAlias(
+                object_key=object_key,
+                alias=alias,
+                normalized_alias=normalized_alias,
+                locale=locale,
+            )
+        )
 
     rights: list[FoundationRights] = []
     for raw_item in _sequence(raw["rights"], "rights"):
@@ -259,7 +387,10 @@ def load_product_foundation_fixture(
         schema_version=_SCHEMA_VERSION,
         content_hash=content_hash,
         companies=companies,
+        industries=industries,
         securities=securities,
+        industry_company_relations=industry_company_relations,
+        aliases=tuple(aliases),
         rights=tuple(rights),
         raw=MappingProxyType(raw),
         manifest_path=path,
@@ -278,13 +409,19 @@ def validate_product_foundation_fixture(value: ProductFoundationFixture) -> None
         value.schema_version,
         value.content_hash,
         value.companies,
+        value.industries,
         value.securities,
+        value.industry_company_relations,
+        value.aliases,
         value.rights,
     ) != (
         validated_import.schema_version,
         validated_import.content_hash,
         validated_import.companies,
+        validated_import.industries,
         validated_import.securities,
+        validated_import.industry_company_relations,
+        validated_import.aliases,
         validated_import.rights,
     ):
         raise ValidationError(

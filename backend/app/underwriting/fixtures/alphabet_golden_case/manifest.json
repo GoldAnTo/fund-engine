@@ -1,0 +1,17 @@
+{
+  "schema_version": "alphabet.golden-case.manifest.v1",
+  "content_hash": "7a447c102c8416548bb5ebe14dbc4e74bdf2ed4616b4db35dc1ff8aece401788",
+  "cutoff": "2026-08-25T23:59:59+00:00",
+  "files": [
+    {"name": "business_map.json", "content_hash": "9deff633af40f4f0fd70df7a304857b8c2dd3a479e89d00bd8e7a009d78ada86"},
+    {"name": "source_facts.json", "content_hash": "32b7d9a7b4d9bf8682db4ddbd856be2edd6253170269fb26ddf8c034f40050e5"},
+    {"name": "strategy_assumptions.json", "content_hash": "e1e8f522494e961c07ef0346ac6a3204e5a62dd2835d39cb69d6e01106d0b6a3"},
+    {"name": "market_inputs.json", "content_hash": "ecf8296b4a00194673cbda942ea1a11248dc1067fb5fb42321a5d1c22df55f57"},
+    {"name": "raw/nasdaq_goog_2026-08-25.json.gz", "content_hash": "1d3a8ddb7f9bfb5f3796e374286342c5464592795d686fa41869dfc46ca005b4", "raw_hash": "29e981036b84e13b09724c2d839e1253459c0535c0c9770eb9cb3b5f2a24fe4a", "raw_size": 492},
+    {"name": "raw/nasdaq_googl_2026-08-25.json.gz", "content_hash": "9a1936ff929051de753954ee8e11393abff327c0186e3ad79bb6eb6716350a1a", "raw_hash": "c75b9b645e16992c0d5a778517900173ace83d1d3cb76400e68d890a6ba23a6c", "raw_size": 493},
+    {"name": "raw/federal_reserve_h10_usd_cny.csv.gz", "content_hash": "258ee0df12f2300994a0d4f84c97d91738306353fa4a2e5f13d89affae0d8cb2", "raw_hash": "0377197ee8f124a336bbad0cb3b0a3ee08db0671232db438a452aa030dc13682", "raw_size": 3672},
+    {"name": "raw/alphabet_q2_2026_exhibit_99_1.html.gz", "content_hash": "642866bb873c7497038040a0961400f76a66f7e35334ecd59e182f2765a7d1d4", "raw_hash": "a01f6bd87c7fa0dcb562493dda7348a1a37d017b4a4b5edb39b915b45688237e", "raw_size": 371494},
+    {"name": "raw/alphabet_q2_2026_10q.html.gz", "content_hash": "c1b712a1bc32a53376a8d811fc005a4a242c1e2accd0c5136b0eb7c2533dd641", "raw_hash": "fecfbc2683f630380b17937278ce3745eca150eb90e21a945fd6b78fe19728c7", "raw_size": 2464133},
+    {"name": "raw/alphabet_2025_10k.html.gz", "content_hash": "861545fb50f2d68c242f928f76d569816a14dd1c2b1f61b18c7100580a0f0bf9", "raw_hash": "c2f6301004f35411a20611c14ff01d80a85c0bcbab6053c80d8cc7f6fc747161", "raw_size": 2616499}
+  ]
+}

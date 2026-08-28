@@ -6,8 +6,10 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
+    event,
     ForeignKey,
     Index,
     Integer,
@@ -15,12 +17,17 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    text,
     UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.ledger import Base, _uuid
+from app.underwriting.domain.search_terms import (
+    digest_search_term,
+    normalize_search_term,
+)
 
 
 _HASH_CHECK = "length(content_hash) = 64"
@@ -90,6 +97,141 @@ class UnderwritingObjectIdentityVersion(Base):
     )
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class UnderwritingResearchObjectAlias(Base):
+    __tablename__ = "uw_research_object_aliases"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(alias)) > 0",
+            name="ck_uw_object_alias_text",
+        ),
+        CheckConstraint(
+            "length(trim(normalized_alias)) > 0 "
+            "AND normalized_alias = trim(normalized_alias)",
+            name="ck_uw_object_alias_normalized_text",
+        ),
+        CheckConstraint(
+            "length(CAST(alias AS BLOB)) != length(alias) "
+            "OR alias GLOB '*[^ -~]*' "
+            "OR normalized_alias = lower(trim(alias))",
+            name="ck_uw_object_alias_normalized",
+        ).ddl_if(dialect="sqlite"),
+        CheckConstraint(
+            "octet_length(alias) != char_length(alias) "
+            "OR alias !~ '^[ -~]*$' "
+            "OR normalized_alias = lower(btrim(alias))",
+            name="ck_uw_object_alias_normalized",
+        ).ddl_if(dialect="postgresql"),
+        UniqueConstraint(
+            "object_id",
+            "normalized_alias",
+            name="uq_uw_object_alias_object_value",
+        ),
+        Index("ix_uw_object_alias_normalized", "normalized_alias"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    object_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("uw_research_objects.id"), nullable=False
+    )
+    alias: Mapped[str] = mapped_column(String(160), nullable=False)
+    normalized_alias: Mapped[str] = mapped_column(String(160), nullable=False)
+    locale: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+@event.listens_for(UnderwritingResearchObjectAlias, "before_insert")
+def _validate_research_object_alias_normalization(
+    _mapper, _connection, target: UnderwritingResearchObjectAlias
+) -> None:
+    expected = normalize_search_term(target.alias)
+    if target.normalized_alias != expected:
+        raise ValueError("normalized_alias must equal NFC(trim(alias)).lower()")
+
+
+class UnderwritingResearchObjectSearchTerm(Base):
+    __tablename__ = "uw_research_object_search_terms"
+    __table_args__ = (
+        CheckConstraint(
+            "term_kind IN ('external_key', 'canonical_name', 'symbol')",
+            name="ck_uw_search_term_kind",
+        ),
+        CheckConstraint(
+            "(term_kind = 'external_key' AND identity_version_id IS NULL) OR "
+            "(term_kind IN ('canonical_name', 'symbol') "
+            "AND identity_version_id IS NOT NULL)",
+            name="ck_uw_search_term_source",
+        ),
+        CheckConstraint(
+            "length(trim(raw_value)) > 0",
+            name="ck_uw_search_term_raw_text",
+        ),
+        CheckConstraint(
+            "length(trim(normalized_value)) > 0 "
+            "AND normalized_value = trim(normalized_value)",
+            name="ck_uw_search_term_normalized_text",
+        ),
+        CheckConstraint(
+            "length(CAST(raw_value AS BLOB)) != length(raw_value) "
+            "OR raw_value GLOB '*[^ -~]*' "
+            "OR normalized_value = lower(trim(raw_value))",
+            name="ck_uw_search_term_normalized",
+        ).ddl_if(dialect="sqlite"),
+        CheckConstraint(
+            "octet_length(raw_value) != char_length(raw_value) "
+            "OR raw_value !~ '^[ -~]*$' "
+            "OR normalized_value = lower(btrim(raw_value))",
+            name="ck_uw_search_term_normalized",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "length(normalized_digest) = 64 "
+            "AND normalized_digest = lower(normalized_digest)",
+            name="ck_uw_search_term_digest",
+        ),
+        UniqueConstraint(
+            "identity_version_id",
+            "term_kind",
+            name="uq_uw_search_term_identity_kind",
+        ),
+        Index("ix_uw_search_term_identity", "identity_version_id"),
+        Index("ix_uw_search_term_normalized_digest", "normalized_digest"),
+        Index(
+            "uq_uw_search_term_external_object",
+            "object_id",
+            unique=True,
+            sqlite_where=text("term_kind = 'external_key'"),
+            postgresql_where=text("term_kind = 'external_key'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    object_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("uw_research_objects.id"), nullable=False
+    )
+    identity_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("uw_object_identity_versions.id"), nullable=True
+    )
+    term_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    raw_value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+@event.listens_for(UnderwritingResearchObjectSearchTerm, "before_insert")
+def _validate_research_object_search_term_normalization(
+    _mapper, _connection, target: UnderwritingResearchObjectSearchTerm
+) -> None:
+    expected = normalize_search_term(target.raw_value)
+    if target.normalized_value != expected:
+        raise ValueError("normalized_value must equal NFC(trim(raw_value)).lower()")
+    if target.normalized_digest != digest_search_term(expected):
+        raise ValueError("normalized_digest must equal SHA-256(normalized_value)")
 
 
 class UnderwritingResearchProject(Base):
@@ -201,14 +343,15 @@ class UnderwritingPriceSnapshot(Base):
         ),
         CheckConstraint("length(raw_hash) = 64", name="ck_uw_price_snapshot_raw_hash"),
         CheckConstraint(_HASH_CHECK, name="ck_uw_price_snapshot_content_hash"),
-        UniqueConstraint(
+        Index(
+            "uq_uw_price_snapshot_business_time",
             "security_identity_id",
             "price_type",
             "adjustment_basis",
             "market_at",
-            "source_id",
-            "raw_hash",
-            name="uq_uw_price_snapshot_identity",
+            unique=True,
+            sqlite_where=text("legacy_business_conflict = 0"),
+            postgresql_where=text("legacy_business_conflict = false"),
         ),
         Index(
             "ix_uw_price_snapshot_security_market",
@@ -233,6 +376,9 @@ class UnderwritingPriceSnapshot(Base):
     raw_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    legacy_business_conflict: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
 
 class UnderwritingFXSnapshot(Base):
@@ -253,14 +399,15 @@ class UnderwritingFXSnapshot(Base):
         CheckConstraint("market_at <= available_at", name="ck_uw_fx_snapshot_available"),
         CheckConstraint("length(raw_hash) = 64", name="ck_uw_fx_snapshot_raw_hash"),
         CheckConstraint(_HASH_CHECK, name="ck_uw_fx_snapshot_content_hash"),
-        UniqueConstraint(
+        Index(
+            "uq_uw_fx_snapshot_business_time",
             "base_currency",
             "quote_currency",
             "quote_direction",
             "market_at",
-            "source_id",
-            "raw_hash",
-            name="uq_uw_fx_snapshot_identity",
+            unique=True,
+            sqlite_where=text("legacy_business_conflict = 0"),
+            postgresql_where=text("legacy_business_conflict = false"),
         ),
         Index("ix_uw_fx_snapshot_pair_market", "base_currency", "quote_currency", "market_at"),
     )
@@ -278,6 +425,9 @@ class UnderwritingFXSnapshot(Base):
     raw_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    legacy_business_conflict: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
 
 class UnderwritingCapitalStructureSnapshot(Base):
@@ -301,14 +451,15 @@ class UnderwritingCapitalStructureSnapshot(Base):
             "length(raw_hash) = 64", name="ck_uw_capital_structure_raw_hash"
         ),
         CheckConstraint(_HASH_CHECK, name="ck_uw_capital_structure_content_hash"),
-        UniqueConstraint(
+        Index(
+            "uq_uw_capital_structure_business_time",
             "company_id",
             "report_period_start",
             "report_period_end",
             "market_at",
-            "source_id",
-            "raw_hash",
-            name="uq_uw_capital_structure_identity",
+            unique=True,
+            sqlite_where=text("legacy_business_conflict = 0"),
+            postgresql_where=text("legacy_business_conflict = false"),
         ),
         Index("ix_uw_capital_structure_company_market", "company_id", "market_at"),
     )
@@ -343,6 +494,9 @@ class UnderwritingCapitalStructureSnapshot(Base):
     raw_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    legacy_business_conflict: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
 
 class UnderwritingSecurityRightsVersion(Base):
@@ -370,6 +524,14 @@ class UnderwritingSecurityRightsVersion(Base):
         ),
         UniqueConstraint(
             "supersedes_id", name="uq_uw_security_rights_successor"
+        ),
+        Index(
+            "uq_uw_security_rights_business_time",
+            "security_identity_id",
+            "effective_from",
+            unique=True,
+            sqlite_where=text("legacy_business_conflict = 0"),
+            postgresql_where=text("legacy_business_conflict = false"),
         ),
         Index(
             "ix_uw_security_rights_security_effective",
@@ -403,6 +565,60 @@ class UnderwritingSecurityRightsVersion(Base):
     )
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    legacy_business_conflict: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+
+
+class UnderwritingMarketCaptureEnvelope(Base):
+    """Immutable, content-addressed source metadata for one frozen market row."""
+
+    __tablename__ = "uw_market_capture_envelopes"
+    __table_args__ = (
+        CheckConstraint(
+            "snapshot_kind IN ('price', 'fx', 'capital_structure', 'security_rights')",
+            name="ck_uw_market_capture_kind",
+        ),
+        CheckConstraint(
+            "provenance_role IN ('primary', 'class_b_legal_rights', 'class_b_units')",
+            name="ck_uw_market_capture_role",
+        ),
+        CheckConstraint("length(raw_hash) = 64", name="ck_uw_market_capture_raw_hash"),
+        CheckConstraint(_HASH_CHECK, name="ck_uw_market_capture_content_hash"),
+        *_json_shape_constraints(
+            "raw_components", "array", "ck_uw_market_capture_components_array"
+        ),
+        UniqueConstraint(
+            "snapshot_kind",
+            "snapshot_id",
+            "provenance_role",
+            name="uq_uw_market_capture_snapshot_role",
+        ),
+        Index(
+            "ix_uw_market_capture_snapshot",
+            "snapshot_kind",
+            "snapshot_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    snapshot_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    provenance_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    source_locator: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_policy_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    raw_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    raw_components: Mapped[list[dict]] = mapped_column(
+        JSON(none_as_null=True), nullable=False
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    authenticated_available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    acquired_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class UnderwritingResearchAssessmentVersion(Base):

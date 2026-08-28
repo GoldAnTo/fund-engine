@@ -150,6 +150,171 @@ def _seed_catalog(session, *, suffix: str = "main") -> dict[str, object]:
     return locals()
 
 
+def test_industry_company_endpoint_returns_complete_alphabet_group(api_client, session) -> None:
+    from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
+    from app.underwriting.services.product_foundation_fixture import (
+        ProductFoundationFixtureService,
+    )
+
+    imported = ProductFoundationFixtureService(session, now=lambda: NOW).load(
+        load_product_foundation_fixture()
+    )
+    industry = imported.objects["GLOBAL:INTERNET_SERVICES:INDUSTRY"]
+
+    response = api_client.get(
+        f"{BASE}/industries/{industry.id}/companies",
+        params={"as_of": NOW.isoformat(), "limit": 3},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["industry_id"] == str(industry.id)
+    assert [item["external_key"] for item in response.json()["items"]] == [
+        "US:ALPHABET:COMPANY",
+        "NASDAQ:GOOGL",
+        "NASDAQ:GOOG",
+    ]
+    assert all(
+        "identity_version_id" not in item for item in response.json()["items"]
+    )
+    openapi = api_client.get("/openapi.json")
+    assert openapi.status_code == 200
+    item_schema = openapi.json()["components"]["schemas"][
+        "IndustryCompanyBrowseItemResponse"
+    ]
+    assert "identity_version_id" not in item_schema["properties"]
+    response_schema = openapi.json()["components"]["schemas"][
+        "IndustryCompanyBrowseResponse"
+    ]
+    assert set(response_schema["required"]) == {"industry_id", "items"}
+    assert response_schema["properties"]["industry_id"]["format"] == "uuid"
+
+
+def test_industry_company_endpoint_maps_not_found_validation_and_keeps_reads_transaction_free(
+    api_client, session, monkeypatch
+) -> None:
+    catalog = _seed_catalog(session, suffix="industry-browse")
+    empty_industry = _seed_object(
+        session, "industry", "industry-empty", "Empty Industry"
+    )
+    ResearchProjectService(session, now=lambda: NOW).append_identity_version(
+        object_id=empty_industry.id,
+        canonical_name=empty_industry.canonical_name,
+        symbol=None,
+        exchange=None,
+        share_class=None,
+        trading_currency=None,
+        effective_from=EFFECTIVE,
+        effective_to=None,
+        expected_parent_id=None,
+    )
+    transaction_calls = {"commit": 0, "rollback": 0}
+
+    def commit_spy() -> None:
+        transaction_calls["commit"] += 1
+
+    def rollback_spy() -> None:
+        transaction_calls["rollback"] += 1
+
+    monkeypatch.setattr(session, "commit", commit_spy)
+    monkeypatch.setattr(session, "rollback", rollback_spy)
+    session.add(
+        UnderwritingObjectRelation(
+            parent_id=catalog["industry"].id,
+            child_id=catalog["security"].id,
+            relation_type="industry_exposes_company",
+            created_at=NOW,
+        )
+    )
+    session.flush()
+
+    empty = api_client.get(
+        f"{BASE}/industries/{empty_industry.id}/companies",
+        params={"as_of": NOW.isoformat()},
+    )
+    missing = api_client.get(
+        f"{BASE}/industries/{uuid4()}/companies",
+        params={"as_of": NOW.isoformat()},
+    )
+    wrong_kind = api_client.get(
+        f"{BASE}/industries/{catalog['company'].id}/companies",
+        params={"as_of": NOW.isoformat()},
+    )
+    corrupt = api_client.get(
+        f"{BASE}/industries/{catalog['industry'].id}/companies",
+        params={"as_of": NOW.isoformat()},
+    )
+
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["items"] == []
+    assert missing.status_code == 404
+    assert _error_code(missing) == "not_found"
+    assert wrong_kind.status_code == 422
+    assert _error_code(wrong_kind) == "validation_failed"
+    assert corrupt.status_code == 422
+    assert _error_code(corrupt) == "validation_failed"
+    assert transaction_calls == {"commit": 0, "rollback": 0}
+
+
+def test_industry_company_endpoint_rejects_an_industry_without_an_effective_identity(
+    api_client, session
+) -> None:
+    catalog = _seed_catalog(session, suffix="future-industry-identity")
+
+    response = api_client.get(
+        f"{BASE}/industries/{catalog['industry'].id}/companies",
+        params={"as_of": (EFFECTIVE - timedelta(days=1)).isoformat()},
+    )
+
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
+
+
+def test_industry_company_endpoint_maps_overlapping_direct_company_security_to_422(
+    api_client, session
+) -> None:
+    catalog = _seed_catalog(session, suffix="industry-overlap")
+    second_company = _seed_object(
+        session, "company", "company-overlap", "Second Company"
+    )
+    service = ResearchProjectService(session, now=lambda: NOW)
+    service.append_identity_version(
+        object_id=second_company.id,
+        canonical_name=second_company.canonical_name,
+        symbol=None,
+        exchange=None,
+        share_class=None,
+        trading_currency=None,
+        effective_from=EFFECTIVE,
+        effective_to=None,
+        expected_parent_id=None,
+    )
+    session.add_all(
+        (
+            UnderwritingObjectRelation(
+                parent_id=catalog["industry"].id,
+                child_id=second_company.id,
+                relation_type="industry_exposes_company",
+                created_at=NOW,
+            ),
+            UnderwritingObjectRelation(
+                parent_id=second_company.id,
+                child_id=catalog["security"].id,
+                relation_type="company_has_security",
+                created_at=NOW,
+            ),
+        )
+    )
+    session.flush()
+
+    response = api_client.get(
+        f"{BASE}/industries/{catalog['industry'].id}/companies",
+        params={"as_of": NOW.isoformat()},
+    )
+
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
+
+
 def _create_project(api_client, catalog: dict[str, object]) -> dict:
     response = api_client.post(
         f"{BASE}/projects",
@@ -306,8 +471,9 @@ def _write_foundation(api_client, project: dict, catalog: dict[str, object]) -> 
 
 
 def test_product_http_foundation_round_trip_is_exact_and_idempotent(
-    api_client, session
+    api_client, session, monkeypatch
 ) -> None:
+    monkeypatch.setattr("app.underwriting.api.product_router._now", lambda: NOW)
     catalog = _seed_catalog(session)
     as_of = NOW.isoformat()
 
@@ -316,6 +482,18 @@ def test_product_http_foundation_round_trip_is_exact_and_idempotent(
     )
     assert search.status_code == 200, search.text
     assert search.json()["items"] == [
+        {
+            "schema_version": "underwriting.v1",
+            "object_id": str(catalog["company"].id),
+            "identity_version_id": str(catalog["company_identity"].id),
+            "kind": "company",
+            "external_key": catalog["company"].external_key,
+            "canonical_name": catalog["company"].canonical_name,
+            "symbol": None,
+            "exchange": None,
+            "share_class": None,
+            "trading_currency": None,
+        },
         {
             "schema_version": "underwriting.v1",
             "object_id": str(catalog["security"].id),
@@ -327,7 +505,7 @@ def test_product_http_foundation_round_trip_is_exact_and_idempotent(
             "exchange": "SZSE",
             "share_class": "ordinary",
             "trading_currency": "CNY",
-        }
+        },
     ]
 
     project = _create_project(api_client, catalog)

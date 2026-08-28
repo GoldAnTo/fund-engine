@@ -418,14 +418,15 @@ def test_fx_rejects_inverse_inference_and_excess_precision(session, services) ->
         _fx(quote_direction="base_per_quote")
 
 
-def test_fx_for_pair_fails_closed_when_pair_and_time_have_multiple_sources(
+def test_fx_for_pair_rejects_conflicting_source_at_the_same_business_time(
     session, services
 ) -> None:
-    services.market.freeze_fx(_fx())
-    services.market.freeze_fx(_fx(source_id="second-feed", raw_hash="e" * 64))
+    first = services.market.freeze_fx(_fx())
 
-    with pytest.raises(ConflictError, match="exact snapshot ID|source"):
-        services.market.fx_for_pair("USD", "CNY", MARKET)
+    with pytest.raises(ConflictError, match="natural identity"):
+        services.market.freeze_fx(_fx(source_id="second-feed", raw_hash="e" * 64))
+
+    assert services.market.fx_for_pair("USD", "CNY", MARKET).id == first.id
 
 
 def test_freeze_capital_structure_requires_company_and_recomputable_hash(
@@ -935,7 +936,14 @@ def test_boundary_context_rejects_two_snapshots_for_the_same_fx_pair(
 ) -> None:
     graph = _product_boundary(session, services, security_currency="USD")
     first = services.market.freeze_fx(_fx())
-    second = services.market.freeze_fx(_fx(source_id="second-feed", raw_hash="e" * 64))
+    second = services.market.freeze_fx(
+        _fx(
+            market_at=MARKET + timedelta(minutes=1),
+            available_at=MARKET + timedelta(minutes=6),
+            source_id="second-feed",
+            raw_hash="e" * 64,
+        )
+    )
     boundary = RevisionBoundaryInput(
         graph["basis"].id,
         graph["mandate"].id,

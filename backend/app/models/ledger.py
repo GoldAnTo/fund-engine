@@ -149,6 +149,8 @@ IMMUTABLE_TABLES = frozenset(
         "uw_evidence_candidate_dossier_versions",
         "uw_evidence_candidate_review_versions",
         "uw_object_identity_versions",
+        "uw_research_object_aliases",
+        "uw_research_object_search_terms",
         "uw_research_projects",
         "uw_research_project_securities",
         "uw_research_scope_versions",
@@ -160,6 +162,8 @@ IMMUTABLE_TABLES = frozenset(
         "uw_research_assessment_versions",
         "uw_revision_boundaries",
         "uw_revision_manifests",
+        "uw_company_research_artifact_versions",
+        "uw_company_research_events",
     }
 )
 

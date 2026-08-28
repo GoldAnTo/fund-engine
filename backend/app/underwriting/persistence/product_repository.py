@@ -3,15 +3,25 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased
 
+from app.models.ledger import ConflictError, ValidationError
+from app.underwriting.domain.product_contracts import RevisionBoundaryInput
+from app.underwriting.domain.search_terms import (
+    SearchTermIntegrityError,
+    digest_search_term,
+    normalize_search_term,
+    require_valid_search_normalization,
+    require_valid_search_term,
+)
 from app.underwriting.persistence.models import (
     UnderwritingHistoricalBasis,
     UnderwritingMandateVersion,
@@ -19,11 +29,12 @@ from app.underwriting.persistence.models import (
     UnderwritingResearchObject,
     UnderwritingResearchVersion,
 )
-from app.models.ledger import ConflictError, ValidationError
 from app.underwriting.persistence.product_models import (
     UnderwritingCapitalStructureSnapshot,
     UnderwritingFXSnapshot,
     UnderwritingObjectIdentityVersion,
+    UnderwritingResearchObjectAlias,
+    UnderwritingResearchObjectSearchTerm,
     UnderwritingPriceSnapshot,
     UnderwritingResearchAgendaVersion,
     UnderwritingResearchAssessmentVersion,
@@ -35,12 +46,25 @@ from app.underwriting.persistence.product_models import (
     UnderwritingSecurityRightsVersion,
     UnderwritingWorkspaceDraft,
 )
-from app.underwriting.domain.product_contracts import RevisionBoundaryInput
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.services.kernel import canonical_hash
 
 
 _STALE_MESSAGE = "expected parent is not the version family head"
+# This bounds rows materialized and expanded in Python. Without a deployed FTS or
+# trigram extension, a leading-wildcard substring predicate may still scan in DB.
+_OBJECT_SEARCH_CANDIDATE_CAP = 256
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectSearchOutcome:
+    rows: tuple[
+        tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion], ...
+    ]
+    had_raw_match: bool
+    candidate_count: int
+
+
 _CAS_CONSTRAINTS = {
     "uw_object_identity_versions": frozenset(
         {
@@ -111,9 +135,9 @@ _SQLITE_CAS_COLUMNS = {
 }
 
 _SNAPSHOT_IDENTITY_CONSTRAINTS = {
-    "uw_price_snapshots": "uq_uw_price_snapshot_identity",
-    "uw_fx_snapshots": "uq_uw_fx_snapshot_identity",
-    "uw_capital_structure_snapshots": "uq_uw_capital_structure_identity",
+    "uw_price_snapshots": "uq_uw_price_snapshot_business_time",
+    "uw_fx_snapshots": "uq_uw_fx_snapshot_business_time",
+    "uw_capital_structure_snapshots": "uq_uw_capital_structure_business_time",
 }
 _SQLITE_SNAPSHOT_IDENTITY_COLUMNS = {
     "uw_price_snapshots": frozenset(
@@ -122,8 +146,6 @@ _SQLITE_SNAPSHOT_IDENTITY_COLUMNS = {
             "price_type",
             "adjustment_basis",
             "market_at",
-            "source_id",
-            "raw_hash",
         }
     ),
     "uw_fx_snapshots": frozenset(
@@ -132,8 +154,6 @@ _SQLITE_SNAPSHOT_IDENTITY_COLUMNS = {
             "quote_currency",
             "quote_direction",
             "market_at",
-            "source_id",
-            "raw_hash",
         }
     ),
     "uw_capital_structure_snapshots": frozenset(
@@ -142,8 +162,6 @@ _SQLITE_SNAPSHOT_IDENTITY_COLUMNS = {
             "report_period_start",
             "report_period_end",
             "market_at",
-            "source_id",
-            "raw_hash",
         }
     ),
 }
@@ -313,6 +331,92 @@ class ProductRepository:
             .limit(1)
         )
 
+    def ensure_identity_search_terms(
+        self,
+        research_object: UnderwritingResearchObject,
+        identity: UnderwritingObjectIdentityVersion,
+        *,
+        repair_missing: bool,
+    ) -> tuple[UnderwritingResearchObjectSearchTerm, ...]:
+        """Validate one identity's exact derived projection and fill only gaps."""
+        expected = {
+            (None, "external_key"): research_object.external_key,
+            (identity.id, "canonical_name"): identity.canonical_name,
+        }
+        if identity.symbol is not None:
+            expected[(identity.id, "symbol")] = identity.symbol
+        existing = tuple(
+            self._session.scalars(
+                select(UnderwritingResearchObjectSearchTerm)
+                .where(
+                    UnderwritingResearchObjectSearchTerm.object_id
+                    == research_object.id,
+                    or_(
+                        UnderwritingResearchObjectSearchTerm.identity_version_id
+                        == identity.id,
+                        and_(
+                            UnderwritingResearchObjectSearchTerm.identity_version_id.is_(
+                                None
+                            ),
+                            UnderwritingResearchObjectSearchTerm.term_kind
+                            == "external_key",
+                        ),
+                    ),
+                )
+                .order_by(
+                    UnderwritingResearchObjectSearchTerm.term_kind,
+                    UnderwritingResearchObjectSearchTerm.id,
+                )
+            )
+        )
+        actual: dict[tuple[UUID | None, str], UnderwritingResearchObjectSearchTerm] = {}
+        for row in existing:
+            key = (row.identity_version_id, row.term_kind)
+            raw_value = expected.get(key)
+            if raw_value is None or row.raw_value != raw_value:
+                raise SearchTermIntegrityError(
+                    "persisted research search term source conflict"
+                )
+            require_valid_search_term(
+                row.raw_value,
+                row.normalized_value,
+                row.normalized_digest,
+            )
+            if key in actual:
+                raise SearchTermIntegrityError(
+                    "persisted research search term duplicate conflict"
+                )
+            actual[key] = row
+        missing = expected.keys() - actual.keys()
+        if missing and not repair_missing:
+            raise SearchTermIntegrityError(
+                "persisted research search term projection is incomplete"
+            )
+        for key in sorted(missing, key=lambda item: (str(item[0]), item[1])):
+            identity_version_id, term_kind = key
+            raw_value = expected[key]
+            normalized_value = normalize_search_term(raw_value)
+            row = UnderwritingResearchObjectSearchTerm(
+                object_id=research_object.id,
+                identity_version_id=identity_version_id,
+                term_kind=term_kind,
+                raw_value=raw_value,
+                normalized_value=normalized_value,
+                normalized_digest=digest_search_term(normalized_value),
+                created_at=(
+                    research_object.created_at
+                    if identity_version_id is None
+                    else identity.created_at
+                ),
+            )
+            self._session.add(row)
+            actual[key] = row
+        if missing:
+            self._session.flush()
+        return tuple(
+            actual[key] for key in sorted(actual, key=lambda x: (str(x[0]), x[1]))
+        )
+
     def append_identity_version(
         self,
         *,
@@ -340,7 +444,7 @@ class ProductRepository:
         )
         actual_parent_id = head.id if head is not None else None
         self._require_expected_parent(actual_parent_id, expected_parent_id)
-        return self._flush_version(
+        identity = self._flush_version(
             UnderwritingObjectIdentityVersion(
                 object_id=object_id,
                 version=1 if head is None else head.version + 1,
@@ -356,6 +460,15 @@ class ProductRepository:
                 created_at=created_at,
             )
         )
+        research_object = self.object(object_id)
+        if research_object is None:  # Defensive against a disabled foreign key.
+            raise SearchTermIntegrityError("research search term object is missing")
+        self.ensure_identity_search_terms(
+            research_object,
+            identity,
+            repair_missing=True,
+        )
+        return identity
 
     def effective_identity(
         self,
@@ -396,13 +509,19 @@ class ProductRepository:
             return None
         return research_object, identity
 
-    def search_objects(
-        self,
-        query: str,
-        as_of: datetime,
-        limit: int,
-    ) -> list[tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion]]:
-        pattern = query.casefold()
+    @staticmethod
+    def _row_key(row):
+        research_object, identity = row
+        return (
+            research_object.kind,
+            normalize_search_term(identity.canonical_name),
+            normalize_search_term(research_object.external_key),
+            str(research_object.id),
+            -identity.version,
+        )
+
+    @staticmethod
+    def _effective_object_statement(as_of: datetime):
         candidate = aliased(UnderwritingObjectIdentityVersion)
         effective_identity_id = (
             select(candidate.id)
@@ -415,7 +534,7 @@ class ProductRepository:
             .correlate(UnderwritingResearchObject)
             .scalar_subquery()
         )
-        statement = (
+        return (
             select(UnderwritingResearchObject, UnderwritingObjectIdentityVersion)
             .join(
                 UnderwritingObjectIdentityVersion,
@@ -430,38 +549,624 @@ class ProductRepository:
                     UnderwritingObjectIdentityVersion.effective_to.is_(None),
                     UnderwritingObjectIdentityVersion.effective_to > as_of,
                 ),
-                or_(
-                    func.lower(
-                        UnderwritingObjectIdentityVersion.canonical_name
-                    ).contains(pattern, autoescape=True),
-                    func.lower(UnderwritingObjectIdentityVersion.symbol).contains(
-                        pattern, autoescape=True
-                    ),
-                    func.lower(UnderwritingResearchObject.external_key).contains(
-                        pattern, autoescape=True
-                    ),
-                ),
             )
-            .order_by(
-                UnderwritingResearchObject.kind,
-                func.lower(UnderwritingObjectIdentityVersion.canonical_name),
-                func.lower(UnderwritingResearchObject.external_key),
-                UnderwritingResearchObject.id,
-                UnderwritingObjectIdentityVersion.version.desc(),
-            )
-            .limit(limit)
         )
-        seen: set[UUID] = set()
+
+    @staticmethod
+    def _candidate_match_predicate(
+        pattern: str,
+        pattern_digest: str,
+        *,
+        exact: bool,
+    ):
+        term_value = UnderwritingResearchObjectSearchTerm.normalized_value
+        alias_value = UnderwritingResearchObjectAlias.normalized_alias
+        term_matches = (
+            and_(
+                UnderwritingResearchObjectSearchTerm.normalized_digest
+                == pattern_digest,
+                term_value == pattern,
+            )
+            if exact
+            else term_value.contains(pattern, autoescape=True)
+        )
+        alias_matches = (
+            alias_value == pattern
+            if exact
+            else alias_value.contains(pattern, autoescape=True)
+        )
+        projected_match = (
+            select(UnderwritingResearchObjectSearchTerm.id)
+            .where(
+                UnderwritingResearchObjectSearchTerm.object_id
+                == UnderwritingResearchObject.id,
+                or_(
+                    and_(
+                        UnderwritingResearchObjectSearchTerm.term_kind
+                        == "external_key",
+                        UnderwritingResearchObjectSearchTerm.identity_version_id.is_(
+                            None
+                        ),
+                    ),
+                    UnderwritingResearchObjectSearchTerm.identity_version_id
+                    == UnderwritingObjectIdentityVersion.id,
+                ),
+                term_matches,
+            )
+            .correlate(UnderwritingResearchObject, UnderwritingObjectIdentityVersion)
+            .exists()
+        )
+        alias_match = (
+            select(UnderwritingResearchObjectAlias.id)
+            .where(
+                UnderwritingResearchObjectAlias.object_id
+                == UnderwritingResearchObject.id,
+                alias_matches,
+            )
+            .correlate(UnderwritingResearchObject)
+            .exists()
+        )
+        return or_(projected_match, alias_match)
+
+    def _search_candidate_rows(
+        self,
+        pattern: str,
+        pattern_digest: str,
+        as_of: datetime,
+    ) -> tuple[
+        tuple[
+            tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion], ...
+        ],
+        set[UUID],
+    ]:
+        canonical_sort = (
+            select(UnderwritingResearchObjectSearchTerm.normalized_value)
+            .where(
+                UnderwritingResearchObjectSearchTerm.identity_version_id
+                == UnderwritingObjectIdentityVersion.id,
+                UnderwritingResearchObjectSearchTerm.term_kind == "canonical_name",
+            )
+            .correlate(UnderwritingObjectIdentityVersion)
+            .limit(1)
+            .scalar_subquery()
+        )
+        external_sort = (
+            select(UnderwritingResearchObjectSearchTerm.normalized_value)
+            .where(
+                UnderwritingResearchObjectSearchTerm.object_id
+                == UnderwritingResearchObject.id,
+                UnderwritingResearchObjectSearchTerm.term_kind == "external_key",
+                UnderwritingResearchObjectSearchTerm.identity_version_id.is_(None),
+            )
+            .correlate(UnderwritingResearchObject)
+            .limit(1)
+            .scalar_subquery()
+        )
+        stable_order = (
+            UnderwritingResearchObject.kind,
+            canonical_sort,
+            external_sort,
+            UnderwritingResearchObject.id,
+        )
+        exact_statement = (
+            self._effective_object_statement(as_of)
+            .where(
+                self._candidate_match_predicate(
+                    pattern,
+                    pattern_digest,
+                    exact=True,
+                )
+            )
+            .order_by(*stable_order)
+            .limit(_OBJECT_SEARCH_CANDIDATE_CAP)
+            .execution_options(uw_search_candidate_stage="exact")
+        )
+        exact_rows = tuple(self._session.execute(exact_statement).tuples())
+        exact_ids = {row[0].id for row in exact_rows}
+        remaining = _OBJECT_SEARCH_CANDIDATE_CAP - len(exact_rows)
+        substring_statement = self._effective_object_statement(as_of).where(
+            self._candidate_match_predicate(
+                pattern,
+                pattern_digest,
+                exact=False,
+            )
+        )
+        if exact_ids:
+            substring_statement = substring_statement.where(
+                UnderwritingResearchObject.id.not_in(exact_ids)
+            )
+        substring_statement = (
+            substring_statement.order_by(*stable_order)
+            .limit(remaining)
+            .execution_options(uw_search_candidate_stage="substring")
+        )
+        substring_rows = tuple(self._session.execute(substring_statement).tuples())
+        return exact_rows + substring_rows, exact_ids
+
+    def _validate_selected_search_terms(
+        self,
+        rows: tuple[
+            tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion], ...
+        ],
+        pattern: str,
+    ) -> None:
+        """Fail closed if any selected admin-bypass projection is non-canonical."""
+        expected: dict[tuple[UUID, UUID | None, str], str] = {}
+        object_ids: set[UUID] = set()
+        identity_ids: set[UUID] = set()
+        for research_object, identity in rows:
+            object_ids.add(research_object.id)
+            identity_ids.add(identity.id)
+            expected[(research_object.id, None, "external_key")] = (
+                research_object.external_key
+            )
+            expected[(research_object.id, identity.id, "canonical_name")] = (
+                identity.canonical_name
+            )
+            if identity.symbol is not None:
+                expected[(research_object.id, identity.id, "symbol")] = identity.symbol
+        projected_rows = tuple(
+            self._session.scalars(
+                select(UnderwritingResearchObjectSearchTerm)
+                .where(
+                    UnderwritingResearchObjectSearchTerm.object_id.in_(object_ids),
+                    or_(
+                        UnderwritingResearchObjectSearchTerm.identity_version_id.in_(
+                            identity_ids
+                        ),
+                        and_(
+                            UnderwritingResearchObjectSearchTerm.identity_version_id.is_(
+                                None
+                            ),
+                            UnderwritingResearchObjectSearchTerm.term_kind
+                            == "external_key",
+                        ),
+                    ),
+                )
+                .order_by(UnderwritingResearchObjectSearchTerm.id)
+            )
+        )
+        actual: set[tuple[UUID, UUID | None, str]] = set()
+        for term in projected_rows:
+            key = (term.object_id, term.identity_version_id, term.term_kind)
+            if key not in expected or term.raw_value != expected[key]:
+                raise SearchTermIntegrityError(
+                    "persisted research search term source conflict"
+                )
+            require_valid_search_term(
+                term.raw_value,
+                term.normalized_value,
+                term.normalized_digest,
+            )
+            actual.add(key)
+        if actual != expected.keys():
+            raise SearchTermIntegrityError(
+                "persisted research search term projection is incomplete"
+            )
+        aliases = tuple(
+            self._session.scalars(
+                select(UnderwritingResearchObjectAlias)
+                .where(
+                    UnderwritingResearchObjectAlias.object_id.in_(object_ids),
+                    UnderwritingResearchObjectAlias.normalized_alias.contains(
+                        pattern, autoescape=True
+                    ),
+                )
+                .order_by(UnderwritingResearchObjectAlias.id)
+                .limit(_OBJECT_SEARCH_CANDIDATE_CAP + 1)
+            )
+        )
+        if len(aliases) > _OBJECT_SEARCH_CANDIDATE_CAP:
+            raise SearchTermIntegrityError(
+                "research alias match set exceeds the validation bound"
+            )
+        for alias in aliases:
+            require_valid_search_normalization(alias.alias, alias.normalized_alias)
+
+    def _search_anchor_rows(
+        self,
+        matched: dict[
+            UUID,
+            tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion],
+        ],
+        exact_object_ids: set[UUID],
+        as_of: datetime,
+    ) -> tuple[
+        dict[
+            UUID,
+            tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion],
+        ],
+        dict[UUID, bool],
+    ]:
+        matched_security_ids = {
+            object_id
+            for object_id, (research_object, _) in matched.items()
+            if research_object.kind == "security"
+        }
+        parent_ids_by_security: dict[UUID, set[UUID]] = {
+            object_id: set() for object_id in matched_security_ids
+        }
+        if matched_security_ids:
+            relation_rows = self._session.execute(
+                select(
+                    UnderwritingObjectRelation.parent_id,
+                    UnderwritingObjectRelation.child_id,
+                )
+                .where(
+                    UnderwritingObjectRelation.relation_type == "company_has_security",
+                    UnderwritingObjectRelation.child_id.in_(matched_security_ids),
+                )
+                .order_by(
+                    UnderwritingObjectRelation.parent_id,
+                    UnderwritingObjectRelation.child_id,
+                )
+                .limit(_OBJECT_SEARCH_CANDIDATE_CAP)
+            )
+            for parent_id, child_id in relation_rows:
+                parent_ids_by_security[child_id].add(parent_id)
+        possible_parent_ids = {
+            parent_id
+            for parent_ids in parent_ids_by_security.values()
+            for parent_id in parent_ids
+        }
+        effective_parents = (
+            {
+                research_object.id: (research_object, identity)
+                for research_object, identity in self._session.execute(
+                    self._effective_object_statement(as_of).where(
+                        UnderwritingResearchObject.id.in_(possible_parent_ids)
+                    )
+                )
+                if research_object.kind == "company"
+            }
+            if possible_parent_ids
+            else {}
+        )
+        anchor_rows = {
+            object_id: row
+            for object_id, row in matched.items()
+            if row[0].kind in {"company", "industry"}
+        }
+        anchor_exact = {
+            object_id: object_id in exact_object_ids for object_id in anchor_rows
+        }
+        anchor_rows.update(effective_parents)
+        for security_id in matched_security_ids:
+            valid_parent_ids = parent_ids_by_security[security_id] & set(
+                effective_parents
+            )
+            for parent_id in valid_parent_ids:
+                anchor_exact[parent_id] = (
+                    anchor_exact.get(parent_id, False)
+                    or security_id in exact_object_ids
+                )
+            if not valid_parent_ids:
+                anchor_rows[security_id] = matched[security_id]
+                anchor_exact[security_id] = security_id in exact_object_ids
+        ordered = sorted(
+            anchor_rows.items(),
+            key=lambda item: (
+                not anchor_exact.get(item[0], False),
+                self._row_key(item[1]),
+            ),
+        )[:_OBJECT_SEARCH_CANDIDATE_CAP]
+        bounded_rows = dict(ordered)
+        return bounded_rows, {
+            object_id: anchor_exact.get(object_id, False) for object_id in bounded_rows
+        }
+
+    @staticmethod
+    def _effective_company_children_statement(
+        company_ids: set[UUID],
+        as_of: datetime,
+        *,
+        require_relation_as_of: bool = False,
+    ):
+        child = aliased(UnderwritingResearchObject)
+        identity = aliased(UnderwritingObjectIdentityVersion)
+        candidate = aliased(UnderwritingObjectIdentityVersion)
+        effective_identity_id = (
+            select(candidate.id)
+            .where(
+                candidate.object_id == child.id,
+                candidate.effective_from <= as_of,
+            )
+            .order_by(candidate.version.desc(), candidate.id.desc())
+            .limit(1)
+            .correlate(child)
+            .scalar_subquery()
+        )
+        statement = (
+            select(UnderwritingObjectRelation.parent_id, child, identity)
+            .join(child, child.id == UnderwritingObjectRelation.child_id)
+            .join(identity, identity.id == effective_identity_id)
+            .where(
+                UnderwritingObjectRelation.relation_type == "company_has_security",
+                UnderwritingObjectRelation.parent_id.in_(company_ids),
+                child.kind == "security",
+                identity.effective_from <= as_of,
+                or_(identity.effective_to.is_(None), identity.effective_to > as_of),
+            )
+        )
+        if require_relation_as_of:
+            statement = statement.where(UnderwritingObjectRelation.created_at <= as_of)
+        return statement
+
+    def _pack_search_groups(
+        self,
+        anchor_rows: dict[
+            UUID,
+            tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion],
+        ],
+        anchor_exact: dict[UUID, bool],
+        as_of: datetime,
+        limit: int,
+    ) -> tuple[
+        tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion], ...
+    ]:
+        company_ids = {
+            object_id
+            for object_id, row in anchor_rows.items()
+            if row[0].kind == "company"
+        }
+        child_counts: dict[UUID, int] = {}
+        if company_ids:
+            child_rows = self._effective_company_children_statement(
+                company_ids, as_of
+            ).subquery()
+            child_counts = dict(
+                self._session.execute(
+                    select(child_rows.c.parent_id, func.count())
+                    .group_by(child_rows.c.parent_id)
+                    .order_by(child_rows.c.parent_id)
+                ).all()
+            )
+        selected: list[
+            tuple[
+                UUID,
+                tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion],
+            ]
+        ] = []
+        reserved = 0
+        ordered_anchors = sorted(
+            anchor_rows.items(),
+            key=lambda item: (
+                not anchor_exact.get(item[0], False),
+                self._row_key(item[1]),
+            ),
+        )
+
+        def reserve_if_complete(anchor_id, anchor_row) -> None:
+            nonlocal reserved
+            group_size = 1 + (
+                child_counts.get(anchor_id, 0) if anchor_row[0].kind == "company" else 0
+            )
+            if reserved + group_size > limit:
+                return
+            selected.append((anchor_id, anchor_row))
+            reserved += group_size
+
+        exact_anchors = [
+            item for item in ordered_anchors if anchor_exact.get(item[0], False)
+        ]
+        for anchor_id, anchor_row in exact_anchors:
+            reserve_if_complete(anchor_id, anchor_row)
+        if exact_anchors and not selected:
+            return ()
+        for anchor_id, anchor_row in ordered_anchors:
+            if anchor_exact.get(anchor_id, False):
+                continue
+            reserve_if_complete(anchor_id, anchor_row)
+        selected_company_ids = {
+            anchor_id for anchor_id, row in selected if row[0].kind == "company"
+        }
+        children_by_company: dict[
+            UUID,
+            list[tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion]],
+        ] = {company_id: [] for company_id in selected_company_ids}
+        if selected_company_ids:
+            child_statement = (
+                self._effective_company_children_statement(selected_company_ids, as_of)
+                .order_by(
+                    UnderwritingObjectRelation.parent_id,
+                    UnderwritingObjectRelation.child_id,
+                )
+                .limit(limit)
+            )
+            for parent_id, child, identity in self._session.execute(child_statement):
+                children_by_company[parent_id].append((child, identity))
         results: list[
             tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion]
         ] = []
-        for research_object, identity in self._session.execute(statement):
-            if research_object.id not in seen:
-                seen.add(research_object.id)
-                results.append((research_object, identity))
-                if len(results) == limit:
-                    break
-        return results
+        seen: set[UUID] = set()
+        for anchor_id, anchor_row in selected:
+            group = [anchor_row, *children_by_company.get(anchor_id, ())]
+            group = sorted(group, key=self._row_key)
+            group_ids = {row[0].id for row in group}
+            if group_ids & seen or len(results) + len(group) > limit:
+                continue
+            results.extend(group)
+            seen.update(group_ids)
+        return tuple(results)
+
+    def _pack_industry_company_groups(
+        self,
+        anchor_rows: dict[
+            UUID,
+            tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion],
+        ],
+        as_of: datetime,
+        limit: int,
+    ) -> tuple[
+        tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion], ...
+    ]:
+        """Pack Industry browse groups without search's exact-match priority rule."""
+        child_counts: dict[UUID, int] = {}
+        if anchor_rows:
+            child_rows = self._effective_company_children_statement(
+                set(anchor_rows), as_of, require_relation_as_of=True
+            ).subquery()
+            child_counts = dict(
+                self._session.execute(
+                    select(child_rows.c.parent_id, func.count())
+                    .group_by(child_rows.c.parent_id)
+                    .order_by(child_rows.c.parent_id)
+                ).all()
+            )
+        selected: list[
+            tuple[
+                UUID,
+                tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion],
+            ]
+        ] = []
+        reserved = 0
+        for anchor_id, anchor_row in sorted(
+            anchor_rows.items(), key=lambda item: self._row_key(item[1])
+        ):
+            group_size = 1 + child_counts.get(anchor_id, 0)
+            if reserved + group_size > limit:
+                continue
+            selected.append((anchor_id, anchor_row))
+            reserved += group_size
+
+        selected_company_ids = {anchor_id for anchor_id, _ in selected}
+        children_by_company: dict[
+            UUID,
+            list[tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion]],
+        ] = {company_id: [] for company_id in selected_company_ids}
+        if selected_company_ids:
+            child_statement = (
+                self._effective_company_children_statement(
+                    selected_company_ids, as_of, require_relation_as_of=True
+                )
+                .order_by(
+                    UnderwritingObjectRelation.parent_id,
+                    UnderwritingObjectRelation.child_id,
+                )
+                .limit(limit)
+            )
+            for parent_id, child, identity in self._session.execute(child_statement):
+                children_by_company[parent_id].append((child, identity))
+        results: list[
+            tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion]
+        ] = []
+        seen: set[UUID] = set()
+        for anchor_id, anchor_row in selected:
+            group = [anchor_row, *children_by_company.get(anchor_id, ())]
+            group = sorted(group, key=self._row_key)
+            group_ids = {row[0].id for row in group}
+            if group_ids & seen or len(results) + len(group) > limit:
+                continue
+            results.extend(group)
+            seen.update(group_ids)
+        return tuple(results)
+
+    def search_objects(
+        self,
+        query: str,
+        as_of: datetime,
+        limit: int,
+    ) -> ObjectSearchOutcome:
+        pattern = normalize_search_term(query)
+        pattern_digest = digest_search_term(pattern)
+        candidate_rows, exact_object_ids = self._search_candidate_rows(
+            pattern,
+            pattern_digest,
+            as_of,
+        )
+        if not candidate_rows:
+            return ObjectSearchOutcome(rows=(), had_raw_match=False, candidate_count=0)
+        self._validate_selected_search_terms(candidate_rows, pattern)
+        matched = {row[0].id: row for row in candidate_rows}
+        anchor_rows, anchor_exact = self._search_anchor_rows(
+            matched, exact_object_ids, as_of
+        )
+        return ObjectSearchOutcome(
+            rows=self._pack_search_groups(anchor_rows, anchor_exact, as_of, limit),
+            had_raw_match=True,
+            candidate_count=len(candidate_rows),
+        )
+
+    def industry_company_groups(
+        self,
+        industry_id: UUID,
+        as_of: datetime,
+        limit: int,
+    ) -> tuple[
+        tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion], ...
+    ] | None:
+        """Return effective, complete Company groups directly exposed by an Industry.
+
+        The direct relation is the auditable browse boundary.  We inspect no
+        transitive graph edges and bound materialized relation rows before
+        expanding a Company to its effective Securities.
+        """
+        industry = self.object(industry_id)
+        if industry is None:
+            return None
+        if industry.kind != "industry":
+            raise ValidationError("industry_id must identify an Industry")
+        if not 1 <= limit <= 100:
+            raise ValidationError("limit must be between 1 and 100")
+        if self.effective_identity(industry_id, as_of) is None:
+            raise ValidationError("Industry has no effective identity at as_of")
+
+        direct_children = tuple(
+            self._session.scalars(
+                select(UnderwritingResearchObject)
+                .join(
+                    UnderwritingObjectRelation,
+                    UnderwritingObjectRelation.child_id
+                    == UnderwritingResearchObject.id,
+                )
+                .where(
+                    UnderwritingObjectRelation.parent_id == industry_id,
+                    UnderwritingObjectRelation.relation_type
+                    == "industry_exposes_company",
+                    UnderwritingObjectRelation.created_at <= as_of,
+                )
+                .order_by(UnderwritingObjectRelation.child_id)
+                .limit(_OBJECT_SEARCH_CANDIDATE_CAP + 1)
+            )
+        )
+        if len(direct_children) > _OBJECT_SEARCH_CANDIDATE_CAP:
+            raise ValidationError("industry exposes too many Company relations")
+        if any(child.kind != "company" for child in direct_children):
+            raise ValidationError(
+                "industry_exposes_company must directly reference a Company"
+            )
+
+        child_ids = {child.id for child in direct_children}
+        effective_rows = (
+            tuple(
+                self._session.execute(
+                    self._effective_object_statement(as_of).where(
+                        UnderwritingResearchObject.id.in_(child_ids)
+                    )
+                )
+            )
+            if child_ids
+            else ()
+        )
+        anchors = {
+            research_object.id: (research_object, identity)
+            for research_object, identity in effective_rows
+        }
+        if anchors:
+            security_rows = self._effective_company_children_statement(
+                set(anchors), as_of, require_relation_as_of=True
+            ).subquery()
+            overlapping_security_id = self._session.scalar(
+                select(security_rows.c.id)
+                .group_by(security_rows.c.id)
+                .having(func.count(func.distinct(security_rows.c.parent_id)) > 1)
+                .limit(1)
+            )
+            if overlapping_security_id is not None:
+                raise ValidationError(
+                    "Security belongs to multiple selected Industry Company groups"
+                )
+        return self._pack_industry_company_groups(anchors, as_of, limit)
 
     def create_project(
         self,
@@ -894,12 +1599,11 @@ class ProductRepository:
             created_at=created_at,
         )
         existing = select(UnderwritingPriceSnapshot).where(
+            UnderwritingPriceSnapshot.legacy_business_conflict.is_(False),
             UnderwritingPriceSnapshot.security_identity_id == security_identity_id,
             UnderwritingPriceSnapshot.price_type == price_type,
             UnderwritingPriceSnapshot.adjustment_basis == adjustment_basis,
             UnderwritingPriceSnapshot.market_at == market_at,
-            UnderwritingPriceSnapshot.source_id == source_id,
-            UnderwritingPriceSnapshot.raw_hash == raw_hash,
         )
         return self._flush_snapshot(row, existing)
 
@@ -944,12 +1648,11 @@ class ProductRepository:
             created_at=created_at,
         )
         existing = select(UnderwritingFXSnapshot).where(
+            UnderwritingFXSnapshot.legacy_business_conflict.is_(False),
             UnderwritingFXSnapshot.base_currency == base_currency,
             UnderwritingFXSnapshot.quote_currency == quote_currency,
             UnderwritingFXSnapshot.quote_direction == quote_direction,
             UnderwritingFXSnapshot.market_at == market_at,
-            UnderwritingFXSnapshot.source_id == source_id,
-            UnderwritingFXSnapshot.raw_hash == raw_hash,
         )
         return self._flush_snapshot(row, existing)
 
@@ -1036,13 +1739,12 @@ class ProductRepository:
             created_at=created_at,
         )
         existing = select(UnderwritingCapitalStructureSnapshot).where(
+            UnderwritingCapitalStructureSnapshot.legacy_business_conflict.is_(False),
             UnderwritingCapitalStructureSnapshot.company_id == company_id,
             UnderwritingCapitalStructureSnapshot.report_period_start
             == report_period_start,
             UnderwritingCapitalStructureSnapshot.report_period_end == report_period_end,
             UnderwritingCapitalStructureSnapshot.market_at == market_at,
-            UnderwritingCapitalStructureSnapshot.source_id == source_id,
-            UnderwritingCapitalStructureSnapshot.raw_hash == raw_hash,
         )
         return self._flush_snapshot(row, existing)
 

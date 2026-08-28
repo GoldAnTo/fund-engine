@@ -120,6 +120,25 @@ def _time_text(value: datetime) -> str:
     return _stored_utc(value).isoformat()
 
 
+def market_capture_envelope_hash(value: object) -> str:
+    return canonical_hash(
+        {
+            "schema_version": "product.market-capture-envelope.v1",
+            "snapshot_kind": getattr(value, "snapshot_kind"),
+            "snapshot_id": str(getattr(value, "snapshot_id")),
+            "provenance_role": getattr(value, "provenance_role"),
+            "source_url": getattr(value, "source_url"),
+            "source_locator": getattr(value, "source_locator"),
+            "provider_policy_version": getattr(value, "provider_policy_version"),
+            "raw_hash": getattr(value, "raw_hash"),
+            "raw_components": getattr(value, "raw_components"),
+            "authenticated_available_at": _time_text(
+                getattr(value, "authenticated_available_at")
+            ),
+        }
+    )
+
+
 def price_snapshot_hash(value: object) -> str:
     return canonical_hash(
         {

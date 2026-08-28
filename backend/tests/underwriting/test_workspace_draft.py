@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta, timezone
 import inspect
 import sqlite3
+from datetime import UTC, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.models.ledger import Base, ConflictError, ValidationError
+from app.underwriting.persistence import product_repository as product_repository_module
 from app.underwriting.persistence.models import (
     UnderwritingHistoricalBasis,
     UnderwritingResearchObject,
@@ -23,12 +24,11 @@ from app.underwriting.persistence.product_models import (
     UnderwritingWorkspaceDraft,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
-from app.underwriting.persistence import product_repository as product_repository_module
 from app.underwriting.services.workspace_draft import (
+    WorkspaceDraftContent,
     WorkspaceDraftPatch,
     WorkspaceDraftService,
 )
-
 
 NOW = datetime(2026, 8, 24, 9, tzinfo=UTC)
 LATER = datetime(2026, 8, 24, 10, tzinfo=UTC)
@@ -98,6 +98,21 @@ def test_create_requires_project_and_builds_one_complete_draft(
         )
         is not None
     )
+
+
+def test_create_can_atomically_seed_the_known_foundation_references(
+    session, service
+) -> None:
+    project = _project(session)
+    content = WorkspaceDraftContent(
+        mandate_id=uuid4(),
+        scope_id=uuid4(),
+        agenda_id=uuid4(),
+    )
+
+    created = service.create(project.id, initial_content=content)
+
+    assert created.content == content
 
 
 def test_create_rejects_unknown_project_and_an_unaware_clock(session) -> None:

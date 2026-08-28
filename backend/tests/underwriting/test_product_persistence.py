@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import importlib
 import os
 from pathlib import Path
 import subprocess
 import sys
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy import create_engine, delete, inspect, update
+from sqlalchemy import create_engine, delete, inspect, select, update
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 
@@ -24,6 +26,8 @@ from app.models.ledger import (
 
 
 PRODUCT_TABLES = {
+    "uw_research_object_aliases",
+    "uw_research_object_search_terms",
     "uw_object_identity_versions",
     "uw_research_projects",
     "uw_research_project_securities",
@@ -40,8 +44,14 @@ PRODUCT_TABLES = {
 }
 
 IMMUTABLE_PRODUCT_TABLES = PRODUCT_TABLES - {"uw_workspace_drafts"}
+PRODUCT_0065_TABLES = PRODUCT_TABLES - {
+    "uw_research_object_aliases",
+    "uw_research_object_search_terms",
+}
 
 PRODUCT_MODEL_NAMES = {
+    "UnderwritingResearchObjectAlias",
+    "UnderwritingResearchObjectSearchTerm",
     "UnderwritingObjectIdentityVersion",
     "UnderwritingResearchProject",
     "UnderwritingResearchProjectSecurity",
@@ -177,6 +187,181 @@ def test_versioned_product_families_prevent_duplicate_versions_and_successors() 
         assert required <= _unique_columns(table_name)
 
 
+def test_research_object_alias_schema_contract() -> None:
+    table = Base.metadata.tables["uw_research_object_aliases"]
+
+    assert _unique_columns("uw_research_object_aliases") == {
+        ("object_id", "normalized_alias")
+    }
+    assert _foreign_key_targets("uw_research_object_aliases") == {
+        "uw_research_objects.id"
+    }
+    checks = {
+        str(constraint.sqltext)
+        for constraint in table.constraints
+        if isinstance(constraint, sa.CheckConstraint)
+    }
+    assert "length(trim(alias)) > 0" in checks
+    assert (
+        "length(trim(normalized_alias)) > 0 "
+        "AND normalized_alias = trim(normalized_alias)"
+    ) in checks
+    sqlite_ddl = str(sa.schema.CreateTable(table).compile(dialect=sqlite.dialect()))
+    postgres_ddl = str(
+        sa.schema.CreateTable(table).compile(dialect=postgresql.dialect())
+    )
+    assert "length(CAST(alias AS BLOB)) != length(alias)" in sqlite_ddl
+    assert "octet_length(alias) != char_length(alias)" in postgres_ddl
+    assert {index.name for index in table.indexes} == {"ix_uw_object_alias_normalized"}
+    assert table.c.alias.type.length == 160
+    assert table.c.normalized_alias.type.length == 160
+    assert table.c.locale.type.length == 16
+
+
+def test_alias_orm_rejects_a_normalized_value_unrelated_to_alias(session) -> None:
+    research_object = persistence.UnderwritingResearchObject(
+        kind="company",
+        external_key=f"normalization:{uuid.uuid4()}",
+        canonical_name="Normalization Test",
+        created_at=datetime(2026, 8, 24, tzinfo=UTC),
+    )
+    session.add(research_object)
+    session.flush()
+    session.add(
+        persistence.UnderwritingResearchObjectAlias(
+            object_id=research_object.id,
+            alias="Google",
+            normalized_alias="unrelated",
+            locale="en",
+            created_at=datetime(2026, 8, 24, tzinfo=UTC),
+        )
+    )
+
+    with pytest.raises((ValueError, IntegrityError)):
+        session.flush()
+
+
+def test_alias_normalizer_uses_nfc_trim_and_lower_without_casefolding() -> None:
+    search_terms = importlib.import_module("app.underwriting.domain.search_terms")
+    normalizer = getattr(search_terms, "normalize_search_term", None)
+
+    assert normalizer is not None
+    assert normalizer("  Straße  ") == "straße"
+    assert normalizer("Strasse") == "strasse"
+    assert normalizer("E\N{COMBINING ACUTE ACCENT}cole") == "école"
+
+
+def test_research_object_search_term_schema_contract() -> None:
+    table = Base.metadata.tables["uw_research_object_search_terms"]
+
+    assert set(table.c.keys()) == {
+        "id",
+        "object_id",
+        "identity_version_id",
+        "term_kind",
+        "raw_value",
+        "normalized_value",
+        "normalized_digest",
+        "created_at",
+    }
+    assert _foreign_key_targets(table.name) == {
+        "uw_research_objects.id",
+        "uw_object_identity_versions.id",
+    }
+    checks = {
+        str(constraint.sqltext)
+        for constraint in table.constraints
+        if isinstance(constraint, sa.CheckConstraint)
+    }
+    assert "term_kind IN ('external_key', 'canonical_name', 'symbol')" in checks
+    assert (
+        "(term_kind = 'external_key' AND identity_version_id IS NULL) OR "
+        "(term_kind IN ('canonical_name', 'symbol') AND identity_version_id IS NOT NULL)"
+    ) in checks
+    assert (
+        "length(normalized_digest) = 64 "
+        "AND normalized_digest = lower(normalized_digest)"
+    ) in checks
+    assert {index.name for index in table.indexes} == {
+        "ix_uw_search_term_identity",
+        "ix_uw_search_term_normalized_digest",
+        "uq_uw_search_term_external_object",
+    }
+    assert _unique_columns(table.name) == {("identity_version_id", "term_kind")}
+    sqlite_ddl = str(sa.schema.CreateTable(table).compile(dialect=sqlite.dialect()))
+    postgres_ddl = str(
+        sa.schema.CreateTable(table).compile(dialect=postgresql.dialect())
+    )
+    assert "length(CAST(raw_value AS BLOB)) != length(raw_value)" in sqlite_ddl
+    assert "octet_length(raw_value) != char_length(raw_value)" in postgres_ddl
+    normalized_index = next(
+        index
+        for index in table.indexes
+        if index.name == "ix_uw_search_term_normalized_digest"
+    )
+    assert table.c.normalized_digest.type.length == 64
+    assert "normalized_digest" in str(
+        sa.schema.CreateIndex(normalized_index).compile(dialect=sqlite.dialect())
+    )
+    assert "normalized_digest" in str(
+        sa.schema.CreateIndex(normalized_index).compile(dialect=postgresql.dialect())
+    )
+    indexed_or_unique_columns = {
+        column.name for index in table.indexes for column in index.columns
+    } | {
+        column.name
+        for constraint in table.constraints
+        if isinstance(constraint, sa.UniqueConstraint)
+        for column in constraint.columns
+    }
+    assert "normalized_value" not in indexed_or_unique_columns
+    assert all(
+        not isinstance(table.c[column_name].type, sa.Text)
+        for column_name in indexed_or_unique_columns
+    )
+
+
+def test_search_term_digest_is_fixed_width_and_validated_with_normalized_value() -> (
+    None
+):
+    search_terms = importlib.import_module("app.underwriting.domain.search_terms")
+    digest = getattr(search_terms, "digest_search_term", None)
+    validator = getattr(search_terms, "require_valid_search_term")
+
+    assert digest is not None
+    expected = hashlib.sha256("école".encode("utf-8")).hexdigest()
+    assert digest("école") == expected
+    with pytest.raises(RuntimeError, match="digest"):
+        validator("ÉCOLE", "école", hashlib.sha256(b"unrelated").hexdigest())
+
+
+def test_object_repository_writes_external_key_search_projection(session) -> None:
+    repository = persistence.UnderwritingRepository(session)
+    research_object = repository.add_object(
+        "company",
+        "ÉCOLE:COMPANY",
+        "Unrelated Holdings",
+        datetime(2026, 8, 24, tzinfo=UTC),
+    )
+
+    term = session.scalar(
+        select(persistence.UnderwritingResearchObjectSearchTerm).where(
+            persistence.UnderwritingResearchObjectSearchTerm.object_id
+            == research_object.id
+        )
+    )
+    assert term is not None
+    assert (term.term_kind, term.raw_value, term.normalized_value) == (
+        "external_key",
+        "ÉCOLE:COMPANY",
+        "école:company",
+    )
+    assert (
+        term.normalized_digest
+        == hashlib.sha256("école:company".encode("utf-8")).hexdigest()
+    )
+
+
 def _product_constraint_tables() -> list[sa.Table]:
     return [
         Base.metadata.tables[name]
@@ -289,6 +474,9 @@ def _successor_rows(
         "version": 3,
         "supersedes_id": parent_id,
     }
+    if table_name == "uw_security_rights_versions":
+        first_successor["effective_from"] = now + timedelta(days=1)
+        duplicate_successor["effective_from"] = now + timedelta(days=2)
     return parent, first_successor, duplicate_successor
 
 
@@ -360,7 +548,7 @@ def test_versioned_product_family_rejects_a_second_successor(
         Base.metadata.drop_all(engine, tables=tables)
 
 
-def test_product_natural_identities_and_revision_retry_identity_are_unique() -> None:
+def test_product_business_identities_and_revision_retry_identity_are_unique() -> None:
     assert ("project_id", "security_id") in _unique_columns(
         "uw_research_project_securities"
     )
@@ -369,30 +557,38 @@ def test_product_natural_identities_and_revision_retry_identity_are_unique() -> 
         "uw_revision_manifests"
     )
     assert ("boundary_id",) in _unique_columns("uw_revision_manifests")
-    assert (
-        "security_identity_id",
-        "price_type",
-        "adjustment_basis",
-        "market_at",
-        "source_id",
-        "raw_hash",
-    ) in _unique_columns("uw_price_snapshots")
-    assert (
-        "base_currency",
-        "quote_currency",
-        "quote_direction",
-        "market_at",
-        "source_id",
-        "raw_hash",
-    ) in _unique_columns("uw_fx_snapshots")
-    assert (
-        "company_id",
-        "report_period_start",
-        "report_period_end",
-        "market_at",
-        "source_id",
-        "raw_hash",
-    ) in _unique_columns("uw_capital_structure_snapshots")
+    business_indexes = {
+        "uw_price_snapshots": (
+            "uq_uw_price_snapshot_business_time",
+            ("security_identity_id", "price_type", "adjustment_basis", "market_at"),
+        ),
+        "uw_fx_snapshots": (
+            "uq_uw_fx_snapshot_business_time",
+            ("base_currency", "quote_currency", "quote_direction", "market_at"),
+        ),
+        "uw_capital_structure_snapshots": (
+            "uq_uw_capital_structure_business_time",
+            ("company_id", "report_period_start", "report_period_end", "market_at"),
+        ),
+        "uw_security_rights_versions": (
+            "uq_uw_security_rights_business_time",
+            ("security_identity_id", "effective_from"),
+        ),
+    }
+    for table_name, (index_name, expected_columns) in business_indexes.items():
+        table = Base.metadata.tables[table_name]
+        index = next(item for item in table.indexes if item.name == index_name)
+
+        assert index.unique
+        assert tuple(index.columns.keys()) == expected_columns
+        assert str(index.dialect_options["sqlite"]["where"]) == (
+            "legacy_business_conflict = 0"
+        )
+        assert str(index.dialect_options["postgresql"]["where"]) == (
+            "legacy_business_conflict = false"
+        )
+        assert not table.c.legacy_business_conflict.nullable
+        assert str(table.c.legacy_business_conflict.server_default.arg) == "false"
 
 
 @pytest.mark.parametrize(
@@ -471,7 +667,11 @@ def test_snapshot_rejects_duplicate_natural_identity_when_value_changes(
 
 
 def test_product_tables_expose_content_hash_except_mutable_draft() -> None:
-    for table_name in IMMUTABLE_PRODUCT_TABLES:
+    derived_tables = {
+        "uw_research_object_aliases",
+        "uw_research_object_search_terms",
+    }
+    for table_name in IMMUTABLE_PRODUCT_TABLES - derived_tables:
         column = Base.metadata.tables[table_name].c.content_hash
         assert column.nullable is False
         assert column.type.length == 64
@@ -1115,7 +1315,7 @@ def _refuse_sqlite_downgrade(
 def _assert_refused_sqlite_downgrade_state(connection: sa.Connection) -> None:
     inspector = sa.inspect(connection)
     table_names = set(inspector.get_table_names())
-    assert PRODUCT_TABLES <= table_names
+    assert PRODUCT_0065_TABLES <= table_names
     assert not {name for name in table_names if name.startswith("_alembic_tmp_")}
     assert connection.execute(
         sa.text("SELECT version_num FROM alembic_version")
@@ -1224,7 +1424,7 @@ def test_0065_sqlite_downgrade_refuses_populated_compatibility_column(
                     sa.text(f"SELECT count(*) FROM {table_name}")
                 ).scalar_one()
                 == 0
-                for table_name in PRODUCT_TABLES
+                for table_name in PRODUCT_0065_TABLES
             )
         _refuse_sqlite_downgrade(backend, environment)
         with engine.connect() as connection:
@@ -1321,7 +1521,7 @@ def test_0064_to_0065_sqlite_upgrade_preserves_legacy_rows_and_nulls_new_columns
 
     with engine.connect() as connection:
         inspector = sa.inspect(connection)
-        assert PRODUCT_TABLES <= set(inspector.get_table_names())
+        assert PRODUCT_0065_TABLES <= set(inspector.get_table_names())
         for table_name, expected_columns in COMPATIBILITY_COLUMNS.items():
             reflected = {
                 column["name"]: column
