@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+import re
 from threading import Barrier
 
 import pytest
@@ -14,6 +15,7 @@ from app.underwriting.persistence.company_research_models import (
     CompanyResearchPreparation,
 )
 from app.underwriting.persistence.models import (
+    UnderwritingHistoricalBasis,
     UnderwritingMandateVersion,
     UnderwritingResearchObject,
 )
@@ -27,14 +29,18 @@ from app.underwriting.persistence.product_models import (
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchInitializer,
 )
+from app.underwriting.services.company_research_boundary import (
+    resolve_alphabet_company_research_boundary,
+)
 from app.underwriting.services.product_foundation_fixture import (
     ProductFoundationFixtureService,
 )
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
-NOW = datetime(2026, 8, 25, 9, tzinfo=UTC)
+NOW = datetime(2026, 8, 28, tzinfo=UTC)
 GOVERNED_CUTOFF = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
+SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 def _initializer(session) -> tuple[CompanyResearchInitializer, object]:
@@ -75,6 +81,7 @@ def _fresh_initializer(session) -> tuple[CompanyResearchInitializer, object]:
 def _assert_no_initialized_foundation(session) -> None:
     """The initializer must leave no partial durable foundation on failure."""
     for model in (
+        UnderwritingHistoricalBasis,
         UnderwritingResearchProject,
         UnderwritingResearchProjectSecurity,
         UnderwritingMandateVersion,
@@ -100,6 +107,7 @@ def test_preview_is_read_only_and_resolves_all_effective_alphabet_securities(
 
     assert preview.company.external_key == "US:ALPHABET:COMPANY"
     assert preview.security_external_keys == ("NASDAQ:GOOG", "NASDAQ:GOOGL")
+    assert preview.cutoff_at == GOVERNED_CUTOFF
     assert (
         session.scalar(select(func.count()).select_from(UnderwritingResearchProject))
         == before
@@ -124,6 +132,23 @@ def test_initialize_creates_the_complete_company_research_foundation(session) ->
     assert result.draft.content.mandate_id == result.mandate.id
     assert result.draft.content.scope_id == result.scope.id
     assert result.draft.content.agenda_id == result.agenda.id
+    assert result.draft.content.historical_basis_id == result.basis.id
+    assert result.basis.cutoff == GOVERNED_CUTOFF
+    assert result.mandate.effective_at == NOW
+    assert result.mandate.effective_at != result.basis.cutoff
+    boundary = resolve_alphabet_company_research_boundary(NOW)
+    assert result.basis.source_manifest_hash == boundary.basis_input.source_manifest_hash
+    assert result.basis.definition_bundle_hash == boundary.basis_input.definition_bundle_hash
+    assert result.basis.parser_bundle_hash == boundary.basis_input.parser_bundle_hash
+    assert result.basis.content_hash == boundary.basis_content_hash
+    for value in (
+        result.basis.source_manifest_hash,
+        result.basis.definition_bundle_hash,
+        result.basis.parser_bundle_hash,
+        result.basis.content_hash,
+    ):
+        assert value is not None
+        assert SHA256.fullmatch(value)
     assert result.draft.content.price_snapshot_ids == ()
     assert result.draft.content.fx_snapshot_ids == ()
     assert result.draft.content.capital_structure_snapshot_id is None
@@ -202,6 +227,8 @@ def test_initialize_replays_the_original_foundation_for_the_same_key(session) ->
     assert replay.project.id == first.project.id
     assert replay.preparation.id == first.preparation.id
     assert replay.job.id == first.job.id
+    assert replay.basis.id == first.basis.id
+    assert session.scalar(select(func.count()).select_from(UnderwritingHistoricalBasis)) == 1
 
 
 def test_initialize_recovers_a_lost_response_in_a_fresh_session(tmp_path) -> None:
@@ -218,6 +245,7 @@ def test_initialize_recovers_a_lost_response_in_a_fresh_session(tmp_path) -> Non
             )
             created_project_id = created.project.id
             created_preparation_id = created.preparation.id
+            created_basis_id = created.basis.id
             first_session.commit()
 
         with sessions() as replay_session:
@@ -232,6 +260,7 @@ def test_initialize_recovers_a_lost_response_in_a_fresh_session(tmp_path) -> Non
 
             assert replay.project.id == created_project_id
             assert replay.preparation.id == created_preparation_id
+            assert replay.basis.id == created_basis_id
             assert (
                 replay_session.scalar(
                     select(func.count()).select_from(UnderwritingResearchProject)
@@ -241,6 +270,12 @@ def test_initialize_recovers_a_lost_response_in_a_fresh_session(tmp_path) -> Non
             assert (
                 replay_session.scalar(
                     select(func.count()).select_from(CompanyResearchPreparation)
+                )
+                == 1
+            )
+            assert (
+                replay_session.scalar(
+                    select(func.count()).select_from(UnderwritingHistoricalBasis)
                 )
                 == 1
             )
@@ -296,12 +331,12 @@ def test_concurrent_different_keys_converge_or_conflict_without_raw_sqlite_error
         engine.dispose()
 
 
-def test_initialize_rejects_an_idempotency_key_reused_for_a_different_request(
+def test_initialize_replays_an_idempotency_key_for_later_supported_cutoff(
     session,
 ) -> None:
     initializer, alphabet = _initializer(session)
     preview = initializer.preview(company_id=alphabet.id, cutoff_at=NOW)
-    initializer.initialize(
+    first = initializer.initialize(
         preview_hash=preview.input_hash,
         company_id=alphabet.id,
         cutoff_at=NOW,
@@ -310,13 +345,14 @@ def test_initialize_rejects_an_idempotency_key_reused_for_a_different_request(
     later = NOW + timedelta(days=1)
     later_preview = initializer.preview(company_id=alphabet.id, cutoff_at=later)
 
-    with pytest.raises(ConflictError, match="idempotency_key"):
-        initializer.initialize(
-            preview_hash=later_preview.input_hash,
-            company_id=alphabet.id,
-            cutoff_at=later,
-            idempotency_key="alphabet-conflict",
-        )
+    replay = initializer.initialize(
+        preview_hash=later_preview.input_hash,
+        company_id=alphabet.id,
+        cutoff_at=later,
+        idempotency_key="alphabet-conflict",
+    )
+
+    assert replay.project.id == first.project.id
 
 
 def test_preview_rejects_a_security_id_as_a_company(session) -> None:
@@ -326,6 +362,24 @@ def test_preview_rejects_a_security_id_as_a_company(session) -> None:
 
     with pytest.raises(ValidationError, match="Company"):
         initializer.preview(company_id=security_id, cutoff_at=NOW)
+
+
+def test_preview_accepts_the_exact_governed_cutoff(session) -> None:
+    initializer, alphabet = _initializer(session)
+
+    preview = initializer.preview(company_id=alphabet.id, cutoff_at=GOVERNED_CUTOFF)
+
+    assert preview.cutoff_at == GOVERNED_CUTOFF
+
+
+def test_preview_rejects_a_cutoff_before_the_governed_boundary(session) -> None:
+    initializer, alphabet = _initializer(session)
+
+    with pytest.raises(ValidationError, match="requested cutoff precedes"):
+        initializer.preview(
+            company_id=alphabet.id,
+            cutoff_at=GOVERNED_CUTOFF - timedelta(seconds=1),
+        )
 
 
 def test_caller_rollback_removes_every_initialized_product_row(session) -> None:

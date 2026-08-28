@@ -37,6 +37,7 @@ from app.underwriting.persistence.company_research_repository import (
     CompanyResearchRepository,
 )
 from app.underwriting.persistence.models import (
+    UnderwritingHistoricalBasis,
     UnderwritingMandateVersion,
     UnderwritingResearchObject,
 )
@@ -61,6 +62,9 @@ from app.underwriting.fixtures.alphabet_golden_case import (
 from app.underwriting.services.company_research_market_inputs import (
     CompanyResearchMarketInputs,
 )
+from app.underwriting.services.company_research_boundary import (
+    resolve_alphabet_company_research_boundary,
+)
 from app.underwriting.services.company_research_model_builder import (
     CompanyResearchModelTemplate,
     FrozenMarketContext,
@@ -77,6 +81,7 @@ class CompanyResearchInitialization:
     """The durable foundation returned by a successful initialization."""
 
     project: ResearchProjectView
+    basis: UnderwritingHistoricalBasis
     mandate: UnderwritingMandateVersion
     scope: UnderwritingResearchScopeVersion
     agenda: UnderwritingResearchAgendaVersion
@@ -149,19 +154,23 @@ class CompanyResearchInitializer:
         self, *, company_id: UUID, cutoff_at: datetime
     ) -> CompanyResearchPreview:
         company_id = self._uuid(company_id, "company_id")
-        cutoff = self._utc(cutoff_at, "cutoff_at")
+        requested_cutoff = self._utc(cutoff_at, "cutoff_at")
         # A preview is a pure read even when the caller has pending objects.
         with self._session.no_autoflush:
             company = self._product_repository.object(company_id)
             if company is None or company.kind != ResearchObjectKind.COMPANY.value:
                 raise ValidationError("company_id must identify a Company")
-            company_identity = self._products.effective_identity(company_id, cutoff)
+            adapter = self._adapter_for(company.external_key)
+            boundary = resolve_alphabet_company_research_boundary(requested_cutoff)
+            company_identity = self._products.effective_identity(
+                company_id, boundary.cutoff_at
+            )
             if company_identity is None:
                 raise ValidationError("Company has no effective identity at cutoff_at")
             rows = tuple(
                 self._session.execute(
                     self._product_repository._effective_company_children_statement(
-                        {company_id}, cutoff
+                        {company_id}, boundary.cutoff_at
                     ).order_by("parent_id", "id")
                 ).tuples()
             )
@@ -189,9 +198,9 @@ class CompanyResearchInitializer:
                 securities=securities,
             )
             return build_company_research_preview(
-                adapter=self._adapter_for(company.external_key),
+                adapter=adapter,
                 identities=identities,
-                cutoff_at=cutoff,
+                cutoff_at=boundary.cutoff_at,
             )
 
     def preview(
@@ -235,6 +244,7 @@ class CompanyResearchInitializer:
             draft.content.mandate_id,
             draft.content.scope_id,
             draft.content.agenda_id,
+            draft.content.historical_basis_id,
         ):
             raise ConflictError(
                 "company research initialization foundation is incomplete"
@@ -242,13 +252,15 @@ class CompanyResearchInitializer:
         mandate = self._products.product_mandate(project.id, draft.content.mandate_id)
         scope = self._products.scope(project.id, draft.content.scope_id)
         agenda = self._products.agenda(project.id, draft.content.agenda_id)
+        basis = self._products.historical_basis(draft.content.historical_basis_id)
         job = self._company_repository.prepare_job(preparation.id)
-        if mandate is None or scope is None or agenda is None or job is None:
+        if mandate is None or scope is None or agenda is None or basis is None or job is None:
             raise ConflictError(
                 "company research initialization foundation is incomplete"
             )
         return CompanyResearchInitialization(
             project=project,
+            basis=basis,
             mandate=mandate,
             scope=scope,
             agenda=agenda,
@@ -309,12 +321,14 @@ class CompanyResearchInitializer:
         preview: CompanyResearchPreview,
         idempotency_key: str,
     ) -> CompanyResearchInitialization:
+        boundary = resolve_alphabet_company_research_boundary(preview.cutoff_at)
         project = self._products.create_project(
             primary_company_id=preview.company.object_id,
             target_security_ids=tuple(
                 security.object_id for security in preview.securities
             ),
         )
+        basis = self._products.create_historical_basis(boundary.basis_input)
         mandate = self._products.append_product_mandate(
             project_id=project.id,
             value=InvestmentMandateInput(
@@ -327,7 +341,7 @@ class CompanyResearchInitializer:
             ),
             benchmark_key=None,
             required_excess_return=None,
-            effective_at=preview.cutoff_at,
+            effective_at=self._created_at(),
             expires_at=None,
             expected_parent_id=None,
         )
@@ -369,6 +383,7 @@ class CompanyResearchInitializer:
                 mandate_id=mandate.id,
                 scope_id=scope.id,
                 agenda_id=agenda.id,
+                historical_basis_id=basis.id,
             ),
         )
         preparation_id = uuid4()
@@ -409,6 +424,7 @@ class CompanyResearchInitializer:
         )
         return CompanyResearchInitialization(
             project=project,
+            basis=basis,
             mandate=mandate,
             scope=scope,
             agenda=agenda,
