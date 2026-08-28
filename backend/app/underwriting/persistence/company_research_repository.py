@@ -40,6 +40,7 @@ from app.underwriting.persistence.company_research_models import (
 )
 from app.underwriting.persistence.models import (
     UnderwritingHistoricalBasis,
+    UnderwritingMandateVersion,
     UnderwritingResearchObject,
 )
 from app.underwriting.persistence.product_models import (
@@ -47,6 +48,10 @@ from app.underwriting.persistence.product_models import (
     UnderwritingFXSnapshot,
     UnderwritingMarketCaptureEnvelope,
     UnderwritingPriceSnapshot,
+    UnderwritingResearchAgendaVersion,
+    UnderwritingResearchProject,
+    UnderwritingResearchProjectSecurity,
+    UnderwritingResearchScopeVersion,
     UnderwritingSecurityRightsVersion,
     UnderwritingWorkspaceDraft,
 )
@@ -69,7 +74,10 @@ from app.underwriting.services.market_snapshots import (
     price_snapshot_hash,
     security_rights_hash,
 )
-from app.underwriting.services.workspace_draft import WorkspaceDraftService
+from app.underwriting.services.workspace_draft import (
+    WorkspaceDraftContent,
+    WorkspaceDraftService,
+)
 
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _PREPARE_JOB_KIND = "prepare_company_research"
@@ -78,6 +86,10 @@ _PREPARE_JOB_TARGET_TYPE = "company_research_preparation"
 
 class CompanyResearchIntegrityError(ValidationError):
     """A persisted immutable company-research record cannot be trusted."""
+
+
+class CompanyResearchGovernedBasisMismatch(CompanyResearchIntegrityError):
+    """An authentic basis belongs to a different governed model boundary."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,8 +122,17 @@ class CompanyResearchBasisRecoveryState:
     preparation: CompanyResearchPreparation
     job: Job
     draft: UnderwritingWorkspaceDraft
+    draft_content: WorkspaceDraftContent
+    project: UnderwritingResearchProject | None
+    company: UnderwritingResearchObject | None
+    securities: tuple[UnderwritingResearchObject, ...]
+    mandate_head_id: UUID | None
+    scope_head_id: UUID | None
+    agenda_head_id: UUID | None
     evidence: CompanyResearchArtifactVersion
     research_gaps: CompanyResearchArtifactVersion
+    evidence_chain: tuple[CompanyResearchArtifactVersion, ...]
+    research_gaps_chain: tuple[CompanyResearchArtifactVersion, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,6 +417,38 @@ class CompanyResearchRepository:
             content_hash=content_hash,
         )
 
+    def authenticate_governed_historical_basis(
+        self,
+        basis: UnderwritingHistoricalBasis,
+        *,
+        expected_input: ProductHistoricalBasisInput,
+        expected_content_hash: str,
+    ) -> CompanyResearchAuthenticatedHistoricalBasis:
+        """Authenticate one basis against an exact governed boundary contract."""
+        if (
+            type(expected_input) is not ProductHistoricalBasisInput
+            or product_historical_basis_content_hash(expected_input)
+            != expected_content_hash
+        ):
+            raise ValidationError("governed historical basis contract is invalid")
+        authenticated = self.authenticate_historical_basis(basis)
+        expected_cutoff = self._stored_datetime(
+            expected_input.cutoff_at, "expected historical basis cutoff"
+        )
+        if (
+            authenticated.cutoff_at != expected_cutoff
+            or authenticated.source_manifest_hash
+            != expected_input.source_manifest_hash
+            or authenticated.definition_bundle_hash
+            != expected_input.definition_bundle_hash
+            or authenticated.parser_bundle_hash != expected_input.parser_bundle_hash
+            or authenticated.content_hash != expected_content_hash
+        ):
+            raise CompanyResearchGovernedBasisMismatch(
+                "company research historical basis does not match governed contract"
+            )
+        return authenticated
+
     def validate_workspace_market_boundary(
         self,
         *,
@@ -423,7 +476,7 @@ class CompanyResearchRepository:
             )
         ):
             raise ValidationError("company research workspace draft is stale")
-        content = WorkspaceDraftService._content(draft.content)
+        content = WorkspaceDraftService.decode_content(draft.content)
         if content.historical_basis_id is None:
             raise ValidationError("company research historical basis is missing")
         basis = ProductRepository(self._session).product_basis(
@@ -890,13 +943,104 @@ class CompanyResearchRepository:
             )
         job = self._job_for_update(preparation.job_id, populate_existing=True)
         draft = self._workspace_draft_for_update(preparation.project_id)
+        if draft is None:
+            raise ValidationError(
+                "company research historical basis recovery inputs are incomplete"
+            )
+        draft_content = WorkspaceDraftService.decode_content(draft.content)
+        project = self._session.scalar(
+            select(UnderwritingResearchProject)
+            .where(UnderwritingResearchProject.id == preparation.project_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        memberships = tuple(
+            self._session.scalars(
+                select(UnderwritingResearchProjectSecurity)
+                .where(
+                    UnderwritingResearchProjectSecurity.project_id
+                    == preparation.project_id
+                )
+                .order_by(UnderwritingResearchProjectSecurity.security_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+        authority_ids = tuple(
+            sorted(
+                {
+                    *(row.security_id for row in memberships),
+                    *((project.primary_company_id,) if project is not None else ()),
+                },
+                key=str,
+            )
+        )
+        authorities = tuple(
+            self._session.scalars(
+                select(UnderwritingResearchObject)
+                .where(UnderwritingResearchObject.id.in_(authority_ids))
+                .order_by(UnderwritingResearchObject.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+        authority_by_id = {row.id: row for row in authorities}
+        company = (
+            authority_by_id.get(project.primary_company_id)
+            if project is not None
+            else None
+        )
+        securities = tuple(
+            authority_by_id[row.security_id]
+            for row in memberships
+            if row.security_id in authority_by_id
+        )
+        foundation_heads = []
+        for model in (
+            UnderwritingMandateVersion,
+            UnderwritingResearchScopeVersion,
+            UnderwritingResearchAgendaVersion,
+        ):
+            foundation_heads.append(
+                self._session.scalar(
+                    select(model)
+                    .where(model.project_id == preparation.project_id)
+                    .order_by(model.version.desc(), model.id.desc())
+                    .limit(1)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            )
+        for model, identifiers in (
+            (UnderwritingMandateVersion, (draft_content.mandate_id,)),
+            (UnderwritingResearchScopeVersion, (draft_content.scope_id,)),
+            (UnderwritingResearchAgendaVersion, (draft_content.agenda_id,)),
+            (UnderwritingPriceSnapshot, draft_content.price_snapshot_ids),
+            (UnderwritingFXSnapshot, draft_content.fx_snapshot_ids),
+            (
+                UnderwritingCapitalStructureSnapshot,
+                (draft_content.capital_structure_snapshot_id,),
+            ),
+            (UnderwritingSecurityRightsVersion, draft_content.security_rights_ids),
+        ):
+            ids = tuple(value for value in identifiers if value is not None)
+            if ids:
+                tuple(
+                    self._session.scalars(
+                        select(model)
+                        .where(model.id.in_(ids))
+                        .order_by(model.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                )
         evidence = self.current_artifact(
             preparation.project_id, "evidence_index", lock=True
         )
         research_gaps = self.current_artifact(
             preparation.project_id, "research_gaps", lock=True
         )
-        if job is None or draft is None or evidence is None or research_gaps is None:
+        if job is None or evidence is None or research_gaps is None:
             raise ValidationError(
                 "company research historical basis recovery inputs are incomplete"
             )
@@ -904,12 +1048,29 @@ class CompanyResearchRepository:
             raise ValidationError(
                 "company research historical basis recovery inputs are incomplete"
             )
+        evidence_chain = self.artifact_chain(evidence.id, lock=True)
+        research_gaps_chain = self.artifact_chain(research_gaps.id, lock=True)
         return CompanyResearchBasisRecoveryState(
             preparation=preparation,
             job=job,
             draft=draft,
+            draft_content=draft_content,
+            project=project,
+            company=company,
+            securities=securities,
+            mandate_head_id=(
+                foundation_heads[0].id if foundation_heads[0] is not None else None
+            ),
+            scope_head_id=(
+                foundation_heads[1].id if foundation_heads[1] is not None else None
+            ),
+            agenda_head_id=(
+                foundation_heads[2].id if foundation_heads[2] is not None else None
+            ),
             evidence=evidence,
             research_gaps=research_gaps,
+            evidence_chain=evidence_chain,
+            research_gaps_chain=research_gaps_chain,
         )
 
     def requeue_recoverable_preparation(
@@ -953,7 +1114,7 @@ class CompanyResearchRepository:
                 job.status != "failed"
                 or job.step != "model_bundle"
                 or draft is None
-                or WorkspaceDraftService._content(
+                or WorkspaceDraftService.decode_content(
                     draft.content
                 ).historical_basis_id
                 != expected_recovered_basis_id
@@ -1892,8 +2053,18 @@ class CompanyResearchRepository:
                 "company research event content hash mismatch"
             )
 
-    def artifact(self, artifact_id: UUID) -> CompanyResearchArtifactVersion | None:
-        row = self._session.get(CompanyResearchArtifactVersion, artifact_id)
+    def artifact(
+        self, artifact_id: UUID, *, lock: bool = False
+    ) -> CompanyResearchArtifactVersion | None:
+        statement = (
+            select(CompanyResearchArtifactVersion)
+            .where(CompanyResearchArtifactVersion.id == artifact_id)
+        )
+        if lock:
+            statement = statement.with_for_update().execution_options(
+                populate_existing=True
+            )
+        row = self._session.scalar(statement)
         if row is not None:
             self._validate_artifact_row(row)
         return row
@@ -1966,7 +2137,7 @@ class CompanyResearchRepository:
             ) from exc
 
     def artifact_chain(
-        self, artifact_id: UUID
+        self, artifact_id: UUID, *, lock: bool = False
     ) -> tuple[CompanyResearchArtifactVersion, ...]:
         """Return root-to-leaf chain after iteratively validating every link."""
         seen: set[UUID] = set()
@@ -1981,7 +2152,7 @@ class CompanyResearchRepository:
                     "company research artifact chain contains a cycle"
                 )
             seen.add(current_id)
-            row = self.artifact(current_id)
+            row = self.artifact(current_id, lock=lock)
             if row is None:
                 raise CompanyResearchIntegrityError(
                     "company research artifact parent is missing"
@@ -2000,7 +2171,7 @@ class CompanyResearchRepository:
                         "company research artifact root has a parent content hash"
                     )
             else:
-                parent = self.artifact(row.supersedes_id)
+                parent = self.artifact(row.supersedes_id, lock=lock)
                 if parent is None:
                     raise CompanyResearchIntegrityError(
                         "company research artifact parent is missing"
@@ -2041,7 +2212,9 @@ class CompanyResearchRepository:
             )
         )
         if lock:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update().execution_options(
+                populate_existing=True
+            )
         rows = tuple(self._session.scalars(statement))
         if not rows:
             return None
@@ -2049,13 +2222,14 @@ class CompanyResearchRepository:
         for row in rows:
             self._validate_artifact_row(row)
 
-        successors = tuple(
-            self._session.scalars(
-                select(CompanyResearchArtifactVersion).where(
-                    CompanyResearchArtifactVersion.supersedes_id.in_(rows_by_id)
-                )
-            )
+        successor_statement = select(CompanyResearchArtifactVersion).where(
+            CompanyResearchArtifactVersion.supersedes_id.in_(rows_by_id)
         )
+        if lock:
+            successor_statement = successor_statement.with_for_update().execution_options(
+                populate_existing=True
+            )
+        successors = tuple(self._session.scalars(successor_statement))
         parent_ids_with_successors: set[UUID] = set()
         for successor in successors:
             self._validate_artifact_row(successor)

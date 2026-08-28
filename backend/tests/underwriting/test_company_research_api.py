@@ -1003,7 +1003,7 @@ def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
     drafts = WorkspaceDraftService(session, now=lambda: operation_now)
     draft = drafts.read(UUID(project_id))
     assert draft is not None and draft.content.historical_basis_id is not None
-    missing = drafts.save(
+    drafts.save(
         UUID(project_id),
         expected_lock_version=draft.lock_version,
         patch=WorkspaceDraftPatch(historical_basis_id=None),
@@ -1013,6 +1013,15 @@ def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
     assert model_claim is not None and model_claim.step == "model_bundle"
     assert worker.run_claim(model_claim) == "discarded"
     session.commit()
+    blocked_workspace = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    assert blocked_workspace.status_code == 200, blocked_workspace.text
+    blocked_preparation = blocked_workspace.json()["preparation"]
+    assert (
+        blocked_preparation["status"],
+        blocked_preparation["current_step"],
+        blocked_preparation["progress"],
+        blocked_preparation["error"]["code"],
+    ) == ("blocked", "model_bundle", 30, "validation_failed")
     blocked_draft = drafts.read(UUID(project_id))
     assert blocked_draft is not None
 
@@ -1060,6 +1069,23 @@ def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
         final_preparation["progress"],
         final_preparation["error"],
     ) == ("awaiting_judgment_review", "judgment_context", 85, None)
+    final_evidence = next(
+        item
+        for item in final.json()["artifacts"]
+        if item["kind"] == "evidence_index"
+    )
+    assert (
+        final_evidence["id"],
+        final_evidence["version"],
+        final_evidence["content_hash"],
+        final_evidence["payload"]["facts"],
+    ) == evidence_snapshot
+    final_decisions = [
+        fact["review_decision"] for fact in final_evidence["payload"]["facts"]
+    ]
+    assert len(final_decisions) == 7
+    assert final_decisions.count("confirmed") == 6
+    assert final_decisions.count("rejected") == 1
 
 
 def test_retry_preserves_the_server_declared_failed_financial_bridge_step(

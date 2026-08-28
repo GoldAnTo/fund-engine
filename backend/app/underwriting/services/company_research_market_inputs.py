@@ -36,7 +36,6 @@ from app.underwriting.domain.company_research_market_contracts import (
     FrozenMarketSnapshotRole,
     FrozenRawComponentReference,
 )
-from app.underwriting.persistence.models import UnderwritingResearchObject
 from app.underwriting.persistence.product_models import (
     UnderwritingCapitalStructureSnapshot,
     UnderwritingFXSnapshot,
@@ -164,12 +163,10 @@ class CompanyResearchMarketInputs:
             raise ValidationError("company research project not found")
         project, security_ids = project_record
         objects = tuple(
-            self._session.get(UnderwritingResearchObject, item) for item in security_ids
+            self._repository.object(item) for item in security_ids
         )
         by_key = {item.external_key: item for item in objects if item is not None}
-        company = self._session.get(
-            UnderwritingResearchObject, project.primary_company_id
-        )
+        company = self._repository.object(project.primary_company_id)
         if (
             company is None
             or company.external_key != market_inputs.company_external_key
@@ -580,7 +577,13 @@ class CompanyResearchMarketInputs:
                 ) from None
             return existing
 
-    def resolve(self, *, project_id: UUID, cutoff_at: datetime) -> FrozenMarketContext:
+    def resolve(
+        self,
+        *,
+        project_id: UUID,
+        cutoff_at: datetime,
+        fresh: bool = False,
+    ) -> FrozenMarketContext:
         if type(project_id) is not UUID:
             raise ValidationError("project_id must be a UUID")
         cutoff = _utc(cutoff_at, "cutoff_at")
@@ -590,11 +593,9 @@ class CompanyResearchMarketInputs:
         if project_record is None:
             raise ValidationError("company research project not found")
         project, security_ids = project_record
-        company = self._session.get(
-            UnderwritingResearchObject, project.primary_company_id
-        )
+        company = self._repository.object(project.primary_company_id)
         securities = tuple(
-            self._session.get(UnderwritingResearchObject, security_id)
+            self._repository.object(security_id)
             for security_id in security_ids
         )
         if (
@@ -615,32 +616,36 @@ class CompanyResearchMarketInputs:
                 security_id=security_by_key[key].id,
                 security_key=key,
                 cutoff=cutoff,
+                fresh=fresh,
             )
             for key in _ALPHABET_SECURITY_KEYS
         )
-        fx = self._fx(cutoff)
-        capital = self._capital(project.primary_company_id, cutoff)
+        fx = self._fx(cutoff, fresh=fresh)
+        capital = self._capital(project.primary_company_id, cutoff, fresh=fresh)
         rights = tuple(
             self._rights(
                 security_id=security_by_key[key].id,
                 security_key=key,
                 cutoff=cutoff,
+                fresh=fresh,
             )
             for key in _ALPHABET_SECURITY_KEYS
         )
         self._validate_hashes(prices=prices, fx=fx, capital=capital, rights=rights)
         captures = {
             **{
-                ("price", row.id, "primary"): self._capture("price", row.id)
+                ("price", row.id, "primary"): self._capture(
+                    "price", row.id, fresh=fresh
+                )
                 for row in prices
             },
-            ("fx", fx.id, "primary"): self._capture("fx", fx.id),
+            ("fx", fx.id, "primary"): self._capture("fx", fx.id, fresh=fresh),
             ("capital_structure", capital.id, "primary"): self._capture(
-                "capital_structure", capital.id
+                "capital_structure", capital.id, fresh=fresh
             ),
             **{
                 ("security_rights", row.id, "primary"): self._capture(
-                    "security_rights", row.id
+                    "security_rights", row.id, fresh=fresh
                 )
                 for row in rights
             },
@@ -648,9 +653,11 @@ class CompanyResearchMarketInputs:
                 "capital_structure",
                 capital.id,
                 "class_b_legal_rights",
-            ): self._capture("capital_structure", capital.id, "class_b_legal_rights"),
+            ): self._capture(
+                "capital_structure", capital.id, "class_b_legal_rights", fresh=fresh
+            ),
             ("capital_structure", capital.id, "class_b_units"): self._capture(
-                "capital_structure", capital.id, "class_b_units"
+                "capital_structure", capital.id, "class_b_units", fresh=fresh
             ),
         }
         return self._context(
@@ -666,17 +673,17 @@ class CompanyResearchMarketInputs:
         snapshot_kind: str,
         snapshot_id: UUID,
         provenance_role: str = "primary",
+        *,
+        fresh: bool = False,
     ) -> UnderwritingMarketCaptureEnvelope:
-        rows = tuple(
-            self._session.scalars(
-                select(UnderwritingMarketCaptureEnvelope).where(
-                    UnderwritingMarketCaptureEnvelope.snapshot_kind == snapshot_kind,
-                    UnderwritingMarketCaptureEnvelope.snapshot_id == snapshot_id,
-                    UnderwritingMarketCaptureEnvelope.provenance_role
-                    == provenance_role,
-                )
-            )
+        statement = select(UnderwritingMarketCaptureEnvelope).where(
+            UnderwritingMarketCaptureEnvelope.snapshot_kind == snapshot_kind,
+            UnderwritingMarketCaptureEnvelope.snapshot_id == snapshot_id,
+            UnderwritingMarketCaptureEnvelope.provenance_role == provenance_role,
         )
+        if fresh:
+            statement = statement.execution_options(populate_existing=True)
+        rows = tuple(self._session.scalars(statement))
         if len(rows) != 1:
             raise ValidationError(
                 "market inputs require one exact persisted capture provenance envelope"
@@ -687,8 +694,15 @@ class CompanyResearchMarketInputs:
             raise ValidationError("market capture provenance envelope hash is invalid")
         return row
 
-    def _price(self, *, security_id: UUID, security_key: str, cutoff: datetime):
-        rows = self._session.scalars(
+    def _price(
+        self,
+        *,
+        security_id: UUID,
+        security_key: str,
+        cutoff: datetime,
+        fresh: bool = False,
+    ):
+        statement = (
             select(UnderwritingPriceSnapshot)
             .join(
                 UnderwritingMarketCaptureEnvelope,
@@ -713,6 +727,9 @@ class CompanyResearchMarketInputs:
             )
             .limit(2)
         )
+        if fresh:
+            statement = statement.execution_options(populate_existing=True)
+        rows = self._session.scalars(statement)
         row = _latest_exact(
             rows, time_field="market_at", label=f"price for {security_key}"
         )
@@ -724,8 +741,8 @@ class CompanyResearchMarketInputs:
             )
         return row
 
-    def _fx(self, cutoff: datetime):
-        rows = self._session.scalars(
+    def _fx(self, cutoff: datetime, *, fresh: bool = False):
+        statement = (
             select(UnderwritingFXSnapshot)
             .join(
                 UnderwritingMarketCaptureEnvelope,
@@ -750,10 +767,15 @@ class CompanyResearchMarketInputs:
             )
             .limit(2)
         )
+        if fresh:
+            statement = statement.execution_options(populate_existing=True)
+        rows = self._session.scalars(statement)
         return _latest_exact(rows, time_field="market_at", label="USD/CNY FX")
 
-    def _capital(self, company_id: UUID, cutoff: datetime):
-        rows = self._session.scalars(
+    def _capital(
+        self, company_id: UUID, cutoff: datetime, *, fresh: bool = False
+    ):
+        statement = (
             select(UnderwritingCapitalStructureSnapshot)
             .join(
                 UnderwritingMarketCaptureEnvelope,
@@ -779,6 +801,9 @@ class CompanyResearchMarketInputs:
             )
             .limit(2)
         )
+        if fresh:
+            statement = statement.execution_options(populate_existing=True)
+        rows = self._session.scalars(statement)
         row = _latest_exact(rows, time_field="market_at", label="capital structure")
         if row.company_id != company_id:
             raise ValidationError(
@@ -790,8 +815,15 @@ class CompanyResearchMarketInputs:
             )
         return row
 
-    def _rights(self, *, security_id: UUID, security_key: str, cutoff: datetime):
-        rows = self._session.scalars(
+    def _rights(
+        self,
+        *,
+        security_id: UUID,
+        security_key: str,
+        cutoff: datetime,
+        fresh: bool = False,
+    ):
+        statement = (
             select(UnderwritingSecurityRightsVersion)
             .join(
                 UnderwritingMarketCaptureEnvelope,
@@ -818,6 +850,9 @@ class CompanyResearchMarketInputs:
             )
             .limit(2)
         )
+        if fresh:
+            statement = statement.execution_options(populate_existing=True)
+        rows = self._session.scalars(statement)
         row = _latest_exact(
             rows,
             time_field="effective_from",

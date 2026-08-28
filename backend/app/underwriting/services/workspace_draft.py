@@ -157,7 +157,8 @@ class WorkspaceDraftService:
         return value.astimezone(UTC)
 
     @staticmethod
-    def _content(value: object) -> WorkspaceDraftContent:
+    def decode_content(value: object) -> WorkspaceDraftContent:
+        """Validate persisted draft JSON at a durable-boundary read."""
         try:
             serialized = json.dumps(
                 value,
@@ -176,7 +177,7 @@ class WorkspaceDraftService:
             project_id=row.project_id,
             base_revision_id=row.base_revision_id,
             lock_version=row.lock_version,
-            content=cls._content(row.content),
+            content=cls.decode_content(row.content),
             created_at=cls._stored_utc(row.created_at),
             updated_at=cls._stored_utc(row.updated_at),
         )
@@ -240,7 +241,7 @@ class WorkspaceDraftService:
         current = self._repository.workspace_draft(project_id)
         if current is None:
             raise ValidationError("workspace draft does not exist for project")
-        current_content = self._content(current.content)
+        current_content = self.decode_content(current.content)
         updated_at = self._utc(self._now(), "clock")
         if updated_at < self._stored_utc(
             current.created_at

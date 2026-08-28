@@ -299,7 +299,11 @@ class ProductRepository:
         return existing
 
     def object(self, object_id: UUID) -> UnderwritingResearchObject | None:
-        return self._session.get(UnderwritingResearchObject, object_id)
+        return self._session.scalar(
+            select(UnderwritingResearchObject)
+            .where(UnderwritingResearchObject.id == object_id)
+            .execution_options(populate_existing=True)
+        )
 
     def relation_exists(
         self,
@@ -1310,7 +1314,11 @@ class ProductRepository:
     def project(
         self, project_id: UUID
     ) -> tuple[UnderwritingResearchProject, tuple[UUID, ...]] | None:
-        project = self._session.get(UnderwritingResearchProject, project_id)
+        project = self._session.scalar(
+            select(UnderwritingResearchProject)
+            .where(UnderwritingResearchProject.id == project_id)
+            .execution_options(populate_existing=True)
+        )
         if project is None:
             return None
         security_ids = tuple(
@@ -1326,6 +1334,7 @@ class ProductRepository:
                 select(UnderwritingResearchProjectSecurity)
                 .where(UnderwritingResearchProjectSecurity.project_id == project_id)
                 .order_by(UnderwritingResearchProjectSecurity.security_id)
+                .execution_options(populate_existing=True)
             )
         )
 

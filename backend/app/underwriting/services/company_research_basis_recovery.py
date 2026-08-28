@@ -23,7 +23,19 @@ from app.underwriting.services.company_research_boundary import (
     CompanyResearchHistoricalBoundary,
     resolve_alphabet_company_research_boundary,
 )
+from app.underwriting.services.company_research_market_inputs import (
+    CompanyResearchMarketInputs,
+)
+from app.underwriting.services.market_snapshots import (
+    MarketSnapshotService,
+    WorkspaceMarketReferences,
+)
 from app.underwriting.services.product_project import ResearchProjectService
+from app.underwriting.services.company_research_sources import (
+    CompanyResearchProviderInput,
+    CompanyResearchSourceCompiler,
+)
+from app.underwriting.hashing import canonical_hash
 from app.underwriting.services.workspace_draft import (
     WorkspaceDraftPatch,
     WorkspaceDraftService,
@@ -42,6 +54,8 @@ class CompanyResearchHistoricalBasisRecovery:
         self._product_repository = ProductRepository(session)
         self._products = ResearchProjectService(session, now=now)
         self._drafts = WorkspaceDraftService(session, now=now)
+        self._market_inputs = CompanyResearchMarketInputs(session, now=now)
+        self._market_snapshots = MarketSnapshotService(session, now=now)
 
     def _now_utc(self) -> datetime:
         value = self._now()
@@ -70,16 +84,13 @@ class CompanyResearchHistoricalBasisRecovery:
     def _project_security_keys(
         self, state: CompanyResearchBasisRecoveryState
     ) -> tuple[str, ...]:
-        project = self._products.project(state.preparation.project_id)
+        project = state.project
         if project is None:
             raise ValidationError(
                 "company research historical basis recovery project is missing"
             )
-        company = self._product_repository.object(project.primary_company_id)
-        securities = tuple(
-            self._product_repository.object(security_id)
-            for security_id in project.target_security_ids
-        )
+        company = state.company
+        securities = state.securities
         if (
             company is None
             or company.kind != "company"
@@ -115,62 +126,111 @@ class CompanyResearchHistoricalBasisRecovery:
             )
         return security_keys
 
-    @staticmethod
     def _validate_reviewed_evidence(
+        self,
         state: CompanyResearchBasisRecoveryState,
         *,
         boundary: CompanyResearchHistoricalBoundary,
         security_keys: tuple[str, ...],
     ) -> None:
-        evidence = state.evidence.payload
-        gaps = state.research_gaps.payload
-        facts = evidence.get("facts") if isinstance(evidence, Mapping) else None
-        evidence_security_keys = (
-            evidence.get("security_external_keys")
-            if isinstance(evidence, Mapping)
-            else None
-        )
-        valid = (
-            isinstance(evidence, Mapping)
-            and isinstance(gaps, Mapping)
-            and evidence.get("fixture_content_hash")
-            == boundary.basis_input.source_manifest_hash
-            and gaps.get("fixture_content_hash")
-            == boundary.basis_input.source_manifest_hash
-            and CompanyResearchRepository.evidence_cutoff(state.evidence)
-            == boundary.cutoff_at
-            and evidence.get("company_external_key") == _ALPHABET_COMPANY_KEY
-            and gaps.get("company_external_key") == _ALPHABET_COMPANY_KEY
-            and isinstance(evidence_security_keys, list)
-            and all(isinstance(value, str) for value in evidence_security_keys)
-            and tuple(evidence_security_keys) == security_keys
-            and isinstance(facts, list)
-            and bool(facts)
-            and all(
-                isinstance(fact, Mapping)
-                and fact.get("company_external_key") == _ALPHABET_COMPANY_KEY
-                and fact.get("review_decision") in _TERMINAL_REVIEW_DECISIONS
-                for fact in facts
+        expected = CompanyResearchSourceCompiler().compile_evidence_index(
+            CompanyResearchProviderInput(
+                preparation_id=state.preparation.id,
+                project_id=state.preparation.project_id,
+                company_external_key=_ALPHABET_COMPANY_KEY,
+                request_hash=state.preparation.request_hash,
+                strategy_version=state.preparation.strategy_version,
             )
         )
-        if not valid:
+        evidence_chain = state.evidence_chain
+        gaps_chain = state.research_gaps_chain
+        root = evidence_chain[0]
+        if (
+            root.input_hash != expected.input_hash
+            or root.payload != expected.evidence_index_payload
+            or tuple(root.source_refs) != expected.source_refs
+            or len(gaps_chain) != 1
+            or gaps_chain[0].input_hash != expected.input_hash
+            or gaps_chain[0].payload != expected.research_gaps_payload
+            or tuple(gaps_chain[0].source_refs) != expected.source_refs
+            or expected.input_hash != boundary.basis_input.source_manifest_hash
+            or tuple(
+                expected.evidence_index_payload.get("security_external_keys", ())
+            )
+            != security_keys
+        ):
             raise ValidationError(
                 "company research historical basis recovery evidence is invalid"
             )
-
-    @staticmethod
-    def _matches_boundary(
-        basis: CompanyResearchAuthenticatedHistoricalBasis,
-        boundary: CompanyResearchHistoricalBoundary,
-    ) -> bool:
-        expected = boundary.basis_input
-        return (
-            basis.cutoff_at == boundary.cutoff_at
-            and basis.source_manifest_hash == expected.source_manifest_hash
-            and basis.definition_bundle_hash == expected.definition_bundle_hash
-            and basis.parser_bundle_hash == expected.parser_bundle_hash
-            and basis.content_hash == boundary.basis_content_hash
-        )
+        for parent, successor in zip(
+            evidence_chain, evidence_chain[1:], strict=False
+        ):
+            if tuple(successor.source_refs) != expected.source_refs:
+                raise ValidationError(
+                    "company research historical basis recovery evidence is invalid"
+                )
+            parent_facts = parent.payload.get("facts")
+            successor_facts = successor.payload.get("facts")
+            if (
+                not isinstance(parent_facts, list)
+                or not isinstance(successor_facts, list)
+                or len(parent_facts) != len(successor_facts)
+            ):
+                raise ValidationError(
+                    "company research historical basis recovery evidence is invalid"
+                )
+            changes: list[tuple[str, str]] = []
+            for before, after in zip(parent_facts, successor_facts, strict=True):
+                if before == after:
+                    continue
+                if not isinstance(before, Mapping) or not isinstance(after, Mapping):
+                    raise ValidationError(
+                        "company research historical basis recovery evidence is invalid"
+                    )
+                decision = after.get("review_decision")
+                expected_after = dict(before)
+                if (
+                    "review_decision" in before
+                    or decision not in _TERMINAL_REVIEW_DECISIONS
+                ):
+                    raise ValidationError(
+                        "company research historical basis recovery evidence is invalid"
+                    )
+                expected_after["review_decision"] = decision
+                if after != expected_after:
+                    raise ValidationError(
+                        "company research historical basis recovery evidence is invalid"
+                    )
+                changes.append((str(after.get("fact_key")), str(decision)))
+            if len(changes) != 1:
+                raise ValidationError(
+                    "company research historical basis recovery evidence is invalid"
+                )
+            fact_key, decision = changes[0]
+            if successor.input_hash != canonical_hash(
+                {
+                    "parent": parent.content_hash,
+                    "fact_key": fact_key,
+                    "decision": decision,
+                }
+            ):
+                raise ValidationError(
+                    "company research historical basis recovery evidence is invalid"
+                )
+        head_facts = state.evidence.payload.get("facts")
+        if (
+            not isinstance(head_facts, list)
+            or len(head_facts)
+            != len(expected.evidence_index_payload.get("facts", ()))
+            or any(
+                not isinstance(fact, Mapping)
+                or fact.get("review_decision") not in _TERMINAL_REVIEW_DECISIONS
+                for fact in head_facts
+            )
+        ):
+            raise ValidationError(
+                "company research historical basis recovery evidence is invalid"
+            )
 
     def _authenticate_exact_basis(
         self,
@@ -183,16 +243,73 @@ class CompanyResearchHistoricalBasisRecovery:
                 "company research historical basis recovery found a conflicting basis"
             )
         try:
-            authenticated = self._company.authenticate_historical_basis(basis)
+            return self._company.authenticate_governed_historical_basis(
+                basis,
+                expected_input=boundary.basis_input,
+                expected_content_hash=boundary.basis_content_hash,
+            )
         except ValidationError as exc:
             raise ValidationError(
                 "company research historical basis recovery found a conflicting basis"
             ) from exc
-        if not self._matches_boundary(authenticated, boundary):
+
+    def _authenticate_workspace_references(
+        self,
+        state: CompanyResearchBasisRecoveryState,
+        *,
+        cutoff: datetime,
+    ) -> None:
+        content = state.draft_content
+        if (
+            content.mandate_id is None
+            or content.scope_id is None
+            or content.agenda_id is None
+            or content.mandate_id != state.mandate_head_id
+            or content.scope_id != state.scope_head_id
+            or content.agenda_id != state.agenda_head_id
+            or not content.price_snapshot_ids
+            or not content.fx_snapshot_ids
+            or content.capital_structure_snapshot_id is None
+            or not content.security_rights_ids
+        ):
             raise ValidationError(
-                "company research historical basis recovery found a conflicting basis"
+                "company research historical basis recovery draft is incomplete"
             )
-        return authenticated
+        references = WorkspaceMarketReferences(
+            mandate_id=content.mandate_id,
+            scope_id=content.scope_id,
+            agenda_id=content.agenda_id,
+            price_snapshot_ids=content.price_snapshot_ids,
+            fx_snapshot_ids=content.fx_snapshot_ids,
+            capital_structure_snapshot_id=content.capital_structure_snapshot_id,
+            security_rights_ids=content.security_rights_ids,
+        )
+        try:
+            self._market_snapshots.workspace_reference_context(
+                state.preparation.project_id,
+                references,
+                as_of=cutoff,
+                model_currency="CNY",
+            )
+            expected = self._market_inputs.resolve(
+                project_id=state.preparation.project_id,
+                cutoff_at=cutoff,
+                fresh=True,
+            )
+        except ValidationError as exc:
+            raise ValidationError(
+                "company research historical basis recovery draft is incomplete"
+            ) from exc
+        if (
+            content.price_snapshot_ids != expected.price_snapshot_ids
+            or content.fx_snapshot_ids != expected.fx_snapshot_ids
+            or content.capital_structure_snapshot_id
+            != expected.capital_structure_snapshot_id
+            or content.security_rights_ids != expected.security_rights_ids
+        ):
+            raise ValidationError(
+                "company research historical basis recovery draft is incomplete"
+            )
 
     def recover(self, preparation_id: UUID) -> UUID:
         state = self._company.lock_basis_recovery_state(preparation_id)
@@ -205,22 +322,16 @@ class CompanyResearchHistoricalBasisRecovery:
             raise ValidationError(
                 "company research historical basis recovery evidence is invalid"
             ) from exc
-        self._validate_reviewed_evidence(
-            state, boundary=boundary, security_keys=security_keys
-        )
-        content = WorkspaceDraftService._content(state.draft.content)
-        if (
-            content.mandate_id is None
-            or content.scope_id is None
-            or content.agenda_id is None
-            or not content.price_snapshot_ids
-            or not content.fx_snapshot_ids
-            or content.capital_structure_snapshot_id is None
-            or not content.security_rights_ids
-        ):
-            raise ValidationError(
-                "company research historical basis recovery draft is incomplete"
+        try:
+            self._validate_reviewed_evidence(
+                state, boundary=boundary, security_keys=security_keys
             )
+        except ValidationError as exc:
+            raise ValidationError(
+                "company research historical basis recovery evidence is invalid"
+            ) from exc
+        self._authenticate_workspace_references(state, cutoff=boundary.cutoff_at)
+        content = state.draft_content
         if content.historical_basis_id is not None:
             return self._authenticate_exact_basis(
                 content.historical_basis_id, boundary

@@ -240,6 +240,19 @@ class BoundaryContext:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkspaceMarketReferences:
+    """Basis-optional draft references authenticated before legacy recovery."""
+
+    mandate_id: UUID
+    scope_id: UUID
+    agenda_id: UUID
+    price_snapshot_ids: tuple[UUID, ...]
+    fx_snapshot_ids: tuple[UUID, ...]
+    capital_structure_snapshot_id: UUID
+    security_rights_ids: tuple[UUID, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class SecurityRightsResolution:
     effective: object | None
     head: object | None
@@ -621,14 +634,58 @@ class MarketSnapshotService:
         project_id = _uuid(project_id, "project_id")
         if type(boundary) is not RevisionBoundaryInput:
             raise ValidationError("boundary must be a RevisionBoundaryInput")
+        if self._repository.product_basis(boundary.historical_basis_id) is None:
+            raise ValidationError("historical basis does not exist")
+        references = WorkspaceMarketReferences(
+            mandate_id=boundary.mandate_id,
+            scope_id=boundary.scope_id,
+            agenda_id=boundary.agenda_id,
+            price_snapshot_ids=boundary.price_snapshot_ids,
+            fx_snapshot_ids=boundary.fx_snapshot_ids,
+            capital_structure_snapshot_id=boundary.capital_structure_snapshot_id,
+            security_rights_ids=boundary.security_rights_ids,
+        )
+        return self._reference_context(
+            project_id,
+            references,
+            as_of=as_of,
+            model_currency=model_currency,
+        )
+
+    def workspace_reference_context(
+        self,
+        project_id: UUID,
+        references: WorkspaceMarketReferences,
+        *,
+        as_of: datetime,
+        model_currency: str,
+    ) -> BoundaryContext:
+        """Authenticate foundation and market refs without requiring a basis."""
+        if type(references) is not WorkspaceMarketReferences:
+            raise ValidationError(
+                "references must be WorkspaceMarketReferences"
+            )
+        return self._reference_context(
+            project_id,
+            references,
+            as_of=as_of,
+            model_currency=model_currency,
+        )
+
+    def _reference_context(
+        self,
+        project_id: UUID,
+        boundary: WorkspaceMarketReferences,
+        *,
+        as_of: datetime,
+        model_currency: str,
+    ) -> BoundaryContext:
         boundary_at = _utc(as_of, "as_of")
         model_currency = _currency(model_currency, "model_currency")
         record = self._repository.project(project_id)
         if record is None:
             raise ValidationError("project does not exist")
         project, project_security_ids = record
-        if self._repository.product_basis(boundary.historical_basis_id) is None:
-            raise ValidationError("historical basis does not exist")
         mandate = self._repository.product_mandate(project_id, boundary.mandate_id)
         if mandate is None:
             raise ValidationError("mandate must belong to the project")

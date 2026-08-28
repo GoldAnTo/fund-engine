@@ -31,6 +31,12 @@ from app.underwriting.persistence.models import (
     UnderwritingHistoricalBasis,
     UnderwritingResearchObject,
 )
+from app.underwriting.persistence.product_models import (
+    UnderwritingCapitalStructureSnapshot,
+    UnderwritingFXSnapshot,
+    UnderwritingPriceSnapshot,
+    UnderwritingSecurityRightsVersion,
+)
 from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchInitializer,
@@ -44,6 +50,11 @@ from app.underwriting.services.company_research_boundary import (
 )
 from app.underwriting.services.company_research_preparation import (
     CompanyResearchPreparationWorker,
+)
+from app.underwriting.services.market_snapshots import (
+    capital_structure_snapshot_hash,
+    fx_snapshot_hash,
+    price_snapshot_hash,
 )
 from app.underwriting.services.company_research_workbench import (
     CompanyResearchWorkbench,
@@ -62,7 +73,7 @@ NOW = datetime(2026, 8, 26, tzinfo=UTC)
 CUTOFF = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
 
 
-def _initialized(session):
+def _initialized(session, *, idempotency_key="company-worker-alphabet"):
     loaded = ProductFoundationFixtureService(session, now=lambda: NOW).load(
         load_product_foundation_fixture()
     )
@@ -74,7 +85,7 @@ def _initialized(session):
         preview_hash=preview.input_hash,
         company_id=preview.company.object_id,
         cutoff_at=CUTOFF,
-        idempotency_key="company-worker-alphabet",
+        idempotency_key=idempotency_key,
     )
 
 
@@ -591,6 +602,193 @@ def _append_recovery_evidence(
     )
 
 
+def _durably_rewrite_artifact(
+    session,
+    row,
+    *,
+    payload=None,
+    source_refs=None,
+    input_hash=None,
+):
+    repository = CompanyResearchRepository(session)
+    persisted = session.get(CompanyResearchArtifactVersion, row.id)
+    assert persisted is not None
+    row = persisted
+    rewritten_payload = deepcopy(row.payload) if payload is None else payload
+    rewritten_refs = deepcopy(row.source_refs) if source_refs is None else source_refs
+    rewritten_input_hash = row.input_hash if input_hash is None else input_hash
+    content_hash = repository.artifact_content_hash(
+        project_id=row.project_id,
+        kind=row.kind,
+        version=row.version,
+        supersedes_id=row.supersedes_id,
+        parent_content_hash=row.parent_content_hash,
+        input_hash=rewritten_input_hash,
+        payload=rewritten_payload,
+        source_refs=rewritten_refs,
+    )
+    statement = text(
+        "UPDATE uw_company_research_artifact_versions SET "
+        "payload = :payload, source_refs = :source_refs, "
+        "input_hash = :input_hash, content_hash = :content_hash WHERE id = :id"
+    ).bindparams(
+        bindparam(
+            "payload", type_=CompanyResearchArtifactVersion.__table__.c.payload.type
+        ),
+        bindparam(
+            "source_refs",
+            type_=CompanyResearchArtifactVersion.__table__.c.source_refs.type,
+        ),
+        bindparam(
+            "input_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.input_hash.type,
+        ),
+        bindparam(
+            "content_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.content_hash.type,
+        ),
+        bindparam("id", type_=CompanyResearchArtifactVersion.__table__.c.id.type),
+    )
+    assert session.connection().execute(
+        statement,
+        {
+            "payload": rewritten_payload,
+            "source_refs": rewritten_refs,
+            "input_hash": rewritten_input_hash,
+            "content_hash": content_hash,
+            "id": row.id,
+        },
+    ).rowcount == 1
+    session.expire(row)
+    return row
+
+
+@pytest.mark.parametrize(
+    ("mutation", "apply"),
+    (
+        ("delete_fact", lambda payload, refs: payload["facts"].pop()),
+        (
+            "change_fact_key",
+            lambda payload, refs: payload["facts"][0].__setitem__(
+                "fact_key", "changed_fact_key"
+            ),
+        ),
+        (
+            "change_fact_source",
+            lambda payload, refs: payload["facts"][0].__setitem__(
+                "source_locator", "changed locator"
+            ),
+        ),
+        (
+            "change_source_refs",
+            lambda payload, refs: refs[0].__setitem__("raw_hash", "1" * 64),
+        ),
+    ),
+)
+def test_historical_basis_recovery_authenticates_the_complete_reviewed_evidence_contract(
+    session, mutation, apply
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    payload = deepcopy(reviewed.payload)
+    source_refs = deepcopy(reviewed.source_refs)
+    apply(payload, source_refs)
+    _durably_rewrite_artifact(
+        session,
+        reviewed,
+        payload=payload,
+        source_refs=source_refs,
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery evidence is invalid",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert draft is not None and draft.lock_version == blocked_draft.lock_version
+    assert draft.content.historical_basis_id is None
+    assert CompanyResearchRepository(session).current_artifact(
+        initialized.project.id, "research_gaps"
+    ).id == gaps.id
+
+
+def test_historical_basis_recovery_authenticates_reviewed_evidence_input_hash(
+    session,
+) -> None:
+    initialized, reviewed, _gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    _durably_rewrite_artifact(session, reviewed, input_hash="1" * 64)
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery evidence is invalid",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert draft is not None and draft.lock_version == blocked_draft.lock_version
+    assert draft.content.historical_basis_id is None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "apply"),
+    (
+        ("delete_gap", lambda payload, refs: payload["gaps"].pop()),
+        (
+            "change_gap",
+            lambda payload, refs: payload["gaps"][0].__setitem__(
+                "reason", "changed reason"
+            ),
+        ),
+        (
+            "change_source_refs",
+            lambda payload, refs: refs[0].__setitem__("raw_hash", "2" * 64),
+        ),
+    ),
+)
+def test_historical_basis_recovery_authenticates_the_complete_gaps_contract(
+    session, mutation, apply
+) -> None:
+    initialized, _reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    payload = deepcopy(gaps.payload)
+    source_refs = deepcopy(gaps.source_refs)
+    apply(payload, source_refs)
+    _durably_rewrite_artifact(
+        session,
+        gaps,
+        payload=payload,
+        source_refs=source_refs,
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery evidence is invalid",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert draft is not None and draft.lock_version == blocked_draft.lock_version
+    assert draft.content.historical_basis_id is None
+
+
 @pytest.mark.parametrize(
     ("case", "mutate"),
     (
@@ -703,6 +901,278 @@ def test_historical_basis_recovery_rejects_each_incomplete_draft_reference(
     assert repository.current_artifact(initialized.project.id, "evidence_index").id == reviewed.id
     assert repository.current_artifact(initialized.project.id, "research_gaps").id == gaps.id
     assert repository.events(initialized.preparation.id) == events_before
+
+
+def test_historical_basis_recovery_rejects_a_nonexistent_mandate_reference(
+    session,
+) -> None:
+    initialized, _reviewed, _gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    drafts = WorkspaceDraftService(session, now=lambda: NOW + timedelta(seconds=1))
+    changed = drafts.save(
+        initialized.project.id,
+        expected_lock_version=blocked_draft.lock_version,
+        patch=WorkspaceDraftPatch(mandate_id=uuid4()),
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery draft is incomplete",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+    after = drafts.read(initialized.project.id)
+    assert after is not None and after.lock_version == changed.lock_version
+    assert after.content.historical_basis_id is None
+
+
+@pytest.mark.parametrize("field", ("scope_id", "agenda_id"))
+def test_historical_basis_recovery_rejects_a_foreign_foundation_reference(
+    session, field
+) -> None:
+    initialized, _reviewed, _gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    project_service = ResearchProjectService(session, now=lambda: NOW)
+    foreign_project = project_service.create_project(
+        initialized.project.primary_company_id,
+        initialized.project.target_security_ids,
+    )
+    repository = ProductRepository(session)
+    original_scope = repository.scope(
+        initialized.project.id, blocked_draft.content.scope_id
+    )
+    original_agenda = repository.agenda(
+        initialized.project.id, blocked_draft.content.agenda_id
+    )
+    assert original_scope is not None and original_agenda is not None
+    foreign_scope = repository.append_scope(
+        project_id=foreign_project.id,
+        payload=deepcopy(original_scope.payload),
+        content_hash="a" * 64,
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    foreign_agenda = repository.append_agenda(
+        project_id=foreign_project.id,
+        scope_id=foreign_scope.id,
+        payload=deepcopy(original_agenda.payload),
+        generator_provenance=deepcopy(original_agenda.generator_provenance),
+        content_hash="b" * 64,
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    foreign_id = foreign_scope.id if field == "scope_id" else foreign_agenda.id
+    drafts = WorkspaceDraftService(session, now=lambda: NOW + timedelta(seconds=1))
+    changed = drafts.save(
+        initialized.project.id,
+        expected_lock_version=blocked_draft.lock_version,
+        patch=WorkspaceDraftPatch(**{field: foreign_id}),
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery draft is incomplete",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+    after = drafts.read(initialized.project.id)
+    assert after is not None and after.lock_version == changed.lock_version
+    assert after.content.historical_basis_id is None
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "price_snapshot_ids",
+        "fx_snapshot_ids",
+        "capital_structure_snapshot_id",
+        "security_rights_ids",
+    ),
+)
+def test_historical_basis_recovery_rejects_an_existing_wrong_market_reference(
+    session, field
+) -> None:
+    initialized, _reviewed, _gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    content = blocked_draft.content
+    foreign_company = session.scalar(
+        select(UnderwritingResearchObject).where(
+            UnderwritingResearchObject.external_key == "CN:300750:COMPANY"
+        )
+    )
+    foreign_security = session.scalar(
+        select(UnderwritingResearchObject).where(
+            UnderwritingResearchObject.external_key == "SZSE:300750"
+        )
+    )
+    assert foreign_company is not None and foreign_security is not None
+    if field == "price_snapshot_ids":
+        original = session.get(UnderwritingPriceSnapshot, content.price_snapshot_ids[0])
+        assert original is not None
+        wrong = UnderwritingPriceSnapshot(
+            security_identity_id=foreign_security.id,
+            price=original.price,
+            currency=original.currency,
+            price_type=original.price_type,
+            adjustment_basis=original.adjustment_basis,
+            market_at=original.market_at,
+            available_at=original.available_at,
+            source_id="test:foreign-price",
+            raw_hash="8" * 64,
+            content_hash="0" * 64,
+            created_at=NOW,
+        )
+        wrong.content_hash = price_snapshot_hash(wrong)
+    elif field == "fx_snapshot_ids":
+        original = session.get(UnderwritingFXSnapshot, content.fx_snapshot_ids[0])
+        assert original is not None
+        wrong = UnderwritingFXSnapshot(
+            base_currency=original.quote_currency,
+            quote_currency=original.base_currency,
+            rate=original.rate,
+            quote_direction=original.quote_direction,
+            market_at=original.market_at,
+            available_at=original.available_at,
+            source_id="test:wrong-fx-pair",
+            raw_hash="8" * 64,
+            content_hash="0" * 64,
+            created_at=NOW,
+        )
+        wrong.content_hash = fx_snapshot_hash(wrong)
+    elif field == "capital_structure_snapshot_id":
+        original = session.get(
+            UnderwritingCapitalStructureSnapshot,
+            content.capital_structure_snapshot_id,
+        )
+        assert original is not None
+        wrong = UnderwritingCapitalStructureSnapshot(
+            company_id=foreign_company.id,
+            currency=original.currency,
+            cash=original.cash,
+            debt=original.debt,
+            minority_interest=original.minority_interest,
+            investments=original.investments,
+            pension_liabilities=original.pension_liabilities,
+            other_adjustments=original.other_adjustments,
+            basic_shares=original.basic_shares,
+            diluted_shares=original.diluted_shares,
+            potential_dilution_descriptors=deepcopy(
+                original.potential_dilution_descriptors
+            ),
+            report_period_start=original.report_period_start,
+            report_period_end=original.report_period_end,
+            market_at=original.market_at,
+            available_at=original.available_at,
+            source_id="test:foreign-capital",
+            raw_hash="8" * 64,
+            content_hash="0" * 64,
+            created_at=NOW,
+        )
+        wrong.content_hash = capital_structure_snapshot_hash(wrong)
+    else:
+        wrong = session.scalar(
+            select(UnderwritingSecurityRightsVersion).where(
+                UnderwritingSecurityRightsVersion.security_identity_id
+                == foreign_security.id
+            )
+        )
+        assert wrong is not None
+    if field != "security_rights_ids":
+        session.add(wrong)
+        session.flush()
+    if field == "capital_structure_snapshot_id":
+        value = wrong.id
+    else:
+        current_ids = getattr(content, field)
+        value = tuple(sorted((*current_ids, wrong.id), key=str))
+    drafts = WorkspaceDraftService(session, now=lambda: NOW + timedelta(seconds=1))
+    changed = drafts.save(
+        initialized.project.id,
+        expected_lock_version=blocked_draft.lock_version,
+        patch=WorkspaceDraftPatch(**{field: value}),
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery draft is incomplete",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+    after = drafts.read(initialized.project.id)
+    assert after is not None and after.lock_version == changed.lock_version
+    assert after.content.historical_basis_id is None
+
+
+def test_historical_basis_recovery_rejects_a_durably_changed_cached_security(
+    tmp_path,
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'company-research-stale-identity.sqlite'}",
+        future=True,
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    with sessions() as bootstrap:
+        initialized, _reviewed, _gaps, _draft = _legacy_blocked_missing_basis(
+            bootstrap
+        )
+        project_id = initialized.project.id
+        preparation_id = initialized.preparation.id
+        security_id = initialized.project.target_security_ids[0]
+        bootstrap.commit()
+
+    with sessions() as cached, sessions() as mutator:
+        repository = ProductRepository(cached)
+        project = repository.project(project_id)
+        assert project is not None
+        assert repository.object(project[0].primary_company_id) is not None
+        security = repository.object(security_id)
+        assert security is not None and security.external_key in {
+            "NASDAQ:GOOG",
+            "NASDAQ:GOOGL",
+        }
+        assert CompanyResearchRepository(cached).current_artifact(
+            project_id, "evidence_index"
+        ) is not None
+        assert WorkspaceDraftService(cached, now=lambda: NOW).read(
+            project_id
+        ) is not None
+
+        update_security = text(
+            "UPDATE uw_research_objects SET external_key = :external_key "
+            "WHERE id = :security_id"
+        ).bindparams(
+            bindparam(
+                "security_id", type_=UnderwritingResearchObject.__table__.c.id.type
+            )
+        )
+        assert mutator.execute(
+            update_security,
+            {"security_id": security_id, "external_key": "US:ALTERED:SECURITY"},
+        ).rowcount == 1
+        mutator.commit()
+
+        with pytest.raises(
+            ValidationError,
+            match="historical basis recovery project identity is invalid",
+        ):
+            CompanyResearchHistoricalBasisRecovery(
+                cached, now=lambda: NOW + timedelta(seconds=2)
+            ).recover(preparation_id)
+        cached.rollback()
+
+    Base.metadata.drop_all(engine)
+    engine.dispose()
 
 
 def test_historical_basis_recovery_rejects_an_already_bound_conflicting_basis(
@@ -1098,6 +1568,24 @@ def test_sqlite_two_retries_recover_one_basis_and_queue_one_attempt(
         )
         assert draft.lock_version == blocked_draft.lock_version + 1
         assert draft.content.historical_basis_id is not None
+        boundary = resolve_alphabet_company_research_boundary(CUTOFF)
+        assert observer.scalar(
+            select(func.count())
+            .select_from(UnderwritingHistoricalBasis)
+            .where(
+                UnderwritingHistoricalBasis.content_hash
+                == boundary.basis_content_hash
+            )
+        ) == 1
+        basis = ProductRepository(observer).product_basis(
+            draft.content.historical_basis_id
+        )
+        assert basis is not None
+        repository.authenticate_governed_historical_basis(
+            basis,
+            expected_input=boundary.basis_input,
+            expected_content_hash=boundary.basis_content_hash,
+        )
         assert [event.event_type for event in repository.events(preparation_id)].count(
             "historical_basis_recovered"
         ) == 1
@@ -1113,6 +1601,24 @@ def test_sqlite_two_retries_recover_one_basis_and_queue_one_attempt(
             current_gaps.content_hash,
             current_gaps.payload,
         ) == gaps_snapshot
+        decisions = [
+            fact["review_decision"] for fact in evidence.payload["facts"]
+        ]
+        assert len(decisions) == 7
+        assert decisions.count("confirmed") == 6
+        assert decisions.count("rejected") == 1
+        assert all(
+            repository.current_artifact(project_id, kind) is None
+            for kind in (
+                "business_map",
+                "driver_map",
+                "financial_bridge",
+                "scenario_set",
+                "valuation_set",
+                "judgment_context",
+                "memo",
+            )
+        )
     Base.metadata.drop_all(engine)
     engine.dispose()
 
