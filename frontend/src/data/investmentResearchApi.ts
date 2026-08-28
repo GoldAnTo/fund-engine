@@ -1130,6 +1130,20 @@ function collectComputationSources(value: unknown, sources: Record<string, unkno
   return sources;
 }
 
+function collectNumericObservations(value: unknown, observations: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectNumericObservations(item, observations));
+    return observations;
+  }
+  if (!isRecord(value)) return observations;
+  if (isNumericObservation(value)) {
+    observations.push(value);
+    return observations;
+  }
+  Object.values(value).forEach((item) => collectNumericObservations(item, observations));
+  return observations;
+}
+
 function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWorkspace {
   if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "project_id", "company", "preparation", "artifacts", "modules", "source_count", "gap_count", "draft", "selected_revision", "change_summary"])
     || !isUuid(value.project_id) || !isProductDto(value.company)
@@ -1173,6 +1187,7 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
     registry.set(String(artifact.id), artifact);
     kinds.add(String(artifact.kind));
   }
+  if (kinds.has("valuation_set") && !kinds.has("scenario_set")) return false;
   if (!sameStringSets(Object.keys(summary.artifact_versions), [...kinds])) return false;
   const exactRef = (ref: Record<string, unknown>, registryShape: boolean): boolean => {
     const id = String(registryShape ? ref.id : ref.artifact_id);
@@ -1188,6 +1203,30 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
       || JSON.stringify(source.artifact_refs) !== JSON.stringify(lineage.artifact_refs)
       || JSON.stringify(source.market_snapshot_ids) !== JSON.stringify(lineage.market_snapshot_ids));
   })) return false;
+  const evidence = artifacts.find((artifact) => artifact.kind === "evidence_index");
+  const evidencePayload = evidence && isRecord(evidence.payload) ? evidence.payload : null;
+  const facts = evidencePayload && Array.isArray(evidencePayload.facts)
+    ? evidencePayload.facts.filter(isRecord) : [];
+  const factRegistry = new Map<string, Record<string, unknown>>(
+    facts.map((fact) => [String(fact.fact_key), fact]),
+  );
+  for (const observation of artifacts.flatMap((artifact) => collectNumericObservations(artifact.payload))) {
+    if (observation.state !== "reported" || !isRecord(observation.source_ref)) continue;
+    const fact = factRegistry.get(String(observation.source_ref.fact_key));
+    const factObservation = fact && isRecord(fact.observation) ? fact.observation : null;
+    const source = factObservation && isRecord(factObservation.source_ref) ? factObservation.source_ref : null;
+    if (factObservation === null || source === null
+      || observation.value !== factObservation.value
+      || observation.unit !== factObservation.unit
+      || observation.currency !== factObservation.currency
+      || observation.period !== factObservation.period
+      || observation.source_ref.kind !== source.kind
+      || observation.source_ref.fact_key !== source.fact_key
+      || observation.source_ref.source_role !== source.source_role
+      || observation.source_ref.source_url !== source.source_url
+      || observation.source_ref.source_locator !== source.source_locator
+      || observation.source_ref.raw_hash !== source.raw_hash) return false;
+  }
   return value.modules.every((item) => {
     if (!isProductDto(item)
       || !hasExactKeys(item, ["schema_version", "key", "state", "artifact_refs", "valuation_state"])
@@ -1199,7 +1238,8 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
     const refs = item.artifact_refs.filter(isRecord);
     const refKinds = refs.map((ref) => String(ref.kind));
     const allowed = COMPANY_RESEARCH_MODULE_ARTIFACTS[item.key];
-    const expectedKinds = allowed.filter((kind) => kinds.has(kind));
+    const expectedKinds = item.key === "scenarios_valuation_implied_expectations" && item.valuation_state === "blocked"
+      ? ["scenario_set"] : allowed;
     if (!refs.every((ref) => exactRef(ref, true))
       || !sameOrderedStrings(refKinds, allowed.filter((kind) => refKinds.includes(kind)))) return false;
     if ((item.state === "ready" || item.state === "needs_review")
@@ -1207,10 +1247,12 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
     if (item.key === "scenarios_valuation_implied_expectations") {
       if (item.valuation_state === "ready" && !sameOrderedStrings(refKinds, ["scenario_set", "valuation_set"])) return false;
       if (item.valuation_state === "blocked" && !sameOrderedStrings(refKinds, ["scenario_set"])) return false;
+      if ((item.valuation_state === "ready" || item.valuation_state === "blocked") && item.state !== "ready") return false;
+      if (item.valuation_state === "pending" && item.state === "ready") return false;
     } else if (item.valuation_state !== "not_applicable") return false;
     if (item.state === "ready") return refs.length > 0 && !(expectedEvidenceReview && refKinds.includes("evidence_index"));
     if (item.state === "needs_review") return expectedEvidenceReview && refKinds.includes("evidence_index");
-    return item.state === "blocked" || refs.length === 0;
+    return refs.length === 0;
   });
 }
 
@@ -1315,7 +1357,7 @@ function sameStringSets(actual: unknown, expected: unknown): boolean {
   return [...actual].sort().every((item, index) => item === [...expected].sort()[index]);
 }
 
-function sameOrderedStrings(actual: string[], expected: string[]): boolean {
+function sameOrderedStrings(actual: string[], expected: readonly string[]): boolean {
   return actual.length === expected.length && actual.every((item, index) => item === expected[index]);
 }
 

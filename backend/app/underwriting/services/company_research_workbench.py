@@ -666,7 +666,12 @@ class CompanyResearchWorkbench:
                 and preparation.status == "awaiting_evidence_review"
             ):
                 state = "needs_review"
-            elif artifacts:
+            elif len(artifacts) == len(kinds) or (
+                key == "scenarios_valuation_implied_expectations"
+                and "scenario_set" in heads
+                and "judgment_context" in heads
+                and "valuation_set" not in heads
+            ):
                 state: ModuleState = "ready"
             elif preparation.status in {"blocked", "recoverable_failure"}:
                 state = "blocked"
@@ -682,8 +687,11 @@ class CompanyResearchWorkbench:
                     valuation_state = "blocked"
                 else:
                     valuation_state = "pending"
+            visible_artifacts = (
+                artifacts if state in {"ready", "needs_review"} else ()
+            )
             modules.append(
-                WorkbenchModule(key, state, artifacts, valuation_state)
+                WorkbenchModule(key, state, visible_artifacts, valuation_state)
             )
         gaps = heads.get("research_gaps")
         gap_values = gaps.payload.get("gaps", []) if gaps else []

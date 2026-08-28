@@ -39,6 +39,7 @@ HASH = "a" * 64
 PROJECT_ID = UUID("00000000-0000-4000-8000-000000000001")
 COMPANY_ID = UUID("00000000-0000-4000-8000-000000000002")
 ARTIFACT_ID = UUID("00000000-0000-4000-8000-000000000003")
+GAPS_ID = UUID("00000000-0000-4000-8000-000000000004")
 EXPECTED_MODULES = (
     "overview",
     "business_map",
@@ -111,10 +112,35 @@ def _evidence_artifact_payload() -> dict:
     }
 
 
-def _workspace_contract(modules, artifact=None) -> CompanyResearchWorkspaceResponse:
-    artifact = artifact or CompanyResearchArtifactResponse.model_validate(
+def _gaps_artifact_payload() -> dict:
+    return {
+        "id": GAPS_ID,
+        "project_id": PROJECT_ID,
+        "kind": "research_gaps",
+        "version": 1,
+        "input_hash": HASH,
+        "content_hash": "b" * 64,
+        "payload": {
+            "fixture_content_hash": HASH,
+            "company_external_key": "US:ALPHABET:COMPANY",
+            "gaps": [],
+        },
+        "source_refs": [
+            {
+                "source_url": "https://example.test/source",
+                "raw_hash": HASH,
+                "source_locator": "p. 1",
+                "source_role": "regulatory_filing",
+            }
+        ],
+    }
+
+
+def _workspace_contract(modules) -> CompanyResearchWorkspaceResponse:
+    artifact = CompanyResearchArtifactResponse.model_validate(
         _evidence_artifact_payload()
     )
+    gaps = CompanyResearchArtifactResponse.model_validate(_gaps_artifact_payload())
     return CompanyResearchWorkspaceResponse(
         project_id=PROJECT_ID,
         company=CompanyResearchWorkspaceCompanyResponse(
@@ -130,7 +156,7 @@ def _workspace_contract(modules, artifact=None) -> CompanyResearchWorkspaceRespo
             progress=25,
             error=None,
         ),
-        artifacts=(artifact,),
+        artifacts=(artifact, gaps),
         modules=modules,
         source_count=1,
         gap_count=0,
@@ -139,7 +165,7 @@ def _workspace_contract(modules, artifact=None) -> CompanyResearchWorkspaceRespo
         ),
         selected_revision=None,
         change_summary={
-            "artifact_versions": {"evidence_index": 1},
+            "artifact_versions": {"evidence_index": 1, "research_gaps": 1},
             "reviewed_fact_count": 0,
         },
     )
@@ -202,6 +228,11 @@ def test_company_research_workspace_requires_exact_module_order_and_state_artifa
         "kind": artifact.root.kind,
         "content_hash": artifact.root.content_hash,
     }
+    gaps_ref = {
+        "id": GAPS_ID,
+        "kind": "research_gaps",
+        "content_hash": "b" * 64,
+    }
     modules = tuple(
         CompanyResearchWorkbenchModuleResponse(
             key=key,
@@ -210,7 +241,7 @@ def test_company_research_workspace_requires_exact_module_order_and_state_artifa
                 if key == "evidence_and_gaps"
                 else "not_started"
             ),
-            artifact_refs=(artifact_ref,) if key == "evidence_and_gaps" else (),
+            artifact_refs=(artifact_ref, gaps_ref) if key == "evidence_and_gaps" else (),
             valuation_state=(
                 "pending"
                 if key == "scenarios_valuation_implied_expectations"
@@ -220,6 +251,14 @@ def test_company_research_workspace_requires_exact_module_order_and_state_artifa
         for key in EXPECTED_MODULES
     )
     _workspace_contract(modules)
+
+    with pytest.raises(PydanticValidationError):
+        CompanyResearchWorkbenchModuleResponse(
+            key="evidence_and_gaps",
+            state="needs_review",
+            artifact_refs=(artifact_ref,),
+            valuation_state="not_applicable",
+        )
 
     with pytest.raises(PydanticValidationError):
         _workspace_contract((modules[1], modules[0], *modules[2:]))
@@ -242,12 +281,27 @@ def test_company_research_empty_module_states_are_closed(state: str) -> None:
     )
     assert module.state == state
 
+    with pytest.raises(PydanticValidationError):
+        CompanyResearchWorkbenchModuleResponse(
+            key="operating_drivers",
+            state=state,
+            artifact_refs=(
+                {
+                    "id": ARTIFACT_ID,
+                    "kind": "driver_map",
+                    "content_hash": HASH,
+                },
+            ),
+            valuation_state="not_applicable",
+        )
+
 
 @pytest.mark.parametrize("state", ("ready", "needs_review"))
 def test_company_research_artifact_module_states_are_closed(state: str) -> None:
     artifact = CompanyResearchArtifactResponse.model_validate(
         _evidence_artifact_payload()
     )
+    gaps = CompanyResearchArtifactResponse.model_validate(_gaps_artifact_payload())
     module = CompanyResearchWorkbenchModuleResponse(
         key="evidence_and_gaps",
         state=state,
@@ -256,6 +310,11 @@ def test_company_research_artifact_module_states_are_closed(state: str) -> None:
                 "id": artifact.root.id,
                 "kind": artifact.root.kind,
                 "content_hash": artifact.root.content_hash,
+            },
+            {
+                "id": gaps.root.id,
+                "kind": gaps.root.kind,
+                "content_hash": gaps.root.content_hash,
             },
         ),
         valuation_state="not_applicable",
@@ -340,6 +399,19 @@ def test_workspace_response_rejects_nonexistent_foreign_or_substituted_registry_
     business["payload"]["_lineage"]["artifact_refs"][0]["content_hash"] = "b" * 64
     duplicate = deepcopy(body)
     duplicate["artifacts"].append(deepcopy(duplicate["artifacts"][0]))
+    reported_value_substitution = deepcopy(body)
+    driver_map = next(
+        item
+        for item in reported_value_substitution["artifacts"]
+        if item["kind"] == "driver_map"
+    )
+    reported_observation = next(
+        observation
+        for driver in driver_map["payload"]["drivers"]
+        for observation in driver["values"]
+        if observation["state"] == "reported"
+    )
+    reported_observation["value"] = "999"
 
     for invalid in (
         nonexistent,
@@ -347,9 +419,35 @@ def test_workspace_response_rejects_nonexistent_foreign_or_substituted_registry_
         substituted,
         lineage_substitution,
         duplicate,
+        reported_value_substitution,
     ):
         with pytest.raises(PydanticValidationError):
             CompanyResearchWorkspaceResponse.model_validate(invalid)
+
+
+@pytest.mark.parametrize(
+    "missing_kind",
+    ("research_gaps", "scenario_set", "judgment_context"),
+)
+def test_ready_modules_cannot_shrink_when_a_required_head_is_missing(
+    api_client, session, missing_kind: str
+) -> None:
+    initialized, _workbench, _repository = _model_workspace(session)
+    response = api_client.get(f"{BASE}/projects/{initialized.project.id}/workspace")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    missing = next(item for item in body["artifacts"] if item["kind"] == missing_kind)
+    body["artifacts"] = [
+        item for item in body["artifacts"] if item["id"] != missing["id"]
+    ]
+    body["change_summary"]["artifact_versions"].pop(missing_kind)
+    for module in body["modules"]:
+        module["artifact_refs"] = [
+            ref for ref in module["artifact_refs"] if ref["id"] != missing["id"]
+        ]
+
+    with pytest.raises(PydanticValidationError):
+        CompanyResearchWorkspaceResponse.model_validate(body)
 
 
 def _alphabet_id(session):
@@ -473,22 +571,26 @@ def test_public_pipeline_exposes_every_current_artifact_once_and_references_them
         item for item in body["artifacts"] if item["kind"] == "evidence_index"
     )
     facts = {item["fact_key"]: item for item in evidence["payload"]["facts"]}
-    driver_map = next(
-        item for item in body["artifacts"] if item["kind"] == "driver_map"
-    )
-    reported = [
-        observation
-        for driver in driver_map["payload"]["drivers"]
-        for observation in driver["values"]
-        if observation["state"] == "reported"
-    ]
-    assert reported
+    def reported_observations(value):
+        if isinstance(value, list):
+            return [item for child in value for item in reported_observations(child)]
+        if not isinstance(value, dict):
+            return []
+        if value.get("state") == "reported" and "source_ref" in value:
+            return [value]
+        return [
+            item for child in value.values() for item in reported_observations(child)
+        ]
+
+    reported = reported_observations(body["artifacts"])
+    assert len(reported) == 15
     for observation in reported:
         source = observation["source_ref"]
         fact = facts[source["fact_key"]]
         assert observation["unit"] == fact["observation"]["unit"]
         assert observation["currency"] == fact["observation"]["currency"]
         assert observation["period"] == fact["observation"]["period"]
+        assert observation["value"] == fact["observation"]["value"]
         assert source == fact["observation"]["source_ref"]
 
 

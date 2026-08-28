@@ -854,7 +854,9 @@ class CompanyResearchWorkbenchModuleResponse(UnderwritingModel):
                 raise ValueError("ready and needs_review modules require an artifact")
             if self.state == "needs_review" and "evidence_index" not in kinds:
                 raise ValueError("only evidence can need review")
-        elif self.state != "blocked" and self.artifact_refs:
+            if self.key != "scenarios_valuation_implied_expectations" and kinds != allowed:
+                raise ValueError("ready module requires its exact static artifact contract")
+        elif self.artifact_refs:
             raise ValueError("non-ready modules cannot expose an artifact")
         if self.key == "scenarios_valuation_implied_expectations":
             if "valuation_set" in kinds and kinds != (
@@ -869,6 +871,10 @@ class CompanyResearchWorkbenchModuleResponse(UnderwritingModel):
                 raise ValueError("ready valuation requires scenario and valuation refs")
             if self.valuation_state == "blocked" and kinds != ("scenario_set",):
                 raise ValueError("blocked valuation still requires the scenario ref")
+            if self.valuation_state in {"ready", "blocked"} and self.state != "ready":
+                raise ValueError("resolved valuation state requires a ready module")
+            if self.valuation_state == "pending" and self.state == "ready":
+                raise ValueError("ready scenario module requires a resolved valuation state")
         elif self.valuation_state != "not_applicable":
             raise ValueError("valuation state only belongs to the scenario module")
         return self
@@ -986,11 +992,12 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
             for ref in module.artifact_refs:
                 require_exact_ref(ref)
             if module.state in {"ready", "needs_review"}:
-                expected_kinds = tuple(
-                    kind
-                    for kind in _MODULE_ARTIFACT_KINDS[module.key]
-                    if kind in kinds
-                )
+                expected_kinds = _MODULE_ARTIFACT_KINDS[module.key]
+                if (
+                    module.key == "scenarios_valuation_implied_expectations"
+                    and module.valuation_state == "blocked"
+                ):
+                    expected_kinds = ("scenario_set",)
                 if tuple(ref.kind for ref in module.artifact_refs) != expected_kinds:
                     raise ValueError(
                         "ready module must expose every available required artifact"
@@ -1034,6 +1041,51 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
                         validate_computation_refs(child)
 
             validate_computation_refs(payload)
+
+        evidence = next(
+            (wrapper.root for wrapper in self.artifacts if wrapper.root.kind == "evidence_index"),
+            None,
+        )
+        fact_registry = {
+            fact.fact_key: fact.observation
+            for fact in evidence.payload.facts
+        } if isinstance(evidence, CompanyResearchEvidenceIndexArtifactResponse) else {}
+
+        def validate_reported_observations(item):
+            if isinstance(item, CompanyResearchNumericObservationResponse):
+                if item.state != "reported":
+                    return
+                source = item.source_ref
+                if not isinstance(source, CompanyResearchExternalNumericSourceResponse):
+                    raise ValueError("reported observation requires exact evidence fact")
+                fact = fact_registry.get(source.fact_key)
+                if fact is None or (
+                    item.value,
+                    item.unit,
+                    item.currency,
+                    item.period,
+                    item.source_ref,
+                ) != (
+                    fact.value,
+                    fact.unit,
+                    fact.currency,
+                    fact.period,
+                    fact.source_ref,
+                ):
+                    raise ValueError("reported observation differs from its evidence fact")
+                return
+            if isinstance(item, BaseModel):
+                for child in item.__dict__.values():
+                    validate_reported_observations(child)
+            elif isinstance(item, (tuple, list)):
+                for child in item:
+                    validate_reported_observations(child)
+            elif isinstance(item, dict):
+                for child in item.values():
+                    validate_reported_observations(child)
+
+        for wrapper in self.artifacts:
+            validate_reported_observations(wrapper.root.payload)
         if set(self.change_summary.artifact_versions) != kinds:
             raise ValueError("change summary must describe every registry artifact")
         return self
