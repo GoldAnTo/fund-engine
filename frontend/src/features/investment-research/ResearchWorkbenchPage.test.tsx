@@ -97,16 +97,20 @@ function evidenceFact(reviewDecision?: "confirmed" | "rejected") {
   };
 }
 
+type PreparationStep = NonNullable<CompanyResearchWorkspace["preparation"]["error"]>["failed_step"];
+
 function workspace(options: {
   status?: CompanyResearchWorkspace["preparation"]["status"];
   rich?: boolean;
   factDecision?: "confirmed" | "rejected";
   evidenceVersion?: number;
+  currentStep?: PreparationStep;
 } = {}): CompanyResearchWorkspace {
   const status = options.status ?? "awaiting_evidence_review";
+  const impliedDecision = options.factDecision ?? (options.rich || ((status === "building_model" || status === "recoverable_failure") && (options.currentStep ?? "model_bundle") === "model_bundle") ? "confirmed" : undefined);
   const evidence = artifact("evidence_index", {
     fixture_content_hash: hash, cutoff: "2026-02-05T00:00:00Z", company_external_key: "ALPHABET:COMPANY",
-    security_external_keys: ["NASDAQ:GOOGL", "NASDAQ:GOOG"], facts: [evidenceFact(options.factDecision)],
+    security_external_keys: ["NASDAQ:GOOGL", "NASDAQ:GOOG"], facts: [evidenceFact(impliedDecision)],
   }, options.evidenceVersion ?? 1);
   const gaps = artifact("research_gaps", {
     fixture_content_hash: hash, company_external_key: "ALPHABET:COMPANY",
@@ -115,7 +119,7 @@ function workspace(options: {
   const artifacts: ReturnType<typeof artifact>[] = [evidence, gaps];
   if (options.rich) {
     const richFacts = (evidence.payload as { facts: ReturnType<typeof evidenceFact>[] }).facts;
-    richFacts[0] = evidenceFact(options.factDecision ?? "confirmed");
+    richFacts[0] = evidenceFact(impliedDecision ?? "confirmed");
     richFacts.push({ ...evidenceFact("confirmed"), fact_key: "ai_capex_risk", observation: observation("ai_capex_risk", "1") });
     const business = artifact("business_map", { modules: [{ module_key: "google_services", revenue_sources: ["Search", "YouTube"], cost_structure: ["TAC", "基础设施"], capital_needs: ["AI 数据中心"], fact_refs: [lineageSource()], gap_refs: ["youtube_margin_gap"], classified_evidence: [] }], _lineage: lineage([evidence]) });
     const driver = artifact("driver_map", { drivers: [{ driver_key: "search_growth", module_key: "google_services", fact_refs: [lineageSource()], assumption_refs: [], equation: "revenue × growth", output_metric: "revenue", equation_id: "driver.v1", values: [observation("search_growth", "0.11", "assumption")], assumption_rationale: "查询量与变现率", assumption_equation: "volume × monetization" }], _lineage: lineage([business]) });
@@ -161,15 +165,17 @@ function workspace(options: {
     const memo = artifact("memo", { assessment_status: "answerable", business_map_ref: memoRef(business), driver_map_ref: memoRef(driver), financial_bridge_ref: memoRef(financial), scenario_set_ref: memoRef(scenario), valuation_set_ref: memoRef(valuation), gap_keys: ["youtube_margin_gap"], strongest_counterevidence: [counterevidence], next_verification_events: ["Q3 Cloud backlog 与 AI capex 回报验证"], candidate_status: "machine_draft", _lineage: lineage([judgment]) });
     artifacts.push(business, driver, financial, scenario, valuation, judgment, memo);
   }
-  const moduleStates = options.rich ? "ready" : "preparing";
+  const currentStep = options.currentStep ?? (status === "completed" ? null : status === "recoverable_failure" || status === "building_model" || status === "blocked" ? "model_bundle" : status === "queued" || status === "preparing_sources" ? "evidence_index" : status === "awaiting_judgment_review" ? "judgment_context" : status === "ready_to_freeze" ? "memo" : "research_gaps");
+  const progress = options.rich || status === "completed" ? 100 : status === "queued" ? 0 : status === "preparing_sources" ? 10 : status === "awaiting_judgment_review" ? 85 : status === "ready_to_freeze" ? 95 : 25;
+  const defaultModuleState = status === "recoverable_failure" || status === "blocked" ? "blocked" : status === "queued" ? "not_started" : "preparing";
   return {
     schema_version: "underwriting.v1", project_id: ids.project,
     company: { schema_version: "underwriting.v1", object_id: ids.company, id: ids.company, external_key: "ALPHABET:COMPANY", canonical_name: "Alphabet Inc." },
     preparation: {
       schema_version: "underwriting.v1", id: ids.preparation, status,
-      current_step: status === "completed" ? null : status === "recoverable_failure" || status === "building_model" ? "model_bundle" : "research_gaps",
-      progress: options.rich ? 100 : 25,
-      error: status === "recoverable_failure" ? { schema_version: "underwriting.v1", code: "model_temporarily_unavailable", failed_step: "model_bundle", retryable: true, next_attempt_at: "2026-08-28T01:00:00Z" } : null,
+      current_step: currentStep,
+      progress,
+      error: status === "recoverable_failure" || status === "blocked" ? { schema_version: "underwriting.v1", code: "model_temporarily_unavailable", failed_step: currentStep!, retryable: status === "recoverable_failure", next_attempt_at: status === "recoverable_failure" ? "2026-08-28T01:00:00Z" : null } : null,
     },
     artifacts: artifacts as CompanyResearchWorkspace["artifacts"],
     modules: ["overview", "business_map", "operating_drivers", "evidence_and_gaps", "industry_competition_regulation", "financials_cash_flow_capital_allocation", "scenarios_valuation_implied_expectations", "counterevidence_risks_next_checks", "versions_changes_memo"].map((key) => {
@@ -178,14 +184,15 @@ function workspace(options: {
         industry_competition_regulation: ["business_map"], financials_cash_flow_capital_allocation: ["financial_bridge"],
         scenarios_valuation_implied_expectations: ["scenario_set", "valuation_set"], counterevidence_risks_next_checks: ["research_gaps", "judgment_context"], versions_changes_memo: ["memo"],
       };
-      const state = key === "evidence_and_gaps" && !options.rich ? "needs_review" : moduleStates;
-      const artifactRefs = (options.rich || key === "evidence_and_gaps")
+      const evidenceReady = key === "evidence_and_gaps" && impliedDecision !== undefined && (status !== "queued" || currentStep !== "evidence_index");
+      const state = options.rich ? "ready" : key === "evidence_and_gaps" && status === "awaiting_evidence_review" ? "needs_review" : evidenceReady ? "ready" : defaultModuleState;
+      const artifactRefs = (options.rich || key === "evidence_and_gaps" && (status === "awaiting_evidence_review" || evidenceReady))
         ? refsByModule[key].map((kind) => registryRef(artifacts.find((item) => item.kind === kind)!)) : [];
       return { schema_version: "underwriting.v1", key, state, artifact_refs: artifactRefs, valuation_state: key === "scenarios_valuation_implied_expectations" ? options.rich ? "ready" : "pending" : "not_applicable" };
     }) as CompanyResearchWorkspace["modules"],
     source_count: 1, gap_count: 1,
-    draft: { schema_version: "underwriting.v1", id: ids.draft, lock_version: options.factDecision ? 2 : 1, base_revision_id: null }, selected_revision: null,
-    change_summary: { artifact_versions: Object.fromEntries(artifacts.map((item) => [item.kind, item.version])), reviewed_fact_count: options.rich ? 2 : options.factDecision ? 1 : 0 },
+    draft: { schema_version: "underwriting.v1", id: ids.draft, lock_version: impliedDecision ? 2 : 1, base_revision_id: null }, selected_revision: null,
+    change_summary: { artifact_versions: Object.fromEntries(artifacts.map((item) => [item.kind, item.version])), reviewed_fact_count: options.rich ? 2 : impliedDecision ? 1 : 0 },
   };
 }
 
@@ -193,15 +200,86 @@ function renderPage() {
   return render(<MemoryRouter initialEntries={[`/research/projects/${ids.project}`]}><Routes><Route path="/research/projects/:projectId" element={<ResearchWorkbenchPage />} /></Routes></MemoryRouter>);
 }
 
+async function decodeWorkspaceFixture(candidate: CompanyResearchWorkspace) {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(candidate), {
+    status: 200, headers: { "content-type": "application/json" },
+  })));
+  try {
+    return await new InvestmentResearchApi().companyResearchWorkspace(ids.project);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+}
+
+function assessmentFixture(status: "not_answerable" | "partially_answerable" | "answerable") {
+  const candidate = workspace({ status: "completed", rich: true });
+  const judgment = candidate.artifacts.find((item) => item.kind === "judgment_context")! as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "judgment_context" }>;
+  judgment.payload.operating_baseline_available = status === "answerable";
+  judgment.payload.financial_bridge_closed = status === "answerable";
+  judgment.payload.market_security_bridge_available = status === "answerable";
+  const memo = candidate.artifacts.find((item) => item.kind === "memo")! as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "memo" }>;
+  memo.payload.assessment_status = status;
+  memo.payload.gap_keys = status === "not_answerable" ? ["youtube_margin_gap"] : [];
+  return candidate;
+}
+
+function answerableWithoutValuationFixture() {
+  const candidate = assessmentFixture("answerable");
+  candidate.artifacts = candidate.artifacts.filter((item) => item.kind !== "valuation_set");
+  delete candidate.change_summary.artifact_versions.valuation_set;
+  const scenario = candidate.artifacts.find((item) => item.kind === "scenario_set")!;
+  candidate.modules = candidate.modules.map((module) => module.key === "scenarios_valuation_implied_expectations"
+    ? { ...module, state: "ready", valuation_state: "blocked", artifact_refs: [registryRef(scenario)] } : module);
+  const judgment = candidate.artifacts.find((item) => item.kind === "judgment_context")! as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "judgment_context" }>;
+  judgment.payload._lineage.artifact_refs = judgment.payload._lineage.artifact_refs.filter((ref) => ref.artifact_kind !== "valuation_set");
+  const memo = candidate.artifacts.find((item) => item.kind === "memo")! as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "memo" }>;
+  memo.payload.valuation_set_ref = null;
+  return candidate;
+}
+
+const RETRY_FIXTURE_CASES = [
+  ["evidence_index", "queued", 0], ["business_map", "queued", 0], ["driver_map", "queued", 0],
+  ["financial_bridge", "queued", 0], ["scenario_set", "queued", 0], ["valuation_set", "queued", 0],
+  ["research_gaps", "queued", 0], ["judgment_context", "queued", 0], ["memo", "queued", 0],
+  ["model_bundle", "building_model", 25],
+] as const;
+
+function retryWorkspaceFixture(step: typeof RETRY_FIXTURE_CASES[number][0], resumed: boolean) {
+  const status = resumed ? RETRY_FIXTURE_CASES.find(([candidate]) => candidate === step)![1] : "recoverable_failure";
+  return workspace({ status, currentStep: step, factDecision: step === "evidence_index" ? undefined : "confirmed" });
+}
+
 describe("Alphabet company research workbench", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["awaiting evidence review", () => workspace()],
+    ["rich answerable", () => workspace({ status: "completed", rich: true })],
+    ["sync-pending reviewed successor", () => workspace({ status: "building_model", factDecision: "confirmed", evidenceVersion: 2 })],
+    ["recoverable retry", () => workspace({ status: "recoverable_failure" })],
+    ["explicit not-answerable", () => assessmentFixture("not_answerable")],
+    ["partial answerability", () => assessmentFixture("partially_answerable")],
+    ["answerable without valuation", () => answerableWithoutValuationFixture()],
+  ] as const)("keeps the %s fixture valid under the production decoder", async (_label, fixture) => {
+    await expect(decodeWorkspaceFixture(fixture())).resolves.toMatchObject({ project_id: ids.project });
+  });
+
+  it.each(RETRY_FIXTURE_CASES)("decodes the failed and resumed %s retry fixtures", async (step, resumedStatus, progress) => {
+    const failed = await decodeWorkspaceFixture(retryWorkspaceFixture(step, false));
+    expect(failed.preparation).toMatchObject({ status: "recoverable_failure", current_step: step });
+    const resumed = await decodeWorkspaceFixture(retryWorkspaceFixture(step, true));
+    expect(resumed.preparation).toMatchObject({ status: resumedStatus, current_step: step, progress });
   });
 
   it("renders all nine modules, live progress, gaps, source trace, and candidate review controls without publication preview", async () => {
+    const awaitingReview = workspace();
+    await decodeWorkspaceFixture(awaitingReview);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
-    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(workspace());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(awaitingReview);
     const preview = vi.spyOn(investmentResearchApi, "preview");
     const user = userEvent.setup();
     renderPage();
@@ -250,16 +328,8 @@ describe("Alphabet company research workbench", () => {
   });
 
   it("shows formal not-answerable copy only when the memo explicitly assesses it", async () => {
-    const formal = workspace();
-    const judgment = artifact("judgment_context", { operating_baseline_available: false, financial_bridge_closed: false, market_security_bridge_available: false, strongest_counterevidence: [], next_verification_events: [], _lineage: {} });
-    const memo = artifact("memo", {
-      assessment_status: "not_answerable", business_map_ref: {}, driver_map_ref: {}, financial_bridge_ref: {}, scenario_set_ref: {}, valuation_set_ref: null,
-      gap_keys: ["youtube_margin_gap"], strongest_counterevidence: [], next_verification_events: [], candidate_status: "machine_draft", _lineage: {},
-    });
-    formal.artifacts.push(judgment as CompanyResearchWorkspace["artifacts"][number], memo as CompanyResearchWorkspace["artifacts"][number]);
-    formal.change_summary.artifact_versions.judgment_context = judgment.version;
-    formal.change_summary.artifact_versions.memo = memo.version;
-    formal.modules = formal.modules.map((module) => module.key === "overview" ? { ...module, state: "ready", artifact_refs: [registryRef(judgment)] } : module);
+    const formal = assessmentFixture("not_answerable");
+    await decodeWorkspaceFixture(formal);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(formal);
     renderPage();
@@ -270,8 +340,10 @@ describe("Alphabet company research workbench", () => {
   });
 
   it("renders DCF, reverse-DCF, distinct GOOGL/GOOG ranges, scenario mechanisms, effects, and counterevidence without probabilities", async () => {
+    const rich = workspace({ status: "completed", rich: true });
+    await decodeWorkspaceFixture(rich);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
-    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(workspace({ status: "completed", rich: true }));
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(rich);
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
@@ -310,6 +382,8 @@ describe("Alphabet company research workbench", () => {
     const initial = workspace();
     const successorWorkspace = workspace({ status: "building_model", factDecision: decision, evidenceVersion: 2 });
     successorWorkspace.modules = successorWorkspace.modules.map((module) => module.key === "evidence_and_gaps" ? module : { ...module, state: "preparing" });
+    await decodeWorkspaceFixture(initial);
+    await decodeWorkspaceFixture(successorWorkspace);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(initial).mockResolvedValueOnce(successorWorkspace);
     const review = vi.spyOn(investmentResearchApi, "reviewCompanyEvidence").mockResolvedValue({ evidence_artifact: successorWorkspace.artifacts[0] } as never);
@@ -394,8 +468,10 @@ describe("Alphabet company research workbench", () => {
   });
 
   it("retries only the server-declared recoverable preparation stage", async () => {
-    const failed = workspace({ status: "recoverable_failure" });
-    const resumed = workspace({ status: "building_model" });
+    const failed = retryWorkspaceFixture("model_bundle", false);
+    const resumed = retryWorkspaceFixture("model_bundle", true);
+    await decodeWorkspaceFixture(failed);
+    await decodeWorkspaceFixture(resumed);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(failed).mockResolvedValueOnce(resumed);
     const retry = vi.spyOn(investmentResearchApi, "retryCompanyResearchProject").mockResolvedValue({ project_id: ids.project } as never);
@@ -409,9 +485,9 @@ describe("Alphabet company research workbench", () => {
   });
 
   it("surfaces a retry-command workspace regression as a synchronization error", async () => {
-    const failed = workspace({ status: "recoverable_failure" });
+    const failed = retryWorkspaceFixture("model_bundle", false);
     failed.draft.lock_version = 4;
-    const stale = workspace({ status: "building_model" });
+    const stale = retryWorkspaceFixture("model_bundle", true);
     stale.draft.lock_version = 3;
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(failed).mockResolvedValueOnce(stale);
@@ -424,8 +500,8 @@ describe("Alphabet company research workbench", () => {
   });
 
   it("retains the current company when retry synchronization returns another company", async () => {
-    const failed = workspace({ status: "recoverable_failure" });
-    const mixed = workspace({ status: "building_model" });
+    const failed = retryWorkspaceFixture("model_bundle", false);
+    const mixed = retryWorkspaceFixture("model_bundle", true);
     mixed.company = { ...mixed.company, id: uid(90), canonical_name: "Other Company" };
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(failed).mockResolvedValueOnce(mixed);
@@ -672,14 +748,7 @@ describe("Alphabet company research workbench", () => {
     ["pending", "情景、估值与当前价格隐含正在准备"],
     ["blocked", "估值已阻塞（服务器状态：blocked）"],
   ] as const)("renders valuation state %s without inferring a gap block", async (valuationState, copy) => {
-    const rich = valuationState === "pending" ? workspace() : workspace({ status: "completed", rich: true });
-    if (valuationState === "blocked") {
-      rich.artifacts = rich.artifacts.filter((item) => item.kind !== "valuation_set");
-      delete rich.change_summary.artifact_versions.valuation_set;
-      const scenario = rich.artifacts.find((item) => item.kind === "scenario_set")!;
-      rich.modules = rich.modules.map((module) => module.key === "scenarios_valuation_implied_expectations"
-        ? { ...module, state: "ready", valuation_state: "blocked", artifact_refs: [{ id: scenario.id, kind: scenario.kind, content_hash: scenario.content_hash }] } : module);
-    }
+    const rich = valuationState === "pending" ? workspace() : answerableWithoutValuationFixture();
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(rich);
     const user = userEvent.setup();
@@ -730,12 +799,11 @@ describe("Alphabet company research workbench", () => {
   });
 
   it("shows explicit unavailable overview fields for contract-valid empty answerable and partial memos", async () => {
-    const answerable = workspace({ status: "completed", rich: true });
-    const valuation = answerable.artifacts.find((item) => item.kind === "valuation_set")! as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "valuation_set" }>;
-    valuation.payload.security_value_ranges = [];
+    const answerable = answerableWithoutValuationFixture();
     const judgment = answerable.artifacts.find((item) => item.kind === "judgment_context")! as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "judgment_context" }>;
     judgment.payload.strongest_counterevidence = [];
     judgment.payload.next_verification_events = [];
+    await decodeWorkspaceFixture(answerable);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(answerable);
     const rendered = renderPage();
@@ -744,13 +812,8 @@ describe("Alphabet company research workbench", () => {
     expect(screen.getByText("下一验证事件未提供。")).toBeVisible();
     rendered.unmount();
 
-    const partial = workspace();
-    const partialJudgment = artifact("judgment_context", { operating_baseline_available: true, financial_bridge_closed: false, market_security_bridge_available: false, strongest_counterevidence: [], next_verification_events: [], _lineage: {} });
-    const partialMemo = artifact("memo", { assessment_status: "partially_answerable", business_map_ref: {}, driver_map_ref: {}, financial_bridge_ref: {}, scenario_set_ref: {}, valuation_set_ref: null, gap_keys: [], strongest_counterevidence: [], next_verification_events: [], candidate_status: "machine_draft", _lineage: {} });
-    partial.artifacts.push(partialJudgment as CompanyResearchWorkspace["artifacts"][number], partialMemo as CompanyResearchWorkspace["artifacts"][number]);
-    partial.change_summary.artifact_versions.judgment_context = partialJudgment.version;
-    partial.change_summary.artifact_versions.memo = partialMemo.version;
-    partial.modules = partial.modules.map((module) => module.key === "overview" ? { ...module, state: "ready", artifact_refs: [registryRef(partialJudgment)] } : module);
+    const partial = assessmentFixture("partially_answerable");
+    await decodeWorkspaceFixture(partial);
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(partial);
     renderPage();
     expect(await screen.findByText("未提供阻塞项。")).toBeVisible();
