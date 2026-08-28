@@ -183,9 +183,114 @@ def _legacy_blocked_missing_basis(session):
         "validation_failed",
         "failed",
         "model_bundle",
-        "validation_failed",
+        "validation_failed: company research historical basis is missing",
     )
     return initialized, reviewed, gaps, blocked_draft
+
+
+def test_missing_historical_basis_validation_diagnostic_is_safe_and_actionable(
+    session,
+) -> None:
+    initialized, _reviewed, _gaps, _blocked_draft = (
+        _legacy_blocked_missing_basis(session)
+    )
+
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and job is not None
+    assert preparation.last_error_code == "validation_failed"
+    assert (
+        job.error
+        == "validation_failed: company research historical basis is missing"
+    )
+    job_events = tuple(
+        session.scalars(
+            select(JobEvent)
+            .where(JobEvent.job_id == job.id)
+            .order_by(JobEvent.seq)
+        )
+    )
+    assert job_events[-1].message == "company research historical basis is missing"
+    company_events = CompanyResearchRepository(session).events(preparation.id)
+    assert company_events[-1].event_type == "model_preparation_blocked"
+    assert company_events[-1].payload == {
+        "code": "validation_failed",
+        "message": "company research historical basis is missing",
+    }
+
+
+def test_internal_validation_diagnostic_is_single_line_and_bounded(
+    session, monkeypatch
+) -> None:
+    initialized = _ready_for_model(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None and claim.step == "model_bundle"
+    raw_message = "  internal\n validation\tmessage   " + "sensitive-detail " * 80
+    normalized = " ".join(raw_message.split())
+    monkeypatch.setattr(
+        worker,
+        "_model_input",
+        lambda _claim: (_ for _ in ()).throw(ValidationError(raw_message)),
+    )
+
+    assert worker.run_claim(claim) == "discarded"
+
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and job is not None
+    assert preparation.last_error_code == "validation_failed"
+    prefix = "validation_failed: "
+    assert job.error == prefix + normalized[: 512 - len(prefix)]
+    assert len(job.error) == 512
+    assert "\n" not in job.error and "\t" not in job.error
+    job_events = tuple(
+        session.scalars(
+            select(JobEvent)
+            .where(JobEvent.job_id == job.id)
+            .order_by(JobEvent.seq)
+        )
+    )
+    assert job_events[-1].message == normalized[:512]
+    assert len(job_events[-1].message) == 512
+    company_events = CompanyResearchRepository(session).events(preparation.id)
+    assert company_events[-1].payload == {
+        "code": "validation_failed",
+        "message": normalized[:512],
+    }
+
+
+@pytest.mark.parametrize("raw_message", ("", " \n\t  "))
+def test_empty_internal_validation_diagnostic_falls_back_to_code_without_colon(
+    session, monkeypatch, raw_message
+) -> None:
+    initialized = _ready_for_model(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None and claim.step == "model_bundle"
+    monkeypatch.setattr(
+        worker,
+        "_model_input",
+        lambda _claim: (_ for _ in ()).throw(ValidationError(raw_message)),
+    )
+
+    assert worker.run_claim(claim) == "discarded"
+
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and job is not None
+    assert preparation.last_error_code == "validation_failed"
+    assert job.error == "validation_failed"
+    job_events = tuple(
+        session.scalars(
+            select(JobEvent)
+            .where(JobEvent.job_id == job.id)
+            .order_by(JobEvent.seq)
+        )
+    )
+    assert job_events[-1].message == "validation_failed"
+    company_events = CompanyResearchRepository(session).events(preparation.id)
+    assert company_events[-1].payload == {"code": "validation_failed"}
 
 
 def test_claim_is_exclusive_and_success_stops_at_evidence_review(session) -> None:
@@ -318,7 +423,8 @@ def test_worker_blocks_a_contract_incompatible_historical_basis_before_model_pro
     assert (job.status, job.step, job.error, job.claim_token) == (
         "failed",
         "model_bundle",
-        "validation_failed",
+        "validation_failed: company research historical basis does not match "
+        "governed model contract",
         None,
     )
     repository = CompanyResearchRepository(session)
@@ -390,7 +496,7 @@ def test_worker_blocks_a_durably_corrupted_historical_basis_before_model_provide
     assert job is not None
     assert (job.status, job.error, job.claim_token) == (
         "failed",
-        "validation_failed",
+        "validation_failed: company research historical basis is invalid",
         None,
     )
     repository = CompanyResearchRepository(session)
@@ -465,7 +571,7 @@ def test_model_provider_failure_is_requeued_with_bounded_backoff(session) -> Non
         session,
         now=lambda: NOW,
         model_provider=lambda _input: (_ for _ in ()).throw(
-            TimeoutError("provider secret")
+            TimeoutError("provider secret\nline two")
         ),
     )
     claim = worker.claim_next()
@@ -489,6 +595,21 @@ def test_model_provider_failure_is_requeued_with_bounded_backoff(session) -> Non
     assert CompanyResearchRepository(session).current_artifact(
         initialized.project.id, "business_map"
     ) is None
+    job_events = tuple(
+        session.scalars(
+            select(JobEvent)
+            .where(JobEvent.job_id == job.id)
+            .order_by(JobEvent.seq)
+        )
+    )
+    assert job_events[-1].message == "provider_unavailable"
+    company_event = CompanyResearchRepository(session).events(preparation.id)[-1]
+    assert company_event.payload == {
+        "code": "provider_unavailable",
+        "recoverable": True,
+    }
+    assert "provider secret\nline two" not in str(job_events[-1].message)
+    assert "provider secret\nline two" not in str(company_event.payload)
 
 
 def test_manual_retry_keeps_a_model_failure_on_the_model_bundle_step(session) -> None:
@@ -535,7 +656,7 @@ def test_retry_recovers_only_a_missing_historical_basis_without_rewriting_review
     assert (job.status, job.step, job.error) == (
         "failed",
         "model_bundle",
-        "validation_failed",
+        "validation_failed: company research historical basis is missing",
     )
     reviewed_snapshot = (
         reviewed.id,

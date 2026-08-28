@@ -64,7 +64,17 @@ MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = (30, 120, 600)
 _SAFE_PROVIDER_ERROR = "provider_unavailable"
 _SAFE_STALE_ERROR = "stale_output_discarded"
+_VALIDATION_MESSAGE_LIMIT = 512
 RETRYABLE_PROVIDER_ERRORS = (TimeoutError, ConnectionError)
+
+
+def _safe_validation_message(message: str | None) -> str | None:
+    if message is None:
+        return None
+    normalized = " ".join(message.split())
+    if not normalized:
+        return None
+    return normalized[:_VALIDATION_MESSAGE_LIMIT]
 
 
 @dataclass(frozen=True, slots=True)
@@ -473,15 +483,27 @@ class CompanyResearchPreparationWorker:
         self._session.flush()
 
     def _block(
-        self, claim: CompanyResearchClaim, *, error_code: str = "validation_failed"
+        self,
+        claim: CompanyResearchClaim,
+        *,
+        error_code: str = "validation_failed",
+        error_message: str | None = None,
     ) -> None:
         current = self._current_claim(claim)
         if current is None:
             return
         job, preparation = current
         now = self._utcnow()
+        event_message = _safe_validation_message(error_message)
+        if event_message is None:
+            job_error = error_code
+            job_event_message = error_code
+        else:
+            prefix = f"{error_code}: "
+            job_error = prefix + event_message[: _VALIDATION_MESSAGE_LIMIT - len(prefix)]
+            job_event_message = event_message
         job.status = "failed"
-        job.error = error_code
+        job.error = job_error
         job.claim_token = None
         job.finished_at = now
         preparation.status = "blocked"
@@ -492,8 +514,11 @@ class CompanyResearchPreparationWorker:
             seq=self._jobs.next_event_seq(job.id),
             status="failed",
             step=claim.step,
-            message=error_code,
+            message=job_event_message,
         )
+        event_payload = {"code": error_code}
+        if event_message is not None:
+            event_payload["message"] = event_message
         self._repository.append_event(
             preparation_id=preparation.id,
             event_type=(
@@ -501,7 +526,7 @@ class CompanyResearchPreparationWorker:
                 if claim.step == "evidence_index"
                 else "model_preparation_blocked"
             ),
-            payload={"code": error_code},
+            payload=event_payload,
             created_at=now,
         )
         self._session.flush()
@@ -739,11 +764,11 @@ class CompanyResearchPreparationWorker:
                 self._session.rollback()
                 self._recoverable_failure(claim)
                 return "recoverable_failure"
-            except (
-                AlphabetGoldenCaseFixtureError,
-                CompanyResearchValidationError,
-                ValidationError,
-            ):
+            except ValidationError as exc:
+                self._session.rollback()
+                self._block(claim, error_message=str(exc))
+                return "discarded"
+            except CompanyResearchValidationError:
                 self._session.rollback()
                 self._block(claim)
                 return "discarded"
@@ -769,7 +794,7 @@ class CompanyResearchPreparationWorker:
                 if self._is_stale_model_error(exc):
                     self._discard(claim)
                 else:
-                    self._block(claim)
+                    self._block(claim, error_message=str(exc))
                 return "discarded"
             return "awaiting_judgment_review"
         if claim.step != "evidence_index":
