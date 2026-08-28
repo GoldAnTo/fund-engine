@@ -777,6 +777,12 @@ class CompanyResearchWorkbench:
                     raise ValidationError(
                         "company research artifact lineage is invalid"
                     )
+                if self._company._persisted_utc(
+                    current.created_at
+                ) < self._company._persisted_utc(parent.created_at):
+                    raise ValidationError(
+                        "company research artifact timestamps are not monotonic"
+                    )
                 current, expected_version = parent, expected_version - 1
             if row.kind == "evidence_index":
                 evidence_chain = tuple(reversed(chain))

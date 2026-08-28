@@ -323,17 +323,33 @@ def test_historical_basis_recovery_accepts_a_genuine_pre_7707036_request_cutoff(
         initialized=initialized,
         now=LEGACY_PREPARATION_CREATED + timedelta(seconds=1),
     )
+    _durably_rewrite_events_as_legacy_v1(
+        session, initialized.preparation.id
+    )
+    repository = CompanyResearchRepository(session)
+    assert {
+        event.hash_version
+        for event in repository.events(initialized.preparation.id)
+    } == {1}
 
-    recovered_basis_id = CompanyResearchHistoricalBasisRecovery(
+    result = CompanyResearchPreparationService(
         session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=1)
-    ).recover(initialized.preparation.id)
+    ).retry(project_id=initialized.project.id)
     recovered = WorkspaceDraftService(
         session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=1)
     ).read(initialized.project.id)
 
     assert recovered is not None
-    assert recovered.content.historical_basis_id == recovered_basis_id
+    assert result.preparation.status == "building_model"
+    assert recovered.content.historical_basis_id is not None
     assert recovered.lock_version == blocked_draft.lock_version + 1
+    events = repository.events(initialized.preparation.id)
+    assert [event.event_type for event in events[-2:]] == [
+        "historical_basis_recovered",
+        "retry_queued",
+    ]
+    assert [event.hash_version for event in events[-2:]] == [2, 2]
+    assert all(event.hash_version == 1 for event in events[:-2])
 
 
 def test_missing_historical_basis_validation_diagnostic_is_safe_and_actionable(
@@ -1610,6 +1626,7 @@ def _durably_rewrite_review_events(session, preparation_id, mode: str) -> None:
         )
         return
     payloads = [deepcopy(event.payload) for event in events]
+    created_ats = [event.created_at for event in events]
     first = review_indexes[0]
     if mode == "wrong_artifact":
         payloads[first]["evidence_artifact_id"] = str(uuid4())
@@ -1624,38 +1641,83 @@ def _durably_rewrite_review_events(session, preparation_id, mode: str) -> None:
     elif mode == "reordered":
         second = review_indexes[1]
         payloads[first], payloads[second] = payloads[second], payloads[first]
+    elif mode == "timestamp_mismatch":
+        for index in range(first, len(created_ats)):
+            created_ats[index] = created_ats[index] + timedelta(seconds=1)
     else:
         raise AssertionError(mode)
     statement = text(
         "UPDATE uw_company_research_events SET previous_event_hash = :previous, "
-        "payload = :payload, content_hash = :content_hash WHERE id = :id"
+        "payload = :payload, created_at = :created_at, "
+        "content_hash = :content_hash WHERE id = :id"
     ).bindparams(
         bindparam(
             "previous",
             type_=CompanyResearchEvent.__table__.c.previous_event_hash.type,
         ),
         bindparam("payload", type_=CompanyResearchEvent.__table__.c.payload.type),
+        bindparam(
+            "created_at", type_=CompanyResearchEvent.__table__.c.created_at.type
+        ),
         bindparam("id", type_=CompanyResearchEvent.__table__.c.id.type),
     )
     previous_hash = None
-    for event, payload in zip(events, payloads, strict=True):
+    for event, payload, created_at in zip(
+        events, payloads, created_ats, strict=True
+    ):
         content_hash = repository.event_content_hash_v2(
             preparation_id=event.preparation_id,
             sequence=event.sequence,
             previous_event_hash=previous_hash,
             event_type=event.event_type,
             payload=payload,
-            created_at=event.created_at,
+            created_at=created_at,
         )
         session.execute(
             statement,
             {
                 "previous": previous_hash,
                 "payload": payload,
+                "created_at": created_at,
                 "content_hash": content_hash,
                 "id": event.id,
             },
         )
+        previous_hash = content_hash
+    session.expire_all()
+
+
+def _durably_rewrite_events_as_legacy_v1(session, preparation_id) -> None:
+    repository = CompanyResearchRepository(session)
+    events = repository.events(preparation_id)
+    statement = text(
+        "UPDATE uw_company_research_events SET hash_version = 1, "
+        "previous_event_hash = :previous, content_hash = :content_hash "
+        "WHERE id = :id"
+    ).bindparams(
+        bindparam(
+            "previous",
+            type_=CompanyResearchEvent.__table__.c.previous_event_hash.type,
+        ),
+        bindparam("id", type_=CompanyResearchEvent.__table__.c.id.type),
+    )
+    previous_hash = None
+    for event in events:
+        content_hash = repository.event_content_hash(
+            preparation_id=event.preparation_id,
+            sequence=event.sequence,
+            previous_event_hash=previous_hash,
+            event_type=event.event_type,
+            payload=event.payload,
+        )
+        assert session.execute(
+            statement,
+            {
+                "previous": previous_hash,
+                "content_hash": content_hash,
+                "id": event.id,
+            },
+        ).rowcount == 1
         previous_hash = content_hash
     session.expire_all()
 
@@ -2268,12 +2330,13 @@ def test_historical_basis_recovery_requires_one_authentic_initialized_event(
             payload = (
                 {"request_hash": []} if event.sequence == 1 else event.payload
             )
-            content_hash = repository.event_content_hash(
+            content_hash = repository.event_content_hash_v2(
                 preparation_id=event.preparation_id,
                 sequence=event.sequence,
                 previous_event_hash=previous_hash,
                 event_type=event.event_type,
                 payload=payload,
+                created_at=event.created_at,
             )
             session.execute(
                 statement,
@@ -3110,6 +3173,53 @@ def test_worker_claim_boundary_locks_project_before_preparation_and_job(
     assert calls == ["project", "preparation", "job"]
 
 
+def test_claim_next_skips_a_locked_candidate_and_claims_the_next_job(
+    session, monkeypatch
+) -> None:
+    first = _initialized(session, idempotency_key="claim-skip-first")
+    first.preparation.request_hash = "f" * 64
+    session.flush()
+    second = _initialized(session, idempotency_key="claim-skip-second")
+    ordered = tuple(
+        session.execute(
+            select(Job.id, CompanyResearchPreparation.id)
+            .join(
+                CompanyResearchPreparation,
+                CompanyResearchPreparation.job_id == Job.id,
+            )
+            .where(
+                CompanyResearchPreparation.id.in_(
+                    (first.preparation.id, second.preparation.id)
+                )
+            )
+            .order_by(Job.created_at, Job.id)
+        )
+    )
+    assert len(ordered) == 2
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    real_lock = worker._repository.lock_worker_claim_state
+    calls = []
+
+    def skip_first(*, preparation_id, job_id, **kwargs):
+        calls.append((job_id, preparation_id, kwargs))
+        if preparation_id == ordered[0][1]:
+            return None
+        return real_lock(
+            preparation_id=preparation_id, job_id=job_id, **kwargs
+        )
+
+    monkeypatch.setattr(
+        worker._repository, "lock_worker_claim_state", skip_first
+    )
+
+    claim = worker.claim_next()
+
+    assert claim is not None
+    assert (claim.job_id, claim.preparation_id) == ordered[1]
+    assert [call[:2] for call in calls] == list(ordered)
+    assert all(call[2] == {"skip_locked": True} for call in calls)
+
+
 def test_retry_boundary_locks_project_before_preparation_and_job(
     session, monkeypatch
 ) -> None:
@@ -3140,6 +3250,51 @@ def test_retry_boundary_locks_project_before_preparation_and_job(
 
     assert queued.status == "queued"
     assert calls == ["project", "preparation", "job"]
+
+
+@pytest.mark.parametrize("operation", ("recover_stale", "cancel_queued"))
+def test_worker_maintenance_transitions_use_project_first_ownership_boundary(
+    session, monkeypatch, operation: str
+) -> None:
+    initialized = _initialized(
+        session, idempotency_key=f"maintenance-lock-{operation}"
+    )
+    preparation = initialized.preparation
+    job = initialized.job
+    if operation == "recover_stale":
+        preparation.status = "preparing_sources"
+        preparation.progress = 5
+        job.status = "running"
+        job.step = "evidence_index"
+        job.started_at = NOW - timedelta(hours=1)
+        job.claim_token = "stale-claim"
+    else:
+        job.cancel_requested = True
+    session.flush()
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    real_lock = worker._repository.lock_worker_claim_state
+    calls = []
+
+    def record_lock(*, preparation_id, job_id, **kwargs):
+        calls.append((preparation_id, job_id, kwargs))
+        return real_lock(
+            preparation_id=preparation_id, job_id=job_id, **kwargs
+        )
+
+    monkeypatch.setattr(
+        worker._repository, "lock_worker_claim_state", record_lock
+    )
+
+    changed = (
+        worker.recover_stale_claims(before=NOW)
+        if operation == "recover_stale"
+        else worker.cancel_queued_claims()
+    )
+
+    assert changed == 1
+    assert calls == [
+        (preparation.id, job.id, {"skip_locked": True})
+    ]
 
 
 def test_historical_basis_recovery_rejects_a_wrong_gaps_fixture_hash(
@@ -3225,7 +3380,15 @@ def test_rehashed_evidence_decision_must_match_review_audit_event(session) -> No
 
 @pytest.mark.parametrize(
     "mode",
-    ("deleted", "duplicate", "reordered", "wrong_artifact", "wrong_fact", "wrong_decision"),
+    (
+        "deleted",
+        "duplicate",
+        "reordered",
+        "wrong_artifact",
+        "wrong_fact",
+        "wrong_decision",
+        "timestamp_mismatch",
+    ),
 )
 def test_evidence_review_audit_reconciliation_fails_closed(
     session, mode: str
@@ -3547,6 +3710,64 @@ def test_sqlite_two_retries_recover_one_basis_and_queue_one_attempt(
         )
     Base.metadata.drop_all(engine)
     engine.dispose()
+
+
+def test_blocked_retry_deadline_rejects_before_recovery_writes_even_if_committed(
+    session,
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    preparation = session.get(
+        CompanyResearchPreparation, initialized.preparation.id
+    )
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and job is not None
+    preparation.next_attempt_at = NOW + timedelta(minutes=5)
+    session.flush()
+    repository = CompanyResearchRepository(session)
+    event_snapshot = tuple(
+        (event.id, event.sequence, event.event_type, event.content_hash)
+        for event in repository.events(preparation.id)
+    )
+    preparation_snapshot = (
+        preparation.status,
+        preparation.current_step,
+        preparation.progress,
+        preparation.attempt,
+        repository._persisted_utc(preparation.next_attempt_at),
+        preparation.last_error_code,
+    )
+    job_snapshot = (job.status, job.step, job.attempt, job.error)
+
+    with pytest.raises(ValidationError, match="not ready to retry"):
+        CompanyResearchPreparationService(session, now=lambda: NOW).retry(
+            project_id=initialized.project.id
+        )
+    session.commit()
+
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert draft is not None
+    assert draft.id == blocked_draft.id
+    assert draft.lock_version == blocked_draft.lock_version
+    assert draft.content.historical_basis_id is None
+    assert (
+        preparation.status,
+        preparation.current_step,
+        preparation.progress,
+        preparation.attempt,
+        repository._persisted_utc(preparation.next_attempt_at),
+        preparation.last_error_code,
+    ) == preparation_snapshot
+    assert (job.status, job.step, job.attempt, job.error) == job_snapshot
+    assert repository.current_artifact(initialized.project.id, "evidence_index").id == reviewed.id
+    assert repository.current_artifact(initialized.project.id, "research_gaps").id == gaps.id
+    assert tuple(
+        (event.id, event.sequence, event.event_type, event.content_hash)
+        for event in repository.events(preparation.id)
+    ) == event_snapshot
 
 
 def test_sqlite_two_ordinary_retries_queue_one_attempt_and_one_event(
@@ -4558,19 +4779,36 @@ def test_committed_output_survives_a_worker_crash_after_artifact_event_convergen
 
 
 @pytest.mark.pg_only
-def test_postgresql_two_workers_claim_the_same_company_job_exclusively(engine) -> None:
+def test_postgresql_two_workers_skip_a_locked_project_and_claim_distinct_jobs(
+    engine,
+) -> None:
     sessions = sessionmaker(bind=engine, future=True)
     initializer_session = sessions()
     first_session = sessions()
     second_session = sessions()
     try:
-        _initialized(initializer_session)
+        first_initialized = _initialized(
+            initializer_session, idempotency_key="pg-skip-locked-first"
+        )
+        first_initialized.preparation.request_hash = "f" * 64
+        initializer_session.flush()
+        second_initialized = _initialized(
+            initializer_session, idempotency_key="pg-skip-locked-second"
+        )
+        expected = {
+            first_initialized.preparation.id,
+            second_initialized.preparation.id,
+        }
         initializer_session.commit()
         first = CompanyResearchPreparationWorker(first_session, now=lambda: NOW)
         second = CompanyResearchPreparationWorker(second_session, now=lambda: NOW)
 
-        assert first.claim_next() is not None
-        assert second.claim_next() is None
+        first_claim = first.claim_next()
+        assert first_claim is not None
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            second_claim = pool.submit(second.claim_next).result(timeout=3)
+        assert second_claim is not None
+        assert {first_claim.preparation_id, second_claim.preparation_id} == expected
     finally:
         first_session.rollback()
         second_session.rollback()

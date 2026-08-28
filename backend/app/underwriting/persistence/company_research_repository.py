@@ -210,12 +210,16 @@ def reconcile_company_research_evidence_audit(
     if len(prepared) != 1:
         raise invalid
     prepared_event = prepared[0]
+    prepared_at = CompanyResearchRepository._persisted_utc(
+        prepared_event.created_at
+    )
     if prepared_event.payload != {
         "evidence_index_id": str(evidence_chain[0].id),
         "research_gaps_id": str(research_gaps.id),
-    } or CompanyResearchRepository._persisted_utc(prepared_event.created_at) < max(
-        CompanyResearchRepository._persisted_utc(evidence_chain[0].created_at),
-        CompanyResearchRepository._persisted_utc(research_gaps.created_at),
+    } or prepared_at != CompanyResearchRepository._persisted_utc(
+        evidence_chain[0].created_at
+    ) or prepared_at != CompanyResearchRepository._persisted_utc(
+        research_gaps.created_at
     ):
         raise invalid
     predecessor_index = prepared_event.sequence - 2
@@ -266,7 +270,7 @@ def reconcile_company_research_evidence_audit(
                 "decision": decision,
             }
             or CompanyResearchRepository._persisted_utc(event.created_at)
-            < CompanyResearchRepository._persisted_utc(successor.created_at)
+            != CompanyResearchRepository._persisted_utc(successor.created_at)
         ):
             raise invalid
 
@@ -528,12 +532,12 @@ class CompanyResearchRepository:
         )
 
     def _project_for_update(
-        self, project_id: UUID
+        self, project_id: UUID, *, skip_locked: bool = False
     ) -> UnderwritingResearchProject | None:
         return self._session.scalar(
             select(UnderwritingResearchProject)
             .where(UnderwritingResearchProject.id == project_id)
-            .with_for_update()
+            .with_for_update(skip_locked=skip_locked)
             .execution_options(populate_existing=True)
         )
 
@@ -1276,7 +1280,11 @@ class CompanyResearchRepository:
         )
 
     def lock_worker_claim_state(
-        self, *, preparation_id: UUID, job_id: UUID
+        self,
+        *,
+        preparation_id: UUID,
+        job_id: UUID,
+        skip_locked: bool = False,
     ) -> tuple[CompanyResearchPreparation, Job] | None:
         """Lock one worker ownership boundary in global project-first order."""
         project_id = self._session.scalar(
@@ -1287,7 +1295,7 @@ class CompanyResearchRepository:
         if project_id is None:
             return None
         self._reserve_sqlite_writer_before_ownership_read()
-        if self._project_for_update(project_id) is None:
+        if self._project_for_update(project_id, skip_locked=skip_locked) is None:
             return None
         preparation = self._preparation_for_update(
             preparation_id, populate_existing=True
@@ -2225,22 +2233,28 @@ class CompanyResearchRepository:
             raise CompanyResearchIntegrityError(
                 "company research event payload is invalid"
             )
-        expected_v2 = CompanyResearchRepository.event_content_hash_v2(
-            preparation_id=row.preparation_id,
-            sequence=row.sequence,
-            previous_event_hash=row.previous_event_hash,
-            event_type=row.event_type,
-            payload=row.payload,
-            created_at=row.created_at,
-        )
-        expected_v1 = CompanyResearchRepository.event_content_hash(
-            preparation_id=row.preparation_id,
-            sequence=row.sequence,
-            previous_event_hash=row.previous_event_hash,
-            event_type=row.event_type,
-            payload=row.payload,
-        )
-        if row.content_hash not in {expected_v1, expected_v2}:
+        if row.hash_version == 1:
+            expected_hash = CompanyResearchRepository.event_content_hash(
+                preparation_id=row.preparation_id,
+                sequence=row.sequence,
+                previous_event_hash=row.previous_event_hash,
+                event_type=row.event_type,
+                payload=row.payload,
+            )
+        elif row.hash_version == 2:
+            expected_hash = CompanyResearchRepository.event_content_hash_v2(
+                preparation_id=row.preparation_id,
+                sequence=row.sequence,
+                previous_event_hash=row.previous_event_hash,
+                event_type=row.event_type,
+                payload=row.payload,
+                created_at=row.created_at,
+            )
+        else:
+            raise CompanyResearchIntegrityError(
+                "company research event hash version is invalid"
+            )
+        if row.content_hash != expected_hash:
             raise CompanyResearchIntegrityError(
                 "company research event content hash mismatch"
             )
@@ -2288,6 +2302,11 @@ class CompanyResearchRepository:
         actual_parent_id = parent.id if parent is not None else None
         if actual_parent_id != expected_parent_id:
             raise StaleParentError("expected parent is not the company artifact head")
+        when = self._stored_datetime(created_at, "created_at")
+        if parent is not None and when < self._persisted_utc(parent.created_at):
+            raise ValidationError(
+                "company research artifact created_at precedes its parent"
+            )
         self._validate_typed_artifact_payload(
             kind=kind,
             payload=payload,
@@ -2319,7 +2338,7 @@ class CompanyResearchRepository:
                 payload=copied_payload,
                 source_refs=copied_refs,
             ),
-            created_at=self._stored_datetime(created_at, "created_at"),
+            created_at=when,
         )
         try:
             return self._flush_in_savepoint(row)
@@ -2371,6 +2390,12 @@ class CompanyResearchRepository:
                 if row.parent_content_hash != parent.content_hash:
                     raise CompanyResearchIntegrityError(
                         "company research artifact parent content hash mismatch"
+                    )
+                if self._persisted_utc(row.created_at) < self._persisted_utc(
+                    parent.created_at
+                ):
+                    raise CompanyResearchIntegrityError(
+                        "company research artifact timestamps are not monotonic"
                     )
             chain.append(row)
             expected_project_id = row.project_id
@@ -2498,6 +2523,7 @@ class CompanyResearchRepository:
             CompanyResearchEvent(
                 preparation_id=preparation_id,
                 sequence=sequence,
+                hash_version=2,
                 previous_event_hash=previous_event_hash,
                 event_type=event_type,
                 payload=copied_payload,
@@ -2528,8 +2554,14 @@ class CompanyResearchRepository:
         rows = tuple(self._session.scalars(statement))
         previous_hash: str | None = None
         previous_created_at: datetime | None = None
+        v2_started = False
         for expected_sequence, row in enumerate(rows, start=1):
             self._validate_event_row(row)
+            if row.hash_version == 1 and v2_started:
+                raise CompanyResearchIntegrityError(
+                    "company research event hash version regressed"
+                )
+            v2_started = v2_started or row.hash_version == 2
             if row.sequence != expected_sequence:
                 raise CompanyResearchIntegrityError(
                     "company research event sequence is invalid"

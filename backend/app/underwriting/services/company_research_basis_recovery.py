@@ -93,7 +93,9 @@ class CompanyResearchHistoricalBasisRecovery:
         return value.astimezone(UTC)
 
     @staticmethod
-    def _eligible(state: CompanyResearchBasisRecoveryState) -> None:
+    def _eligible(
+        state: CompanyResearchBasisRecoveryState, *, retry_at: datetime
+    ) -> None:
         if (
             state.preparation.status != "blocked"
             or state.preparation.current_step != "model_bundle"
@@ -104,6 +106,16 @@ class CompanyResearchHistoricalBasisRecovery:
         ):
             raise ValidationError(
                 "company research preparation is not eligible for basis recovery"
+            )
+        if (
+            state.preparation.next_attempt_at is not None
+            and CompanyResearchHistoricalBasisRecovery._stored_utc(
+                state.preparation.next_attempt_at
+            )
+            > retry_at
+        ):
+            raise ValidationError(
+                "company research preparation is not ready to retry"
             )
 
     def _project_security_keys(
@@ -443,9 +455,12 @@ class CompanyResearchHistoricalBasisRecovery:
                 "company research historical basis recovery draft is incomplete"
             )
 
-    def recover(self, preparation_id: UUID) -> UUID:
+    def recover(
+        self, preparation_id: UUID, *, retry_at: datetime | None = None
+    ) -> UUID:
+        when = self._now_utc() if retry_at is None else self._stored_utc(retry_at)
         state = self._company.lock_basis_recovery_state(preparation_id)
-        self._eligible(state)
+        self._eligible(state, retry_at=when)
         security_keys = self._project_security_keys(state)
         try:
             cutoff = self._company.evidence_cutoff(state.evidence)
@@ -481,7 +496,7 @@ class CompanyResearchHistoricalBasisRecovery:
         if basis is None:
             basis = self._products.create_historical_basis(boundary.basis_input)
         authenticated = self._authenticate_exact_basis(basis.id, boundary)
-        created_at = self._now_utc()
+        created_at = when
         prior_lock_version = state.draft.lock_version
         recovered = self._drafts.save(
             state.preparation.project_id,

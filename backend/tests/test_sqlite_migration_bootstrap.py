@@ -183,8 +183,35 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             connection.execute(
                 sa.text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "0068"
+            == "0069"
         )
+        event_columns = {
+            column["name"]: column
+            for column in sa.inspect(connection).get_columns(
+                "uw_company_research_events"
+            )
+        }
+        assert event_columns["hash_version"]["nullable"] is False
+        assert any(
+            constraint["name"]
+            == "ck_uw_company_research_event_hash_version"
+            for constraint in sa.inspect(connection).get_check_constraints(
+                "uw_company_research_events"
+            )
+        )
+        event_triggers = {
+            row[0]
+            for row in connection.execute(
+                sa.text(
+                    "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                    "AND tbl_name = 'uw_company_research_events'"
+                )
+            )
+        }
+        assert event_triggers == {
+            "no_update_uw_company_research_events",
+            "no_delete_uw_company_research_events",
+        }
         assert "uw_market_capture_envelopes" in sa.inspect(connection).get_table_names()
         assessment_columns = {
             column["name"]
@@ -858,6 +885,55 @@ def test_0066_sqlite_alias_schema_is_constrained_immutable_and_reversible(
     engine.dispose()
 
 
+def test_0069_event_hash_version_migration_downgrades_cleanly(tmp_path) -> None:
+    database_path = tmp_path / "event-hash-version.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0069"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    downgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0068"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert downgraded.returncode == 0, downgraded.stderr
+
+    engine = sa.create_engine(f"sqlite:///{database_path}")
+    with engine.connect() as connection:
+        assert connection.execute(
+            sa.text("SELECT version_num FROM alembic_version")
+        ).scalar_one() == "0068"
+        assert "hash_version" not in {
+            column["name"]
+            for column in sa.inspect(connection).get_columns(
+                "uw_company_research_events"
+            )
+        }
+        assert {
+            row[0]
+            for row in connection.execute(
+                sa.text(
+                    "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                    "AND tbl_name = 'uw_company_research_events'"
+                )
+            )
+        } == {
+            "no_update_uw_company_research_events",
+            "no_delete_uw_company_research_events",
+        }
+    engine.dispose()
+
+
 def test_0061_downgrade_removes_only_wave2_economic_model_tables(tmp_path) -> None:
     database_path = tmp_path / "economic-model-0061.db"
     backend = Path(__file__).parents[1]
@@ -1426,7 +1502,7 @@ with SessionLocal() as session:
 
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0068"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0069"
         assert {
             "research_preparations",
             "research_preparation_artifacts",
@@ -2190,7 +2266,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0068"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0069"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -2244,7 +2320,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0068"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0069"
 
 
 def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> None:
@@ -2301,7 +2377,7 @@ def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> 
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == "0068"
+        ).scalar_one() == "0069"
         assert connection.execute(
             sa.text(
                 "SELECT research_source_type FROM source_contracts WHERE id = :id"

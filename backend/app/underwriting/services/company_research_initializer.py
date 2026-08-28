@@ -507,22 +507,25 @@ class CompanyResearchPreparationService:
         return CompanyResearchProjectStatus(project=project, preparation=preparation)
 
     def retry(self, *, project_id: UUID) -> CompanyResearchProjectStatus:
+        retry_at = self._now_utc()
         current = self.status(project_id=project_id)
         expected_recovered_basis_id = (
-            self._basis_recovery.recover(current.preparation.id)
+            self._basis_recovery.recover(
+                current.preparation.id, retry_at=retry_at
+            )
             if current.preparation.status == "blocked"
             else None
         )
         preparation = self._company_repository.requeue_recoverable_preparation(
             current.preparation.id,
-            updated_at=self._now_utc(),
+            updated_at=retry_at,
             expected_recovered_basis_id=expected_recovered_basis_id,
         )
         self._company_repository.append_event(
             preparation_id=preparation.id,
             event_type="retry_queued",
             payload={"attempt": preparation.attempt},
-            created_at=self._now_utc(),
+            created_at=retry_at,
         )
         return CompanyResearchProjectStatus(
             project=current.project, preparation=preparation

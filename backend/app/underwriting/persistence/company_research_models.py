@@ -228,6 +228,10 @@ class CompanyResearchEvent(Base):
         ),
         CheckConstraint("sequence >= 1", name="ck_uw_company_research_event_sequence"),
         CheckConstraint(
+            "hash_version IN (1, 2)",
+            name="ck_uw_company_research_event_hash_version",
+        ),
+        CheckConstraint(
             "(sequence = 1 AND previous_event_hash IS NULL) OR "
             "(sequence > 1 AND previous_event_hash IS NOT NULL "
             "AND length(previous_event_hash) = 64)",
@@ -251,6 +255,7 @@ class CompanyResearchEvent(Base):
         Uuid, ForeignKey("uw_company_research_preparations.id"), nullable=False
     )
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    hash_version: Mapped[int] = mapped_column(Integer, nullable=False)
     previous_event_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON(none_as_null=True), nullable=False)

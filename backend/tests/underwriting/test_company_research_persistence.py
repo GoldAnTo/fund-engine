@@ -1204,12 +1204,13 @@ def test_event_reads_reject_a_rewritten_predecessor(session) -> None:
     assert second.previous_event_hash == first.content_hash
 
     rewritten_payload = {"step": "rewritten"}
-    rewritten_hash = CompanyResearchRepository.event_content_hash(
+    rewritten_hash = CompanyResearchRepository.event_content_hash_v2(
         preparation_id=first.preparation_id,
         sequence=first.sequence,
         previous_event_hash=None,
         event_type=first.event_type,
         payload=rewritten_payload,
+        created_at=first.created_at,
     )
     _tamper_row(
         session,
@@ -1231,14 +1232,55 @@ def test_new_event_hash_authenticates_its_timestamp(session) -> None:
         payload={"step": "evidence_index"},
         created_at=NOW,
     )
+    downgraded_hash = repository.event_content_hash(
+        preparation_id=event.preparation_id,
+        sequence=event.sequence,
+        previous_event_hash=event.previous_event_hash,
+        event_type=event.event_type,
+        payload=event.payload,
+    )
     _tamper_row(
         session,
         CompanyResearchEvent,
         event.id,
         created_at=NOW + timedelta(days=30),
+        content_hash=downgraded_hash,
     )
 
     with pytest.raises(CompanyResearchIntegrityError, match="content hash"):
+        repository.events(preparation.id)
+
+
+def test_event_chain_rejects_a_v1_hash_after_the_v2_transition(session) -> None:
+    repository, _, preparation = _repository_with_preparation(session)
+    first = repository.append_event(
+        preparation_id=preparation.id,
+        event_type="initialized",
+        payload={"step": "evidence_index"},
+        created_at=NOW,
+    )
+    second = repository.append_event(
+        preparation_id=preparation.id,
+        event_type="advanced",
+        payload={"step": "business_map"},
+        created_at=NOW + timedelta(seconds=1),
+    )
+    second_v1 = repository.event_content_hash(
+        preparation_id=second.preparation_id,
+        sequence=second.sequence,
+        previous_event_hash=first.content_hash,
+        event_type=second.event_type,
+        payload=second.payload,
+    )
+    _tamper_row(
+        session,
+        CompanyResearchEvent,
+        second.id,
+        hash_version=1,
+        content_hash=second_v1,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="hash version"):
         repository.events(preparation.id)
 
 
@@ -1285,11 +1327,18 @@ def test_legacy_event_hashes_remain_readable_but_timestamps_must_be_monotonic(
         event_type=third.event_type,
         payload=third.payload,
     )
-    _tamper_row(session, CompanyResearchEvent, first.id, content_hash=first_v1)
+    _tamper_row(
+        session,
+        CompanyResearchEvent,
+        first.id,
+        hash_version=1,
+        content_hash=first_v1,
+    )
     _tamper_row(
         session,
         CompanyResearchEvent,
         second.id,
+        hash_version=1,
         previous_event_hash=first_v1,
         content_hash=second_v1,
     )
@@ -1297,6 +1346,7 @@ def test_legacy_event_hashes_remain_readable_but_timestamps_must_be_monotonic(
         session,
         CompanyResearchEvent,
         third.id,
+        hash_version=1,
         previous_event_hash=second_v1,
         content_hash=third_v1,
     )
@@ -1328,6 +1378,39 @@ def test_event_append_rejects_a_timestamp_before_its_predecessor(session) -> Non
             payload={"step": "business_map"},
             created_at=NOW - timedelta(seconds=1),
         )
+
+
+def test_artifact_chain_rejects_a_successor_timestamp_before_its_parent(
+    session,
+) -> None:
+    repository, project, _ = _repository_with_preparation(session)
+    root = repository.append_artifact(
+        project_id=project.id,
+        kind="evidence_index",
+        input_hash="3" * 64,
+        payload={"driver": "query volume"},
+        source_refs=[],
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    successor = repository.append_artifact(
+        project_id=project.id,
+        kind="evidence_index",
+        input_hash="4" * 64,
+        payload={"driver": "query volume reviewed"},
+        source_refs=[],
+        expected_parent_id=root.id,
+        created_at=NOW + timedelta(seconds=1),
+    )
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        successor.id,
+        created_at=NOW - timedelta(seconds=1),
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="timestamps"):
+        repository.artifact_chain(successor.id)
 
 
 def test_artifact_reads_fail_closed_on_hash_tamper_and_duplicate_heads(session) -> None:
@@ -1507,6 +1590,30 @@ def test_evidence_lifecycle_locks_its_owned_job_before_transition(
     assert len(statements) == 1
     assert "FOR UPDATE" in str(statements[0].compile(dialect=postgresql.dialect()))
     assert "FOR UPDATE" not in str(statements[0].compile(dialect=sqlite.dialect()))
+
+
+def test_worker_candidate_project_lock_uses_postgres_skip_locked(session) -> None:
+    repository, _project, preparation, job = _repository_with_evidence_job(session)
+    statements = []
+
+    def _capture_project_select(execute_state) -> None:
+        statement = execute_state.statement
+        if execute_state.is_select and "FROM uw_research_projects" in str(statement):
+            statements.append(statement)
+
+    event.listen(session, "do_orm_execute", _capture_project_select)
+    try:
+        assert repository.lock_worker_claim_state(
+            preparation_id=preparation.id,
+            job_id=job.id,
+            skip_locked=True,
+        ) == (preparation, job)
+    finally:
+        event.remove(session, "do_orm_execute", _capture_project_select)
+
+    assert len(statements) == 1
+    compiled = str(statements[0].compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE SKIP LOCKED" in compiled
 
 
 def test_add_preparation_rejects_a_job_that_is_not_its_exact_owner(session) -> None:
