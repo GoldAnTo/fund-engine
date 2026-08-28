@@ -612,6 +612,89 @@ def test_model_provider_failure_is_requeued_with_bounded_backoff(session) -> Non
     assert "provider secret\nline two" not in str(company_event.payload)
 
 
+def test_model_provider_validation_error_is_sanitized_at_provider_boundary(
+    session,
+) -> None:
+    initialized = _ready_for_model(session)
+    raw_message = "provider secret\nline two"
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=lambda _input: (_ for _ in ()).throw(
+            ValidationError(raw_message)
+        ),
+    )
+    claim = worker.claim_next()
+    assert claim is not None and claim.step == "model_bundle"
+
+    assert worker.run_claim(claim) == "discarded"
+
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and job is not None
+    assert (preparation.status, preparation.last_error_code) == (
+        "blocked",
+        "validation_failed",
+    )
+    assert (job.status, job.error) == ("failed", "validation_failed")
+    job_events = tuple(
+        session.scalars(
+            select(JobEvent)
+            .where(JobEvent.job_id == job.id)
+            .order_by(JobEvent.seq)
+        )
+    )
+    assert job_events[-1].message == "validation_failed"
+    company_events = CompanyResearchRepository(session).events(preparation.id)
+    company_event = company_events[-1]
+    assert company_event.event_type == "model_preparation_blocked"
+    assert company_event.payload == {"code": "validation_failed"}
+    persisted_diagnostics = (
+        job.error,
+        *(event.message for event in job_events),
+        *(str(event.payload) for event in company_events),
+    )
+    for forbidden in ("provider", "secret", "line two", raw_message):
+        assert all(forbidden not in str(value) for value in persisted_diagnostics)
+
+
+def test_post_provider_bundle_validation_diagnostic_remains_actionable(
+    session, monkeypatch
+) -> None:
+    initialized = _ready_for_model(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None and claim.step == "model_bundle"
+    monkeypatch.setattr(
+        worker,
+        "_persisted_bundle",
+        lambda *_args: (_ for _ in ()).throw(
+            ValidationError("trusted bundle validation failed")
+        ),
+    )
+
+    assert worker.run_claim(claim) == "discarded"
+
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and job is not None
+    assert preparation.last_error_code == "validation_failed"
+    assert job.error == "validation_failed: trusted bundle validation failed"
+    job_events = tuple(
+        session.scalars(
+            select(JobEvent)
+            .where(JobEvent.job_id == job.id)
+            .order_by(JobEvent.seq)
+        )
+    )
+    assert job_events[-1].message == "trusted bundle validation failed"
+    company_event = CompanyResearchRepository(session).events(preparation.id)[-1]
+    assert company_event.payload == {
+        "code": "validation_failed",
+        "message": "trusted bundle validation failed",
+    }
+
+
 def test_manual_retry_keeps_a_model_failure_on_the_model_bundle_step(session) -> None:
     initialized = _ready_for_model(session)
     worker = CompanyResearchPreparationWorker(

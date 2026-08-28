@@ -758,12 +758,36 @@ class CompanyResearchPreparationWorker:
                 # publish those immutable inputs and release their transaction
                 # before invoking a potentially slow provider.
                 self._session.commit()
+            except ValidationError as exc:
+                self._session.rollback()
+                self._block(claim, error_message=str(exc))
+                return "discarded"
+            except CompanyResearchValidationError:
+                self._session.rollback()
+                self._block(claim)
+                return "discarded"
+            except Exception:
+                self._session.rollback()
+                raise
+            try:
                 result = self._compile_model(boundary.build_input)
-                bundle = self._persisted_bundle(boundary, result)
             except RETRYABLE_PROVIDER_ERRORS:
                 self._session.rollback()
                 self._recoverable_failure(claim)
                 return "recoverable_failure"
+            except (
+                AlphabetGoldenCaseFixtureError,
+                CompanyResearchValidationError,
+                ValidationError,
+            ):
+                self._session.rollback()
+                self._block(claim)
+                return "discarded"
+            except Exception:
+                self._session.rollback()
+                raise
+            try:
+                bundle = self._persisted_bundle(boundary, result)
             except ValidationError as exc:
                 self._session.rollback()
                 self._block(claim, error_message=str(exc))
