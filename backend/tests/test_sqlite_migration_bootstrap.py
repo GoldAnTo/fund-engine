@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import os
 import subprocess
 import sys
 from uuid import UUID
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -932,6 +933,232 @@ def test_0069_event_hash_version_migration_downgrades_cleanly(tmp_path) -> None:
             "no_delete_uw_company_research_events",
         }
     engine.dispose()
+
+
+def test_0069_frozen_hash_algorithms_match_production_golden_values() -> None:
+    from app.underwriting.persistence.company_research_repository import (
+        CompanyResearchRepository,
+    )
+
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0069_company_research_event_hash_version.py"
+    )
+    module_spec = importlib.util.spec_from_file_location(
+        "migration_0069_event_hash_golden", migration_path
+    )
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    migration = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(migration)
+    preparation_id = UUID("11111111-1111-1111-1111-111111111111")
+    created_at = datetime(2026, 8, 29, tzinfo=UTC)
+    payload = {"request_hash": "a" * 64}
+    row = {
+        "preparation_id": preparation_id.hex,
+        "sequence": 1,
+        "previous_event_hash": None,
+        "event_type": "initialized",
+        "payload": payload,
+        "created_at": created_at.replace(tzinfo=None),
+    }
+
+    assert migration._event_hash(row, version=1) == (
+        "69e3d6a8ae4295e2221c57578fa1287e9b4a92eda9fe6f2535529a0574c3142f"
+    )
+    assert migration._event_hash(row, version=2) == (
+        "7951a8987bd0e01081cf0a66628e6c6df1e1bf3dd1766c9dea09634f4a7854ed"
+    )
+    assert CompanyResearchRepository.event_content_hash(
+        preparation_id=preparation_id,
+        sequence=1,
+        previous_event_hash=None,
+        event_type="initialized",
+        payload=payload,
+    ) == migration._event_hash(row, version=1)
+    assert CompanyResearchRepository.event_content_hash_v2(
+        preparation_id=preparation_id,
+        sequence=1,
+        previous_event_hash=None,
+        event_type="initialized",
+        payload=payload,
+        created_at=created_at,
+    ) == migration._event_hash(row, version=2)
+
+
+def _company_event_hash(
+    *,
+    version: int,
+    preparation_id: UUID,
+    sequence: int,
+    previous_event_hash: str | None,
+    event_type: str,
+    payload: dict[str, object],
+    created_at: datetime,
+) -> str:
+    value: dict[str, object] = {
+        "schema_version": f"company-research-event.v{version}",
+        "preparation_id": str(preparation_id),
+        "sequence": sequence,
+        "previous_event_hash": previous_event_hash,
+        "event_type": event_type,
+        "payload": payload,
+    }
+    if version == 2:
+        value["created_at"] = created_at.astimezone(UTC).isoformat()
+    serialized = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _seed_pre_0069_event_history(
+    database_url: str, *, versions: tuple[int, ...], unmatched: bool = False
+) -> UUID:
+    preparation_id = UUID("11111111-1111-1111-1111-111111111111")
+    engine = sa.create_engine(database_url)
+    with engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.execute(
+            sa.text(
+                "DROP TRIGGER no_update_uw_company_research_events"
+            )
+        )
+        connection.execute(
+            sa.text(
+                "DROP TRIGGER no_delete_uw_company_research_events"
+            )
+        )
+        previous_hash = None
+        created_at = datetime(2026, 8, 29, tzinfo=UTC)
+        for sequence, version in enumerate(versions, start=1):
+            payload = {"stage": f"stage-{sequence}"}
+            content_hash = _company_event_hash(
+                version=version,
+                preparation_id=preparation_id,
+                sequence=sequence,
+                previous_event_hash=previous_hash,
+                event_type="test_event",
+                payload=payload,
+                created_at=created_at,
+            )
+            if unmatched and sequence == len(versions):
+                content_hash = "f" * 64
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_company_research_events ("
+                    "id, preparation_id, sequence, previous_event_hash, "
+                    "event_type, payload, content_hash, created_at"
+                    ") VALUES ("
+                    ":id, :preparation_id, :sequence, :previous_event_hash, "
+                    ":event_type, :payload, :content_hash, :created_at)"
+                ),
+                {
+                    "id": UUID(int=sequence).hex,
+                    "preparation_id": preparation_id.hex,
+                    "sequence": sequence,
+                    "previous_event_hash": previous_hash,
+                    "event_type": "test_event",
+                    "payload": json.dumps(payload),
+                    "content_hash": content_hash,
+                    "created_at": created_at.replace(tzinfo=None),
+                },
+            )
+            previous_hash = content_hash
+            created_at += timedelta(seconds=1)
+        connection.commit()
+    engine.dispose()
+    return preparation_id
+
+
+@pytest.mark.parametrize(
+    ("versions", "expected"),
+    (
+        ((1, 1), (1, 1)),
+        ((2, 2), (2, 2)),
+        ((1, 2), (1, 2)),
+    ),
+)
+def test_0069_authenticates_populated_event_hash_histories(
+    tmp_path, versions: tuple[int, ...], expected: tuple[int, ...]
+) -> None:
+    from app.underwriting.persistence.company_research_repository import (
+        CompanyResearchRepository,
+    )
+
+    database_path = tmp_path / f"event-hashes-{'-'.join(map(str, versions))}.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    initial = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0068"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert initial.returncode == 0, initial.stderr
+    preparation_id = _seed_pre_0069_event_history(
+        environment["DATABASE_URL"], versions=versions
+    )
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0069"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert upgraded.returncode == 0, upgraded.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with sessionmaker(engine)() as session:
+        events = CompanyResearchRepository(session).events(preparation_id)
+        assert tuple(event.hash_version for event in events) == expected
+    engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("versions", "unmatched"),
+    (((2, 1), False), ((1,), True)),
+)
+def test_0069_rejects_unauthenticated_or_downgraded_event_history(
+    tmp_path, versions: tuple[int, ...], unmatched: bool
+) -> None:
+    database_path = tmp_path / "invalid-event-hashes.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    initial = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0068"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert initial.returncode == 0, initial.stderr
+    _seed_pre_0069_event_history(
+        environment["DATABASE_URL"], versions=versions, unmatched=unmatched
+    )
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0069"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert upgraded.returncode != 0
+    assert "cannot authenticate company research event history" in upgraded.stderr
 
 
 def test_0061_downgrade_removes_only_wave2_economic_model_tables(tmp_path) -> None:
@@ -2300,7 +2527,11 @@ def test_live_case_runner_bootstraps_its_database_before_materializing(
 
 def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> None:
     import app.models  # noqa: F401 - register the complete metadata
-    from app.db_migrations import upgrade_database_to_head
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        require_company_research_event_schema,
+        upgrade_database_to_head,
+    )
     from app.models.ledger import Base, ResearchCase
     from sqlalchemy.orm import Session
 
@@ -2316,11 +2547,55 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
         )
         session.commit()
 
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="company research event schema",
+    ):
+        require_company_research_event_schema(database_url)
+
     upgrade_database_to_head(database_url)
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
         assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0069"
+        assert {
+            row[0]
+            for row in connection.execute(
+                sa.text(
+                    "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                    "AND tbl_name = 'uw_company_research_events'"
+                )
+            )
+        } == {
+            "no_update_uw_company_research_events",
+            "no_delete_uw_company_research_events",
+        }
+    require_company_research_event_schema(database_url)
+
+    with engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.exec_driver_sql(
+            "INSERT INTO uw_company_research_events ("
+            "id, preparation_id, sequence, hash_version, previous_event_hash, "
+            "event_type, payload, content_hash, created_at"
+            ") VALUES ("
+            "'00000000000000000000000000000001', "
+            "'11111111111111111111111111111111', 1, 2, NULL, "
+            "'test', '{}', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', "
+            "'2026-08-29 00:00:00')"
+        )
+        connection.commit()
+        with pytest.raises(sa.exc.DatabaseError, match="append-only"):
+            connection.exec_driver_sql(
+                "UPDATE uw_company_research_events SET event_type = 'changed'"
+            )
+        connection.rollback()
+        with pytest.raises(sa.exc.DatabaseError, match="append-only"):
+            connection.exec_driver_sql("DELETE FROM uw_company_research_events")
+        connection.rollback()
+        assert connection.exec_driver_sql(
+            "SELECT COUNT(*) FROM uw_company_research_events"
+        ).scalar_one() == 1
 
 
 def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> None:

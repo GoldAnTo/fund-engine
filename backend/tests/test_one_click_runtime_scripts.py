@@ -26,6 +26,28 @@ def test_runtime_control_script_keeps_credentials_local_and_switches_only_app_se
     assert "--volumes" not in script
 
 
+def test_runtime_stops_existing_writers_before_schema_migration() -> None:
+    script = (ROOT / "scripts" / "one-click-runtime.sh").read_text()
+    compose = (ROOT / "docker-compose.one-click.yml").read_text()
+    start = script[
+        script.index("start_one_click_runtime"):script.index(
+            "stop_one_click_runtime"
+        )
+    ]
+
+    stop = start.index(
+        "compose stop api research-worker acquisition-worker "
+        "company-research-worker scheduler frontend"
+    )
+    launch = start.index("compose up -d --no-build")
+    assert stop < launch
+    assert "alembic upgrade head" in compose
+    assert "python -m app.scripts.verify_company_research_schema" in compose
+    assert compose.index("alembic upgrade head") < compose.index(
+        "python -m app.scripts.verify_company_research_schema"
+    )
+
+
 def test_rollback_restarts_only_legacy_application_containers() -> None:
     script = (ROOT / "scripts" / "one-click-runtime.sh").read_text()
     legacy_restore = script[
@@ -76,6 +98,7 @@ case "$1" in
     [[ "$*" == *" config --format json"* ]] && {{ printf '%s' '{{"name":"test-project","volumes":{{"fund-engine-one-click-data":{{"name":"test-db"}}}}}}'; exit 0; }}
     [[ "$*" == *" config -q"* || "$*" == *" build"* ]] && exit 0
     [[ "$*" == *" create postgres"* ]] && exit 0
+    [[ "$*" == *" stop api research-worker acquisition-worker company-research-worker scheduler frontend"* ]] && exit 0
     [[ "$*" == *" up -d --no-build"* ]] && exit 1
     [[ "$*" == *" down"* ]] && {{ [[ "${{FAIL_DOWN:-0}}" == 1 ]] && exit 39 || exit 0; }}
     ;;

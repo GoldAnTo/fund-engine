@@ -591,6 +591,11 @@ start_one_click_runtime() (
   validate_live_postgres_volume "$postgres_volume" "$project_name"
   prepare_legacy_stop_state || die "failed to prerecord legacy application containers"
   stop_legacy_application_services || die "failed to stop legacy application containers"
+  # Stop every writer from an earlier deployment of this same Compose project
+  # before Alembic changes the event hash contract. The new schema deliberately
+  # has no hash_version default, so an old writer can never be silently relabeled.
+  compose stop api research-worker acquisition-worker company-research-worker scheduler frontend \
+    || die "failed to stop existing one-click application services"
   compose up -d --no-build --scale acquisition-worker=3 \
     || die "one-click startup failed"
   rollback_required="false"

@@ -25,7 +25,7 @@ services:
       - sh
       - -eu
       - -c
-      - alembic upgrade head && python -m app.scripts.load_product_foundation_fixture
+      - alembic upgrade head && python -m app.scripts.verify_company_research_schema && python -m app.scripts.load_product_foundation_fixture
     environment:
       DATABASE_URL: postgresql+psycopg://${ONE_CLICK_POSTGRES_USER:?}:${ONE_CLICK_POSTGRES_PASSWORD:?}@postgres:5432/${ONE_CLICK_POSTGRES_DB:?}
     depends_on:
