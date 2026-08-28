@@ -426,15 +426,6 @@ class CompanyResearchWorkbench:
                 CompanyResearchRepository.market_binding_from_payload(value)
                 for value in bindings
             )
-            expected_input_hash = self._company._model_artifact_input_hash(
-                request_hash=preparation.request_hash,
-                artifact_refs=refs,
-                market_snapshot_bindings=parsed_bindings,
-            )
-            if row.input_hash != expected_input_hash:
-                raise ValidationError(
-                    "company research cross-artifact lineage is invalid"
-                )
         market_available = heads["judgment_context"].payload.get(
             "market_security_bridge_available"
         )
@@ -464,6 +455,36 @@ class CompanyResearchWorkbench:
             bindings=parsed,
             cutoff_at=cutoff,
         )
+        draft = WorkspaceDraftService(self._session, now=self._now).read(project_id)
+        if draft is None or draft.content.historical_basis_id is None:
+            raise ValidationError("company research historical basis is invalid")
+        basis = ProductRepository(self._session).product_basis(
+            draft.content.historical_basis_id
+        )
+        if basis is None:
+            raise ValidationError("company research historical basis is invalid")
+        for kind, expected_refs in expectations.items():
+            row = heads[kind]
+            refs, _snapshot_ids, bindings = self._validate_closed_lineage_shape(row)
+            if refs != expected_refs:
+                raise ValidationError(
+                    "company research cross-artifact lineage is invalid"
+                )
+            parsed_bindings = tuple(
+                CompanyResearchRepository.market_binding_from_payload(value)
+                for value in bindings
+            )
+            expected_input_hash = self._company._model_artifact_input_hash(
+                request_hash=preparation.request_hash,
+                artifact_refs=refs,
+                historical_basis_id=basis.id,
+                historical_basis_content_hash=basis.content_hash,
+                market_snapshot_bindings=parsed_bindings,
+            )
+            if row.input_hash != expected_input_hash:
+                raise ValidationError(
+                    "company research cross-artifact lineage is invalid"
+                )
         current_gaps = heads["research_gaps"]
         predecessor_gaps = (
             history_by_id.get(current_gaps.supersedes_id)

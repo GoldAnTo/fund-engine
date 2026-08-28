@@ -45,6 +45,7 @@ from app.underwriting.domain.company_research import CompanyResearchIdentitySet
 from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.models import UnderwritingResearchObject
 from app.underwriting.persistence.product_models import UnderwritingResearchProject
+from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.fixtures.alphabet_golden_case import (
     AlphabetGoldenCaseFixtureError,
 )
@@ -83,6 +84,8 @@ class _ModelBuildBoundary:
     research_gaps_content_hash: str
     workspace_draft_id: UUID
     workspace_draft_lock_version: int
+    historical_basis_id: UUID
+    historical_basis_content_hash: str
     source_refs: tuple[dict[str, str], ...]
 
 
@@ -568,6 +571,22 @@ class CompanyResearchPreparationWorker:
         )
         if draft is None:
             raise ValidationError("company research workspace draft is missing")
+        if draft.content.historical_basis_id is None:
+            raise ValidationError("company research historical basis is missing")
+        basis = ProductRepository(self._session).product_basis(
+            draft.content.historical_basis_id
+        )
+        if basis is None:
+            raise ValidationError("company research historical basis is invalid")
+        try:
+            historical_basis_content_hash = self._repository._require_hash(
+                basis.content_hash,
+                "company research historical basis content hash",
+            )
+        except ValidationError as exc:
+            raise ValidationError(
+                "company research historical basis is invalid"
+            ) from exc
         bindings = (
             governed.market_context.snapshot_bindings
             if governed.market_context is not None
@@ -603,6 +622,8 @@ class CompanyResearchPreparationWorker:
             research_gaps_content_hash=gaps.content_hash,
             workspace_draft_id=draft.id,
             workspace_draft_lock_version=draft.lock_version,
+            historical_basis_id=basis.id,
+            historical_basis_content_hash=historical_basis_content_hash,
             source_refs=source_refs,
         )
 
@@ -643,6 +664,8 @@ class CompanyResearchPreparationWorker:
             research_gaps_content_hash=boundary.research_gaps_content_hash,
             workspace_draft_id=boundary.workspace_draft_id,
             workspace_draft_lock_version=boundary.workspace_draft_lock_version,
+            historical_basis_id=boundary.historical_basis_id,
+            historical_basis_content_hash=boundary.historical_basis_content_hash,
             business_map=payloads["business_map"],
             driver_map=payloads["driver_map"],
             financial_bridge=payloads["financial_bridge"],
@@ -668,6 +691,7 @@ class CompanyResearchPreparationWorker:
                 "claim is stale",
                 "model inputs are stale",
                 "workspace draft is stale",
+                "historical basis is stale",
                 "market bindings do not match workspace draft",
             )
         )

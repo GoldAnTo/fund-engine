@@ -1568,6 +1568,7 @@ class ProductRepository:
                 UnderwritingHistoricalBasis.price_as_of.is_(None),
             )
             .limit(1)
+            .execution_options(populate_existing=True)
         )
 
     def freeze_price(

@@ -5,12 +5,13 @@ import sys
 import uuid
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import bindparam, select, text
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.ledger import ValidationError
 from app.models.operational import Job
 from app.underwriting.hashing import canonical_hash
+from app.underwriting.domain.product_contracts import ProductHistoricalBasisInput
 from app.underwriting.domain.types import InvestmentMandateInput
 from app.underwriting.persistence.company_research_repository import (
     CompanyResearchPersistedBundle,
@@ -19,7 +20,10 @@ from app.underwriting.persistence.company_research_repository import (
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
 )
-from app.underwriting.persistence.models import UnderwritingResearchObject
+from app.underwriting.persistence.models import (
+    UnderwritingHistoricalBasis,
+    UnderwritingResearchObject,
+)
 from app.underwriting.persistence.product_models import (
     UnderwritingMarketCaptureEnvelope,
     UnderwritingPriceSnapshot,
@@ -171,6 +175,9 @@ def _model_workspace(
     }
     draft = WorkspaceDraftService(session, now=lambda: NOW).read(initialized.project.id)
     assert draft is not None
+    assert draft.content.historical_basis_id is not None
+    basis = ProductRepository(session).product_basis(draft.content.historical_basis_id)
+    assert basis is not None
     bundle = CompanyResearchPersistedBundle(
         evidence_artifact_id=current.id,
         evidence_content_hash=current.content_hash,
@@ -178,6 +185,8 @@ def _model_workspace(
         research_gaps_content_hash=prior_gaps.content_hash,
         workspace_draft_id=draft.id,
         workspace_draft_lock_version=draft.lock_version,
+        historical_basis_id=basis.id,
+        historical_basis_content_hash=basis.content_hash,
         business_map=payloads["business_map"],
         driver_map=payloads["driver_map"],
         financial_bridge=payloads["financial_bridge"],
@@ -237,6 +246,37 @@ def _rewrite_source_refs(row, source_refs) -> None:
     )
     set_committed_value(row, "source_refs", copied)
     set_committed_value(row, "content_hash", content_hash)
+
+
+def _durably_tamper_basis_source_manifest_hash(session, basis) -> None:
+    table = UnderwritingHistoricalBasis.__table__
+    statement = text(
+        "UPDATE uw_historical_bases "
+        "SET source_manifest_hash = :source_manifest_hash "
+        "WHERE id = :basis_id"
+    ).bindparams(
+        bindparam(
+            "source_manifest_hash",
+            type_=table.c.source_manifest_hash.type,
+        ),
+        bindparam("basis_id", type_=table.c.id.type),
+    )
+    connection = session.connection()
+    disable_trigger = text("ALTER TABLE uw_historical_bases DISABLE TRIGGER USER")
+    enable_trigger = text("ALTER TABLE uw_historical_bases ENABLE TRIGGER USER")
+    if connection.dialect.name == "postgresql":
+        connection.execute(disable_trigger)
+    try:
+        connection.execute(
+            statement,
+            {
+                "source_manifest_hash": "0" * 64,
+                "basis_id": basis.id,
+            },
+        )
+    finally:
+        if connection.dialect.name == "postgresql":
+            connection.execute(enable_trigger)
 
 
 def test_workspace_is_a_closed_snapshot_of_the_review_gate(session) -> None:
@@ -387,12 +427,18 @@ def test_workbench_accepts_one_closed_model_bundle(session) -> None:
     assert market_ids
     preparation = repository.preparation_for_project(initialized.project.id)
     assert preparation is not None
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(initialized.project.id)
+    assert draft is not None and draft.content.historical_basis_id is not None
+    basis = ProductRepository(session).product_basis(draft.content.historical_basis_id)
+    assert basis is not None
     for row in heads.values():
         assert row.payload["_lineage"]["market_snapshot_ids"] == market_ids
         assert row.input_hash == canonical_hash(
             {
                 "request_hash": preparation.request_hash,
                 "artifact_refs": row.payload["_lineage"]["artifact_refs"],
+                "historical_basis_id": str(basis.id),
+                "historical_basis_content_hash": basis.content_hash,
                 "market_snapshot_ids": market_ids,
                 "market_snapshot_bindings": row.payload["_lineage"][
                     "market_snapshot_bindings"
@@ -412,12 +458,45 @@ def test_workbench_fails_closed_when_historical_basis_source_differs_from_eviden
     assert draft.content.historical_basis_id is not None
     basis = ProductRepository(session).product_basis(draft.content.historical_basis_id)
     assert basis is not None
-    set_committed_value(basis, "source_manifest_hash", "0" * 64)
+    _durably_tamper_basis_source_manifest_hash(session, basis)
+    assert basis.source_manifest_hash != "0" * 64
 
     with pytest.raises(
         ValidationError,
         match="historical basis source does not match reviewed evidence",
     ):
+        workbench.workspace(project_id=initialized.project.id)
+
+
+def test_workbench_rejects_a_substitute_historical_basis_after_publication(
+    session,
+) -> None:
+    initialized, workbench, _repository = _model_workspace(session)
+    drafts = WorkspaceDraftService(session, now=lambda: NOW)
+    draft = drafts.read(initialized.project.id)
+    assert draft is not None
+    assert draft.content.historical_basis_id is not None
+    original = ProductRepository(session).product_basis(
+        draft.content.historical_basis_id
+    )
+    assert original is not None
+    substitute = ResearchProjectService(
+        session, now=lambda: NOW
+    ).create_historical_basis(
+        ProductHistoricalBasisInput(
+            cutoff_at=CompanyResearchRepository._persisted_utc(original.cutoff),
+            source_manifest_hash=original.source_manifest_hash,
+            definition_bundle_hash="d" * 64,
+            parser_bundle_hash="e" * 64,
+        )
+    )
+    drafts.save(
+        initialized.project.id,
+        expected_lock_version=draft.lock_version,
+        patch=WorkspaceDraftPatch(historical_basis_id=substitute.id),
+    )
+
+    with pytest.raises(ValidationError, match="cross-artifact lineage is invalid"):
         workbench.workspace(project_id=initialized.project.id)
 
 
@@ -475,6 +554,11 @@ def test_optional_valuation_tracks_the_current_model_epoch_across_rebuilds(
         }
         draft = drafts.read(project_id)
         assert draft is not None
+        assert draft.content.historical_basis_id is not None
+        basis = ProductRepository(session).product_basis(
+            draft.content.historical_basis_id
+        )
+        assert basis is not None
         repository.complete_model_bundle(
             preparation.id,
             bundle=CompanyResearchPersistedBundle(
@@ -484,6 +568,8 @@ def test_optional_valuation_tracks_the_current_model_epoch_across_rebuilds(
                 research_gaps_content_hash=gaps.content_hash,
                 workspace_draft_id=draft.id,
                 workspace_draft_lock_version=draft.lock_version,
+                historical_basis_id=basis.id,
+                historical_basis_content_hash=basis.content_hash,
                 business_map=payloads["business_map"],
                 driver_map=payloads["driver_map"],
                 financial_bridge=payloads["financial_bridge"],
@@ -890,9 +976,12 @@ def test_model_artifact_input_hash_is_sensitive_to_every_market_binding_field(
         if field == "security_external_key"
         else governed.market_context.snapshot_bindings[0]
     )
+    historical_basis_id = uuid.uuid4()
     original = CompanyResearchRepository._model_artifact_input_hash(
         request_hash="a" * 64,
         artifact_refs=(),
+        historical_basis_id=historical_basis_id,
+        historical_basis_content_hash="b" * 64,
         market_snapshot_bindings=(binding,),
     )
     if field in {
@@ -954,6 +1043,8 @@ def test_model_artifact_input_hash_is_sensitive_to_every_market_binding_field(
     mutated = CompanyResearchRepository._model_artifact_input_hash(
         request_hash="a" * 64,
         artifact_refs=(),
+        historical_basis_id=historical_basis_id,
+        historical_basis_content_hash="b" * 64,
         market_snapshot_bindings=(changed,),
     )
 
@@ -966,7 +1057,13 @@ def test_workbench_rejects_source_identity_tamper_even_with_rehashed_artifact(
     initialized, workbench, repository = _model_workspace(session)
     driver = repository.current_artifact(initialized.project.id, "driver_map")
     preparation = repository.preparation_for_project(initialized.project.id)
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
     assert driver is not None and preparation is not None
+    assert draft is not None and draft.content.historical_basis_id is not None
+    basis = ProductRepository(session).product_basis(draft.content.historical_basis_id)
+    assert basis is not None
     payload = dict(driver.payload)
     lineage = dict(payload["_lineage"])
     bindings = [dict(value) for value in lineage["market_snapshot_bindings"]]
@@ -981,6 +1078,8 @@ def test_workbench_rejects_source_identity_tamper_even_with_rehashed_artifact(
         {
             "request_hash": preparation.request_hash,
             "artifact_refs": lineage["artifact_refs"],
+            "historical_basis_id": str(basis.id),
+            "historical_basis_content_hash": basis.content_hash,
             "market_snapshot_ids": lineage["market_snapshot_ids"],
             "market_snapshot_bindings": bindings,
         }

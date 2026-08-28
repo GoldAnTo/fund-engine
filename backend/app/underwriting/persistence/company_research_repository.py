@@ -85,6 +85,8 @@ class CompanyResearchPersistedBundle:
     research_gaps_content_hash: str
     workspace_draft_id: UUID
     workspace_draft_lock_version: int
+    historical_basis_id: UUID
+    historical_basis_content_hash: str
     business_map: Mapping[str, object]
     driver_map: Mapping[str, object]
     financial_bridge: Mapping[str, object]
@@ -116,6 +118,7 @@ class CompanyResearchPersistedBundle:
             type(self.evidence_artifact_id) is not UUID
             or type(self.research_gaps_artifact_id) is not UUID
             or type(self.workspace_draft_id) is not UUID
+            or type(self.historical_basis_id) is not UUID
             or type(self.workspace_draft_lock_version) is not int
             or self.workspace_draft_lock_version < 1
         ):
@@ -123,6 +126,7 @@ class CompanyResearchPersistedBundle:
         for value in (
             self.evidence_content_hash,
             self.research_gaps_content_hash,
+            self.historical_basis_content_hash,
         ):
             if not isinstance(value, str) or _HASH.fullmatch(value) is None:
                 raise ValidationError(
@@ -316,6 +320,8 @@ class CompanyResearchRepository:
         bindings: Sequence[FrozenMarketSnapshotBinding],
         expected_cutoff_at: datetime,
         expected_source_manifest_hash: str,
+        expected_historical_basis_id: UUID | None = None,
+        expected_historical_basis_content_hash: str | None = None,
         expected_draft_id: UUID | None = None,
         expected_lock_version: int | None = None,
         lock: bool = False,
@@ -342,6 +348,11 @@ class CompanyResearchRepository:
         )
         if basis is None:
             raise ValidationError("company research historical basis is invalid")
+        if (
+            expected_historical_basis_id is not None
+            and basis.id != expected_historical_basis_id
+        ):
+            raise ValidationError("company research historical basis is stale")
         cutoff = self._persisted_utc(basis.cutoff)
         expected_cutoff = self._stored_datetime(
             expected_cutoff_at, "expected_cutoff_at"
@@ -368,7 +379,9 @@ class CompanyResearchRepository:
                 "historical basis parser bundle hash",
             )
         except ValidationError as exc:
-            raise ValidationError("company research historical basis is invalid") from exc
+            raise CompanyResearchIntegrityError(
+                "company research historical basis is invalid"
+            ) from exc
         if basis.content_hash != canonical_hash(
             {
                 "schema_version": "product.historical-basis.v1",
@@ -378,7 +391,14 @@ class CompanyResearchRepository:
                 "parser_bundle_hash": parser_bundle_hash,
             }
         ):
-            raise ValidationError("company research historical basis is invalid")
+            raise CompanyResearchIntegrityError(
+                "company research historical basis is invalid"
+            )
+        if (
+            expected_historical_basis_content_hash is not None
+            and basis.content_hash != expected_historical_basis_content_hash
+        ):
+            raise ValidationError("company research historical basis is stale")
         bindings_by_role = {
             role: tuple(
                 sorted(
@@ -1160,8 +1180,16 @@ class CompanyResearchRepository:
         *,
         request_hash: str,
         artifact_refs: Sequence[Mapping[str, str]],
+        historical_basis_id: UUID,
+        historical_basis_content_hash: str,
         market_snapshot_bindings: Sequence[FrozenMarketSnapshotBinding] = (),
     ) -> str:
+        if type(historical_basis_id) is not UUID:
+            raise ValidationError("company research model historical basis is invalid")
+        historical_basis_content_hash = CompanyResearchRepository._require_hash(
+            historical_basis_content_hash,
+            "historical_basis_content_hash",
+        )
         binding_payloads = [
             CompanyResearchRepository._market_binding_payload(value)
             for value in market_snapshot_bindings
@@ -1170,6 +1198,8 @@ class CompanyResearchRepository:
             {
                 "request_hash": request_hash,
                 "artifact_refs": list(artifact_refs),
+                "historical_basis_id": str(historical_basis_id),
+                "historical_basis_content_hash": historical_basis_content_hash,
                 "market_snapshot_ids": [
                     str(value.snapshot_id) for value in market_snapshot_bindings
                 ],
@@ -1440,6 +1470,8 @@ class CompanyResearchRepository:
             bindings=bundle.market_snapshot_bindings,
             expected_cutoff_at=evidence_cutoff,
             expected_source_manifest_hash=evidence_source_manifest_hash,
+            expected_historical_basis_id=bundle.historical_basis_id,
+            expected_historical_basis_content_hash=bundle.historical_basis_content_hash,
             expected_draft_id=bundle.workspace_draft_id,
             expected_lock_version=bundle.workspace_draft_lock_version,
             lock=True,
@@ -1497,6 +1529,10 @@ class CompanyResearchRepository:
                     input_hash=self._model_artifact_input_hash(
                         request_hash=request_hash,
                         artifact_refs=refs,
+                        historical_basis_id=bundle.historical_basis_id,
+                        historical_basis_content_hash=(
+                            bundle.historical_basis_content_hash
+                        ),
                         market_snapshot_bindings=market_snapshot_bindings,
                     ),
                     payload=self._model_artifact_payload(
@@ -1545,6 +1581,8 @@ class CompanyResearchRepository:
             gap_input_hash = self._model_artifact_input_hash(
                 request_hash=request_hash,
                 artifact_refs=gap_refs,
+                historical_basis_id=bundle.historical_basis_id,
+                historical_basis_content_hash=bundle.historical_basis_content_hash,
                 market_snapshot_bindings=market_snapshot_bindings,
             )
             planned_gap_id = uuid4()

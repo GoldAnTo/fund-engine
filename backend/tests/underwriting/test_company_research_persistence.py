@@ -28,9 +28,13 @@ from app.underwriting.persistence.company_research_repository import (
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.persistence.models import (
     UnderwritingHistoricalBasis,
+    UnderwritingMandateVersion,
     UnderwritingResearchObject,
 )
-from app.underwriting.persistence.product_models import UnderwritingResearchProject
+from app.underwriting.persistence.product_models import (
+    UnderwritingResearchProject,
+    UnderwritingWorkspaceDraft,
+)
 from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.domain.product_contracts import ProductHistoricalBasisInput
 from app.underwriting.domain.types import InvestmentMandateInput
@@ -220,6 +224,9 @@ def _repository_with_model_job(session):
     payloads = _valid_model_payloads(with_valuation=False)
     draft = WorkspaceDraftService(session, now=lambda: NOW).read(project.id)
     assert draft is not None
+    assert draft.content.historical_basis_id is not None
+    basis = ProductRepository(session).product_basis(draft.content.historical_basis_id)
+    assert basis is not None
     bundle = CompanyResearchPersistedBundle(
         evidence_artifact_id=evidence.id,
         evidence_content_hash=evidence.content_hash,
@@ -227,6 +234,8 @@ def _repository_with_model_job(session):
         research_gaps_content_hash=gaps.content_hash,
         workspace_draft_id=draft.id,
         workspace_draft_lock_version=draft.lock_version,
+        historical_basis_id=basis.id,
+        historical_basis_content_hash=basis.content_hash,
         business_map=payloads["business_map"],
         driver_map=payloads["driver_map"],
         financial_bridge=payloads["financial_bridge"],
@@ -261,6 +270,32 @@ def _basis_for_workspace(session, project):
     return basis
 
 
+def _substitute_basis(session, project):
+    original = _basis_for_workspace(session, project)
+    return ResearchProjectService(session, now=lambda: NOW).create_historical_basis(
+        ProductHistoricalBasisInput(
+            cutoff_at=CompanyResearchRepository._persisted_utc(original.cutoff),
+            source_manifest_hash=original.source_manifest_hash,
+            definition_bundle_hash="d" * 64,
+            parser_bundle_hash="e" * 64,
+        )
+    )
+
+
+def _rebind_historical_basis_without_updating_draft_lock(
+    session, project, basis_id
+) -> None:
+    draft = ProductRepository(session).workspace_draft(project.id)
+    assert draft is not None
+    content = {**draft.content, "historical_basis_id": str(basis_id)}
+    _tamper_row(
+        session,
+        UnderwritingWorkspaceDraft,
+        draft.id,
+        content=content,
+    )
+
+
 def _save_workspace_draft(session, project, bundle, patch):
     drafts = WorkspaceDraftService(session, now=lambda: NOW)
     draft = drafts.read(project.id)
@@ -277,7 +312,7 @@ def _save_workspace_draft(session, project, bundle, patch):
     )
 
 
-def _tamper_row(session, model, row_id, **values) -> None:
+def _tamper_row(session, model, row_id, *, expire: bool = True, **values) -> None:
     """Bypass ORM immutability with dialect-typed named SQL parameters."""
     table = model.__table__
     if not values or any(key not in table.c for key in values):
@@ -300,7 +335,8 @@ def _tamper_row(session, model, row_id, **values) -> None:
     finally:
         if connection.dialect.name == "postgresql":
             connection.execute(enable_trigger)
-    session.expire_all()
+    if expire:
+        session.expire_all()
 
 
 def _mutated_bundle_source_refs(bundle, mutation: str):
@@ -377,8 +413,16 @@ def test_model_bundle_rolls_back_every_artifact_on_failure(
 def test_complete_model_bundle_succeeds_when_mandate_effective_at_differs_from_evidence(
     session,
 ) -> None:
-    repository, _project, preparation, job, evidence, old_gaps, bundle = (
+    repository, project, preparation, job, evidence, old_gaps, bundle = (
         _repository_with_model_job(session)
+    )
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(project.id)
+    assert draft is not None and draft.content.mandate_id is not None
+    mandate = session.get(UnderwritingMandateVersion, draft.content.mandate_id)
+    assert mandate is not None
+    assert mandate.effective_at is not None
+    assert CompanyResearchRepository._persisted_utc(mandate.effective_at) != (
+        CompanyResearchRepository.evidence_cutoff(evidence)
     )
 
     updated, rows = _complete_model_bundle(repository, preparation, bundle)
@@ -440,10 +484,57 @@ def test_complete_model_bundle_succeeds_when_mandate_effective_at_differs_from_e
             {
                 "request_hash": preparation.request_hash,
                 "artifact_refs": lineage["artifact_refs"],
+                "historical_basis_id": str(bundle.historical_basis_id),
+                "historical_basis_content_hash": bundle.historical_basis_content_hash,
                 "market_snapshot_ids": lineage["market_snapshot_ids"],
                 "market_snapshot_bindings": lineage["market_snapshot_bindings"],
             }
         )
+
+
+def test_complete_model_bundle_rejects_a_substitute_historical_basis_captured_for_bundle(
+    session,
+) -> None:
+    repository, project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    substitute = _substitute_basis(session, project)
+    _rebind_historical_basis_without_updating_draft_lock(
+        session,
+        project,
+        substitute.id,
+    )
+
+    with pytest.raises(ValidationError, match="historical basis is stale"):
+        _complete_model_bundle(repository, preparation, bundle)
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
+def test_complete_model_bundle_refreshes_a_durably_tampered_cached_basis(
+    session,
+) -> None:
+    repository, project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    basis = _basis_for_workspace(session, project)
+    original_source_manifest_hash = basis.source_manifest_hash
+    _tamper_row(
+        session,
+        UnderwritingHistoricalBasis,
+        basis.id,
+        expire=False,
+        source_manifest_hash="7" * 64,
+    )
+    assert basis.source_manifest_hash == original_source_manifest_hash
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis source does not match reviewed evidence",
+    ):
+        _complete_model_bundle(repository, preparation, bundle)
+
+    assert repository.current_artifact(project.id, "business_map") is None
 
 
 def test_complete_model_bundle_requires_a_historical_basis(session) -> None:
@@ -568,7 +659,10 @@ def test_complete_model_bundle_rejects_a_historical_basis_with_invalid_bundle_ha
     basis = _basis_for_workspace(session, project)
     _tamper_row(session, UnderwritingHistoricalBasis, basis.id, **{field: value})
 
-    with pytest.raises(ValidationError, match="historical basis is invalid"):
+    with pytest.raises(
+        CompanyResearchIntegrityError,
+        match="historical basis is invalid",
+    ):
         _complete_model_bundle(repository, preparation, bundle)
 
     assert repository.current_artifact(project.id, "business_map") is None
@@ -588,7 +682,10 @@ def test_complete_model_bundle_rejects_a_historical_basis_with_a_corrupted_conte
         content_hash="0" * 64,
     )
 
-    with pytest.raises(ValidationError, match="historical basis is invalid"):
+    with pytest.raises(
+        CompanyResearchIntegrityError,
+        match="historical basis is invalid",
+    ):
         _complete_model_bundle(repository, preparation, bundle)
 
     assert repository.current_artifact(project.id, "business_map") is None
@@ -842,6 +939,8 @@ def test_complete_model_bundle_omits_optional_valuation_and_keeps_lineage_closed
         research_gaps_content_hash=bundle.research_gaps_content_hash,
         workspace_draft_id=bundle.workspace_draft_id,
         workspace_draft_lock_version=bundle.workspace_draft_lock_version,
+        historical_basis_id=bundle.historical_basis_id,
+        historical_basis_content_hash=bundle.historical_basis_content_hash,
         business_map=bundle.business_map,
         driver_map=bundle.driver_map,
         financial_bridge=bundle.financial_bridge,
