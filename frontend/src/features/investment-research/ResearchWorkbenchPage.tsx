@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { investmentResearchApi, type CompanyResearchWorkspace, type ProductProject } from "../../data/investmentResearchApi";
-import { COMPANY_RESEARCH_MODULES, answerabilityView, artifactByKind, type CompanyResearchModuleKey, numericObservationView, preparationIsActive } from "./companyResearchView";
+import { COMPANY_RESEARCH_MODULES, answerabilityView, artifactByKind, type CompanyResearchModuleKey, numericObservationView, preparationIsActive, workspaceSnapshotIsMonotonic } from "./companyResearchView";
 
 type WorkspaceArtifact = CompanyResearchWorkspace["artifacts"][number];
 type EvidenceArtifact = Extract<WorkspaceArtifact, { kind: "evidence_index" }>;
@@ -10,6 +10,8 @@ type NumericObservation = EvidenceArtifact["payload"]["facts"][number]["observat
 type EvidenceFact = EvidenceArtifact["payload"]["facts"][number];
 type ReviewDecision = "confirmed" | "rejected";
 type ModuleState = CompanyResearchWorkspace["modules"][number]["state"];
+type ValuationState = CompanyResearchWorkspace["modules"][number]["valuation_state"];
+type CommittedReview = { factKey: string; decision: ReviewDecision; previousEvidence: EvidenceArtifact; successor: EvidenceArtifact };
 
 const PREPARATION_LABELS: Record<CompanyResearchWorkspace["preparation"]["status"], string> = {
   queued: "已排队", preparing_sources: "准备来源", awaiting_evidence_review: "等待证据审核", building_model: "构建模型",
@@ -21,6 +23,24 @@ const MODULE_STATE_LABELS: Record<CompanyResearchWorkspace["modules"][number]["s
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
+}
+
+function factWithoutDecision(fact: EvidenceFact): Omit<EvidenceFact, "review_decision"> {
+  const { review_decision: _decision, ...rest } = fact as EvidenceFact & { review_decision?: ReviewDecision };
+  return rest;
+}
+
+function reviewSuccessorIsExact(projectId: string, previous: EvidenceArtifact, successor: EvidenceArtifact, factKey: string, decision: ReviewDecision): boolean {
+  if (successor.project_id !== projectId || successor.version !== previous.version + 1) return false;
+  const reviewed = successor.payload.facts.find((item) => item.fact_key === factKey);
+  if (!reviewed || !("review_decision" in reviewed) || reviewed.review_decision !== decision) return false;
+  const submitted = previous.payload.facts.find((item) => item.fact_key === factKey);
+  if (!submitted || JSON.stringify(factWithoutDecision(reviewed)) !== JSON.stringify(factWithoutDecision(submitted))) return false;
+  return previous.payload.facts.every((currentFact) => {
+    if (currentFact.fact_key === factKey) return true;
+    const nextFact = successor.payload.facts.find((item) => item.fact_key === currentFact.fact_key);
+    return nextFact !== undefined && JSON.stringify(nextFact) === JSON.stringify(currentFact);
+  });
 }
 
 function workspaceCutoff(workspace: CompanyResearchWorkspace): string | null {
@@ -90,14 +110,14 @@ function DriversPanel({ workspace }: { workspace: CompanyResearchWorkspace }) {
   return <div className="ir-research-list">{artifact.payload.drivers.map((driver) => <article key={driver.driver_key}><h3>{driver.driver_key}</h3><p>{driver.equation}</p>{driver.assumption_rationale ? <p>{driver.assumption_rationale}</p> : null}<div className="ir-numeric-grid">{driver.values.map((item) => <NumericCard artifact={artifact} key={`${driver.driver_key}-${item.key}-${item.period}`} label={item.key} observation={item} cutoff={cutoff} />)}</div></article>)}</div>;
 }
 
-function EvidencePanel({ workspace, reviewingFact, onReview }: { workspace: CompanyResearchWorkspace; reviewingFact: string | null; onReview: (fact: EvidenceFact, decision: ReviewDecision, button: HTMLButtonElement) => void }) {
+function EvidencePanel({ workspace, reviewLocked, onReview }: { workspace: CompanyResearchWorkspace; reviewLocked: boolean; onReview: (fact: EvidenceFact, decision: ReviewDecision, button: HTMLButtonElement) => void }) {
   const evidence = artifactByKind(workspace, "evidence_index");
   const gaps = artifactByKind(workspace, "research_gaps");
   if (!evidence) return <EmptyModule message="证据索引仍在准备。" />;
   const gapItems = gaps && "gaps" in gaps.payload ? gaps.payload.gaps : [];
   return <div className="ir-evidence-layout"><section><h3>事实候选与审核</h3><div className="ir-evidence-list">{evidence.payload.facts.map((fact) => {
     const reviewed = "review_decision" in fact ? fact.review_decision : null;
-    return <article key={fact.fact_key} aria-label={`事实 ${fact.fact_key}`}><header><strong>{fact.metric_key}</strong><span>{reviewed === "confirmed" ? "已确认" : reviewed === "rejected" ? "已驳回" : "候选事实"}</span></header><NumericCard artifact={evidence} label={fact.metric_key} observation={fact.observation} cutoff={evidence.payload.cutoff} /><dl><div><dt>来源定位</dt><dd>{fact.source_locator}</dd></div><div><dt>可用时间</dt><dd>{new Date(fact.available_at).toLocaleString("zh-CN")}</dd></div><div><dt>冲突组</dt><dd>接口未提供（不可推断）</dd></div></dl><a href={fact.source_url} target="_blank" rel="noreferrer">查看来源 · {fact.source_locator}</a>{reviewed === null ? <div className="ir-review-actions"><button className="ir-button" disabled={reviewingFact !== null} onClick={(event) => onReview(fact, "confirmed", event.currentTarget)} type="button">确认事实 {fact.fact_key}</button><button className="ir-button" disabled={reviewingFact !== null} onClick={(event) => onReview(fact, "rejected", event.currentTarget)} type="button">驳回事实 {fact.fact_key}</button></div> : null}</article>;
+    return <article key={fact.fact_key} aria-label={`事实 ${fact.fact_key}`}><header><strong>{fact.metric_key}</strong><span>{reviewed === "confirmed" ? "已确认" : reviewed === "rejected" ? "已驳回" : "候选事实"}</span></header><NumericCard artifact={evidence} label={fact.metric_key} observation={fact.observation} cutoff={evidence.payload.cutoff} /><dl><div><dt>来源定位</dt><dd>{fact.source_locator}</dd></div><div><dt>可用时间</dt><dd>{new Date(fact.available_at).toLocaleString("zh-CN")}</dd></div><div><dt>冲突组</dt><dd>接口未提供（不可推断）</dd></div></dl><a href={fact.source_url} target="_blank" rel="noreferrer">查看来源 · {fact.source_locator}</a>{reviewed === null ? <div className="ir-review-actions"><button className="ir-button" disabled={reviewLocked} onClick={(event) => onReview(fact, "confirmed", event.currentTarget)} type="button">确认事实 {fact.fact_key}</button><button className="ir-button" disabled={reviewLocked} onClick={(event) => onReview(fact, "rejected", event.currentTarget)} type="button">驳回事实 {fact.fact_key}</button></div> : null}</article>;
   })}</div></section><section><h3>研究缺口</h3>{gapItems.length > 0 ? <ul>{gapItems.map((gap) => <li key={"gap_key" in gap ? gap.gap_key : gap.code}>{"gap_key" in gap ? `${gap.gap_key} · ${gap.reason}` : `${gap.code} · ${gap.severity} · ${gap.message}`}</li>)}</ul> : <p>当前未记录研究缺口。</p>}</section></div>;
 }
 
@@ -108,16 +128,16 @@ function FinancialPanel({ workspace }: { workspace: CompanyResearchWorkspace }) 
   return <div className="ir-research-list">{artifact.payload.rows.map((row) => <article key={row.period}><h3>{row.period}</h3><div className="ir-numeric-grid"><NumericCard artifact={artifact} label="收入" observation={row.revenue} cutoff={cutoff} /><NumericCard artifact={artifact} label="营业利润" observation={row.operating_income} cutoff={cutoff} /><NumericCard artifact={artifact} label="现金税率" observation={row.cash_tax_rate} cutoff={cutoff} /><NumericCard artifact={artifact} label="折旧" observation={row.depreciation} cutoff={cutoff} /><NumericCard artifact={artifact} label="资本开支" observation={row.capex} cutoff={cutoff} /><NumericCard artifact={artifact} label="营运资本变化" observation={row.working_capital_change} cutoff={cutoff} /><NumericCard artifact={artifact} label="FCFF" observation={row.fcff} cutoff={cutoff} /></div></article>)}</div>;
 }
 
-function ScenarioPanel({ workspace }: { workspace: CompanyResearchWorkspace }) {
+function ScenarioPanel({ workspace, valuationState }: { workspace: CompanyResearchWorkspace; valuationState: ValuationState }) {
   const scenarios = artifactByKind(workspace, "scenario_set");
-  const valuation = artifactByKind(workspace, "valuation_set");
+  const valuation = valuationState === "ready" ? artifactByKind(workspace, "valuation_set") : null;
   const judgment = artifactByKind(workspace, "judgment_context");
   const cutoff = workspaceCutoff(workspace);
   if (!scenarios) return <EmptyModule message="情景模型仍在准备。" />;
   return <div className="ir-scenario-view"><section><h3>情景机制与驱动变化</h3><div className="ir-research-list">{scenarios.payload.scenarios.map((scenario) => {
     const dcf = valuation?.payload.scenario_dcf_values.find((item) => item.scenario_id === scenario.scenario_id) ?? null;
-    return <article key={scenario.scenario_id}><h4>{scenario.scenario_id}</h4><p><b>机制</b> {scenario.mechanism_id}</p>{scenario.driver_overrides.map((override) => <div key={override.driver_key}><p><b>变化驱动</b> {override.driver_key}</p>{override.rationale ? <p>{override.rationale}</p> : null}<NumericCard artifact={scenarios} label={override.driver_key} observation={override.observation} cutoff={cutoff} /></div>)}<p>逐情景财务效果：接口未提供（不可推断）</p><h5>DCF 估值</h5><NumericCard artifact={valuation ?? scenarios} label={`${scenario.scenario_id} DCF 企业价值`} observation={dcf?.enterprise_value ?? null} cutoff={cutoff} /></article>;
-  })}</div></section>{valuation ? <><section><h3>DCF 情景值</h3><div className="ir-numeric-grid">{valuation.payload.scenario_dcf_values.map((item) => <NumericCard artifact={valuation} key={item.scenario_id} label={`${item.scenario_id} DCF`} observation={item.enterprise_value} cutoff={cutoff} />)}</div></section><section><h3>反向 DCF</h3>{valuation.payload.reverse_dcf ? <div className="ir-numeric-grid"><NumericCard artifact={valuation} label="当前价格隐含 FCFF 倍数" observation={valuation.payload.reverse_dcf.implied_value} cutoff={cutoff} /><NumericCard artifact={valuation} label="求解残差" observation={valuation.payload.reverse_dcf.achieved_residual} cutoff={cutoff} /><NumericCard artifact={valuation} label="迭代次数" observation={valuation.payload.reverse_dcf.iteration_count} cutoff={cutoff} /></div> : <p>当前无法建立反向 DCF。</p>}</section><section><h3>证券价值范围</h3>{valuation.payload.security_value_ranges.map((range) => <article className="ir-security-range" key={range.security_external_key}><h4>{range.security_external_key}</h4><div className="ir-numeric-grid"><NumericCard artifact={valuation} label="每股价值下限" observation={range.usd_per_share.minimum} cutoff={cutoff} /><NumericCard artifact={valuation} label="每股价值上限" observation={range.usd_per_share.maximum} cutoff={cutoff} /><NumericCard artifact={valuation} label="回报下限" observation={range.cny_return.minimum} cutoff={cutoff} /><NumericCard artifact={valuation} label="回报上限" observation={range.cny_return.maximum} cutoff={cutoff} /></div></article>)}</section></> : <section><h3>估值</h3><p>情景已建立，但估值仍被数据缺口阻塞。</p></section>}<section><h3>反证</h3>{judgment ? <SourceRefList refs={judgment.payload.strongest_counterevidence} /> : <p>反证清单仍在准备。</p>}</section></div>;
+    return <article key={scenario.scenario_id}><h4>{scenario.scenario_id}</h4><p><b>机制</b> {scenario.mechanism_id}</p>{scenario.driver_overrides.map((override) => <div key={override.driver_key}><p><b>变化驱动</b> {override.driver_key}</p>{override.rationale ? <p>{override.rationale}</p> : null}<NumericCard artifact={scenarios} label={override.driver_key} observation={override.observation} cutoff={cutoff} /></div>)}<p>逐情景财务效果：接口未提供（不可推断）</p>{valuationState === "ready" ? <><h5>DCF 估值</h5><NumericCard artifact={valuation ?? scenarios} label={`${scenario.scenario_id} DCF 企业价值`} observation={dcf?.enterprise_value ?? null} cutoff={cutoff} /></> : null}</article>;
+  })}</div></section>{valuation ? <><section><h3>DCF 情景值</h3><div className="ir-numeric-grid">{valuation.payload.scenario_dcf_values.map((item) => <NumericCard artifact={valuation} key={item.scenario_id} label={`${item.scenario_id} DCF`} observation={item.enterprise_value} cutoff={cutoff} />)}</div></section><section><h3>反向 DCF</h3>{valuation.payload.reverse_dcf ? <div className="ir-numeric-grid"><NumericCard artifact={valuation} label="当前价格隐含 FCFF 倍数" observation={valuation.payload.reverse_dcf.implied_value} cutoff={cutoff} /><NumericCard artifact={valuation} label="求解残差" observation={valuation.payload.reverse_dcf.achieved_residual} cutoff={cutoff} /><NumericCard artifact={valuation} label="迭代次数" observation={valuation.payload.reverse_dcf.iteration_count} cutoff={cutoff} /></div> : <p>当前无法建立反向 DCF。</p>}</section><section><h3>证券价值范围</h3>{valuation.payload.security_value_ranges.map((range) => <article className="ir-security-range" key={range.security_external_key}><h4>{range.security_external_key}</h4><div className="ir-numeric-grid"><NumericCard artifact={valuation} label="每股价值下限" observation={range.usd_per_share.minimum} cutoff={cutoff} /><NumericCard artifact={valuation} label="每股价值上限" observation={range.usd_per_share.maximum} cutoff={cutoff} /><NumericCard artifact={valuation} label="回报下限" observation={range.cny_return.minimum} cutoff={cutoff} /><NumericCard artifact={valuation} label="回报上限" observation={range.cny_return.maximum} cutoff={cutoff} /></div></article>)}</section></> : <section><h3>估值</h3><p>{valuationState === "pending" ? "估值仍在准备（服务器状态：pending）" : valuationState === "blocked" ? "估值已阻塞（服务器状态：blocked）" : valuationState === "ready" ? "估值标记为可查看，但估值制品缺失；接口响应不一致。" : "估值不适用于当前模块。"}</p></section>}<section><h3>反证</h3>{judgment ? <SourceRefList refs={judgment.payload.strongest_counterevidence} /> : <p>反证清单仍在准备。</p>}</section></div>;
 }
 
 function RisksPanel({ workspace }: { workspace: CompanyResearchWorkspace }) {
@@ -131,8 +151,10 @@ function VersionsPanel({ workspace, lastSuccess }: { workspace: CompanyResearchW
   return <div className="ir-version-summary"><strong>当前草稿版本 {workspace.draft.lock_version}</strong><p>证据审核累计 {workspace.change_summary.reviewed_fact_count} 项</p>{lastSuccess ? <p>{lastSuccess}</p> : null}<h3>制品版本变化</h3><dl>{Object.entries(workspace.change_summary.artifact_versions).map(([kind, version]) => <div key={kind}><dt>{kind}</dt><dd>v{version}</dd></div>)}</dl><h3>研究备忘录</h3>{memo ? <p>{memo.payload.candidate_status} · {memo.payload.assessment_status}</p> : <p>研究备忘录尚未建立。</p>}</div>;
 }
 
-function ModulePanel({ activeModule, moduleState, workspace, reviewingFact, onReview, lastSuccess }: { activeModule: CompanyResearchModuleKey; moduleState: ModuleState; workspace: CompanyResearchWorkspace; reviewingFact: string | null; onReview: (fact: EvidenceFact, decision: ReviewDecision, button: HTMLButtonElement) => void; lastSuccess: string | null }) {
+function ModulePanel({ activeModule, moduleState, valuationState, workspace, reviewLocked, onReview, lastSuccess }: { activeModule: CompanyResearchModuleKey; moduleState: ModuleState; valuationState: ValuationState; workspace: CompanyResearchWorkspace; reviewLocked: boolean; onReview: (fact: EvidenceFact, decision: ReviewDecision, button: HTMLButtonElement) => void; lastSuccess: string | null }) {
   const label = COMPANY_RESEARCH_MODULES.find((item) => item.key === activeModule)?.label ?? activeModule;
+  const canRender = moduleState === "ready" || (activeModule === "evidence_and_gaps" && moduleState === "needs_review");
+  if (!canRender) return activeModule === "overview" ? <div className="ir-answerability"><strong>判断尚在准备</strong><EmptyModule message={moduleUnavailableCopy(label, moduleState)} /></div> : <EmptyModule message={moduleUnavailableCopy(label, moduleState)} />;
   if (activeModule === "industry_competition_regulation") return <IndustryPanel state={moduleState} />;
   const requiredKind: Partial<Record<CompanyResearchModuleKey, WorkspaceArtifact["kind"]>> = {
     overview: "memo", business_map: "business_map", operating_drivers: "driver_map", evidence_and_gaps: "evidence_index",
@@ -146,9 +168,9 @@ function ModulePanel({ activeModule, moduleState, workspace, reviewingFact, onRe
   if (activeModule === "overview") return <OverviewPanel workspace={workspace} />;
   if (activeModule === "business_map") return <BusinessPanel workspace={workspace} />;
   if (activeModule === "operating_drivers") return <DriversPanel workspace={workspace} />;
-  if (activeModule === "evidence_and_gaps") return <EvidencePanel workspace={workspace} reviewingFact={reviewingFact} onReview={onReview} />;
+  if (activeModule === "evidence_and_gaps") return <EvidencePanel workspace={workspace} reviewLocked={reviewLocked} onReview={onReview} />;
   if (activeModule === "financials_cash_flow_capital_allocation") return <FinancialPanel workspace={workspace} />;
-  if (activeModule === "scenarios_valuation_implied_expectations") return <ScenarioPanel workspace={workspace} />;
+  if (activeModule === "scenarios_valuation_implied_expectations") return <ScenarioPanel workspace={workspace} valuationState={valuationState} />;
   if (activeModule === "counterevidence_risks_next_checks") return <RisksPanel workspace={workspace} />;
   return <VersionsPanel workspace={workspace} lastSuccess={lastSuccess} />;
 }
@@ -163,6 +185,7 @@ export default function ResearchWorkbenchPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [lastSuccess, setLastSuccess] = useState<string | null>(null);
   const [reviewingFact, setReviewingFact] = useState<string | null>(null);
+  const [committedReview, setCommittedReview] = useState<CommittedReview | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [reloadAttempt, setReloadAttempt] = useState(0);
   const [pollTick, setPollTick] = useState(0);
@@ -179,16 +202,6 @@ export default function ResearchWorkbenchPage() {
     setWorkspace(nextWorkspace);
   }
 
-  function workspaceIsMonotonic(nextWorkspace: CompanyResearchWorkspace): boolean {
-    const current = workspaceRef.current;
-    if (current === null) return true;
-    const currentEvidence = artifactByKind(current, "evidence_index");
-    const nextEvidence = artifactByKind(nextWorkspace, "evidence_index");
-    if (currentEvidence === null) return true;
-    if (nextEvidence === null || nextEvidence.version < currentEvidence.version) return false;
-    return nextEvidence.version > currentEvidence.version || (nextEvidence.id === currentEvidence.id && nextEvidence.content_hash === currentEvidence.content_hash);
-  }
-
   useEffect(() => {
     const onVisibility = () => {
       const visible = document.visibilityState !== "hidden";
@@ -200,7 +213,7 @@ export default function ResearchWorkbenchPage() {
   }, []);
   useEffect(() => {
     const lifecycle = ++lifecycleRef.current; pollGenerationRef.current += 1; mutationGenerationRef.current += 1; mutationActiveRef.current = false; let active = true;
-    setLoading(true); setLoadError(null); setActionError(null); setLastSuccess(null); setProject(null); workspaceRef.current = null; setWorkspace(null); setActiveModule("overview"); setReviewingFact(null); setRetrying(false); pollAttemptRef.current = 0;
+    setLoading(true); setLoadError(null); setActionError(null); setLastSuccess(null); setProject(null); workspaceRef.current = null; setWorkspace(null); setActiveModule("overview"); setReviewingFact(null); setCommittedReview(null); setRetrying(false); pollAttemptRef.current = 0;
     void Promise.all([investmentResearchApi.project(projectId), investmentResearchApi.companyResearchWorkspace(projectId)]).then(([nextProject, nextWorkspace]) => {
       if (!active || lifecycleRef.current !== lifecycle || nextWorkspace.project_id !== projectId || nextProject.id !== projectId) return;
       setProject(nextProject); commitWorkspace(nextWorkspace);
@@ -208,7 +221,7 @@ export default function ResearchWorkbenchPage() {
     return () => { active = false; if (lifecycleRef.current === lifecycle) lifecycleRef.current += 1; pollGenerationRef.current += 1; mutationGenerationRef.current += 1; mutationActiveRef.current = false; };
   }, [projectId, reloadAttempt]);
   useEffect(() => {
-    if (!workspace || !browserVisible || reviewingFact !== null || retrying || mutationActiveRef.current || !preparationIsActive(workspace.preparation.status)) return;
+    if (!workspace || !browserVisible || reviewingFact !== null || committedReview !== null || retrying || mutationActiveRef.current || !preparationIsActive(workspace.preparation.status)) return;
     const lifecycle = lifecycleRef.current; const delay = Math.min(1000 * 2 ** pollAttemptRef.current, 8000); let active = true;
     const timer = window.setTimeout(() => {
       if (!active || document.visibilityState === "hidden" || mutationActiveRef.current) return;
@@ -216,45 +229,63 @@ export default function ResearchWorkbenchPage() {
       void investmentResearchApi.companyResearchWorkspace(projectId).then((nextWorkspace) => {
         if (!active || lifecycleRef.current !== lifecycle || pollGenerationRef.current !== pollGeneration || document.visibilityState === "hidden" || mutationActiveRef.current || nextWorkspace.project_id !== projectId) return;
         pollAttemptRef.current += 1;
-        if (workspaceIsMonotonic(nextWorkspace)) commitWorkspace(nextWorkspace); else setPollTick((value) => value + 1);
+        if (workspaceRef.current === null || workspaceSnapshotIsMonotonic(workspaceRef.current, nextWorkspace)) commitWorkspace(nextWorkspace); else setPollTick((value) => value + 1);
       }).catch(() => {
         if (active && lifecycleRef.current === lifecycle && pollGenerationRef.current === pollGeneration && document.visibilityState !== "hidden" && !mutationActiveRef.current) { pollAttemptRef.current += 1; setPollTick((value) => value + 1); }
       });
     }, delay);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [browserVisible, pollTick, projectId, retrying, reviewingFact, workspace]);
+  }, [browserVisible, committedReview, pollTick, projectId, retrying, reviewingFact, workspace]);
 
-  async function reviewFact(fact: EvidenceFact, decision: ReviewDecision, button: HTMLButtonElement) {
-    if (!workspace || mutationActiveRef.current) return; const evidence = artifactByKind(workspace, "evidence_index"); if (!evidence) return;
-    mutationActiveRef.current = true; pollGenerationRef.current += 1; const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current;
-    setReviewingFact(fact.fact_key); setActionError(null); setLastSuccess(null);
+  async function synchronizeCommittedReview(pending: CommittedReview, lifecycle: number, mutation: number): Promise<void> {
     try {
-      const result = await investmentResearchApi.reviewCompanyEvidence(projectId, { schema_version: "underwriting.v1", evidence_artifact_id: evidence.id, fact_key: fact.fact_key, decision, expected_head_id: evidence.id });
-      if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
-      const successor = result.evidence_artifact;
-      const reviewedFact = successor.payload.facts.find((item) => item.fact_key === fact.fact_key);
-      if (successor.project_id !== projectId || successor.version < evidence.version + 1 || !reviewedFact || !("review_decision" in reviewedFact) || reviewedFact.review_decision !== decision) {
-        throw new Error("审核后继证据响应无效；已保留原工作区。");
-      }
       const refreshed = await investmentResearchApi.companyResearchWorkspace(projectId);
       if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
       const refreshedEvidence = artifactByKind(refreshed, "evidence_index");
-      const refreshedFact = refreshedEvidence?.payload.facts.find((item) => item.fact_key === fact.fact_key);
-      if (refreshed.project_id !== projectId || refreshedEvidence === null || refreshedEvidence.id !== successor.id || refreshedEvidence.content_hash !== successor.content_hash || !refreshedFact || !("review_decision" in refreshedFact) || refreshedFact.review_decision !== decision || !workspaceIsMonotonic(refreshed)) {
-        throw new Error("后继工作区与已审核证据版本不一致；已保留原工作区。");
+      if (!reviewSuccessorIsExact(projectId, pending.previousEvidence, pending.successor, pending.factKey, pending.decision)
+        || refreshed.project_id !== projectId || refreshedEvidence === null
+        || refreshedEvidence.id !== pending.successor.id || refreshedEvidence.content_hash !== pending.successor.content_hash
+        || !reviewSuccessorIsExact(projectId, pending.previousEvidence, refreshedEvidence, pending.factKey, pending.decision)
+        || (workspaceRef.current !== null && !workspaceSnapshotIsMonotonic(workspaceRef.current, refreshed))) {
+        throw new Error("后继工作区与已提交审核版本不一致");
       }
       commitWorkspace(refreshed);
-      setLastSuccess(`事实 ${fact.fact_key} 已${decision === "confirmed" ? "确认" : "驳回"}，证据版本 ${successor.version}`);
+      setCommittedReview(null);
+      setActionError(null);
+      setLastSuccess(`事实 ${pending.factKey} 已${pending.decision === "confirmed" ? "确认" : "驳回"}，证据版本 ${pending.successor.version}`);
     } catch (error) {
-      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { setActionError(errorMessage(error, "证据审核无法完成")); requestAnimationFrame(() => button.focus()); }
-    } finally {
-      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { mutationActiveRef.current = false; setReviewingFact(null); }
+      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) setActionError(`审核已提交，工作区同步失败：${errorMessage(error, "后继工作区无法读取")}`);
     }
+  }
+
+  async function reviewFact(fact: EvidenceFact, decision: ReviewDecision, button: HTMLButtonElement) {
+    if (!workspace || committedReview !== null || mutationActiveRef.current) return; const evidence = artifactByKind(workspace, "evidence_index"); if (!evidence) return;
+    mutationActiveRef.current = true; pollGenerationRef.current += 1; const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current;
+    setReviewingFact(fact.fact_key); setActionError(null); setLastSuccess(null);
+    let pending: CommittedReview;
+    try {
+      const result = await investmentResearchApi.reviewCompanyEvidence(projectId, { schema_version: "underwriting.v1", evidence_artifact_id: evidence.id, fact_key: fact.fact_key, decision, expected_head_id: evidence.id });
+      if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
+      pending = { factKey: fact.fact_key, decision, previousEvidence: evidence, successor: result.evidence_artifact };
+      setCommittedReview(pending);
+    } catch (error) {
+      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { setActionError(errorMessage(error, "证据审核无法写入")); requestAnimationFrame(() => button.focus()); mutationActiveRef.current = false; setReviewingFact(null); }
+      return;
+    }
+    await synchronizeCommittedReview(pending, lifecycle, mutation);
+    if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { mutationActiveRef.current = false; setReviewingFact(null); }
+  }
+  async function retryCommittedReviewSync() {
+    if (committedReview === null || mutationActiveRef.current) return;
+    mutationActiveRef.current = true; pollGenerationRef.current += 1; const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current;
+    setReviewingFact(committedReview.factKey); setActionError(null);
+    await synchronizeCommittedReview(committedReview, lifecycle, mutation);
+    if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { mutationActiveRef.current = false; setReviewingFact(null); }
   }
   async function retryPreparation() {
     if (!workspace?.preparation.error?.retryable || mutationActiveRef.current) return;
     mutationActiveRef.current = true; pollGenerationRef.current += 1; const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current; setRetrying(true); setActionError(null);
-    try { await investmentResearchApi.retryCompanyResearchProject(projectId); const refreshed = await investmentResearchApi.companyResearchWorkspace(projectId); if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation && refreshed.project_id === projectId && workspaceIsMonotonic(refreshed)) { pollAttemptRef.current = 0; commitWorkspace(refreshed); } }
+    try { await investmentResearchApi.retryCompanyResearchProject(projectId); const refreshed = await investmentResearchApi.companyResearchWorkspace(projectId); if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { if (refreshed.project_id !== projectId || workspaceRef.current === null || !workspaceSnapshotIsMonotonic(workspaceRef.current, refreshed, { allowRecovery: true })) throw new Error("重试已提交，但工作区同步响应无效"); pollAttemptRef.current = 0; commitWorkspace(refreshed); } }
     catch (error) { if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) setActionError(errorMessage(error, "准备阶段无法重试")); }
     finally { if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { mutationActiveRef.current = false; setRetrying(false); } }
   }
@@ -267,9 +298,9 @@ export default function ResearchWorkbenchPage() {
   return <main className="ir-page ir-workbench" aria-busy={reviewingFact !== null || retrying}>
     <header className="ir-workbench-head"><div><p className="ir-eyebrow">Independent company research</p><h1>研究工作台</h1><h2>{workspace.company.canonical_name}</h2><p>{project.security_identities.map((security) => `${security.symbol} · ${security.share_class} · ${security.exchange}`).join("；")}</p></div><span className="ir-draft-state">草稿版本 {workspace.draft.lock_version}</span></header>
     <section className="ir-preparation" aria-live="polite"><div><strong>{PREPARATION_LABELS[workspace.preparation.status]}</strong><span>{workspace.preparation.progress}% · {workspace.preparation.current_step ?? "全部阶段"}</span></div><progress aria-label="研究准备进度" aria-valuemax={100} aria-valuemin={0} aria-valuenow={workspace.preparation.progress} max="100" value={workspace.preparation.progress}>{workspace.preparation.progress}%</progress>{preparationError ? <div className="ir-stage-error"><p>{preparationError.code}</p>{preparationError.retryable ? <button className="ir-button" disabled={retrying} onClick={() => void retryPreparation()} type="button">重试 {preparationError.failed_step}</button> : null}</div> : null}</section>
-    {actionError ? <div className="ir-alert" role="alert">{actionError}</div> : null}{lastSuccess ? <p className="ir-confirmed" role="status">{lastSuccess}</p> : null}
+    {actionError ? <div className="ir-alert" role="alert"><p>{actionError}</p>{committedReview ? <button className="ir-button" disabled={reviewingFact !== null} onClick={() => void retryCommittedReviewSync()} type="button">重试同步已提交审核</button> : null}</div> : null}{lastSuccess ? <p className="ir-confirmed" role="status">{lastSuccess}</p> : null}
     <div className="ir-workbench-grid"><nav className="ir-module-nav" aria-label="研究模块">{COMPANY_RESEARCH_MODULES.map((definition) => { const module = workspace.modules.find((item) => item.key === definition.key); return <button aria-current={activeModule === definition.key ? "page" : undefined} className={activeModule === definition.key ? "is-active" : ""} key={definition.key} onClick={() => setActiveModule(definition.key)} type="button"><span>{definition.label}</span><small>{module ? MODULE_STATE_LABELS[module.state] : "未开始"}</small></button>; })}</nav>
-      <section className="ir-module-content" aria-live="polite"><header><p className="ir-eyebrow">Company research module</p><h2>{activeDefinition.label}</h2></header><ModulePanel activeModule={activeModule} moduleState={activeServerModule?.state ?? "not_started"} workspace={workspace} reviewingFact={reviewingFact} onReview={reviewFact} lastSuccess={lastSuccess} /></section>
+      <section className="ir-module-content" aria-live="polite"><header><p className="ir-eyebrow">Company research module</p><h2>{activeDefinition.label}</h2></header><ModulePanel activeModule={activeModule} moduleState={activeServerModule?.state ?? "not_started"} valuationState={activeServerModule?.valuation_state ?? "not_applicable"} workspace={workspace} reviewLocked={reviewingFact !== null || committedReview !== null} onReview={reviewFact} lastSuccess={lastSuccess} /></section>
       <aside className="ir-boundary" aria-label="研究状态摘要"><p className="ir-eyebrow">Research state</p><h2>准备状态</h2><dl><div><dt>来源</dt><dd>{workspace.source_count}</dd></div><div><dt>缺口</dt><dd>{workspace.gap_count}</dd></div><div><dt>已审核事实</dt><dd>{workspace.change_summary.reviewed_fact_count}</dd></div></dl><details id="audit-details"><summary>审计详情</summary><dl><div><dt>Project</dt><dd>{workspace.project_id}</dd></div><div><dt>Preparation</dt><dd>{workspace.preparation.id}</dd></div><div><dt>Draft</dt><dd>{workspace.draft.id}</dd></div><div><dt>Selected revision</dt><dd>{workspace.selected_revision ?? "尚未选择冻结版本"}</dd></div></dl>{Object.entries(workspace.change_summary.artifact_versions).map(([kind, version]) => <span id={`audit-${encodeURIComponent(kind)}`} key={kind}>{kind} v{version}</span>)}</details></aside>
     </div>
   </main>;

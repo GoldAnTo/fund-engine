@@ -7,6 +7,7 @@ import {
   artifactByKind,
   numericObservationView,
   preparationIsActive,
+  workspaceSnapshotIsMonotonic,
 } from "./companyResearchView";
 
 describe("company research view model", () => {
@@ -104,5 +105,65 @@ describe("company research view model", () => {
     expect(preparationIsActive("recoverable_failure")).toBe(false);
     expect(preparationIsActive("blocked")).toBe(false);
     expect(preparationIsActive("completed")).toBe(false);
+  });
+
+  it("rejects component-wise workspace regressions when evidence heads are equal or absent", () => {
+    const base = {
+      project_id: "project-1",
+      preparation: { status: "building_model", current_step: "financial_bridge", progress: 60 },
+      artifacts: [
+        { kind: "evidence_index", id: "evidence-2", content_hash: "hash-2", version: 2 },
+        { kind: "valuation_set", id: "valuation-3", content_hash: "value-3", version: 3 },
+      ],
+      modules: [
+        { key: "overview", state: "ready", valuation_state: "not_applicable" },
+        { key: "scenarios_valuation_implied_expectations", state: "ready", valuation_state: "ready" },
+      ],
+      draft: { lock_version: 4, base_revision_id: "revision-4" },
+      selected_revision: "revision-4",
+      change_summary: { reviewed_fact_count: 2, artifact_versions: { evidence_index: 2, valuation_set: 3 } },
+    } as unknown as CompanyResearchWorkspace;
+    const clone = () => structuredClone(base);
+    const regressions = [
+      ["project", (next: CompanyResearchWorkspace) => { next.project_id = "project-2"; }],
+      ["preparation progress", (next: CompanyResearchWorkspace) => { next.preparation.progress = 59; }],
+      ["preparation status", (next: CompanyResearchWorkspace) => { next.preparation.status = "awaiting_evidence_review"; }],
+      ["preparation stage", (next: CompanyResearchWorkspace) => { next.preparation.current_step = "research_gaps"; }],
+      ["draft lock", (next: CompanyResearchWorkspace) => { next.draft.lock_version = 3; }],
+      ["frozen revision", (next: CompanyResearchWorkspace) => { next.selected_revision = null; }],
+      ["module state", (next: CompanyResearchWorkspace) => { next.modules[0].state = "preparing"; }],
+      ["valuation state", (next: CompanyResearchWorkspace) => { next.modules[1].valuation_state = "pending"; }],
+      ["reviewed count", (next: CompanyResearchWorkspace) => { next.change_summary.reviewed_fact_count = 1; }],
+      ["summary artifact version", (next: CompanyResearchWorkspace) => { next.change_summary.artifact_versions.valuation_set = 2; }],
+      ["artifact version", (next: CompanyResearchWorkspace) => { next.artifacts[1].version = 2; }],
+    ] as const;
+    for (const [_label, regress] of regressions) {
+      const next = clone();
+      regress(next);
+      expect(workspaceSnapshotIsMonotonic(base, next)).toBe(false);
+    }
+    const noEvidence = clone();
+    noEvidence.artifacts = noEvidence.artifacts.filter((item) => item.kind !== "evidence_index");
+    delete noEvidence.change_summary.artifact_versions.evidence_index;
+    const staleBeforeEvidence = structuredClone(noEvidence);
+    staleBeforeEvidence.draft.lock_version = 3;
+    expect(workspaceSnapshotIsMonotonic(noEvidence, staleBeforeEvidence)).toBe(false);
+  });
+
+  it("accepts downstream staleness only across a strictly newer evidence head", () => {
+    const current = {
+      project_id: "project-1", preparation: { status: "awaiting_evidence_review", progress: 40 },
+      artifacts: [{ kind: "evidence_index", id: "evidence-1", content_hash: "hash-1", version: 1 }],
+      modules: [{ key: "overview", state: "ready", valuation_state: "not_applicable" }],
+      draft: { lock_version: 1, base_revision_id: null }, selected_revision: null,
+      change_summary: { reviewed_fact_count: 0, artifact_versions: { evidence_index: 1 } },
+    } as unknown as CompanyResearchWorkspace;
+    const successor = structuredClone(current);
+    Object.assign(successor.artifacts[0], { id: "evidence-2", content_hash: "hash-2", version: 2 });
+    successor.modules[0].state = "preparing";
+    expect(workspaceSnapshotIsMonotonic(current, successor)).toBe(true);
+    const predecessor = structuredClone(successor);
+    predecessor.artifacts[0] = current.artifacts[0];
+    expect(workspaceSnapshotIsMonotonic(successor, predecessor)).toBe(false);
   });
 });

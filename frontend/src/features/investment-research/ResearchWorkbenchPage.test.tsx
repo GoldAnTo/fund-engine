@@ -175,6 +175,7 @@ describe("Alphabet company research workbench", () => {
       assessment_status: "not_answerable", business_map_ref: {}, driver_map_ref: {}, financial_bridge_ref: {}, scenario_set_ref: {}, valuation_set_ref: null,
       gap_keys: ["youtube_margin_gap"], strongest_counterevidence: [], next_verification_events: [], candidate_status: "machine_draft", _lineage: {},
     }) as CompanyResearchWorkspace["artifacts"][number]);
+    formal.modules = formal.modules.map((module) => module.key === "overview" ? { ...module, state: "ready" } : module);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(formal);
     renderPage();
@@ -257,12 +258,13 @@ describe("Alphabet company research workbench", () => {
     expect(screen.getByRole("article", { name: "事实 revenue_2025" })).not.toHaveTextContent("已确认");
   });
 
-  it("keeps the old workspace fail-closed when review succeeds but successor refresh fails", async () => {
+  it("locks a committed review after sync failure and retries only the workspace GET", async () => {
     const initial = workspace();
-    const successor = workspace({ factDecision: "confirmed", evidenceVersion: 2 }).artifacts[0];
+    const successorWorkspace = workspace({ status: "building_model", factDecision: "confirmed", evidenceVersion: 2 });
+    const successor = successorWorkspace.artifacts[0];
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
-    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(initial).mockRejectedValueOnce(new Error("后继工作区读取失败"));
-    vi.spyOn(investmentResearchApi, "reviewCompanyEvidence").mockResolvedValue({ evidence_artifact: successor } as never);
+    const workspaceRead = vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(initial).mockRejectedValueOnce(new Error("后继工作区读取失败")).mockResolvedValueOnce(successorWorkspace);
+    const review = vi.spyOn(investmentResearchApi, "reviewCompanyEvidence").mockResolvedValue({ evidence_artifact: successor } as never);
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
@@ -270,11 +272,17 @@ describe("Alphabet company research workbench", () => {
     const confirm = screen.getByRole("button", { name: "确认事实 revenue_2025" });
     await user.click(confirm);
 
+    expect(screen.getByRole("alert")).toHaveTextContent("审核已提交");
     expect(screen.getByRole("alert")).toHaveTextContent("后继工作区读取失败");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    expect(confirm).toHaveFocus();
+    expect(confirm).toBeDisabled();
+    expect(screen.getByRole("button", { name: "重试同步已提交审核" })).toBeEnabled();
     expect(screen.getByRole("article", { name: "事实 revenue_2025" })).toHaveTextContent("候选事实");
-    expect(screen.getByRole("button", { name: /Google 如何赚钱/ })).toHaveTextContent("准备中");
+    await user.click(screen.getByRole("button", { name: "重试同步已提交审核" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("证据版本 2");
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(workspaceRead).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole("article", { name: "事实 revenue_2025" })).toHaveTextContent("已确认");
   });
 
   it("rejects a refreshed workspace whose evidence head differs from the exact reviewed successor", async () => {
@@ -292,9 +300,11 @@ describe("Alphabet company research workbench", () => {
     const confirm = screen.getByRole("button", { name: "确认事实 revenue_2025" });
     await user.click(confirm);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("后继工作区与已审核证据版本不一致");
+    expect(await screen.findByRole("alert")).toHaveTextContent("审核已提交，工作区同步失败");
+    expect(screen.getByRole("alert")).toHaveTextContent("后继工作区与已提交审核版本不一致");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    expect(confirm).toHaveFocus();
+    expect(confirm).toBeDisabled();
+    expect(screen.getByRole("button", { name: "重试同步已提交审核" })).toBeEnabled();
     expect(screen.getByRole("article", { name: "事实 revenue_2025" })).toHaveTextContent("候选事实");
     expect(screen.getByRole("button", { name: /Google 如何赚钱/ })).toHaveTextContent("准备中");
   });
@@ -312,6 +322,21 @@ describe("Alphabet company research workbench", () => {
     await user.click(button);
     await waitFor(() => expect(retry).toHaveBeenCalledWith(ids.project));
     expect(await screen.findByRole("progressbar", { name: "研究准备进度" })).toHaveAttribute("aria-valuenow", "25");
+  });
+
+  it("surfaces a retry-command workspace regression as a synchronization error", async () => {
+    const failed = workspace({ status: "recoverable_failure" });
+    failed.draft.lock_version = 4;
+    const stale = workspace({ status: "building_model" });
+    stale.draft.lock_version = 3;
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(failed).mockResolvedValueOnce(stale);
+    vi.spyOn(investmentResearchApi, "retryCompanyResearchProject").mockResolvedValue({ project_id: ids.project } as never);
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "重试 valuation_set" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("重试已提交，但工作区同步响应无效");
+    expect(screen.getByText("草稿版本 4")).toBeVisible();
   });
 
   it("polls active preparation with bounded backoff and stops after completion", async () => {
@@ -417,12 +442,13 @@ describe("Alphabet company research workbench", () => {
   it.each([
     ["wrong project", (successor: CompanyResearchWorkspace["artifacts"][number]) => ({ ...successor, project_id: uid(98) })],
     ["non-advancing version", (successor: CompanyResearchWorkspace["artifacts"][number]) => ({ ...successor, version: 1 })],
+    ["jumped version", (successor: CompanyResearchWorkspace["artifacts"][number]) => ({ ...successor, version: 3 })],
     ["missing decision", (successor: CompanyResearchWorkspace["artifacts"][number]) => ({ ...successor, payload: { ...successor.payload, facts: [evidenceFact()] } })],
     ["wrong decision", (successor: CompanyResearchWorkspace["artifacts"][number]) => ({ ...successor, payload: { ...successor.payload, facts: [evidenceFact("rejected")] } })],
   ] as const)("rejects a semantically invalid review successor: %s", async (_label, mutate) => {
     const successorWorkspace = workspace({ factDecision: "confirmed", evidenceVersion: 2 });
     const invalid = mutate(successorWorkspace.artifacts[0]) as never;
-    const refresh = vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(workspace());
+    const refresh = vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(workspace()).mockResolvedValueOnce(successorWorkspace);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "reviewCompanyEvidence").mockResolvedValue({ evidence_artifact: invalid } as never);
     const user = userEvent.setup();
@@ -431,10 +457,28 @@ describe("Alphabet company research workbench", () => {
     await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
     const confirm = screen.getByRole("button", { name: "确认事实 revenue_2025" });
     await user.click(confirm);
-    expect(await screen.findByRole("alert")).toHaveTextContent("审核后继证据响应无效");
-    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("alert")).toHaveTextContent("审核已提交");
+    expect(screen.getByRole("alert")).toHaveTextContent("后继工作区与已提交审核版本不一致");
+    expect(refresh).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    expect(confirm).toHaveFocus();
+    expect(confirm).toBeDisabled();
+  });
+
+  it("rejects a successor that drops an unaffected evidence fact", async () => {
+    const initial = workspace();
+    const initialEvidence = initial.artifacts[0] as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "evidence_index" }>;
+    initialEvidence.payload.facts.push({ ...evidenceFact(), fact_key: "revenue_2024", metric_key: "revenue prior" });
+    const successorWorkspace = workspace({ factDecision: "confirmed", evidenceVersion: 2 });
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(initial).mockResolvedValueOnce(successorWorkspace);
+    vi.spyOn(investmentResearchApi, "reviewCompanyEvidence").mockResolvedValue({ evidence_artifact: successorWorkspace.artifacts[0] } as never);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("heading", { name: "Alphabet Inc." });
+    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    await user.click(screen.getByRole("button", { name: "确认事实 revenue_2025" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("审核已提交");
+    expect(screen.getByRole("button", { name: "确认事实 revenue_2025" })).toBeDisabled();
   });
 
   it("disables every evidence review action while one review is active", async () => {
@@ -473,11 +517,63 @@ describe("Alphabet company research workbench", () => {
       [/财务、现金流与资本配置/, "财务、现金流与资本配置正在准备"],
       [/情景、估值与当前价格隐含/, "情景、估值与当前价格隐含等待审核"],
       [/反证、风险与下一验证/, "反证、风险与下一验证已阻塞"],
-      [/版本、变化与研究备忘录/, "研究备忘录尚未建立"],
+      [/版本、变化与研究备忘录/, "版本、变化与研究备忘录尚未开始"],
     ] as const;
     for (const [buttonName, copy] of assertions) {
       await user.click(screen.getByRole("button", { name: buttonName }));
       expect(screen.getByText(new RegExp(copy))).toBeVisible();
+    }
+  });
+
+  it("treats server module state as authoritative even when retained artifacts exist", async () => {
+    const retained = workspace({ status: "completed", rich: true });
+    retained.modules = retained.modules.map((module) => module.key === "business_map" ? { ...module, state: "blocked" } : module.key === "versions_changes_memo" ? { ...module, state: "preparing" } : module);
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(retained);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("heading", { name: "Alphabet Inc." });
+    await user.click(screen.getByRole("button", { name: /Google 如何赚钱/ }));
+    expect(screen.getByText(/Google 如何赚钱已阻塞/)).toBeVisible();
+    expect(screen.queryByText("Search")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /版本、变化与研究备忘录/ }));
+    expect(screen.getByText(/版本、变化与研究备忘录正在准备/)).toBeVisible();
+    expect(screen.queryByText(/当前草稿版本/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["pending", "估值仍在准备（服务器状态：pending）"],
+    ["blocked", "估值已阻塞（服务器状态：blocked）"],
+  ] as const)("renders valuation state %s without inferring a gap block", async (valuationState, copy) => {
+    const rich = workspace({ status: "completed", rich: true });
+    rich.modules = rich.modules.map((module) => module.key === "scenarios_valuation_implied_expectations" ? { ...module, valuation_state: valuationState } : module);
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(rich);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("heading", { name: "Alphabet Inc." });
+    await user.click(screen.getByRole("button", { name: /情景、估值与当前价格隐含/ }));
+    expect(screen.getByText(copy)).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "DCF 情景值" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/数据缺口阻塞/)).not.toBeInTheDocument();
+  });
+
+  it("exercises ready-state content for every supported research module", async () => {
+    const rich = workspace({ status: "completed", rich: true });
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(rich);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("heading", { name: "Alphabet Inc." });
+    const assertions = [
+      [/概览与当前判断/, "可回答"], [/Google 如何赚钱/, "Search；YouTube"], [/关键经营变量/, "revenue × growth"],
+      [/来源、事实与缺口/, "2025 10-K, p. 32"], [/行业、竞争与监管/, "接口未提供行业、竞争与监管专属语义（不可推断）"],
+      [/财务、现金流与资本配置/, "FY2025"], [/情景、估值与当前价格隐含/, "base_search_ai"],
+      [/反证、风险与下一验证/, "Q3 Cloud backlog 与 AI capex 回报验证"], [/版本、变化与研究备忘录/, "machine_draft · answerable"],
+    ] as const;
+    for (const [buttonName, copy] of assertions) {
+      await user.click(screen.getByRole("button", { name: buttonName }));
+      expect(screen.getAllByText(copy, { exact: false })[0]).toBeVisible();
     }
   });
 
@@ -517,6 +613,7 @@ describe("Alphabet company research workbench", () => {
 
     const partial = workspace();
     partial.artifacts.push(artifact("memo", { assessment_status: "partially_answerable", business_map_ref: {}, driver_map_ref: {}, financial_bridge_ref: {}, scenario_set_ref: {}, valuation_set_ref: null, gap_keys: [], strongest_counterevidence: [], next_verification_events: [], candidate_status: "machine_draft", _lineage: {} }) as CompanyResearchWorkspace["artifacts"][number]);
+    partial.modules = partial.modules.map((module) => module.key === "overview" ? { ...module, state: "ready" } : module);
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(partial);
     renderPage();
     expect(await screen.findByText("未提供阻塞项。")).toBeVisible();

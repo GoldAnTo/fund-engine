@@ -277,7 +277,8 @@ describe("independent investment research shell", () => {
     expect(document.body).not.toHaveTextContent(/target_price|action|推荐|仓位/i);
 
     await user.click(screen.getByRole("button", { name: /版本、变化与研究备忘录/ }));
-    expect(screen.getByText(/当前草稿版本 4/)).toBeVisible();
+    expect(screen.getByText(/版本、变化与研究备忘录正在准备/)).toBeVisible();
+    expect(screen.queryByText(/当前草稿版本 4/)).not.toBeInTheDocument();
     expect(previewSpy).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });

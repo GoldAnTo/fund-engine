@@ -4,6 +4,18 @@ type WorkspaceArtifact = CompanyResearchWorkspace["artifacts"][number];
 type ArtifactKind = WorkspaceArtifact["kind"];
 type PreparationStatus = CompanyResearchWorkspace["preparation"]["status"];
 type NumericObservation = Extract<WorkspaceArtifact, { kind: "evidence_index" }>["payload"]["facts"][number]["observation"];
+type WorkspaceMonotonicOptions = { allowRecovery?: boolean };
+
+const PREPARATION_RANK: Record<PreparationStatus, number> = {
+  queued: 0, preparing_sources: 1, awaiting_evidence_review: 2, building_model: 3, awaiting_judgment_review: 4,
+  ready_to_freeze: 5, recoverable_failure: 6, blocked: 7, completed: 8,
+};
+const MODULE_RANK: Record<CompanyResearchWorkspace["modules"][number]["state"], number> = {
+  not_started: 0, preparing: 1, needs_review: 2, ready: 3, blocked: 4,
+};
+const VALUATION_RANK: Record<CompanyResearchWorkspace["modules"][number]["valuation_state"], number> = {
+  not_applicable: 0, pending: 1, ready: 2, blocked: 3,
+};
 
 export const COMPANY_RESEARCH_MODULES = [
   { key: "overview", label: "概览与当前判断" },
@@ -73,4 +85,39 @@ export function artifactByKind<K extends ArtifactKind>(workspace: CompanyResearc
 
 export function preparationIsActive(status: PreparationStatus): boolean {
   return status !== "recoverable_failure" && status !== "blocked" && status !== "completed";
+}
+
+function versionsAreMonotonic(current: Readonly<Record<string, number>>, next: Readonly<Record<string, number>>): boolean {
+  return Object.entries(current).every(([kind, version]) => next[kind] !== undefined && next[kind] >= version);
+}
+
+export function workspaceSnapshotIsMonotonic(current: CompanyResearchWorkspace, next: CompanyResearchWorkspace, options: WorkspaceMonotonicOptions = {}): boolean {
+  if (current.project_id !== next.project_id) return false;
+  const currentEvidence = artifactByKind(current, "evidence_index");
+  const nextEvidence = artifactByKind(next, "evidence_index");
+  if (currentEvidence !== null) {
+    if (nextEvidence === null || nextEvidence.version < currentEvidence.version) return false;
+    if (nextEvidence.version > currentEvidence.version) return true;
+    if (nextEvidence.id !== currentEvidence.id || nextEvidence.content_hash !== currentEvidence.content_hash) return false;
+  } else if (nextEvidence !== null) {
+    return true;
+  }
+
+  const recovery = options.allowRecovery === true && (current.preparation.status === "recoverable_failure" || current.preparation.status === "blocked");
+  if (next.preparation.progress < current.preparation.progress || (!recovery && PREPARATION_RANK[next.preparation.status] < PREPARATION_RANK[current.preparation.status])) return false;
+  if (!recovery && next.preparation.progress === current.preparation.progress && next.preparation.status === current.preparation.status && next.preparation.current_step !== current.preparation.current_step) return false;
+  if (next.draft.lock_version < current.draft.lock_version) return false;
+  if (next.draft.lock_version === current.draft.lock_version && current.draft.base_revision_id !== null && next.draft.base_revision_id !== current.draft.base_revision_id) return false;
+  if (current.selected_revision !== null && next.selected_revision !== current.selected_revision) return false;
+  if (next.change_summary.reviewed_fact_count < current.change_summary.reviewed_fact_count) return false;
+  if (!versionsAreMonotonic(current.change_summary.artifact_versions, next.change_summary.artifact_versions)) return false;
+  const currentArtifactVersions = Object.fromEntries(current.artifacts.map((artifact) => [artifact.kind, artifact.version]));
+  const nextArtifactVersions = Object.fromEntries(next.artifacts.map((artifact) => [artifact.kind, artifact.version]));
+  if (!versionsAreMonotonic(currentArtifactVersions, nextArtifactVersions)) return false;
+  return current.modules.every((module) => {
+    const candidate = next.modules.find((item) => item.key === module.key);
+    if (!candidate) return false;
+    if (recovery) return true;
+    return MODULE_RANK[candidate.state] >= MODULE_RANK[module.state] && VALUATION_RANK[candidate.valuation_state] >= VALUATION_RANK[module.valuation_state];
+  });
 }
