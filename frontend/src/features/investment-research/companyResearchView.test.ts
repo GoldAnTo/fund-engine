@@ -50,7 +50,17 @@ describe("company research view model", () => {
       state: "reported",
       traceLabel: "10-K p. 32",
       traceUrl: "https://example.test/10-k",
+      provenanceKind: "external",
+      provenanceKey: "revenue_2025",
     });
+    expect(numericObservationView({
+      key: "fcff", value: "100", unit: "USD million", currency: "USD", period: "FY2025", state: "derived",
+      source_ref: { kind: "artifact_computation", artifact_refs: [], market_snapshot_ids: [], equation_id: "fcff.v1" }, gap_key: null, assumption_key: null,
+    })).toMatchObject({ traceLabel: "fcff.v1", provenanceKind: "equation", provenanceKey: "fcff.v1" });
+    expect(numericObservationView({
+      key: "growth", value: "0.1", unit: "ratio", currency: "N/A", period: "FY2025", state: "assumption",
+      source_ref: null, gap_key: null, assumption_key: "search_growth",
+    })).toMatchObject({ provenanceKind: "assumption", provenanceKey: "search_growth" });
     expect(numericObservationView(null)).toBeNull();
   });
 

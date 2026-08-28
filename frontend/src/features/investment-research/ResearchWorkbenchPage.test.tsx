@@ -1,6 +1,6 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -13,6 +13,17 @@ import ResearchWorkbenchPage from "./ResearchWorkbenchPage";
 const hash = "a".repeat(64);
 const uid = (value: number) => `20000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 const ids = { project: uid(1), company: uid(2), googl: uid(3), goog: uid(4), preparation: uid(5), draft: uid(6), evidence: uid(7), gaps: uid(8) };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise; });
+  return { promise, resolve, reject };
+}
+
+function forProject(base: CompanyResearchWorkspace, projectId: string): CompanyResearchWorkspace {
+  return { ...base, project_id: projectId, artifacts: base.artifacts.map((item) => ({ ...item, project_id: projectId })) };
+}
 
 function project(): ProductProject {
   return {
@@ -38,7 +49,7 @@ function observation(key: string, value: string, state: "reported" | "derived" |
   return {
     key, value, unit: key.includes("return") || key.includes("rate") ? "ratio" : "USD million", currency: key.includes("return") || key.includes("rate") ? "N/A" : "USD",
     period: "FY2025 / cutoff 2026-02-05", state,
-    source_ref: state === "reported" ? source(key) : state === "derived" ? { kind: "artifact_computation", artifact_refs: [], market_snapshot_ids: [], equation_id: "dcf.v1" } : null,
+    source_ref: state === "reported" ? source(key) : state === "derived" ? { kind: "artifact_computation" as const, artifact_refs: [], market_snapshot_ids: [], equation_id: "dcf.v1" } : null,
     gap_key: null, assumption_key: state === "assumption" ? `assumption_${key}` : null,
   };
 }
@@ -134,6 +145,7 @@ describe("Alphabet company research workbench", () => {
     for (const label of ["概览与当前判断", "Google 如何赚钱", "关键经营变量", "来源、事实与缺口", "行业、竞争与监管", "财务、现金流与资本配置", "情景、估值与当前价格隐含", "反证、风险与下一验证", "版本、变化与研究备忘录"]) {
       expect(screen.getByRole("button", { name: new RegExp(label) })).toBeEnabled();
     }
+    expect(screen.getByRole("button", { name: /概览与当前判断/ })).toHaveAttribute("aria-current", "page");
     expect(screen.queryByText(/^方向$/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^置信度$/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^目标价$/)).not.toBeInTheDocument();
@@ -185,7 +197,11 @@ describe("Alphabet company research workbench", () => {
 
     expect(screen.getByRole("heading", { name: "DCF 情景值" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "反向 DCF" })).toBeVisible();
-    expect(within(screen.getByRole("article", { name: "当前价格隐含 FCFF 倍数 1.08" })).getByRole("link")).toHaveAttribute("href", "#audit-details");
+    const derivedCard = screen.getByRole("article", { name: "当前价格隐含 FCFF 倍数 1.08" });
+    const provenanceHref = within(derivedCard).getByRole("link").getAttribute("href");
+    expect(provenanceHref).toMatch(/^#provenance-/);
+    expect(document.querySelector(provenanceHref!)).toHaveTextContent("dcf.v1");
+    expect(document.querySelector(provenanceHref!)).toHaveTextContent("valuation_set");
     expect(screen.getByText("base_search_ai")).toBeVisible();
     expect(screen.getByText("base case mechanism")).toBeVisible();
     expect(screen.getByText("NASDAQ:GOOGL")).toBeVisible();
@@ -251,10 +267,12 @@ describe("Alphabet company research workbench", () => {
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
     await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
-    await user.click(screen.getByRole("button", { name: "确认事实 revenue_2025" }));
+    const confirm = screen.getByRole("button", { name: "确认事实 revenue_2025" });
+    await user.click(confirm);
 
-    expect(await screen.findByRole("status")).toHaveTextContent("证据版本 2");
     expect(screen.getByRole("alert")).toHaveTextContent("后继工作区读取失败");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(confirm).toHaveFocus();
     expect(screen.getByRole("article", { name: "事实 revenue_2025" })).toHaveTextContent("候选事实");
     expect(screen.getByRole("button", { name: /Google 如何赚钱/ })).toHaveTextContent("准备中");
   });
@@ -271,9 +289,12 @@ describe("Alphabet company research workbench", () => {
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
     await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
-    await user.click(screen.getByRole("button", { name: "确认事实 revenue_2025" }));
+    const confirm = screen.getByRole("button", { name: "确认事实 revenue_2025" });
+    await user.click(confirm);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("后继工作区与已审核证据版本不一致");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(confirm).toHaveFocus();
     expect(screen.getByRole("article", { name: "事实 revenue_2025" })).toHaveTextContent("候选事实");
     expect(screen.getByRole("button", { name: /Google 如何赚钱/ })).toHaveTextContent("准备中");
   });
@@ -312,5 +333,192 @@ describe("Alphabet company research workbench", () => {
     expect(workspaceRead).toHaveBeenCalledTimes(3);
     await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
     expect(workspaceRead).toHaveBeenCalledTimes(3);
+  });
+
+  it("caps repeated preparation polling delays at eight seconds", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    const workspaceRead = vi.spyOn(investmentResearchApi, "companyResearchWorkspace")
+      .mockResolvedValueOnce(workspace())
+      .mockRejectedValue(new Error("temporary poll failure"));
+    renderPage();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    for (const delay of [1000, 2000, 4000, 8000, 8000]) {
+      const before = workspaceRead.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(delay - 1); });
+      expect(workspaceRead).toHaveBeenCalledTimes(before);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(workspaceRead).toHaveBeenCalledTimes(before + 1);
+    }
+  });
+
+  it("does not let an older in-flight poll overwrite an exact reviewed successor", async () => {
+    vi.useFakeTimers();
+    const initial = workspace();
+    const successor = workspace({ status: "building_model", factDecision: "confirmed", evidenceVersion: 2 });
+    const poll = deferred<CompanyResearchWorkspace>();
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace")
+      .mockResolvedValueOnce(initial)
+      .mockImplementationOnce(() => poll.promise)
+      .mockResolvedValueOnce(successor);
+    vi.spyOn(investmentResearchApi, "reviewCompanyEvidence").mockResolvedValue({ evidence_artifact: successor.artifacts[0] } as never);
+    renderPage();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    fireEvent.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    fireEvent.click(screen.getByRole("button", { name: "确认事实 revenue_2025" }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByRole("status")).toHaveTextContent("证据版本 2");
+    await act(async () => { poll.resolve(initial); await Promise.resolve(); });
+    expect(screen.getByRole("article", { name: "事实 revenue_2025" })).toHaveTextContent("已确认");
+  });
+
+  it.each(["hidden", "unmount"] as const)("invalidates an in-flight poll on %s", async (mode) => {
+    vi.useFakeTimers();
+    const poll = deferred<CompanyResearchWorkspace>();
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(workspace()).mockImplementationOnce(() => poll.promise);
+    const rendered = renderPage();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    if (mode === "hidden") {
+      await act(async () => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+    } else {
+      rendered.unmount();
+    }
+    await act(async () => { poll.resolve(workspace({ status: "completed", rich: true })); await Promise.resolve(); });
+    if (mode === "hidden") expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+  });
+
+  it("invalidates an old project's in-flight poll after a project switch", async () => {
+    vi.useFakeTimers();
+    const nextProjectId = uid(99);
+    const poll = deferred<CompanyResearchWorkspace>();
+    vi.spyOn(investmentResearchApi, "project").mockImplementation(async (projectId) => ({ ...project(), id: projectId }));
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace")
+      .mockResolvedValueOnce(workspace())
+      .mockImplementationOnce(() => poll.promise)
+      .mockResolvedValueOnce(forProject(workspace({ status: "completed", rich: true }), nextProjectId));
+    const router = createMemoryRouter([{ path: "/research/projects/:projectId", element: <ResearchWorkbenchPage /> }], { initialEntries: [`/research/projects/${ids.project}`] });
+    render(<RouterProvider router={router} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await act(async () => { void router.navigate(`/research/projects/${nextProjectId}`); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+    await act(async () => { poll.resolve(workspace()); await Promise.resolve(); });
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+  });
+
+  it.each([
+    ["wrong project", (successor: CompanyResearchWorkspace["artifacts"][number]) => ({ ...successor, project_id: uid(98) })],
+    ["non-advancing version", (successor: CompanyResearchWorkspace["artifacts"][number]) => ({ ...successor, version: 1 })],
+    ["missing decision", (successor: CompanyResearchWorkspace["artifacts"][number]) => ({ ...successor, payload: { ...successor.payload, facts: [evidenceFact()] } })],
+    ["wrong decision", (successor: CompanyResearchWorkspace["artifacts"][number]) => ({ ...successor, payload: { ...successor.payload, facts: [evidenceFact("rejected")] } })],
+  ] as const)("rejects a semantically invalid review successor: %s", async (_label, mutate) => {
+    const successorWorkspace = workspace({ factDecision: "confirmed", evidenceVersion: 2 });
+    const invalid = mutate(successorWorkspace.artifacts[0]) as never;
+    const refresh = vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(workspace());
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "reviewCompanyEvidence").mockResolvedValue({ evidence_artifact: invalid } as never);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("heading", { name: "Alphabet Inc." });
+    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    const confirm = screen.getByRole("button", { name: "确认事实 revenue_2025" });
+    await user.click(confirm);
+    expect(await screen.findByRole("alert")).toHaveTextContent("审核后继证据响应无效");
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(confirm).toHaveFocus();
+  });
+
+  it("disables every evidence review action while one review is active", async () => {
+    const initial = workspace();
+    const evidence = initial.artifacts[0] as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "evidence_index" }>;
+    evidence.payload.facts.push({ ...evidenceFact(), fact_key: "revenue_2024", metric_key: "revenue prior" });
+    const review = deferred<never>();
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(initial);
+    vi.spyOn(investmentResearchApi, "reviewCompanyEvidence").mockImplementation(() => review.promise);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("heading", { name: "Alphabet Inc." });
+    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    await user.click(screen.getByRole("button", { name: "确认事实 revenue_2025" }));
+    for (const button of screen.getAllByRole("button", { name: /^(确认|驳回)事实/ })) expect(button).toBeDisabled();
+    await act(async () => { review.reject(new Error("stop")); await Promise.resolve(); });
+  });
+
+  it("renders state-specific honest empty content for all nine modules and never reuses business facts as industry evidence", async () => {
+    const empty = workspace();
+    empty.artifacts = [];
+    const states = ["preparing", "blocked", "not_started", "needs_review", "ready", "preparing", "needs_review", "blocked", "not_started"] as const;
+    empty.modules = empty.modules.map((module, index) => ({ ...module, state: states[index] }));
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(empty);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("heading", { name: "Alphabet Inc." });
+    const assertions = [
+      [/概览与当前判断/, "概览与当前判断正在准备"],
+      [/Google 如何赚钱/, "Google 如何赚钱已阻塞"],
+      [/关键经营变量/, "关键经营变量尚未开始"],
+      [/来源、事实与缺口/, "来源、事实与缺口等待审核"],
+      [/行业、竞争与监管/, "接口未提供行业、竞争与监管专属语义（不可推断）"],
+      [/财务、现金流与资本配置/, "财务、现金流与资本配置正在准备"],
+      [/情景、估值与当前价格隐含/, "情景、估值与当前价格隐含等待审核"],
+      [/反证、风险与下一验证/, "反证、风险与下一验证已阻塞"],
+      [/版本、变化与研究备忘录/, "研究备忘录尚未建立"],
+    ] as const;
+    for (const [buttonName, copy] of assertions) {
+      await user.click(screen.getByRole("button", { name: buttonName }));
+      expect(screen.getByText(new RegExp(copy))).toBeVisible();
+    }
+  });
+
+  it("resolves every non-external numeric link to concrete equation, assumption, or gap provenance", async () => {
+    const rich = workspace({ status: "completed", rich: true });
+    const driver = rich.artifacts.find((item) => item.kind === "driver_map")! as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "driver_map" }>;
+    driver.payload.drivers[0].values.push({ ...observation("missing_metric", "not available"), state: "gap", source_ref: null, gap_key: "missing_metric_gap", assumption_key: null });
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(rich);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("heading", { name: "Alphabet Inc." });
+    await user.click(screen.getByRole("button", { name: /关键经营变量/ }));
+
+    for (const [cardName, key] of [["search_growth 0.11", "assumption_search_growth"], ["missing_metric not available", "missing_metric_gap"]] as const) {
+      const href = within(screen.getByRole("article", { name: cardName })).getByRole("link").getAttribute("href");
+      expect(href).toMatch(/^#provenance-/);
+      expect(document.querySelector(href!)).toHaveTextContent(key);
+      expect(document.querySelector(href!)).toHaveTextContent("driver_map");
+    }
+  });
+
+  it("shows explicit unavailable overview fields for contract-valid empty answerable and partial memos", async () => {
+    const answerable = workspace({ status: "completed", rich: true });
+    const valuation = answerable.artifacts.find((item) => item.kind === "valuation_set")! as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "valuation_set" }>;
+    valuation.payload.security_value_ranges = [];
+    const judgment = answerable.artifacts.find((item) => item.kind === "judgment_context")! as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "judgment_context" }>;
+    judgment.payload.strongest_counterevidence = [];
+    judgment.payload.next_verification_events = [];
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(answerable);
+    const rendered = renderPage();
+    expect(await screen.findByText("价值与回报范围未提供或不一致。")).toBeVisible();
+    expect(screen.getByText("最强反证未提供。")).toBeVisible();
+    expect(screen.getByText("下一验证事件未提供。")).toBeVisible();
+    rendered.unmount();
+
+    const partial = workspace();
+    partial.artifacts.push(artifact("memo", { assessment_status: "partially_answerable", business_map_ref: {}, driver_map_ref: {}, financial_bridge_ref: {}, scenario_set_ref: {}, valuation_set_ref: null, gap_keys: [], strongest_counterevidence: [], next_verification_events: [], candidate_status: "machine_draft", _lineage: {} }) as CompanyResearchWorkspace["artifacts"][number]);
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(partial);
+    renderPage();
+    expect(await screen.findByText("未提供阻塞项。")).toBeVisible();
   });
 });

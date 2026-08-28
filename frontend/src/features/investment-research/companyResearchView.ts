@@ -22,6 +22,18 @@ export type CompanyResearchModuleKey = typeof COMPANY_RESEARCH_MODULES[number]["
 export function numericObservationView(observation: NumericObservation | null) {
   if (observation === null) return null;
   const source = observation.source_ref;
+  const provenanceKind = source?.kind === "external"
+    ? "external"
+    : observation.gap_key
+      ? "gap"
+      : observation.assumption_key
+        ? "assumption"
+        : source?.equation_id
+          ? "equation"
+          : "unavailable";
+  const provenanceKey = source?.kind === "external"
+    ? source.fact_key
+    : observation.gap_key ?? observation.assumption_key ?? source?.equation_id ?? "来源待补充";
   return {
     value: observation.value,
     unit: observation.unit,
@@ -32,6 +44,8 @@ export function numericObservationView(observation: NumericObservation | null) {
       ? source.source_locator
       : observation.gap_key ?? observation.assumption_key ?? source?.equation_id ?? "来源待补充",
     traceUrl: source?.kind === "external" ? source.source_url : null,
+    provenanceKind,
+    provenanceKey,
   };
 }
 
