@@ -55,6 +55,7 @@ describe("company research view model", () => {
   });
 
   it("derives answerability without manufacturing direction, confidence, target, or return", () => {
+    const preparing = { artifacts: [] } as unknown as CompanyResearchWorkspace;
     const notAnswerable = {
       artifacts: [{ kind: "memo", payload: { assessment_status: "not_answerable", gap_keys: ["missing_segment_margin"] } }],
     } as unknown as CompanyResearchWorkspace;
@@ -62,6 +63,11 @@ describe("company research view model", () => {
       artifacts: [{ kind: "memo", payload: { assessment_status: "partially_answerable", gap_keys: ["missing_regulatory_case"] } }],
     } as unknown as CompanyResearchWorkspace;
 
+    expect(answerabilityView(preparing)).toEqual({
+      status: "preparing",
+      label: "判断尚在准备",
+      blockers: [],
+    });
     expect(answerabilityView(notAnswerable)).toEqual({
       status: "not_answerable",
       label: "当前不可回答",

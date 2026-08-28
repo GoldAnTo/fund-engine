@@ -152,8 +152,24 @@ describe("Alphabet company research workbench", () => {
     expect(within(fact).getByRole("button", { name: "驳回事实 revenue_2025" })).toBeEnabled();
     expect(screen.getByText(/YouTube 分部利润率未单独披露/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: /概览与当前判断/ }));
-    expect(screen.getByText("当前不可回答")).toBeVisible();
+    expect(screen.getByText("判断尚在准备")).toBeVisible();
+    expect(screen.queryByText(/当前正式证据不足/)).not.toBeInTheDocument();
     expect(preview).not.toHaveBeenCalled();
+  });
+
+  it("shows formal not-answerable copy only when the memo explicitly assesses it", async () => {
+    const formal = workspace();
+    formal.artifacts.push(artifact("memo", {
+      assessment_status: "not_answerable", business_map_ref: {}, driver_map_ref: {}, financial_bridge_ref: {}, scenario_set_ref: {}, valuation_set_ref: null,
+      gap_keys: ["youtube_margin_gap"], strongest_counterevidence: [], next_verification_events: [], candidate_status: "machine_draft", _lineage: {},
+    }) as CompanyResearchWorkspace["artifacts"][number]);
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(formal);
+    renderPage();
+
+    expect(await screen.findByText("当前不可回答")).toBeVisible();
+    expect(screen.getByText(/当前正式证据不足/)).toBeVisible();
+    expect(screen.queryByText("判断尚在准备")).not.toBeInTheDocument();
   });
 
   it("renders DCF, reverse-DCF, distinct GOOGL/GOOG ranges, scenario mechanisms, effects, and counterevidence without probabilities", async () => {
@@ -177,7 +193,9 @@ describe("Alphabet company research workbench", () => {
     expect(screen.getByText("165")).toBeVisible();
     expect(screen.getByText("227")).toBeVisible();
     expect(screen.getByText(/ai_capex_risk/)).toBeVisible();
-    expect(screen.getAllByText("财务效果与价值")).toHaveLength(3);
+    expect(screen.queryByText("财务效果与价值")).not.toBeInTheDocument();
+    expect(screen.getAllByText("逐情景财务效果：接口未提供（不可推断）")).toHaveLength(3);
+    expect(screen.getAllByText("DCF 估值")).toHaveLength(3);
     expect(document.body).not.toHaveTextContent(/概率|加权目标价|probability/i);
 
     await user.click(screen.getByRole("button", { name: /版本、变化与研究备忘录/ }));
@@ -237,6 +255,25 @@ describe("Alphabet company research workbench", () => {
 
     expect(await screen.findByRole("status")).toHaveTextContent("证据版本 2");
     expect(screen.getByRole("alert")).toHaveTextContent("后继工作区读取失败");
+    expect(screen.getByRole("article", { name: "事实 revenue_2025" })).toHaveTextContent("候选事实");
+    expect(screen.getByRole("button", { name: /Google 如何赚钱/ })).toHaveTextContent("准备中");
+  });
+
+  it("rejects a refreshed workspace whose evidence head differs from the exact reviewed successor", async () => {
+    const initial = workspace();
+    const exactSuccessor = workspace({ status: "building_model", factDecision: "confirmed", evidenceVersion: 2 });
+    const mismatched = workspace({ status: "building_model", factDecision: "confirmed", evidenceVersion: 3 });
+    mismatched.artifacts[0] = { ...mismatched.artifacts[0], content_hash: "b".repeat(64) };
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(initial).mockResolvedValueOnce(mismatched);
+    vi.spyOn(investmentResearchApi, "reviewCompanyEvidence").mockResolvedValue({ evidence_artifact: exactSuccessor.artifacts[0] } as never);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole("heading", { name: "Alphabet Inc." });
+    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    await user.click(screen.getByRole("button", { name: "确认事实 revenue_2025" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("后继工作区与已审核证据版本不一致");
     expect(screen.getByRole("article", { name: "事实 revenue_2025" })).toHaveTextContent("候选事实");
     expect(screen.getByRole("button", { name: /Google 如何赚钱/ })).toHaveTextContent("准备中");
   });

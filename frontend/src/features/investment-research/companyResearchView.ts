@@ -37,7 +37,10 @@ export function numericObservationView(observation: NumericObservation | null) {
 
 export function answerabilityView(workspace: CompanyResearchWorkspace) {
   const memo = artifactByKind(workspace, "memo");
-  const status = memo?.payload.assessment_status ?? "not_answerable";
+  if (memo === null) {
+    return { status: "preparing" as const, label: "判断尚在准备", blockers: [] as string[] };
+  }
+  const status = memo.payload.assessment_status;
   const labels = {
     not_answerable: "当前不可回答",
     partially_answerable: "暂定判断",
@@ -46,7 +49,7 @@ export function answerabilityView(workspace: CompanyResearchWorkspace) {
   return {
     status,
     label: labels[status],
-    blockers: memo?.payload.gap_keys ?? [],
+    blockers: memo.payload.gap_keys,
   };
 }
 

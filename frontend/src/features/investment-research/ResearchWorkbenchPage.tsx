@@ -52,7 +52,7 @@ function OverviewPanel({ workspace }: { workspace: CompanyResearchWorkspace }) {
   const judgment = artifactByKind(workspace, "judgment_context");
   const cutoff = workspaceCutoff(workspace);
   return <div className="ir-answerability"><strong>{answerability.label}</strong>
-    {answerability.status === "not_answerable" ? <p>当前正式证据不足，不形成投资方向、置信度、目标价或预期回报。</p> : answerability.status === "partially_answerable" ? <p>当前判断为暂定结论，必须先解除下列阻塞项。</p> : <p>价值与回报范围已建立；仍需持续核验最强反证。</p>}
+    {answerability.status === "preparing" ? <p>正式研究备忘录尚未建立；当前不推断可回答性。</p> : answerability.status === "not_answerable" ? <p>当前正式证据不足，不形成投资方向、置信度、目标价或预期回报。</p> : answerability.status === "partially_answerable" ? <p>当前判断为暂定结论，必须先解除下列阻塞项。</p> : <p>价值与回报范围已建立；仍需持续核验最强反证。</p>}
     {answerability.blockers.length > 0 ? <section><h3>阻塞项</h3><ul>{answerability.blockers.map((item) => <li key={item}>{item}</li>)}</ul></section> : null}
     {answerability.status === "answerable" && valuation ? <section><h3>价值与回报范围</h3><div className="ir-numeric-grid">{valuation.payload.security_value_ranges.flatMap((range) => [<NumericCard key={`${range.security_external_key}-value-min`} label={`${range.security_external_key} 价值下限`} observation={range.usd_per_share.minimum} cutoff={cutoff} />, <NumericCard key={`${range.security_external_key}-value-max`} label={`${range.security_external_key} 价值上限`} observation={range.usd_per_share.maximum} cutoff={cutoff} />, <NumericCard key={`${range.security_external_key}-return-min`} label={`${range.security_external_key} 回报下限`} observation={range.cny_return.minimum} cutoff={cutoff} />, <NumericCard key={`${range.security_external_key}-return-max`} label={`${range.security_external_key} 回报上限`} observation={range.cny_return.maximum} cutoff={cutoff} />])}</div></section> : null}
     {answerability.status === "answerable" && judgment ? <section><h3>最强反证与下一验证</h3><SourceRefList refs={judgment.payload.strongest_counterevidence} /><ul>{judgment.payload.next_verification_events.map((item) => <li key={item}>{item}</li>)}</ul></section> : null}
@@ -98,7 +98,7 @@ function ScenarioPanel({ workspace }: { workspace: CompanyResearchWorkspace }) {
   if (!scenarios) return <EmptyModule message="情景模型仍在准备。" />;
   return <div className="ir-scenario-view"><section><h3>情景机制与驱动变化</h3><div className="ir-research-list">{scenarios.payload.scenarios.map((scenario) => {
     const dcf = valuation?.payload.scenario_dcf_values.find((item) => item.scenario_id === scenario.scenario_id) ?? null;
-    return <article key={scenario.scenario_id}><h4>{scenario.scenario_id}</h4><p><b>机制</b> {scenario.mechanism_id}</p>{scenario.driver_overrides.map((override) => <div key={override.driver_key}><p><b>变化驱动</b> {override.driver_key}</p>{override.rationale ? <p>{override.rationale}</p> : null}<NumericCard label={override.driver_key} observation={override.observation} cutoff={cutoff} /></div>)}<h5>财务效果与价值</h5><NumericCard label={`${scenario.scenario_id} DCF 企业价值`} observation={dcf?.enterprise_value ?? null} cutoff={cutoff} /></article>;
+    return <article key={scenario.scenario_id}><h4>{scenario.scenario_id}</h4><p><b>机制</b> {scenario.mechanism_id}</p>{scenario.driver_overrides.map((override) => <div key={override.driver_key}><p><b>变化驱动</b> {override.driver_key}</p>{override.rationale ? <p>{override.rationale}</p> : null}<NumericCard label={override.driver_key} observation={override.observation} cutoff={cutoff} /></div>)}<p>逐情景财务效果：接口未提供（不可推断）</p><h5>DCF 估值</h5><NumericCard label={`${scenario.scenario_id} DCF 企业价值`} observation={dcf?.enterprise_value ?? null} cutoff={cutoff} /></article>;
   })}</div></section>{valuation ? <><section><h3>DCF 情景值</h3><div className="ir-numeric-grid">{valuation.payload.scenario_dcf_values.map((item) => <NumericCard key={item.scenario_id} label={`${item.scenario_id} DCF`} observation={item.enterprise_value} cutoff={cutoff} />)}</div></section><section><h3>反向 DCF</h3>{valuation.payload.reverse_dcf ? <div className="ir-numeric-grid"><NumericCard label="当前价格隐含 FCFF 倍数" observation={valuation.payload.reverse_dcf.implied_value} cutoff={cutoff} /><NumericCard label="求解残差" observation={valuation.payload.reverse_dcf.achieved_residual} cutoff={cutoff} /><NumericCard label="迭代次数" observation={valuation.payload.reverse_dcf.iteration_count} cutoff={cutoff} /></div> : <p>当前无法建立反向 DCF。</p>}</section><section><h3>证券价值范围</h3>{valuation.payload.security_value_ranges.map((range) => <article className="ir-security-range" key={range.security_external_key}><h4>{range.security_external_key}</h4><div className="ir-numeric-grid"><NumericCard label="每股价值下限" observation={range.usd_per_share.minimum} cutoff={cutoff} /><NumericCard label="每股价值上限" observation={range.usd_per_share.maximum} cutoff={cutoff} /><NumericCard label="回报下限" observation={range.cny_return.minimum} cutoff={cutoff} /><NumericCard label="回报上限" observation={range.cny_return.maximum} cutoff={cutoff} /></div></article>)}</section></> : <section><h3>估值</h3><p>情景已建立，但估值仍被数据缺口阻塞。</p></section>}<section><h3>反证</h3>{judgment ? <SourceRefList refs={judgment.payload.strongest_counterevidence} /> : <p>反证清单仍在准备。</p>}</section></div>;
 }
 
@@ -163,19 +163,25 @@ export default function ResearchWorkbenchPage() {
   async function reviewFact(fact: EvidenceFact, decision: ReviewDecision, button: HTMLButtonElement) {
     if (!workspace || reviewingFact) return; const evidence = artifactByKind(workspace, "evidence_index"); if (!evidence) return;
     const epoch = epochRef.current; setReviewingFact(fact.fact_key); setActionError(null); setLastSuccess(null);
-    let successorVersion: number;
+    let successorIdentity: { id: string; contentHash: string };
     try {
       const result = await investmentResearchApi.reviewCompanyEvidence(projectId, { schema_version: "underwriting.v1", evidence_artifact_id: evidence.id, fact_key: fact.fact_key, decision, expected_head_id: evidence.id });
       if (epochRef.current !== epoch) return;
-      successorVersion = result.evidence_artifact.version;
-      setLastSuccess(`事实 ${fact.fact_key} 已${decision === "confirmed" ? "确认" : "驳回"}，证据版本 ${successorVersion}`);
+      successorIdentity = { id: result.evidence_artifact.id, contentHash: result.evidence_artifact.content_hash };
+      setLastSuccess(`事实 ${fact.fact_key} 已${decision === "confirmed" ? "确认" : "驳回"}，证据版本 ${result.evidence_artifact.version}`);
     } catch (error) {
       if (epochRef.current === epoch) { setActionError(errorMessage(error, "证据审核无法写入")); requestAnimationFrame(() => button.focus()); setReviewingFact(null); }
       return;
     }
     try {
       const request = ++requestRef.current; const refreshed = await investmentResearchApi.companyResearchWorkspace(projectId);
-      if (epochRef.current === epoch && requestRef.current === request && refreshed.project_id === projectId) setWorkspace(refreshed);
+      if (epochRef.current !== epoch || requestRef.current !== request || refreshed.project_id !== projectId) return;
+      const refreshedEvidence = artifactByKind(refreshed, "evidence_index");
+      if (refreshedEvidence === null || refreshedEvidence.id !== successorIdentity.id || refreshedEvidence.content_hash !== successorIdentity.contentHash) {
+        setActionError("后继工作区与已审核证据版本不一致；已保留原工作区。");
+        return;
+      }
+      setWorkspace(refreshed);
     } catch (error) {
       if (epochRef.current === epoch) setActionError(errorMessage(error, "审核已写入，但后继工作区无法读取"));
     } finally { if (epochRef.current === epoch) setReviewingFact(null); }
