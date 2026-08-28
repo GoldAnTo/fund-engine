@@ -1659,6 +1659,7 @@ class CompanyResearchMemoArtifact:
     gap_keys: tuple[str, ...]
     strongest_counterevidence: tuple[SourceLineageReference, ...]
     next_verification_events: tuple[str, ...]
+    research_gaps: tuple[ResearchGap, ...] = ()
     candidate_status: str = "machine_draft"
 
     def __post_init__(self) -> None:
@@ -1714,4 +1715,15 @@ class CompanyResearchMemoArtifact:
         ):
             raise CompanyResearchValidationError(
                 "company research memo verification events must be canonical text"
+            )
+        if (
+            not isinstance(self.research_gaps, tuple)
+            or not all(type(item) is ResearchGap for item in self.research_gaps)
+            or tuple(sorted(item.code for item in self.research_gaps))
+            != tuple(item.code for item in self.research_gaps)
+            or len({item.code for item in self.research_gaps})
+            != len(self.research_gaps)
+        ):
+            raise CompanyResearchValidationError(
+                "company research memo gaps must be unique and canonical"
             )

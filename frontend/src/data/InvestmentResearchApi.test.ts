@@ -186,6 +186,83 @@ function addScenarioArtifact(workspace: any): any {
   return workspace;
 }
 
+function addClosedModelArtifacts(workspace: any, includeDerivedGaps = true): any {
+  addScenarioArtifact(workspace);
+  const byKind = (kind: string) => workspace.artifacts.find((item: any) => item.kind === kind);
+  const evidence = byKind("evidence_index");
+  const sourceGaps = byKind("research_gaps");
+  const business = byKind("business_map");
+  const driver = byKind("driver_map");
+  const scenario = byKind("scenario_set");
+  const sourceRefs = [...evidence.source_refs];
+  const assumption = (key: string) => ({
+    key, value: "1", unit: "USD_million", currency: "USD", period: "FY2026",
+    state: "assumption", source_ref: null, gap_key: null, assumption_key: `fixture.${key}`,
+  });
+  const financial = {
+    schema_version: "underwriting.v1", id: ids.fx, project_id: ids.project, kind: "financial_bridge", version: 1,
+    input_hash: hash, content_hash: hash,
+    payload: {
+      rows: Array.from({ length: 5 }, (_, index) => ({
+        period: `FY${2026 + index}`,
+        revenue: assumption("revenue"), operating_income: assumption("operating_income"),
+        cash_tax_rate: { ...assumption("cash_tax_rate"), unit: "ratio", currency: "N/A" },
+        depreciation: assumption("depreciation"), capex: assumption("capex"),
+        working_capital_change: assumption("working_capital_change"), fcff: assumption("fcff"),
+        fact_refs: [], assumption_refs: [],
+      })),
+      _lineage: { artifact_refs: [{ artifact_id: driver.id, artifact_kind: driver.kind, content_hash: driver.content_hash }], market_snapshot_ids: [], market_snapshot_bindings: [] },
+    },
+    source_refs: sourceRefs,
+  };
+  const parentArtifacts = [evidence, business, driver, financial, scenario, sourceGaps];
+  const derivedGaps = [{ code: "verify_search_share", module_key: "search", severity: "high", message: "Verify search share." }];
+  if (!includeDerivedGaps) {
+    sourceGaps.payload = {
+      gaps: derivedGaps,
+      _lineage: {
+        artifact_refs: parentArtifacts.slice(0, -1).map((item) => ({ artifact_id: item.id, artifact_kind: item.kind, content_hash: item.content_hash })),
+        market_snapshot_ids: [], market_snapshot_bindings: [],
+      },
+    };
+  }
+  const judgment = {
+    schema_version: "underwriting.v1", id: ids.capital, project_id: ids.project, kind: "judgment_context", version: 1,
+    input_hash: hash, content_hash: agendaHash,
+    payload: {
+      operating_baseline_available: true, financial_bridge_closed: true, market_security_bridge_available: false,
+      strongest_counterevidence: [], next_verification_events: [derivedGaps[0].message],
+      _lineage: { artifact_refs: parentArtifacts.map((item) => ({ artifact_id: item.id, artifact_kind: item.kind, content_hash: item.content_hash })), market_snapshot_ids: [], market_snapshot_bindings: [] },
+    },
+    source_refs: sourceRefs,
+  };
+  const memoPayload: any = {
+    assessment_status: "not_answerable",
+    business_map_ref: { artifact_kind: "business_map", content_hash: business.content_hash },
+    driver_map_ref: { artifact_kind: "driver_map", content_hash: driver.content_hash },
+    financial_bridge_ref: { artifact_kind: "financial_bridge", content_hash: financial.content_hash },
+    scenario_set_ref: { artifact_kind: "scenario_set", content_hash: scenario.content_hash },
+    valuation_set_ref: null, gap_keys: [derivedGaps[0].code], strongest_counterevidence: [],
+    next_verification_events: [derivedGaps[0].message], candidate_status: "machine_draft",
+    _lineage: { artifact_refs: [{ artifact_id: judgment.id, artifact_kind: judgment.kind, content_hash: judgment.content_hash }], market_snapshot_ids: [], market_snapshot_bindings: [] },
+  };
+  const memo = {
+    schema_version: "underwriting.v1", id: ids.rightsA, project_id: ids.project, kind: "memo", version: 1,
+    input_hash: hash, content_hash: companyResearchHash, payload: memoPayload, source_refs: sourceRefs,
+  };
+  workspace.artifacts.push(financial, judgment, memo);
+  Object.assign(workspace.change_summary.artifact_versions, { financial_bridge: 1, judgment_context: 1, memo: 1 });
+  Object.assign(workspace.preparation, { status: "awaiting_judgment_review", current_step: "judgment_context", progress: 85 });
+  const ref = (item: any) => ({ id: item.id, kind: item.kind, content_hash: item.content_hash });
+  Object.assign(workspace.modules.find((item: any) => item.key === "overview"), { state: "ready", artifact_refs: [ref(judgment)] });
+  Object.assign(workspace.modules.find((item: any) => item.key === "evidence_and_gaps"), { state: "ready" });
+  Object.assign(workspace.modules.find((item: any) => item.key === "financials_cash_flow_capital_allocation"), { state: "ready", artifact_refs: [ref(financial)] });
+  Object.assign(workspace.modules.find((item: any) => item.key === "counterevidence_risks_next_checks"), { state: "ready", artifact_refs: [ref(sourceGaps), ref(judgment)] });
+  Object.assign(workspace.modules.find((item: any) => item.key === "versions_changes_memo"), { state: "ready", artifact_refs: [ref(memo)] });
+  workspace.gap_count = derivedGaps.length;
+  return workspace;
+}
+
 function industryCompanyBrowseBody(items: object[] = [
   { schema_version: "underwriting.v1", object_id: ids.company, kind: "company", external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc.", symbol: null, exchange: null, share_class: null, trading_currency: null },
   { schema_version: "underwriting.v1", object_id: ids.securityA, kind: "security", external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD" },
@@ -587,6 +664,18 @@ describe("InvestmentResearchApi", () => {
       `/api/underwriting/v1/product/company-research/projects/${ids.project}/workspace`,
       `/api/underwriting/v1/product/company-research/projects/${ids.project}/evidence-reviews`,
     ]);
+  });
+
+  it("uses memo-derived gaps and preserves legacy model gap counts", async () => {
+    const current = addClosedModelArtifacts(companyResearchWorkspaceBody());
+    const legacy = addClosedModelArtifacts(companyResearchWorkspaceBody(), false);
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(response(current))
+      .mockResolvedValueOnce(response(legacy));
+    const api = new InvestmentResearchApi();
+
+    await expect(api.companyResearchWorkspace(ids.project)).resolves.toMatchObject({ gap_count: 1 });
+    await expect(api.companyResearchWorkspace(ids.project)).resolves.toMatchObject({ gap_count: 1 });
   });
 
   it("rejects a workbench response with unknown artifact kinds or a ready module without artifact", async () => {

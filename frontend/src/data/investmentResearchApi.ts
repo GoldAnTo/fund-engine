@@ -1223,7 +1223,11 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
   const gapArtifact = artifacts.find((artifact) => artifact.kind === "research_gaps");
   const gapPayload = gapArtifact && isRecord(gapArtifact.payload) ? gapArtifact.payload : null;
   const gaps = gapPayload && Array.isArray(gapPayload.gaps) ? gapPayload.gaps : [];
-  if (value.gap_count !== gaps.length) return false;
+  const memoArtifact = artifacts.find((artifact) => artifact.kind === "memo");
+  const memoPayload = memoArtifact && isRecord(memoArtifact.payload) ? memoArtifact.payload : null;
+  const expectedGapCount = memoPayload && Array.isArray(memoPayload.gap_keys)
+    ? memoPayload.gap_keys.length : gaps.length;
+  if (value.gap_count !== expectedGapCount) return false;
   for (const artifact of artifacts) {
     for (const observation of collectNumericObservations(artifact.payload)) {
       if (observation.state !== "reported" || !isRecord(observation.source_ref)) continue;

@@ -370,7 +370,6 @@ def _mutated_bundle_source_refs(bundle, mutation: str):
         "financial_bridge",
         "scenario_set",
         "judgment_context",
-        "research_gaps",
         "memo",
     ),
 )
@@ -434,7 +433,6 @@ def test_complete_model_bundle_succeeds_when_mandate_effective_at_differs_from_e
         "financial_bridge",
         "scenario_set",
         "judgment_context",
-        "research_gaps",
         "memo",
     )
     assert updated.status == "awaiting_judgment_review"
@@ -444,7 +442,19 @@ def test_complete_model_bundle_succeeds_when_mandate_effective_at_differs_from_e
     assert job.step == "judgment_context"
     assert job.progress == 85
     assert job.claim_token is None
-    assert by_kind["research_gaps"].supersedes_id == old_gaps.id
+    current_gaps = repository.current_artifact(project.id, "research_gaps")
+    assert current_gaps is not None
+    assert (
+        current_gaps.id,
+        current_gaps.version,
+        current_gaps.content_hash,
+        current_gaps.payload,
+    ) == (
+        old_gaps.id,
+        old_gaps.version,
+        old_gaps.content_hash,
+        old_gaps.payload,
+    )
     assert all(tuple(row.source_refs) == bundle.source_refs for row in rows)
 
     def refs(kind: str) -> dict[str, tuple[str, str]]:
@@ -917,6 +927,34 @@ def test_model_bundle_rejects_a_memo_ref_that_does_not_match_its_payload(
 
     with pytest.raises(ValidationError, match="memo artifact references"):
         replace(bundle, memo=memo)
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
+def test_model_bundle_rejects_derived_gaps_inconsistent_with_memo_and_judgment(
+    session,
+) -> None:
+    repository, project, _preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+
+    with pytest.raises(ValidationError, match="derived gaps are inconsistent"):
+        replace(bundle, research_gaps={"gaps": []})
+
+    assert repository.current_artifact(project.id, "business_map") is None
+
+
+def test_model_bundle_requires_new_memos_to_publish_complete_derived_gaps(
+    session,
+) -> None:
+    repository, project, _preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    legacy_memo = dict(bundle.memo)
+    legacy_memo.pop("research_gaps")
+
+    with pytest.raises(ValidationError, match="derived gaps are inconsistent"):
+        replace(bundle, memo=legacy_memo)
 
     assert repository.current_artifact(project.id, "business_map") is None
 

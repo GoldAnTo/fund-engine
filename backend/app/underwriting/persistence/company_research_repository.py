@@ -8,7 +8,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -17,8 +17,10 @@ from sqlalchemy.orm import Session
 from app.models.ledger import ConflictError, ValidationError
 from app.models.operational import Job
 from app.underwriting.domain.company_research import (
+    BusinessMapArtifact,
     CompanyResearchMemoArtifact,
     JudgmentContextArtifact,
+    ResearchGap,
     SourceLineageReference,
 )
 from app.underwriting.domain.company_research_provenance import (
@@ -82,6 +84,45 @@ from app.underwriting.services.workspace_draft import (
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _PREPARE_JOB_KIND = "prepare_company_research"
 _PREPARE_JOB_TARGET_TYPE = "company_research_preparation"
+
+
+def validate_company_research_derived_gap_semantics(
+    *,
+    business_map: BusinessMapArtifact,
+    memo: CompanyResearchMemoArtifact,
+    judgment: JudgmentContextArtifact,
+    gaps: tuple[ResearchGap, ...],
+    has_valuation: bool,
+    require_embedded_memo_gaps: bool,
+) -> None:
+    """Close every published/read projection of model-derived gaps."""
+    expected_refs_by_module: dict[str, list[str]] = {}
+    for gap in gaps:
+        expected_refs_by_module.setdefault(gap.module_key, []).append(gap.code)
+    expected = {
+        module_key: tuple(sorted(codes))
+        for module_key, codes in expected_refs_by_module.items()
+    }
+    actual = {
+        module.module_key: module.gap_refs
+        for module in business_map.modules
+        if module.gap_refs
+    }
+    if (
+        (require_embedded_memo_gaps and memo.research_gaps != gaps)
+        or tuple(gap.code for gap in gaps) != memo.gap_keys
+        or tuple(gap.message for gap in gaps)
+        != judgment.next_verification_events
+        or memo.next_verification_events != judgment.next_verification_events
+        or memo.strongest_counterevidence
+        != judgment.strongest_counterevidence
+        or actual != expected
+        or (
+            any(gap.severity.value == "critical" for gap in gaps)
+            and (memo.assessment_status != "not_answerable" or has_valuation)
+        )
+    ):
+        raise ValidationError("company research derived gaps are inconsistent")
 
 
 class CompanyResearchIntegrityError(ValidationError):
@@ -260,8 +301,26 @@ class CompanyResearchPersistedBundle:
         judgment = CompanyResearchArtifactCodec.decode(
             "judgment_context", self.judgment_context
         )
+        business_map = CompanyResearchArtifactCodec.decode(
+            "business_map", self.business_map
+        )
+        gaps = CompanyResearchArtifactCodec.decode(
+            "research_gaps", self.research_gaps
+        )
         assert type(memo) is CompanyResearchMemoArtifact
         assert type(judgment) is JudgmentContextArtifact
+        assert type(business_map) is BusinessMapArtifact
+        assert isinstance(gaps, tuple) and all(type(gap) is ResearchGap for gap in gaps)
+        if "research_gaps" not in self.memo:
+            raise ValidationError("company research derived gaps are inconsistent")
+        validate_company_research_derived_gap_semantics(
+            business_map=business_map,
+            memo=memo,
+            judgment=judgment,
+            gaps=gaps,
+            has_valuation=self.valuation_set is not None,
+            require_embedded_memo_gaps=True,
+        )
         if bool(self.market_snapshot_bindings) != judgment.market_security_bridge_available:
             raise ValidationError(
                 "company research bundle market availability is inconsistent"
@@ -1875,62 +1934,11 @@ class CompanyResearchRepository:
                 scenario_set,
                 *((valuation_set,) if valuation_set is not None else ()),
             )
-            gap_parents = (evidence, *model_rows)
-            gap_refs = tuple(self._artifact_reference(parent) for parent in gap_parents)
-            gap_payload = self._model_artifact_payload(
-                bundle.research_gaps,
-                artifact_refs=gap_refs,
-                market_snapshot_bindings=market_snapshot_bindings,
-            )
-            gap_input_hash = self._model_artifact_input_hash(
-                request_hash=request_hash,
-                artifact_refs=gap_refs,
-                historical_basis_id=workspace_boundary.historical_basis_id,
-                historical_basis_content_hash=(
-                    workspace_boundary.historical_basis_content_hash
-                ),
-                market_snapshot_bindings=market_snapshot_bindings,
-            )
-            planned_gap_id = uuid4()
-            planned_gap_version = current_gaps.version + 1
-            planned_gap_hash = self.artifact_content_hash(
-                project_id=preparation.project_id,
-                kind="research_gaps",
-                version=planned_gap_version,
-                supersedes_id=current_gaps.id,
-                parent_content_hash=current_gaps.content_hash,
-                input_hash=gap_input_hash,
-                payload=gap_payload,
-                source_refs=model_source_refs,
-            )
-            planned_gap = CompanyResearchArtifactVersion(
-                id=planned_gap_id,
-                project_id=preparation.project_id,
-                kind="research_gaps",
-                version=planned_gap_version,
-                supersedes_id=current_gaps.id,
-                parent_content_hash=current_gaps.content_hash,
-                input_hash=gap_input_hash,
-                payload=gap_payload,
-                source_refs=list(model_source_refs),
-                content_hash=planned_gap_hash,
-                created_at=when,
-            )
             judgment_context = append(
                 "judgment_context",
                 bundle.judgment_context,
-                (evidence, *model_rows, planned_gap),
+                (evidence, *model_rows, current_gaps),
             )
-            persisted_gaps = append(
-                "research_gaps",
-                bundle.research_gaps,
-                gap_parents,
-                artifact_id=planned_gap_id,
-            )
-            if persisted_gaps.content_hash != planned_gap_hash:
-                raise CompanyResearchIntegrityError(
-                    "planned research gaps content hash changed"
-                )
             append("memo", bundle.memo, (judgment_context,))
 
             preparation.status = "awaiting_judgment_review"

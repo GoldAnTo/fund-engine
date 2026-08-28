@@ -75,3 +75,13 @@ def test_artifact_codec_rejects_a_noncanonical_decimal_representation() -> None:
 
     with pytest.raises(ValidationError, match="financial_bridge payload is invalid"):
         CompanyResearchArtifactCodec.validate_payload("financial_bridge", payload)
+
+
+def test_artifact_codec_reads_a_legacy_memo_without_derived_gaps() -> None:
+    payload = CompanyResearchArtifactCodec.encode("memo", _artifacts()["memo"])
+    payload.pop("research_gaps")
+
+    decoded = CompanyResearchArtifactCodec.decode("memo", payload)
+
+    assert decoded.research_gaps == ()
+    assert CompanyResearchArtifactCodec.validate_payload("memo", payload) == payload

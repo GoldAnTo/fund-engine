@@ -249,6 +249,166 @@ def _rewrite_source_refs(row, source_refs) -> None:
     set_committed_value(row, "content_hash", content_hash)
 
 
+def _durably_rewrite_payload(
+    session, row, payload: dict, *, input_hash: str | None = None
+) -> None:
+    rewritten_input_hash = input_hash or row.input_hash
+    content_hash = CompanyResearchRepository.artifact_content_hash(
+        project_id=row.project_id,
+        kind=row.kind,
+        version=row.version,
+        supersedes_id=row.supersedes_id,
+        parent_content_hash=row.parent_content_hash,
+        input_hash=rewritten_input_hash,
+        payload=payload,
+        source_refs=row.source_refs,
+    )
+    statement = text(
+        "UPDATE uw_company_research_artifact_versions SET "
+        "payload = :payload, input_hash = :input_hash, "
+        "content_hash = :content_hash WHERE id = :id"
+    ).bindparams(
+        bindparam(
+            "payload", type_=CompanyResearchArtifactVersion.__table__.c.payload.type
+        ),
+        bindparam(
+            "input_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.input_hash.type,
+        ),
+        bindparam(
+            "content_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.content_hash.type,
+        ),
+        bindparam("id", type_=CompanyResearchArtifactVersion.__table__.c.id.type),
+    )
+    assert session.connection().execute(
+        statement,
+        {
+            "payload": payload,
+            "input_hash": rewritten_input_hash,
+            "content_hash": content_hash,
+            "id": row.id,
+        },
+    ).rowcount == 1
+    session.expire_all()
+
+
+def _rewrite_as_legacy_model_gap_successor(session, initialized, repository):
+    kinds = (
+        "evidence_index",
+        "research_gaps",
+        "business_map",
+        "driver_map",
+        "financial_bridge",
+        "scenario_set",
+        "valuation_set",
+        "judgment_context",
+        "memo",
+    )
+    heads = {
+        kind: repository.current_artifact(initialized.project.id, kind)
+        for kind in kinds
+    }
+    assert all(row is not None for row in heads.values())
+    source_gaps = heads["research_gaps"]
+    memo = heads["memo"]
+    judgment = heads["judgment_context"]
+    preparation = repository.preparation_for_project(initialized.project.id)
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert preparation is not None and draft is not None
+    assert draft.content.historical_basis_id is not None
+    basis = ProductRepository(session).product_basis(
+        draft.content.historical_basis_id
+    )
+    assert basis is not None
+    model_parents = tuple(
+        heads[kind]
+        for kind in (
+            "evidence_index",
+            "business_map",
+            "driver_map",
+            "financial_bridge",
+            "scenario_set",
+            "valuation_set",
+        )
+    )
+    model_refs = tuple(repository._artifact_reference(row) for row in model_parents)
+    bindings = tuple(
+        CompanyResearchRepository.market_binding_from_payload(value)
+        for value in judgment.payload["_lineage"]["market_snapshot_bindings"]
+    )
+    legacy_gap_payload = repository._model_artifact_payload(
+        {"gaps": memo.payload["research_gaps"]},
+        artifact_refs=model_refs,
+        market_snapshot_bindings=bindings,
+    )
+    legacy_gap_input_hash = repository._model_artifact_input_hash(
+        request_hash=preparation.request_hash,
+        artifact_refs=model_refs,
+        historical_basis_id=basis.id,
+        historical_basis_content_hash=basis.content_hash,
+        market_snapshot_bindings=bindings,
+    )
+    legacy_gaps = repository.append_artifact(
+        project_id=initialized.project.id,
+        kind="research_gaps",
+        input_hash=legacy_gap_input_hash,
+        payload=legacy_gap_payload,
+        source_refs=judgment.source_refs,
+        expected_parent_id=source_gaps.id,
+        created_at=NOW,
+    )
+    judgment_parents = (*model_parents, legacy_gaps)
+    judgment_refs = tuple(
+        repository._artifact_reference(row) for row in judgment_parents
+    )
+    judgment_payload = {
+        **judgment.payload,
+        "_lineage": {
+            **judgment.payload["_lineage"],
+            "artifact_refs": list(judgment_refs),
+        },
+    }
+    judgment_input_hash = repository._model_artifact_input_hash(
+        request_hash=preparation.request_hash,
+        artifact_refs=judgment_refs,
+        historical_basis_id=basis.id,
+        historical_basis_content_hash=basis.content_hash,
+        market_snapshot_bindings=bindings,
+    )
+    _durably_rewrite_payload(
+        session,
+        judgment,
+        judgment_payload,
+        input_hash=judgment_input_hash,
+    )
+    judgment = repository.artifact(judgment.id)
+    assert judgment is not None
+    memo_payload = dict(memo.payload)
+    memo_payload.pop("research_gaps")
+    memo_refs = (repository._artifact_reference(judgment),)
+    memo_payload["_lineage"] = {
+        **memo_payload["_lineage"],
+        "artifact_refs": list(memo_refs),
+    }
+    memo_input_hash = repository._model_artifact_input_hash(
+        request_hash=preparation.request_hash,
+        artifact_refs=memo_refs,
+        historical_basis_id=basis.id,
+        historical_basis_content_hash=basis.content_hash,
+        market_snapshot_bindings=bindings,
+    )
+    _durably_rewrite_payload(
+        session,
+        memo,
+        memo_payload,
+        input_hash=memo_input_hash,
+    )
+    return source_gaps, legacy_gaps
+
+
 def _durably_tamper_basis_source_manifest_hash(session, basis) -> None:
     table = UnderwritingHistoricalBasis.__table__
     statement = text(
@@ -432,6 +592,13 @@ def test_workbench_accepts_one_closed_model_bundle(session) -> None:
     assert draft is not None and draft.content.historical_basis_id is not None
     basis = ProductRepository(session).product_basis(draft.content.historical_basis_id)
     assert basis is not None
+    reviewed_gaps = heads.pop("research_gaps")
+    memo = heads["memo"]
+    assert reviewed_gaps is not None
+    assert reviewed_gaps.version == 1
+    assert reviewed_gaps.supersedes_id is None
+    assert "_lineage" not in reviewed_gaps.payload
+    assert workspace.gap_count == len(memo.payload["research_gaps"])
     for row in heads.values():
         assert row.payload["_lineage"]["market_snapshot_ids"] == market_ids
         assert row.input_hash == canonical_hash(
@@ -446,6 +613,64 @@ def test_workbench_accepts_one_closed_model_bundle(session) -> None:
                 ],
             }
         )
+
+
+def test_workbench_rejects_a_new_bundle_with_a_legacy_shaped_memo(
+    session,
+) -> None:
+    initialized, workbench, repository = _model_workspace(session)
+    memo = repository.current_artifact(initialized.project.id, "memo")
+    source_gaps = repository.current_artifact(
+        initialized.project.id, "research_gaps"
+    )
+    assert memo is not None and source_gaps is not None
+    legacy_payload = dict(memo.payload)
+    legacy_payload.pop("research_gaps")
+    _rewrite_payload(session, memo, legacy_payload)
+
+    with pytest.raises(ValidationError, match="cross-artifact lineage"):
+        workbench.workspace(project_id=initialized.project.id)
+
+
+def test_workbench_reads_a_true_legacy_model_gap_successor(
+    session,
+) -> None:
+    initialized, workbench, repository = _model_workspace(session)
+    _source_gaps, legacy_gaps = _rewrite_as_legacy_model_gap_successor(
+        session, initialized, repository
+    )
+
+    workspace = workbench.workspace(project_id=initialized.project.id)
+
+    visible_gaps = next(
+        artifact for artifact in workspace.artifacts if artifact.kind == "research_gaps"
+    )
+    assert visible_gaps.id == legacy_gaps.id
+    assert visible_gaps.version == 2
+    assert workspace.gap_count == len(legacy_gaps.payload["gaps"])
+
+
+def test_workbench_rejects_a_rehashed_memo_with_inconsistent_derived_gaps(
+    session,
+) -> None:
+    initialized, workbench, repository = _model_workspace(session)
+    memo = repository.current_artifact(initialized.project.id, "memo")
+    assert memo is not None
+    tampered = dict(memo.payload)
+    tampered["research_gaps"] = [
+        {
+            "code": "zz_tampered_gap",
+            "module_key": "overview",
+            "severity": "critical",
+            "message": "Durably rewritten memo gap.",
+        }
+    ]
+    tampered["gap_keys"] = ["zz_tampered_gap"]
+    tampered["next_verification_events"] = ["Durably rewritten memo gap."]
+    _durably_rewrite_payload(session, memo, tampered)
+
+    with pytest.raises(ValidationError, match="derived gaps are inconsistent"):
+        workbench.workspace(project_id=initialized.project.id)
 
 
 def test_workbench_rejects_a_durably_tampered_historical_basis_source_as_integrity_error(

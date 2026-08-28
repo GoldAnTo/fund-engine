@@ -184,6 +184,8 @@ def _metric_metadata(key: str) -> tuple[str, str]:
 def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
     payload = value.payload
     kind = value.kind
+    if kind == "memo":
+        return {key: item for key, item in payload.items() if key != "research_gaps"}
     if kind == "evidence_index":
         facts = []
         for fact in payload["facts"]:

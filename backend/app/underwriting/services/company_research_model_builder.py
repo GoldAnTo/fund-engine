@@ -712,6 +712,34 @@ class CompanyResearchModelBuilder:
     def __init__(self) -> None:
         self._engine = CompanyResearchEngine()
 
+    @classmethod
+    def validate_governed_gap_projection(
+        cls,
+        value: CompanyResearchBuildInput,
+        gaps: tuple[ResearchGap, ...],
+    ) -> None:
+        """Require model-derived gaps to preserve every still-open source gap."""
+        if type(value) is not CompanyResearchBuildInput:
+            raise ValidationError("company research builder input must be typed")
+        if not isinstance(gaps, tuple) or not all(
+            type(gap) is ResearchGap for gap in gaps
+        ):
+            raise ValidationError("company research model gaps must be typed")
+        _validate_evidence_payload(value.evidence_payload, value.cutoff_at)
+        raw_gaps = _validate_gap_payload(value.gap_payload, value.evidence_payload)
+        expected_source_gaps = cls._active_gaps(raw_gaps, value.market_context, ())
+        source_codes = {str(item["gap_key"]) for item in raw_gaps}
+        actual_source_gaps = tuple(
+            sorted(
+                (gap for gap in gaps if gap.code in source_codes),
+                key=lambda gap: gap.code,
+            )
+        )
+        if actual_source_gaps != expected_source_gaps:
+            raise ValidationError(
+                "company research model gaps conflict with governed source gaps"
+            )
+
     def build(self, value: CompanyResearchBuildInput) -> CompanyResearchBuildResult:
         if type(value) is not CompanyResearchBuildInput:
             raise ValidationError("company research builder input must be typed")
@@ -1275,4 +1303,5 @@ class CompanyResearchModelBuilder:
             gap_keys=tuple(sorted(gap.code for gap in gaps)),
             strongest_counterevidence=judgment.strongest_counterevidence,
             next_verification_events=judgment.next_verification_events,
+            research_gaps=gaps,
         )

@@ -45,7 +45,11 @@ from app.underwriting.services.company_research_model_builder import (
     CompanyResearchModelBuilder,
 )
 from app.underwriting.services.workspace_draft import WorkspaceDraftService
-from app.underwriting.domain.company_research import CompanyResearchIdentitySet
+from app.underwriting.domain.company_research import (
+    CompanyResearchAssessment,
+    CompanyResearchIdentitySet,
+    CompanyResearchMemoArtifact,
+)
 from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.models import UnderwritingResearchObject
 from app.underwriting.persistence.product_models import UnderwritingResearchProject
@@ -679,6 +683,17 @@ class CompanyResearchPreparationWorker:
     ) -> CompanyResearchPersistedBundle:
         if type(result) is not CompanyResearchBuildResult:
             raise ValidationError("company research model result is invalid")
+        if (
+            type(result.assessment) is not CompanyResearchAssessment
+            or type(result.memo) is not CompanyResearchMemoArtifact
+        ):
+            raise ValidationError("company research model result is invalid")
+        if result.assessment.status != result.memo.assessment_status:
+            raise ValidationError("company research model assessment is inconsistent")
+        CompanyResearchModelBuilder.validate_governed_gap_projection(
+            boundary.build_input,
+            result.gaps,
+        )
         values: dict[str, object] = {
             "business_map": result.business_map,
             "driver_map": result.driver_map,

@@ -1134,7 +1134,18 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
             ),
             (),
         )
-        if self.gap_count != len(gaps):
+        memo_gap_keys = next(
+            (
+                wrapper.root.payload.gap_keys
+                for wrapper in self.artifacts
+                if wrapper.root.kind == "memo"
+            ),
+            None,
+        )
+        expected_gap_count = (
+            len(memo_gap_keys) if memo_gap_keys is not None else len(gaps)
+        )
+        if self.gap_count != expected_gap_count:
             raise ValueError("gap count must equal current research gaps")
         return self
 

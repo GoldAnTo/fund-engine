@@ -367,6 +367,410 @@ def test_worker_builds_all_model_artifacts_after_last_evidence_review(session) -
     )
 
 
+def test_model_completion_preserves_the_reviewed_research_gaps_head(session) -> None:
+    initialized = _ready_for_model(session)
+    repository = CompanyResearchRepository(session)
+    gaps_before = repository.current_artifact(
+        initialized.project.id, "research_gaps"
+    )
+    assert gaps_before is not None
+    gaps_snapshot = (
+        gaps_before.id,
+        gaps_before.version,
+        gaps_before.content_hash,
+        deepcopy(gaps_before.payload),
+    )
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+
+    claim = worker.claim_next()
+
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "awaiting_judgment_review"
+    gaps_after = repository.current_artifact(
+        initialized.project.id, "research_gaps"
+    )
+    assert gaps_after is not None
+    assert (
+        gaps_after.id,
+        gaps_after.version,
+        gaps_after.content_hash,
+        gaps_after.payload,
+    ) == gaps_snapshot
+    assert len(repository.artifact_chain(gaps_after.id)) == 1
+    judgment = repository.current_artifact(
+        initialized.project.id, "judgment_context"
+    )
+    assert judgment is not None
+    assert any(
+        reference["artifact_kind"] == "research_gaps"
+        and reference["artifact_id"] == str(gaps_before.id)
+        and reference["content_hash"] == gaps_before.content_hash
+        for reference in judgment.payload["_lineage"]["artifact_refs"]
+    )
+
+
+def test_model_completion_rejects_derived_gaps_that_conflict_with_reviewed_source_gaps(
+    session,
+) -> None:
+    from app.underwriting.domain.company_research import (
+        ResearchGap,
+        ResearchGapSeverity,
+    )
+    from app.underwriting.services.company_research_model_builder import (
+        CompanyResearchModelBuilder,
+    )
+
+    initialized = _ready_for_model(session)
+    repository = CompanyResearchRepository(session)
+    gaps_before = repository.current_artifact(
+        initialized.project.id, "research_gaps"
+    )
+    assert gaps_before is not None
+    raw_gap = gaps_before.payload["gaps"][0]
+
+    def conflicting_provider(build_input):
+        result = CompanyResearchModelBuilder().build(build_input)
+        conflicting = ResearchGap(
+            code=raw_gap["gap_key"],
+            module_key=raw_gap["business_module"],
+            severity=ResearchGapSeverity.HIGH,
+            message="provider attempted to reopen a governed-closed source gap",
+        )
+        return replace(result, gaps=(conflicting, *result.gaps))
+
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=conflicting_provider,
+    )
+
+    claim = worker.claim_next()
+
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "discarded"
+    gaps_after = repository.current_artifact(
+        initialized.project.id, "research_gaps"
+    )
+    assert gaps_after is not None and gaps_after.id == gaps_before.id
+    preparation = session.get(
+        CompanyResearchPreparation, initialized.preparation.id
+    )
+    assert preparation is not None
+    assert (
+        preparation.status,
+        preparation.current_step,
+        preparation.progress,
+        preparation.last_error_code,
+    ) == ("blocked", "model_bundle", 30, "validation_failed")
+
+
+def test_model_completion_rejects_a_derived_gap_without_business_map_projection(
+    session,
+) -> None:
+    from app.underwriting.domain.company_research import (
+        ResearchGap,
+        ResearchGapSeverity,
+    )
+    from app.underwriting.services.company_research_model_builder import (
+        CompanyResearchModelBuilder,
+    )
+
+    initialized = _ready_for_model(session)
+
+    def conflicting_provider(build_input):
+        result = CompanyResearchModelBuilder().build(build_input)
+        extra = ResearchGap(
+            code="zz_provider_extra_gap",
+            module_key="overview",
+            severity=ResearchGapSeverity.HIGH,
+            message="Provider gap has no business map projection.",
+        )
+        gaps = tuple(sorted((*result.gaps, extra), key=lambda gap: gap.code))
+        return replace(
+            result,
+            gaps=gaps,
+            memo=replace(
+                result.memo,
+                gap_keys=tuple(gap.code for gap in gaps),
+            ),
+            judgment_context=replace(
+                result.judgment_context,
+                next_verification_events=tuple(gap.message for gap in gaps),
+            ),
+        )
+
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=conflicting_provider,
+    )
+
+    claim = worker.claim_next()
+
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "discarded"
+    assert CompanyResearchRepository(session).current_artifact(
+        initialized.project.id, "business_map"
+    ) is None
+
+
+def test_model_completion_rejects_a_derived_gap_projected_to_the_wrong_module(
+    session,
+) -> None:
+    from app.underwriting.services.company_research_model_builder import (
+        CompanyResearchModelBuilder,
+    )
+
+    initialized = _ready_for_model(session)
+
+    def conflicting_provider(build_input):
+        result = CompanyResearchModelBuilder().build(build_input)
+        source_codes = {
+            gap["gap_key"] for gap in build_input.gap_payload["gaps"]
+        }
+        target = next(gap for gap in result.gaps if gap.code not in source_codes)
+        wrong_module = (
+            "business_map" if target.module_key == "overview" else "overview"
+        )
+        changed = replace(target, module_key=wrong_module)
+        return replace(
+            result,
+            gaps=tuple(
+                changed if gap.code == target.code else gap
+                for gap in result.gaps
+            ),
+        )
+
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=conflicting_provider,
+    )
+
+    claim = worker.claim_next()
+
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "discarded"
+    assert CompanyResearchRepository(session).current_artifact(
+        initialized.project.id, "business_map"
+    ) is None
+
+
+def test_model_completion_rejects_an_assessment_that_disagrees_with_the_memo(
+    session,
+) -> None:
+    from app.underwriting.domain.company_research import CompanyResearchAssessment
+    from app.underwriting.services.company_research_model_builder import (
+        CompanyResearchModelBuilder,
+    )
+
+    initialized = _ready_for_model(session)
+
+    def conflicting_provider(build_input):
+        result = CompanyResearchModelBuilder().build(build_input)
+        return replace(
+            result,
+            assessment=CompanyResearchAssessment.partially_answerable(),
+        )
+
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=conflicting_provider,
+    )
+    claim = worker.claim_next()
+
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "discarded"
+    assert CompanyResearchRepository(session).current_artifact(
+        initialized.project.id, "business_map"
+    ) is None
+
+
+@pytest.mark.parametrize("field", ("assessment", "memo"))
+def test_model_completion_bounds_malformed_nested_provider_results(
+    session, field
+) -> None:
+    from app.underwriting.services.company_research_model_builder import (
+        CompanyResearchModelBuilder,
+    )
+
+    initialized = _ready_for_model(session)
+
+    def malformed_provider(build_input):
+        result = CompanyResearchModelBuilder().build(build_input)
+        return replace(result, **{field: None})
+
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=malformed_provider,
+    )
+    claim = worker.claim_next()
+
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "discarded"
+    preparation = session.get(
+        CompanyResearchPreparation, initialized.preparation.id
+    )
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and preparation.status == "blocked"
+    assert job is not None and job.status == "failed"
+
+
+def test_model_completion_rejects_memo_judgment_divergence(session) -> None:
+    from app.underwriting.services.company_research_model_builder import (
+        CompanyResearchModelBuilder,
+    )
+
+    initialized = _ready_for_model(session)
+
+    def conflicting_provider(build_input):
+        result = CompanyResearchModelBuilder().build(build_input)
+        return replace(
+            result,
+            memo=replace(
+                result.memo,
+                next_verification_events=(
+                    *result.memo.next_verification_events,
+                    "Memo-only verification event.",
+                ),
+            ),
+        )
+
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=conflicting_provider,
+    )
+    claim = worker.claim_next()
+
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "discarded"
+    assert CompanyResearchRepository(session).current_artifact(
+        initialized.project.id, "business_map"
+    ) is None
+
+
+def test_model_completion_rejects_memo_counterevidence_divergence(session) -> None:
+    from app.underwriting.services.company_research_model_builder import (
+        CompanyResearchModelBuilder,
+    )
+
+    initialized = _ready_for_model(session)
+
+    def conflicting_provider(build_input):
+        result = CompanyResearchModelBuilder().build(build_input)
+        available_ref = next(
+            reference
+            for module in result.business_map.modules
+            for reference in module.fact_refs
+            if reference not in result.memo.strongest_counterevidence
+        )
+        return replace(
+            result,
+            memo=replace(
+                result.memo,
+                strongest_counterevidence=(
+                    *result.memo.strongest_counterevidence,
+                    available_ref,
+                ),
+            ),
+        )
+
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=conflicting_provider,
+    )
+    claim = worker.claim_next()
+
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "discarded"
+    assert CompanyResearchRepository(session).current_artifact(
+        initialized.project.id, "business_map"
+    ) is None
+
+
+def test_model_completion_rejects_a_projected_critical_gap_with_answerable_assessment(
+    session,
+) -> None:
+    from app.underwriting.domain.company_research import (
+        CompanyResearchAssessment,
+        ResearchGap,
+        ResearchGapSeverity,
+    )
+    from app.underwriting.services.company_research_artifact_codec import (
+        CompanyResearchArtifactCodec,
+    )
+    from app.underwriting.services.company_research_model_builder import (
+        CompanyResearchModelBuilder,
+    )
+
+    initialized = _ready_for_model(session)
+
+    def conflicting_provider(build_input):
+        result = CompanyResearchModelBuilder().build(build_input)
+        module = result.business_map.modules[0]
+        extra = ResearchGap(
+            code="zz_provider_critical_gap",
+            module_key=module.module_key,
+            severity=ResearchGapSeverity.CRITICAL,
+            message="Provider critical gap must close valuation.",
+        )
+        gaps = tuple(sorted((*result.gaps, extra), key=lambda gap: gap.code))
+        business_map = replace(
+            result.business_map,
+            modules=(
+                replace(
+                    module,
+                    gap_refs=tuple(sorted((*module.gap_refs, extra.code))),
+                ),
+                *result.business_map.modules[1:],
+            ),
+        )
+        events = tuple(gap.message for gap in gaps)
+        memo = replace(
+            result.memo,
+            assessment_status="answerable",
+            business_map_ref=replace(
+                result.memo.business_map_ref,
+                content_hash=canonical_hash(
+                    CompanyResearchArtifactCodec.encode(
+                        "business_map", business_map
+                    )
+                ),
+            ),
+            gap_keys=tuple(gap.code for gap in gaps),
+            next_verification_events=events,
+            research_gaps=gaps,
+        )
+        return replace(
+            result,
+            assessment=CompanyResearchAssessment.answerable(),
+            business_map=business_map,
+            gaps=gaps,
+            judgment_context=replace(
+                result.judgment_context,
+                next_verification_events=events,
+            ),
+            memo=memo,
+        )
+
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: NOW,
+        model_provider=conflicting_provider,
+    )
+    claim = worker.claim_next()
+
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "discarded"
+    assert CompanyResearchRepository(session).current_artifact(
+        initialized.project.id, "business_map"
+    ) is None
+
+
 def test_worker_blocks_a_contract_incompatible_historical_basis_before_model_provider(
     session,
 ) -> None:
@@ -559,7 +963,11 @@ def test_missing_market_inputs_complete_with_not_answerable_and_gaps(
     gaps = repository.current_artifact(initialized.project.id, "research_gaps")
     assert memo is not None and memo.payload["assessment_status"] == "not_answerable"
     assert gaps is not None
-    assert {item["code"] for item in gaps.payload["gaps"]} >= {
+    assert {item["gap_key"] for item in gaps.payload["gaps"]} >= {
+        "market_price_missing",
+        "usd_cny_fx_missing",
+    }
+    assert set(memo.payload["gap_keys"]) >= {
         "market_price_missing",
         "usd_cny_fx_missing",
     }

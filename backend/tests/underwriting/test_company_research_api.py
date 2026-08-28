@@ -1054,16 +1054,6 @@ def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
     assert [
         fact["review_decision"] for fact in current["payload"]["facts"]
     ] == ["confirmed"] * 6 + ["rejected"]
-    repository = CompanyResearchRepository(session)
-    gaps = repository.current_artifact(UUID(project_id), "research_gaps")
-    assert gaps is not None
-    evidence_snapshot = (
-        current["id"],
-        current["version"],
-        current["content_hash"],
-        deepcopy(current["payload"]["facts"]),
-    )
-    gaps_snapshot = (str(gaps.id), gaps.version, gaps.content_hash, deepcopy(gaps.payload))
     drafts = WorkspaceDraftService(session, now=lambda: operation_now)
     draft = drafts.read(UUID(project_id))
     assert draft is not None and draft.content.historical_basis_id is not None
@@ -1088,6 +1078,42 @@ def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
     ) == ("blocked", "model_bundle", 30, "validation_failed")
     blocked_draft = drafts.read(UUID(project_id))
     assert blocked_draft is not None
+    blocked_project_id = UUID(project_id)
+    blocked_draft_identity = (
+        blocked_draft.id,
+        blocked_draft.project_id,
+        blocked_draft.base_revision_id,
+        blocked_draft.created_at,
+    )
+    blocked_draft_lock_version = blocked_draft.lock_version
+    blocked_draft_content = blocked_draft.content.model_copy(deep=True)
+    assert blocked_draft.project_id == blocked_project_id
+    assert blocked_draft_content.historical_basis_id is None
+    blocked_artifacts = blocked_workspace.json()["artifacts"]
+    blocked_artifact_heads = {
+        artifact["kind"]: (
+            artifact["id"],
+            artifact["version"],
+            artifact["content_hash"],
+        )
+        for artifact in blocked_artifacts
+    }
+    blocked_source_artifacts = {
+        artifact["kind"]: (
+            artifact["id"],
+            artifact["version"],
+            artifact["content_hash"],
+            deepcopy(artifact["payload"]),
+        )
+        for artifact in blocked_artifacts
+        if artifact["kind"] in {"evidence_index", "research_gaps"}
+    }
+    assert set(blocked_source_artifacts) == {"evidence_index", "research_gaps"}
+    ordered_decisions = tuple(
+        fact["review_decision"]
+        for fact in blocked_source_artifacts["evidence_index"][3]["facts"]
+    )
+    assert ordered_decisions == ("confirmed",) * 6 + ("rejected",)
 
     retried = api_client.post(f"{BASE}/projects/{project_id}/retry")
 
@@ -1100,24 +1126,40 @@ def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
     ) == ("building_model", "model_bundle", 25)
     recovered = drafts.read(UUID(project_id))
     assert recovered is not None and recovered.content.historical_basis_id is not None
-    assert recovered.lock_version == blocked_draft.lock_version + 1
+    assert (
+        recovered.id,
+        recovered.project_id,
+        recovered.base_revision_id,
+        recovered.created_at,
+    ) == blocked_draft_identity
+    assert recovered.project_id == blocked_project_id
+    assert recovered.lock_version == blocked_draft_lock_version + 1
+    assert recovered.content.model_copy(
+        update={"historical_basis_id": None}, deep=True
+    ) == blocked_draft_content
     workspace_after = api_client.get(f"{BASE}/projects/{project_id}/workspace")
     assert workspace_after.status_code == 200, workspace_after.text
     artifacts_after = workspace_after.json()["artifacts"]
-    evidence_after = next(item for item in artifacts_after if item["kind"] == "evidence_index")
-    gaps_after = next(item for item in artifacts_after if item["kind"] == "research_gaps")
-    assert (
-        evidence_after["id"],
-        evidence_after["version"],
-        evidence_after["content_hash"],
-        evidence_after["payload"]["facts"],
-    ) == evidence_snapshot
-    assert (
-        gaps_after["id"],
-        gaps_after["version"],
-        gaps_after["content_hash"],
-        gaps_after["payload"],
-    ) == gaps_snapshot
+    artifact_heads_after = {
+        artifact["kind"]: (
+            artifact["id"],
+            artifact["version"],
+            artifact["content_hash"],
+        )
+        for artifact in artifacts_after
+    }
+    source_artifacts_after = {
+        artifact["kind"]: (
+            artifact["id"],
+            artifact["version"],
+            artifact["content_hash"],
+            deepcopy(artifact["payload"]),
+        )
+        for artifact in artifacts_after
+        if artifact["kind"] in blocked_source_artifacts
+    }
+    assert artifact_heads_after == blocked_artifact_heads
+    assert source_artifacts_after == blocked_source_artifacts
     retry_worker = CompanyResearchPreparationWorker(
         session, now=lambda: datetime.now(UTC)
     )
@@ -1133,23 +1175,86 @@ def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
         final_preparation["progress"],
         final_preparation["error"],
     ) == ("awaiting_judgment_review", "judgment_context", 85, None)
-    final_evidence = next(
-        item
-        for item in final.json()["artifacts"]
-        if item["kind"] == "evidence_index"
+    final_source_artifacts = {
+        artifact["kind"]: (
+            artifact["id"],
+            artifact["version"],
+            artifact["content_hash"],
+            deepcopy(artifact["payload"]),
+        )
+        for artifact in final.json()["artifacts"]
+        if artifact["kind"] in blocked_source_artifacts
+    }
+    assert final_source_artifacts == blocked_source_artifacts
+    final_decisions = tuple(
+        fact["review_decision"]
+        for fact in final_source_artifacts["evidence_index"][3]["facts"]
     )
-    assert (
-        final_evidence["id"],
-        final_evidence["version"],
-        final_evidence["content_hash"],
-        final_evidence["payload"]["facts"],
-    ) == evidence_snapshot
-    final_decisions = [
-        fact["review_decision"] for fact in final_evidence["payload"]["facts"]
-    ]
+    assert final_decisions == ordered_decisions
     assert len(final_decisions) == 7
     assert final_decisions.count("confirmed") == 6
     assert final_decisions.count("rejected") == 1
+
+
+def test_workspace_projects_internal_memo_gaps_to_the_existing_public_contract(
+    api_client, session
+) -> None:
+    from tests.underwriting.test_company_research_workbench import _model_workspace
+
+    initialized, _workbench, repository = _model_workspace(session)
+    raw_memo = repository.current_artifact(initialized.project.id, "memo")
+    assert raw_memo is not None
+    assert isinstance(raw_memo.payload["research_gaps"], list)
+
+    response = api_client.get(f"{BASE}/projects/{initialized.project.id}/workspace")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    memo = next(item for item in body["artifacts"] if item["kind"] == "memo")
+    assert set(memo["payload"]) == {
+        "assessment_status",
+        "business_map_ref",
+        "driver_map_ref",
+        "financial_bridge_ref",
+        "scenario_set_ref",
+        "valuation_set_ref",
+        "gap_keys",
+        "strongest_counterevidence",
+        "next_verification_events",
+        "candidate_status",
+        "_lineage",
+    }
+    assert "research_gaps" not in memo["payload"]
+    assert body["gap_count"] == len(raw_memo.payload["research_gaps"])
+
+
+def test_workspace_api_reads_a_true_legacy_model_gap_successor(
+    api_client, session
+) -> None:
+    from tests.underwriting.test_company_research_workbench import (
+        _model_workspace,
+        _rewrite_as_legacy_model_gap_successor,
+    )
+
+    initialized, _workbench, repository = _model_workspace(session)
+    _source_gaps, legacy_gaps = _rewrite_as_legacy_model_gap_successor(
+        session, initialized, repository
+    )
+
+    response = api_client.get(f"{BASE}/projects/{initialized.project.id}/workspace")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    visible_gaps = next(
+        item for item in body["artifacts"] if item["kind"] == "research_gaps"
+    )
+    memo = next(item for item in body["artifacts"] if item["kind"] == "memo")
+    assert (visible_gaps["id"], visible_gaps["version"]) == (
+        str(legacy_gaps.id),
+        2,
+    )
+    assert "research_gaps" not in memo["payload"]
+    assert body["gap_count"] == len(legacy_gaps.payload["gaps"])
 
 
 def test_retry_returns_422_for_a_malformed_durable_review_decision(

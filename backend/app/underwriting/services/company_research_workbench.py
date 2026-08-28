@@ -13,8 +13,10 @@ from sqlalchemy import select
 from app.models.ledger import ConflictError, ValidationError
 from app.models.operational import Job
 from app.underwriting.domain.company_research import (
+    BusinessMapArtifact,
     CompanyResearchMemoArtifact,
     JudgmentContextArtifact,
+    ResearchGap,
 )
 from app.underwriting.hashing import canonical_hash
 from app.underwriting.domain.company_research_provenance import canonical_source_refs
@@ -25,6 +27,7 @@ from app.underwriting.persistence.company_research_models import (
 )
 from app.underwriting.persistence.company_research_repository import (
     CompanyResearchRepository,
+    validate_company_research_derived_gap_semantics,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.domain.company_research_artifact_codec import (
@@ -344,7 +347,7 @@ class CompanyResearchWorkbench:
         *,
         expected_draft_id: UUID,
         expected_draft_lock_version: int,
-    ) -> None:
+    ) -> CompanyResearchArtifactVersion | None:
         """Reject a partial, substituted, or cross-project model bundle."""
         model_kinds = {
             "business_map",
@@ -356,7 +359,7 @@ class CompanyResearchWorkbench:
             "memo",
         }
         if not any(kind in heads for kind in model_kinds - {"business_map"}):
-            return
+            return None
         required = {
             "evidence_index",
             "research_gaps",
@@ -376,21 +379,12 @@ class CompanyResearchWorkbench:
         def expected(*kinds: str) -> list[dict[str, str]]:
             return [self._lineage_reference(heads[kind]) for kind in kinds]
 
+        memo_has_embedded_gaps = "research_gaps" in heads["memo"].payload
         expectations: dict[str, list[dict[str, str]]] = {
             "business_map": expected("evidence_index"),
             "driver_map": expected("business_map"),
             "financial_bridge": expected("driver_map"),
             "scenario_set": expected("driver_map"),
-            "research_gaps": (
-                expected(
-                    "evidence_index",
-                    "business_map",
-                    "driver_map",
-                    "financial_bridge",
-                    "scenario_set",
-                    *(("valuation_set",) if "valuation_set" in heads else ()),
-                )
-            ),
             "judgment_context": (
                 expected(
                     "evidence_index",
@@ -404,6 +398,15 @@ class CompanyResearchWorkbench:
             ),
             "memo": expected("judgment_context"),
         }
+        if not memo_has_embedded_gaps:
+            expectations["research_gaps"] = expected(
+                "evidence_index",
+                "business_map",
+                "driver_map",
+                "financial_bridge",
+                "scenario_set",
+                *(("valuation_set",) if "valuation_set" in heads else ()),
+            )
         if "valuation_set" in heads:
             expectations["valuation_set"] = expected("scenario_set", "financial_bridge")
         expected_market_ids: list[str] | None = None
@@ -485,20 +488,33 @@ class CompanyResearchWorkbench:
                     "company research cross-artifact lineage is invalid"
                 )
         current_gaps = heads["research_gaps"]
-        predecessor_gaps = (
-            history_by_id.get(current_gaps.supersedes_id)
-            if current_gaps.supersedes_id is not None
-            else None
-        )
-        if (
-            predecessor_gaps is None
-            or predecessor_gaps.project_id != project_id
-            or predecessor_gaps.kind != "research_gaps"
-        ):
-            raise ValidationError("company research model source refs are invalid")
+        if memo_has_embedded_gaps:
+            if (
+                current_gaps.project_id != project_id
+                or current_gaps.version != 1
+                or current_gaps.supersedes_id is not None
+            ):
+                raise ValidationError("company research model source refs are invalid")
+            governed_source_gaps = current_gaps
+        else:
+            governed_source_gaps = (
+                history_by_id.get(current_gaps.supersedes_id)
+                if current_gaps.supersedes_id is not None
+                else None
+            )
+            if (
+                current_gaps.project_id != project_id
+                or current_gaps.version != 2
+                or governed_source_gaps is None
+                or governed_source_gaps.project_id != project_id
+                or governed_source_gaps.kind != "research_gaps"
+                or governed_source_gaps.version != 1
+                or governed_source_gaps.supersedes_id is not None
+            ):
+                raise ValidationError("company research model source refs are invalid")
         expected_source_refs = self._company.expected_model_source_refs(
             evidence=heads["evidence_index"],
-            predecessor_gaps=predecessor_gaps,
+            predecessor_gaps=governed_source_gaps,
             market_snapshot_bindings=parsed,
         )
         for kind in expectations:
@@ -527,9 +543,41 @@ class CompanyResearchWorkbench:
                 if key != "_lineage"
             },
         )
+        business_map = CompanyResearchArtifactCodec.decode(
+            "business_map",
+            {
+                key: value
+                for key, value in heads["business_map"].payload.items()
+                if key != "_lineage"
+            },
+        )
+        derived_gaps = (
+            memo.research_gaps
+            if memo_has_embedded_gaps
+            else CompanyResearchArtifactCodec.decode(
+                "research_gaps",
+                {
+                    key: value
+                    for key, value in current_gaps.payload.items()
+                    if key != "_lineage"
+                },
+            )
+        )
         assert type(memo) is CompanyResearchMemoArtifact
         assert type(judgment) is JudgmentContextArtifact
+        assert type(business_map) is BusinessMapArtifact
+        assert isinstance(derived_gaps, tuple) and all(
+            type(gap) is ResearchGap for gap in derived_gaps
+        )
         has_valuation = "valuation_set" in heads
+        validate_company_research_derived_gap_semantics(
+            business_map=business_map,
+            memo=memo,
+            judgment=judgment,
+            gaps=derived_gaps,
+            has_valuation=has_valuation,
+            require_embedded_memo_gaps=memo_has_embedded_gaps,
+        )
         memo_refs = {
             "business_map": memo.business_map_ref,
             "driver_map": memo.driver_map_ref,
@@ -566,6 +614,7 @@ class CompanyResearchWorkbench:
             raise ValidationError("company research valuation state is invalid")
         if not has_valuation and memo.assessment_status != "not_answerable":
             raise ValidationError("company research valuation state is invalid")
+        return governed_source_gaps
 
     def _heads(
         self,
@@ -573,7 +622,7 @@ class CompanyResearchWorkbench:
         *,
         expected_draft_id: UUID,
         expected_draft_lock_version: int,
-    ) -> dict[str, WorkbenchArtifact]:
+    ) -> tuple[dict[str, WorkbenchArtifact], tuple[dict, ...]]:
         """Materialize all artifact families once; never query once per module."""
         rows = tuple(
             self._session.scalars(
@@ -651,7 +700,15 @@ class CompanyResearchWorkbench:
                 != evidence.content_hash
             ):
                 raise ValidationError("business map input evidence head is invalid")
-        return heads
+        current_gap_head = head_rows.get("research_gaps")
+        current_gap_values = (
+            current_gap_head.payload.get("gaps", [])
+            if current_gap_head is not None
+            else []
+        )
+        if not isinstance(current_gap_values, list):
+            raise ValidationError("research gaps payload is invalid")
+        return heads, tuple(current_gap_values)
 
     def workspace(self, *, project_id: UUID) -> CompanyResearchWorkspace:
         # This deliberately avoids ``ResearchProjectService.status()``: that
@@ -694,7 +751,7 @@ class CompanyResearchWorkbench:
             raise ValidationError(
                 "frozen company research workspace replay is not implemented"
             )
-        heads = self._heads(
+        heads, current_gap_values = self._heads(
             project_id,
             expected_draft_id=draft.id,
             expected_draft_lock_version=draft.lock_version,
@@ -735,10 +792,13 @@ class CompanyResearchWorkbench:
             modules.append(
                 WorkbenchModule(key, state, visible_artifacts, valuation_state)
             )
-        gaps = heads.get("research_gaps")
-        gap_values = gaps.payload.get("gaps", []) if gaps else []
-        if not isinstance(gap_values, list):
-            raise ValidationError("research gaps payload is invalid")
+        gap_values = current_gap_values
+        memo = heads.get("memo")
+        if memo is not None and "research_gaps" in memo.payload:
+            memo_gap_values = memo.payload["research_gaps"]
+            if not isinstance(memo_gap_values, list):
+                raise ValidationError("memo research gaps payload is invalid")
+            gap_values = memo_gap_values
         evidence_facts = (
             heads.get("evidence_index").payload.get("facts", [])
             if heads.get("evidence_index")

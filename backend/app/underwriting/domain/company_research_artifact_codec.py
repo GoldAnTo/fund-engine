@@ -128,6 +128,13 @@ class CompanyResearchArtifactCodec:
             canonical: object = {"gaps": _canonical_json(decoded)}
         else:
             canonical = _canonical_json(decoded)
+        if (
+            kind == "memo"
+            and isinstance(candidate, dict)
+            and "research_gaps" not in candidate
+            and isinstance(canonical, dict)
+        ):
+            canonical.pop("research_gaps", None)
         if not isinstance(canonical, dict) or canonical != candidate:
             raise ValidationError(f"{kind} payload is invalid")
         return canonical
