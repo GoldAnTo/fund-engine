@@ -33,6 +33,18 @@ PreparationStatus = Literal[
     "blocked",
     "completed",
 ]
+CompanyResearchFailureStep = Literal[
+    "evidence_index",
+    "research_gaps",
+    "business_map",
+    "driver_map",
+    "financial_bridge",
+    "scenario_set",
+    "valuation_set",
+    "judgment_context",
+    "memo",
+    "model_bundle",
+]
 
 
 class CompanyResearchPreviewRequest(UnderwritingModel):
@@ -146,16 +158,16 @@ COMPANY_RESEARCH_MODULE_KEYS = (
     "counterevidence_risks_next_checks",
     "versions_changes_memo",
 )
-_MODULE_ARTIFACT_KINDS: dict[str, str] = {
-    "overview": "evidence_index",
-    "business_map": "business_map",
-    "operating_drivers": "driver_map",
-    "evidence_and_gaps": "evidence_index",
-    "industry_competition_regulation": "business_map",
-    "financials_cash_flow_capital_allocation": "financial_bridge",
-    "scenarios_valuation_implied_expectations": "valuation_set",
-    "counterevidence_risks_next_checks": "research_gaps",
-    "versions_changes_memo": "memo",
+_MODULE_ARTIFACT_KINDS: dict[str, tuple[str, ...]] = {
+    "overview": ("judgment_context",),
+    "business_map": ("business_map",),
+    "operating_drivers": ("driver_map",),
+    "evidence_and_gaps": ("evidence_index", "research_gaps"),
+    "industry_competition_regulation": ("business_map",),
+    "financials_cash_flow_capital_allocation": ("financial_bridge",),
+    "scenarios_valuation_implied_expectations": ("scenario_set", "valuation_set"),
+    "counterevidence_risks_next_checks": ("research_gaps", "judgment_context"),
+    "versions_changes_memo": ("memo",),
 }
 _CANONICAL_DECIMAL_PATTERN = r"^(?:0|-?(?:0\.\d*[1-9]|[1-9]\d*(?:\.\d*[1-9])?))$"
 CanonicalDecimalString = Annotated[StrictStr, Field(pattern=_CANONICAL_DECIMAL_PATTERN)]
@@ -181,6 +193,14 @@ class CompanyResearchLineageSourceReferenceResponse(
 class CompanyResearchArtifactParentResponse(_ClosedCompanyResearchPayloadModel):
     artifact_id: UUID
     artifact_kind: CompanyResearchArtifactKind
+    content_hash: str = Field(pattern=SHA256_PATTERN)
+
+
+class CompanyResearchArtifactRegistryReferenceResponse(
+    _ClosedCompanyResearchPayloadModel
+):
+    id: UUID
+    kind: CompanyResearchArtifactKind
     content_hash: str = Field(pattern=SHA256_PATTERN)
 
 
@@ -223,15 +243,80 @@ class CompanyResearchArtifactLineageResponse(_ClosedCompanyResearchPayloadModel)
         return self
 
 
+class CompanyResearchExternalNumericSourceResponse(
+    CompanyResearchLineageSourceReferenceResponse
+):
+    kind: Literal["external"]
+
+
+class CompanyResearchComputationNumericSourceResponse(
+    _ClosedCompanyResearchPayloadModel
+):
+    kind: Literal["artifact_computation"]
+    artifact_refs: tuple[CompanyResearchArtifactParentResponse, ...] = Field(
+        min_length=1
+    )
+    market_snapshot_ids: tuple[UUID, ...]
+    equation_id: StrictStr = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def unique_computation_refs(self):
+        if len({item.artifact_id for item in self.artifact_refs}) != len(
+            self.artifact_refs
+        ):
+            raise ValueError("numeric computation artifact refs must be unique")
+        if len(set(self.market_snapshot_ids)) != len(self.market_snapshot_ids):
+            raise ValueError("numeric computation market refs must be unique")
+        return self
+
+
+CompanyResearchNumericSourceResponse = Annotated[
+    CompanyResearchExternalNumericSourceResponse
+    | CompanyResearchComputationNumericSourceResponse,
+    Field(discriminator="kind"),
+]
+
+
+class CompanyResearchNumericObservationResponse(_ClosedCompanyResearchPayloadModel):
+    key: StrictStr = Field(min_length=1)
+    value: CanonicalDecimalString
+    unit: StrictStr = Field(min_length=1)
+    currency: StrictStr = Field(min_length=1)
+    period: StrictStr = Field(min_length=1)
+    state: Literal["reported", "derived", "assumption", "gap"]
+    source_ref: CompanyResearchNumericSourceResponse | None
+    gap_key: StrictStr | None
+    assumption_key: StrictStr | None
+
+    @model_validator(mode="after")
+    def one_semantic_provenance_path(self):
+        provenance_count = sum(
+            value is not None
+            for value in (self.source_ref, self.gap_key, self.assumption_key)
+        )
+        if provenance_count != 1:
+            raise ValueError("numeric observation requires exactly one provenance path")
+        if self.state == "reported" and not isinstance(
+            self.source_ref, CompanyResearchExternalNumericSourceResponse
+        ):
+            raise ValueError("reported numeric observation requires an external source")
+        if self.state == "derived" and not isinstance(
+            self.source_ref, CompanyResearchComputationNumericSourceResponse
+        ):
+            raise ValueError("derived numeric observation requires a computation source")
+        if self.state == "assumption" and self.assumption_key is None:
+            raise ValueError("assumption numeric observation requires an assumption key")
+        if self.state == "gap" and self.gap_key is None:
+            raise ValueError("gap numeric observation requires a gap key")
+        return self
+
+
 class _CompanyResearchEvidenceFactBaseResponse(_ClosedCompanyResearchPayloadModel):
     fact_key: StrictStr = Field(min_length=1)
     company_external_key: StrictStr = Field(min_length=1)
     business_module: StrictStr = Field(min_length=1)
     metric_key: StrictStr = Field(min_length=1)
-    value: CanonicalDecimalString
-    value_kind: Literal["reported", "derived", "assumption"]
-    currency: StrictStr = Field(min_length=1)
-    unit: StrictStr = Field(min_length=1)
+    observation: CompanyResearchNumericObservationResponse
     period_start: date
     period_end: date
     published_at: datetime
@@ -313,9 +398,7 @@ class CompanyResearchClassifiedEvidenceResponse(_ClosedCompanyResearchPayloadMod
     fact_ref: CompanyResearchLineageSourceReferenceResponse
     metric_key: StrictStr = Field(min_length=1)
     category: Literal["revenue", "cost", "capital"]
-    value: CanonicalDecimalString
-    currency: StrictStr = Field(min_length=1)
-    unit: StrictStr = Field(min_length=1)
+    observation: CompanyResearchNumericObservationResponse
     period_start: date
     period_end: date
 
@@ -363,10 +446,8 @@ class CompanyResearchDriverResponse(_ClosedCompanyResearchPayloadModel):
     assumption_refs: tuple[CompanyResearchLineageSourceReferenceResponse, ...]
     equation: StrictStr = Field(min_length=1)
     output_metric: StrictStr = Field(min_length=1)
-    input_state: Literal["reported", "derived", "assumption"]
-    assumption_key: StrictStr | None
     equation_id: StrictStr | None
-    values: tuple[CanonicalDecimalString, ...] = Field(min_length=1)
+    values: tuple[CompanyResearchNumericObservationResponse, ...] = Field(min_length=1)
     assumption_rationale: StrictStr | None
     assumption_equation: StrictStr | None
 
@@ -377,19 +458,16 @@ class CompanyResearchDriverMapPayloadResponse(_ClosedCompanyResearchPayloadModel
 
 
 class CompanyResearchFinancialBridgeRowResponse(_ClosedCompanyResearchPayloadModel):
-    fiscal_year: StrictInt = Field(ge=1900)
-    revenue: CanonicalDecimalString
-    operating_income: CanonicalDecimalString
-    cash_tax_rate: CanonicalDecimalString
-    depreciation: CanonicalDecimalString
-    capex: CanonicalDecimalString
-    working_capital_change: CanonicalDecimalString
-    fcff: CanonicalDecimalString
+    period: StrictStr = Field(min_length=1)
+    revenue: CompanyResearchNumericObservationResponse
+    operating_income: CompanyResearchNumericObservationResponse
+    cash_tax_rate: CompanyResearchNumericObservationResponse
+    depreciation: CompanyResearchNumericObservationResponse
+    capex: CompanyResearchNumericObservationResponse
+    working_capital_change: CompanyResearchNumericObservationResponse
+    fcff: CompanyResearchNumericObservationResponse
     fact_refs: tuple[CompanyResearchLineageSourceReferenceResponse, ...]
     assumption_refs: tuple[CompanyResearchLineageSourceReferenceResponse, ...]
-    input_states: tuple[Literal["reported", "derived", "assumption"], ...] = Field(
-        min_length=1
-    )
 
 
 class CompanyResearchFinancialBridgePayloadResponse(_ClosedCompanyResearchPayloadModel):
@@ -401,9 +479,7 @@ class CompanyResearchFinancialBridgePayloadResponse(_ClosedCompanyResearchPayloa
 
 class CompanyResearchScenarioOverrideResponse(_ClosedCompanyResearchPayloadModel):
     driver_key: StrictStr = Field(min_length=1)
-    value: CanonicalDecimalString
-    state: Literal["reported", "derived", "assumption"] | None
-    assumption_key: StrictStr | None
+    observation: CompanyResearchNumericObservationResponse
     rationale: StrictStr | None
     equation: StrictStr | None
 
@@ -433,12 +509,12 @@ class CompanyResearchScenarioSetPayloadResponse(_ClosedCompanyResearchPayloadMod
 
 class CompanyResearchScenarioDcfValueResponse(_ClosedCompanyResearchPayloadModel):
     scenario_id: Literal["base", "bull", "bear"]
-    enterprise_value: CanonicalDecimalString
+    enterprise_value: CompanyResearchNumericObservationResponse
 
 
 class CompanyResearchValueRangeResponse(_ClosedCompanyResearchPayloadModel):
-    minimum: CanonicalDecimalString
-    maximum: CanonicalDecimalString
+    minimum: CompanyResearchNumericObservationResponse
+    maximum: CompanyResearchNumericObservationResponse
 
 
 class CompanyResearchSecurityValueRangeResponse(_ClosedCompanyResearchPayloadModel):
@@ -449,16 +525,16 @@ class CompanyResearchSecurityValueRangeResponse(_ClosedCompanyResearchPayloadMod
 
 class CompanyResearchReverseDcfResponse(_ClosedCompanyResearchPayloadModel):
     driver_key: Literal["fcff_multiplier"]
-    implied_value: CanonicalDecimalString
-    achieved_residual: CanonicalDecimalString
-    iteration_count: StrictInt = Field(ge=1)
+    implied_value: CompanyResearchNumericObservationResponse
+    achieved_residual: CompanyResearchNumericObservationResponse
+    iteration_count: CompanyResearchNumericObservationResponse
 
 
 class CompanyResearchRequiredReturnComparisonResponse(
     _ClosedCompanyResearchPayloadModel
 ):
     security_external_key: StrictStr = Field(min_length=1)
-    required_return: CanonicalDecimalString
+    required_return: CompanyResearchNumericObservationResponse
     achieved_return_range: CompanyResearchValueRangeResponse
     meets_required_return: StrictBool
 
@@ -471,7 +547,7 @@ class CompanyResearchValuationSetPayloadResponse(_ClosedCompanyResearchPayloadMo
     security_value_ranges: tuple[CompanyResearchSecurityValueRangeResponse, ...] = (
         Field(min_length=1)
     )
-    required_return: CanonicalDecimalString
+    required_return: CompanyResearchNumericObservationResponse
     required_return_comparisons: tuple[
         CompanyResearchRequiredReturnComparisonResponse, ...
     ] = Field(min_length=1)
@@ -536,6 +612,7 @@ class CompanyResearchMemoPayloadResponse(_ClosedCompanyResearchPayloadModel):
 
 class _CompanyResearchArtifactBaseResponse(UnderwritingModel):
     id: UUID
+    project_id: UUID
     version: StrictInt = Field(ge=1)
     input_hash: str = Field(pattern=SHA256_PATTERN)
     content_hash: str = Field(pattern=SHA256_PATTERN)
@@ -567,9 +644,18 @@ class CompanyResearchEvidenceIndexArtifactResponse(
             for item in self.source_refs
         }
         if any(
-            (fact.source_role, fact.source_url, fact.source_locator, fact.raw_hash)
+            (
+                fact.observation.source_ref.source_role,
+                fact.observation.source_ref.source_url,
+                fact.observation.source_ref.source_locator,
+                fact.observation.source_ref.raw_hash,
+            )
             not in parents
             for fact in self.payload.facts
+            if isinstance(
+                fact.observation.source_ref,
+                CompanyResearchExternalNumericSourceResponse,
+            )
         ):
             raise ValueError("evidence facts require exact source parents")
         return self
@@ -752,20 +838,39 @@ class CompanyResearchArtifactResponse(RootModel[CompanyResearchArtifactVariant])
 class CompanyResearchWorkbenchModuleResponse(UnderwritingModel):
     key: CompanyResearchModuleKey
     state: Literal["not_started", "preparing", "needs_review", "ready", "blocked"]
-    artifact: CompanyResearchArtifactResponse | None
+    artifact_refs: tuple[CompanyResearchArtifactRegistryReferenceResponse, ...]
+    valuation_state: Literal["not_applicable", "pending", "ready", "blocked"]
 
     @model_validator(mode="after")
     def valid_state_artifact_pair(self):
-        artifact = self.artifact.root if self.artifact is not None else None
-        if artifact is not None and artifact.kind != _MODULE_ARTIFACT_KINDS[self.key]:
+        kinds = tuple(ref.kind for ref in self.artifact_refs)
+        allowed = _MODULE_ARTIFACT_KINDS[self.key]
+        if any(kind not in allowed for kind in kinds):
             raise ValueError("module artifact kind is impossible")
+        if kinds != tuple(kind for kind in allowed if kind in kinds):
+            raise ValueError("module artifact refs must use canonical order")
         if self.state in {"ready", "needs_review"}:
-            if artifact is None:
+            if not self.artifact_refs:
                 raise ValueError("ready and needs_review modules require an artifact")
-            if self.state == "needs_review" and artifact.kind != "evidence_index":
+            if self.state == "needs_review" and "evidence_index" not in kinds:
                 raise ValueError("only evidence can need review")
-        elif artifact is not None:
+        elif self.state != "blocked" and self.artifact_refs:
             raise ValueError("non-ready modules cannot expose an artifact")
+        if self.key == "scenarios_valuation_implied_expectations":
+            if "valuation_set" in kinds and kinds != (
+                "scenario_set",
+                "valuation_set",
+            ):
+                raise ValueError("valuation cannot be exposed without its scenario")
+            if self.valuation_state == "ready" and kinds != (
+                "scenario_set",
+                "valuation_set",
+            ):
+                raise ValueError("ready valuation requires scenario and valuation refs")
+            if self.valuation_state == "blocked" and kinds != ("scenario_set",):
+                raise ValueError("blocked valuation still requires the scenario ref")
+        elif self.valuation_state != "not_applicable":
+            raise ValueError("valuation state only belongs to the scenario module")
         return self
 
 
@@ -778,6 +883,7 @@ class CompanyResearchWorkspacePreparationResponse(UnderwritingModel):
     status: PreparationStatus
     current_step: str | None
     progress: StrictInt = Field(ge=0, le=100)
+    error: "CompanyResearchPreparationErrorResponse | None"
 
     @model_validator(mode="after")
     def valid_status_step_pair(self):
@@ -791,7 +897,32 @@ class CompanyResearchWorkspacePreparationResponse(UnderwritingModel):
             and self.current_step != "judgment_context"
         ):
             raise ValueError("awaiting_judgment_review must expose judgment_context")
+        if self.status in {"blocked", "recoverable_failure"} and self.error is None:
+            raise ValueError("failed preparation requires typed error semantics")
+        if self.status not in {"blocked", "recoverable_failure"} and self.error is not None:
+            raise ValueError("non-failed preparation cannot expose an error")
+        if self.error is not None:
+            if self.error.failed_step != self.current_step:
+                raise ValueError("preparation error must match current step")
+            if (self.status == "recoverable_failure") != self.error.retryable:
+                raise ValueError("recoverable status and retryability are inconsistent")
+            if self.status == "recoverable_failure" and self.error.next_attempt_at is None:
+                raise ValueError("recoverable failure requires a retry time")
+            if self.status == "blocked" and self.error.next_attempt_at is not None:
+                raise ValueError("blocked preparation cannot expose a retry time")
         return self
+
+
+class CompanyResearchPreparationErrorResponse(UnderwritingModel):
+    code: StrictStr = Field(min_length=1)
+    failed_step: CompanyResearchFailureStep
+    retryable: StrictBool
+    next_attempt_at: datetime | None
+
+    @field_validator("next_attempt_at")
+    @classmethod
+    def aware_retry_time(cls, value):
+        return _require_aware(value, "next_attempt_at") if value is not None else None
 
 
 class CompanyResearchWorkspaceDraftResponse(UnderwritingModel):
@@ -816,6 +947,7 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
     project_id: UUID
     company: CompanyResearchWorkspaceCompanyResponse
     preparation: CompanyResearchWorkspacePreparationResponse
+    artifacts: tuple[CompanyResearchArtifactResponse, ...]
     modules: tuple[CompanyResearchWorkbenchModuleResponse, ...] = Field(
         min_length=9, max_length=9
     )
@@ -830,17 +962,80 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
         if tuple(item.key for item in self.modules) != COMPANY_RESEARCH_MODULE_KEYS:
             raise ValueError("company research modules must use the exact order")
         evidence_review = self.preparation.status == "awaiting_evidence_review"
+        registry = {}
+        kinds = set()
+        for wrapper in self.artifacts:
+            artifact = wrapper.root
+            if artifact.project_id != self.project_id:
+                raise ValueError("artifact registry contains a foreign project")
+            if artifact.id in registry or artifact.kind in kinds:
+                raise ValueError("artifact registry must contain unique current heads")
+            registry[artifact.id] = artifact
+            kinds.add(artifact.kind)
+
+        def require_exact_ref(ref):
+            artifact_id = getattr(ref, "artifact_id", getattr(ref, "id", None))
+            artifact_kind = getattr(ref, "artifact_kind", getattr(ref, "kind", None))
+            artifact = registry.get(artifact_id)
+            if artifact is None:
+                raise ValueError("artifact ref is absent from the response registry")
+            if artifact.kind != artifact_kind or artifact.content_hash != ref.content_hash:
+                raise ValueError("artifact ref does not match the response registry")
+
         for module in self.modules:
-            artifact = module.artifact.root if module.artifact is not None else None
+            for ref in module.artifact_refs:
+                require_exact_ref(ref)
+            if module.state in {"ready", "needs_review"}:
+                expected_kinds = tuple(
+                    kind
+                    for kind in _MODULE_ARTIFACT_KINDS[module.key]
+                    if kind in kinds
+                )
+                if tuple(ref.kind for ref in module.artifact_refs) != expected_kinds:
+                    raise ValueError(
+                        "ready module must expose every available required artifact"
+                    )
             if module.state == "needs_review" and not evidence_review:
                 raise ValueError("needs_review requires the evidence review gate")
             if (
                 evidence_review
-                and artifact is not None
-                and artifact.kind == "evidence_index"
+                and any(ref.kind == "evidence_index" for ref in module.artifact_refs)
                 and module.state != "needs_review"
             ):
                 raise ValueError("unreviewed evidence cannot be ready")
+        for wrapper in self.artifacts:
+            payload = wrapper.root.payload
+            lineage = getattr(payload, "lineage", None)
+            if lineage is not None:
+                for ref in lineage.artifact_refs:
+                    require_exact_ref(ref)
+
+            def validate_computation_refs(item):
+                if isinstance(item, CompanyResearchComputationNumericSourceResponse):
+                    if lineage is None or item.artifact_refs != lineage.artifact_refs:
+                        raise ValueError(
+                            "numeric computation requires exact artifact lineage"
+                        )
+                    if item.market_snapshot_ids != lineage.market_snapshot_ids:
+                        raise ValueError(
+                            "numeric computation requires exact market lineage"
+                        )
+                    for ref in item.artifact_refs:
+                        require_exact_ref(ref)
+                    return
+                if isinstance(item, BaseModel):
+                    for child in item.__dict__.values():
+                        validate_computation_refs(child)
+                elif isinstance(item, (tuple, list)):
+                    for child in item:
+                        validate_computation_refs(child)
+                elif isinstance(item, dict):
+                    for child in item.values():
+                        validate_computation_refs(child)
+
+            validate_computation_refs(payload)
+        if set(self.change_summary.artifact_versions) != kinds:
+            raise ValueError("change summary must describe every registry artifact")
         return self
 
 

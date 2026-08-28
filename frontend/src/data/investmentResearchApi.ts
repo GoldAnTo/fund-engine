@@ -789,6 +789,48 @@ function sourceRefIdentity(value: Record<string, unknown>): string {
   return JSON.stringify([value.source_role, value.source_url, value.source_locator, value.raw_hash]);
 }
 
+const ARTIFACT_PARENT_KEYS = ["artifact_id", "artifact_kind", "content_hash"] as const;
+
+function isArtifactParentRef(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && hasExactKeys(value, ARTIFACT_PARENT_KEYS)
+    && isUuid(value.artifact_id) && typeof value.artifact_kind === "string"
+    && COMPANY_RESEARCH_ARTIFACT_KINDS.has(value.artifact_kind as typeof COMPANY_RESEARCH_STEPS[number])
+    && isHash(value.content_hash);
+}
+
+function isNumericSource(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.kind !== "string") return false;
+  if (value.kind === "external") {
+    return hasExactKeys(value, ["kind", ...LINEAGE_SOURCE_REF_KEYS])
+      && isCompanyResearchSourceRef(Object.fromEntries(Object.entries(value).filter(([key]) => key !== "kind")), true);
+  }
+  return value.kind === "artifact_computation"
+    && hasExactKeys(value, ["kind", "artifact_refs", "market_snapshot_ids", "equation_id"])
+    && Array.isArray(value.artifact_refs) && value.artifact_refs.length > 0
+    && value.artifact_refs.every(isArtifactParentRef)
+    && new Set(value.artifact_refs.map((ref) => ref.artifact_id)).size === value.artifact_refs.length
+    && isUuidArray(value.market_snapshot_ids)
+    && new Set(value.market_snapshot_ids).size === value.market_snapshot_ids.length
+    && isNonEmptyString(value.equation_id);
+}
+
+function isNumericObservation(value: unknown): boolean {
+  if (!isRecord(value)
+    || !hasExactKeys(value, ["key", "value", "unit", "currency", "period", "state", "source_ref", "gap_key", "assumption_key"])
+    || !isNonEmptyString(value.key) || !isCanonicalDecimal(value.value)
+    || !isNonEmptyString(value.unit) || !isNonEmptyString(value.currency)
+    || !isNonEmptyString(value.period)
+    || !["reported", "derived", "assumption", "gap"].includes(String(value.state))) return false;
+  const paths = [value.source_ref, value.gap_key, value.assumption_key]
+    .filter((item) => item !== null).length;
+  if (paths !== 1) return false;
+  if (value.state === "reported") return isRecord(value.source_ref) && value.source_ref.kind === "external" && isNumericSource(value.source_ref);
+  if (value.state === "derived") return isRecord(value.source_ref)
+    && value.source_ref.kind === "artifact_computation" && isNumericSource(value.source_ref);
+  if (value.state === "assumption") return isNonEmptyString(value.assumption_key);
+  return isNonEmptyString(value.gap_key);
+}
+
 function isCompanyResearchLineage(
   value: unknown,
   expectedParents: readonly string[],
@@ -797,11 +839,7 @@ function isCompanyResearchLineage(
   if (!isRecord(value)
     || !hasExactKeys(value, ["artifact_refs", "market_snapshot_ids", "market_snapshot_bindings"])
     || !Array.isArray(value.artifact_refs)
-    || !value.artifact_refs.every((ref) => isRecord(ref)
-      && hasExactKeys(ref, ["artifact_id", "artifact_kind", "content_hash"])
-      && isUuid(ref.artifact_id) && isNonEmptyString(ref.artifact_kind)
-      && COMPANY_RESEARCH_ARTIFACT_KINDS.has(ref.artifact_kind as typeof COMPANY_RESEARCH_STEPS[number])
-      && isHash(ref.content_hash))
+    || !value.artifact_refs.every(isArtifactParentRef)
     || new Set(value.artifact_refs.map((ref) => isRecord(ref) ? ref.artifact_id : null)).size !== value.artifact_refs.length
     || !sameOrderedStrings(
       value.artifact_refs.map((ref) => isRecord(ref) && typeof ref.artifact_kind === "string" ? ref.artifact_kind : ""),
@@ -835,13 +873,11 @@ function isCompanyResearchLineage(
 
 function isEvidenceFact(value: unknown): value is Record<string, unknown> {
   if (!isRecord(value)) return false;
-  const keys = ["fact_key", "company_external_key", "business_module", "metric_key", "value", "value_kind", "currency", "unit", "period_start", "period_end", "published_at", "available_at", "source_role", "source_url", "source_locator", "raw_hash"];
+  const keys = ["fact_key", "company_external_key", "business_module", "metric_key", "observation", "period_start", "period_end", "published_at", "available_at", "source_role", "source_url", "source_locator", "raw_hash"];
   return (hasExactKeys(value, keys) || hasExactKeys(value, [...keys, "review_decision"]))
     && isNonEmptyString(value.fact_key) && isNonEmptyString(value.company_external_key)
     && isNonEmptyString(value.business_module) && isNonEmptyString(value.metric_key)
-    && isCanonicalDecimal(value.value)
-    && ["reported", "derived", "assumption"].includes(String(value.value_kind))
-    && isNonEmptyString(value.currency) && isNonEmptyString(value.unit)
+    && isNumericObservation(value.observation)
     && isDateOnly(value.period_start) && isDateOnly(value.period_end)
     && value.period_start <= value.period_end
     && isDateTime(value.published_at) && isDateTime(value.available_at)
@@ -861,7 +897,12 @@ function isEvidencePayload(value: unknown, sourceRefs: Record<string, unknown>[]
   const keys = value.facts.map((fact) => isRecord(fact) ? fact.fact_key : null);
   if (new Set(keys).size !== value.facts.length) return false;
   const parents = new Set(sourceRefs.map(sourceRefIdentity));
-  return value.facts.every((fact) => isRecord(fact) && parents.has(sourceRefIdentity(fact)));
+  return value.facts.every((fact) => {
+    if (!isRecord(fact) || !isRecord(fact.observation) || !isRecord(fact.observation.source_ref)) return false;
+    const external = { ...fact.observation.source_ref };
+    delete external.kind;
+    return parents.has(sourceRefIdentity(external));
+  });
 }
 
 function isResearchGapsPayload(value: unknown): boolean {
@@ -903,11 +944,10 @@ function isBusinessMapPayload(value: unknown): boolean {
       && Array.isArray(module.fact_refs) && module.fact_refs.every((ref) => isCompanyResearchSourceRef(ref, true))
       && isStringArray(module.gap_refs) && Array.isArray(module.classified_evidence)
       && module.classified_evidence.every((observation) => isRecord(observation)
-        && hasExactKeys(observation, ["fact_ref", "metric_key", "category", "value", "currency", "unit", "period_start", "period_end"])
+        && hasExactKeys(observation, ["fact_ref", "metric_key", "category", "observation", "period_start", "period_end"])
         && isCompanyResearchSourceRef(observation.fact_ref, true) && isNonEmptyString(observation.metric_key)
         && ["revenue", "cost", "capital"].includes(String(observation.category))
-        && isCanonicalDecimal(observation.value) && isNonEmptyString(observation.currency)
-        && isNonEmptyString(observation.unit) && isDateOnly(observation.period_start)
+        && isNumericObservation(observation.observation) && isDateOnly(observation.period_start)
         && isDateOnly(observation.period_end) && observation.period_start <= observation.period_end));
 }
 
@@ -916,31 +956,27 @@ function isDriverMapPayload(value: unknown): boolean {
     && isCompanyResearchLineage(value._lineage, ["business_map"])
     && Array.isArray(value.drivers) && value.drivers.length > 0
     && value.drivers.every((driver) => isRecord(driver)
-      && hasExactKeys(driver, ["driver_key", "module_key", "fact_refs", "assumption_refs", "equation", "output_metric", "input_state", "assumption_key", "equation_id", "values", "assumption_rationale", "assumption_equation"])
+      && hasExactKeys(driver, ["driver_key", "module_key", "fact_refs", "assumption_refs", "equation", "output_metric", "equation_id", "values", "assumption_rationale", "assumption_equation"])
       && isNonEmptyString(driver.driver_key) && isNonEmptyString(driver.module_key)
       && Array.isArray(driver.fact_refs) && driver.fact_refs.every((ref) => isCompanyResearchSourceRef(ref, true))
       && Array.isArray(driver.assumption_refs) && driver.assumption_refs.every((ref) => isCompanyResearchSourceRef(ref, true))
       && isNonEmptyString(driver.equation) && isNonEmptyString(driver.output_metric)
-      && ["reported", "derived", "assumption"].includes(String(driver.input_state))
-      && (driver.assumption_key === null || isNonEmptyString(driver.assumption_key))
       && (driver.equation_id === null || isNonEmptyString(driver.equation_id))
-      && Array.isArray(driver.values) && driver.values.length > 0 && driver.values.every(isCanonicalDecimal)
+      && Array.isArray(driver.values) && driver.values.length > 0 && driver.values.every(isNumericObservation)
       && (driver.assumption_rationale === null || isNonEmptyString(driver.assumption_rationale))
       && (driver.assumption_equation === null || isNonEmptyString(driver.assumption_equation)));
 }
 
 function isFinancialBridgePayload(value: unknown): boolean {
-  const decimalKeys = ["revenue", "operating_income", "cash_tax_rate", "depreciation", "capex", "working_capital_change", "fcff"];
+  const observationKeys = ["revenue", "operating_income", "cash_tax_rate", "depreciation", "capex", "working_capital_change", "fcff"];
   return isRecord(value) && hasExactKeys(value, ["rows", "_lineage"])
     && isCompanyResearchLineage(value._lineage, ["driver_map"])
     && Array.isArray(value.rows) && value.rows.length === 5
     && value.rows.every((row) => isRecord(row)
-      && hasExactKeys(row, ["fiscal_year", ...decimalKeys, "fact_refs", "assumption_refs", "input_states"])
-      && isPositiveInteger(row.fiscal_year) && decimalKeys.every((key) => isCanonicalDecimal(row[key]))
+      && hasExactKeys(row, ["period", ...observationKeys, "fact_refs", "assumption_refs"])
+      && isNonEmptyString(row.period) && observationKeys.every((key) => isNumericObservation(row[key]))
       && Array.isArray(row.fact_refs) && row.fact_refs.every((ref) => isCompanyResearchSourceRef(ref, true))
-      && Array.isArray(row.assumption_refs) && row.assumption_refs.every((ref) => isCompanyResearchSourceRef(ref, true))
-      && Array.isArray(row.input_states) && row.input_states.length > 0
-      && row.input_states.every((state) => ["reported", "derived", "assumption"].includes(String(state))));
+      && Array.isArray(row.assumption_refs) && row.assumption_refs.every((ref) => isCompanyResearchSourceRef(ref, true)));
 }
 
 function isScenarioSetPayload(value: unknown): boolean {
@@ -956,17 +992,15 @@ function isScenarioSetPayload(value: unknown): boolean {
       && isNonEmptyString(scenario.mechanism_id) && Array.isArray(scenario.driver_overrides)
       && scenario.driver_overrides.length > 0
       && scenario.driver_overrides.every((override) => isRecord(override)
-        && hasExactKeys(override, ["driver_key", "value", "state", "assumption_key", "rationale", "equation"])
-        && isNonEmptyString(override.driver_key) && isCanonicalDecimal(override.value)
-        && (override.state === null || ["reported", "derived", "assumption"].includes(String(override.state)))
-        && (override.assumption_key === null || isNonEmptyString(override.assumption_key))
+        && hasExactKeys(override, ["driver_key", "observation", "rationale", "equation"])
+        && isNonEmptyString(override.driver_key) && isNumericObservation(override.observation)
         && (override.rationale === null || isNonEmptyString(override.rationale))
         && (override.equation === null || isNonEmptyString(override.equation))));
 }
 
 function isValueRange(value: unknown): boolean {
   return isRecord(value) && hasExactKeys(value, ["minimum", "maximum"])
-    && isCanonicalDecimal(value.minimum) && isCanonicalDecimal(value.maximum);
+    && isNumericObservation(value.minimum) && isNumericObservation(value.maximum);
 }
 
 function isValuationSetPayload(value: unknown): boolean {
@@ -976,21 +1010,21 @@ function isValuationSetPayload(value: unknown): boolean {
     || !Array.isArray(value.scenario_dcf_values) || value.scenario_dcf_values.length !== 3
     || !value.scenario_dcf_values.every((item) => isRecord(item)
       && hasExactKeys(item, ["scenario_id", "enterprise_value"])
-      && ["base", "bull", "bear"].includes(String(item.scenario_id)) && isCanonicalDecimal(item.enterprise_value))
+      && ["base", "bull", "bear"].includes(String(item.scenario_id)) && isNumericObservation(item.enterprise_value))
     || !(value.reverse_dcf === null || isRecord(value.reverse_dcf)
       && hasExactKeys(value.reverse_dcf, ["driver_key", "implied_value", "achieved_residual", "iteration_count"])
       && value.reverse_dcf.driver_key === "fcff_multiplier"
-      && isCanonicalDecimal(value.reverse_dcf.implied_value) && isCanonicalDecimal(value.reverse_dcf.achieved_residual)
-      && isPositiveInteger(value.reverse_dcf.iteration_count))
+      && isNumericObservation(value.reverse_dcf.implied_value) && isNumericObservation(value.reverse_dcf.achieved_residual)
+      && isNumericObservation(value.reverse_dcf.iteration_count))
     || !Array.isArray(value.security_value_ranges) || value.security_value_ranges.length === 0
     || !value.security_value_ranges.every((item) => isRecord(item)
       && hasExactKeys(item, ["security_external_key", "usd_per_share", "cny_return"])
       && isNonEmptyString(item.security_external_key) && isValueRange(item.usd_per_share) && isValueRange(item.cny_return))
-    || !isCanonicalDecimal(value.required_return)
+    || !isNumericObservation(value.required_return)
     || !Array.isArray(value.required_return_comparisons) || value.required_return_comparisons.length === 0
     || !value.required_return_comparisons.every((item) => isRecord(item)
       && hasExactKeys(item, ["security_external_key", "required_return", "achieved_return_range", "meets_required_return"])
-      && isNonEmptyString(item.security_external_key) && isCanonicalDecimal(item.required_return)
+      && isNonEmptyString(item.security_external_key) && isNumericObservation(item.required_return)
       && isValueRange(item.achieved_return_range) && typeof item.meets_required_return === "boolean")) return false;
   const values = value.security_value_ranges.map((item) => isRecord(item) ? item.security_external_key : null);
   const comparisons = value.required_return_comparisons.map((item) => isRecord(item) ? item.security_external_key : null);
@@ -1032,8 +1066,8 @@ function isMemoPayload(value: unknown): boolean {
 }
 
 function isCompanyResearchArtifact(value: unknown): boolean {
-  if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "id", "kind", "version", "input_hash", "content_hash", "payload", "source_refs"])
-    || !isUuid(value.id) || typeof value.kind !== "string" || !COMPANY_RESEARCH_ARTIFACT_KINDS.has(value.kind as typeof COMPANY_RESEARCH_STEPS[number])
+  if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "id", "project_id", "kind", "version", "input_hash", "content_hash", "payload", "source_refs"])
+    || !isUuid(value.id) || !isUuid(value.project_id) || typeof value.kind !== "string" || !COMPANY_RESEARCH_ARTIFACT_KINDS.has(value.kind as typeof COMPANY_RESEARCH_STEPS[number])
     || !isPositiveInteger(value.version) || !isHash(value.input_hash) || !isHash(value.content_hash)
     || !isRecord(value.payload) || !Array.isArray(value.source_refs) || value.source_refs.length === 0
     || !value.source_refs.every((ref) => isCompanyResearchSourceRef(ref))) return false;
@@ -1050,25 +1084,62 @@ function isCompanyResearchArtifact(value: unknown): boolean {
   return value.kind === "memo" && isMemoPayload(value.payload);
 }
 
-const COMPANY_RESEARCH_MODULE_ARTIFACTS: Record<string, string> = {
-  overview: "evidence_index",
-  business_map: "business_map",
-  operating_drivers: "driver_map",
-  evidence_and_gaps: "evidence_index",
-  industry_competition_regulation: "business_map",
-  financials_cash_flow_capital_allocation: "financial_bridge",
-  scenarios_valuation_implied_expectations: "valuation_set",
-  counterevidence_risks_next_checks: "research_gaps",
-  versions_changes_memo: "memo",
+const COMPANY_RESEARCH_MODULE_ARTIFACTS: Record<string, readonly string[]> = {
+  overview: ["judgment_context"],
+  business_map: ["business_map"],
+  operating_drivers: ["driver_map"],
+  evidence_and_gaps: ["evidence_index", "research_gaps"],
+  industry_competition_regulation: ["business_map"],
+  financials_cash_flow_capital_allocation: ["financial_bridge"],
+  scenarios_valuation_implied_expectations: ["scenario_set", "valuation_set"],
+  counterevidence_risks_next_checks: ["research_gaps", "judgment_context"],
+  versions_changes_memo: ["memo"],
 };
 
+function isRegistryRef(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && hasExactKeys(value, ["id", "kind", "content_hash"])
+    && isUuid(value.id) && typeof value.kind === "string"
+    && COMPANY_RESEARCH_ARTIFACT_KINDS.has(value.kind as typeof COMPANY_RESEARCH_STEPS[number])
+    && isHash(value.content_hash);
+}
+
+function collectArtifactParentRefs(value: unknown, refs: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectArtifactParentRefs(item, refs));
+    return refs;
+  }
+  if (!isRecord(value)) return refs;
+  if (value.kind === "artifact_computation" && Array.isArray(value.artifact_refs)) {
+    value.artifact_refs.filter(isArtifactParentRef).forEach((ref) => refs.push(ref));
+  }
+  if (isRecord(value._lineage) && Array.isArray(value._lineage.artifact_refs)) {
+    value._lineage.artifact_refs.filter(isArtifactParentRef).forEach((ref) => refs.push(ref));
+  }
+  Object.values(value).forEach((item) => collectArtifactParentRefs(item, refs));
+  return refs;
+}
+
+function collectComputationSources(value: unknown, sources: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectComputationSources(item, sources));
+    return sources;
+  }
+  if (!isRecord(value)) return sources;
+  if (value.kind === "artifact_computation") sources.push(value);
+  Object.values(value).forEach((item) => collectComputationSources(item, sources));
+  return sources;
+}
+
 function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWorkspace {
-  if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "project_id", "company", "preparation", "modules", "source_count", "gap_count", "draft", "selected_revision", "change_summary"])
+  if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "project_id", "company", "preparation", "artifacts", "modules", "source_count", "gap_count", "draft", "selected_revision", "change_summary"])
     || !isUuid(value.project_id) || !isProductDto(value.company)
     || !hasExactKeys(value.company, ["schema_version", "object_id", "external_key", "canonical_name", "id"])
     || !isUuid(value.company.id) || value.company.object_id !== value.company.id || !isNonEmptyString(value.company.external_key) || !isNonEmptyString(value.company.canonical_name)
-    || !isProductDto(value.preparation) || !hasExactKeys(value.preparation, ["schema_version", "id", "status", "current_step", "progress"])
-    || !isUuid(value.preparation.id) || !isPreparationStateAndStep({ ...value.preparation, attempt: 1, next_attempt_at: null, last_error_code: value.preparation.status === "blocked" ? "blocked" : null })
+    || !isProductDto(value.preparation) || !hasExactKeys(value.preparation, ["schema_version", "id", "status", "current_step", "progress", "error"])
+    || !isUuid(value.preparation.id) || !isNonNegativeInteger(value.preparation.progress) || Number(value.preparation.progress) > 100
+    || !["queued", "preparing_sources", "awaiting_evidence_review", "building_model", "awaiting_judgment_review", "ready_to_freeze", "recoverable_failure", "blocked", "completed"].includes(String(value.preparation.status))
+    || !(value.preparation.current_step === null || isNonEmptyString(value.preparation.current_step))
+    || !Array.isArray(value.artifacts) || !value.artifacts.every(isCompanyResearchArtifact)
     || !Array.isArray(value.modules) || value.modules.length !== COMPANY_RESEARCH_AGENDA_KEYS.length
     || !isNonNegativeInteger(value.source_count) || !isNonNegativeInteger(value.gap_count)
     || !isProductDto(value.draft) || !hasExactKeys(value.draft, ["schema_version", "id", "lock_version", "base_revision_id"])
@@ -1077,23 +1148,69 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
   const moduleKeys = value.modules.map((item) => isProductDto(item) ? item.key : null);
   if (!sameOrderedStrings(moduleKeys.filter(isNonEmptyString), [...COMPANY_RESEARCH_AGENDA_KEYS])) return false;
   const expectedEvidenceReview = value.preparation.status === "awaiting_evidence_review";
+  const failed = value.preparation.status === "recoverable_failure" || value.preparation.status === "blocked";
+  const error = value.preparation.error;
+  if (failed) {
+    const failureSteps = new Set([...COMPANY_RESEARCH_STEPS, "model_bundle"]);
+    if (!isProductDto(error) || !hasExactKeys(error, ["schema_version", "code", "failed_step", "retryable", "next_attempt_at"])
+      || !isNonEmptyString(error.code) || error.failed_step !== value.preparation.current_step
+      || !failureSteps.has(String(error.failed_step))
+      || typeof error.retryable !== "boolean" || (value.preparation.status === "recoverable_failure") !== error.retryable
+      || !(error.next_attempt_at === null || isDateTime(error.next_attempt_at))) return false;
+    if (value.preparation.status === "recoverable_failure" && error.next_attempt_at === null) return false;
+    if (value.preparation.status === "blocked" && error.next_attempt_at !== null) return false;
+  } else if (error !== null) return false;
   const summary = value.change_summary;
   if (!hasExactKeys(summary, ["artifact_versions", "reviewed_fact_count"])
     || !isRecord(summary.artifact_versions)
     || !Object.values(summary.artifact_versions).every(isPositiveInteger)
     || !isNonNegativeInteger(summary.reviewed_fact_count)) return false;
+  const artifacts = value.artifacts.filter(isRecord);
+  const registry = new Map<string, Record<string, unknown>>();
+  const kinds = new Set<string>();
+  for (const artifact of artifacts) {
+    if (artifact.project_id !== value.project_id || registry.has(String(artifact.id)) || kinds.has(String(artifact.kind))) return false;
+    registry.set(String(artifact.id), artifact);
+    kinds.add(String(artifact.kind));
+  }
+  if (!sameStringSets(Object.keys(summary.artifact_versions), [...kinds])) return false;
+  const exactRef = (ref: Record<string, unknown>, registryShape: boolean): boolean => {
+    const id = String(registryShape ? ref.id : ref.artifact_id);
+    const kind = String(registryShape ? ref.kind : ref.artifact_kind);
+    const artifact = registry.get(id);
+    return artifact !== undefined && artifact.kind === kind && artifact.content_hash === ref.content_hash;
+  };
+  if (artifacts.some((artifact) => {
+    if (collectArtifactParentRefs(artifact.payload).some((ref) => !exactRef(ref, false))) return true;
+    const payload = isRecord(artifact.payload) ? artifact.payload : null;
+    const lineage = payload && isRecord(payload._lineage) ? payload._lineage : null;
+    return collectComputationSources(artifact.payload).some((source) => lineage === null
+      || JSON.stringify(source.artifact_refs) !== JSON.stringify(lineage.artifact_refs)
+      || JSON.stringify(source.market_snapshot_ids) !== JSON.stringify(lineage.market_snapshot_ids));
+  })) return false;
   return value.modules.every((item) => {
     if (!isProductDto(item)
-      || !hasExactKeys(item, ["schema_version", "key", "state", "artifact"])
+      || !hasExactKeys(item, ["schema_version", "key", "state", "artifact_refs", "valuation_state"])
       || !isNonEmptyString(item.key)
       || COMPANY_RESEARCH_MODULE_ARTIFACTS[item.key] === undefined
       || !["not_started", "preparing", "needs_review", "ready", "blocked"].includes(String(item.state))
-      || (item.artifact !== null && !isCompanyResearchArtifact(item.artifact))) return false;
-    const artifact = isRecord(item.artifact) ? item.artifact : null;
-    if (artifact !== null && artifact.kind !== COMPANY_RESEARCH_MODULE_ARTIFACTS[item.key]) return false;
-    if (item.state === "ready") return artifact !== null && !(expectedEvidenceReview && artifact.kind === "evidence_index");
-    if (item.state === "needs_review") return expectedEvidenceReview && artifact !== null && artifact.kind === "evidence_index";
-    return artifact === null;
+      || !Array.isArray(item.artifact_refs) || !item.artifact_refs.every(isRegistryRef)
+      || !["not_applicable", "pending", "ready", "blocked"].includes(String(item.valuation_state))) return false;
+    const refs = item.artifact_refs.filter(isRecord);
+    const refKinds = refs.map((ref) => String(ref.kind));
+    const allowed = COMPANY_RESEARCH_MODULE_ARTIFACTS[item.key];
+    const expectedKinds = allowed.filter((kind) => kinds.has(kind));
+    if (!refs.every((ref) => exactRef(ref, true))
+      || !sameOrderedStrings(refKinds, allowed.filter((kind) => refKinds.includes(kind)))) return false;
+    if ((item.state === "ready" || item.state === "needs_review")
+      && !sameOrderedStrings(refKinds, expectedKinds)) return false;
+    if (item.key === "scenarios_valuation_implied_expectations") {
+      if (item.valuation_state === "ready" && !sameOrderedStrings(refKinds, ["scenario_set", "valuation_set"])) return false;
+      if (item.valuation_state === "blocked" && !sameOrderedStrings(refKinds, ["scenario_set"])) return false;
+    } else if (item.valuation_state !== "not_applicable") return false;
+    if (item.state === "ready") return refs.length > 0 && !(expectedEvidenceReview && refKinds.includes("evidence_index"));
+    if (item.state === "needs_review") return expectedEvidenceReview && refKinds.includes("evidence_index");
+    return item.state === "blocked" || refs.length === 0;
   });
 }
 

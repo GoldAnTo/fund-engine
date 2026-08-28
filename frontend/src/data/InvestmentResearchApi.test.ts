@@ -83,19 +83,20 @@ function companyResearchProjectBody(status = "queued", currentStep: string | nul
   };
 }
 
-function companyResearchWorkspaceBody() {
+function companyResearchWorkspaceBody(): any {
   const artifact = {
-    schema_version: "underwriting.v1", id: ids.agenda, kind: "evidence_index", version: 1,
+    schema_version: "underwriting.v1", id: ids.agenda, project_id: ids.project, kind: "evidence_index", version: 1,
     input_hash: hash, content_hash: hash,
-    payload: { fixture_content_hash: hash, cutoff: now, company_external_key: "US:ALPHABET:COMPANY", security_external_keys: ["NASDAQ:GOOG", "NASDAQ:GOOGL"], facts: [{ fact_key: "reported_revenue", company_external_key: "US:ALPHABET:COMPANY", business_module: "search", metric_key: "revenue", value: "1", value_kind: "reported", currency: "USD", unit: "million", period_start: "2025-01-01", period_end: "2025-12-31", published_at: now, available_at: now, source_role: "regulatory_filing", source_url: "https://example.test/source", source_locator: "p. 1", raw_hash: hash }] },
+    payload: { fixture_content_hash: hash, cutoff: now, company_external_key: "US:ALPHABET:COMPANY", security_external_keys: ["NASDAQ:GOOG", "NASDAQ:GOOGL"], facts: [{ fact_key: "reported_revenue", company_external_key: "US:ALPHABET:COMPANY", business_module: "search", metric_key: "revenue", observation: { key: "revenue", value: "1", unit: "USD_million", currency: "USD", period: "2025-01-01/2025-12-31", state: "reported", source_ref: { kind: "external", fact_key: "reported_revenue", source_role: "regulatory_filing", source_url: "https://example.test/source", source_locator: "p. 1", raw_hash: hash }, gap_key: null, assumption_key: null }, period_start: "2025-01-01", period_end: "2025-12-31", published_at: now, available_at: now, source_role: "regulatory_filing", source_url: "https://example.test/source", source_locator: "p. 1", raw_hash: hash }] },
     source_refs: [{ source_url: "https://example.test/source", raw_hash: hash, source_locator: "p. 1", source_role: "regulatory_filing" }],
   };
   const keys = ["overview", "business_map", "operating_drivers", "evidence_and_gaps", "industry_competition_regulation", "financials_cash_flow_capital_allocation", "scenarios_valuation_implied_expectations", "counterevidence_risks_next_checks", "versions_changes_memo"];
   return {
     schema_version: "underwriting.v1", project_id: ids.project,
     company: { schema_version: "underwriting.v1", id: ids.company, object_id: ids.company, external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc." },
-    preparation: { schema_version: "underwriting.v1", id: ids.draft, status: "awaiting_evidence_review", current_step: "research_gaps", progress: 25 },
-    modules: keys.map((key) => ({ schema_version: "underwriting.v1", key, state: key === "overview" || key === "evidence_and_gaps" ? "needs_review" : "not_started", artifact: key === "overview" || key === "evidence_and_gaps" ? artifact : null })),
+    preparation: { schema_version: "underwriting.v1", id: ids.draft, status: "awaiting_evidence_review", current_step: "research_gaps", progress: 25, error: null },
+    artifacts: [artifact],
+    modules: keys.map((key) => ({ schema_version: "underwriting.v1", key, state: key === "evidence_and_gaps" ? "needs_review" : "not_started", artifact_refs: key === "evidence_and_gaps" ? [{ id: artifact.id, kind: artifact.kind, content_hash: artifact.content_hash }] : [], valuation_state: key === "scenarios_valuation_implied_expectations" ? "pending" : "not_applicable" })),
     source_count: 1, gap_count: 0,
     draft: { schema_version: "underwriting.v1", id: ids.draft, lock_version: 1, base_revision_id: null },
     selected_revision: null, change_summary: { artifact_versions: { evidence_index: 1 }, reviewed_fact_count: 0 },
@@ -480,7 +481,7 @@ describe("InvestmentResearchApi", () => {
 
   it("validates the closed company-research workspace and review response", async () => {
     const workspace = companyResearchWorkspaceBody();
-    const reviewed = { schema_version: "underwriting.v1", evidence_artifact: { ...workspace.modules[0].artifact!, version: 2 } };
+    const reviewed = { schema_version: "underwriting.v1", evidence_artifact: { ...workspace.artifacts[0], version: 2 } };
     const fetchSpy = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(response(workspace))
       .mockResolvedValueOnce(response(reviewed));
@@ -495,9 +496,11 @@ describe("InvestmentResearchApi", () => {
 
   it("rejects a workbench response with unknown artifact kinds or a ready module without artifact", async () => {
     const unknown = companyResearchWorkspaceBody();
-    (unknown.modules[0].artifact as { kind: string }).kind = "unknown_kind";
+    unknown.artifacts[0].kind = "unknown_kind";
     const missing = companyResearchWorkspaceBody();
-    missing.modules[0].artifact = null;
+    const evidenceModule = missing.modules.find((item: any) => item.key === "evidence_and_gaps");
+    evidenceModule.state = "ready";
+    evidenceModule.artifact_refs = [];
     const fetchSpy = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(response(unknown))
       .mockResolvedValueOnce(response(missing));
@@ -511,9 +514,9 @@ describe("InvestmentResearchApi", () => {
     const reordered = companyResearchWorkspaceBody();
     [reordered.modules[0], reordered.modules[1]] = [reordered.modules[1], reordered.modules[0]];
     const invalidDecimal = companyResearchWorkspaceBody();
-    (invalidDecimal.modules[0].artifact!.payload.facts[0] as { value: string }).value = "1e3";
+    invalidDecimal.artifacts[0].payload.facts[0].observation.value = "1e3";
     const missingParent = companyResearchWorkspaceBody();
-    missingParent.modules[0].artifact!.source_refs = [];
+    missingParent.artifacts[0].source_refs = [];
     const fetchSpy = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(response(reordered))
       .mockResolvedValueOnce(response(invalidDecimal))
@@ -526,11 +529,30 @@ describe("InvestmentResearchApi", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(3);
   });
 
+  it("rejects derived observations backed by external facts and invalid failure timing", async () => {
+    const externalDerived = companyResearchWorkspaceBody();
+    externalDerived.artifacts[0].payload.facts[0].observation.state = "derived";
+    const recoverableWithoutRetry = companyResearchWorkspaceBody();
+    recoverableWithoutRetry.preparation = { schema_version: "underwriting.v1", id: ids.draft, status: "recoverable_failure", current_step: "evidence_index", progress: 10, error: { schema_version: "underwriting.v1", code: "source_unavailable", failed_step: "evidence_index", retryable: true, next_attempt_at: null } };
+    recoverableWithoutRetry.artifacts = [];
+    recoverableWithoutRetry.change_summary.artifact_versions = {};
+    recoverableWithoutRetry.modules = recoverableWithoutRetry.modules.map((item: any) => ({ ...item, state: "blocked", artifact_refs: [] }));
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(response(externalDerived))
+      .mockResolvedValueOnce(response(recoverableWithoutRetry));
+    const api = new InvestmentResearchApi();
+
+    await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects workspace extra keys, project mismatch, and duplicate module keys", async () => {
     const extra = companyResearchWorkspaceBody();
     Reflect.set(extra, "unexpected", true);
     const mismatched = companyResearchWorkspaceBody();
     mismatched.project_id = ids.company;
+    mismatched.artifacts[0].project_id = ids.company;
     const duplicate = companyResearchWorkspaceBody();
     duplicate.modules[1] = { ...duplicate.modules[0] };
     const fetchSpy = vi.spyOn(globalThis, "fetch")
@@ -543,6 +565,40 @@ describe("InvestmentResearchApi", () => {
     await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "identity_mismatch" });
     await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
     expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects nonexistent, foreign, hash-substituted, and duplicate registry artifacts", async () => {
+    const nonexistent = companyResearchWorkspaceBody();
+    nonexistent.modules.find((item: any) => item.key === "evidence_and_gaps").artifact_refs[0].id = ids.company;
+    const foreign = companyResearchWorkspaceBody();
+    foreign.artifacts[0].project_id = ids.company;
+    const substituted = companyResearchWorkspaceBody();
+    substituted.modules.find((item: any) => item.key === "evidence_and_gaps").artifact_refs[0].content_hash = companyResearchHash;
+    const duplicate = companyResearchWorkspaceBody();
+    duplicate.artifacts.push({ ...duplicate.artifacts[0] });
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(response(nonexistent))
+      .mockResolvedValueOnce(response(foreign))
+      .mockResolvedValueOnce(response(substituted))
+      .mockResolvedValueOnce(response(duplicate));
+    const api = new InvestmentResearchApi();
+
+    for (let index = 0; index < 4; index += 1) {
+      await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    }
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+  });
+
+  it("accepts a closed recoverable company-research workspace", async () => {
+    const recoverable = companyResearchWorkspaceBody();
+    recoverable.preparation = { schema_version: "underwriting.v1", id: ids.draft, status: "recoverable_failure", current_step: "evidence_index", progress: 10, error: { schema_version: "underwriting.v1", code: "source_unavailable", failed_step: "evidence_index", retryable: true, next_attempt_at: now } };
+    recoverable.artifacts = [];
+    recoverable.change_summary.artifact_versions = {};
+    recoverable.modules = recoverable.modules.map((item: any) => ({ ...item, state: "blocked", artifact_refs: [] }));
+    vi.stubGlobal("fetch", vi.fn(async () => response(recoverable)));
+
+    await expect(new InvestmentResearchApi().companyResearchWorkspace(ids.project))
+      .resolves.toMatchObject({ preparation: { status: "recoverable_failure", error: { code: "source_unavailable", retryable: true } } });
   });
 
   it("rejects a zero-length rights interval from the service", async () => {

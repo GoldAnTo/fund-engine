@@ -4795,6 +4795,21 @@ export interface components {
             /** Content Hash */
             content_hash: string;
         };
+        /** CompanyResearchArtifactRegistryReferenceResponse */
+        CompanyResearchArtifactRegistryReferenceResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "evidence_index" | "research_gaps" | "business_map" | "driver_map" | "financial_bridge" | "scenario_set" | "valuation_set" | "judgment_context" | "memo";
+            /** Content Hash */
+            content_hash: string;
+        };
         /** CompanyResearchArtifactResponse */
         CompanyResearchArtifactResponse: components["schemas"]["CompanyResearchEvidenceIndexArtifactResponse"] | components["schemas"]["CompanyResearchGapsArtifactResponse"] | components["schemas"]["CompanyResearchBusinessMapArtifactResponse"] | components["schemas"]["CompanyResearchDriverMapArtifactResponse"] | components["schemas"]["CompanyResearchFinancialBridgeArtifactResponse"] | components["schemas"]["CompanyResearchScenarioSetArtifactResponse"] | components["schemas"]["CompanyResearchValuationSetArtifactResponse"] | components["schemas"]["CompanyResearchJudgmentContextArtifactResponse"] | components["schemas"]["CompanyResearchMemoArtifactResponse"];
         /** CompanyResearchBusinessMapArtifactResponse */
@@ -4810,6 +4825,11 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
             /** Version */
             version: number;
             /** Input Hash */
@@ -4868,12 +4888,7 @@ export interface components {
              * @enum {string}
              */
             category: "revenue" | "cost" | "capital";
-            /** Value */
-            value: string;
-            /** Currency */
-            currency: string;
-            /** Unit */
-            unit: string;
+            observation: components["schemas"]["CompanyResearchNumericObservationResponse"];
             /**
              * Period Start
              * Format: date
@@ -4884,6 +4899,20 @@ export interface components {
              * Format: date
              */
             period_end: string;
+        };
+        /** CompanyResearchComputationNumericSourceResponse */
+        CompanyResearchComputationNumericSourceResponse: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "artifact_computation";
+            /** Artifact Refs */
+            artifact_refs: components["schemas"]["CompanyResearchArtifactParentResponse"][];
+            /** Market Snapshot Ids */
+            market_snapshot_ids: string[];
+            /** Equation Id */
+            equation_id: string;
         };
         /** CompanyResearchDriverMapArtifactResponse */
         CompanyResearchDriverMapArtifactResponse: {
@@ -4898,6 +4927,11 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
             /** Version */
             version: number;
             /** Input Hash */
@@ -4933,17 +4967,10 @@ export interface components {
             equation: string;
             /** Output Metric */
             output_metric: string;
-            /**
-             * Input State
-             * @enum {string}
-             */
-            input_state: "reported" | "derived" | "assumption";
-            /** Assumption Key */
-            assumption_key: string | null;
             /** Equation Id */
             equation_id: string | null;
             /** Values */
-            values: string[];
+            values: components["schemas"]["CompanyResearchNumericObservationResponse"][];
             /** Assumption Rationale */
             assumption_rationale: string | null;
             /** Assumption Equation */
@@ -4962,6 +4989,11 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
             /** Version */
             version: number;
             /** Input Hash */
@@ -5003,6 +5035,24 @@ export interface components {
             schema_version: "underwriting.v1";
             evidence_artifact: components["schemas"]["CompanyResearchEvidenceIndexArtifactResponse"];
         };
+        /** CompanyResearchExternalNumericSourceResponse */
+        CompanyResearchExternalNumericSourceResponse: {
+            /** Raw Hash */
+            raw_hash: string;
+            /** Source Locator */
+            source_locator: string;
+            /** Source Role */
+            source_role: string;
+            /** Source Url */
+            source_url: string;
+            /** Fact Key */
+            fact_key: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "external";
+        };
         /** CompanyResearchFinancialBridgeArtifactResponse */
         CompanyResearchFinancialBridgeArtifactResponse: {
             /**
@@ -5016,6 +5066,11 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
             /** Version */
             version: number;
             /** Input Hash */
@@ -5039,28 +5094,19 @@ export interface components {
         };
         /** CompanyResearchFinancialBridgeRowResponse */
         CompanyResearchFinancialBridgeRowResponse: {
-            /** Fiscal Year */
-            fiscal_year: number;
-            /** Revenue */
-            revenue: string;
-            /** Operating Income */
-            operating_income: string;
-            /** Cash Tax Rate */
-            cash_tax_rate: string;
-            /** Depreciation */
-            depreciation: string;
-            /** Capex */
-            capex: string;
-            /** Working Capital Change */
-            working_capital_change: string;
-            /** Fcff */
-            fcff: string;
+            /** Period */
+            period: string;
+            revenue: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            operating_income: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            cash_tax_rate: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            depreciation: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            capex: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            working_capital_change: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            fcff: components["schemas"]["CompanyResearchNumericObservationResponse"];
             /** Fact Refs */
             fact_refs: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
             /** Assumption Refs */
             assumption_refs: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
-            /** Input States */
-            input_states: ("reported" | "derived" | "assumption")[];
         };
         /** CompanyResearchGapResponse */
         CompanyResearchGapResponse: {
@@ -5089,6 +5135,11 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
             /** Version */
             version: number;
             /** Input Hash */
@@ -5136,6 +5187,11 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
             /** Version */
             version: number;
             /** Input Hash */
@@ -5272,6 +5328,11 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
             /** Version */
             version: number;
             /** Input Hash */
@@ -5317,6 +5378,50 @@ export interface components {
             /** Gaps */
             gaps: components["schemas"]["CompanyResearchGapResponse"][];
             _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
+        };
+        /** CompanyResearchNumericObservationResponse */
+        CompanyResearchNumericObservationResponse: {
+            /** Key */
+            key: string;
+            /** Value */
+            value: string;
+            /** Unit */
+            unit: string;
+            /** Currency */
+            currency: string;
+            /** Period */
+            period: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "reported" | "derived" | "assumption" | "gap";
+            /** Source Ref */
+            source_ref: (components["schemas"]["CompanyResearchExternalNumericSourceResponse"] | components["schemas"]["CompanyResearchComputationNumericSourceResponse"]) | null;
+            /** Gap Key */
+            gap_key: string | null;
+            /** Assumption Key */
+            assumption_key: string | null;
+        };
+        /** CompanyResearchPreparationErrorResponse */
+        CompanyResearchPreparationErrorResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /** Code */
+            code: string;
+            /**
+             * Failed Step
+             * @enum {string}
+             */
+            failed_step: "evidence_index" | "research_gaps" | "business_map" | "driver_map" | "financial_bridge" | "scenario_set" | "valuation_set" | "judgment_context" | "memo" | "model_bundle";
+            /** Retryable */
+            retryable: boolean;
+            /** Next Attempt At */
+            next_attempt_at: string | null;
         };
         /** CompanyResearchPreparationResponse */
         CompanyResearchPreparationResponse: {
@@ -5444,8 +5549,7 @@ export interface components {
         CompanyResearchRequiredReturnComparisonResponse: {
             /** Security External Key */
             security_external_key: string;
-            /** Required Return */
-            required_return: string;
+            required_return: components["schemas"]["CompanyResearchNumericObservationResponse"];
             achieved_return_range: components["schemas"]["CompanyResearchValueRangeResponse"];
             /** Meets Required Return */
             meets_required_return: boolean;
@@ -5457,12 +5561,9 @@ export interface components {
              * @constant
              */
             driver_key: "fcff_multiplier";
-            /** Implied Value */
-            implied_value: string;
-            /** Achieved Residual */
-            achieved_residual: string;
-            /** Iteration Count */
-            iteration_count: number;
+            implied_value: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            achieved_residual: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            iteration_count: components["schemas"]["CompanyResearchNumericObservationResponse"];
         };
         /** CompanyResearchReviewedEvidenceFactResponse */
         CompanyResearchReviewedEvidenceFactResponse: {
@@ -5474,17 +5575,7 @@ export interface components {
             business_module: string;
             /** Metric Key */
             metric_key: string;
-            /** Value */
-            value: string;
-            /**
-             * Value Kind
-             * @enum {string}
-             */
-            value_kind: "reported" | "derived" | "assumption";
-            /** Currency */
-            currency: string;
-            /** Unit */
-            unit: string;
+            observation: components["schemas"]["CompanyResearchNumericObservationResponse"];
             /**
              * Period Start
              * Format: date
@@ -5526,19 +5617,13 @@ export interface components {
              * @enum {string}
              */
             scenario_id: "base" | "bull" | "bear";
-            /** Enterprise Value */
-            enterprise_value: string;
+            enterprise_value: components["schemas"]["CompanyResearchNumericObservationResponse"];
         };
         /** CompanyResearchScenarioOverrideResponse */
         CompanyResearchScenarioOverrideResponse: {
             /** Driver Key */
             driver_key: string;
-            /** Value */
-            value: string;
-            /** State */
-            state: ("reported" | "derived" | "assumption") | null;
-            /** Assumption Key */
-            assumption_key: string | null;
+            observation: components["schemas"]["CompanyResearchNumericObservationResponse"];
             /** Rationale */
             rationale: string | null;
             /** Equation */
@@ -5569,6 +5654,11 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
             /** Version */
             version: number;
             /** Input Hash */
@@ -5647,17 +5737,7 @@ export interface components {
             business_module: string;
             /** Metric Key */
             metric_key: string;
-            /** Value */
-            value: string;
-            /**
-             * Value Kind
-             * @enum {string}
-             */
-            value_kind: "reported" | "derived" | "assumption";
-            /** Currency */
-            currency: string;
-            /** Unit */
-            unit: string;
+            observation: components["schemas"]["CompanyResearchNumericObservationResponse"];
             /**
              * Period Start
              * Format: date
@@ -5700,6 +5780,11 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
             /** Version */
             version: number;
             /** Input Hash */
@@ -5722,18 +5807,15 @@ export interface components {
             reverse_dcf: components["schemas"]["CompanyResearchReverseDcfResponse"] | null;
             /** Security Value Ranges */
             security_value_ranges: components["schemas"]["CompanyResearchSecurityValueRangeResponse"][];
-            /** Required Return */
-            required_return: string;
+            required_return: components["schemas"]["CompanyResearchNumericObservationResponse"];
             /** Required Return Comparisons */
             required_return_comparisons: components["schemas"]["CompanyResearchRequiredReturnComparisonResponse"][];
             _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
         };
         /** CompanyResearchValueRangeResponse */
         CompanyResearchValueRangeResponse: {
-            /** Minimum */
-            minimum: string;
-            /** Maximum */
-            maximum: string;
+            minimum: components["schemas"]["CompanyResearchNumericObservationResponse"];
+            maximum: components["schemas"]["CompanyResearchNumericObservationResponse"];
         };
         /** CompanyResearchWorkbenchModuleResponse */
         CompanyResearchWorkbenchModuleResponse: {
@@ -5753,7 +5835,13 @@ export interface components {
              * @enum {string}
              */
             state: "not_started" | "preparing" | "needs_review" | "ready" | "blocked";
-            artifact: components["schemas"]["CompanyResearchArtifactResponse"] | null;
+            /** Artifact Refs */
+            artifact_refs: components["schemas"]["CompanyResearchArtifactRegistryReferenceResponse"][];
+            /**
+             * Valuation State
+             * @enum {string}
+             */
+            valuation_state: "not_applicable" | "pending" | "ready" | "blocked";
         };
         /** CompanyResearchWorkspaceCompanyResponse */
         CompanyResearchWorkspaceCompanyResponse: {
@@ -5818,6 +5906,7 @@ export interface components {
             current_step: string | null;
             /** Progress */
             progress: number;
+            error: components["schemas"]["CompanyResearchPreparationErrorResponse"] | null;
         };
         /** CompanyResearchWorkspaceResponse */
         CompanyResearchWorkspaceResponse: {
@@ -5834,6 +5923,8 @@ export interface components {
             project_id: string;
             company: components["schemas"]["CompanyResearchWorkspaceCompanyResponse"];
             preparation: components["schemas"]["CompanyResearchWorkspacePreparationResponse"];
+            /** Artifacts */
+            artifacts: components["schemas"]["CompanyResearchArtifactResponse"][];
             /** Modules */
             modules: components["schemas"]["CompanyResearchWorkbenchModuleResponse"][];
             /** Source Count */

@@ -36,16 +36,27 @@ ModuleState = Literal["not_started", "preparing", "needs_review", "ready", "bloc
 _MAX_ARTIFACT_HISTORY = 2048
 
 _MODULE_ARTIFACTS = {
-    "overview": "evidence_index",
-    "business_map": "business_map",
-    "operating_drivers": "driver_map",
-    "evidence_and_gaps": "evidence_index",
-    "industry_competition_regulation": "business_map",
-    "financials_cash_flow_capital_allocation": "financial_bridge",
-    "scenarios_valuation_implied_expectations": "valuation_set",
-    "counterevidence_risks_next_checks": "research_gaps",
-    "versions_changes_memo": "memo",
+    "overview": ("judgment_context",),
+    "business_map": ("business_map",),
+    "operating_drivers": ("driver_map",),
+    "evidence_and_gaps": ("evidence_index", "research_gaps"),
+    "industry_competition_regulation": ("business_map",),
+    "financials_cash_flow_capital_allocation": ("financial_bridge",),
+    "scenarios_valuation_implied_expectations": ("scenario_set", "valuation_set"),
+    "counterevidence_risks_next_checks": ("research_gaps", "judgment_context"),
+    "versions_changes_memo": ("memo",),
 }
+_ARTIFACT_ORDER = (
+    "evidence_index",
+    "research_gaps",
+    "business_map",
+    "driver_map",
+    "financial_bridge",
+    "scenario_set",
+    "valuation_set",
+    "judgment_context",
+    "memo",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +74,12 @@ class WorkbenchArtifact:
 class WorkbenchModule:
     key: str
     state: ModuleState
-    artifact: WorkbenchArtifact | None
+    artifacts: tuple[WorkbenchArtifact, ...]
+    valuation_state: Literal["not_applicable", "pending", "ready", "blocked"]
+
+    @property
+    def artifact(self) -> WorkbenchArtifact | None:
+        return self.artifacts[0] if self.artifacts else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,9 +92,19 @@ class WorkbenchCompany:
 @dataclass(frozen=True, slots=True)
 class WorkbenchPreparation:
     id: UUID
+    strategy_version: str
     status: str
     current_step: str | None
     progress: int
+    error: "WorkbenchPreparationError | None"
+
+
+@dataclass(frozen=True, slots=True)
+class WorkbenchPreparationError:
+    code: str
+    failed_step: str
+    retryable: bool
+    next_attempt_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +120,7 @@ class CompanyResearchWorkspace:
     company: WorkbenchCompany
     preparation: WorkbenchPreparation
     modules: tuple[WorkbenchModule, ...]
+    artifacts: tuple[WorkbenchArtifact, ...]
     source_count: int
     gap_count: int
     draft: WorkbenchDraft
@@ -631,25 +658,33 @@ class CompanyResearchWorkbench:
             )
         heads = self._heads(project_id)
         modules = []
-        for key, kind in _MODULE_ARTIFACTS.items():
-            artifact = heads.get(kind)
+        for key, kinds in _MODULE_ARTIFACTS.items():
+            artifacts = tuple(heads[kind] for kind in kinds if kind in heads)
             if (
-                artifact is not None
-                and kind == "evidence_index"
+                key == "evidence_and_gaps"
+                and "evidence_index" in heads
                 and preparation.status == "awaiting_evidence_review"
             ):
                 state = "needs_review"
-            elif artifact is not None:
+            elif artifacts:
                 state: ModuleState = "ready"
-            elif kind == "valuation_set" and "judgment_context" in heads:
-                state = "blocked"
             elif preparation.status in {"blocked", "recoverable_failure"}:
                 state = "blocked"
             elif preparation.status in {"preparing_sources", "building_model"}:
                 state = "preparing"
             else:
                 state = "not_started"
-            modules.append(WorkbenchModule(key, state, artifact))
+            valuation_state = "not_applicable"
+            if key == "scenarios_valuation_implied_expectations":
+                if "valuation_set" in heads:
+                    valuation_state = "ready"
+                elif "judgment_context" in heads and "scenario_set" in heads:
+                    valuation_state = "blocked"
+                else:
+                    valuation_state = "pending"
+            modules.append(
+                WorkbenchModule(key, state, artifacts, valuation_state)
+            )
         gaps = heads.get("research_gaps")
         gap_values = gaps.payload.get("gaps", []) if gaps else []
         if not isinstance(gap_values, list):
@@ -665,6 +700,22 @@ class CompanyResearchWorkbench:
             if isinstance(fact, dict)
             and fact.get("review_decision") in {"confirmed", "rejected"}
         )
+        error = None
+        if preparation.status in {"blocked", "recoverable_failure"}:
+            if preparation.last_error_code is None or preparation.current_step is None:
+                raise ValidationError(
+                    "failed company research preparation requires typed error semantics"
+                )
+            error = WorkbenchPreparationError(
+                preparation.last_error_code,
+                preparation.current_step,
+                preparation.status == "recoverable_failure",
+                preparation.next_attempt_at,
+            )
+        elif preparation.last_error_code is not None:
+            raise ValidationError(
+                "non-failed company research preparation cannot expose an error"
+            )
         return CompanyResearchWorkspace(
             project_id,
             WorkbenchCompany(
@@ -674,11 +725,14 @@ class CompanyResearchWorkbench:
             ),
             WorkbenchPreparation(
                 preparation.id,
+                preparation.strategy_version,
                 preparation.status,
                 preparation.current_step,
                 preparation.progress,
+                error,
             ),
             tuple(modules),
+            tuple(heads[kind] for kind in _ARTIFACT_ORDER if kind in heads),
             len(
                 {
                     canonical_hash(ref)

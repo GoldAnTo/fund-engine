@@ -506,8 +506,9 @@ def test_optional_valuation_tracks_the_current_model_epoch_across_rebuilds(
         for item in without_valuation.modules
         if item.key == "scenarios_valuation_implied_expectations"
     )
-    assert valuation_module.state == "blocked"
-    assert valuation_module.artifact is None
+    assert valuation_module.state == "ready"
+    assert tuple(item.kind for item in valuation_module.artifacts) == ("scenario_set",)
+    assert valuation_module.valuation_state == "blocked"
     assert "valuation_set" not in without_valuation.change_summary["artifact_versions"]
     historical_valuation = repository.current_artifact(project_id, "valuation_set")
     assert historical_valuation is not None
@@ -534,8 +535,12 @@ def test_optional_valuation_tracks_the_current_model_epoch_across_rebuilds(
         if item.key == "scenarios_valuation_implied_expectations"
     )
     assert restored_module.state == "ready"
-    assert restored_module.artifact is not None
-    assert restored_module.artifact.version == first_valuation.version + 1
+    assert tuple(item.kind for item in restored_module.artifacts) == (
+        "scenario_set",
+        "valuation_set",
+    )
+    assert restored_module.valuation_state == "ready"
+    assert restored_module.artifacts[-1].version == first_valuation.version + 1
 
 
 def test_model_bundle_rolls_back_when_valuation_append_fails(
