@@ -220,6 +220,7 @@ function assessmentFixture(status: "not_answerable" | "partially_answerable" | "
   const memo = candidate.artifacts.find((item) => item.kind === "memo")! as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "memo" }>;
   memo.payload.assessment_status = status;
   memo.payload.gap_keys = status === "not_answerable" ? ["youtube_margin_gap"] : [];
+  candidate.gap_count = memo.payload.gap_keys.length;
   return candidate;
 }
 
