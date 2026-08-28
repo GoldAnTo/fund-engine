@@ -471,8 +471,9 @@ def _write_foundation(api_client, project: dict, catalog: dict[str, object]) -> 
 
 
 def test_product_http_foundation_round_trip_is_exact_and_idempotent(
-    api_client, session
+    api_client, session, monkeypatch
 ) -> None:
+    monkeypatch.setattr("app.underwriting.api.product_router._now", lambda: NOW)
     catalog = _seed_catalog(session)
     as_of = NOW.isoformat()
 
