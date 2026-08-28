@@ -32,8 +32,10 @@ from app.underwriting.domain.evidence_candidates import (
 from app.underwriting.domain.product_contracts import (
     AssessmentConfidence,
     AssessmentDirection,
+    ProductHistoricalBasisInput,
     PublicationStatus,
     RevisionBoundaryInput,
+    product_historical_basis_payload_and_hash,
 )
 from app.underwriting.domain.types import ResearchObjectKind
 from app.underwriting.domain.types import (
@@ -1764,13 +1766,17 @@ class ResearchRevisionDiffService:
             or capital is None or any(item is None for item in (*prices, *fxs, *rights))
         ):
             raise ValidationError("product research revision exact reference is missing")
-        basis_hash = canonical_hash({
-            "schema_version": "product.historical-basis.v1",
-            "cutoff_at": self._stored_datetime(basis.cutoff).isoformat(),
-            "source_manifest_hash": basis.source_manifest_hash,
-            "definition_bundle_hash": basis.definition_bundle_hash,
-            "parser_bundle_hash": basis.parser_bundle_hash,
-        })
+        try:
+            _payload, basis_hash = product_historical_basis_payload_and_hash(
+                ProductHistoricalBasisInput(
+                    cutoff_at=self._stored_datetime(basis.cutoff),
+                    source_manifest_hash=basis.source_manifest_hash,
+                    definition_bundle_hash=basis.definition_bundle_hash,
+                    parser_bundle_hash=basis.parser_bundle_hash,
+                )
+            )
+        except ValueError as exc:
+            raise ValidationError("product foundation reference is invalid") from exc
         mandate_hash = canonical_hash({
             "schema_version": "product.investment-mandate.v1", "project_id": str(project_id),
             "mandate_key": mandate.mandate_key, "horizon_years": mandate.horizon_years,

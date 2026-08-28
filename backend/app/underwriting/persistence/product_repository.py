@@ -14,7 +14,10 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased
 
 from app.models.ledger import ConflictError, ValidationError
-from app.underwriting.domain.product_contracts import RevisionBoundaryInput
+from app.underwriting.domain.product_contracts import (
+    PRODUCT_HISTORICAL_BASIS_SCHEMA,
+    RevisionBoundaryInput,
+)
 from app.underwriting.domain.search_terms import (
     SearchTermIntegrityError,
     digest_search_term,
@@ -1564,7 +1567,7 @@ class ProductRepository:
             .where(
                 UnderwritingHistoricalBasis.id == basis_id,
                 UnderwritingHistoricalBasis.boundary_schema_version
-                == "product.historical-basis.v1",
+                == PRODUCT_HISTORICAL_BASIS_SCHEMA,
                 UnderwritingHistoricalBasis.price_as_of.is_(None),
             )
             .limit(1)

@@ -17,9 +17,11 @@ from app.underwriting.domain.product_contracts import (
     AssessmentConfidence,
     AssessmentDirection,
     AssessmentState,
+    ProductHistoricalBasisInput,
     ProductRevisionView,
     PublicationStatus,
     RevisionBoundaryInput,
+    product_historical_basis_payload_and_hash,
 )
 from app.underwriting.domain.types import AnswerabilityState, ResearchObjectKind
 from app.underwriting.persistence.product_repository import ProductRepository
@@ -319,15 +321,19 @@ class RevisionPublisher:
         rights = self.repository.security_rights_many(boundary.security_rights_ids)
         if basis is None or scope is None or agenda is None or capital is None:
             raise ValidationError("publication boundary reference is missing")
-        basis_hash = canonical_hash(
-            {
-                "schema_version": "product.historical-basis.v1",
-                "cutoff_at": _stored_utc(basis.cutoff).isoformat(),
-                "source_manifest_hash": basis.source_manifest_hash,
-                "definition_bundle_hash": basis.definition_bundle_hash,
-                "parser_bundle_hash": basis.parser_bundle_hash,
-            }
-        )
+        try:
+            _payload, basis_hash = product_historical_basis_payload_and_hash(
+                ProductHistoricalBasisInput(
+                    cutoff_at=_stored_utc(basis.cutoff),
+                    source_manifest_hash=basis.source_manifest_hash,
+                    definition_bundle_hash=basis.definition_bundle_hash,
+                    parser_bundle_hash=basis.parser_bundle_hash,
+                )
+            )
+        except ValueError as exc:
+            raise ValidationError(
+                "publication boundary reference hash mismatch"
+            ) from exc
         mandate_hash = canonical_hash(
             {
                 "schema_version": "product.investment-mandate.v1",

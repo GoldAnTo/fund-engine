@@ -29,6 +29,7 @@ from app.underwriting.domain.product_contracts import (
     ResearchScopeInput,
     SecurityRightsInput,
     agenda_items_hash,
+    product_historical_basis_payload_and_hash,
 )
 from app.underwriting.domain.types import AnswerabilityState, InvestmentMandateInput
 from app.underwriting.persistence.models import (
@@ -66,6 +67,7 @@ from app.underwriting.services.revision_publisher import (
     PRODUCT_MANIFEST_SCHEMA,
     RevisionPublisher,
 )
+import app.underwriting.services.revision_publisher as revision_publisher_module
 from app.underwriting.services.workspace_draft import WorkspaceDraftService
 
 
@@ -482,6 +484,99 @@ def test_foundation_golden_path_publishes_only_insufficient_evidence(session) ->
     assert summary.direction is None
     assert summary.confidence is None
     assert summary.publication_status is PublicationStatus.USER_FROZEN
+
+
+def test_publisher_validates_the_historical_basis_with_the_canonical_helper(
+    session, monkeypatch
+) -> None:
+    graph = _ready_graph(session)
+    helper_calls = []
+
+    def wrapped_helper(value):
+        helper_calls.append(value)
+        return product_historical_basis_payload_and_hash(value)
+
+    monkeypatch.setattr(
+        revision_publisher_module,
+        "product_historical_basis_payload_and_hash",
+        wrapped_helper,
+    )
+
+    RevisionPublisher(session, now=lambda: NOW).preview(
+        graph["project"].id,
+        graph["draft"].lock_version,
+    )
+
+    assert len(helper_calls) == 1
+
+
+def test_product_revision_reader_validates_historical_basis_with_canonical_helper(
+    session, monkeypatch
+) -> None:
+    graph = _ready_graph(session)
+    revision = RevisionPublisher(session, now=lambda: NOW).publish(
+        graph["project"].id,
+        graph["draft"].lock_version,
+        idempotency_key="canonical-basis-reader",
+    )
+    import app.underwriting.services.research_revision_diff as revision_diff_module
+
+    helper_calls = []
+
+    def wrapped_helper(value):
+        helper_calls.append(value)
+        return product_historical_basis_payload_and_hash(value)
+
+    monkeypatch.setattr(
+        revision_diff_module,
+        "product_historical_basis_payload_and_hash",
+        wrapped_helper,
+    )
+
+    revision_diff_module.ResearchRevisionDiffService(session).revision_summary(
+        revision.id
+    )
+
+    assert len(helper_calls) == 1
+
+
+def test_publisher_preserves_hash_mismatch_for_an_invalid_persisted_basis(
+    session,
+) -> None:
+    graph = _ready_graph(session)
+    session.connection().exec_driver_sql(
+        "UPDATE uw_historical_bases SET definition_bundle_hash = ? WHERE id = ?",
+        (None, graph["basis"].id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(
+        ValidationError,
+        match="publication boundary reference hash mismatch",
+    ):
+        RevisionPublisher(session, now=lambda: NOW).preview(
+            graph["project"].id,
+            graph["draft"].lock_version,
+        )
+
+
+def test_product_revision_reader_preserves_invalid_persisted_basis_error(
+    session,
+) -> None:
+    graph = _ready_graph(session)
+    revision = RevisionPublisher(session, now=lambda: NOW).publish(
+        graph["project"].id,
+        graph["draft"].lock_version,
+        idempotency_key="invalid-basis-reader",
+    )
+    session.connection().exec_driver_sql(
+        "UPDATE uw_historical_bases SET definition_bundle_hash = ? WHERE id = ?",
+        (None, graph["basis"].id.hex),
+    )
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="product foundation reference is invalid"):
+        ResearchRevisionDiffService(session).revision_summary(revision.id)
 
 
 def test_alphabet_foundation_searches_and_previews_two_securities_without_publication(
