@@ -25,16 +25,23 @@ from app.models.operational import Job
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchPreparation,
 )
+from app.underwriting.persistence.company_research_repository import (
+    CompanyResearchRepository,
+)
 from app.underwriting.services.company_research_preparation import (
     CompanyResearchPreparationWorker,
 )
 from app.underwriting.services.product_foundation_fixture import (
     ProductFoundationFixtureService,
 )
+from app.underwriting.services.workspace_draft import (
+    WorkspaceDraftPatch,
+    WorkspaceDraftService,
+)
 from tests.underwriting.test_company_research_workbench import _model_workspace
 
 BASE = "/api/underwriting/v1/product/company-research"
-NOW = datetime(2026, 8, 25, 9, tzinfo=UTC)
+NOW = datetime(2026, 8, 28, tzinfo=UTC)
 HASH = "a" * 64
 PROJECT_ID = UUID("00000000-0000-4000-8000-000000000001")
 COMPANY_ID = UUID("00000000-0000-4000-8000-000000000002")
@@ -939,6 +946,120 @@ def test_retry_requeues_only_a_recoverable_preparation(api_client, session) -> N
     assert body["preparation"]["progress"] == 0
     assert body["preparation"]["attempt"] == 2
     assert body["preparation"]["request_hash"] == preview["preview_hash"]
+
+
+def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
+    api_client, session
+) -> None:
+    cutoff = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
+    company_id = _alphabet_id(session)
+    preview = _preview(api_client, company_id, cutoff_at=cutoff)
+    initialized = _initialize(
+        api_client,
+        company_id,
+        preview["preview_hash"],
+        cutoff_at=cutoff,
+    )
+    assert initialized.status_code == 201, initialized.text
+    project_id = initialized.json()["project_id"]
+    operation_now = datetime.now(UTC)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: operation_now)
+    source_claim = worker.claim_next()
+    assert source_claim is not None
+    assert worker.run_claim(source_claim) == "awaiting_evidence_review"
+    workspace = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    assert workspace.status_code == 200, workspace.text
+    evidence = next(
+        item
+        for item in workspace.json()["artifacts"]
+        if item["kind"] == "evidence_index"
+    )
+    current = evidence
+    for index, fact in enumerate(evidence["payload"]["facts"]):
+        reviewed = api_client.post(
+            f"{BASE}/projects/{project_id}/evidence-reviews",
+            json={
+                "evidence_artifact_id": current["id"],
+                "fact_key": fact["fact_key"],
+                "decision": "rejected" if index == 6 else "confirmed",
+                "expected_head_id": current["id"],
+            },
+        )
+        assert reviewed.status_code == 200, reviewed.text
+        current = reviewed.json()["evidence_artifact"]
+    assert [
+        fact["review_decision"] for fact in current["payload"]["facts"]
+    ] == ["confirmed"] * 6 + ["rejected"]
+    repository = CompanyResearchRepository(session)
+    gaps = repository.current_artifact(UUID(project_id), "research_gaps")
+    assert gaps is not None
+    evidence_snapshot = (
+        current["id"],
+        current["version"],
+        current["content_hash"],
+        deepcopy(current["payload"]["facts"]),
+    )
+    gaps_snapshot = (str(gaps.id), gaps.version, gaps.content_hash, deepcopy(gaps.payload))
+    drafts = WorkspaceDraftService(session, now=lambda: operation_now)
+    draft = drafts.read(UUID(project_id))
+    assert draft is not None and draft.content.historical_basis_id is not None
+    missing = drafts.save(
+        UUID(project_id),
+        expected_lock_version=draft.lock_version,
+        patch=WorkspaceDraftPatch(historical_basis_id=None),
+    )
+    session.commit()
+    model_claim = worker.claim_next()
+    assert model_claim is not None and model_claim.step == "model_bundle"
+    assert worker.run_claim(model_claim) == "discarded"
+    session.commit()
+    blocked_draft = drafts.read(UUID(project_id))
+    assert blocked_draft is not None
+
+    retried = api_client.post(f"{BASE}/projects/{project_id}/retry")
+
+    assert retried.status_code == 202, retried.text
+    retried_preparation = retried.json()["preparation"]
+    assert (
+        retried_preparation["status"],
+        retried_preparation["current_step"],
+        retried_preparation["progress"],
+    ) == ("building_model", "model_bundle", 25)
+    recovered = drafts.read(UUID(project_id))
+    assert recovered is not None and recovered.content.historical_basis_id is not None
+    assert recovered.lock_version == blocked_draft.lock_version + 1
+    workspace_after = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    assert workspace_after.status_code == 200, workspace_after.text
+    artifacts_after = workspace_after.json()["artifacts"]
+    evidence_after = next(item for item in artifacts_after if item["kind"] == "evidence_index")
+    gaps_after = next(item for item in artifacts_after if item["kind"] == "research_gaps")
+    assert (
+        evidence_after["id"],
+        evidence_after["version"],
+        evidence_after["content_hash"],
+        evidence_after["payload"]["facts"],
+    ) == evidence_snapshot
+    assert (
+        gaps_after["id"],
+        gaps_after["version"],
+        gaps_after["content_hash"],
+        gaps_after["payload"],
+    ) == gaps_snapshot
+    retry_worker = CompanyResearchPreparationWorker(
+        session, now=lambda: datetime.now(UTC)
+    )
+    retry_claim = retry_worker.claim_next()
+    assert retry_claim is not None and retry_claim.step == "model_bundle"
+    assert retry_worker.run_claim(retry_claim) == "awaiting_judgment_review"
+    final = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    assert final.status_code == 200, final.text
+    final_preparation = final.json()["preparation"]
+    assert (
+        final_preparation["status"],
+        final_preparation["current_step"],
+        final_preparation["progress"],
+        final_preparation["error"],
+    ) == ("awaiting_judgment_review", "judgment_context", 85, None)
 
 
 def test_retry_preserves_the_server_declared_failed_financial_bridge_step(

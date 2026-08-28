@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import subprocess
 import sys
+from threading import Barrier
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import bindparam, select, text
+from sqlalchemy import bindparam, create_engine, func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models.ledger import ValidationError
+from app.models.ledger import Base, ConflictError, ValidationError
 from app.models.operational import Job, JobEvent
 from app.underwriting.domain.product_contracts import ProductHistoricalBasisInput
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
@@ -24,11 +27,20 @@ from app.underwriting.persistence.company_research_repository import (
     CompanyResearchIntegrityError,
     CompanyResearchRepository,
 )
-from app.underwriting.persistence.models import UnderwritingHistoricalBasis
+from app.underwriting.persistence.models import (
+    UnderwritingHistoricalBasis,
+    UnderwritingResearchObject,
+)
 from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchInitializer,
     CompanyResearchPreparationService,
+)
+from app.underwriting.services.company_research_basis_recovery import (
+    CompanyResearchHistoricalBasisRecovery,
+)
+from app.underwriting.services.company_research_boundary import (
+    resolve_alphabet_company_research_boundary,
 )
 from app.underwriting.services.company_research_preparation import (
     CompanyResearchPreparationWorker,
@@ -85,6 +97,25 @@ def _review_all_evidence(session, initialized):
     return current
 
 
+def _review_evidence_with_one_rejection(session, initialized):
+    workbench = CompanyResearchWorkbench(session, now=lambda: NOW)
+    workspace = workbench.workspace(project_id=initialized.project.id)
+    evidence = next(
+        item.artifact for item in workspace.modules if item.key == "evidence_and_gaps"
+    )
+    assert evidence is not None
+    current = evidence
+    for index, fact in enumerate(evidence.payload["facts"]):
+        current = workbench.review_evidence(
+            project_id=initialized.project.id,
+            evidence_artifact_id=current.id,
+            fact_key=fact["fact_key"],
+            decision="rejected" if index == len(evidence.payload["facts"]) - 1 else "confirmed",
+            expected_head_id=current.id,
+        ).evidence_artifact
+    return current
+
+
 def _ready_for_model(session):
     initialized = _initialized(session)
     source_worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
@@ -93,6 +124,51 @@ def _ready_for_model(session):
     assert source_worker.run_claim(source_claim) == "awaiting_evidence_review"
     _review_all_evidence(session, initialized)
     return initialized
+
+
+def _legacy_blocked_missing_basis(session):
+    initialized = _initialized(session)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    source_claim = worker.claim_next()
+    assert source_claim is not None
+    assert worker.run_claim(source_claim) == "awaiting_evidence_review"
+    reviewed = _review_evidence_with_one_rejection(session, initialized)
+    repository = CompanyResearchRepository(session)
+    gaps = repository.current_artifact(initialized.project.id, "research_gaps")
+    assert gaps is not None
+    drafts = WorkspaceDraftService(session, now=lambda: NOW)
+    draft = drafts.read(initialized.project.id)
+    assert draft is not None and draft.content.historical_basis_id is not None
+    drafts.save(
+        initialized.project.id,
+        expected_lock_version=draft.lock_version,
+        patch=WorkspaceDraftPatch(historical_basis_id=None),
+    )
+    model_claim = worker.claim_next()
+    assert model_claim is not None and model_claim.step == "model_bundle"
+    assert worker.run_claim(model_claim) == "discarded"
+    blocked_draft = drafts.read(initialized.project.id)
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert blocked_draft is not None and preparation is not None and job is not None
+    assert (
+        preparation.status,
+        preparation.current_step,
+        preparation.progress,
+        preparation.last_error_code,
+        job.status,
+        job.step,
+        job.error,
+    ) == (
+        "blocked",
+        "model_bundle",
+        30,
+        "validation_failed",
+        "failed",
+        "model_bundle",
+        "validation_failed",
+    )
+    return initialized, reviewed, gaps, blocked_draft
 
 
 def test_claim_is_exclusive_and_success_stops_at_evidence_review(session) -> None:
@@ -420,6 +496,625 @@ def test_manual_retry_keeps_a_model_failure_on_the_model_bundle_step(session) ->
         session, now=lambda: NOW + timedelta(seconds=30)
     ).claim_next()
     assert retry is not None and retry.step == "model_bundle"
+
+
+def test_retry_recovers_only_a_missing_historical_basis_without_rewriting_reviewed_state(
+    session,
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    repository = CompanyResearchRepository(session)
+    drafts = WorkspaceDraftService(session, now=lambda: NOW)
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and job is not None
+    assert (
+        preparation.status,
+        preparation.current_step,
+        preparation.progress,
+        preparation.last_error_code,
+    ) == ("blocked", "model_bundle", 30, "validation_failed")
+    assert (job.status, job.step, job.error) == (
+        "failed",
+        "model_bundle",
+        "validation_failed",
+    )
+    reviewed_snapshot = (
+        reviewed.id,
+        reviewed.version,
+        reviewed.content_hash,
+        deepcopy(reviewed.payload["facts"]),
+    )
+    gaps_snapshot = (gaps.id, gaps.version, gaps.content_hash, deepcopy(gaps.payload))
+    missing_content = blocked_draft.content.model_dump(mode="json")
+    events_before = repository.events(initialized.preparation.id)
+
+    retried = CompanyResearchPreparationService(
+        session, now=lambda: NOW + timedelta(seconds=1)
+    ).retry(project_id=initialized.project.id)
+
+    assert (
+        retried.preparation.status,
+        retried.preparation.current_step,
+        retried.preparation.progress,
+        retried.preparation.last_error_code,
+    ) == ("building_model", "model_bundle", 25, None)
+    recovered = drafts.read(initialized.project.id)
+    assert recovered is not None and recovered.content.historical_basis_id is not None
+    assert recovered.lock_version == blocked_draft.lock_version + 1
+    recovered_content = recovered.content.model_dump(mode="json")
+    recovered_content["historical_basis_id"] = None
+    assert recovered_content == missing_content
+    reviewed_after = repository.current_artifact(initialized.project.id, "evidence_index")
+    gaps_after = repository.current_artifact(initialized.project.id, "research_gaps")
+    assert reviewed_after is not None and gaps_after is not None
+    assert (
+        reviewed_after.id,
+        reviewed_after.version,
+        reviewed_after.content_hash,
+        reviewed_after.payload["facts"],
+    ) == reviewed_snapshot
+    assert (
+        gaps_after.id,
+        gaps_after.version,
+        gaps_after.content_hash,
+        gaps_after.payload,
+    ) == gaps_snapshot
+    events_after = repository.events(initialized.preparation.id)
+    assert len(events_after) == len(events_before) + 2
+    assert [event.event_type for event in events_after[-2:]] == [
+        "historical_basis_recovered",
+        "retry_queued",
+    ]
+    assert events_after[-2].payload["prior_lock_version"] == blocked_draft.lock_version
+    assert events_after[-2].payload["new_lock_version"] == blocked_draft.lock_version + 1
+
+
+def _append_recovery_evidence(
+    session,
+    initialized,
+    reviewed,
+    mutate,
+):
+    repository = CompanyResearchRepository(session)
+    payload = deepcopy(reviewed.payload)
+    mutate(payload)
+    return repository.append_artifact(
+        project_id=initialized.project.id,
+        kind="evidence_index",
+        input_hash="f" * 64,
+        payload=payload,
+        source_refs=reviewed.source_refs,
+        expected_parent_id=reviewed.id,
+        created_at=NOW + timedelta(seconds=1),
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "mutate"),
+    (
+        (
+            "unreviewed",
+            lambda payload: payload["facts"][-1].pop("review_decision"),
+        ),
+        (
+            "wrong_cutoff",
+            lambda payload: payload.__setitem__(
+                "cutoff", (CUTOFF + timedelta(seconds=1)).isoformat()
+            ),
+        ),
+        (
+            "wrong_fixture_hash",
+            lambda payload: payload.__setitem__("fixture_content_hash", "0" * 64),
+        ),
+        (
+            "wrong_company",
+            lambda payload: payload.__setitem__(
+                "company_external_key", "US:OTHER:COMPANY"
+            ),
+        ),
+        (
+            "wrong_securities",
+            lambda payload: payload.__setitem__(
+                "security_external_keys", ["NYSE:OTHER"]
+            ),
+        ),
+    ),
+)
+def test_historical_basis_recovery_rejects_invalid_reviewed_evidence_without_requeue(
+    session, case, mutate
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    invalid = _append_recovery_evidence(
+        session, initialized, reviewed, mutate
+    )
+    repository = CompanyResearchRepository(session)
+    events_before = repository.events(initialized.preparation.id)
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery evidence is invalid",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    current_evidence = repository.current_artifact(
+        initialized.project.id, "evidence_index"
+    )
+    current_gaps = repository.current_artifact(initialized.project.id, "research_gaps")
+    current_draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert preparation is not None and preparation.status == "blocked"
+    assert job is not None and job.status == "failed"
+    assert current_evidence is not None and current_evidence.id == invalid.id
+    assert current_gaps is not None
+    assert (current_gaps.id, current_gaps.content_hash) == (gaps.id, gaps.content_hash)
+    assert current_draft is not None
+    assert current_draft.lock_version == blocked_draft.lock_version
+    assert current_draft.content.historical_basis_id is None
+    assert repository.events(initialized.preparation.id) == events_before
+
+
+@pytest.mark.parametrize(
+    "patch",
+    (
+        WorkspaceDraftPatch(mandate_id=None),
+        WorkspaceDraftPatch(scope_id=None),
+        WorkspaceDraftPatch(agenda_id=None),
+        WorkspaceDraftPatch(price_snapshot_ids=()),
+        WorkspaceDraftPatch(fx_snapshot_ids=()),
+        WorkspaceDraftPatch(capital_structure_snapshot_id=None),
+        WorkspaceDraftPatch(security_rights_ids=()),
+    ),
+)
+def test_historical_basis_recovery_rejects_each_incomplete_draft_reference(
+    session, patch
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    drafts = WorkspaceDraftService(session, now=lambda: NOW + timedelta(seconds=1))
+    incomplete = drafts.save(
+        initialized.project.id,
+        expected_lock_version=blocked_draft.lock_version,
+        patch=patch,
+    )
+    repository = CompanyResearchRepository(session)
+    events_before = repository.events(initialized.preparation.id)
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery draft is incomplete",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+    after = drafts.read(initialized.project.id)
+    assert after is not None and after.lock_version == incomplete.lock_version
+    assert after.content.historical_basis_id is None
+    assert repository.current_artifact(initialized.project.id, "evidence_index").id == reviewed.id
+    assert repository.current_artifact(initialized.project.id, "research_gaps").id == gaps.id
+    assert repository.events(initialized.preparation.id) == events_before
+
+
+def test_historical_basis_recovery_rejects_an_already_bound_conflicting_basis(
+    session,
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    boundary = resolve_alphabet_company_research_boundary(CUTOFF)
+    conflicting = ResearchProjectService(
+        session, now=lambda: NOW + timedelta(seconds=1)
+    ).create_historical_basis(
+        ProductHistoricalBasisInput(
+            cutoff_at=boundary.cutoff_at,
+            source_manifest_hash=boundary.basis_input.source_manifest_hash,
+            definition_bundle_hash="d" * 64,
+            parser_bundle_hash=boundary.basis_input.parser_bundle_hash,
+        )
+    )
+    drafts = WorkspaceDraftService(session, now=lambda: NOW + timedelta(seconds=1))
+    bound = drafts.save(
+        initialized.project.id,
+        expected_lock_version=blocked_draft.lock_version,
+        patch=WorkspaceDraftPatch(historical_basis_id=conflicting.id),
+    )
+    repository = CompanyResearchRepository(session)
+    events_before = repository.events(initialized.preparation.id)
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery found a conflicting basis",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+    assert drafts.read(initialized.project.id).lock_version == bound.lock_version
+    assert repository.events(initialized.preparation.id) == events_before
+    assert repository.current_artifact(initialized.project.id, "evidence_index").id == reviewed.id
+    assert repository.current_artifact(initialized.project.id, "research_gaps").id == gaps.id
+
+
+def test_historical_basis_recovery_rejects_a_wrong_project_security_identity(
+    session,
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    security = session.get(
+        UnderwritingResearchObject, initialized.project.target_security_ids[0]
+    )
+    assert security is not None
+    identity_tamper = text(
+        "UPDATE uw_research_objects SET external_key = :external_key WHERE id = :id"
+    ).bindparams(
+        bindparam(
+            "external_key",
+            type_=UnderwritingResearchObject.__table__.c.external_key.type,
+        ),
+        bindparam("id", type_=UnderwritingResearchObject.__table__.c.id.type),
+    )
+    assert session.connection().execute(
+        identity_tamper,
+        {"external_key": "NYSE:OTHER", "id": security.id},
+    ).rowcount == 1
+    session.expire(security)
+    repository = CompanyResearchRepository(session)
+    events_before = repository.events(initialized.preparation.id)
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery project identity is invalid",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=1)
+        ).recover(initialized.preparation.id)
+
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert preparation is not None and preparation.status == "blocked"
+    assert job is not None and job.status == "failed"
+    assert draft is not None and draft.lock_version == blocked_draft.lock_version
+    assert draft.content.historical_basis_id is None
+    assert repository.current_artifact(initialized.project.id, "evidence_index").id == reviewed.id
+    assert repository.current_artifact(initialized.project.id, "research_gaps").id == gaps.id
+    assert repository.events(initialized.preparation.id) == events_before
+
+
+def test_historical_basis_recovery_rejects_a_wrong_gaps_fixture_hash(
+    session,
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    repository = CompanyResearchRepository(session)
+    payload = deepcopy(gaps.payload)
+    payload["fixture_content_hash"] = "0" * 64
+    invalid_content_hash = repository.artifact_content_hash(
+        project_id=initialized.project.id,
+        kind="research_gaps",
+        version=gaps.version,
+        supersedes_id=gaps.supersedes_id,
+        parent_content_hash=gaps.parent_content_hash,
+        input_hash=gaps.input_hash,
+        payload=payload,
+        source_refs=gaps.source_refs,
+    )
+    gaps_tamper = text(
+        "UPDATE uw_company_research_artifact_versions "
+        "SET payload = :payload, content_hash = :content_hash WHERE id = :id"
+    ).bindparams(
+        bindparam(
+            "payload",
+            type_=CompanyResearchArtifactVersion.__table__.c.payload.type,
+        ),
+        bindparam(
+            "content_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.content_hash.type,
+        ),
+        bindparam(
+            "id", type_=CompanyResearchArtifactVersion.__table__.c.id.type
+        ),
+    )
+    assert session.connection().execute(
+        gaps_tamper,
+        {
+            "payload": payload,
+            "content_hash": invalid_content_hash,
+            "id": gaps.id,
+        },
+    ).rowcount == 1
+    session.expire(gaps)
+    events_before = repository.events(initialized.preparation.id)
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery evidence is invalid",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert preparation is not None and preparation.status == "blocked"
+    assert draft is not None and draft.lock_version == blocked_draft.lock_version
+    assert repository.current_artifact(initialized.project.id, "evidence_index").id == reviewed.id
+    assert repository.current_artifact(initialized.project.id, "research_gaps").id == gaps.id
+    assert repository.events(initialized.preparation.id) == events_before
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("status", "recoverable_failure"),
+        ("current_step", "research_gaps"),
+        ("progress", 25),
+        ("last_error_code", "provider_unavailable"),
+    ),
+)
+def test_historical_basis_recovery_requires_the_exact_blocked_preparation_state(
+    session, field, value
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    assert preparation is not None
+    setattr(preparation, field, value)
+    session.flush()
+
+    with pytest.raises(
+        ValidationError,
+        match="preparation is not eligible for basis recovery",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=1)
+        ).recover(initialized.preparation.id)
+
+    repository = CompanyResearchRepository(session)
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert draft is not None and draft.lock_version == blocked_draft.lock_version
+    assert draft.content.historical_basis_id is None
+    assert repository.current_artifact(initialized.project.id, "evidence_index").id == reviewed.id
+    assert repository.current_artifact(initialized.project.id, "research_gaps").id == gaps.id
+    assert all(
+        event.event_type != "historical_basis_recovered"
+        for event in repository.events(initialized.preparation.id)
+    )
+
+
+def test_historical_basis_recovery_requires_a_complete_locked_snapshot(session) -> None:
+    initialized = _initialized(session)
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and job is not None
+    preparation.status = "blocked"
+    preparation.current_step = "model_bundle"
+    preparation.progress = 30
+    preparation.last_error_code = "validation_failed"
+    job.status = "failed"
+    job.step = "model_bundle"
+    job.error = "validation_failed"
+    session.flush()
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery inputs are incomplete",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=1)
+        ).recover(initialized.preparation.id)
+
+
+def test_historical_basis_recovery_is_idempotent_for_the_exact_recovered_basis(
+    session,
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    repository = CompanyResearchRepository(session)
+    basis_count_before = session.scalar(
+        select(func.count()).select_from(UnderwritingHistoricalBasis)
+    )
+    recovery = CompanyResearchHistoricalBasisRecovery(
+        session, now=lambda: NOW + timedelta(seconds=1)
+    )
+
+    first = recovery.recover(initialized.preparation.id)
+    second = recovery.recover(initialized.preparation.id)
+
+    assert first == second
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingHistoricalBasis))
+        == basis_count_before
+    )
+    recovered = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert recovered is not None
+    assert recovered.lock_version == blocked_draft.lock_version + 1
+    assert recovered.content.historical_basis_id == first
+    assert [
+        event.event_type
+        for event in repository.events(initialized.preparation.id)
+    ].count("historical_basis_recovered") == 1
+    assert repository.current_artifact(initialized.project.id, "evidence_index").id == reviewed.id
+    assert repository.current_artifact(initialized.project.id, "research_gaps").id == gaps.id
+
+
+def test_historical_basis_recovery_creates_the_exact_basis_when_none_exists(
+    session,
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    old_basis_id = initialized.basis.id
+    delete_basis = text(
+        "DELETE FROM uw_historical_bases WHERE id = :basis_id"
+    ).bindparams(
+        bindparam(
+            "basis_id", type_=UnderwritingHistoricalBasis.__table__.c.id.type
+        )
+    )
+    assert session.connection().execute(
+        delete_basis, {"basis_id": old_basis_id}
+    ).rowcount == 1
+
+    recovered_basis_id = CompanyResearchHistoricalBasisRecovery(
+        session, now=lambda: NOW + timedelta(seconds=1)
+    ).recover(initialized.preparation.id)
+
+    assert recovered_basis_id != old_basis_id
+    boundary = resolve_alphabet_company_research_boundary(CUTOFF)
+    basis = ProductRepository(session).product_basis(recovered_basis_id)
+    assert basis is not None and basis.content_hash == boundary.basis_content_hash
+    recovered_draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert recovered_draft is not None
+    assert recovered_draft.lock_version == blocked_draft.lock_version + 1
+    assert recovered_draft.content.historical_basis_id == recovered_basis_id
+    repository = CompanyResearchRepository(session)
+    assert repository.current_artifact(initialized.project.id, "evidence_index").id == reviewed.id
+    assert repository.current_artifact(initialized.project.id, "research_gaps").id == gaps.id
+
+
+def test_historical_basis_recovery_rejects_a_stale_draft_cas_without_requeue(
+    session, monkeypatch
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    recovery = CompanyResearchHistoricalBasisRecovery(
+        session, now=lambda: NOW + timedelta(seconds=1)
+    )
+    original_save = recovery._drafts.save
+
+    def race(project_id, *, expected_lock_version, patch):
+        WorkspaceDraftService(
+            session, now=lambda: NOW + timedelta(seconds=1)
+        ).save(
+            project_id,
+            expected_lock_version=expected_lock_version,
+            patch=WorkspaceDraftPatch(user_focus="concurrent edit"),
+        )
+        return original_save(
+            project_id,
+            expected_lock_version=expected_lock_version,
+            patch=patch,
+        )
+
+    monkeypatch.setattr(recovery._drafts, "save", race)
+
+    with pytest.raises(ConflictError, match="workspace draft changed"):
+        recovery.recover(initialized.preparation.id)
+
+    repository = CompanyResearchRepository(session)
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and preparation.status == "blocked"
+    assert job is not None and job.status == "failed"
+    assert repository.current_artifact(initialized.project.id, "evidence_index").id == reviewed.id
+    assert repository.current_artifact(initialized.project.id, "research_gaps").id == gaps.id
+    assert all(
+        event.event_type != "historical_basis_recovered"
+        for event in repository.events(initialized.preparation.id)
+    )
+
+
+def test_sqlite_two_retries_recover_one_basis_and_queue_one_attempt(
+    tmp_path,
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'company-research-basis-recovery.sqlite'}",
+        future=True,
+        connect_args={"check_same_thread": False, "timeout": 3},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    with sessions() as bootstrap:
+        initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+            bootstrap
+        )
+        project_id = initialized.project.id
+        preparation_id = initialized.preparation.id
+        evidence_snapshot = (
+            reviewed.id,
+            reviewed.version,
+            reviewed.content_hash,
+            deepcopy(reviewed.payload),
+        )
+        gaps_snapshot = (gaps.id, gaps.version, gaps.content_hash, deepcopy(gaps.payload))
+        bootstrap.commit()
+
+    barrier = Barrier(2)
+
+    def retry_once():
+        with sessions() as competing:
+            barrier.wait()
+            try:
+                result = CompanyResearchPreparationService(
+                    competing, now=lambda: NOW + timedelta(seconds=1)
+                ).retry(project_id=project_id)
+                competing.commit()
+                return result.preparation.status
+            except ValidationError as exc:
+                competing.rollback()
+                return str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = tuple(pool.map(lambda _: retry_once(), range(2)))
+
+    assert outcomes.count("building_model") == 1
+    assert sum("recoverable" in outcome or "eligible" in outcome for outcome in outcomes) == 1
+    with sessions() as observer:
+        repository = CompanyResearchRepository(observer)
+        preparation = observer.get(CompanyResearchPreparation, preparation_id)
+        job = repository.prepare_job(preparation_id)
+        draft = WorkspaceDraftService(observer, now=lambda: NOW).read(project_id)
+        evidence = repository.current_artifact(project_id, "evidence_index")
+        current_gaps = repository.current_artifact(project_id, "research_gaps")
+        assert preparation is not None and job is not None and draft is not None
+        assert (preparation.status, preparation.attempt, job.status, job.attempt) == (
+            "building_model", 2, "queued", 2
+        )
+        assert draft.lock_version == blocked_draft.lock_version + 1
+        assert draft.content.historical_basis_id is not None
+        assert [event.event_type for event in repository.events(preparation_id)].count(
+            "historical_basis_recovered"
+        ) == 1
+        assert (
+            evidence.id,
+            evidence.version,
+            evidence.content_hash,
+            evidence.payload,
+        ) == evidence_snapshot
+        assert (
+            current_gaps.id,
+            current_gaps.version,
+            current_gaps.content_hash,
+            current_gaps.payload,
+        ) == gaps_snapshot
+    Base.metadata.drop_all(engine)
+    engine.dispose()
 
 
 def test_manual_retry_does_not_consume_the_three_execution_attempt_budget(session) -> None:

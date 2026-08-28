@@ -104,6 +104,17 @@ class CompanyResearchValidatedWorkspaceBoundary:
 
 
 @dataclass(frozen=True, slots=True)
+class CompanyResearchBasisRecoveryState:
+    """All mutable and immutable inputs locked for one legacy basis recovery."""
+
+    preparation: CompanyResearchPreparation
+    job: Job
+    draft: UnderwritingWorkspaceDraft
+    evidence: CompanyResearchArtifactVersion
+    research_gaps: CompanyResearchArtifactVersion
+
+
+@dataclass(frozen=True, slots=True)
 class CompanyResearchPersistedBundle:
     """Complete JSON-ready model candidate passed to one atomic publication."""
 
@@ -863,20 +874,93 @@ class CompanyResearchRepository:
             .limit(1)
         )
 
-    def requeue_recoverable_preparation(
-        self, preparation_id: UUID, *, updated_at: datetime
-    ) -> CompanyResearchPreparation:
-        """Return one recoverable preparation to its initial queued step."""
-        preparation = self._preparation_for_update(preparation_id)
+    def lock_basis_recovery_state(
+        self, preparation_id: UUID
+    ) -> CompanyResearchBasisRecoveryState:
+        """Lock the complete legacy-recovery snapshot in one transaction."""
+        self._reserve_sqlite_writer_before_ownership_read()
+        preparation = self._preparation_for_update(
+            preparation_id, populate_existing=True
+        )
         if preparation is None:
             raise ValidationError("company research preparation not found")
-        if preparation.status != "recoverable_failure":
+        if preparation.job_id is None:
+            raise ValidationError(
+                "company research historical basis recovery inputs are incomplete"
+            )
+        job = self._job_for_update(preparation.job_id, populate_existing=True)
+        draft = self._workspace_draft_for_update(preparation.project_id)
+        evidence = self.current_artifact(
+            preparation.project_id, "evidence_index", lock=True
+        )
+        research_gaps = self.current_artifact(
+            preparation.project_id, "research_gaps", lock=True
+        )
+        if job is None or draft is None or evidence is None or research_gaps is None:
+            raise ValidationError(
+                "company research historical basis recovery inputs are incomplete"
+            )
+        if not self.is_exact_prepare_job_owner(job, preparation.id):
+            raise ValidationError(
+                "company research historical basis recovery inputs are incomplete"
+            )
+        return CompanyResearchBasisRecoveryState(
+            preparation=preparation,
+            job=job,
+            draft=draft,
+            evidence=evidence,
+            research_gaps=research_gaps,
+        )
+
+    def requeue_recoverable_preparation(
+        self,
+        preparation_id: UUID,
+        *,
+        updated_at: datetime,
+        expected_recovered_basis_id: UUID | None = None,
+    ) -> CompanyResearchPreparation:
+        """Return one recoverable preparation to its initial queued step."""
+        if expected_recovered_basis_id is not None:
+            self._reserve_sqlite_writer_before_ownership_read()
+        preparation = self._preparation_for_update(
+            preparation_id, populate_existing=expected_recovered_basis_id is not None
+        )
+        if preparation is None:
+            raise ValidationError("company research preparation not found")
+        if expected_recovered_basis_id is None and preparation.status != "recoverable_failure":
             raise ValidationError("company research preparation is not recoverable")
-        job = self.prepare_job(preparation.id)
+        if expected_recovered_basis_id is not None and (
+            preparation.status != "blocked"
+            or preparation.current_step != "model_bundle"
+            or preparation.progress != 30
+            or preparation.last_error_code != "validation_failed"
+        ):
+            raise ValidationError(
+                "company research preparation is not eligible for basis recovery"
+            )
+        job = (
+            self._locked_prepare_job(preparation, populate_existing=True)
+            if expected_recovered_basis_id is not None
+            else self.prepare_job(preparation.id)
+        )
         if job is None:
             raise CompanyResearchIntegrityError(
                 "company research preparation job is missing"
             )
+        if expected_recovered_basis_id is not None:
+            draft = self._workspace_draft_for_update(preparation.project_id)
+            if (
+                job.status != "failed"
+                or job.step != "model_bundle"
+                or draft is None
+                or WorkspaceDraftService._content(
+                    draft.content
+                ).historical_basis_id
+                != expected_recovered_basis_id
+            ):
+                raise ValidationError(
+                    "company research preparation is not eligible for basis recovery"
+                )
         self._validate_prepare_job_step(
             preparation_step=preparation.current_step,
             preparation_status=preparation.status,

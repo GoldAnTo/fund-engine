@@ -1574,6 +1574,26 @@ class ProductRepository:
             .execution_options(populate_existing=True)
         )
 
+    def product_basis_by_content_hash(
+        self, content_hash: str
+    ) -> UnderwritingHistoricalBasis | None:
+        """Return one exact product basis for an authenticated content digest."""
+        return self._session.scalar(
+            select(UnderwritingHistoricalBasis)
+            .where(
+                UnderwritingHistoricalBasis.content_hash == content_hash,
+                UnderwritingHistoricalBasis.boundary_schema_version
+                == PRODUCT_HISTORICAL_BASIS_SCHEMA,
+                UnderwritingHistoricalBasis.price_as_of.is_(None),
+            )
+            .order_by(
+                UnderwritingHistoricalBasis.created_at,
+                UnderwritingHistoricalBasis.id,
+            )
+            .limit(1)
+            .execution_options(populate_existing=True)
+        )
+
     def freeze_price(
         self,
         *,

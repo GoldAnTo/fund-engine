@@ -65,6 +65,9 @@ from app.underwriting.services.company_research_market_inputs import (
 from app.underwriting.services.company_research_boundary import (
     resolve_alphabet_company_research_boundary,
 )
+from app.underwriting.services.company_research_basis_recovery import (
+    CompanyResearchHistoricalBasisRecovery,
+)
 from app.underwriting.services.company_research_model_builder import (
     CompanyResearchModelTemplate,
     FrozenMarketContext,
@@ -500,6 +503,9 @@ class CompanyResearchPreparationService:
         self._now = now
         self._products = ResearchProjectService(session, now=now)
         self._company_repository = CompanyResearchRepository(session)
+        self._basis_recovery = CompanyResearchHistoricalBasisRecovery(
+            session, now=now
+        )
 
     def _now_utc(self) -> datetime:
         return CompanyResearchInitializer._utc(self._now(), "clock")
@@ -526,9 +532,15 @@ class CompanyResearchPreparationService:
             and self._stored_utc(current.preparation.next_attempt_at) > self._now_utc()
         ):
             raise ValidationError("company research preparation is not ready to retry")
+        expected_recovered_basis_id = (
+            self._basis_recovery.recover(current.preparation.id)
+            if current.preparation.status == "blocked"
+            else None
+        )
         preparation = self._company_repository.requeue_recoverable_preparation(
             current.preparation.id,
             updated_at=self._now_utc(),
+            expected_recovered_basis_id=expected_recovered_basis_id,
         )
         self._company_repository.append_event(
             preparation_id=preparation.id,
