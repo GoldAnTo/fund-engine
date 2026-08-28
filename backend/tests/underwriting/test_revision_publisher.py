@@ -29,7 +29,7 @@ from app.underwriting.domain.product_contracts import (
     ResearchScopeInput,
     SecurityRightsInput,
     agenda_items_hash,
-    product_historical_basis_payload_and_hash,
+    product_historical_basis_content_hash,
 )
 from app.underwriting.domain.types import AnswerabilityState, InvestmentMandateInput
 from app.underwriting.persistence.models import (
@@ -494,11 +494,11 @@ def test_publisher_validates_the_historical_basis_with_the_canonical_helper(
 
     def wrapped_helper(value):
         helper_calls.append(value)
-        return product_historical_basis_payload_and_hash(value)
+        return product_historical_basis_content_hash(value)
 
     monkeypatch.setattr(
         revision_publisher_module,
-        "product_historical_basis_payload_and_hash",
+        "product_historical_basis_content_hash",
         wrapped_helper,
     )
 
@@ -525,11 +525,11 @@ def test_product_revision_reader_validates_historical_basis_with_canonical_helpe
 
     def wrapped_helper(value):
         helper_calls.append(value)
-        return product_historical_basis_payload_and_hash(value)
+        return product_historical_basis_content_hash(value)
 
     monkeypatch.setattr(
         revision_diff_module,
-        "product_historical_basis_payload_and_hash",
+        "product_historical_basis_content_hash",
         wrapped_helper,
     )
 

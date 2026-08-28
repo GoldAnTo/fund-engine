@@ -275,21 +275,25 @@ class ProductHistoricalBasisInput:
         _require_sha256(self.parser_bundle_hash, "parser_bundle_hash")
 
 
-def product_historical_basis_payload_and_hash(
+def _product_historical_basis_payload(
     value: ProductHistoricalBasisInput,
-) -> tuple[dict[str, str], str]:
-    """Normalize one product basis into its canonical immutable payload/hash."""
+) -> dict[str, str]:
+    """Normalize one product basis into its canonical immutable payload."""
     if type(value) is not ProductHistoricalBasisInput:
         raise ValueError("value must be a ProductHistoricalBasisInput")
     cutoff = value.cutoff_at.astimezone(UTC)
-    payload = {
+    return {
         "schema_version": PRODUCT_HISTORICAL_BASIS_SCHEMA,
         "cutoff_at": cutoff.isoformat(),
         "source_manifest_hash": value.source_manifest_hash,
         "definition_bundle_hash": value.definition_bundle_hash,
         "parser_bundle_hash": value.parser_bundle_hash,
     }
-    return payload, canonical_hash(payload)
+
+
+def product_historical_basis_content_hash(value: ProductHistoricalBasisInput) -> str:
+    """Return the canonical immutable content hash for one product basis."""
+    return canonical_hash(_product_historical_basis_payload(value))
 
 
 @dataclass(frozen=True, slots=True)

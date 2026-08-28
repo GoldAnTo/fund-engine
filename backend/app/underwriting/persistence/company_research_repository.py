@@ -28,7 +28,7 @@ from app.underwriting.domain.company_research_provenance import (
 )
 from app.underwriting.domain.product_contracts import (
     ProductHistoricalBasisInput,
-    product_historical_basis_payload_and_hash,
+    product_historical_basis_content_hash,
 )
 from app.underwriting.persistence.company_research_models import (
     COMPANY_RESEARCH_ARTIFACT_KINDS,
@@ -364,7 +364,7 @@ class CompanyResearchRepository:
             raise CompanyResearchIntegrityError(
                 "company research historical basis is invalid"
             ) from exc
-        _payload, content_hash = product_historical_basis_payload_and_hash(
+        content_hash = product_historical_basis_content_hash(
             ProductHistoricalBasisInput(
                 cutoff_at=cutoff,
                 source_manifest_hash=source_manifest_hash,

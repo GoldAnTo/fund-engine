@@ -1241,7 +1241,7 @@ def test_product_historical_basis_has_exact_boundary_hashes_and_no_price(
     assert service.historical_basis(uuid4()) is None
 
 
-def test_product_historical_basis_payload_and_hash_normalizes_cutoff_to_utc() -> None:
+def test_product_historical_basis_content_hash_normalizes_cutoff_to_utc() -> None:
     value = ProductHistoricalBasisInput(
         datetime(2026, 8, 26, 8, tzinfo=timezone(timedelta(hours=8))),
         A64,
@@ -1249,18 +1249,24 @@ def test_product_historical_basis_payload_and_hash_normalizes_cutoff_to_utc() ->
         C64,
     )
 
-    payload, content_hash = product_contracts.product_historical_basis_payload_and_hash(
-        value
+    content_hash = product_contracts.product_historical_basis_content_hash(value)
+
+    assert content_hash == canonical_hash(
+        {
+            "schema_version": "product.historical-basis.v1",
+            "cutoff_at": "2026-08-26T00:00:00+00:00",
+            "source_manifest_hash": A64,
+            "definition_bundle_hash": B64,
+            "parser_bundle_hash": C64,
+        }
     )
 
-    assert payload == {
-        "schema_version": "product.historical-basis.v1",
-        "cutoff_at": "2026-08-26T00:00:00+00:00",
-        "source_manifest_hash": A64,
-        "definition_bundle_hash": B64,
-        "parser_bundle_hash": C64,
-    }
-    assert content_hash == canonical_hash(payload)
+
+def test_product_historical_basis_does_not_expose_a_payload_helper() -> None:
+    assert not hasattr(
+        product_contracts,
+        "product_historical_basis_payload_and_hash",
+    )
 
 
 def test_historical_basis_read_rejects_legacy_and_non_product_rows(

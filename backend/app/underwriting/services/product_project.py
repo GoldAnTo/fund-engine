@@ -16,7 +16,7 @@ from app.underwriting.domain.product_contracts import (
     ProductHistoricalBasisInput,
     ResearchAgendaInput,
     ResearchScopeInput,
-    product_historical_basis_payload_and_hash,
+    product_historical_basis_content_hash,
 )
 from app.underwriting.domain.search_terms import normalize_search_term
 from app.underwriting.domain.types import InvestmentMandateInput, ResearchObjectKind
@@ -706,7 +706,7 @@ class ResearchProjectService:
         if type(value) is not ProductHistoricalBasisInput:
             raise ValidationError("value must be a ProductHistoricalBasisInput")
         cutoff = self._utc(value.cutoff_at, "cutoff_at")
-        _payload, content_hash = product_historical_basis_payload_and_hash(value)
+        content_hash = product_historical_basis_content_hash(value)
         return self._repository.create_product_basis(
             cutoff=cutoff,
             source_manifest_hash=value.source_manifest_hash,

@@ -11,7 +11,7 @@ from app.models.ledger import ValidationError
 from app.underwriting.adapters.company_research import AlphabetCompanyResearchAdapter
 from app.underwriting.domain.product_contracts import (
     ProductHistoricalBasisInput,
-    product_historical_basis_payload_and_hash,
+    product_historical_basis_content_hash,
 )
 from app.underwriting.fixtures.alphabet_golden_case import (
     load_alphabet_golden_case_fixture,
@@ -97,9 +97,7 @@ def resolve_alphabet_company_research_boundary(
         definition_bundle_hash=definition_bundle_hash,
         parser_bundle_hash=parser_bundle_hash,
     )
-    _basis_payload, basis_content_hash = product_historical_basis_payload_and_hash(
-        basis_input
-    )
+    basis_content_hash = product_historical_basis_content_hash(basis_input)
     return CompanyResearchHistoricalBoundary(
         cutoff_at=fixture.cutoff,
         basis_input=basis_input,

@@ -33,9 +33,10 @@ from app.underwriting.domain.product_contracts import (
     AssessmentConfidence,
     AssessmentDirection,
     ProductHistoricalBasisInput,
+    PRODUCT_HISTORICAL_BASIS_SCHEMA,
     PublicationStatus,
     RevisionBoundaryInput,
-    product_historical_basis_payload_and_hash,
+    product_historical_basis_content_hash,
 )
 from app.underwriting.domain.types import ResearchObjectKind
 from app.underwriting.domain.types import (
@@ -1767,7 +1768,7 @@ class ResearchRevisionDiffService:
         ):
             raise ValidationError("product research revision exact reference is missing")
         try:
-            _payload, basis_hash = product_historical_basis_payload_and_hash(
+            basis_hash = product_historical_basis_content_hash(
                 ProductHistoricalBasisInput(
                     cutoff_at=self._stored_datetime(basis.cutoff),
                     source_manifest_hash=basis.source_manifest_hash,
@@ -1794,7 +1795,8 @@ class ResearchRevisionDiffService:
             "generator": agenda.generator_provenance,
         })
         if (
-            basis.boundary_schema_version != "product.historical-basis.v1" or basis.price_as_of is not None
+            basis.boundary_schema_version != PRODUCT_HISTORICAL_BASIS_SCHEMA
+            or basis.price_as_of is not None
             or basis.content_hash != basis_hash or mandate.project_id != project_id
             or mandate.content_hash != mandate_hash or scope.project_id != project_id
             or scope.content_hash != scope_hash or agenda.project_id != project_id

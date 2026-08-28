@@ -21,7 +21,7 @@ from app.underwriting.domain.product_contracts import (
     ProductRevisionView,
     PublicationStatus,
     RevisionBoundaryInput,
-    product_historical_basis_payload_and_hash,
+    product_historical_basis_content_hash,
 )
 from app.underwriting.domain.types import AnswerabilityState, ResearchObjectKind
 from app.underwriting.persistence.product_repository import ProductRepository
@@ -322,7 +322,7 @@ class RevisionPublisher:
         if basis is None or scope is None or agenda is None or capital is None:
             raise ValidationError("publication boundary reference is missing")
         try:
-            _payload, basis_hash = product_historical_basis_payload_and_hash(
+            basis_hash = product_historical_basis_content_hash(
                 ProductHistoricalBasisInput(
                     cutoff_at=_stored_utc(basis.cutoff),
                     source_manifest_hash=basis.source_manifest_hash,
