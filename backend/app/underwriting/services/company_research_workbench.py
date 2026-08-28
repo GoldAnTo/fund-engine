@@ -27,6 +27,7 @@ from app.underwriting.persistence.company_research_models import (
 )
 from app.underwriting.persistence.company_research_repository import (
     CompanyResearchRepository,
+    reconcile_company_research_evidence_audit,
     validate_company_research_derived_gap_semantics,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
@@ -728,6 +729,8 @@ class CompanyResearchWorkbench:
                 select(CompanyResearchArtifactVersion)
                 .where(CompanyResearchArtifactVersion.project_id == project_id)
                 .limit(_MAX_ARTIFACT_HISTORY + 1)
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
         )
         if len(rows) > _MAX_ARTIFACT_HISTORY:
@@ -737,6 +740,8 @@ class CompanyResearchWorkbench:
             row.supersedes_id for row in rows if row.supersedes_id is not None
         }
         head_rows: dict[str, CompanyResearchArtifactVersion] = {}
+        evidence_chain: tuple[CompanyResearchArtifactVersion, ...] | None = None
+        source_research_gaps: CompanyResearchArtifactVersion | None = None
         for row in rows:
             self._company._validate_artifact_row(row)
             if row.id in successor_ids:
@@ -774,12 +779,24 @@ class CompanyResearchWorkbench:
                     )
                 current, expected_version = parent, expected_version - 1
             if row.kind == "evidence_index":
+                evidence_chain = tuple(reversed(chain))
                 self._validate_evidence_review_chain(
-                    tuple(reversed(chain)),
+                    evidence_chain,
                     preparation=preparation,
                     company_external_key=company_external_key,
                 )
+            elif row.kind == "research_gaps":
+                source_research_gaps = chain[-1]
             head_rows[row.kind] = row
+        if evidence_chain is not None:
+            if source_research_gaps is None:
+                raise ValidationError("company research evidence audit history is invalid")
+            reconcile_company_research_evidence_audit(
+                preparation=preparation,
+                evidence_chain=evidence_chain,
+                research_gaps=source_research_gaps,
+                events=self._company.events(preparation.id, lock=True),
+            )
         judgment_head = head_rows.get("judgment_context")
         if judgment_head is not None:
             refs, _snapshot_ids, _bindings = self._validate_closed_lineage_shape(
@@ -826,7 +843,9 @@ class CompanyResearchWorkbench:
         if record is None:
             raise ValidationError("company research project not found")
         project, _security_ids = record
-        preparation = self._company.preparation_for_project(project_id)
+        preparation = self._company.preparation_for_project(
+            project_id, fresh=True, lock=True
+        )
         if preparation is None:
             raise ValidationError("company research preparation not found")
         company_object = self._product_repository.object(project.primary_company_id)

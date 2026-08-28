@@ -217,23 +217,10 @@ def _model_workspace(
 def _rewrite_payload(
     session, row, payload: dict, *, input_hash: str | None = None
 ) -> None:
-    rewritten_input_hash = input_hash or row.input_hash
-    content_hash = CompanyResearchRepository.artifact_content_hash(
-        project_id=row.project_id,
-        kind=row.kind,
-        version=row.version,
-        supersedes_id=row.supersedes_id,
-        parent_content_hash=row.parent_content_hash,
-        input_hash=rewritten_input_hash,
-        payload=payload,
-        source_refs=row.source_refs,
-    )
-    set_committed_value(row, "payload", payload)
-    set_committed_value(row, "input_hash", rewritten_input_hash)
-    set_committed_value(row, "content_hash", content_hash)
+    _durably_rewrite_payload(session, row, payload, input_hash=input_hash)
 
 
-def _rewrite_source_refs(row, source_refs) -> None:
+def _rewrite_source_refs(session, row, source_refs) -> None:
     copied = [dict(value) for value in source_refs]
     content_hash = CompanyResearchRepository.artifact_content_hash(
         project_id=row.project_id,
@@ -245,8 +232,25 @@ def _rewrite_source_refs(row, source_refs) -> None:
         payload=row.payload,
         source_refs=copied,
     )
-    set_committed_value(row, "source_refs", copied)
-    set_committed_value(row, "content_hash", content_hash)
+    statement = text(
+        "UPDATE uw_company_research_artifact_versions SET "
+        "source_refs = :source_refs, content_hash = :content_hash WHERE id = :id"
+    ).bindparams(
+        bindparam(
+            "source_refs",
+            type_=CompanyResearchArtifactVersion.__table__.c.source_refs.type,
+        ),
+        bindparam(
+            "content_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.content_hash.type,
+        ),
+        bindparam("id", type_=CompanyResearchArtifactVersion.__table__.c.id.type),
+    )
+    assert session.connection().execute(
+        statement,
+        {"source_refs": copied, "content_hash": content_hash, "id": row.id},
+    ).rowcount == 1
+    session.expire_all()
 
 
 def _durably_rewrite_payload(
@@ -1377,7 +1381,7 @@ def test_workbench_rejects_rehashed_model_source_refs_not_derived_from_governed_
             "source_locator": "fabricated:locator",
             "raw_hash": "8" * 64,
         }[mutation]
-    _rewrite_source_refs(memo, refs)
+    _rewrite_source_refs(session, memo, refs)
 
     with pytest.raises(ValidationError, match="source refs"):
         workbench.workspace(project_id=initialized.project.id)

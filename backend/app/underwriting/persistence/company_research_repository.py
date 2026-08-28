@@ -181,6 +181,96 @@ class CompanyResearchBasisRecoveryState:
     events: tuple[CompanyResearchEvent, ...]
 
 
+def reconcile_company_research_evidence_audit(
+    *,
+    preparation: CompanyResearchPreparation,
+    evidence_chain: tuple[CompanyResearchArtifactVersion, ...],
+    research_gaps: CompanyResearchArtifactVersion,
+    events: tuple[CompanyResearchEvent, ...],
+) -> None:
+    """Bind the reviewed evidence version chain to its append-only audit events."""
+    invalid = ValidationError("company research evidence audit history is invalid")
+    initialized_events = tuple(
+        event for event in events if event.event_type == "initialized"
+    )
+    if (
+        not evidence_chain
+        or evidence_chain[0].project_id != preparation.project_id
+        or research_gaps.project_id != preparation.project_id
+        or not events
+        or len(initialized_events) != 1
+        or events[0].event_type != "initialized"
+        or events[0].sequence != 1
+        or events[0].payload != {"request_hash": preparation.request_hash}
+    ):
+        raise invalid
+    prepared = tuple(
+        event for event in events if event.event_type == "evidence_index_prepared"
+    )
+    if len(prepared) != 1:
+        raise invalid
+    prepared_event = prepared[0]
+    if prepared_event.payload != {
+        "evidence_index_id": str(evidence_chain[0].id),
+        "research_gaps_id": str(research_gaps.id),
+    } or CompanyResearchRepository._persisted_utc(prepared_event.created_at) < max(
+        CompanyResearchRepository._persisted_utc(evidence_chain[0].created_at),
+        CompanyResearchRepository._persisted_utc(research_gaps.created_at),
+    ):
+        raise invalid
+    predecessor_index = prepared_event.sequence - 2
+    if predecessor_index < 0 or predecessor_index >= len(events):
+        raise invalid
+    source_claim = events[predecessor_index]
+    if (
+        not isinstance(source_claim.payload, Mapping)
+        or source_claim.event_type != "source_stage_claimed"
+        or set(source_claim.payload) != {"stage", "attempt"}
+        or source_claim.payload.get("stage") != "evidence_index"
+        or type(source_claim.payload.get("attempt")) is not int
+        or source_claim.payload["attempt"] < 1
+    ):
+        raise invalid
+    review_events = tuple(
+        event for event in events if event.event_type == "evidence_reviewed"
+    )
+    if len(review_events) != len(evidence_chain) - 1:
+        raise invalid
+    for offset, (parent, successor, event) in enumerate(
+        zip(evidence_chain[:-1], evidence_chain[1:], review_events, strict=True),
+        start=1,
+    ):
+        before = parent.payload.get("facts")
+        after = successor.payload.get("facts")
+        if (
+            not isinstance(before, list)
+            or not isinstance(after, list)
+            or len(before) != len(after)
+        ):
+            raise invalid
+        changes = [
+            candidate
+            for previous, candidate in zip(before, after, strict=True)
+            if previous != candidate
+        ]
+        if len(changes) != 1 or not isinstance(changes[0], Mapping):
+            raise invalid
+        fact_key = changes[0].get("fact_key")
+        decision = changes[0].get("review_decision")
+        if (
+            event.sequence != prepared_event.sequence + offset
+            or event.payload
+            != {
+                "evidence_artifact_id": str(successor.id),
+                "fact_key": fact_key,
+                "decision": decision,
+            }
+            or CompanyResearchRepository._persisted_utc(event.created_at)
+            < CompanyResearchRepository._persisted_utc(successor.created_at)
+        ):
+            raise invalid
+
+
 @dataclass(frozen=True, slots=True)
 class CompanyResearchPersistedBundle:
     """Complete JSON-ready model candidate passed to one atomic publication."""
@@ -895,6 +985,31 @@ class CompanyResearchRepository:
             )
         )
 
+    @classmethod
+    def event_content_hash_v2(
+        cls,
+        *,
+        preparation_id: UUID,
+        sequence: int,
+        previous_event_hash: str | None,
+        event_type: str,
+        payload: Mapping[str, object],
+        created_at: datetime,
+    ) -> str:
+        if not isinstance(created_at, datetime):
+            raise ValidationError("event created_at must be a datetime")
+        return canonical_hash(
+            {
+                "schema_version": "company-research-event.v2",
+                "preparation_id": str(preparation_id),
+                "sequence": sequence,
+                "previous_event_hash": previous_event_hash,
+                "event_type": event_type,
+                "payload": payload,
+                "created_at": cls._persisted_utc(created_at).isoformat(),
+            }
+        )
+
     def add_preparation(
         self,
         *,
@@ -992,14 +1107,19 @@ class CompanyResearchRepository:
         )
 
     def preparation_for_project(
-        self, project_id: UUID
+        self, project_id: UUID, *, fresh: bool = False, lock: bool = False
     ) -> CompanyResearchPreparation | None:
         """Return the single preparation owned by a high-level project."""
-        return self._session.scalar(
+        statement = (
             select(CompanyResearchPreparation)
             .where(CompanyResearchPreparation.project_id == project_id)
             .limit(1)
         )
+        if lock:
+            statement = statement.with_for_update()
+        if fresh:
+            statement = statement.execution_options(populate_existing=True)
+        return self._session.scalar(statement)
 
     def lock_basis_recovery_state(
         self, preparation_id: UUID
@@ -1155,6 +1275,30 @@ class CompanyResearchRepository:
             events=events,
         )
 
+    def lock_worker_claim_state(
+        self, *, preparation_id: UUID, job_id: UUID
+    ) -> tuple[CompanyResearchPreparation, Job] | None:
+        """Lock one worker ownership boundary in global project-first order."""
+        project_id = self._session.scalar(
+            select(CompanyResearchPreparation.project_id).where(
+                CompanyResearchPreparation.id == preparation_id
+            )
+        )
+        if project_id is None:
+            return None
+        self._reserve_sqlite_writer_before_ownership_read()
+        if self._project_for_update(project_id) is None:
+            return None
+        preparation = self._preparation_for_update(
+            preparation_id, populate_existing=True
+        )
+        if preparation is None or preparation.project_id != project_id:
+            return None
+        job = self._job_for_update(job_id, populate_existing=True)
+        if job is None or preparation.job_id != job.id:
+            return None
+        return preparation, job
+
     def requeue_recoverable_preparation(
         self,
         preparation_id: UUID,
@@ -1163,12 +1307,26 @@ class CompanyResearchRepository:
         expected_recovered_basis_id: UUID | None = None,
     ) -> CompanyResearchPreparation:
         """Return one recoverable preparation to its initial queued step."""
+        project_id = self._session.scalar(
+            select(CompanyResearchPreparation.project_id).where(
+                CompanyResearchPreparation.id == preparation_id
+            )
+        )
+        if project_id is None:
+            raise ValidationError("company research preparation not found")
         self._reserve_sqlite_writer_before_ownership_read()
+        if self._project_for_update(project_id) is None:
+            raise ValidationError("company research preparation not found")
         preparation = self._preparation_for_update(
             preparation_id, populate_existing=True
         )
-        if preparation is None:
+        if preparation is None or preparation.project_id != project_id:
             raise ValidationError("company research preparation not found")
+        when = self._stored_datetime(updated_at, "updated_at")
+        if preparation.next_attempt_at is not None and self._persisted_utc(
+            preparation.next_attempt_at
+        ) > when:
+            raise ValidationError("company research preparation is not ready to retry")
         if expected_recovered_basis_id is None and preparation.status != "recoverable_failure":
             raise ValidationError("company research preparation is not recoverable")
         if expected_recovered_basis_id is not None and (
@@ -1216,7 +1374,7 @@ class CompanyResearchRepository:
         )
         preparation.next_attempt_at = None
         preparation.last_error_code = None
-        preparation.updated_at = self._stored_datetime(updated_at, "updated_at")
+        preparation.updated_at = when
         if reserve_next_attempt:
             preparation.attempt += 1
             job.attempt += 1
@@ -2063,14 +2221,26 @@ class CompanyResearchRepository:
 
     @staticmethod
     def _validate_event_row(row: CompanyResearchEvent) -> None:
-        expected_hash = CompanyResearchRepository.event_content_hash(
+        if not isinstance(row.event_type, str) or not isinstance(row.payload, dict):
+            raise CompanyResearchIntegrityError(
+                "company research event payload is invalid"
+            )
+        expected_v2 = CompanyResearchRepository.event_content_hash_v2(
+            preparation_id=row.preparation_id,
+            sequence=row.sequence,
+            previous_event_hash=row.previous_event_hash,
+            event_type=row.event_type,
+            payload=row.payload,
+            created_at=row.created_at,
+        )
+        expected_v1 = CompanyResearchRepository.event_content_hash(
             preparation_id=row.preparation_id,
             sequence=row.sequence,
             previous_event_hash=row.previous_event_hash,
             event_type=row.event_type,
             payload=row.payload,
         )
-        if row.content_hash != expected_hash:
+        if row.content_hash not in {expected_v1, expected_v2}:
             raise CompanyResearchIntegrityError(
                 "company research event content hash mismatch"
             )
@@ -2313,6 +2483,13 @@ class CompanyResearchRepository:
         copied_payload = deepcopy(dict(payload))
         existing_events = self.events(preparation_id)
         predecessor = existing_events[-1] if existing_events else None
+        when = self._stored_datetime(created_at, "created_at")
+        if predecessor is not None and when < self._persisted_utc(
+            predecessor.created_at
+        ):
+            raise ValidationError(
+                "company research event created_at precedes its predecessor"
+            )
         sequence = 1 if predecessor is None else predecessor.sequence + 1
         previous_event_hash = (
             predecessor.content_hash if predecessor is not None else None
@@ -2324,14 +2501,15 @@ class CompanyResearchRepository:
                 previous_event_hash=previous_event_hash,
                 event_type=event_type,
                 payload=copied_payload,
-                content_hash=self.event_content_hash(
+                content_hash=self.event_content_hash_v2(
                     preparation_id=preparation_id,
                     sequence=sequence,
                     previous_event_hash=previous_event_hash,
                     event_type=event_type,
                     payload=copied_payload,
+                    created_at=when,
                 ),
-                created_at=self._stored_datetime(created_at, "created_at"),
+                created_at=when,
             )
         )
 
@@ -2349,6 +2527,7 @@ class CompanyResearchRepository:
             )
         rows = tuple(self._session.scalars(statement))
         previous_hash: str | None = None
+        previous_created_at: datetime | None = None
         for expected_sequence, row in enumerate(rows, start=1):
             self._validate_event_row(row)
             if row.sequence != expected_sequence:
@@ -2359,7 +2538,13 @@ class CompanyResearchRepository:
                 raise CompanyResearchIntegrityError(
                     "company research event predecessor hash mismatch"
                 )
+            created_at = self._persisted_utc(row.created_at)
+            if previous_created_at is not None and created_at < previous_created_at:
+                raise CompanyResearchIntegrityError(
+                    "company research event timestamps are not monotonic"
+                )
             previous_hash = row.content_hash
+            previous_created_at = created_at
         return rows
 
     def prepare_job(self, preparation_id: UUID) -> Job | None:

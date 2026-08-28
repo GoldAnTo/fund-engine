@@ -659,6 +659,95 @@ def _rewrite_head_decision_as_malformed(session, head_id: UUID) -> None:
     session.expire_all()
 
 
+def _rewrite_first_review_decision_chain(
+    session, head_id: UUID, *, decision: str
+) -> None:
+    """Rehash a valid review chain while leaving its audit events untouched."""
+    repository = CompanyResearchRepository(session)
+    chain = repository.artifact_chain(head_id)
+    assert len(chain) >= 2
+    changed = [
+        after
+        for before, after in zip(
+            chain[0].payload["facts"], chain[1].payload["facts"], strict=True
+        )
+        if before != after
+    ]
+    assert len(changed) == 1
+    target_fact_key = changed[0]["fact_key"]
+    rewritten_hashes = {chain[0].id: chain[0].content_hash}
+    statement = text(
+        "UPDATE uw_company_research_artifact_versions SET "
+        "parent_content_hash = :parent_content_hash, payload = :payload, "
+        "input_hash = :input_hash, content_hash = :content_hash WHERE id = :id"
+    ).bindparams(
+        bindparam(
+            "parent_content_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.parent_content_hash.type,
+        ),
+        bindparam(
+            "payload", type_=CompanyResearchArtifactVersion.__table__.c.payload.type
+        ),
+        bindparam(
+            "input_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.input_hash.type,
+        ),
+        bindparam(
+            "content_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.content_hash.type,
+        ),
+        bindparam("id", type_=CompanyResearchArtifactVersion.__table__.c.id.type),
+    )
+    for parent, row in zip(chain, chain[1:], strict=False):
+        original_changes = [
+            after
+            for before, after in zip(
+                parent.payload["facts"], row.payload["facts"], strict=True
+            )
+            if before != after
+        ]
+        assert len(original_changes) == 1
+        fact_key = original_changes[0]["fact_key"]
+        transition_decision = original_changes[0]["review_decision"]
+        payload = deepcopy(row.payload)
+        for fact in payload["facts"]:
+            if fact["fact_key"] == target_fact_key:
+                fact["review_decision"] = decision
+                if fact_key == target_fact_key:
+                    transition_decision = decision
+                break
+        parent_content_hash = rewritten_hashes[parent.id]
+        input_hash = canonical_hash(
+            {
+                "parent": parent_content_hash,
+                "fact_key": fact_key,
+                "decision": transition_decision,
+            }
+        )
+        content_hash = repository.artifact_content_hash(
+            project_id=row.project_id,
+            kind=row.kind,
+            version=row.version,
+            supersedes_id=row.supersedes_id,
+            parent_content_hash=parent_content_hash,
+            input_hash=input_hash,
+            payload=payload,
+            source_refs=row.source_refs,
+        )
+        assert session.execute(
+            statement,
+            {
+                "parent_content_hash": parent_content_hash,
+                "payload": payload,
+                "input_hash": input_hash,
+                "content_hash": content_hash,
+                "id": row.id,
+            },
+        ).rowcount == 1
+        rewritten_hashes[row.id] = content_hash
+    session.expire_all()
+
+
 def _rewrite_evidence_fact_field(
     session, head_id: UUID, *, field: str, value: object
 ) -> None:
@@ -799,6 +888,48 @@ def test_workspace_returns_422_for_hash_consistent_malformed_evidence_timestamp(
     assert response.status_code == 422, response.text
     assert response.json()["error"]["message"] == (
         "evidence fact published_at must be canonical non-empty text"
+    )
+
+
+def test_workspace_returns_422_when_review_chain_contradicts_audit_events(
+    api_client, session
+) -> None:
+    company_id = _alphabet_id(session)
+    preview = _preview(api_client, company_id)
+    initialized = _initialize(api_client, company_id, preview["preview_hash"])
+    assert initialized.status_code == 201, initialized.text
+    project_id = UUID(initialized.json()["project_id"])
+    worker = CompanyResearchPreparationWorker(session, now=lambda: datetime.now(UTC))
+    claim = worker.claim_next()
+    assert claim is not None
+    assert worker.run_claim(claim) == "awaiting_evidence_review"
+    workspace = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    evidence = next(
+        artifact
+        for artifact in workspace.json()["artifacts"]
+        if artifact["kind"] == "evidence_index"
+    )
+    reviewed = api_client.post(
+        f"{BASE}/projects/{project_id}/evidence-reviews",
+        json={
+            "evidence_artifact_id": evidence["id"],
+            "fact_key": evidence["payload"]["facts"][0]["fact_key"],
+            "decision": "confirmed",
+            "expected_head_id": evidence["id"],
+        },
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    reviewed_id = UUID(reviewed.json()["evidence_artifact"]["id"])
+    _rewrite_first_review_decision_chain(
+        session, reviewed_id, decision="rejected"
+    )
+    session.commit()
+
+    response = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["message"] == (
+        "company research evidence audit history is invalid"
     )
 
 
@@ -1262,8 +1393,9 @@ def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
     )
     assert initialized.status_code == 201, initialized.text
     project_id = initialized.json()["project_id"]
-    operation_now = datetime.now(UTC)
-    worker = CompanyResearchPreparationWorker(session, now=lambda: operation_now)
+    worker = CompanyResearchPreparationWorker(
+        session, now=lambda: datetime.now(UTC)
+    )
     source_claim = worker.claim_next()
     assert source_claim is not None
     assert worker.run_claim(source_claim) == "awaiting_evidence_review"
@@ -1290,7 +1422,7 @@ def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
     assert [
         fact["review_decision"] for fact in current["payload"]["facts"]
     ] == ["confirmed"] * 6 + ["rejected"]
-    drafts = WorkspaceDraftService(session, now=lambda: operation_now)
+    drafts = WorkspaceDraftService(session, now=lambda: datetime.now(UTC))
     draft = drafts.read(UUID(project_id))
     assert draft is not None and draft.content.historical_basis_id is not None
     drafts.save(
@@ -1651,7 +1783,9 @@ def test_workspace_and_evidence_review_routes_are_closed(api_client, session) ->
     initialized = _initialize(api_client, company_id, preview["preview_hash"])
     assert initialized.status_code == 201
     project_id = initialized.json()["project_id"]
-    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    worker = CompanyResearchPreparationWorker(
+        session, now=lambda: datetime.now(UTC)
+    )
     claim = worker.claim_next()
     assert claim is not None and worker.run_claim(claim) == "awaiting_evidence_review"
 
@@ -1719,7 +1853,9 @@ def test_rejected_evidence_counts_as_reviewed_but_cannot_feed_downstream(
     initialized = _initialize(api_client, company_id, preview["preview_hash"])
     assert initialized.status_code == 201
     project_id = initialized.json()["project_id"]
-    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    worker = CompanyResearchPreparationWorker(
+        session, now=lambda: datetime.now(UTC)
+    )
     claim = worker.claim_next()
     assert claim is not None and worker.run_claim(claim) == "awaiting_evidence_review"
     before = api_client.get(f"{BASE}/projects/{project_id}/workspace").json()

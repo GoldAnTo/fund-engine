@@ -18,6 +18,7 @@ from app.underwriting.persistence.company_research_repository import (
     CompanyResearchAuthenticatedHistoricalBasis,
     CompanyResearchBasisRecoveryState,
     CompanyResearchRepository,
+    reconcile_company_research_evidence_audit,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.services.company_research_boundary import (
@@ -456,6 +457,12 @@ class CompanyResearchHistoricalBasisRecovery:
         try:
             self._validate_reviewed_evidence(
                 state, boundary=boundary, security_keys=security_keys
+            )
+            reconcile_company_research_evidence_audit(
+                preparation=state.preparation,
+                evidence_chain=state.evidence_chain,
+                research_gaps=state.research_gaps_chain[0],
+                events=state.events,
             )
         except ValidationError as exc:
             raise ValidationError(

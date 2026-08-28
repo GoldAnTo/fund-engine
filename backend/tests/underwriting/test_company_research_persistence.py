@@ -1223,6 +1223,113 @@ def test_event_reads_reject_a_rewritten_predecessor(session) -> None:
         repository.events(preparation.id)
 
 
+def test_new_event_hash_authenticates_its_timestamp(session) -> None:
+    repository, _, preparation = _repository_with_preparation(session)
+    event = repository.append_event(
+        preparation_id=preparation.id,
+        event_type="initialized",
+        payload={"step": "evidence_index"},
+        created_at=NOW,
+    )
+    _tamper_row(
+        session,
+        CompanyResearchEvent,
+        event.id,
+        created_at=NOW + timedelta(days=30),
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="content hash"):
+        repository.events(preparation.id)
+
+
+def test_legacy_event_hashes_remain_readable_but_timestamps_must_be_monotonic(
+    session,
+) -> None:
+    repository, _, preparation = _repository_with_preparation(session)
+    first = repository.append_event(
+        preparation_id=preparation.id,
+        event_type="initialized",
+        payload={"step": "evidence_index"},
+        created_at=NOW,
+    )
+    second = repository.append_event(
+        preparation_id=preparation.id,
+        event_type="advanced",
+        payload={"step": "business_map"},
+        created_at=NOW + timedelta(seconds=1),
+    )
+    third = repository.append_event(
+        preparation_id=preparation.id,
+        event_type="advanced",
+        payload={"step": "driver_map"},
+        created_at=NOW + timedelta(seconds=2),
+    )
+    first_v1 = repository.event_content_hash(
+        preparation_id=first.preparation_id,
+        sequence=first.sequence,
+        previous_event_hash=None,
+        event_type=first.event_type,
+        payload=first.payload,
+    )
+    second_v1 = repository.event_content_hash(
+        preparation_id=second.preparation_id,
+        sequence=second.sequence,
+        previous_event_hash=first_v1,
+        event_type=second.event_type,
+        payload=second.payload,
+    )
+    third_v1 = repository.event_content_hash(
+        preparation_id=third.preparation_id,
+        sequence=third.sequence,
+        previous_event_hash=second_v1,
+        event_type=third.event_type,
+        payload=third.payload,
+    )
+    _tamper_row(session, CompanyResearchEvent, first.id, content_hash=first_v1)
+    _tamper_row(
+        session,
+        CompanyResearchEvent,
+        second.id,
+        previous_event_hash=first_v1,
+        content_hash=second_v1,
+    )
+    _tamper_row(
+        session,
+        CompanyResearchEvent,
+        third.id,
+        previous_event_hash=second_v1,
+        content_hash=third_v1,
+    )
+    assert repository.events(preparation.id) == (first, second, third)
+
+    _tamper_row(
+        session,
+        CompanyResearchEvent,
+        second.id,
+        created_at=NOW - timedelta(seconds=1),
+    )
+    with pytest.raises(CompanyResearchIntegrityError, match="timestamps"):
+        repository.events(preparation.id)
+
+
+def test_event_append_rejects_a_timestamp_before_its_predecessor(session) -> None:
+    repository, _, preparation = _repository_with_preparation(session)
+    repository.append_event(
+        preparation_id=preparation.id,
+        event_type="initialized",
+        payload={"step": "evidence_index"},
+        created_at=NOW,
+    )
+
+    with pytest.raises(ValidationError, match="precedes its predecessor"):
+        repository.append_event(
+            preparation_id=preparation.id,
+            event_type="advanced",
+            payload={"step": "business_map"},
+            created_at=NOW - timedelta(seconds=1),
+        )
+
+
 def test_artifact_reads_fail_closed_on_hash_tamper_and_duplicate_heads(session) -> None:
     repository, project, _ = _repository_with_preparation(session)
     artifact = repository.append_artifact(
