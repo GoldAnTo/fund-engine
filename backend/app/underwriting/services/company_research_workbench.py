@@ -448,10 +448,16 @@ class CompanyResearchWorkbench:
             CompanyResearchRepository.market_binding_from_payload(value)
             for value in (expected_market_bindings or [])
         )
+        evidence = heads["evidence_index"]
+        evidence_cutoff = self._company.evidence_cutoff(evidence)
+        evidence_source_manifest_hash = self._company.evidence_source_manifest_hash(
+            evidence
+        )
         cutoff = self._company.validate_workspace_market_boundary(
             project_id=project_id,
             bindings=parsed,
-            expected_cutoff_at=self._company.evidence_cutoff(heads["evidence_index"]),
+            expected_cutoff_at=evidence_cutoff,
+            expected_source_manifest_hash=evidence_source_manifest_hash,
         )
         self._company.validate_market_snapshot_bindings(
             project_id=project_id,

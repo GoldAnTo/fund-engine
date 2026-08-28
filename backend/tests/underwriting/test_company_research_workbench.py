@@ -25,6 +25,7 @@ from app.underwriting.persistence.product_models import (
     UnderwritingPriceSnapshot,
     UnderwritingResearchProject,
 )
+from app.underwriting.persistence.product_repository import ProductRepository
 
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
 from app.underwriting.services.company_research_initializer import (
@@ -400,6 +401,26 @@ def test_workbench_accepts_one_closed_model_bundle(session) -> None:
         )
 
 
+def test_workbench_fails_closed_when_historical_basis_source_differs_from_evidence(
+    session,
+) -> None:
+    initialized, workbench, _repository = _model_workspace(session)
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert draft is not None
+    assert draft.content.historical_basis_id is not None
+    basis = ProductRepository(session).product_basis(draft.content.historical_basis_id)
+    assert basis is not None
+    set_committed_value(basis, "source_manifest_hash", "0" * 64)
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis source does not match reviewed evidence",
+    ):
+        workbench.workspace(project_id=initialized.project.id)
+
+
 def test_optional_valuation_tracks_the_current_model_epoch_across_rebuilds(
     session,
 ) -> None:
@@ -671,7 +692,7 @@ def test_model_bundle_rejects_cleared_or_replaced_draft_market_refs_without_writ
     )
 
 
-def test_model_bundle_rejects_a_newer_draft_mandate_as_a_cutoff_substitute(
+def test_model_bundle_does_not_substitute_a_newer_draft_mandate_for_missing_basis(
     session,
 ) -> None:
     later_cutoff = datetime(2026, 8, 28, tzinfo=UTC)
@@ -701,7 +722,10 @@ def test_model_bundle_rejects_a_newer_draft_mandate_as_a_cutoff_substitute(
         changed = drafts.save(
             initialized.project.id,
             expected_lock_version=current.lock_version,
-            patch=WorkspaceDraftPatch(mandate_id=later.id),
+            patch=WorkspaceDraftPatch(
+                mandate_id=later.id,
+                historical_basis_id=None,
+            ),
         )
         return replace(
             bundle,
@@ -709,9 +733,7 @@ def test_model_bundle_rejects_a_newer_draft_mandate_as_a_cutoff_substitute(
             workspace_draft_lock_version=changed.lock_version,
         )
 
-    with pytest.raises(
-        ValidationError, match="cutoff does not match reviewed evidence"
-    ):
+    with pytest.raises(ValidationError, match="historical basis is missing"):
         _model_workspace(session, before_commit=substitute_mandate)
 
     assert (
