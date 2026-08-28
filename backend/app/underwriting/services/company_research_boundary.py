@@ -41,14 +41,21 @@ def _utc(value: object, field_name: str) -> datetime:
 
 def _json_contract(value: object) -> object:
     if isinstance(value, Enum):
-        return value.value
+        return _json_contract(value.value)
     if isinstance(value, Mapping):
-        return {
-            _json_contract(key): _json_contract(item) for key, item in value.items()
-        }
+        result: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValidationError("JSON contract mapping keys must be strings")
+            result[key] = _json_contract(item)
+        return result
     if isinstance(value, (tuple, list)):
         return [_json_contract(item) for item in value]
-    return value
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    raise ValidationError(
+        f"JSON contract does not support {type(value).__name__} values"
+    )
 
 
 @dataclass(frozen=True, slots=True)
