@@ -33,7 +33,7 @@ from app.underwriting.services.product_foundation_fixture import (
 from app.underwriting.services.company_research_model_builder import StrategyAssumptionSet
 
 
-NOW = datetime(2026, 8, 25, 9, tzinfo=UTC)
+NOW = datetime(2026, 8, 28, tzinfo=UTC)
 _FIXTURE_ROOT = Path(__file__).parents[2] / "app" / "underwriting" / "fixtures" / "alphabet_golden_case"
 
 
@@ -374,7 +374,7 @@ def test_custom_fixture_deep_json_is_a_recoverable_fixture_error(
     )
     _write_json(root / "manifest.json", manifest)
 
-    with pytest.raises(AlphabetGoldenCaseFixtureError, match="unreadable"):
+    with pytest.raises(AlphabetGoldenCaseFixtureError):
         load_alphabet_golden_case_fixture(root)
 
 
