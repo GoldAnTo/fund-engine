@@ -82,21 +82,50 @@ def product_mandate_payload(
     }
 
 
-def product_mandate_record_content_hash(row: object) -> str:
+def product_mandate_content_hash(
+    *,
+    project_id: UUID,
+    mandate_key: str,
+    horizon_years: int,
+    base_currency: str,
+    required_return: Decimal,
+    permanent_loss_limit: Decimal,
+    comparison_set: tuple[str, ...] | list[str],
+    benchmark_key: str | None,
+    required_excess_return: Decimal | None,
+    effective_at: datetime,
+    expires_at: datetime | None,
+) -> str:
+    """Hash already-validated mandate fields without accepting an untyped row."""
     return canonical_hash(
         product_mandate_payload(
-            project_id=getattr(row, "project_id"),
-            mandate_key=getattr(row, "mandate_key"),
-            horizon_years=getattr(row, "horizon_years"),
-            base_currency=getattr(row, "base_currency"),
-            required_return=getattr(row, "required_return"),
-            permanent_loss_limit=getattr(row, "permanent_loss_limit"),
-            comparison_set=getattr(row, "comparison_set"),
-            benchmark_key=getattr(row, "benchmark_key"),
-            required_excess_return=getattr(row, "required_excess_return"),
-            effective_at=getattr(row, "effective_at"),
-            expires_at=getattr(row, "expires_at"),
+            project_id=project_id,
+            mandate_key=mandate_key,
+            horizon_years=horizon_years,
+            base_currency=base_currency,
+            required_return=required_return,
+            permanent_loss_limit=permanent_loss_limit,
+            comparison_set=comparison_set,
+            benchmark_key=benchmark_key,
+            required_excess_return=required_excess_return,
+            effective_at=effective_at,
+            expires_at=expires_at,
         )
+    )
+
+
+def research_project_content_hash(
+    *, primary_company_id: UUID, target_security_ids: tuple[UUID, ...]
+) -> str:
+    """Canonical immutable project identity commitment."""
+    return canonical_hash(
+        {
+            "schema_version": "product.research-project.v1",
+            "primary_company_id": str(primary_company_id),
+            "target_security_ids": [
+                str(value) for value in sorted(target_security_ids, key=str)
+            ],
+        }
     )
 
 
@@ -545,14 +574,9 @@ class ResearchProjectService:
                 )
 
         project_id = uuid4()
-        content_hash = canonical_hash(
-            {
-                "schema_version": "product.research-project.v1",
-                "primary_company_id": str(primary_company_id),
-                "target_security_ids": [
-                    str(value) for value in normalized_security_ids
-                ],
-            }
+        content_hash = research_project_content_hash(
+            primary_company_id=primary_company_id,
+            target_security_ids=normalized_security_ids,
         )
         membership_hashes = {
             security_id: canonical_hash(
@@ -666,7 +690,7 @@ class ResearchProjectService:
                 raise ValidationError("mandate effective_at must advance")
 
         mandate_key = f"product.project:{project_id}"
-        payload = product_mandate_payload(
+        content_hash = product_mandate_content_hash(
             project_id=project_id,
             mandate_key=mandate_key,
             horizon_years=value.horizon_years,
@@ -692,7 +716,7 @@ class ResearchProjectService:
                 required_excess_return=normalized_excess,
                 effective_at=normalized_effective,
                 expires_at=normalized_expires,
-                content_hash=canonical_hash(payload),
+                content_hash=content_hash,
                 expected_parent_id=expected_parent_id,
                 created_at=self._created_at(),
             )

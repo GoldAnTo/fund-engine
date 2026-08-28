@@ -8,7 +8,7 @@ from uuid import UUID
 
 import pytest
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import select
+from sqlalchemy import bindparam, select, text
 
 from app.underwriting.api.company_research_schemas import (
     CompanyResearchArtifactResponse,
@@ -23,6 +23,7 @@ from app.underwriting.api.company_research_router import _workspace_response
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
 from app.models.operational import Job
 from app.underwriting.persistence.company_research_models import (
+    CompanyResearchArtifactVersion,
     CompanyResearchPreparation,
 )
 from app.underwriting.persistence.company_research_repository import (
@@ -38,6 +39,7 @@ from app.underwriting.services.workspace_draft import (
     WorkspaceDraftPatch,
     WorkspaceDraftService,
 )
+from app.underwriting.hashing import canonical_hash
 from tests.underwriting.test_company_research_workbench import _model_workspace
 
 BASE = "/api/underwriting/v1/product/company-research"
@@ -595,6 +597,68 @@ def _run_public_company_research_pipeline(api_client, session) -> dict:
     return result.json()
 
 
+def _rewrite_head_decision_as_malformed(session, head_id: UUID) -> None:
+    repository = CompanyResearchRepository(session)
+    head = session.get(CompanyResearchArtifactVersion, head_id)
+    assert head is not None and head.supersedes_id is not None
+    parent = session.get(CompanyResearchArtifactVersion, head.supersedes_id)
+    assert parent is not None
+    payload = deepcopy(head.payload)
+    changes = [
+        after
+        for before, after in zip(
+            parent.payload["facts"], payload["facts"], strict=True
+        )
+        if before != after
+    ]
+    assert len(changes) == 1
+    changes[0]["review_decision"] = []
+    input_hash = canonical_hash(
+        {
+            "parent": parent.content_hash,
+            "fact_key": changes[0]["fact_key"],
+            "decision": [],
+        }
+    )
+    content_hash = repository.artifact_content_hash(
+        project_id=head.project_id,
+        kind=head.kind,
+        version=head.version,
+        supersedes_id=head.supersedes_id,
+        parent_content_hash=head.parent_content_hash,
+        input_hash=input_hash,
+        payload=payload,
+        source_refs=head.source_refs,
+    )
+    statement = text(
+        "UPDATE uw_company_research_artifact_versions SET payload = :payload, "
+        "input_hash = :input_hash, content_hash = :content_hash WHERE id = :id"
+    ).bindparams(
+        bindparam(
+            "payload", type_=CompanyResearchArtifactVersion.__table__.c.payload.type
+        ),
+        bindparam(
+            "input_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.input_hash.type,
+        ),
+        bindparam(
+            "content_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.content_hash.type,
+        ),
+        bindparam("id", type_=CompanyResearchArtifactVersion.__table__.c.id.type),
+    )
+    assert session.execute(
+        statement,
+        {
+            "payload": payload,
+            "input_hash": input_hash,
+            "content_hash": content_hash,
+            "id": head.id,
+        },
+    ).rowcount == 1
+    session.expire_all()
+
+
 def test_public_pipeline_exposes_every_current_artifact_once_and_references_them_from_modules(
     api_client, session
 ) -> None:
@@ -1086,6 +1150,73 @@ def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
     assert len(final_decisions) == 7
     assert final_decisions.count("confirmed") == 6
     assert final_decisions.count("rejected") == 1
+
+
+def test_retry_returns_422_for_a_malformed_durable_review_decision(
+    api_client, session
+) -> None:
+    cutoff = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
+    company_id = _alphabet_id(session)
+    preview = _preview(api_client, company_id, cutoff_at=cutoff)
+    initialized = _initialize(
+        api_client,
+        company_id,
+        preview["preview_hash"],
+        cutoff_at=cutoff,
+    )
+    assert initialized.status_code == 201, initialized.text
+    project_id = UUID(initialized.json()["project_id"])
+    worker = CompanyResearchPreparationWorker(session, now=lambda: datetime.now(UTC))
+    source_claim = worker.claim_next()
+    assert source_claim is not None
+    assert worker.run_claim(source_claim) == "awaiting_evidence_review"
+    workspace = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    assert workspace.status_code == 200, workspace.text
+    evidence = next(
+        item
+        for item in workspace.json()["artifacts"]
+        if item["kind"] == "evidence_index"
+    )
+    current = evidence
+    for fact in evidence["payload"]["facts"]:
+        reviewed = api_client.post(
+            f"{BASE}/projects/{project_id}/evidence-reviews",
+            json={
+                "evidence_artifact_id": current["id"],
+                "fact_key": fact["fact_key"],
+                "decision": "confirmed",
+                "expected_head_id": current["id"],
+            },
+        )
+        assert reviewed.status_code == 200, reviewed.text
+        current = reviewed.json()["evidence_artifact"]
+    drafts = WorkspaceDraftService(session, now=lambda: datetime.now(UTC))
+    draft = drafts.read(project_id)
+    assert draft is not None and draft.content.historical_basis_id is not None
+    drafts.save(
+        project_id,
+        expected_lock_version=draft.lock_version,
+        patch=WorkspaceDraftPatch(historical_basis_id=None),
+    )
+    session.commit()
+    model_claim = worker.claim_next()
+    assert model_claim is not None and model_claim.step == "model_bundle"
+    assert worker.run_claim(model_claim) == "discarded"
+    session.commit()
+    _rewrite_head_decision_as_malformed(session, UUID(current["id"]))
+    session.commit()
+
+    response = api_client.post(f"{BASE}/projects/{project_id}/retry")
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["message"] == (
+        "company research historical basis recovery evidence is invalid"
+    )
+    preparation = session.get(CompanyResearchPreparation, model_claim.preparation_id)
+    draft_after = drafts.read(project_id)
+    assert preparation is not None and preparation.status == "blocked"
+    assert draft_after is not None
+    assert draft_after.content.historical_basis_id is None
 
 
 def test_retry_preserves_the_server_declared_failed_financial_bridge_step(

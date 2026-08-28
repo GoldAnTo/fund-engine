@@ -740,6 +740,175 @@ def _durably_rewrite_review_successors(session, head, mutate_payload) -> None:
     session.expire_all()
 
 
+def _durably_rewrite_first_review_decision(session, head, decision) -> None:
+    """Keep the complete chain cryptographically valid with one malformed decision."""
+    repository = CompanyResearchRepository(session)
+    chain = repository.artifact_chain(head.id)
+    first_parent, first_successor = chain[:2]
+    changed = [
+        after
+        for before, after in zip(
+            first_parent.payload["facts"],
+            first_successor.payload["facts"],
+            strict=True,
+        )
+        if before != after
+    ]
+    assert len(changed) == 1
+    target_fact_key = changed[0]["fact_key"]
+    rewritten_hashes = {chain[0].id: chain[0].content_hash}
+    statement = text(
+        "UPDATE uw_company_research_artifact_versions SET "
+        "parent_content_hash = :parent_content_hash, payload = :payload, "
+        "input_hash = :input_hash, content_hash = :content_hash WHERE id = :id"
+    ).bindparams(
+        bindparam(
+            "parent_content_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.parent_content_hash.type,
+        ),
+        bindparam(
+            "payload", type_=CompanyResearchArtifactVersion.__table__.c.payload.type
+        ),
+        bindparam(
+            "input_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.input_hash.type,
+        ),
+        bindparam(
+            "content_hash",
+            type_=CompanyResearchArtifactVersion.__table__.c.content_hash.type,
+        ),
+        bindparam("id", type_=CompanyResearchArtifactVersion.__table__.c.id.type),
+    )
+    for parent, row in zip(chain, chain[1:], strict=False):
+        original_changes = [
+            after
+            for before, after in zip(
+                parent.payload["facts"], row.payload["facts"], strict=True
+            )
+            if before != after
+        ]
+        assert len(original_changes) == 1
+        reviewed_fact = original_changes[0]
+        fact_key = reviewed_fact["fact_key"]
+        transition_decision = reviewed_fact["review_decision"]
+        payload = deepcopy(row.payload)
+        for fact in payload["facts"]:
+            if fact["fact_key"] == target_fact_key:
+                fact["review_decision"] = decision
+                if fact_key == target_fact_key:
+                    transition_decision = decision
+                break
+        parent_content_hash = rewritten_hashes[parent.id]
+        input_hash = canonical_hash(
+            {
+                "parent": parent_content_hash,
+                "fact_key": fact_key,
+                "decision": transition_decision,
+            }
+        )
+        content_hash = repository.artifact_content_hash(
+            project_id=row.project_id,
+            kind=row.kind,
+            version=row.version,
+            supersedes_id=row.supersedes_id,
+            parent_content_hash=parent_content_hash,
+            input_hash=input_hash,
+            payload=payload,
+            source_refs=row.source_refs,
+        )
+        assert session.connection().execute(
+            statement,
+            {
+                "parent_content_hash": parent_content_hash,
+                "payload": payload,
+                "input_hash": input_hash,
+                "content_hash": content_hash,
+                "id": row.id,
+            },
+        ).rowcount == 1
+        rewritten_hashes[row.id] = content_hash
+    session.expire_all()
+
+
+@pytest.mark.parametrize("decision", ([], {}, None, 1))
+def test_historical_basis_recovery_rejects_malformed_review_decision(
+    session, decision
+) -> None:
+    initialized, reviewed, _gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    _durably_rewrite_first_review_decision(session, reviewed, decision)
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery evidence is invalid",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert draft is not None and draft.lock_version == blocked_draft.lock_version
+    assert draft.content.historical_basis_id is None
+
+
+@pytest.mark.parametrize("field", ("fact_key", "source_refs"))
+def test_historical_basis_recovery_bounds_other_malformed_review_fields(
+    session, field
+) -> None:
+    initialized, reviewed, _gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    repository = CompanyResearchRepository(session)
+    chain = repository.artifact_chain(reviewed.id)
+    parent, head = chain[-2:]
+    payload = deepcopy(head.payload)
+    source_refs = deepcopy(head.source_refs)
+    input_hash = head.input_hash
+    if field == "fact_key":
+        changed = [
+            after
+            for before, after in zip(
+                parent.payload["facts"], payload["facts"], strict=True
+            )
+            if before != after
+        ]
+        assert len(changed) == 1
+        changed[0]["fact_key"] = []
+        input_hash = canonical_hash(
+            {
+                "parent": parent.content_hash,
+                "fact_key": [],
+                "decision": changed[0]["review_decision"],
+            }
+        )
+    else:
+        source_refs = [[]]
+    _durably_rewrite_artifact(
+        session,
+        head,
+        payload=payload,
+        source_refs=source_refs,
+        input_hash=input_hash,
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery evidence is invalid",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert draft is not None and draft.lock_version == blocked_draft.lock_version
+    assert draft.content.historical_basis_id is None
+
+
 @pytest.mark.parametrize(
     ("case", "mutate"),
     (
@@ -1052,27 +1221,229 @@ def _stored_time_text(value) -> str | None:
     return value.astimezone(UTC).isoformat()
 
 
-def _mandate_content_hash(row, *, horizon_years: int) -> str:
+def _mandate_content_hash(
+    row,
+    *,
+    horizon_years: int | None = None,
+    effective_at=None,
+    comparison_set=None,
+) -> str:
     return canonical_hash(
         {
             "schema_version": "product.investment-mandate.v1",
             "project_id": str(row.project_id),
             "mandate_key": row.mandate_key,
-            "horizon_years": horizon_years,
+            "horizon_years": (
+                row.horizon_years if horizon_years is None else horizon_years
+            ),
             "base_currency": row.base_currency,
             "required_return": format(row.required_return, ".8f"),
             "permanent_loss_limit": format(row.permanent_loss_limit, ".8f"),
-            "comparison_set": list(row.comparison_set),
+            "comparison_set": (
+                list(row.comparison_set)
+                if comparison_set is None
+                else comparison_set
+            ),
             "benchmark_key": row.benchmark_key,
             "required_excess_return": (
                 format(row.required_excess_return, ".8f")
                 if row.required_excess_return is not None
                 else None
             ),
-            "effective_at": _stored_time_text(row.effective_at),
+            "effective_at": _stored_time_text(
+                row.effective_at if effective_at is None else effective_at
+            ),
             "expires_at": _stored_time_text(row.expires_at),
         }
     )
+
+
+@pytest.mark.parametrize(
+    ("direction", "recompute_hash"),
+    (
+        ("future", False),
+        ("future", True),
+        ("past", False),
+        ("past", True),
+    ),
+)
+def test_historical_basis_recovery_bounds_mandate_effective_at_by_lifecycle(
+    session, direction, recompute_hash
+) -> None:
+    initialized, _reviewed, _gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    mandate = ProductRepository(session).product_mandate(
+        initialized.project.id, blocked_draft.content.mandate_id
+    )
+    project = session.get(UnderwritingResearchProject, initialized.project.id)
+    preparation = session.get(
+        CompanyResearchPreparation, initialized.preparation.id
+    )
+    assert mandate is not None and project is not None and preparation is not None
+    anchor = preparation.created_at if direction == "future" else project.created_at
+    wrong_effective_at = anchor + (
+        timedelta(days=365) if direction == "future" else -timedelta(days=365)
+    )
+    content_hash = (
+        _mandate_content_hash(mandate, effective_at=wrong_effective_at)
+        if recompute_hash
+        else mandate.content_hash
+    )
+    statement = text(
+        "UPDATE uw_mandate_versions SET effective_at = :effective_at, "
+        "content_hash = :content_hash WHERE id = :id"
+    ).bindparams(
+        bindparam(
+            "effective_at",
+            type_=UnderwritingMandateVersion.__table__.c.effective_at.type,
+        ),
+        bindparam(
+            "content_hash",
+            type_=UnderwritingMandateVersion.__table__.c.content_hash.type,
+        ),
+        bindparam("id", type_=UnderwritingMandateVersion.__table__.c.id.type),
+    )
+    assert session.execute(
+        statement,
+        {
+            "effective_at": wrong_effective_at,
+            "content_hash": content_hash,
+            "id": mandate.id,
+        },
+    ).rowcount == 1
+    session.expire_all()
+
+    with pytest.raises(ValidationError, match="recovery draft is incomplete"):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
+
+
+@pytest.mark.parametrize(
+    ("kind", "malformed"),
+    (
+        ("mandate_comparison_set", 7),
+        ("scope_covered_segments", 7),
+        ("scope_target_security_ids", {"unexpected": "mapping"}),
+        ("agenda_items", 7),
+        ("agenda_generator", ["unexpected"]),
+    ),
+)
+def test_historical_basis_recovery_bounds_malformed_foundation_json(
+    session, kind, malformed
+) -> None:
+    initialized, _reviewed, _gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    repository = ProductRepository(session)
+    if kind == "mandate_comparison_set":
+        row = repository.product_mandate(
+            initialized.project.id, blocked_draft.content.mandate_id
+        )
+        assert row is not None
+        content_hash = _mandate_content_hash(row, comparison_set=malformed)
+        statement = text(
+            "UPDATE uw_mandate_versions SET comparison_set = :malformed, "
+            "content_hash = :content_hash WHERE id = :id"
+        ).bindparams(
+            bindparam(
+                "malformed",
+                type_=UnderwritingMandateVersion.__table__.c.comparison_set.type,
+            ),
+            bindparam(
+                "content_hash",
+                type_=UnderwritingMandateVersion.__table__.c.content_hash.type,
+            ),
+            bindparam("id", type_=UnderwritingMandateVersion.__table__.c.id.type),
+        )
+        values = {"malformed": malformed, "content_hash": content_hash, "id": row.id}
+    elif kind.startswith("scope_"):
+        row = repository.scope(initialized.project.id, blocked_draft.content.scope_id)
+        assert row is not None
+        payload = deepcopy(row.payload)
+        payload[kind.removeprefix("scope_")] = malformed
+        content_hash = canonical_hash(
+            {
+                "schema_version": "product.research-scope.v1",
+                "project_id": str(row.project_id),
+                "scope": payload,
+            }
+        )
+        statement = text(
+            "UPDATE uw_research_scope_versions SET payload = :malformed, "
+            "content_hash = :content_hash WHERE id = :id"
+        ).bindparams(
+            bindparam(
+                "malformed",
+                type_=UnderwritingResearchScopeVersion.__table__.c.payload.type,
+            ),
+            bindparam(
+                "content_hash",
+                type_=UnderwritingResearchScopeVersion.__table__.c.content_hash.type,
+            ),
+            bindparam(
+                "id", type_=UnderwritingResearchScopeVersion.__table__.c.id.type
+            ),
+        )
+        values = {"malformed": payload, "content_hash": content_hash, "id": row.id}
+    else:
+        row = repository.agenda(
+            initialized.project.id, blocked_draft.content.agenda_id
+        )
+        assert row is not None
+        payload = deepcopy(row.payload)
+        generator = deepcopy(row.generator_provenance)
+        if kind == "agenda_items":
+            payload["items"] = malformed
+        else:
+            generator = malformed
+        content_hash = canonical_hash(
+            {
+                "schema_version": "product.research-agenda.v1",
+                "project_id": str(row.project_id),
+                "scope_id": str(row.scope_id),
+                "items": payload["items"],
+                "generator": generator,
+            }
+        )
+        statement = text(
+            "UPDATE uw_research_agenda_versions SET payload = :payload, "
+            "generator_provenance = :generator, content_hash = :content_hash "
+            "WHERE id = :id"
+        ).bindparams(
+            bindparam(
+                "payload",
+                type_=UnderwritingResearchAgendaVersion.__table__.c.payload.type,
+            ),
+            bindparam(
+                "generator",
+                type_=UnderwritingResearchAgendaVersion.__table__.c.generator_provenance.type,
+            ),
+            bindparam(
+                "content_hash",
+                type_=UnderwritingResearchAgendaVersion.__table__.c.content_hash.type,
+            ),
+            bindparam(
+                "id", type_=UnderwritingResearchAgendaVersion.__table__.c.id.type
+            ),
+        )
+        values = {
+            "payload": payload,
+            "generator": generator,
+            "content_hash": content_hash,
+            "id": row.id,
+        }
+    assert session.execute(statement, values).rowcount == 1
+    session.expire_all()
+
+    with pytest.raises(
+        ValidationError,
+        match="historical basis recovery draft is incomplete",
+    ):
+        CompanyResearchHistoricalBasisRecovery(
+            session, now=lambda: NOW + timedelta(seconds=2)
+        ).recover(initialized.preparation.id)
 
 
 @pytest.mark.parametrize(

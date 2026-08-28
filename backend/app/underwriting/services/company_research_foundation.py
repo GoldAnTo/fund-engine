@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from app.models.ledger import ValidationError
@@ -19,13 +22,15 @@ from app.underwriting.domain.types import InvestmentMandateInput
 from app.underwriting.persistence.models import UnderwritingMandateVersion
 from app.underwriting.persistence.product_models import (
     UnderwritingResearchAgendaVersion,
+    UnderwritingResearchProject,
     UnderwritingResearchScopeVersion,
 )
 from app.underwriting.services.product_project import (
     agenda_generator_provenance,
-    product_mandate_record_content_hash,
+    product_mandate_content_hash,
     research_agenda_content_hash,
     research_agenda_payload,
+    research_project_content_hash,
     research_scope_content_hash,
     research_scope_payload,
 )
@@ -97,13 +102,153 @@ def alphabet_company_research_foundation_contract(
 
 def authenticate_company_research_foundation(
     *,
-    project_id: UUID,
+    project: UnderwritingResearchProject,
+    preparation_created_at: datetime,
     contract: CompanyResearchFoundationContract,
     mandate: UnderwritingMandateVersion,
     scope: UnderwritingResearchScopeVersion,
     agenda: UnderwritingResearchAgendaVersion,
 ) -> None:
     """Authenticate immutable hashes and the exact governed first-version values."""
+    def invalid() -> ValidationError:
+        return ValidationError("company research foundation contract is invalid")
+
+    def uuid(value: object) -> UUID:
+        if type(value) is not UUID:
+            raise invalid()
+        return value
+
+    def integer(value: object) -> int:
+        if type(value) is not int:
+            raise invalid()
+        return value
+
+    def text(value: object) -> str:
+        if not isinstance(value, str) or not value:
+            raise invalid()
+        return value
+
+    def optional_text(value: object) -> str | None:
+        if value is None:
+            return None
+        return text(value)
+
+    def decimal(value: object) -> Decimal:
+        if not isinstance(value, Decimal) or not value.is_finite():
+            raise invalid()
+        return value
+
+    def stored_utc(value: object) -> datetime:
+        if not isinstance(value, datetime):
+            raise invalid()
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        if value.utcoffset() is None:
+            raise invalid()
+        return value.astimezone(UTC)
+
+    def string_list(value: object) -> tuple[str, ...]:
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) and item for item in value
+        ):
+            raise invalid()
+        return tuple(value)
+
+    def uuid_string_list(value: object) -> tuple[str, ...]:
+        values = string_list(value)
+        try:
+            parsed = tuple(UUID(item) for item in values)
+        except (TypeError, ValueError) as exc:
+            raise invalid() from exc
+        if tuple(str(item) for item in parsed) != values:
+            raise invalid()
+        return values
+
+    def mapping(value: object, keys: frozenset[str]) -> dict[str, object]:
+        if not isinstance(value, Mapping) or set(value) != keys:
+            raise invalid()
+        return dict(value)
+
+    project_id = uuid(project.id)
+    company_id = uuid(project.primary_company_id)
+    project_created_at = stored_utc(project.created_at)
+    preparation_time = stored_utc(preparation_created_at)
+    project_hash = text(project.content_hash)
+
+    mandate_project_id = uuid(mandate.project_id)
+    mandate_key = text(mandate.mandate_key)
+    mandate_version = integer(mandate.version)
+    mandate_horizon = integer(mandate.horizon_years)
+    mandate_currency = text(mandate.base_currency)
+    mandate_required_return = decimal(mandate.required_return)
+    mandate_loss_limit = decimal(mandate.permanent_loss_limit)
+    mandate_comparison_set = string_list(mandate.comparison_set)
+    mandate_benchmark = optional_text(mandate.benchmark_key)
+    mandate_excess = (
+        decimal(mandate.required_excess_return)
+        if mandate.required_excess_return is not None
+        else None
+    )
+    mandate_effective_at = stored_utc(mandate.effective_at)
+    mandate_expires_at = (
+        stored_utc(mandate.expires_at) if mandate.expires_at is not None else None
+    )
+    mandate_created_at = stored_utc(mandate.created_at)
+    mandate_hash = text(mandate.content_hash)
+
+    scope_project_id = uuid(scope.project_id)
+    scope_version = integer(scope.version)
+    scope_created_at = stored_utc(scope.created_at)
+    scope_payload = mapping(
+        scope.payload,
+        frozenset(
+            {
+                "primary_company_id",
+                "target_security_ids",
+                "industry_ids",
+                "covered_segments",
+                "user_focus",
+                "exclusions",
+            }
+        ),
+    )
+    text(scope_payload["primary_company_id"])
+    uuid_string_list(scope_payload["target_security_ids"])
+    uuid_string_list(scope_payload["industry_ids"])
+    string_list(scope_payload["covered_segments"])
+    optional_text(scope_payload["user_focus"])
+    string_list(scope_payload["exclusions"])
+    scope_hash = text(scope.content_hash)
+
+    agenda_project_id = uuid(agenda.project_id)
+    agenda_scope_id = uuid(agenda.scope_id)
+    agenda_version = integer(agenda.version)
+    agenda_created_at = stored_utc(agenda.created_at)
+    agenda_payload = mapping(agenda.payload, frozenset({"items"}))
+    string_list(agenda_payload["items"])
+    agenda_generator = mapping(
+        agenda.generator_provenance,
+        frozenset(
+            {
+                "method",
+                "template_key",
+                "template_version",
+                "model_name",
+                "prompt_template_version",
+                "input_summary_hash",
+                "output_hash",
+            }
+        ),
+    )
+    text(agenda_generator["method"])
+    text(agenda_generator["template_key"])
+    text(agenda_generator["template_version"])
+    optional_text(agenda_generator["model_name"])
+    optional_text(agenda_generator["prompt_template_version"])
+    text(agenda_generator["input_summary_hash"])
+    text(agenda_generator["output_hash"])
+    agenda_hash = text(agenda.content_hash)
+
     expected_scope = research_scope_payload(
         primary_company_id=contract.scope.primary_company_id,
         target_security_ids=contract.scope.target_security_ids,
@@ -116,39 +261,63 @@ def authenticate_company_research_foundation(
     expected_generator = agenda_generator_provenance(contract.agenda_generator)
     expected_mandate_key = f"product.project:{project_id}"
     valid = (
-        mandate.project_id == project_id
-        and mandate.version == 1
+        company_id == contract.scope.primary_company_id
+        and project_hash
+        == research_project_content_hash(
+            primary_company_id=contract.scope.primary_company_id,
+            target_security_ids=contract.scope.target_security_ids,
+        )
+        and project_created_at
+        <= mandate_effective_at
+        <= mandate_created_at
+        <= scope_created_at
+        <= agenda_created_at
+        <= preparation_time
+        and mandate_project_id == project_id
+        and mandate_version == 1
         and mandate.supersedes_id is None
-        and mandate.mandate_key == expected_mandate_key
-        and mandate.horizon_years == contract.mandate.horizon_years
-        and mandate.base_currency == contract.mandate.base_currency
-        and mandate.required_return == contract.mandate.required_return
-        and mandate.permanent_loss_limit == contract.mandate.permanent_loss_limit
-        and tuple(mandate.comparison_set) == contract.mandate.comparison_set
-        and mandate.benchmark_key is None
-        and mandate.required_excess_return is None
-        and mandate.effective_at is not None
-        and mandate.expires_at is None
-        and mandate.content_hash == product_mandate_record_content_hash(mandate)
-        and scope.project_id == project_id
-        and scope.version == 1
+        and mandate_key == expected_mandate_key
+        and mandate_horizon == contract.mandate.horizon_years
+        and mandate_currency == contract.mandate.base_currency
+        and mandate_required_return == contract.mandate.required_return
+        and mandate_loss_limit == contract.mandate.permanent_loss_limit
+        and mandate_comparison_set == contract.mandate.comparison_set
+        and mandate_benchmark is None
+        and mandate_excess is None
+        and mandate_expires_at is None
+        and mandate_hash
+        == product_mandate_content_hash(
+            project_id=mandate_project_id,
+            mandate_key=mandate_key,
+            horizon_years=mandate_horizon,
+            base_currency=mandate_currency,
+            required_return=mandate_required_return,
+            permanent_loss_limit=mandate_loss_limit,
+            comparison_set=mandate_comparison_set,
+            benchmark_key=mandate_benchmark,
+            required_excess_return=mandate_excess,
+            effective_at=mandate_effective_at,
+            expires_at=mandate_expires_at,
+        )
+        and scope_project_id == project_id
+        and scope_version == 1
         and scope.supersedes_id is None
-        and scope.payload == expected_scope
-        and scope.content_hash
-        == research_scope_content_hash(project_id=project_id, payload=scope.payload)
-        and agenda.project_id == project_id
-        and agenda.version == 1
+        and scope_payload == expected_scope
+        and scope_hash
+        == research_scope_content_hash(project_id=project_id, payload=scope_payload)
+        and agenda_project_id == project_id
+        and agenda_version == 1
         and agenda.supersedes_id is None
-        and agenda.scope_id == scope.id
-        and agenda.payload == expected_agenda
-        and agenda.generator_provenance == expected_generator
-        and agenda.content_hash
+        and agenda_scope_id == scope.id
+        and agenda_payload == expected_agenda
+        and agenda_generator == expected_generator
+        and agenda_hash
         == research_agenda_content_hash(
             project_id=project_id,
             scope_id=scope.id,
-            payload=agenda.payload,
-            generator_provenance=agenda.generator_provenance,
+            payload=agenda_payload,
+            generator_provenance=agenda_generator,
         )
     )
     if not valid:
-        raise ValidationError("company research foundation contract is invalid")
+        raise invalid()

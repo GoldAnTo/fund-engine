@@ -150,14 +150,17 @@ class CompanyResearchHistoricalBasisRecovery:
         evidence_chain = state.evidence_chain
         gaps_chain = state.research_gaps_chain
         root = evidence_chain[0]
+        expected_source_refs = list(expected.source_refs)
         if (
             root.input_hash != expected.input_hash
             or root.payload != expected.evidence_index_payload
-            or tuple(root.source_refs) != expected.source_refs
+            or not isinstance(root.source_refs, list)
+            or root.source_refs != expected_source_refs
             or len(gaps_chain) != 1
             or gaps_chain[0].input_hash != expected.input_hash
             or gaps_chain[0].payload != expected.research_gaps_payload
-            or tuple(gaps_chain[0].source_refs) != expected.source_refs
+            or not isinstance(gaps_chain[0].source_refs, list)
+            or gaps_chain[0].source_refs != expected_source_refs
             or expected.input_hash != boundary.basis_input.source_manifest_hash
             or tuple(
                 expected.evidence_index_payload.get("security_external_keys", ())
@@ -170,7 +173,10 @@ class CompanyResearchHistoricalBasisRecovery:
         for parent, successor in zip(
             evidence_chain, evidence_chain[1:], strict=False
         ):
-            if tuple(successor.source_refs) != expected.source_refs:
+            if (
+                not isinstance(successor.source_refs, list)
+                or successor.source_refs != expected_source_refs
+            ):
                 raise ValidationError(
                     "company research historical basis recovery evidence is invalid"
                 )
@@ -195,10 +201,14 @@ class CompanyResearchHistoricalBasisRecovery:
                         "company research historical basis recovery evidence is invalid"
                     )
                 decision = after.get("review_decision")
+                fact_key = after.get("fact_key")
                 expected_after = dict(before)
                 if (
                     "review_decision" in before
+                    or not isinstance(decision, str)
                     or decision not in _TERMINAL_REVIEW_DECISIONS
+                    or not isinstance(fact_key, str)
+                    or not fact_key
                 ):
                     raise ValidationError(
                         "company research historical basis recovery evidence is invalid"
@@ -209,7 +219,7 @@ class CompanyResearchHistoricalBasisRecovery:
                         "company research historical basis recovery evidence is invalid"
                     )
                 changes.append(
-                    (index, str(after.get("fact_key")), str(decision), expected_after)
+                    (index, fact_key, decision, expected_after)
                 )
             if len(changes) != 1:
                 raise ValidationError(
@@ -241,7 +251,10 @@ class CompanyResearchHistoricalBasisRecovery:
             != len(expected.evidence_index_payload.get("facts", ()))
             or any(
                 not isinstance(fact, Mapping)
+                or not isinstance(fact.get("review_decision"), str)
                 or fact.get("review_decision") not in _TERMINAL_REVIEW_DECISIONS
+                or not isinstance(fact.get("fact_key"), str)
+                or not fact.get("fact_key")
                 for fact in head_facts
             )
         ):
@@ -293,7 +306,8 @@ class CompanyResearchHistoricalBasisRecovery:
                 "company research historical basis recovery draft is incomplete"
             )
         if (
-            state.company is None
+            state.project is None
+            or state.company is None
             or state.mandate is None
             or state.scope is None
             or state.agenda is None
@@ -319,7 +333,8 @@ class CompanyResearchHistoricalBasisRecovery:
                 strategy_version=state.preparation.strategy_version,
             )
             authenticate_company_research_foundation(
-                project_id=state.preparation.project_id,
+                project=state.project,
+                preparation_created_at=state.preparation.created_at,
                 contract=foundation,
                 mandate=state.mandate,
                 scope=state.scope,
