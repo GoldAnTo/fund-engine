@@ -1,8 +1,11 @@
+import json
 import os
 import shutil
 import stat
 import subprocess
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).parents[2]
@@ -37,7 +40,7 @@ def test_runtime_stops_existing_writers_before_schema_migration() -> None:
 
     stop = start.index(
         "compose stop api research-worker acquisition-worker "
-        "company-research-worker scheduler frontend"
+        "company-research-worker frontend"
     )
     launch = start.index("compose up -d --no-build")
     assert stop < launch
@@ -46,6 +49,44 @@ def test_runtime_stops_existing_writers_before_schema_migration() -> None:
     assert compose.index("alembic upgrade head") < compose.index(
         "python -m app.scripts.verify_company_research_schema"
     )
+
+
+def test_rendered_compose_services_match_the_one_click_stop_command() -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("docker compose is not installed")
+    rendered = subprocess.run(
+        [
+            docker,
+            "compose",
+            "--env-file",
+            str(ROOT / ".env.one-click.example"),
+            "-f",
+            str(ROOT / "docker-compose.one-click.yml"),
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    services = json.loads(rendered.stdout)["services"]
+    assert "scheduler" not in services
+    assert {
+        "api",
+        "research-worker",
+        "acquisition-worker",
+        "company-research-worker",
+        "frontend",
+    }.issubset(services)
+    migrate_command = services["migrate"]["command"]
+    if isinstance(migrate_command, list):
+        migrate_command = " ".join(migrate_command)
+    assert "alembic upgrade head" in migrate_command
+    assert "python -m app.scripts.verify_company_research_schema" in migrate_command
 
 
 def test_rollback_restarts_only_legacy_application_containers() -> None:
@@ -98,7 +139,7 @@ case "$1" in
     [[ "$*" == *" config --format json"* ]] && {{ printf '%s' '{{"name":"test-project","volumes":{{"fund-engine-one-click-data":{{"name":"test-db"}}}}}}'; exit 0; }}
     [[ "$*" == *" config -q"* || "$*" == *" build"* ]] && exit 0
     [[ "$*" == *" create postgres"* ]] && exit 0
-    [[ "$*" == *" stop api research-worker acquisition-worker company-research-worker scheduler frontend"* ]] && exit 0
+    [[ "$*" == *" stop api research-worker acquisition-worker company-research-worker frontend"* ]] && exit 0
     [[ "$*" == *" up -d --no-build"* ]] && exit 1
     [[ "$*" == *" down"* ]] && {{ [[ "${{FAIL_DOWN:-0}}" == 1 ]] && exit 39 || exit 0; }}
     ;;

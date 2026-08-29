@@ -4343,6 +4343,84 @@ def test_sqlite_two_ordinary_retries_queue_one_attempt_and_one_event(
     engine.dispose()
 
 
+@pytest.mark.parametrize(
+    ("cached_status", "durable_status", "expects_recovery"),
+    (
+        ("blocked", "recoverable_failure", False),
+        ("recoverable_failure", "blocked", True),
+    ),
+)
+def test_retry_selects_branch_from_fresh_locked_state(
+    tmp_path, cached_status: str, durable_status: str, expects_recovery: bool
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / f'fresh-retry-branch-{cached_status}.sqlite'}",
+        future=True,
+        connect_args={"check_same_thread": False, "timeout": 3},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True, expire_on_commit=False)
+    with sessions() as bootstrap:
+        initialized, _reviewed, _gaps, blocked_draft = (
+            _legacy_blocked_missing_basis(bootstrap)
+        )
+        project_id = initialized.project.id
+        preparation_id = initialized.preparation.id
+        job_id = initialized.job.id
+        if cached_status == "recoverable_failure":
+            initialized.preparation.status = "recoverable_failure"
+            initialized.preparation.last_error_code = "source_unavailable"
+        bootstrap.commit()
+
+    with sessions() as cached:
+        stale_preparation = cached.get(
+            CompanyResearchPreparation, preparation_id
+        )
+        assert stale_preparation is not None
+        assert stale_preparation.status == cached_status
+        with sessions() as mutator:
+            preparation = mutator.get(
+                CompanyResearchPreparation, preparation_id
+            )
+            job = mutator.get(Job, job_id)
+            assert preparation is not None and job is not None
+            preparation.status = durable_status
+            preparation.last_error_code = (
+                "validation_failed"
+                if durable_status == "blocked"
+                else "source_unavailable"
+            )
+            preparation.progress = 30
+            preparation.current_step = "model_bundle"
+            job.status = "failed"
+            job.step = "model_bundle"
+            job.error = preparation.last_error_code
+            mutator.commit()
+
+        result = CompanyResearchPreparationService(
+            cached, now=lambda: NOW + timedelta(seconds=1)
+        ).retry(project_id=project_id)
+        cached.commit()
+
+        assert result.preparation.status == "building_model"
+        assert result.preparation.current_step == "model_bundle"
+        assert result.preparation.progress == 25
+        assert result.preparation.attempt == 2
+        draft = WorkspaceDraftService(cached, now=lambda: NOW).read(project_id)
+        assert draft is not None and draft.id == blocked_draft.id
+        assert (draft.content.historical_basis_id is not None) is expects_recovery
+        event_types = [
+            event.event_type
+            for event in CompanyResearchRepository(cached).events(preparation_id)
+        ]
+        assert event_types.count("historical_basis_recovered") == (
+            1 if expects_recovery else 0
+        )
+        assert event_types.count("retry_queued") == 1
+    Base.metadata.drop_all(engine)
+    engine.dispose()
+
+
 @pytest.mark.parametrize("cached_state", ["future_then_due", "due_then_future"])
 def test_retry_deadline_is_decided_from_fresh_locked_state(
     tmp_path, cached_state: str

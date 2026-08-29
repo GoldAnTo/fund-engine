@@ -181,6 +181,15 @@ class CompanyResearchBasisRecoveryState:
     events: tuple[CompanyResearchEvent, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class CompanyResearchRetryState:
+    """Fresh project-first ownership boundary used to select a retry path."""
+
+    project: UnderwritingResearchProject
+    preparation: CompanyResearchPreparation
+    job: Job
+
+
 def reconcile_company_research_evidence_audit(
     *,
     preparation: CompanyResearchPreparation,
@@ -1323,24 +1332,25 @@ class CompanyResearchRepository:
         *,
         updated_at: datetime,
         expected_recovered_basis_id: UUID | None = None,
+        locked_state: CompanyResearchRetryState | None = None,
     ) -> CompanyResearchPreparation:
         """Return one recoverable preparation to its initial queued step."""
-        project_id = self._session.scalar(
-            select(CompanyResearchPreparation.project_id).where(
-                CompanyResearchPreparation.id == preparation_id
-            )
-        )
-        if project_id is None:
-            raise ValidationError("company research preparation not found")
-        self._reserve_sqlite_writer_before_ownership_read()
-        if self._project_for_update(project_id) is None:
-            raise ValidationError("company research preparation not found")
-        preparation = self._preparation_for_update(
-            preparation_id, populate_existing=True
-        )
-        if preparation is None or preparation.project_id != project_id:
-            raise ValidationError("company research preparation not found")
         when = self._stored_datetime(updated_at, "updated_at")
+        if locked_state is None:
+            project_id = self._session.scalar(
+                select(CompanyResearchPreparation.project_id).where(
+                    CompanyResearchPreparation.id == preparation_id
+                )
+            )
+            if project_id is None:
+                raise ValidationError("company research preparation not found")
+            locked_state = self.lock_retry_state(
+                project_id=project_id, retry_at=when
+            )
+        preparation = locked_state.preparation
+        job = locked_state.job
+        if preparation.id != preparation_id:
+            raise ValidationError("company research preparation not found")
         if preparation.next_attempt_at is not None and self._persisted_utc(
             preparation.next_attempt_at
         ) > when:
@@ -1356,7 +1366,6 @@ class CompanyResearchRepository:
             raise ValidationError(
                 "company research preparation is not eligible for basis recovery"
             )
-        job = self._locked_prepare_job(preparation, populate_existing=True)
         if expected_recovered_basis_id is not None:
             draft = self._workspace_draft_for_update(preparation.project_id)
             if (
@@ -1407,6 +1416,44 @@ class CompanyResearchRepository:
         except IntegrityError as exc:
             raise ConflictError("company research preparation retry conflicts") from exc
         return preparation
+
+    def lock_retry_state(
+        self, *, project_id: UUID, retry_at: datetime
+    ) -> CompanyResearchRetryState:
+        """Lock and freshly revalidate the branch-neutral retry owner."""
+        when = self._stored_datetime(retry_at, "retry_at")
+        self._reserve_sqlite_writer_before_ownership_read()
+        project = self._project_for_update(project_id)
+        if project is None:
+            raise ValidationError("company research project not found")
+        preparation_id = self._session.scalar(
+            select(CompanyResearchPreparation.id).where(
+                CompanyResearchPreparation.project_id == project_id
+            )
+        )
+        if preparation_id is None:
+            raise ValidationError("company research preparation not found")
+        preparation = self._preparation_for_update(
+            preparation_id, populate_existing=True
+        )
+        if preparation is None or preparation.project_id != project_id:
+            raise ValidationError("company research preparation not found")
+        job = self._locked_prepare_job(preparation, populate_existing=True)
+        if preparation.next_attempt_at is not None and self._persisted_utc(
+            preparation.next_attempt_at
+        ) > when:
+            raise ValidationError(
+                "company research preparation is not ready to retry"
+            )
+        self._validate_prepare_job_step(
+            preparation_step=preparation.current_step,
+            preparation_status=preparation.status,
+            job=job,
+            persisted=True,
+        )
+        return CompanyResearchRetryState(
+            project=project, preparation=preparation, job=job
+        )
 
     def complete_evidence_preparation(
         self,

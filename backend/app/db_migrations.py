@@ -33,6 +33,48 @@ _COMPANY_WORKER_INDEX_PREDICATE = (
 )
 
 
+def _normalize_company_worker_predicate(value: object) -> str:
+    """Normalize SQL syntax without changing case-sensitive literals."""
+    source = str(value)
+    normalized: list[str] = []
+    cursor = 0
+    while cursor < len(source):
+        if source[cursor] == "'":
+            end = cursor + 1
+            while end < len(source):
+                if source[end] != "'":
+                    end += 1
+                    continue
+                if end + 1 < len(source) and source[end + 1] == "'":
+                    end += 2
+                    continue
+                end += 1
+                break
+            if end > len(source) or source[end - 1] != "'":
+                return "invalid-unclosed-literal"
+            normalized.append(source[cursor:end])
+            cursor = end
+            continue
+        end = source.find("'", cursor)
+        if end < 0:
+            end = len(source)
+        syntax = (
+            source[cursor:end]
+            .lower()
+            .replace('"', "")
+            .replace("::text", "")
+        )
+        normalized.append(
+            "".join(
+                character
+                for character in syntax
+                if not character.isspace() and character not in "()"
+            )
+        )
+        cursor = end
+    return "".join(normalized)
+
+
 def upgrade_database_to_head(database_url: str) -> None:
     """Upgrade ``database_url`` using this repository's Alembic history."""
     backend_root = Path(__file__).parents[1]
@@ -213,17 +255,10 @@ def _require_company_worker_index(engine) -> None:
         raise UnmanagedDatabaseSchemaError(
             "database lacks the company research worker candidate index"
         )
-    normalized = " ".join(str(predicate).lower().split())
-    if not all(
-        fragment in normalized
-        for fragment in (
-            "kind",
-            "prepare_company_research",
-            "target_type",
-            "company_research_preparation",
-            "research_case_id",
-            "is null",
-        )
+    if _normalize_company_worker_predicate(
+        predicate
+    ) != _normalize_company_worker_predicate(
+        _COMPANY_WORKER_INDEX_PREDICATE
     ):
         raise UnmanagedDatabaseSchemaError(
             "database has an invalid company research worker candidate index"
@@ -254,5 +289,6 @@ def require_company_research_event_schema(database_url: str) -> None:
             )
         _require_company_event_relational_contract(inspector)
         _repair_company_event_schema(engine)
+        _require_company_worker_index(engine)
     finally:
         engine.dispose()

@@ -1478,7 +1478,7 @@ def test_runtime_repair_replaces_named_noop_company_event_triggers(
     backend = Path(__file__).parents[1]
     environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
     initial = subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "0069"],
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=backend,
         env=environment,
         text=True,
@@ -3133,6 +3133,109 @@ def test_unmanaged_adoption_installs_the_0070_company_worker_index(
             index["dialect_options"]["sqlite_where"]
         )
     engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing",
+        "extra_predicate",
+        "uppercase_literal",
+        "cast_suffix_inside_literal",
+        "uppercase_target_literal",
+    ),
+)
+def test_runtime_schema_gate_rejects_a_noncanonical_company_worker_index(
+    tmp_path, mutation: str
+) -> None:
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        require_company_research_event_schema,
+    )
+
+    database_path = tmp_path / f"invalid-worker-index-{mutation}.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "DROP INDEX ix_jobs_company_research_worker_candidates"
+        )
+        if mutation != "missing":
+            kind = {
+                "extra_predicate": "prepare_company_research",
+                "uppercase_literal": "PREPARE_COMPANY_RESEARCH",
+                "cast_suffix_inside_literal": "prepare_company_research::text",
+                "uppercase_target_literal": "prepare_company_research",
+            }[mutation]
+            target = (
+                "COMPANY_RESEARCH_PREPARATION"
+                if mutation == "uppercase_target_literal"
+                else "company_research_preparation"
+            )
+            suffix = " AND status = 'never'" if mutation == "extra_predicate" else ""
+            connection.exec_driver_sql(
+                "CREATE INDEX ix_jobs_company_research_worker_candidates "
+                "ON jobs (status, created_at, id) "
+                f"WHERE kind = '{kind}' "
+                f"AND target_type = '{target}' "
+                f"AND research_case_id IS NULL{suffix}"
+            )
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="company research worker candidate index",
+    ):
+        require_company_research_event_schema(environment["DATABASE_URL"])
+    gate = subprocess.run(
+        [sys.executable, "-m", "app.scripts.verify_company_research_schema"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert gate.returncode != 0
+    assert "company research worker candidate index" in gate.stderr
+    engine.dispose()
+
+
+def test_worker_index_predicate_normalization_preserves_literal_bytes() -> None:
+    from app.db_migrations import (
+        _COMPANY_WORKER_INDEX_PREDICATE,
+        _normalize_company_worker_predicate,
+    )
+
+    expected = _normalize_company_worker_predicate(
+        _COMPANY_WORKER_INDEX_PREDICATE
+    )
+    reflected_postgresql = (
+        "(((kind)::text = 'prepare_company_research'::text) AND "
+        "((target_type)::text = 'company_research_preparation'::text) AND "
+        "(research_case_id IS NULL))"
+    )
+    assert _normalize_company_worker_predicate(reflected_postgresql) == expected
+    for invalid in (
+        reflected_postgresql.replace(
+            "'prepare_company_research'", "'PREPARE_COMPANY_RESEARCH'"
+        ),
+        reflected_postgresql.replace(
+            "'prepare_company_research'", "'prepare_company_research::text'"
+        ),
+        reflected_postgresql.replace(
+            "'company_research_preparation'", "'COMPANY_RESEARCH_PREPARATION'"
+        ),
+    ):
+        assert _normalize_company_worker_predicate(invalid) != expected
 
 
 def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> None:

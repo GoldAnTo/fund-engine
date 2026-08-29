@@ -508,20 +508,27 @@ class CompanyResearchPreparationService:
 
     def retry(self, *, project_id: UUID) -> CompanyResearchProjectStatus:
         retry_at = self._now_utc()
+        project_id = CompanyResearchInitializer._uuid(project_id, "project_id")
         self._company_repository.reserve_retry_writer()
         with self._session.begin_nested():
-            current = self.status(project_id=project_id)
+            retry_state = self._company_repository.lock_retry_state(
+                project_id=project_id, retry_at=retry_at
+            )
+            project = self._products.project(project_id)
+            if project is None:
+                raise ValidationError("company research project not found")
             expected_recovered_basis_id = (
                 self._basis_recovery.recover(
-                    current.preparation.id, retry_at=retry_at
+                    retry_state.preparation.id, retry_at=retry_at
                 )
-                if current.preparation.status == "blocked"
+                if retry_state.preparation.status == "blocked"
                 else None
             )
             preparation = self._company_repository.requeue_recoverable_preparation(
-                current.preparation.id,
+                retry_state.preparation.id,
                 updated_at=retry_at,
                 expected_recovered_basis_id=expected_recovered_basis_id,
+                locked_state=retry_state,
             )
             self._company_repository.append_event(
                 preparation_id=preparation.id,
@@ -530,5 +537,5 @@ class CompanyResearchPreparationService:
                 created_at=retry_at,
             )
         return CompanyResearchProjectStatus(
-            project=current.project, preparation=preparation
+            project=project, preparation=preparation
         )
