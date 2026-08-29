@@ -3103,6 +3103,38 @@ def test_unmanaged_adoption_rejects_unknown_required_company_event_column(
     engine.dispose()
 
 
+def test_unmanaged_adoption_installs_the_0070_company_worker_index(
+    tmp_path,
+) -> None:
+    import app.models  # noqa: F401
+    from app.db_migrations import upgrade_database_to_head
+    from app.models.ledger import Base
+
+    database_url = f"sqlite:///{tmp_path / 'legacy-without-worker-index.db'}"
+    engine = sa.create_engine(database_url)
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "DROP INDEX ix_jobs_company_research_worker_candidates"
+        )
+
+    upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT version_num FROM alembic_version")
+        ) == "0070"
+        index = {
+            row["name"]: row
+            for row in sa.inspect(connection).get_indexes("jobs")
+        }["ix_jobs_company_research_worker_candidates"]
+        assert index["column_names"] == ["status", "created_at", "id"]
+        assert "research_case_id IS NULL" in str(
+            index["dialect_options"]["sqlite_where"]
+        )
+    engine.dispose()
+
+
 def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> None:
     database_path = tmp_path / "source-contracts-0051.db"
     backend = Path(__file__).parents[1]

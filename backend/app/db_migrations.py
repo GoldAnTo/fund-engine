@@ -10,7 +10,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 
 import app.models  # noqa: F401 - ensure the complete metadata is registered
 from app.company_research_event_schema import (
@@ -25,6 +25,12 @@ class UnmanagedDatabaseSchemaError(RuntimeError):
 
 
 _COMPANY_EVENTS = "uw_company_research_events"
+_COMPANY_WORKER_INDEX = "ix_jobs_company_research_worker_candidates"
+_COMPANY_WORKER_INDEX_COLUMNS = ("status", "created_at", "id")
+_COMPANY_WORKER_INDEX_PREDICATE = (
+    "kind = 'prepare_company_research' AND "
+    "target_type = 'company_research_preparation' AND research_case_id IS NULL"
+)
 
 
 def upgrade_database_to_head(database_url: str) -> None:
@@ -46,6 +52,7 @@ def upgrade_database_to_head(database_url: str) -> None:
             # Only a structurally complete one is adopted; unknown schemas are
             # rejected instead of being falsely marked current.
             _repair_company_event_schema(engine)
+            _install_company_worker_index(engine)
             command.stamp(config, "head")
         else:
             command.upgrade(config, "head")
@@ -53,6 +60,7 @@ def upgrade_database_to_head(database_url: str) -> None:
         # when Alembic was already at head.  This repairs later trigger loss or
         # a trigger with a trusted name but untrusted body.
         _repair_company_event_schema(engine)
+        _require_company_worker_index(engine)
     finally:
         engine.dispose()
 
@@ -166,6 +174,60 @@ def _repair_company_event_schema(engine) -> None:
             raise UnmanagedDatabaseSchemaError(
                 "cannot authenticate or repair company research event schema"
             ) from exc
+
+
+def _install_company_worker_index(engine) -> None:
+    """Install the 0070 worker index for ORM-created unmanaged databases."""
+    with engine.begin() as connection:
+        connection.execute(text(f"DROP INDEX IF EXISTS {_COMPANY_WORKER_INDEX}"))
+        connection.execute(
+            text(
+                f"CREATE INDEX {_COMPANY_WORKER_INDEX} ON jobs "
+                f"(status, created_at, id) WHERE {_COMPANY_WORKER_INDEX_PREDICATE}"
+            )
+        )
+
+
+def _require_company_worker_index(engine) -> None:
+    inspector = inspect(engine)
+    indexes = {
+        index["name"]: index for index in inspector.get_indexes("jobs")
+    }
+    index = indexes.get(_COMPANY_WORKER_INDEX)
+    if (
+        index is None
+        or tuple(index.get("column_names") or ())
+        != _COMPANY_WORKER_INDEX_COLUMNS
+        or index.get("unique", False)
+    ):
+        raise UnmanagedDatabaseSchemaError(
+            "database lacks the company research worker candidate index"
+        )
+    dialect_options = index.get("dialect_options") or {}
+    predicate = dialect_options.get(
+        "sqlite_where"
+        if engine.dialect.name == "sqlite"
+        else "postgresql_where"
+    )
+    if predicate is None:
+        raise UnmanagedDatabaseSchemaError(
+            "database lacks the company research worker candidate index"
+        )
+    normalized = " ".join(str(predicate).lower().split())
+    if not all(
+        fragment in normalized
+        for fragment in (
+            "kind",
+            "prepare_company_research",
+            "target_type",
+            "company_research_preparation",
+            "research_case_id",
+            "is null",
+        )
+    ):
+        raise UnmanagedDatabaseSchemaError(
+            "database has an invalid company research worker candidate index"
+        )
 
 
 def require_company_research_event_schema(database_url: str) -> None:
