@@ -3132,6 +3132,18 @@ def test_unmanaged_adoption_installs_the_0070_company_worker_index(
         assert "research_case_id IS NULL" in str(
             index["dialect_options"]["sqlite_where"]
         )
+        repaired_plan = " ".join(
+            row[-1]
+            for row in connection.exec_driver_sql(
+                "EXPLAIN QUERY PLAN SELECT id FROM jobs "
+                "WHERE kind = 'prepare_company_research' "
+                "AND target_type = 'company_research_preparation' "
+                "AND research_case_id IS NULL AND status = 'queued' "
+                "ORDER BY created_at, id LIMIT 100"
+            )
+        )
+        assert "ix_jobs_company_research_worker_candidates" in repaired_plan
+        assert "TEMP B-TREE" not in repaired_plan
     engine.dispose()
 
 
@@ -3143,6 +3155,7 @@ def test_unmanaged_adoption_installs_the_0070_company_worker_index(
         "uppercase_literal",
         "cast_suffix_inside_literal",
         "uppercase_target_literal",
+        "descending_created_at",
     ),
 )
 def test_runtime_schema_gate_rejects_a_noncanonical_company_worker_index(
@@ -3176,6 +3189,7 @@ def test_runtime_schema_gate_rejects_a_noncanonical_company_worker_index(
                 "uppercase_literal": "PREPARE_COMPANY_RESEARCH",
                 "cast_suffix_inside_literal": "prepare_company_research::text",
                 "uppercase_target_literal": "prepare_company_research",
+                "descending_created_at": "prepare_company_research",
             }[mutation]
             target = (
                 "COMPANY_RESEARCH_PREPARATION"
@@ -3183,9 +3197,14 @@ def test_runtime_schema_gate_rejects_a_noncanonical_company_worker_index(
                 else "company_research_preparation"
             )
             suffix = " AND status = 'never'" if mutation == "extra_predicate" else ""
+            columns = (
+                "status, created_at DESC, id"
+                if mutation == "descending_created_at"
+                else "status, created_at, id"
+            )
             connection.exec_driver_sql(
                 "CREATE INDEX ix_jobs_company_research_worker_candidates "
-                "ON jobs (status, created_at, id) "
+                f"ON jobs ({columns}) "
                 f"WHERE kind = '{kind}' "
                 f"AND target_type = '{target}' "
                 f"AND research_case_id IS NULL{suffix}"
@@ -3236,6 +3255,67 @@ def test_worker_index_predicate_normalization_preserves_literal_bytes() -> None:
         ),
     ):
         assert _normalize_company_worker_predicate(invalid) != expected
+
+
+@pytest.mark.parametrize(
+    "override",
+    (
+        {"indisvalid": False},
+        {"indisready": False},
+        {"access_method": "hash"},
+        {"key_columns": ["status", "id", "created_at"]},
+        {"descending": [False, True, False]},
+        {"nulls_first": [False, True, False]},
+    ),
+)
+def test_postgresql_worker_index_catalog_requires_canonical_btree_order(
+    override: dict[str, object],
+) -> None:
+    from app.db_migrations import (
+        _postgresql_company_worker_index_is_canonical,
+    )
+
+    state = {
+        "indisvalid": True,
+        "indisready": True,
+        "access_method": "btree",
+        "indnkeyatts": 3,
+        "key_columns": ["status", "created_at", "id"],
+        "descending": [False, False, False],
+        "nulls_first": [False, False, False],
+        **override,
+    }
+    assert not _postgresql_company_worker_index_is_canonical(state)
+
+
+def test_postgresql_worker_index_catalog_accepts_canonical_btree_order() -> None:
+    from app.db_migrations import (
+        _postgresql_company_worker_index_is_canonical,
+    )
+
+    assert _postgresql_company_worker_index_is_canonical(
+        {
+            "indisvalid": True,
+            "indisready": True,
+            "access_method": "btree",
+            "indnkeyatts": 3,
+            "key_columns": ["status", "created_at", "id"],
+            "descending": [False, False, False],
+            "nulls_first": [False, False, False],
+        }
+    )
+
+
+def test_postgresql_worker_index_catalog_uses_the_visible_jobs_relation() -> None:
+    from app.db_migrations import (
+        _POSTGRESQL_COMPANY_WORKER_INDEX_STATE_SQL,
+    )
+
+    normalized = " ".join(
+        _POSTGRESQL_COMPANY_WORKER_INDEX_STATE_SQL.lower().split()
+    )
+    assert "i.indrelid = to_regclass(:table_name)" in normalized
+    assert "current_schema()" not in normalized
 
 
 def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> None:

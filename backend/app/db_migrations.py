@@ -6,6 +6,7 @@ subsequent release has a well-defined upgrade path.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from alembic import command
@@ -30,6 +31,26 @@ _COMPANY_WORKER_INDEX_COLUMNS = ("status", "created_at", "id")
 _COMPANY_WORKER_INDEX_PREDICATE = (
     "kind = 'prepare_company_research' AND "
     "target_type = 'company_research_preparation' AND research_case_id IS NULL"
+)
+_POSTGRESQL_COMPANY_WORKER_INDEX_STATE_SQL = (
+    "SELECT i.indisvalid, i.indisready, am.amname AS access_method, "
+    "i.indnkeyatts, "
+    "ARRAY(SELECT a.attname FROM unnest(i.indkey) WITH ORDINALITY "
+    "AS key(attnum, ordinal) JOIN pg_attribute a "
+    "ON a.attrelid = table_rel.oid AND a.attnum = key.attnum "
+    "WHERE key.ordinal <= i.indnkeyatts ORDER BY key.ordinal) "
+    "AS key_columns, "
+    "ARRAY(SELECT (i.indoption[ordinal - 1] & 1) <> 0 "
+    "FROM generate_series(1, i.indnkeyatts) AS ordinal "
+    "ORDER BY ordinal) AS descending, "
+    "ARRAY(SELECT (i.indoption[ordinal - 1] & 2) <> 0 "
+    "FROM generate_series(1, i.indnkeyatts) AS ordinal "
+    "ORDER BY ordinal) AS nulls_first "
+    "FROM pg_index i JOIN pg_class index_rel "
+    "ON index_rel.oid = i.indexrelid JOIN pg_class table_rel "
+    "ON table_rel.oid = i.indrelid JOIN pg_am am "
+    "ON am.oid = index_rel.relam WHERE i.indrelid = to_regclass(:table_name) "
+    "AND index_rel.relname = :index_name"
 )
 
 
@@ -230,6 +251,64 @@ def _install_company_worker_index(engine) -> None:
         )
 
 
+def _postgresql_company_worker_index_is_canonical(
+    state: Mapping[str, object] | None,
+) -> bool:
+    return bool(
+        state is not None
+        and state.get("indisvalid") is True
+        and state.get("indisready") is True
+        and state.get("access_method") == "btree"
+        and state.get("indnkeyatts") == len(_COMPANY_WORKER_INDEX_COLUMNS)
+        and tuple(state.get("key_columns") or ())
+        == _COMPANY_WORKER_INDEX_COLUMNS
+        and tuple(state.get("descending") or ()) == (False, False, False)
+        and tuple(state.get("nulls_first") or ()) == (False, False, False)
+    )
+
+
+def _company_worker_index_physical_definition_is_canonical(engine) -> bool:
+    with engine.connect() as connection:
+        if connection.dialect.name == "sqlite":
+            index_row = next(
+                (
+                    row
+                    for row in connection.exec_driver_sql(
+                        "PRAGMA index_list('jobs')"
+                    )
+                    if row[1] == _COMPANY_WORKER_INDEX
+                ),
+                None,
+            )
+            if (
+                index_row is None
+                or index_row[2] != 0
+                or index_row[3] != "c"
+                or index_row[4] != 1
+            ):
+                return False
+            key_rows = tuple(
+                row
+                for row in connection.exec_driver_sql(
+                    f"PRAGMA index_xinfo('{_COMPANY_WORKER_INDEX}')"
+                )
+                if row[5] == 1
+            )
+            return tuple(
+                (row[2], row[3], row[4]) for row in key_rows
+            ) == tuple(
+                (column, 0, "BINARY")
+                for column in _COMPANY_WORKER_INDEX_COLUMNS
+            )
+        if connection.dialect.name != "postgresql":
+            return False
+        state = connection.execute(
+            text(_POSTGRESQL_COMPANY_WORKER_INDEX_STATE_SQL),
+            {"table_name": "jobs", "index_name": _COMPANY_WORKER_INDEX},
+        ).mappings().one_or_none()
+        return _postgresql_company_worker_index_is_canonical(state)
+
+
 def _require_company_worker_index(engine) -> None:
     inspector = inspect(engine)
     indexes = {
@@ -260,6 +339,10 @@ def _require_company_worker_index(engine) -> None:
     ) != _normalize_company_worker_predicate(
         _COMPANY_WORKER_INDEX_PREDICATE
     ):
+        raise UnmanagedDatabaseSchemaError(
+            "database has an invalid company research worker candidate index"
+        )
+    if not _company_worker_index_physical_definition_is_canonical(engine):
         raise UnmanagedDatabaseSchemaError(
             "database has an invalid company research worker candidate index"
         )
