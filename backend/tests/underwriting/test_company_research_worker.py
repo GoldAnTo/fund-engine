@@ -3448,6 +3448,91 @@ def test_worker_maintenance_keyset_pages_beyond_a_fully_locked_first_batch(
     assert "jobs.created_at >" in candidate_sql[1]
 
 
+@pytest.mark.parametrize("operation", ("recover_stale", "cancel_queued"))
+def test_worker_maintenance_caps_transitions_and_next_poll_progresses(
+    session, monkeypatch, operation: str
+) -> None:
+    from app.underwriting.services import company_research_preparation as module
+
+    initialized = []
+    for index in range(3):
+        if initialized:
+            initialized[-1].preparation.request_hash = f"{index + 20:064x}"
+            session.flush()
+        item = _initialized(
+            session, idempotency_key=f"maintenance-budget-{operation}-{index}"
+        )
+        if operation == "recover_stale":
+            item.preparation.status = "preparing_sources"
+            item.preparation.progress = 5
+            item.job.status = "running"
+            item.job.step = "evidence_index"
+            item.job.started_at = NOW - timedelta(hours=1)
+            item.job.claim_token = f"stale-budget-{index}"
+        else:
+            item.job.cancel_requested = True
+        initialized.append(item)
+        session.flush()
+    monkeypatch.setattr(module, "_WORKER_CANDIDATE_PAGE_SIZE", 2)
+    monkeypatch.setattr(module, "_WORKER_MAX_CANDIDATE_PAGES", 2)
+    monkeypatch.setattr(module, "_WORKER_MAX_MAINTENANCE_TRANSITIONS", 1)
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+
+    first = (
+        worker.recover_stale_claims(before=NOW)
+        if operation == "recover_stale"
+        else worker.cancel_queued_claims()
+    )
+    second = (
+        worker.recover_stale_claims(before=NOW)
+        if operation == "recover_stale"
+        else worker.cancel_queued_claims()
+    )
+
+    assert (first, second) == (1, 1)
+    terminal = "queued" if operation == "recover_stale" else "cancelled"
+    assert sum(item.job.status == terminal for item in initialized) == 2
+
+
+def test_worker_run_once_claims_after_bounded_maintenance(
+    session, monkeypatch
+) -> None:
+    from app.underwriting.services import company_research_preparation as module
+
+    initialized = []
+    for index in range(2):
+        if initialized:
+            initialized[-1].preparation.request_hash = f"{index + 30:064x}"
+            session.flush()
+        item = _initialized(
+            session, idempotency_key=f"run-once-maintenance-budget-{index}"
+        )
+        item.preparation.status = "preparing_sources"
+        item.preparation.progress = 5
+        item.job.status = "running"
+        item.job.step = "evidence_index"
+        item.job.started_at = NOW - timedelta(hours=1)
+        item.job.claim_token = f"run-once-stale-{index}"
+        initialized.append(item)
+        session.flush()
+    session.commit()
+    monkeypatch.setattr(module, "_WORKER_MAX_MAINTENANCE_TRANSITIONS", 1)
+    monkeypatch.setattr(run_company_research_worker, "_utcnow", lambda: NOW)
+    claims = []
+    monkeypatch.setattr(
+        CompanyResearchPreparationWorker,
+        "run_claim",
+        lambda _worker, claim: claims.append(claim),
+    )
+    sessions = sessionmaker(bind=session.get_bind(), future=True)
+
+    assert run_company_research_worker.run_once(
+        session_factory=sessions, recover_after_minutes=30
+    )
+
+    assert len(claims) == 1
+
+
 def test_historical_basis_recovery_rejects_a_wrong_gaps_fixture_hash(
     session,
 ) -> None:
@@ -4057,6 +4142,146 @@ def test_basis_recovery_savepoint_rolls_back_every_write_when_later_step_fails(
     assert tuple(
         (event.id, event.sequence, event.content_hash)
         for event in repository.events(initialized.preparation.id)
+    ) == event_snapshot
+
+
+def test_blocked_retry_rolls_back_recovery_and_queue_when_retry_event_fails(
+    session, monkeypatch
+) -> None:
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session
+    )
+    assert session.execute(
+        text("DELETE FROM uw_historical_bases WHERE id = :basis_id").bindparams(
+            bindparam(
+                "basis_id", type_=UnderwritingHistoricalBasis.__table__.c.id.type
+            )
+        ),
+        {"basis_id": initialized.basis.id},
+    ).rowcount == 1
+    session.flush()
+    repository = CompanyResearchRepository(session)
+    preparation = session.get(
+        CompanyResearchPreparation, initialized.preparation.id
+    )
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and job is not None
+    basis_count = session.scalar(
+        select(func.count()).select_from(UnderwritingHistoricalBasis)
+    )
+    event_snapshot = tuple(
+        (event.id, event.sequence, event.event_type, event.content_hash)
+        for event in repository.events(preparation.id)
+    )
+    preparation_snapshot = (
+        preparation.status,
+        preparation.current_step,
+        preparation.progress,
+        preparation.attempt,
+        preparation.last_error_code,
+    )
+    job_snapshot = (job.status, job.step, job.attempt, job.error)
+    service = CompanyResearchPreparationService(session, now=lambda: NOW)
+
+    def reject_retry_event(*_args, **kwargs):
+        assert kwargs["event_type"] == "retry_queued"
+        raise ValidationError("forced retry event failure")
+
+    monkeypatch.setattr(
+        service._company_repository, "append_event", reject_retry_event
+    )
+
+    with pytest.raises(ValidationError, match="forced retry event failure"):
+        service.retry(project_id=initialized.project.id)
+    session.commit()
+    session.expire_all()
+
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
+        initialized.project.id
+    )
+    assert draft is not None
+    assert draft.id == blocked_draft.id
+    assert draft.lock_version == blocked_draft.lock_version
+    assert draft.content == blocked_draft.content
+    assert session.scalar(
+        select(func.count()).select_from(UnderwritingHistoricalBasis)
+    ) == basis_count
+    preparation = session.get(CompanyResearchPreparation, preparation.id)
+    job = session.get(Job, job.id)
+    assert preparation is not None and job is not None
+    assert (
+        preparation.status,
+        preparation.current_step,
+        preparation.progress,
+        preparation.attempt,
+        preparation.last_error_code,
+    ) == preparation_snapshot
+    assert (job.status, job.step, job.attempt, job.error) == job_snapshot
+    assert repository.current_artifact(initialized.project.id, "evidence_index").id == reviewed.id
+    assert repository.current_artifact(initialized.project.id, "research_gaps").id == gaps.id
+    assert tuple(
+        (event.id, event.sequence, event.event_type, event.content_hash)
+        for event in repository.events(preparation.id)
+    ) == event_snapshot
+
+
+def test_ordinary_retry_rolls_back_queue_when_retry_event_fails(
+    session, monkeypatch
+) -> None:
+    initialized = _initialized(session, idempotency_key="ordinary-retry-atomic")
+    initialized.preparation.status = "recoverable_failure"
+    initialized.preparation.last_error_code = "source_unavailable"
+    initialized.preparation.next_attempt_at = NOW
+    initialized.job.status = "failed"
+    initialized.job.error = "source_unavailable"
+    session.flush()
+    repository = CompanyResearchRepository(session)
+    event_snapshot = tuple(
+        (event.id, event.sequence, event.event_type, event.content_hash)
+        for event in repository.events(initialized.preparation.id)
+    )
+    preparation_snapshot = (
+        initialized.preparation.status,
+        initialized.preparation.progress,
+        initialized.preparation.attempt,
+        initialized.preparation.last_error_code,
+        repository._persisted_utc(initialized.preparation.next_attempt_at),
+    )
+    job_snapshot = (
+        initialized.job.status,
+        initialized.job.attempt,
+        initialized.job.error,
+    )
+    service = CompanyResearchPreparationService(session, now=lambda: NOW)
+    monkeypatch.setattr(
+        service._company_repository,
+        "append_event",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValidationError("forced retry event failure")
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="forced retry event failure"):
+        service.retry(project_id=initialized.project.id)
+    session.commit()
+    session.expire_all()
+
+    preparation = session.get(
+        CompanyResearchPreparation, initialized.preparation.id
+    )
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and job is not None
+    assert (
+        preparation.status,
+        preparation.progress,
+        preparation.attempt,
+        preparation.last_error_code,
+        repository._persisted_utc(preparation.next_attempt_at),
+    ) == preparation_snapshot
+    assert (job.status, job.attempt, job.error) == job_snapshot
+    assert tuple(
+        (event.id, event.sequence, event.event_type, event.content_hash)
+        for event in repository.events(preparation.id)
     ) == event_snapshot
 
 

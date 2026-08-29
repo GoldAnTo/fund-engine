@@ -483,6 +483,16 @@ class CompanyResearchRepository:
         if not dbapi_connection.in_transaction:
             connection.exec_driver_sql("BEGIN IMMEDIATE")
 
+    def reserve_retry_writer(self) -> None:
+        """Reserve SQLite retry ownership before an outer atomic savepoint.
+
+        PostgreSQL ownership remains row-lock based.  SQLite must acquire its
+        sole writer before ``Session.begin_nested()`` opens a deferred physical
+        transaction, otherwise two retries can both read and then deadlock on
+        their first write.
+        """
+        self._reserve_sqlite_writer_before_ownership_read()
+
     def _reserve_sqlite_writer_before_artifact_head_read(self) -> None:
         """Reserve SQLite's writer before calculating an artifact successor."""
         try:

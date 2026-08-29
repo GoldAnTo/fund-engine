@@ -67,6 +67,8 @@ COMPANY_RESEARCH_STAGES = (
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = (30, 120, 600)
 _WORKER_CANDIDATE_PAGE_SIZE = 100
+_WORKER_MAX_CANDIDATE_PAGES = 10
+_WORKER_MAX_MAINTENANCE_TRANSITIONS = 100
 _SAFE_PROVIDER_ERROR = "provider_unavailable"
 _SAFE_STALE_ERROR = "stale_output_discarded"
 _VALIDATION_MESSAGE_LIMIT = 512
@@ -138,10 +140,10 @@ class CompanyResearchPreparationWorker:
             raise ValidationError("clock must be a timezone-aware datetime")
         return value.astimezone(UTC)
 
-    def _candidate_pages(self, statement):
+    def _candidate_pages(self, statement, *, max_pages: int):
         cursor_created_at: datetime | None = None
         cursor_job_id: UUID | None = None
-        while True:
+        for _page_number in range(max_pages):
             page_statement = statement
             if cursor_created_at is not None and cursor_job_id is not None:
                 page_statement = page_statement.where(
@@ -204,7 +206,9 @@ class CompanyResearchPreparationWorker:
                 | (CompanyResearchPreparation.next_attempt_at <= now),
             )
         )
-        for candidates in self._candidate_pages(candidate_statement):
+        for candidates in self._candidate_pages(
+            candidate_statement, max_pages=_WORKER_MAX_CANDIDATE_PAGES
+        ):
             for job_id, preparation_id in candidates:
                 locked = self._repository.lock_worker_claim_state(
                     preparation_id=preparation_id,
@@ -302,7 +306,9 @@ class CompanyResearchPreparationWorker:
             )
         )
         recovered = 0
-        for candidates in self._candidate_pages(candidate_statement):
+        for candidates in self._candidate_pages(
+            candidate_statement, max_pages=_WORKER_MAX_CANDIDATE_PAGES
+        ):
             for job_id, preparation_id in candidates:
                 locked = self._repository.lock_worker_claim_state(
                     preparation_id=preparation_id,
@@ -365,6 +371,9 @@ class CompanyResearchPreparationWorker:
                     created_at=now,
                 )
                 recovered += 1
+                if recovered >= _WORKER_MAX_MAINTENANCE_TRANSITIONS:
+                    self._session.flush()
+                    return recovered
         self._session.flush()
         return recovered
 
@@ -401,7 +410,9 @@ class CompanyResearchPreparationWorker:
             )
         )
         cancelled = 0
-        for candidates in self._candidate_pages(candidate_statement):
+        for candidates in self._candidate_pages(
+            candidate_statement, max_pages=_WORKER_MAX_CANDIDATE_PAGES
+        ):
             for job_id, preparation_id in candidates:
                 locked = self._repository.lock_worker_claim_state(
                     preparation_id=preparation_id,
@@ -446,6 +457,9 @@ class CompanyResearchPreparationWorker:
                     created_at=now,
                 )
                 cancelled += 1
+                if cancelled >= _WORKER_MAX_MAINTENANCE_TRANSITIONS:
+                    self._session.flush()
+                    return cancelled
         self._session.flush()
         return cancelled
 

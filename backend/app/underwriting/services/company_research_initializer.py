@@ -508,25 +508,27 @@ class CompanyResearchPreparationService:
 
     def retry(self, *, project_id: UUID) -> CompanyResearchProjectStatus:
         retry_at = self._now_utc()
-        current = self.status(project_id=project_id)
-        expected_recovered_basis_id = (
-            self._basis_recovery.recover(
-                current.preparation.id, retry_at=retry_at
+        self._company_repository.reserve_retry_writer()
+        with self._session.begin_nested():
+            current = self.status(project_id=project_id)
+            expected_recovered_basis_id = (
+                self._basis_recovery.recover(
+                    current.preparation.id, retry_at=retry_at
+                )
+                if current.preparation.status == "blocked"
+                else None
             )
-            if current.preparation.status == "blocked"
-            else None
-        )
-        preparation = self._company_repository.requeue_recoverable_preparation(
-            current.preparation.id,
-            updated_at=retry_at,
-            expected_recovered_basis_id=expected_recovered_basis_id,
-        )
-        self._company_repository.append_event(
-            preparation_id=preparation.id,
-            event_type="retry_queued",
-            payload={"attempt": preparation.attempt},
-            created_at=retry_at,
-        )
+            preparation = self._company_repository.requeue_recoverable_preparation(
+                current.preparation.id,
+                updated_at=retry_at,
+                expected_recovered_basis_id=expected_recovered_basis_id,
+            )
+            self._company_repository.append_event(
+                preparation_id=preparation.id,
+                event_type="retry_queued",
+                payload={"attempt": preparation.attempt},
+                created_at=retry_at,
+            )
         return CompanyResearchProjectStatus(
             project=current.project, preparation=preparation
         )
