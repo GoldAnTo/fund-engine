@@ -378,7 +378,9 @@ class EvidenceGapContract:
             )
         calculated_hash = _canonical_hash(self.canonical_payload())
         if type(self.content_hash) is not str:
-            raise CompanyResearchValidationError("evidence gap contract content_hash must be a string")
+            raise CompanyResearchValidationError(
+                "evidence gap contract content_hash must be a string"
+            )
         if self.content_hash and _INPUT_HASH.fullmatch(self.content_hash) is None:
             raise CompanyResearchValidationError(
                 "evidence gap contract content_hash must be a lowercase SHA-256 hex digest"
@@ -623,7 +625,9 @@ def _artifact_decimal(value: object, field_name: str) -> Decimal:
     return _require_finite_decimal(value, field_name)
 
 
-def _artifact_refs(value: object, field_name: str) -> tuple["SourceLineageReference", ...]:
+def _artifact_refs(
+    value: object, field_name: str
+) -> tuple["SourceLineageReference", ...]:
     if not isinstance(value, tuple) or not value:
         raise CompanyResearchValidationError(f"{field_name} must be a non-empty tuple")
     if not all(type(item) is SourceLineageReference for item in value):
@@ -631,7 +635,9 @@ def _artifact_refs(value: object, field_name: str) -> tuple["SourceLineageRefere
             f"{field_name} must contain SourceLineageReference values"
         )
     if len(set(value)) != len(value):
-        raise CompanyResearchValidationError(f"{field_name} must not contain duplicates")
+        raise CompanyResearchValidationError(
+            f"{field_name} must not contain duplicates"
+        )
     return value
 
 
@@ -645,7 +651,9 @@ def _artifact_optional_refs(
             f"{field_name} must contain SourceLineageReference values"
         )
     if len(set(value)) != len(value):
-        raise CompanyResearchValidationError(f"{field_name} must not contain duplicates")
+        raise CompanyResearchValidationError(
+            f"{field_name} must not contain duplicates"
+        )
     return value
 
 
@@ -664,8 +672,13 @@ class SourceLineageReference:
         _artifact_text(self.source_role, "source.source_role")
         _artifact_text(self.source_url, "source.source_url")
         _artifact_text(self.source_locator, "source.source_locator")
-        if not isinstance(self.raw_hash, str) or _SHA256.fullmatch(self.raw_hash) is None:
-            raise CompanyResearchValidationError("source.raw_hash must be a SHA-256 hex digest")
+        if (
+            not isinstance(self.raw_hash, str)
+            or _SHA256.fullmatch(self.raw_hash) is None
+        ):
+            raise CompanyResearchValidationError(
+                "source.raw_hash must be a SHA-256 hex digest"
+            )
 
     def canonical_payload(self) -> dict[str, str]:
         return {
@@ -789,10 +802,14 @@ class ClassifiedBusinessEvidenceArtifact:
 
     def __post_init__(self) -> None:
         if type(self.fact_ref) is not SourceLineageReference:
-            raise CompanyResearchValidationError("classified evidence requires a fact ref")
+            raise CompanyResearchValidationError(
+                "classified evidence requires a fact ref"
+            )
         _require_key(self.metric_key, "classified evidence metric_key", _GAP_CODE)
         if self.category not in {"revenue", "cost", "capital"}:
-            raise CompanyResearchValidationError("classified evidence category is invalid")
+            raise CompanyResearchValidationError(
+                "classified evidence category is invalid"
+            )
         _artifact_decimal(self.value, "classified evidence value")
         for name in ("currency", "unit", "period_start", "period_end"):
             _artifact_text(getattr(self, name), f"classified evidence {name}")
@@ -812,17 +829,25 @@ class BusinessModuleArtifact:
         _require_key(self.module_key, "business_map.module_key", _MODULE_KEY)
         for name in ("revenue_sources", "cost_structure", "capital_needs"):
             values = getattr(self, name)
-            if not isinstance(values, tuple) or not values or not all(
-                isinstance(item, str) and item.strip() == item and item for item in values
+            if (
+                not isinstance(values, tuple)
+                or not values
+                or not all(
+                    isinstance(item, str) and item.strip() == item and item
+                    for item in values
+                )
             ):
                 raise CompanyResearchValidationError(
                     f"business_map.{name} must contain non-empty canonical text"
                 )
         _artifact_optional_refs(self.fact_refs, "business_map.fact_refs")
         if not isinstance(self.gap_refs, tuple) or not all(
-            isinstance(item, str) and _GAP_CODE.fullmatch(item) for item in self.gap_refs
+            isinstance(item, str) and _GAP_CODE.fullmatch(item)
+            for item in self.gap_refs
         ):
-            raise CompanyResearchValidationError("business_map.gap_refs must contain gap keys")
+            raise CompanyResearchValidationError(
+                "business_map.gap_refs must contain gap keys"
+            )
         if not self.fact_refs and not self.gap_refs:
             raise CompanyResearchValidationError(
                 "business module requires confirmed fact refs or explicit gap refs"
@@ -831,14 +856,19 @@ class BusinessModuleArtifact:
             type(item) is ClassifiedBusinessEvidenceArtifact
             for item in self.classified_evidence
         ):
-            raise CompanyResearchValidationError("business module classified evidence must be typed")
-        if any(item.fact_ref not in self.fact_refs for item in self.classified_evidence):
-            raise CompanyResearchValidationError("classified evidence must use module fact refs")
-        classified_refs = tuple(item.fact_ref for item in self.classified_evidence)
-        if (
-            len(set(classified_refs)) != len(classified_refs)
-            or set(classified_refs) != set(self.fact_refs)
+            raise CompanyResearchValidationError(
+                "business module classified evidence must be typed"
+            )
+        if any(
+            item.fact_ref not in self.fact_refs for item in self.classified_evidence
         ):
+            raise CompanyResearchValidationError(
+                "classified evidence must use module fact refs"
+            )
+        classified_refs = tuple(item.fact_ref for item in self.classified_evidence)
+        if len(set(classified_refs)) != len(classified_refs) or set(
+            classified_refs
+        ) != set(self.fact_refs):
             raise CompanyResearchValidationError(
                 "business module fact refs must be classified exactly once"
             )
@@ -849,12 +879,18 @@ class BusinessMapArtifact:
     modules: tuple[BusinessModuleArtifact, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.modules, tuple) or not self.modules or not all(
-            type(item) is BusinessModuleArtifact for item in self.modules
+        if (
+            not isinstance(self.modules, tuple)
+            or not self.modules
+            or not all(type(item) is BusinessModuleArtifact for item in self.modules)
         ):
-            raise CompanyResearchValidationError("business_map.modules must be a non-empty typed tuple")
+            raise CompanyResearchValidationError(
+                "business_map.modules must be a non-empty typed tuple"
+            )
         if len({item.module_key for item in self.modules}) != len(self.modules):
-            raise CompanyResearchValidationError("business_map.module_key values must be unique")
+            raise CompanyResearchValidationError(
+                "business_map.module_key values must be unique"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -878,20 +914,38 @@ class DriverMetricArtifact:
         _artifact_optional_refs(self.fact_refs, "driver.fact_refs")
         _artifact_optional_refs(self.assumption_refs, "driver.assumption_refs")
         if self.equation not in _DRIVER_EQUATIONS:
-            raise CompanyResearchValidationError("driver.equation must be a closed equation identifier")
+            raise CompanyResearchValidationError(
+                "driver.equation must be a closed equation identifier"
+            )
         _require_key(self.output_metric, "driver.output_metric", _GAP_CODE)
         if not isinstance(self.values, tuple) or not self.values:
             raise CompanyResearchValidationError("driver values must be non-empty")
         for value in self.values:
             _artifact_decimal(value, "driver value")
         if type(self.input_state) is not ModelInputState:
-            raise CompanyResearchValidationError("driver.input_state must be controlled")
+            raise CompanyResearchValidationError(
+                "driver.input_state must be controlled"
+            )
         if self.input_state is ModelInputState.REPORTED:
-            if not self.fact_refs or self.assumption_refs or self.assumption_key is not None or self.equation_id is not None:
-                raise CompanyResearchValidationError("reported driver requires fact refs only")
+            if (
+                not self.fact_refs
+                or self.assumption_refs
+                or self.assumption_key is not None
+                or self.equation_id is not None
+            ):
+                raise CompanyResearchValidationError(
+                    "reported driver requires fact refs only"
+                )
         elif self.input_state is ModelInputState.DERIVED:
-            if not self.fact_refs or self.assumption_refs or self.assumption_key is not None or self.equation_id not in _DRIVER_EQUATIONS:
-                raise CompanyResearchValidationError("derived driver requires fact refs and a closed equation_id")
+            if (
+                not self.fact_refs
+                or self.assumption_refs
+                or self.assumption_key is not None
+                or self.equation_id not in _DRIVER_EQUATIONS
+            ):
+                raise CompanyResearchValidationError(
+                    "derived driver requires fact refs and a closed equation_id"
+                )
         elif (
             self.fact_refs
             or not self.assumption_refs
@@ -913,12 +967,18 @@ class DriverMapArtifact:
     drivers: tuple[DriverMetricArtifact, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.drivers, tuple) or not self.drivers or not all(
-            type(item) is DriverMetricArtifact for item in self.drivers
+        if (
+            not isinstance(self.drivers, tuple)
+            or not self.drivers
+            or not all(type(item) is DriverMetricArtifact for item in self.drivers)
         ):
-            raise CompanyResearchValidationError("driver_map.drivers must be a non-empty typed tuple")
+            raise CompanyResearchValidationError(
+                "driver_map.drivers must be a non-empty typed tuple"
+            )
         if len({item.driver_key for item in self.drivers}) != len(self.drivers):
-            raise CompanyResearchValidationError("driver_map.driver_key values must be unique")
+            raise CompanyResearchValidationError(
+                "driver_map.driver_key values must be unique"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -937,14 +997,23 @@ class FinancialBridgeRow:
 
     def __post_init__(self) -> None:
         if type(self.fiscal_year) is not int or self.fiscal_year < 1900:
-            raise CompanyResearchValidationError("financial_bridge.fiscal_year must be a year")
+            raise CompanyResearchValidationError(
+                "financial_bridge.fiscal_year must be a year"
+            )
         for name in (
-            "revenue", "operating_income", "cash_tax_rate", "depreciation",
-            "capex", "working_capital_change", "fcff",
+            "revenue",
+            "operating_income",
+            "cash_tax_rate",
+            "depreciation",
+            "capex",
+            "working_capital_change",
+            "fcff",
         ):
             _artifact_decimal(getattr(self, name), f"financial_bridge.{name}")
         if self.cash_tax_rate < Decimal("0") or self.cash_tax_rate > Decimal("1"):
-            raise CompanyResearchValidationError("financial_bridge.cash_tax_rate must be between zero and one")
+            raise CompanyResearchValidationError(
+                "financial_bridge.cash_tax_rate must be between zero and one"
+            )
         _artifact_optional_refs(self.fact_refs, "financial_bridge.fact_refs")
         _artifact_optional_refs(
             self.assumption_refs, "financial_bridge.assumption_refs"
@@ -971,9 +1040,10 @@ class FinancialBridgeRow:
             for item in self.input_states
         )
         assumption_state_present = ModelInputState.ASSUMPTION in self.input_states
-        if bool(self.fact_refs) != factual_state_present or bool(
-            self.assumption_refs
-        ) != assumption_state_present:
+        if (
+            bool(self.fact_refs) != factual_state_present
+            or bool(self.assumption_refs) != assumption_state_present
+        ):
             raise CompanyResearchValidationError(
                 "financial bridge provenance must match each input state"
             )
@@ -993,13 +1063,19 @@ class FinancialBridgeArtifact:
     rows: tuple[FinancialBridgeRow, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.rows, tuple) or len(self.rows) != 5 or not all(
-            type(item) is FinancialBridgeRow for item in self.rows
+        if (
+            not isinstance(self.rows, tuple)
+            or len(self.rows) != 5
+            or not all(type(item) is FinancialBridgeRow for item in self.rows)
         ):
-            raise CompanyResearchValidationError("financial_bridge.rows must contain exactly five typed rows")
+            raise CompanyResearchValidationError(
+                "financial_bridge.rows must contain exactly five typed rows"
+            )
         years = tuple(item.fiscal_year for item in self.rows)
         if years != tuple(range(years[0], years[0] + 5)):
-            raise CompanyResearchValidationError("financial_bridge forecast years must be consecutive")
+            raise CompanyResearchValidationError(
+                "financial_bridge forecast years must be consecutive"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1015,7 +1091,9 @@ class ScenarioDriverOverride:
         _require_key(self.driver_key, "scenario.driver_key", _GAP_CODE)
         _artifact_decimal(self.value, "scenario.value")
         if self.state is not None and type(self.state) is not ModelInputState:
-            raise CompanyResearchValidationError("scenario override state must be controlled")
+            raise CompanyResearchValidationError(
+                "scenario override state must be controlled"
+            )
         for value, field_name in (
             (self.assumption_key, "assumption_key"),
             (self.rationale, "rationale"),
@@ -1033,14 +1111,26 @@ class ScenarioArtifact:
 
     def __post_init__(self) -> None:
         if self.scenario_id not in {"base", "bull", "bear"}:
-            raise CompanyResearchValidationError("scenario.scenario_id must be base, bull, or bear")
+            raise CompanyResearchValidationError(
+                "scenario.scenario_id must be base, bull, or bear"
+            )
         _artifact_text(self.mechanism_id, "scenario.mechanism_id")
-        if not isinstance(self.driver_overrides, tuple) or not self.driver_overrides or not all(
-            type(item) is ScenarioDriverOverride for item in self.driver_overrides
+        if (
+            not isinstance(self.driver_overrides, tuple)
+            or not self.driver_overrides
+            or not all(
+                type(item) is ScenarioDriverOverride for item in self.driver_overrides
+            )
         ):
-            raise CompanyResearchValidationError("scenario.driver_overrides must be a non-empty typed tuple")
-        if len({item.driver_key for item in self.driver_overrides}) != len(self.driver_overrides):
-            raise CompanyResearchValidationError("scenario.driver_overrides must have unique driver keys")
+            raise CompanyResearchValidationError(
+                "scenario.driver_overrides must be a non-empty typed tuple"
+            )
+        if len({item.driver_key for item in self.driver_overrides}) != len(
+            self.driver_overrides
+        ):
+            raise CompanyResearchValidationError(
+                "scenario.driver_overrides must have unique driver keys"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1048,12 +1138,18 @@ class ScenarioSetArtifact:
     scenarios: tuple[ScenarioArtifact, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.scenarios, tuple) or len(self.scenarios) != 3 or not all(
-            type(item) is ScenarioArtifact for item in self.scenarios
+        if (
+            not isinstance(self.scenarios, tuple)
+            or len(self.scenarios) != 3
+            or not all(type(item) is ScenarioArtifact for item in self.scenarios)
         ):
-            raise CompanyResearchValidationError("scenario_set.scenarios must contain three typed scenarios")
+            raise CompanyResearchValidationError(
+                "scenario_set.scenarios must contain three typed scenarios"
+            )
         if {item.scenario_id for item in self.scenarios} != {"base", "bull", "bear"}:
-            raise CompanyResearchValidationError("scenario_set must contain base, bull, and bear exactly once")
+            raise CompanyResearchValidationError(
+                "scenario_set must contain base, bull, and bear exactly once"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1082,15 +1178,33 @@ class ScenarioFinancialDriverForecast:
         for value in self.values:
             _artifact_decimal(value, "scenario financial forecast value")
         _artifact_optional_refs(self.fact_refs, "scenario financial forecast fact_refs")
-        _artifact_optional_refs(self.assumption_refs, "scenario financial forecast assumption_refs")
+        _artifact_optional_refs(
+            self.assumption_refs, "scenario financial forecast assumption_refs"
+        )
         if type(self.input_state) is not ModelInputState:
-            raise CompanyResearchValidationError("scenario financial forecast input_state must be controlled")
+            raise CompanyResearchValidationError(
+                "scenario financial forecast input_state must be controlled"
+            )
         if self.input_state is ModelInputState.REPORTED:
-            if not self.fact_refs or self.assumption_refs or self.assumption_key is not None or self.equation_id is not None:
-                raise CompanyResearchValidationError("reported forecast requires fact refs only")
+            if (
+                not self.fact_refs
+                or self.assumption_refs
+                or self.assumption_key is not None
+                or self.equation_id is not None
+            ):
+                raise CompanyResearchValidationError(
+                    "reported forecast requires fact refs only"
+                )
         elif self.input_state is ModelInputState.DERIVED:
-            if not self.fact_refs or self.assumption_refs or self.assumption_key is not None or self.equation_id not in _DRIVER_EQUATIONS:
-                raise CompanyResearchValidationError("derived forecast requires fact refs and a closed equation_id")
+            if (
+                not self.fact_refs
+                or self.assumption_refs
+                or self.assumption_key is not None
+                or self.equation_id not in _DRIVER_EQUATIONS
+            ):
+                raise CompanyResearchValidationError(
+                    "derived forecast requires fact refs and a closed equation_id"
+                )
         elif (
             self.fact_refs
             or not self.assumption_refs
@@ -1115,7 +1229,9 @@ class ScenarioFinancialBridge:
 
     def __post_init__(self) -> None:
         if self.scenario_id not in {"base", "bull", "bear"}:
-            raise CompanyResearchValidationError("scenario financial bridge must be named")
+            raise CompanyResearchValidationError(
+                "scenario financial bridge must be named"
+            )
         if type(self.first_fiscal_year) is not int or self.first_fiscal_year < 1900:
             raise CompanyResearchValidationError(
                 "scenario financial bridge first_fiscal_year must be a year"
@@ -1152,14 +1268,25 @@ class CapitalStructureReference:
     policy_excluded_adjustments: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        for name in ("cash", "debt", "minority_interest", "investments", "pension_liabilities", "other_adjustments", "basic_shares", "diluted_shares"):
+        for name in (
+            "cash",
+            "debt",
+            "minority_interest",
+            "investments",
+            "pension_liabilities",
+            "other_adjustments",
+            "basic_shares",
+            "diluted_shares",
+        ):
             _artifact_decimal(getattr(self, name), f"capital_structure.{name}")
         if self.basic_shares <= Decimal("0") or self.diluted_shares < self.basic_shares:
             raise CompanyResearchValidationError(
                 "capital_structure requires positive basic_shares and diluted_shares >= basic_shares"
             )
         if type(self.source_ref) is not SourceLineageReference:
-            raise CompanyResearchValidationError("capital_structure.source_ref must be source lineage")
+            raise CompanyResearchValidationError(
+                "capital_structure.source_ref must be source lineage"
+            )
         _artifact_text(
             self.capital_bridge_policy_version,
             "capital_structure.capital_bridge_policy_version",
@@ -1206,8 +1333,12 @@ class SecurityValuationReference:
     def __post_init__(self) -> None:
         _artifact_text(self.security_external_key, "security.security_external_key")
         for name in (
-            "listed_class_economic_units", "conversion_ratio", "adr_ratio",
-            "dividend_rights_per_unit", "market_price_usd", "usd_cny_rate",
+            "listed_class_economic_units",
+            "conversion_ratio",
+            "adr_ratio",
+            "dividend_rights_per_unit",
+            "market_price_usd",
+            "usd_cny_rate",
         ):
             _artifact_decimal(getattr(self, name), f"security.{name}")
         if self.listed_class_economic_units <= Decimal("0"):
@@ -1223,11 +1354,20 @@ class SecurityValuationReference:
                 "security dividend_rights_per_unit must be positive for valuation"
             )
         if self.market_price_usd <= Decimal("0"):
-            raise CompanyResearchValidationError("security.market_price_usd must be positive")
+            raise CompanyResearchValidationError(
+                "security.market_price_usd must be positive"
+            )
         if self.usd_cny_rate <= Decimal("0"):
-            raise CompanyResearchValidationError("security.usd_cny_rate must be positive")
-        if type(self.rights_ref) is not SourceLineageReference or type(self.price_ref) is not SourceLineageReference:
-            raise CompanyResearchValidationError("security rights and price refs must be source lineage")
+            raise CompanyResearchValidationError(
+                "security.usd_cny_rate must be positive"
+            )
+        if (
+            type(self.rights_ref) is not SourceLineageReference
+            or type(self.price_ref) is not SourceLineageReference
+        ):
+            raise CompanyResearchValidationError(
+                "security rights and price refs must be source lineage"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1239,32 +1379,61 @@ class MarketBridgeArtifact:
 
     def __post_init__(self) -> None:
         if type(self.capital_structure) is not CapitalStructureReference:
-            raise CompanyResearchValidationError("market_bridge.capital_structure must be typed")
-        if not isinstance(self.securities, tuple) or not self.securities or not all(
-            type(item) is SecurityValuationReference for item in self.securities
+            raise CompanyResearchValidationError(
+                "market_bridge.capital_structure must be typed"
+            )
+        if (
+            not isinstance(self.securities, tuple)
+            or not self.securities
+            or not all(
+                type(item) is SecurityValuationReference for item in self.securities
+            )
         ):
-            raise CompanyResearchValidationError("market_bridge.securities must be a non-empty typed tuple")
-        if len({item.security_external_key for item in self.securities}) != len(self.securities):
-            raise CompanyResearchValidationError("market_bridge securities must not duplicate")
+            raise CompanyResearchValidationError(
+                "market_bridge.securities must be a non-empty typed tuple"
+            )
+        if len({item.security_external_key for item in self.securities}) != len(
+            self.securities
+        ):
+            raise CompanyResearchValidationError(
+                "market_bridge securities must not duplicate"
+            )
         _artifact_decimal(self.usd_cny_rate, "market_bridge.usd_cny_rate")
-        if self.usd_cny_rate <= Decimal("0") or type(self.fx_ref) is not SourceLineageReference:
-            raise CompanyResearchValidationError("market_bridge must have an exact positive FX reference")
+        if (
+            self.usd_cny_rate <= Decimal("0")
+            or type(self.fx_ref) is not SourceLineageReference
+        ):
+            raise CompanyResearchValidationError(
+                "market_bridge must have an exact positive FX reference"
+            )
         references = (
             self.capital_structure.source_ref,
             self.capital_structure.policy_ref,
             self.fx_ref,
-            *(reference for security in self.securities for reference in (security.rights_ref, security.price_ref)),
+            *(
+                reference
+                for security in self.securities
+                for reference in (security.rights_ref, security.price_ref)
+            ),
         )
-        if len(set(references)) != len(references) or len({item.fact_key for item in references}) != len(references):
+        if len(set(references)) != len(references) or len(
+            {item.fact_key for item in references}
+        ) != len(references):
             raise CompanyResearchValidationError(
                 "market bridge references must be unique across capital, rights, price, and FX roles"
             )
         if self.capital_structure.source_ref.fact_key != "capital_structure_usd":
-            raise CompanyResearchValidationError("market bridge capital reference must identify USD capital structure")
+            raise CompanyResearchValidationError(
+                "market bridge capital reference must identify USD capital structure"
+            )
         if self.fx_ref.fact_key != "usd_cny_fx":
-            raise CompanyResearchValidationError("market bridge FX reference must identify the USD/CNY pair")
+            raise CompanyResearchValidationError(
+                "market bridge FX reference must identify the USD/CNY pair"
+            )
         for security in self.securities:
-            suffix = re.sub(r"[^a-z0-9]+", "_", security.security_external_key.lower()).strip("_")
+            suffix = re.sub(
+                r"[^a-z0-9]+", "_", security.security_external_key.lower()
+            ).strip("_")
             if security.rights_ref.fact_key != f"security_rights_{suffix}":
                 raise CompanyResearchValidationError(
                     "market bridge rights reference must identify its security"
@@ -1285,7 +1454,9 @@ class ReverseDcfRequest:
 
     def __post_init__(self) -> None:
         if self.driver_key != "fcff_multiplier":
-            raise CompanyResearchValidationError("reverse DCF driver must be fcff_multiplier")
+            raise CompanyResearchValidationError(
+                "reverse DCF driver must be fcff_multiplier"
+            )
         for name in ("target_enterprise_value", "lower_bound", "upper_bound"):
             _artifact_decimal(getattr(self, name), f"reverse_dcf.{name}")
         if (
@@ -1293,7 +1464,9 @@ class ReverseDcfRequest:
             or self.lower_bound >= self.upper_bound
             or self.max_iterations <= 0
         ):
-            raise CompanyResearchValidationError("reverse DCF bounds and iteration count must be valid")
+            raise CompanyResearchValidationError(
+                "reverse DCF bounds and iteration count must be valid"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1314,13 +1487,24 @@ class MarketEquityComponentReference:
 
     def __post_init__(self) -> None:
         if self.component_key not in {"class_a", "class_b", "class_c"}:
-            raise CompanyResearchValidationError("market equity component key is invalid")
+            raise CompanyResearchValidationError(
+                "market equity component key is invalid"
+            )
         _artifact_decimal(self.economic_units, "market equity component units")
         if self.economic_units < 0:
-            raise CompanyResearchValidationError("market equity component units are invalid")
-        _artifact_text(self.price_proxy_security_external_key, "market equity price proxy")
-        if type(self.unit_source_ref) is not SourceLineageReference or type(self.price_ref) is not SourceLineageReference:
-            raise CompanyResearchValidationError("market equity component lineage must be typed")
+            raise CompanyResearchValidationError(
+                "market equity component units are invalid"
+            )
+        _artifact_text(
+            self.price_proxy_security_external_key, "market equity price proxy"
+        )
+        if (
+            type(self.unit_source_ref) is not SourceLineageReference
+            or type(self.price_ref) is not SourceLineageReference
+        ):
+            raise CompanyResearchValidationError(
+                "market equity component lineage must be typed"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1340,17 +1524,35 @@ class CompanyResearchModelInput:
     equity_components: tuple[MarketEquityComponentReference, ...] = ()
 
     def __post_init__(self) -> None:
-        if type(self.business_map) is not BusinessMapArtifact or type(self.driver_map) is not DriverMapArtifact or type(self.scenario_set) is not ScenarioSetArtifact:
+        if (
+            type(self.business_map) is not BusinessMapArtifact
+            or type(self.driver_map) is not DriverMapArtifact
+            or type(self.scenario_set) is not ScenarioSetArtifact
+        ):
             raise CompanyResearchValidationError("model input artifacts must be typed")
-        if not isinstance(self.scenario_bridges, tuple) or not all(type(item) is ScenarioFinancialBridge for item in self.scenario_bridges):
-            raise CompanyResearchValidationError("model input scenario bridges must be typed")
-        if len({item.scenario_id for item in self.scenario_bridges}) != len(self.scenario_bridges):
-            raise CompanyResearchValidationError("model input scenario bridges must not duplicate")
+        if not isinstance(self.scenario_bridges, tuple) or not all(
+            type(item) is ScenarioFinancialBridge for item in self.scenario_bridges
+        ):
+            raise CompanyResearchValidationError(
+                "model input scenario bridges must be typed"
+            )
+        if len({item.scenario_id for item in self.scenario_bridges}) != len(
+            self.scenario_bridges
+        ):
+            raise CompanyResearchValidationError(
+                "model input scenario bridges must not duplicate"
+            )
         _artifact_refs(self.source_lineage, "model input source_lineage")
-        if not isinstance(self.research_gaps, tuple) or not all(type(item) is ResearchGap for item in self.research_gaps):
-            raise CompanyResearchValidationError("model input research gaps must be typed")
+        if not isinstance(self.research_gaps, tuple) or not all(
+            type(item) is ResearchGap for item in self.research_gaps
+        ):
+            raise CompanyResearchValidationError(
+                "model input research gaps must be typed"
+            )
         if type(self.evidence_gap_contract) is not EvidenceGapContract:
-            raise CompanyResearchValidationError("model input evidence gap contract must be typed")
+            raise CompanyResearchValidationError(
+                "model input evidence gap contract must be typed"
+            )
         if self.research_gaps != self.evidence_gap_contract.gaps:
             raise CompanyResearchValidationError(
                 "model input research gaps must exactly match the evidence gap contract"
@@ -1358,17 +1560,34 @@ class CompanyResearchModelInput:
         _artifact_decimal(self.required_return, "model input required_return")
         _artifact_decimal(self.terminal_growth, "model input terminal_growth")
         if self.required_return <= Decimal("0") or self.terminal_growth < Decimal("0"):
-            raise CompanyResearchValidationError("model input discount and terminal rates must be valid")
-        if self.market_bridge is not None and type(self.market_bridge) is not MarketBridgeArtifact:
-            raise CompanyResearchValidationError("model input market bridge must be typed")
+            raise CompanyResearchValidationError(
+                "model input discount and terminal rates must be valid"
+            )
+        if (
+            self.market_bridge is not None
+            and type(self.market_bridge) is not MarketBridgeArtifact
+        ):
+            raise CompanyResearchValidationError(
+                "model input market bridge must be typed"
+            )
         if type(self.judgment_context) is not JudgmentContextArtifact:
-            raise CompanyResearchValidationError("model input judgment context must be typed")
-        if self.reverse_dcf is not None and type(self.reverse_dcf) is not ReverseDcfRequest:
-            raise CompanyResearchValidationError("model input reverse DCF must be typed")
+            raise CompanyResearchValidationError(
+                "model input judgment context must be typed"
+            )
+        if (
+            self.reverse_dcf is not None
+            and type(self.reverse_dcf) is not ReverseDcfRequest
+        ):
+            raise CompanyResearchValidationError(
+                "model input reverse DCF must be typed"
+            )
         if self.market_bridge is not None:
             if (
                 not isinstance(self.equity_components, tuple)
-                or not all(type(item) is MarketEquityComponentReference for item in self.equity_components)
+                or not all(
+                    type(item) is MarketEquityComponentReference
+                    for item in self.equity_components
+                )
                 or tuple(item.component_key for item in self.equity_components)
                 != ("class_a", "class_b", "class_c")
             ):
@@ -1416,7 +1635,9 @@ class ScenarioDcfValue:
 
     def __post_init__(self) -> None:
         if self.scenario_id not in {"base", "bull", "bear"}:
-            raise CompanyResearchValidationError("scenario DCF value must name a scenario")
+            raise CompanyResearchValidationError(
+                "scenario DCF value must name a scenario"
+            )
         _artifact_decimal(self.enterprise_value, "scenario DCF enterprise value")
 
 
@@ -1428,7 +1649,10 @@ class SecurityValueRangeArtifact:
 
     def __post_init__(self) -> None:
         _artifact_text(self.security_external_key, "security value security key")
-        if type(self.usd_per_share) is not ValueRange or type(self.cny_return) is not ValueRange:
+        if (
+            type(self.usd_per_share) is not ValueRange
+            or type(self.cny_return) is not ValueRange
+        ):
             raise CompanyResearchValidationError("security value ranges must be typed")
 
 
@@ -1440,8 +1664,14 @@ class ReverseDcfArtifact:
     iteration_count: int
 
     def __post_init__(self) -> None:
-        if self.driver_key != "fcff_multiplier" or type(self.iteration_count) is not int or self.iteration_count < 1:
-            raise CompanyResearchValidationError("reverse DCF result must name a bounded driver")
+        if (
+            self.driver_key != "fcff_multiplier"
+            or type(self.iteration_count) is not int
+            or self.iteration_count < 1
+        ):
+            raise CompanyResearchValidationError(
+                "reverse DCF result must name a bounded driver"
+            )
         _artifact_decimal(self.implied_value, "reverse DCF implied value")
         _artifact_decimal(self.achieved_residual, "reverse DCF achieved residual")
 
@@ -1457,7 +1687,9 @@ class RequiredReturnComparisonArtifact:
 
     def __post_init__(self) -> None:
         _artifact_text(self.security_external_key, "required return security key")
-        _artifact_decimal(self.required_return, "required return comparison required_return")
+        _artifact_decimal(
+            self.required_return, "required return comparison required_return"
+        )
         if self.required_return <= Decimal("0"):
             raise CompanyResearchValidationError(
                 "required return comparison required_return must be positive"
@@ -1495,17 +1727,42 @@ class ValuationSetArtifact:
     required_return_comparisons: tuple[RequiredReturnComparisonArtifact, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.scenario_dcf_values, tuple) or {item.scenario_id for item in self.scenario_dcf_values} != {"base", "bull", "bear"} or not all(type(item) is ScenarioDcfValue for item in self.scenario_dcf_values):
-            raise CompanyResearchValidationError("valuation set must have one DCF value per scenario")
-        if self.reverse_dcf is not None and type(self.reverse_dcf) is not ReverseDcfArtifact:
-            raise CompanyResearchValidationError("valuation set reverse DCF must be typed")
-        if not isinstance(self.security_value_ranges, tuple) or not all(type(item) is SecurityValueRangeArtifact for item in self.security_value_ranges):
-            raise CompanyResearchValidationError("valuation set security ranges must be typed")
-        if len({item.security_external_key for item in self.security_value_ranges}) != len(self.security_value_ranges):
-            raise CompanyResearchValidationError("valuation set security ranges must not duplicate")
+        if (
+            not isinstance(self.scenario_dcf_values, tuple)
+            or {item.scenario_id for item in self.scenario_dcf_values}
+            != {"base", "bull", "bear"}
+            or not all(
+                type(item) is ScenarioDcfValue for item in self.scenario_dcf_values
+            )
+        ):
+            raise CompanyResearchValidationError(
+                "valuation set must have one DCF value per scenario"
+            )
+        if (
+            self.reverse_dcf is not None
+            and type(self.reverse_dcf) is not ReverseDcfArtifact
+        ):
+            raise CompanyResearchValidationError(
+                "valuation set reverse DCF must be typed"
+            )
+        if not isinstance(self.security_value_ranges, tuple) or not all(
+            type(item) is SecurityValueRangeArtifact
+            for item in self.security_value_ranges
+        ):
+            raise CompanyResearchValidationError(
+                "valuation set security ranges must be typed"
+            )
+        if len(
+            {item.security_external_key for item in self.security_value_ranges}
+        ) != len(self.security_value_ranges):
+            raise CompanyResearchValidationError(
+                "valuation set security ranges must not duplicate"
+            )
         _artifact_decimal(self.required_return, "valuation set required_return")
         if self.required_return <= Decimal("0"):
-            raise CompanyResearchValidationError("valuation set required_return must be positive")
+            raise CompanyResearchValidationError(
+                "valuation set required_return must be positive"
+            )
         if not isinstance(self.required_return_comparisons, tuple) or not all(
             type(item) is RequiredReturnComparisonArtifact
             for item in self.required_return_comparisons
@@ -1553,8 +1810,7 @@ class ValuationSetArtifact:
         return {
             "required_return": canonical_decimal_string(self.required_return),
             "required_return_comparisons": tuple(
-                item.canonical_payload()
-                for item in self.required_return_comparisons
+                item.canonical_payload() for item in self.required_return_comparisons
             ),
         }
 
@@ -1569,19 +1825,28 @@ class JudgmentContextArtifact:
 
     def __post_init__(self) -> None:
         for name in (
-            "operating_baseline_available", "financial_bridge_closed",
+            "operating_baseline_available",
+            "financial_bridge_closed",
             "market_security_bridge_available",
         ):
             if type(getattr(self, name)) is not bool:
-                raise CompanyResearchValidationError(f"judgment context {name} must be a bool")
+                raise CompanyResearchValidationError(
+                    f"judgment context {name} must be a bool"
+                )
         if not isinstance(self.strongest_counterevidence, tuple) or not all(
-            type(item) is SourceLineageReference for item in self.strongest_counterevidence
+            type(item) is SourceLineageReference
+            for item in self.strongest_counterevidence
         ):
-            raise CompanyResearchValidationError("judgment counterevidence must be typed lineage")
+            raise CompanyResearchValidationError(
+                "judgment counterevidence must be typed lineage"
+            )
         if not isinstance(self.next_verification_events, tuple) or not all(
-            isinstance(item, str) and item.strip() == item and item for item in self.next_verification_events
+            isinstance(item, str) and item.strip() == item and item
+            for item in self.next_verification_events
         ):
-            raise CompanyResearchValidationError("judgment next verification events must be canonical text")
+            raise CompanyResearchValidationError(
+                "judgment next verification events must be canonical text"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1593,8 +1858,12 @@ class CompanyResearchAssessment:
     def __post_init__(self) -> None:
         if self.status not in {"not_answerable", "partially_answerable", "answerable"}:
             raise CompanyResearchValidationError("assessment status is invalid")
-        if self.status == "not_answerable" and (self.direction is not None or self.confidence is not None):
-            raise CompanyResearchValidationError("not_answerable must not have direction or confidence")
+        if self.status == "not_answerable" and (
+            self.direction is not None or self.confidence is not None
+        ):
+            raise CompanyResearchValidationError(
+                "not_answerable must not have direction or confidence"
+            )
 
     @classmethod
     def answerable(cls) -> "CompanyResearchAssessment":
@@ -1632,9 +1901,10 @@ class CompanyResearchArtifactReference:
             raise CompanyResearchValidationError(
                 "memo artifact reference kind is invalid"
             )
-        if not isinstance(self.content_hash, str) or _SHA256.fullmatch(
-            self.content_hash
-        ) is None:
+        if (
+            not isinstance(self.content_hash, str)
+            or _SHA256.fullmatch(self.content_hash) is None
+        ):
             raise CompanyResearchValidationError(
                 "memo artifact reference content_hash must be SHA-256"
             )
