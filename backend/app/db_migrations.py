@@ -10,9 +10,13 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect
 
 import app.models  # noqa: F401 - ensure the complete metadata is registered
+from app.company_research_event_schema import (
+    CompanyResearchEventSchemaError,
+    repair_company_event_schema,
+)
 from app.models.ledger import Base
 
 
@@ -21,12 +25,6 @@ class UnmanagedDatabaseSchemaError(RuntimeError):
 
 
 _COMPANY_EVENTS = "uw_company_research_events"
-_COMPANY_EVENT_TRIGGERS = frozenset(
-    {
-        f"no_update_{_COMPANY_EVENTS}",
-        f"no_delete_{_COMPANY_EVENTS}",
-    }
-)
 
 
 def upgrade_database_to_head(database_url: str) -> None:
@@ -47,20 +45,29 @@ def upgrade_database_to_head(database_url: str) -> None:
             # Direct ORM-created demo databases predate migration management.
             # Only a structurally complete one is adopted; unknown schemas are
             # rejected instead of being falsely marked current.
-            _install_company_event_immutability(engine)
-            _require_company_event_immutability(engine)
+            _repair_company_event_schema(engine)
             command.stamp(config, "head")
         else:
             command.upgrade(config, "head")
+        # Reinstall and behavior-check the canonical append-only boundary even
+        # when Alembic was already at head.  This repairs later trigger loss or
+        # a trigger with a trusted name but untrusted body.
+        _repair_company_event_schema(engine)
     finally:
         engine.dispose()
 
 
 def _require_current_metadata(inspector, actual_tables: set[str]) -> None:
-    expected = {table.name: {column.name for column in table.columns} for table in Base.metadata.sorted_tables}
+    expected = {
+        table.name: {column.name for column in table.columns}
+        for table in Base.metadata.sorted_tables
+    }
     missing_tables = sorted(set(expected) - actual_tables)
     missing_columns = {
-        table: sorted(columns - {column["name"] for column in inspector.get_columns(table)})
+        table: sorted(
+            columns
+            - {column["name"] for column in inspector.get_columns(table)}
+        )
         for table, columns in expected.items()
         if table in actual_tables
         and columns - {column["name"] for column in inspector.get_columns(table)}
@@ -106,8 +113,34 @@ def _require_company_event_relational_contract(inspector) -> None:
         "ck_uw_company_research_event_payload_shape",
     }
     required_indexes = {"ix_uw_company_research_event_preparation"}
+    expected_columns = {
+        "id",
+        "preparation_id",
+        "sequence",
+        "hash_version",
+        "previous_event_hash",
+        "event_type",
+        "payload",
+        "content_hash",
+        "created_at",
+    }
+    incompatible_extra_columns = {
+        name
+        for name, column in company_event_columns.items()
+        if name not in expected_columns
+        and (
+            column.get("computed") is not None
+            or column.get("identity") is not None
+            or (
+                not column.get("nullable", True)
+                and column.get("default") is None
+            )
+        )
+    }
     if (
-        company_event_columns["hash_version"]["nullable"]
+        set(company_event_columns) < expected_columns
+        or incompatible_extra_columns
+        or company_event_columns["hash_version"]["nullable"]
         or company_event_columns["hash_version"].get("default") is not None
         or not required_checks.issubset(company_event_checks)
         or not required_indexes.issubset(company_event_indexes)
@@ -125,98 +158,14 @@ def _require_company_event_relational_contract(inspector) -> None:
         )
 
 
-def _install_company_event_immutability(engine) -> None:
+def _repair_company_event_schema(engine) -> None:
     with engine.begin() as connection:
-        if connection.dialect.name == "sqlite":
-            connection.execute(
-                text(
-                    f"""
-                    CREATE TRIGGER IF NOT EXISTS no_update_{_COMPANY_EVENTS}
-                    BEFORE UPDATE ON {_COMPANY_EVENTS}
-                    BEGIN
-                        SELECT RAISE(ABORT, 'immutable company research table is append-only');
-                    END
-                    """
-                )
-            )
-            connection.execute(
-                text(
-                    f"""
-                    CREATE TRIGGER IF NOT EXISTS no_delete_{_COMPANY_EVENTS}
-                    BEFORE DELETE ON {_COMPANY_EVENTS}
-                    BEGIN
-                        SELECT RAISE(ABORT, 'immutable company research table is append-only');
-                    END
-                    """
-                )
-            )
-            return
-        if connection.dialect.name != "postgresql":
+        try:
+            repair_company_event_schema(connection)
+        except (CompanyResearchEventSchemaError, ValueError, TypeError) as exc:
             raise UnmanagedDatabaseSchemaError(
-                "cannot install company research event immutability on this database"
-            )
-        if connection.scalar(
-            text("SELECT to_regprocedure('reject_mutable_ledger()')")
-        ) is None:
-            connection.execute(
-                text(
-                    """
-                    CREATE FUNCTION reject_mutable_ledger()
-                    RETURNS trigger AS $$
-                    BEGIN
-                        RAISE EXCEPTION 'immutable ledger rows cannot be changed';
-                    END;
-                    $$ LANGUAGE plpgsql
-                    """
-                )
-            )
-        for operation in ("update", "delete"):
-            connection.execute(
-                text(
-                    f"DROP TRIGGER IF EXISTS no_{operation}_{_COMPANY_EVENTS} "
-                    f"ON {_COMPANY_EVENTS}"
-                )
-            )
-            connection.execute(
-                text(
-                    f"CREATE TRIGGER no_{operation}_{_COMPANY_EVENTS} "
-                    f"BEFORE {operation.upper()} ON {_COMPANY_EVENTS} "
-                    "FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger()"
-                )
-            )
-
-
-def _require_company_event_immutability(engine) -> None:
-    with engine.connect() as connection:
-        if connection.dialect.name == "sqlite":
-            actual = {
-                row[0]
-                for row in connection.execute(
-                    text(
-                        "SELECT name FROM sqlite_master WHERE type = 'trigger' "
-                        "AND tbl_name = :table_name"
-                    ),
-                    {"table_name": _COMPANY_EVENTS},
-                )
-            }
-        elif connection.dialect.name == "postgresql":
-            actual = {
-                row[0]
-                for row in connection.execute(
-                    text(
-                        "SELECT trigger_name FROM information_schema.triggers "
-                        "WHERE event_object_table = :table_name"
-                    ),
-                    {"table_name": _COMPANY_EVENTS},
-                )
-            }
-        else:
-            actual = set()
-    if not _COMPANY_EVENT_TRIGGERS.issubset(actual):
-        raise UnmanagedDatabaseSchemaError(
-            "existing database has no Alembic version and lacks required "
-            "company research event immutability triggers"
-        )
+                "cannot authenticate or repair company research event schema"
+            ) from exc
 
 
 def require_company_research_event_schema(database_url: str) -> None:
@@ -242,6 +191,6 @@ def require_company_research_event_schema(database_url: str) -> None:
                 "database is not at the company research event schema"
             )
         _require_company_event_relational_contract(inspector)
-        _require_company_event_immutability(engine)
+        _repair_company_event_schema(engine)
     finally:
         engine.dispose()

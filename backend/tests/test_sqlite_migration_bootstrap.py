@@ -184,7 +184,7 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             connection.execute(
                 sa.text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == "0069"
+            == "0070"
         )
         event_columns = {
             column["name"]: column
@@ -193,6 +193,25 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             )
         }
         assert event_columns["hash_version"]["nullable"] is False
+        worker_indexes = {
+            index["name"]: index
+            for index in sa.inspect(connection).get_indexes("jobs")
+        }
+        assert worker_indexes[
+            "ix_jobs_company_research_worker_candidates"
+        ]["column_names"] == ["status", "created_at", "id"]
+        worker_plan = " ".join(
+            row[-1]
+            for row in connection.exec_driver_sql(
+                "EXPLAIN QUERY PLAN SELECT id FROM jobs "
+                "WHERE kind = 'prepare_company_research' "
+                "AND target_type = 'company_research_preparation' "
+                "AND research_case_id IS NULL AND status = 'queued' "
+                "ORDER BY created_at, id LIMIT 100"
+            )
+        )
+        assert "ix_jobs_company_research_worker_candidates" in worker_plan
+        assert "TEMP B-TREE" not in worker_plan
         assert any(
             constraint["name"]
             == "ck_uw_company_research_event_hash_version"
@@ -936,6 +955,7 @@ def test_0069_event_hash_version_migration_downgrades_cleanly(tmp_path) -> None:
 
 
 def test_0069_frozen_hash_algorithms_match_production_golden_values() -> None:
+    from app.company_research_event_schema import _event_hash as runtime_event_hash
     from app.underwriting.persistence.company_research_repository import (
         CompanyResearchRepository,
     )
@@ -953,6 +973,19 @@ def test_0069_frozen_hash_algorithms_match_production_golden_values() -> None:
     assert module_spec.loader is not None
     migration = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(migration)
+    repair_migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0070_repair_company_research_event_schema.py"
+    )
+    repair_spec = importlib.util.spec_from_file_location(
+        "migration_0070_event_hash_golden", repair_migration_path
+    )
+    assert repair_spec is not None
+    assert repair_spec.loader is not None
+    repair_migration = importlib.util.module_from_spec(repair_spec)
+    repair_spec.loader.exec_module(repair_migration)
     preparation_id = UUID("11111111-1111-1111-1111-111111111111")
     created_at = datetime(2026, 8, 29, tzinfo=UTC)
     payload = {"request_hash": "a" * 64}
@@ -986,6 +1019,18 @@ def test_0069_frozen_hash_algorithms_match_production_golden_values() -> None:
         payload=payload,
         created_at=created_at,
     ) == migration._event_hash(row, version=2)
+    assert repair_migration._event_hash({**row, "hash_version": 1}) == (
+        migration._event_hash(row, version=1)
+    )
+    assert repair_migration._event_hash({**row, "hash_version": 2}) == (
+        migration._event_hash(row, version=2)
+    )
+    assert runtime_event_hash({**row, "hash_version": 1}) == (
+        migration._event_hash(row, version=1)
+    )
+    assert runtime_event_hash({**row, "hash_version": 2}) == (
+        migration._event_hash(row, version=2)
+    )
 
 
 def _company_event_hash(
@@ -1159,6 +1204,321 @@ def test_0069_rejects_unauthenticated_or_downgraded_event_history(
 
     assert upgraded.returncode != 0
     assert "cannot authenticate company research event history" in upgraded.stderr
+
+
+def _seed_stamped_company_event(
+    connection, *, drop_triggers: bool = True
+) -> tuple[str, str]:
+    preparation_id = UUID("11111111-1111-1111-1111-111111111111")
+    event_id = UUID("22222222-2222-2222-2222-222222222222")
+    created_at = datetime(2026, 8, 29, tzinfo=UTC)
+    payload = {"stage": "stamped-0069"}
+    content_hash = _company_event_hash(
+        version=2,
+        preparation_id=preparation_id,
+        sequence=1,
+        previous_event_hash=None,
+        event_type="test_event",
+        payload=payload,
+        created_at=created_at,
+    )
+    connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+    object_id = UUID("33333333-3333-3333-3333-333333333333")
+    project_id = UUID("44444444-4444-4444-4444-444444444444")
+    job_id = UUID("55555555-5555-5555-5555-555555555555")
+    connection.execute(
+        sa.text(
+            "INSERT INTO uw_research_objects ("
+            "id, kind, external_key, canonical_name, created_at"
+            ") VALUES (:id, 'company', 'TEST:COMPANY', 'Test Company', :created_at)"
+        ),
+        {"id": object_id.hex, "created_at": created_at.replace(tzinfo=None)},
+    )
+    connection.execute(
+        sa.text(
+            "INSERT INTO uw_research_projects ("
+            "id, primary_company_id, content_hash, created_at"
+            ") VALUES (:id, :company_id, :content_hash, :created_at)"
+        ),
+        {
+            "id": project_id.hex,
+            "company_id": object_id.hex,
+            "content_hash": "a" * 64,
+            "created_at": created_at.replace(tzinfo=None),
+        },
+    )
+    connection.execute(
+        sa.text(
+            "INSERT INTO jobs ("
+            "id, kind, status, progress, attempt, step, cancel_requested, "
+            "target_type, target_id, created_at"
+            ") VALUES ("
+            ":id, 'prepare_company_research', 'failed', 30, 1, "
+            "'model_bundle', 0, 'company_research_preparation', "
+            ":target_id, :created_at)"
+        ),
+        {
+            "id": job_id.hex,
+            "target_id": preparation_id.hex,
+            "created_at": created_at.replace(tzinfo=None),
+        },
+    )
+    connection.execute(
+        sa.text(
+            "INSERT INTO uw_company_research_preparations ("
+            "id, project_id, idempotency_key, request_hash, strategy_version, "
+            "status, current_step, progress, attempt, last_error_code, job_id, "
+            "created_at, updated_at"
+            ") VALUES ("
+            ":id, :project_id, 'stamped-0069', :request_hash, 'test-v1', "
+            "'blocked', 'model_bundle', 30, 1, 'validation_failed', :job_id, "
+            ":created_at, :created_at)"
+        ),
+        {
+            "id": preparation_id.hex,
+            "project_id": project_id.hex,
+            "request_hash": "b" * 64,
+            "job_id": job_id.hex,
+            "created_at": created_at.replace(tzinfo=None),
+        },
+    )
+    connection.execute(
+        sa.text(
+            "INSERT INTO uw_company_research_events ("
+            "id, preparation_id, sequence, hash_version, previous_event_hash, "
+            "event_type, payload, content_hash, created_at"
+            ") VALUES ("
+            ":id, :preparation_id, 1, 2, NULL, 'test_event', :payload, "
+            ":content_hash, :created_at)"
+        ),
+        {
+            "id": event_id.hex,
+            "preparation_id": preparation_id.hex,
+            "payload": json.dumps(payload),
+            "content_hash": content_hash,
+            "created_at": created_at.replace(tzinfo=None),
+        },
+    )
+    if drop_triggers:
+        connection.exec_driver_sql(
+            "DROP TRIGGER IF EXISTS no_update_uw_company_research_events"
+        )
+        connection.exec_driver_sql(
+            "DROP TRIGGER IF EXISTS no_delete_uw_company_research_events"
+        )
+    connection.commit()
+    return preparation_id.hex, event_id.hex
+
+
+def test_0070_repairs_a_stamped_0069_database_without_event_triggers(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "stamped-0069-triggerless.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    initial = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0069"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert initial.returncode == 0, initial.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.connect() as connection:
+        _preparation_id, event_id = _seed_stamped_company_event(connection)
+
+    repaired = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert repaired.returncode == 0, repaired.stderr
+    with engine.connect() as connection:
+        assert connection.execute(
+            sa.text("SELECT version_num FROM alembic_version")
+        ).scalar_one() == "0070"
+        for statement in (
+            "UPDATE uw_company_research_events SET event_type = 'changed' "
+            f"WHERE id = '{event_id}'",
+            "DELETE FROM uw_company_research_events "
+            f"WHERE id = '{event_id}'",
+        ):
+            with pytest.raises(sa.exc.DatabaseError, match="append-only"):
+                connection.exec_driver_sql(statement)
+            connection.rollback()
+    engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("versions", "unmatched", "succeeds"),
+    (
+        ((1,), False, True),
+        ((2,), False, True),
+        ((1, 2), False, True),
+        ((2, 1), False, False),
+        ((2,), True, False),
+    ),
+)
+def test_0070_authenticates_populated_stamped_0069_histories(
+    tmp_path,
+    versions: tuple[int, ...],
+    unmatched: bool,
+    succeeds: bool,
+) -> None:
+    database_path = tmp_path / (
+        f"stamped-0069-history-{'-'.join(map(str, versions))}-{unmatched}.db"
+    )
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    initial = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0069"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert initial.returncode == 0, initial.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.connect() as connection:
+        preparation_id, event_id = _seed_stamped_company_event(connection)
+        preparation_uuid = UUID(preparation_id)
+        created_at = datetime(2026, 8, 29, tzinfo=UTC)
+        root_payload = {"stage": "stamped-0069"}
+        root_hash = _company_event_hash(
+            version=versions[0],
+            preparation_id=preparation_uuid,
+            sequence=1,
+            previous_event_hash=None,
+            event_type="test_event",
+            payload=root_payload,
+            created_at=created_at,
+        )
+        if unmatched:
+            root_hash = "f" * 64
+        connection.exec_driver_sql(
+            "UPDATE uw_company_research_events SET hash_version = ?, "
+            "content_hash = ? WHERE id = ?",
+            (versions[0], root_hash, event_id),
+        )
+        previous_hash = root_hash
+        for sequence, version in enumerate(versions[1:], start=2):
+            event_at = created_at + timedelta(seconds=sequence - 1)
+            payload = {"stage": f"stamped-{sequence}"}
+            digest = _company_event_hash(
+                version=version,
+                preparation_id=preparation_uuid,
+                sequence=sequence,
+                previous_event_hash=previous_hash,
+                event_type="test_event",
+                payload=payload,
+                created_at=event_at,
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_company_research_events ("
+                    "id, preparation_id, sequence, hash_version, "
+                    "previous_event_hash, event_type, payload, content_hash, "
+                    "created_at) VALUES (:id, :preparation_id, :sequence, "
+                    ":version, :previous, 'test_event', :payload, :digest, "
+                    ":created_at)"
+                ),
+                {
+                    "id": UUID(int=sequence + 100).hex,
+                    "preparation_id": preparation_id,
+                    "sequence": sequence,
+                    "version": version,
+                    "previous": previous_hash,
+                    "payload": json.dumps(payload),
+                    "digest": digest,
+                    "created_at": event_at.replace(tzinfo=None),
+                },
+            )
+            previous_hash = digest
+        connection.commit()
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert (upgraded.returncode == 0) is succeeds
+    if succeeds:
+        with engine.connect() as connection:
+            assert connection.scalar(
+                sa.text("SELECT version_num FROM alembic_version")
+            ) == "0070"
+            assert tuple(
+                connection.scalars(
+                    sa.text(
+                        "SELECT hash_version FROM uw_company_research_events "
+                        "ORDER BY sequence"
+                    )
+                )
+            ) == versions
+    else:
+        assert "cannot authenticate company research event history" in upgraded.stderr
+    engine.dispose()
+
+
+def test_runtime_repair_replaces_named_noop_company_event_triggers(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "named-noop-triggers.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    initial = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0069"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert initial.returncode == 0, initial.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.connect() as connection:
+        _preparation_id, event_id = _seed_stamped_company_event(connection)
+        connection.exec_driver_sql(
+            "CREATE TRIGGER no_update_uw_company_research_events "
+            "BEFORE UPDATE ON uw_company_research_events BEGIN SELECT 1; END"
+        )
+        connection.exec_driver_sql(
+            "CREATE TRIGGER no_delete_uw_company_research_events "
+            "BEFORE DELETE ON uw_company_research_events BEGIN SELECT 1; END"
+        )
+        connection.commit()
+    repaired = subprocess.run(
+        [sys.executable, "-m", "app.scripts.verify_company_research_schema"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert repaired.returncode == 0, repaired.stderr
+    with engine.connect() as connection:
+        for statement in (
+            "UPDATE uw_company_research_events SET event_type = 'changed' "
+            f"WHERE id = '{event_id}'",
+            "DELETE FROM uw_company_research_events "
+            f"WHERE id = '{event_id}'",
+        ):
+            with pytest.raises(sa.exc.DatabaseError, match="append-only"):
+                connection.exec_driver_sql(statement)
+            connection.rollback()
+    engine.dispose()
 
 
 def test_0061_downgrade_removes_only_wave2_economic_model_tables(tmp_path) -> None:
@@ -1729,7 +2089,7 @@ with SessionLocal() as session:
 
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0069"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0070"
         assert {
             "research_preparations",
             "research_preparation_artifacts",
@@ -2493,7 +2853,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0069"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0070"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -2557,7 +2917,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0069"
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0070"
         assert {
             row[0]
             for row in connection.execute(
@@ -2596,6 +2956,151 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
         assert connection.exec_driver_sql(
             "SELECT COUNT(*) FROM uw_company_research_events"
         ).scalar_one() == 1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "invalid_digest",
+        "broken_preparation_fk",
+        "sequence_gap",
+        "wrong_predecessor",
+        "descending_timestamp",
+    ),
+)
+def test_unmanaged_adoption_authenticates_existing_company_event_history(
+    tmp_path, mutation: str
+) -> None:
+    import app.models  # noqa: F401
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+    from app.models.ledger import Base
+
+    database_url = f"sqlite:///{tmp_path / f'invalid-adoption-{mutation}.db'}"
+    engine = sa.create_engine(database_url)
+    Base.metadata.create_all(engine)
+    with engine.connect() as connection:
+        preparation_id, event_id = _seed_stamped_company_event(connection)
+        if mutation == "invalid_digest":
+            connection.exec_driver_sql(
+                "UPDATE uw_company_research_events SET content_hash = ? WHERE id = ?",
+                ("f" * 64, event_id),
+            )
+        elif mutation == "broken_preparation_fk":
+            missing = UUID("66666666-6666-6666-6666-666666666666")
+            created_at = datetime(2026, 8, 29, tzinfo=UTC)
+            payload = {"stage": "stamped-0069"}
+            digest = _company_event_hash(
+                version=2,
+                preparation_id=missing,
+                sequence=1,
+                previous_event_hash=None,
+                event_type="test_event",
+                payload=payload,
+                created_at=created_at,
+            )
+            connection.exec_driver_sql(
+                "UPDATE uw_company_research_events SET preparation_id = ?, "
+                "content_hash = ? WHERE id = ?",
+                (missing.hex, digest, event_id),
+            )
+        elif mutation == "sequence_gap":
+            connection.exec_driver_sql("PRAGMA ignore_check_constraints=ON")
+            connection.exec_driver_sql(
+                "UPDATE uw_company_research_events SET sequence = 2 WHERE id = ?",
+                (event_id,),
+            )
+        elif mutation == "wrong_predecessor":
+            connection.exec_driver_sql("PRAGMA ignore_check_constraints=ON")
+            connection.exec_driver_sql(
+                "UPDATE uw_company_research_events SET previous_event_hash = ? "
+                "WHERE id = ?",
+                ("e" * 64, event_id),
+            )
+        else:
+            root_hash = connection.exec_driver_sql(
+                "SELECT content_hash FROM uw_company_research_events WHERE id = ?",
+                (event_id,),
+            ).scalar_one()
+            earlier = datetime(2026, 8, 28, tzinfo=UTC)
+            payload = {"stage": "second"}
+            digest = _company_event_hash(
+                version=2,
+                preparation_id=UUID(preparation_id),
+                sequence=2,
+                previous_event_hash=root_hash,
+                event_type="test_event",
+                payload=payload,
+                created_at=earlier,
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO uw_company_research_events ("
+                    "id, preparation_id, sequence, hash_version, "
+                    "previous_event_hash, event_type, payload, content_hash, "
+                    "created_at) VALUES (:id, :preparation_id, 2, 2, "
+                    ":previous, 'test_event', :payload, :digest, :created_at)"
+                ),
+                {
+                    "id": UUID("77777777-7777-7777-7777-777777777777").hex,
+                    "preparation_id": preparation_id,
+                    "previous": root_hash,
+                    "payload": json.dumps(payload),
+                    "digest": digest,
+                    "created_at": earlier.replace(tzinfo=None),
+                },
+            )
+        connection.exec_driver_sql("PRAGMA ignore_check_constraints=OFF")
+        connection.commit()
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="authenticate or repair company research event schema",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert "alembic_version" not in sa.inspect(connection).get_table_names()
+        assert not {
+            row[0]
+            for row in connection.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                "AND tbl_name = 'uw_company_research_events'"
+            )
+        }
+    engine.dispose()
+
+
+def test_unmanaged_adoption_rejects_unknown_required_company_event_column(
+    tmp_path,
+) -> None:
+    import app.models  # noqa: F401
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+    from app.models.ledger import Base
+
+    database_url = f"sqlite:///{tmp_path / 'required-extra-event-column.db'}"
+    engine = sa.create_engine(database_url)
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "ALTER TABLE uw_company_research_events "
+            "ADD COLUMN unknown_required TEXT NOT NULL"
+        )
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="current company research event schema",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert "alembic_version" not in sa.inspect(connection).get_table_names()
+    engine.dispose()
 
 
 def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> None:
@@ -2652,7 +3157,7 @@ def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> 
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == "0069"
+        ).scalar_one() == "0070"
         assert connection.execute(
             sa.text(
                 "SELECT research_source_type FROM source_contracts WHERE id = :id"

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 
 from sqlalchemy import (
     CheckConstraint,
@@ -28,6 +28,7 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -102,6 +103,22 @@ class Job(Base):
             from datetime import datetime as _dt, timezone as _tz
 
             self.created_at = _dt.now(_tz.utc)
+
+
+Index(
+    "ix_jobs_company_research_worker_candidates",
+    Job.status,
+    Job.created_at,
+    Job.id,
+    sqlite_where=text(
+        "kind = 'prepare_company_research' AND "
+        "target_type = 'company_research_preparation' AND research_case_id IS NULL"
+    ),
+    postgresql_where=text(
+        "kind = 'prepare_company_research' AND "
+        "target_type = 'company_research_preparation' AND research_case_id IS NULL"
+    ),
+)
 
 
 class JobEvent(Base):
