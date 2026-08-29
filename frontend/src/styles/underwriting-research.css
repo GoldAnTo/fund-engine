@@ -90,6 +90,9 @@
 .ir-answerability ul{margin:8px 0 0;padding-left:18px;color:var(--ros-soft)}
 .ir-version-summary{padding-top:18px}
 .ir-version-summary>p{color:var(--ros-soft)}
+.ir-publication-dialog{width:min(760px,calc(100vw - 32px));max-height:min(88vh,900px);overflow:auto;overscroll-behavior:contain}
+.ir-publication-blockers{max-height:12rem;overflow:auto;overscroll-behavior:contain}
+.ir-publication-memo{max-width:100%;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
 .ir-boundary{align-self:start;padding:16px;border:1px solid var(--ros-rule);border-radius:7px;background:var(--ros-deep)}
 .ir-boundary h2{margin-bottom:12px}
 .ir-boundary dl{margin:0}

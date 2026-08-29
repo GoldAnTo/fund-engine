@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   InvestmentResearchApi,
@@ -201,6 +201,13 @@ function workspace(options: {
 
 function publicationWorkspace(stage: 85 | 95 | 100): CompanyResearchWorkspace {
   const candidate = assessmentFixture("not_answerable");
+  candidate.artifacts = candidate.artifacts.filter((item) => item.kind !== "valuation_set");
+  delete candidate.change_summary.artifact_versions.valuation_set;
+  candidate.modules = candidate.modules.map((module) => module.key === "scenarios_valuation_implied_expectations"
+    ? { ...module, valuation_state: "blocked", artifact_refs: module.artifact_refs.filter((ref) => ref.kind !== "valuation_set") }
+    : module);
+  const judgment = candidate.artifacts.find((item) => item.kind === "judgment_context")! as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "judgment_context" }>;
+  judgment.payload._lineage.artifact_refs = judgment.payload._lineage.artifact_refs.filter((ref) => ref.artifact_kind !== "valuation_set");
   Object.assign(candidate.preparation, stage === 85
     ? { status: "awaiting_judgment_review", current_step: "judgment_context", progress: 85 }
     : stage === 95
@@ -210,6 +217,7 @@ function publicationWorkspace(stage: 85 | 95 | 100): CompanyResearchWorkspace {
   candidate.draft.lock_version = stage === 85 ? 2 : stage === 95 ? 3 : 4;
   candidate.draft.base_revision_id = stage === 100 ? ids.revision : null;
   const memo = candidate.artifacts.find((item) => item.kind === "memo")! as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "memo" }>;
+  memo.payload.valuation_set_ref = null;
   if (stage >= 95) {
     memo.id = uid(129);
     memo.version = 2;
@@ -241,7 +249,7 @@ function publicationPreview(): CompanyResearchPublicationPreview {
     historical_basis_id: uid(50), historical_basis_content_hash: hash,
     strategy_version: "company_research.v1", model_version: "model.v1",
     assessment: { schema_version: "underwriting.v1", answerability: "not_answerable", direction: null, confidence: null, content_hash: hash },
-    value_range: null, return_range: null, blockers: ["youtube_margin_gap"],
+    value_range: null, return_range: null, blockers: Array.from({ length: 31 }, (_, index) => `research_gap_${String(index + 1).padStart(2, "0")}`),
     strongest_counterevidence: [sourceRef], next_verification_events: ["Q3 Cloud backlog 与 AI capex 回报验证"],
     memo_markdown: "当前正式证据不足，不能形成投资方向、置信度、目标价或预期回报。",
     artifacts: publicationWorkspace(95).artifacts.filter((item) => item.kind !== "valuation_set").map((item) => ({
@@ -265,6 +273,25 @@ function frozenRevision(): CompanyResearchFrozenRevision {
   };
 }
 
+function frozenRevisionFor(candidate: CompanyResearchWorkspace): CompanyResearchFrozenRevision {
+  const memo = candidate.artifacts.find((item) => item.kind === "memo") as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "memo" }> | undefined;
+  return {
+    ...frozenRevision(),
+    assessment: {
+      schema_version: "underwriting.v1",
+      answerability: memo?.payload.assessment_status ?? "not_answerable",
+      direction: null,
+      confidence: null,
+      content_hash: hash,
+    },
+    memo_markdown: memo?.payload.candidate_status === "human_confirmed" ? memo.payload.markdown : "冻结研究备忘录\n\n保留换行。",
+    artifacts: candidate.artifacts.map((item) => ({
+      schema_version: "underwriting.v1", kind: item.kind, id: item.id, version: item.version,
+      input_hash: item.input_hash, content_hash: item.content_hash,
+    })),
+  };
+}
+
 function markdownExport(): CompanyResearchMarkdownExport {
   return {
     schema_version: "underwriting.v1",
@@ -277,6 +304,14 @@ function markdownExport(): CompanyResearchMarkdownExport {
 
 function renderPage() {
   return render(<MemoryRouter initialEntries={[`/research/projects/${ids.project}`]}><Routes><Route path="/research/projects/:projectId" element={<ResearchWorkbenchPage />} /></Routes></MemoryRouter>);
+}
+
+function mockFrozenRevision(candidate: CompanyResearchWorkspace) {
+  return vi.spyOn(investmentResearchApi, "companyResearchRevision").mockResolvedValue(frozenRevisionFor(candidate));
+}
+
+async function bindFrozenWorkspace(_user: ReturnType<typeof userEvent.setup>) {
+  await screen.findByText("冻结版本已自动验证并载入。");
 }
 
 async function decodeWorkspaceFixture(candidate: CompanyResearchWorkspace) {
@@ -330,6 +365,13 @@ function retryWorkspaceFixture(step: typeof RETRY_FIXTURE_CASES[number][0], resu
 }
 
 describe("Alphabet company research workbench", () => {
+  beforeEach(() => {
+    Object.defineProperties(HTMLDialogElement.prototype, {
+      showModal: { configurable: true, value(this: HTMLDialogElement) { this.setAttribute("open", ""); } },
+      close: { configurable: true, value(this: HTMLDialogElement) { this.removeAttribute("open"); } },
+    });
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -386,6 +428,7 @@ describe("Alphabet company research workbench", () => {
     const confirmButton = screen.getByRole("button", { name: "确认当前判断" });
     await user.click(confirmButton);
     expect(confirmButton).toBeDisabled();
+    expect(confirmButton).toHaveTextContent("正在确认研究判断…");
     expect(confirm).toHaveBeenCalledWith(ids.project, {
       schema_version: "underwriting.v1",
       expected_lock_version: 2,
@@ -400,10 +443,33 @@ describe("Alphabet company research workbench", () => {
     const previewButton = screen.getByRole("button", { name: "预览冻结版本" });
     await user.click(previewButton);
     expect(preview).toHaveBeenCalledWith(ids.project, { schema_version: "underwriting.v1", expected_lock_version: 3 });
-    const dialog = await screen.findByRole("dialog", { name: "确认冻结版本" });
-    for (const copy of ["Alphabet Inc.", "GOOGL", "GOOG", "2026-02-05T00:00:00Z", "not_answerable", "ai_capex_risk", "冻结后不可修改", "未建立价值范围", "未建立回报范围"]) {
-      expect(within(dialog).getByText(new RegExp(copy))).toBeVisible();
+    let dialog = await screen.findByRole("dialog", { name: "确认冻结版本" });
+    for (const copy of [
+      "Alphabet Inc.", "ALPHABET:COMPANY", ids.company, "GOOGL", "GOOG", "NASDAQ:GOOGL", "NASDAQ:GOOG",
+      ids.googl, ids.goog, "USD", "2026-02-05T00:00:00Z", uid(50), "company_research.v1", "model.v1",
+      "not_answerable", "未建立方向", "未建立置信度", "ai_capex_risk", "filing", "2025 10-K, p. 32",
+      "Q3 Cloud backlog 与 AI capex 回报验证", "当前正式证据不足", "冻结后不可修改", "未建立价值范围",
+      "未建立回报范围", "research_gap_31", "expected lock 3", "manifest hash", hash,
+    ]) {
+      expect(dialog).toHaveTextContent(copy);
     }
+    const frozenBlockers = within(dialog).getByRole("list", { name: "冻结阻塞项" });
+    expect(frozenBlockers.children).toHaveLength(31);
+    expect(frozenBlockers).toHaveClass("ir-publication-blockers");
+    const frozenArtifacts = within(dialog).getByRole("list", { name: "冻结制品清单" });
+    expect(frozenArtifacts).toHaveTextContent(`evidence_index ${publicationWorkspace(95).artifacts[0].id} v1 input ${hash} content ${hash}`);
+    expect(dialog).toHaveAttribute("open");
+    expect(within(dialog).getByRole("button", { name: "返回检查" })).toHaveFocus();
+    fireEvent(dialog, new Event("cancel", { bubbles: false, cancelable: true }));
+    expect(screen.queryByRole("dialog", { name: "确认冻结版本" })).not.toBeInTheDocument();
+    await waitFor(() => expect(previewButton).toHaveFocus());
+    await user.click(previewButton);
+    dialog = await screen.findByRole("dialog", { name: "确认冻结版本" });
+    await user.click(within(dialog).getByRole("button", { name: "返回检查" }));
+    expect(screen.queryByRole("dialog", { name: "确认冻结版本" })).not.toBeInTheDocument();
+    await waitFor(() => expect(previewButton).toHaveFocus());
+    await user.click(previewButton);
+    dialog = await screen.findByRole("dialog", { name: "确认冻结版本" });
     const publishButton = within(dialog).getByRole("button", { name: "冻结并发布" });
     await user.click(publishButton);
     await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
@@ -415,6 +481,8 @@ describe("Alphabet company research workbench", () => {
     expect(screen.getByText(ids.revision, { selector: ".ir-publication-revision-id" })).toBeVisible();
     expect(screen.getByText("2026-08-30T02:03:04Z")).toBeVisible();
     expect(within(screen.getByLabelText("冻结版本回放")).getByText("evidence_index v1")).toBeVisible();
+    expect(screen.getByLabelText("冻结研究备忘录")).toHaveTextContent("当前正式证据不足，不能形成投资方向、置信度、目标价或预期回报。");
+    await waitFor(() => expect(screen.getByRole("button", { name: "查看冻结版本" })).toHaveFocus());
     expect(replay).toHaveBeenCalledWith(ids.project, ids.revision);
 
     await user.click(screen.getByRole("button", { name: "导出 Markdown" }));
@@ -425,6 +493,127 @@ describe("Alphabet company research workbench", () => {
     expect(anchorClick).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:alphabet-export");
   }, 15_000);
+
+  it("loads a selected frozen revision before exposing completed module payloads", async () => {
+    const completed = publicationWorkspace(100);
+    const revision = frozenRevisionFor(completed);
+    const revisionRequest = deferred<CompanyResearchFrozenRevision>();
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(completed);
+    const replay = vi.spyOn(investmentResearchApi, "companyResearchRevision").mockImplementation(() => revisionRequest.promise);
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Alphabet Inc." });
+    const moduleContent = document.querySelector(".ir-module-content")!;
+    expect(moduleContent).toHaveTextContent("冻结版本尚未验证");
+    expect(moduleContent).not.toHaveTextContent("当前不可回答");
+    expect(screen.getByRole("button", { name: "正在载入冻结版本…" })).toBeDisabled();
+    expect(replay).toHaveBeenCalledWith(ids.project, ids.revision);
+    await act(async () => { revisionRequest.resolve(revision); await Promise.resolve(); });
+    expect(await within(moduleContent as HTMLElement).findByText(`冻结版本 ${ids.revision}`)).toBeVisible();
+    expect(within(moduleContent as HTMLElement).getByText("当前不可回答")).toBeVisible();
+  });
+
+  it.each([
+    ["id", uid(999)],
+    ["version", 99],
+    ["input_hash", "b".repeat(64)],
+    ["content_hash", "b".repeat(64)],
+  ] as const)("fails closed when a frozen descriptor %s does not match the completed workspace", async (field, value) => {
+    const completed = publicationWorkspace(100);
+    const mismatched = frozenRevisionFor(completed);
+    mismatched.artifacts[0] = { ...mismatched.artifacts[0], [field]: value };
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(completed);
+    vi.spyOn(investmentResearchApi, "companyResearchRevision").mockResolvedValue(mismatched);
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结版本与工作区制品不一致");
+    const replayButton = screen.getByRole("button", { name: "查看冻结版本" });
+    await user.click(replayButton);
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结版本与工作区制品不一致");
+    expect(document.querySelector(".ir-module-content")).toHaveTextContent("冻结版本尚未验证");
+    await waitFor(() => expect(replayButton).toHaveFocus());
+  });
+
+  it("renders non-null preview ranges with their exact currencies", async () => {
+    const ready = publicationWorkspace(95);
+    const answerable = {
+      ...publicationPreview(),
+      assessment: { schema_version: "underwriting.v1" as const, answerability: "answerable" as const, direction: "provisional_neutral" as const, confidence: "medium" as const, content_hash: "c".repeat(64) },
+      value_range: { schema_version: "underwriting.v1" as const, minimum: "120", maximum: "180", currency: "USD" as const },
+      return_range: { schema_version: "underwriting.v1" as const, minimum: "-0.10", maximum: "0.25" },
+    };
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(ready);
+    vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockResolvedValue(answerable);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
+    const dialog = await screen.findByRole("dialog", { name: "确认冻结版本" });
+    expect(dialog).toHaveTextContent("120–180 USD");
+    expect(dialog).toHaveTextContent("-0.10–0.25");
+    expect(dialog).toHaveTextContent("provisional_neutral");
+    expect(dialog).toHaveTextContent("medium");
+    expect(dialog).toHaveTextContent("c".repeat(64));
+  });
+
+  it("serializes preview and publish while showing loading copy and rejecting a double publish", async () => {
+    const ready = publicationWorkspace(95);
+    const previewRequest = deferred<CompanyResearchPublicationPreview>();
+    const publishRequest = deferred<CompanyResearchFrozenRevision>();
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(ready);
+    vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockImplementation(() => previewRequest.promise);
+    const publish = vi.spyOn(investmentResearchApi, "publishCompanyResearch").mockImplementation(() => publishRequest.promise);
+    const user = userEvent.setup();
+    renderPage();
+
+    const previewButton = await screen.findByRole("button", { name: "预览冻结版本" });
+    await user.click(previewButton);
+    expect(screen.getByRole("button", { name: "正在生成冻结预览…" })).toBeDisabled();
+    await act(async () => { previewRequest.resolve(publicationPreview()); await Promise.resolve(); });
+    const publishButton = await screen.findByRole("button", { name: "冻结并发布" });
+    await user.dblClick(publishButton);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "正在冻结并发布…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "返回检查" })).toBeDisabled();
+    expect(previewButton).toBeDisabled();
+    const busyDialog = screen.getByRole("dialog", { name: "确认冻结版本" });
+    fireEvent(busyDialog, new Event("cancel", { bubbles: false, cancelable: true }));
+    expect(busyDialog).toBeInTheDocument();
+    await act(async () => { publishRequest.reject(new Error("stop")); await Promise.resolve(); });
+    expect(await screen.findByRole("alert")).toHaveTextContent("stop");
+    await waitFor(() => expect(publishButton).toHaveFocus());
+  });
+
+  it("serializes replay and export with loading copy and preserves Markdown newlines", async () => {
+    const completed = publicationWorkspace(100);
+    const revision = frozenRevisionFor(completed);
+    revision.memo_markdown = "第一段\n\n第二段\n- 缺口";
+    const replayRequest = deferred<CompanyResearchFrozenRevision>();
+    const exportRequest = deferred<CompanyResearchMarkdownExport>();
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(completed);
+    vi.spyOn(investmentResearchApi, "companyResearchRevision").mockImplementation(() => replayRequest.promise);
+    vi.spyOn(investmentResearchApi, "exportCompanyResearchRevision").mockImplementation(() => exportRequest.promise);
+    const user = userEvent.setup();
+    renderPage();
+
+    const replayButton = await screen.findByRole("button", { name: "查看冻结版本" });
+    await user.click(replayButton);
+    expect(screen.getByRole("button", { name: "正在载入冻结版本…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "导出 Markdown" })).toBeDisabled();
+    await act(async () => { replayRequest.resolve(revision); await Promise.resolve(); });
+    expect(screen.getByLabelText("冻结研究备忘录").textContent).toBe("第一段\n\n第二段\n- 缺口");
+    const exportButton = screen.getByRole("button", { name: "导出 Markdown" });
+    await user.click(exportButton);
+    expect(screen.getByRole("button", { name: "正在验证导出…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "查看冻结版本" })).toBeDisabled();
+    await act(async () => { exportRequest.reject(new Error("stop")); await Promise.resolve(); });
+  });
 
   it("returns focus on publication failures and reuses the preview idempotency key after response loss", async () => {
     const at95 = publicationWorkspace(95);
@@ -481,9 +670,108 @@ describe("Alphabet company research workbench", () => {
 
     await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
     await user.click(await screen.findByRole("button", { name: "冻结并发布" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("工作区已更新，请审核最新判断");
+    expect(await screen.findByRole("alert")).toHaveTextContent("工作区已更新，请重新生成冻结预览");
     expect(workspaceRead).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("dialog", { name: "确认冻结版本" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "预览冻结版本" })).toHaveFocus());
+  });
+
+  it("refreshes a preview conflict that remains at 95 percent and restores preview focus", async () => {
+    const at95 = publicationWorkspace(95);
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(at95).mockResolvedValueOnce(at95);
+    vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("请重新生成冻结预览");
+    await waitFor(() => expect(screen.getByRole("button", { name: "预览冻结版本" })).toHaveFocus());
+  });
+
+  it("refreshes a preview conflict to 100 percent and binds the concurrent frozen revision", async () => {
+    const at95 = publicationWorkspace(95);
+    const at100 = publicationWorkspace(100);
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(at95).mockResolvedValueOnce(at100);
+    vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
+    const replay = vi.spyOn(investmentResearchApi, "companyResearchRevision").mockResolvedValue(frozenRevisionFor(at100));
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("冻结版本已由并发请求发布");
+    expect(replay).toHaveBeenCalledWith(ids.project, ids.revision);
+    expect(document.querySelector(".ir-module-content")).toHaveTextContent("当前不可回答");
+    await waitFor(() => expect(screen.getByRole("button", { name: "查看冻结版本" })).toHaveFocus());
+  });
+
+  it("focuses the persistent replay control when a 409 reaches 100 percent but binding fails", async () => {
+    const at95 = publicationWorkspace(95);
+    const at100 = publicationWorkspace(100);
+    const mismatched = frozenRevisionFor(at100);
+    mismatched.artifacts[0] = { ...mismatched.artifacts[0], input_hash: "b".repeat(64) };
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(at95).mockResolvedValueOnce(at100);
+    vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
+    vi.spyOn(investmentResearchApi, "companyResearchRevision").mockResolvedValue(mismatched);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("冻结版本与工作区制品不一致");
+    expect(document.querySelector(".ir-module-content")).toHaveTextContent("冻结版本尚未验证");
+    await waitFor(() => expect(screen.getByRole("button", { name: "查看冻结版本" })).toHaveFocus());
+  });
+
+  it("keeps a concurrent 85 percent judgment editable and restores confirmation focus", async () => {
+    const at85 = publicationWorkspace(85);
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(at85).mockResolvedValueOnce(at85);
+    vi.spyOn(investmentResearchApi, "confirmCompanyResearchJudgment").mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "确认当前判断" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("请审核最新判断后再确认");
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认当前判断" })).toHaveFocus());
+  });
+
+  it("recognizes a concurrent confirmation and advances from 85 to 95 percent", async () => {
+    const at85 = publicationWorkspace(85);
+    const at95 = publicationWorkspace(95);
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(at85).mockResolvedValueOnce(at95);
+    vi.spyOn(investmentResearchApi, "confirmCompanyResearchJudgment").mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "确认当前判断" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("判断已由并发请求确认");
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "95");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "预览冻结版本" })).toHaveFocus());
+  });
+
+  it("recognizes a concurrent publication, binds the selected revision, and advances to 100 percent", async () => {
+    const at95 = publicationWorkspace(95);
+    const at100 = publicationWorkspace(100);
+    const revision = frozenRevisionFor(at100);
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(at95).mockResolvedValueOnce(at100);
+    vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockResolvedValue(publicationPreview());
+    vi.spyOn(investmentResearchApi, "publishCompanyResearch").mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
+    const replay = vi.spyOn(investmentResearchApi, "companyResearchRevision").mockResolvedValue(revision);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
+    await user.click(await screen.findByRole("button", { name: "冻结并发布" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("冻结版本已由并发请求发布");
+    expect(replay).toHaveBeenCalledWith(ids.project, ids.revision);
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+    expect(screen.getAllByText(`冻结版本 ${ids.revision}`)).toHaveLength(2);
+    await waitFor(() => expect(screen.getByRole("button", { name: "查看冻结版本" })).toHaveFocus());
   });
 
   it("invalidates an open publication preview when a newer workspace arrives", async () => {
@@ -525,6 +813,24 @@ describe("Alphabet company research workbench", () => {
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "95");
     await act(async () => { poll.resolve(at85); await Promise.resolve(); });
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "95");
+  });
+
+  it("restarts active polling after a publication mutation spans the poll deadline", async () => {
+    vi.useFakeTimers();
+    const at95 = publicationWorkspace(95);
+    const previewRequest = deferred<CompanyResearchPublicationPreview>();
+    const workspaceRead = vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(at95).mockResolvedValueOnce(at95);
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockImplementation(() => previewRequest.promise);
+    renderPage();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    fireEvent.click(screen.getByRole("button", { name: "预览冻结版本" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(workspaceRead).toHaveBeenCalledTimes(1);
+    await act(async () => { previewRequest.reject(new Error("stop")); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(workspaceRead).toHaveBeenCalledTimes(2);
   });
 
   it("renders all nine modules, live progress, gaps, source trace, and candidate review controls without publication preview", async () => {
@@ -584,8 +890,11 @@ describe("Alphabet company research workbench", () => {
     await decodeWorkspaceFixture(formal);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(formal);
+    mockFrozenRevision(formal);
+    const user = userEvent.setup();
     renderPage();
 
+    await bindFrozenWorkspace(user);
     expect(await screen.findByText("当前不可回答")).toBeVisible();
     expect(screen.getByText(/当前正式证据不足/)).toBeVisible();
     expect(screen.queryByText("判断尚在准备")).not.toBeInTheDocument();
@@ -596,9 +905,11 @@ describe("Alphabet company research workbench", () => {
     await decodeWorkspaceFixture(rich);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(rich);
+    mockFrozenRevision(rich);
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
+    await bindFrozenWorkspace(user);
     expect(screen.getByText("可回答")).toBeVisible();
     expect(screen.getByRole("heading", { name: "价值与回报范围" })).toBeVisible();
     expect(screen.getByText(/Q3 Cloud backlog 与 AI capex 回报验证/)).toBeVisible();
@@ -985,9 +1296,11 @@ describe("Alphabet company research workbench", () => {
     retained.modules = retained.modules.map((module) => module.key === "business_map" ? { ...module, state: "blocked", artifact_refs: [] } : module.key === "versions_changes_memo" ? { ...module, state: "preparing", artifact_refs: [] } : module);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(retained);
+    mockFrozenRevision(retained);
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
+    await bindFrozenWorkspace(user);
     await user.click(screen.getByRole("button", { name: /Google 如何赚钱/ }));
     expect(screen.getByText(/Google 如何赚钱已阻塞/)).toBeVisible();
     expect(screen.queryByText("Search")).not.toBeInTheDocument();
@@ -1003,9 +1316,11 @@ describe("Alphabet company research workbench", () => {
     const rich = valuationState === "pending" ? workspace() : answerableWithoutValuationFixture();
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(rich);
+    if (rich.preparation.status === "completed") mockFrozenRevision(rich);
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
+    if (rich.preparation.status === "completed") await bindFrozenWorkspace(user);
     await user.click(screen.getByRole("button", { name: /情景、估值与当前价格隐含/ }));
     expect(screen.getByText(copy, { exact: false })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "DCF 情景值" })).not.toBeInTheDocument();
@@ -1016,9 +1331,11 @@ describe("Alphabet company research workbench", () => {
     const rich = workspace({ status: "completed", rich: true });
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(rich);
+    mockFrozenRevision(rich);
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
+    await bindFrozenWorkspace(user);
     const assertions = [
       [/概览与当前判断/, "可回答"], [/Google 如何赚钱/, "Search；YouTube"], [/关键经营变量/, "revenue × growth"],
       [/来源、事实与缺口/, "2025 10-K, p. 32"], [/行业、竞争与监管/, "接口未提供行业、竞争与监管专属语义（不可推断）"],
@@ -1037,9 +1354,11 @@ describe("Alphabet company research workbench", () => {
     driver.payload.drivers[0].values.push({ ...observation("missing_metric", "not available"), state: "gap", source_ref: null, gap_key: "missing_metric_gap", assumption_key: null });
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(rich);
+    mockFrozenRevision(rich);
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
+    await bindFrozenWorkspace(user);
     await user.click(screen.getByRole("button", { name: /关键经营变量/ }));
 
     for (const [cardName, key] of [["search_growth 0.11", "assumption_search_growth"], ["missing_metric not available", "missing_metric_gap"]] as const) {
@@ -1058,7 +1377,11 @@ describe("Alphabet company research workbench", () => {
     await decodeWorkspaceFixture(answerable);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(answerable);
+    vi.spyOn(investmentResearchApi, "companyResearchRevision")
+      .mockResolvedValueOnce(frozenRevisionFor(answerable));
+    const user = userEvent.setup();
     const rendered = renderPage();
+    await bindFrozenWorkspace(user);
     expect(await screen.findByText("价值与回报范围未提供或不一致。")).toBeVisible();
     expect(screen.getByText("最强反证未提供。")).toBeVisible();
     expect(screen.getByText("下一验证事件未提供。")).toBeVisible();
@@ -1067,7 +1390,9 @@ describe("Alphabet company research workbench", () => {
     const partial = assessmentFixture("partially_answerable");
     await decodeWorkspaceFixture(partial);
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(partial);
+    vi.spyOn(investmentResearchApi, "companyResearchRevision").mockResolvedValue(frozenRevisionFor(partial));
     renderPage();
+    await bindFrozenWorkspace(user);
     expect(await screen.findByText("未提供阻塞项。")).toBeVisible();
   });
 
@@ -1078,8 +1403,11 @@ describe("Alphabet company research workbench", () => {
     ready.modules = ready.modules.map((module) => module.key === "versions_changes_memo" ? { ...module, state: "not_started", artifact_refs: [] } : module);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(ready);
+    mockFrozenRevision(ready);
+    const user = userEvent.setup();
     renderPage();
 
+    await bindFrozenWorkspace(user);
     expect(await screen.findByText("判断尚在准备")).toBeVisible();
     expect(screen.getByText("Q3 Cloud backlog 与 AI capex 回报验证")).toBeVisible();
     expect(screen.queryByText(/概览与当前判断标记为可查看，但所需制品缺失/)).not.toBeInTheDocument();
