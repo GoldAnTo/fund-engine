@@ -489,9 +489,7 @@ def test_foundation_golden_path_publishes_only_insufficient_evidence(session) ->
     assert summary.publication_status is PublicationStatus.USER_FROZEN
 
 
-def _mark_as_company_research(
-    session, project_id: UUID, *, flush: bool = True
-) -> None:
+def _mark_as_company_research(session, project_id: UUID, *, flush: bool = True) -> None:
     session.add(
         CompanyResearchPreparation(
             project_id=project_id,
@@ -533,6 +531,39 @@ def test_generic_publication_rejects_company_research_projects(session) -> None:
             idempotency_key="company-publication-guard",
         )
 
+    company_revision = UnderwritingResearchVersion(
+        object_id=graph["project"].primary_company_id,
+        basis_id=graph["draft"].content.historical_basis_id,
+        version_kind="company_research",
+        sequence=1,
+        content_hash="9" * 64,
+        parent_ids=[],
+        supersedes_id=None,
+        project_id=graph["project"].id,
+        boundary_id=None,
+        manifest_id=None,
+        manifest_schema="company-research.revision-manifest.v1",
+        publication_status="user_frozen",
+        created_at=NOW,
+    )
+    session.add(company_revision)
+    session.flush([company_revision])
+
+    with pytest.raises(
+        ValidationError,
+        match="generic publication is not available for company research projects",
+    ):
+        publisher.preview(graph["project"].id, graph["draft"].lock_version)
+    with pytest.raises(
+        ValidationError,
+        match="generic publication is not available for company research projects",
+    ):
+        publisher.publish(
+            graph["project"].id,
+            graph["draft"].lock_version,
+            idempotency_key="company-publication-guard-after-revision",
+        )
+
 
 def test_generic_publication_rejects_a_pending_company_research_preparation(
     session,
@@ -545,9 +576,7 @@ def test_generic_publication_rejects_a_pending_company_research_preparation(
         ValidationError,
         match="generic publication is not available for company research projects",
     ):
-        publisher.preview(
-            graph["project"].id, graph["draft"].lock_version
-        )
+        publisher.preview(graph["project"].id, graph["draft"].lock_version)
     with pytest.raises(
         ValidationError,
         match="generic publication is not available for company research projects",
@@ -673,7 +702,9 @@ def test_product_revision_reader_preserves_invalid_persisted_basis_error(
     )
     session.expire_all()
 
-    with pytest.raises(ValidationError, match="product foundation reference is invalid"):
+    with pytest.raises(
+        ValidationError, match="product foundation reference is invalid"
+    ):
         ResearchRevisionDiffService(session).revision_summary(revision.id)
 
 
@@ -1351,10 +1382,10 @@ def test_public_product_read_walks_1200_parents_once_without_recursion(
     nodes = []
     for index in range(1200):
         nodes.append(
-                SimpleNamespace(
-                    id=UUID(int=index + 1),
-                    project_id=UUID(int=9999),
-                    supersedes_id=nodes[-1].id if nodes else None,
+            SimpleNamespace(
+                id=UUID(int=index + 1),
+                project_id=UUID(int=9999),
+                supersedes_id=nodes[-1].id if nodes else None,
                 manifest_schema=PRODUCT_MANIFEST_SCHEMA,
             )
         )

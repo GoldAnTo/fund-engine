@@ -54,6 +54,8 @@ from app.underwriting.services.kernel import canonical_hash
 
 
 _STALE_MESSAGE = "expected parent is not the version family head"
+_COMPANY_RESEARCH_REVISION_KIND = "company_research"
+_COMPANY_RESEARCH_MANIFEST_SCHEMA = "company-research.revision-manifest.v1"
 # This bounds rows materialized and expanded in Python. Without a deployed FTS or
 # trigram extension, a leading-wildcard substring predicate may still scan in DB.
 _OBJECT_SEARCH_CANDIDATE_CAP = 256
@@ -503,6 +505,7 @@ class ProductRepository:
                 ),
             )
             .limit(1)
+            .execution_options(populate_existing=True)
         )
 
     def effective_object(
@@ -1099,9 +1102,10 @@ class ProductRepository:
         industry_id: UUID,
         as_of: datetime,
         limit: int,
-    ) -> tuple[
-        tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion], ...
-    ] | None:
+    ) -> (
+        tuple[tuple[UnderwritingResearchObject, UnderwritingObjectIdentityVersion], ...]
+        | None
+    ):
         """Return effective, complete Company groups directly exposed by an Industry.
 
         The direct relation is the auditable browse boundary.  We inspect no
@@ -1956,20 +1960,59 @@ class ProductRepository:
             statement = statement.with_for_update()
         return self._session.scalar(statement)
 
+    def company_research_revision_head(
+        self, project_id: UUID, *, lock: bool = False
+    ) -> UnderwritingResearchVersion | None:
+        statement = (
+            select(UnderwritingResearchVersion)
+            .where(
+                UnderwritingResearchVersion.project_id == project_id,
+                UnderwritingResearchVersion.version_kind
+                == _COMPANY_RESEARCH_REVISION_KIND,
+            )
+            .order_by(
+                UnderwritingResearchVersion.sequence.desc(),
+                UnderwritingResearchVersion.id.desc(),
+            )
+            .limit(1)
+        )
+        return self._session.scalar(statement.with_for_update() if lock else statement)
+
+    def company_research_revision(
+        self, revision_id: UUID
+    ) -> UnderwritingResearchVersion | None:
+        return self._session.scalar(
+            select(UnderwritingResearchVersion)
+            .where(UnderwritingResearchVersion.id == revision_id)
+            .execution_options(populate_existing=True)
+        )
+
     def manifest(self, manifest_id: UUID | None) -> UnderwritingRevisionManifest | None:
         if manifest_id is None:
             return None
-        return self._session.get(UnderwritingRevisionManifest, manifest_id)
+        return self._session.scalar(
+            select(UnderwritingRevisionManifest)
+            .where(UnderwritingRevisionManifest.id == manifest_id)
+            .execution_options(populate_existing=True)
+        )
 
     def boundary(self, boundary_id: UUID | None) -> UnderwritingRevisionBoundary | None:
         if boundary_id is None:
             return None
-        return self._session.get(UnderwritingRevisionBoundary, boundary_id)
+        return self._session.scalar(
+            select(UnderwritingRevisionBoundary)
+            .where(UnderwritingRevisionBoundary.id == boundary_id)
+            .execution_options(populate_existing=True)
+        )
 
     def assessment(
         self, assessment_id: UUID
     ) -> UnderwritingResearchAssessmentVersion | None:
-        return self._session.get(UnderwritingResearchAssessmentVersion, assessment_id)
+        return self._session.scalar(
+            select(UnderwritingResearchAssessmentVersion)
+            .where(UnderwritingResearchAssessmentVersion.id == assessment_id)
+            .execution_options(populate_existing=True)
+        )
 
     def revision_for_idempotency(
         self, project_id: UUID, idempotency_key: str
@@ -2139,6 +2182,64 @@ class ProductRepository:
             boundary_id=boundary_id,
             manifest_id=manifest_id,
             manifest_schema=_PRODUCT_MANIFEST_SCHEMA,
+            publication_status="user_frozen",
+            created_at=created_at,
+        )
+        self._session.add(row)
+        self._session.flush([row])
+        return row
+
+    def append_company_research_revision(
+        self,
+        *,
+        project_id: UUID,
+        object_id: UUID,
+        basis_id: UUID,
+        boundary_id: UUID,
+        manifest_id: UUID,
+        manifest_hash: str,
+        assessment_id: UUID,
+        parent_revision_id: UUID | None,
+        created_at: datetime,
+    ) -> UnderwritingResearchVersion:
+        """Append one immutable Company Research revision to its project chain."""
+        head = self.company_research_revision_head(project_id, lock=True)
+        actual_parent_id = head.id if head is not None else None
+        if actual_parent_id != parent_revision_id:
+            raise StaleParentError(_STALE_MESSAGE)
+        sequence = 1 if head is None else head.sequence + 1
+        content_hash = canonical_hash(
+            {
+                "schema_version": "company-research.research-revision.v1",
+                "project_id": str(project_id),
+                "object_id": str(object_id),
+                "basis_id": str(basis_id),
+                "version_kind": _COMPANY_RESEARCH_REVISION_KIND,
+                "sequence": sequence,
+                "boundary_id": str(boundary_id),
+                "manifest_id": str(manifest_id),
+                "manifest_hash": manifest_hash,
+                "assessment_id": str(assessment_id),
+                "parent_revision_id": (
+                    str(parent_revision_id) if parent_revision_id is not None else None
+                ),
+                "publication_status": "user_frozen",
+            }
+        )
+        row = UnderwritingResearchVersion(
+            object_id=object_id,
+            basis_id=basis_id,
+            version_kind=_COMPANY_RESEARCH_REVISION_KIND,
+            sequence=sequence,
+            content_hash=content_hash,
+            parent_ids=(
+                [str(parent_revision_id)] if parent_revision_id is not None else []
+            ),
+            supersedes_id=parent_revision_id,
+            project_id=project_id,
+            boundary_id=boundary_id,
+            manifest_id=manifest_id,
+            manifest_schema=_COMPANY_RESEARCH_MANIFEST_SCHEMA,
             publication_status="user_frozen",
             created_at=created_at,
         )

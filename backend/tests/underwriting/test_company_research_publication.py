@@ -4,11 +4,12 @@ from copy import deepcopy
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+from hashlib import sha256
 from threading import Barrier, BrokenBarrierError
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import bindparam, create_engine, func, select, text
+from sqlalchemy import bindparam, create_engine, event, func, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
@@ -30,8 +31,13 @@ from app.underwriting.persistence.company_research_repository import (
 from app.underwriting.persistence.product_models import (
     UnderwritingMarketCaptureEnvelope,
     UnderwritingPriceSnapshot,
+    UnderwritingResearchAssessmentVersion,
+    UnderwritingRevisionBoundary,
+    UnderwritingRevisionManifest,
     UnderwritingWorkspaceDraft,
 )
+from app.underwriting.persistence.models import UnderwritingResearchVersion
+from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.services.company_research_preparation import (
     CompanyResearchPreparationWorker,
 )
@@ -58,6 +64,7 @@ from tests.underwriting.test_company_research_workbench import (
 
 
 CONFIRMED_AT = NOW + timedelta(minutes=5)
+FROZEN_AT = CONFIRMED_AT + timedelta(minutes=5)
 REVIEWER = "human:local-user"
 REJECTED_FACT_KEY = "fy2025_other_bets_revenue"
 
@@ -187,6 +194,603 @@ def _confirmation_request(draft, memo, **changes) -> dict[str, object]:
     }
     values.update(changes)
     return values
+
+
+def _ready_to_freeze_workspace(session):
+    initialized, repository, preparation, job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    confirmation = CompanyResearchPublicationService(
+        session, now=lambda: CONFIRMED_AT
+    ).confirm_judgment(
+        project_id=initialized.project.id,
+        **_confirmation_request(draft, machine_memo),
+    )
+    session.flush()
+    return (
+        initialized,
+        repository,
+        preparation,
+        job,
+        draft,
+        machine_memo,
+        confirmation,
+    )
+
+
+def test_publication_preview_is_zero_write_and_keeps_not_answerable_closed(
+    session, monkeypatch
+) -> None:
+    initialized, repository, preparation, job, _draft, _machine_memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    before = _durable_publication_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+        job_id=job.id,
+    )
+    confirmed_memo = repository.current_artifact(initialized.project.id, "memo")
+    assert confirmed_memo is not None
+    pending = CompanyResearchEvent(
+        preparation_id=uuid4(),
+        sequence=1,
+        hash_version=2,
+        previous_event_hash=None,
+        event_type="pending_unrelated",
+        payload={},
+        content_hash="0" * 64,
+        created_at=FROZEN_AT,
+    )
+    session.add(pending)
+    original_flush = session.flush
+
+    def reject_flush(*args, **kwargs):
+        raise AssertionError("publication preview must not flush")
+
+    monkeypatch.setattr(session, "flush", reject_flush)
+    writes: list[str] = []
+
+    def capture_writes(_connection, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().split(None, 1)[0].upper() in {
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+        }:
+            writes.append(statement)
+
+    event.listen(session.bind, "before_cursor_execute", capture_writes)
+
+    try:
+        preview = CompanyResearchPublicationService(
+            session, now=lambda: FROZEN_AT
+        ).preview(
+            project_id=initialized.project.id,
+            expected_lock_version=confirmation.draft_lock_version,
+        )
+    finally:
+        event.remove(session.bind, "before_cursor_execute", capture_writes)
+
+    assert preview.assessment.answerability == "not_answerable"
+    assert preview.assessment.direction is None
+    assert preview.assessment.confidence is None
+    assert preview.value_range is None
+    assert preview.return_range is None
+    assert preview.blockers == tuple(confirmed_memo.payload["gap_keys"])
+    assert pending in session.new
+    assert writes == []
+    monkeypatch.setattr(session, "flush", original_flush)
+    with session.no_autoflush:
+        assert (
+            _durable_publication_snapshot(
+                session,
+                project_id=initialized.project.id,
+                preparation_id=preparation.id,
+                job_id=job.id,
+            )
+            == before
+        )
+
+
+def test_publish_freezes_one_company_research_revision_and_exactly_replays(
+    session,
+) -> None:
+    initialized, repository, preparation, _job, _draft, _machine_memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="alphabet-first-freeze",
+    )
+
+    assert revision.sequence == 1
+    assert revision.assessment.answerability == "not_answerable"
+    assert revision.assessment.direction is None
+    assert revision.assessment.confidence is None
+    assert revision.value_range is None
+    assert revision.return_range is None
+    assert revision.preparation_status == "completed"
+    assert revision.progress == 100
+    assert revision.current_step is None
+    assert revision.artifacts == preview.artifacts
+    assert service.revision(initialized.project.id, revision.id) == revision
+    assert (
+        service.publish(
+            project_id=initialized.project.id,
+            expected_lock_version=preview.expected_lock_version,
+            expected_manifest_hash=preview.manifest_hash,
+            idempotency_key="alphabet-first-freeze",
+        )
+        == revision
+    )
+
+    session.expire_all()
+    current_preparation = repository.preparation_for_project(
+        initialized.project.id, fresh=True
+    )
+    current_draft = session.scalar(
+        select(UnderwritingWorkspaceDraft)
+        .where(UnderwritingWorkspaceDraft.project_id == initialized.project.id)
+        .execution_options(populate_existing=True)
+    )
+    assert current_preparation is not None
+    assert (
+        current_preparation.status,
+        current_preparation.current_step,
+        current_preparation.progress,
+    ) == ("completed", None, 100)
+    assert current_draft is not None
+    assert current_draft.lock_version == preview.expected_lock_version + 1
+    assert current_draft.base_revision_id == revision.id
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingResearchVersion))
+        == 1
+    )
+    assert (
+        session.scalar(
+            select(func.count()).select_from(UnderwritingResearchAssessmentVersion)
+        )
+        == 1
+    )
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingRevisionBoundary))
+        == 1
+    )
+    assert (
+        session.scalar(select(func.count()).select_from(UnderwritingRevisionManifest))
+        == 1
+    )
+    events = repository.events(preparation.id)
+    assert events[-1].event_type == "company_research_published"
+    assert events[-1].payload == {
+        "revision_id": str(revision.id),
+        "manifest_hash": revision.manifest_hash,
+        "idempotency_key": "alphabet-first-freeze",
+    }
+
+
+def _frozen_row_snapshot(session, *, project_id, preparation_id):
+    session.expire_all()
+    repository = CompanyResearchRepository(session)
+    preparation = repository.preparation_for_project(project_id, fresh=True)
+    draft = session.scalar(
+        select(UnderwritingWorkspaceDraft)
+        .where(UnderwritingWorkspaceDraft.project_id == project_id)
+        .execution_options(populate_existing=True)
+    )
+    assert preparation is not None and draft is not None
+    return {
+        "preparation": _row_projection(preparation),
+        "draft": _row_projection(draft),
+        "assessment_count": session.scalar(
+            select(func.count()).select_from(UnderwritingResearchAssessmentVersion)
+        ),
+        "boundary_count": session.scalar(
+            select(func.count()).select_from(UnderwritingRevisionBoundary)
+        ),
+        "manifest_count": session.scalar(
+            select(func.count()).select_from(UnderwritingRevisionManifest)
+        ),
+        "revision_count": session.scalar(
+            select(func.count()).select_from(UnderwritingResearchVersion)
+        ),
+        "events": tuple(
+            _row_projection(row) for row in repository.events(preparation_id)
+        ),
+    }
+
+
+def test_publish_rejects_stale_or_changed_manifest_and_reused_key(session) -> None:
+    initialized, _repository, preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    session.commit()
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    before = _frozen_row_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+    )
+
+    with pytest.raises(ValidationError, match="manifest hash changed"):
+        service.publish(
+            project_id=initialized.project.id,
+            expected_lock_version=preview.expected_lock_version,
+            expected_manifest_hash="f" * 64,
+            idempotency_key="wrong-manifest",
+        )
+    session.commit()
+    assert (
+        _frozen_row_snapshot(
+            session,
+            project_id=initialized.project.id,
+            preparation_id=preparation.id,
+        )
+        == before
+    )
+
+    with pytest.raises(ConflictError, match="stale"):
+        service.publish(
+            project_id=initialized.project.id,
+            expected_lock_version=preview.expected_lock_version + 1,
+            expected_manifest_hash=preview.manifest_hash,
+            idempotency_key="stale-draft",
+        )
+    session.commit()
+    assert (
+        _frozen_row_snapshot(
+            session,
+            project_id=initialized.project.id,
+            preparation_id=preparation.id,
+        )
+        == before
+    )
+
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="one-key",
+    )
+    session.commit()
+    with pytest.raises(ConflictError, match="reused"):
+        service.publish(
+            project_id=initialized.project.id,
+            expected_lock_version=preview.expected_lock_version,
+            expected_manifest_hash="e" * 64,
+            idempotency_key="one-key",
+        )
+    with pytest.raises(ConflictError, match="stale"):
+        service.publish(
+            project_id=initialized.project.id,
+            expected_lock_version=preview.expected_lock_version,
+            expected_manifest_hash=preview.manifest_hash,
+            idempotency_key="different-key",
+        )
+    assert service.revision(initialized.project.id, revision.id) == revision
+
+
+@pytest.mark.parametrize(
+    ("owner", "method_name"),
+    (
+        (ProductRepository, "append_assessment"),
+        (ProductRepository, "append_boundary"),
+        (ProductRepository, "append_manifest"),
+        (ProductRepository, "append_company_research_revision"),
+        (ProductRepository, "reset_draft_after_publish"),
+        (CompanyResearchRepository, "append_event"),
+        (CompanyResearchPublicationService, "_complete_publication"),
+    ),
+    ids=(
+        "assessment",
+        "boundary",
+        "manifest",
+        "revision",
+        "draft_cas",
+        "publication_event",
+        "preparation_completion",
+    ),
+)
+def test_failure_after_each_publication_write_rolls_back_before_caller_commit(
+    session, monkeypatch, owner, method_name
+) -> None:
+    initialized, _repository, preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    session.commit()
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    before = _frozen_row_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+    )
+    original = getattr(owner, method_name)
+
+    def fail_after_write(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        raise RuntimeError(f"injected after {method_name}")
+
+    monkeypatch.setattr(owner, method_name, fail_after_write)
+
+    with pytest.raises(RuntimeError, match=f"injected after {method_name}"):
+        service.publish(
+            project_id=initialized.project.id,
+            expected_lock_version=preview.expected_lock_version,
+            expected_manifest_hash=preview.manifest_hash,
+            idempotency_key=f"failure-{method_name}",
+        )
+    session.commit()
+
+    assert (
+        _frozen_row_snapshot(
+            session,
+            project_id=initialized.project.id,
+            preparation_id=preparation.id,
+        )
+        == before
+    )
+
+
+def test_export_is_deterministic_hashed_and_preserves_frozen_domain_order(
+    session,
+) -> None:
+    initialized, repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="alphabet-export",
+    )
+    frozen_evidence = next(
+        item for item in revision.artifacts if item.kind == "evidence_index"
+    )
+    evidence = repository.artifact(frozen_evidence.id)
+    assert evidence is not None
+
+    first = service.export(initialized.project.id, revision.id)
+    second = service.export(initialized.project.id, revision.id)
+
+    assert first == second
+    assert first.filename == f"alphabet-company-research-{revision.id}.md"
+    assert first.media_type == "text/markdown"
+    assert sha256(first.content.encode("utf-8")).hexdigest() == first.content_hash
+    assert "not_answerable" in first.content
+    assert "No authenticated market price is bundled." in first.content
+    assert "Item 7, Results of Operations" in first.content
+    headings = (
+        "## Revision",
+        "## Company and Securities",
+        "## Historical Basis",
+        "## Strategy and Model",
+        "## Assessment",
+        "## Memo",
+        "## Evidence",
+        "## Research Gaps",
+        "## Assumptions",
+        "## Strongest Counterevidence",
+        "## Next Verification Events",
+    )
+    assert tuple(first.content.index(heading) for heading in headings) == tuple(
+        sorted(first.content.index(heading) for heading in headings)
+    )
+    fact_keys = tuple(item["fact_key"] for item in evidence.payload["facts"])
+    assert tuple(first.content.index(key) for key in fact_keys) == tuple(
+        sorted(first.content.index(key) for key in fact_keys)
+    )
+
+
+def test_revision_replay_uses_frozen_artifact_ids_not_later_current_heads(
+    session,
+) -> None:
+    initialized, repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="frozen-head-replay",
+    )
+    frozen_memo_ref = next(item for item in revision.artifacts if item.kind == "memo")
+    frozen_memo = repository.artifact(frozen_memo_ref.id)
+    assert frozen_memo is not None
+    successor = repository.append_artifact(
+        project_id=initialized.project.id,
+        kind="memo",
+        input_hash=frozen_memo.input_hash,
+        payload=frozen_memo.payload,
+        source_refs=frozen_memo.source_refs,
+        expected_parent_id=frozen_memo.id,
+        created_at=FROZEN_AT + timedelta(minutes=1),
+    )
+
+    assert (
+        repository.current_artifact(initialized.project.id, "memo").id == successor.id
+    )
+    assert service.revision(initialized.project.id, revision.id) == revision
+
+
+def test_revision_replay_fails_closed_for_a_tampered_frozen_artifact(session) -> None:
+    initialized, _repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="tampered-frozen-replay",
+    )
+    frozen = next(item for item in revision.artifacts if item.kind == "business_map")
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        frozen.id,
+        content_hash="0" * 64,
+    )
+    session.expire_all()
+
+    with pytest.raises(CompanyResearchIntegrityError, match="content hash mismatch"):
+        service.revision(initialized.project.id, revision.id)
+
+
+def test_sqlite_concurrent_different_publication_keys_create_at_most_one_revision(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "company-research-publication.sqlite3"
+    engine = create_engine(
+        f"sqlite:///{database_path}",
+        future=True,
+        connect_args={"check_same_thread": False, "timeout": 15},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    setup = sessions()
+    try:
+        initialized, _repository, _preparation, _job, _draft, _memo, confirmation = (
+            _ready_to_freeze_workspace(setup)
+        )
+        project_id = initialized.project.id
+        preview = CompanyResearchPublicationService(
+            setup, now=lambda: FROZEN_AT
+        ).preview(
+            project_id=project_id,
+            expected_lock_version=confirmation.draft_lock_version,
+        )
+        setup.commit()
+    finally:
+        setup.close()
+    barrier = Barrier(2)
+
+    def publish_once(key: str):
+        concurrent = sessions()
+        try:
+            try:
+                with concurrent.begin_nested():
+                    assert (
+                        concurrent.scalar(
+                            select(UnderwritingWorkspaceDraft.id).where(
+                                UnderwritingWorkspaceDraft.project_id == project_id
+                            )
+                        )
+                        is not None
+                    )
+                    barrier.wait()
+                    result = CompanyResearchPublicationService(
+                        concurrent, now=lambda: FROZEN_AT
+                    ).publish(
+                        project_id=project_id,
+                        expected_lock_version=preview.expected_lock_version,
+                        expected_manifest_hash=preview.manifest_hash,
+                        idempotency_key=key,
+                    )
+                concurrent.commit()
+                return result, None
+            except Exception as exc:  # noqa: BLE001 - assert public taxonomy below
+                concurrent.commit()
+                return None, exc
+        finally:
+            concurrent.close()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = tuple(
+                executor.map(publish_once, ("different-key-a", "different-key-b"))
+            )
+        results = tuple(result for result, error in outcomes if error is None)
+        errors = tuple(error for result, error in outcomes if result is None)
+        assert len(results) == 1
+        assert len(errors) == 1
+        assert type(errors[0]) is ConflictError
+        verify = sessions()
+        try:
+            assert (
+                verify.scalar(
+                    select(func.count()).select_from(UnderwritingResearchVersion)
+                )
+                == 1
+            )
+            assert (
+                verify.scalar(
+                    select(func.count()).select_from(UnderwritingRevisionManifest)
+                )
+                == 1
+            )
+        finally:
+            verify.close()
+    finally:
+        engine.dispose()
+
+
+def test_postgres_company_research_publication_if_configured(session, engine) -> None:
+    if engine.dialect.name != "postgresql":
+        pytest.skip("TEST_DATABASE_URL is not configured")
+    initialized, _repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    project_id = initialized.project.id
+    preview = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT).preview(
+        project_id=project_id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    session.commit()
+    sessions = sessionmaker(bind=engine, future=True)
+    first = sessions()
+    second = sessions()
+    try:
+        winner = CompanyResearchPublicationService(
+            first, now=lambda: FROZEN_AT
+        ).publish(
+            project_id=project_id,
+            expected_lock_version=preview.expected_lock_version,
+            expected_manifest_hash=preview.manifest_hash,
+            idempotency_key="company-research-pg",
+        )
+        first.commit()
+        replayed = CompanyResearchPublicationService(
+            second, now=lambda: FROZEN_AT
+        ).publish(
+            project_id=project_id,
+            expected_lock_version=preview.expected_lock_version,
+            expected_manifest_hash=preview.manifest_hash,
+            idempotency_key="company-research-pg",
+        )
+        assert replayed == winner
+    finally:
+        first.close()
+        second.close()
 
 
 def _rewrite_one_event_type(

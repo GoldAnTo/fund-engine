@@ -1236,9 +1236,27 @@ class CompanyResearchRepository:
         self, project_id: UUID
     ) -> CompanyResearchPublicationState:
         """Capture every mutable owner and immutable authentication input freshly."""
+        return self._publication_state(project_id, lock=True)
+
+    def publication_state(self, project_id: UUID) -> CompanyResearchPublicationState:
+        """Read the complete publication boundary freshly without reserving a writer."""
+        return self._publication_state(project_id, lock=False)
+
+    def _publication_state(
+        self, project_id: UUID, *, lock: bool
+    ) -> CompanyResearchPublicationState:
         if type(project_id) is not UUID:
             raise ValidationError("project_id must be a UUID")
-        project = self.reserve_publication_writer(project_id)
+        if lock:
+            project = self.reserve_publication_writer(project_id)
+        else:
+            project = self._session.scalar(
+                select(UnderwritingResearchProject)
+                .where(UnderwritingResearchProject.id == project_id)
+                .execution_options(populate_existing=True)
+            )
+            if project is None:
+                raise ValidationError("company research project not found")
         preparation_id = self._session.scalar(
             select(CompanyResearchPreparation.id).where(
                 CompanyResearchPreparation.project_id == project_id
@@ -1246,13 +1264,29 @@ class CompanyResearchRepository:
         )
         if preparation_id is None:
             raise ValidationError("company research preparation not found")
-        preparation = self._preparation_for_update(
-            preparation_id, populate_existing=True
+        preparation = (
+            self._preparation_for_update(preparation_id, populate_existing=True)
+            if lock
+            else self.preparation_for_project(project_id, fresh=True)
         )
         if preparation is None or preparation.project_id != project_id:
             raise ValidationError("company research preparation not found")
-        job = self._locked_prepare_job(preparation, populate_existing=True)
-        draft = self._workspace_draft_for_update(project_id)
+        if lock:
+            job = self._locked_prepare_job(preparation, populate_existing=True)
+            draft = self._workspace_draft_for_update(project_id)
+        else:
+            job = self._session.scalar(
+                select(Job)
+                .where(Job.id == preparation.job_id)
+                .execution_options(populate_existing=True)
+            )
+            draft = self._session.scalar(
+                select(UnderwritingWorkspaceDraft)
+                .where(UnderwritingWorkspaceDraft.project_id == project_id)
+                .execution_options(populate_existing=True)
+            )
+        if job is None:
+            raise ValidationError("company research preparation job not found")
         if draft is None:
             raise ValidationError("company research workspace draft is missing")
         try:
@@ -1262,30 +1296,30 @@ class CompanyResearchRepository:
                 "company research workspace draft content is invalid"
             ) from exc
 
-        memberships = tuple(
-            self._session.scalars(
-                select(UnderwritingResearchProjectSecurity)
-                .where(UnderwritingResearchProjectSecurity.project_id == project_id)
-                .order_by(UnderwritingResearchProjectSecurity.security_id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
+        membership_statement = (
+            select(UnderwritingResearchProjectSecurity)
+            .where(UnderwritingResearchProjectSecurity.project_id == project_id)
+            .order_by(UnderwritingResearchProjectSecurity.security_id)
+            .execution_options(populate_existing=True)
         )
+        if lock:
+            membership_statement = membership_statement.with_for_update()
+        memberships = tuple(self._session.scalars(membership_statement))
         authority_ids = tuple(
             sorted(
                 {project.primary_company_id, *(row.security_id for row in memberships)},
                 key=str,
             )
         )
-        authorities = tuple(
-            self._session.scalars(
-                select(UnderwritingResearchObject)
-                .where(UnderwritingResearchObject.id.in_(authority_ids))
-                .order_by(UnderwritingResearchObject.id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
+        authority_statement = (
+            select(UnderwritingResearchObject)
+            .where(UnderwritingResearchObject.id.in_(authority_ids))
+            .order_by(UnderwritingResearchObject.id)
+            .execution_options(populate_existing=True)
         )
+        if lock:
+            authority_statement = authority_statement.with_for_update()
+        authorities = tuple(self._session.scalars(authority_statement))
         authority_by_id = {row.id: row for row in authorities}
         company = authority_by_id.get(project.primary_company_id)
         securities = tuple(
@@ -1303,12 +1337,14 @@ class CompanyResearchRepository:
             raise CompanyResearchIntegrityError(
                 "company research historical basis is missing"
             )
-        historical_basis = self._session.scalar(
+        historical_basis_statement = (
             select(UnderwritingHistoricalBasis)
             .where(UnderwritingHistoricalBasis.id == historical_basis_id)
-            .with_for_update()
             .execution_options(populate_existing=True)
         )
+        if lock:
+            historical_basis_statement = historical_basis_statement.with_for_update()
+        historical_basis = self._session.scalar(historical_basis_statement)
         if historical_basis is None:
             raise CompanyResearchIntegrityError(
                 "company research historical basis is invalid"
@@ -1321,31 +1357,31 @@ class CompanyResearchRepository:
             UnderwritingResearchScopeVersion,
             UnderwritingResearchAgendaVersion,
         ):
-            foundation_heads.append(
-                self._session.scalar(
-                    select(model)
-                    .where(model.project_id == project_id)
-                    .order_by(model.version.desc(), model.id.desc())
-                    .limit(1)
-                    .with_for_update()
-                    .execution_options(populate_existing=True)
-                )
-            )
-
-        all_artifacts = tuple(
-            self._session.scalars(
-                select(CompanyResearchArtifactVersion)
-                .where(CompanyResearchArtifactVersion.project_id == project_id)
-                .order_by(
-                    CompanyResearchArtifactVersion.kind,
-                    CompanyResearchArtifactVersion.version,
-                    CompanyResearchArtifactVersion.id,
-                )
-                .limit(2049)
-                .with_for_update()
+            foundation_statement = (
+                select(model)
+                .where(model.project_id == project_id)
+                .order_by(model.version.desc(), model.id.desc())
+                .limit(1)
                 .execution_options(populate_existing=True)
             )
+            if lock:
+                foundation_statement = foundation_statement.with_for_update()
+            foundation_heads.append(self._session.scalar(foundation_statement))
+
+        artifact_statement = (
+            select(CompanyResearchArtifactVersion)
+            .where(CompanyResearchArtifactVersion.project_id == project_id)
+            .order_by(
+                CompanyResearchArtifactVersion.kind,
+                CompanyResearchArtifactVersion.version,
+                CompanyResearchArtifactVersion.id,
+            )
+            .limit(2049)
+            .execution_options(populate_existing=True)
         )
+        if lock:
+            artifact_statement = artifact_statement.with_for_update()
+        all_artifacts = tuple(self._session.scalars(artifact_statement))
         if len(all_artifacts) > 2048:
             raise CompanyResearchIntegrityError(
                 "company research artifact history limit exceeded"
@@ -1362,7 +1398,7 @@ class CompanyResearchRepository:
         artifact_chains: dict[str, tuple[CompanyResearchArtifactVersion, ...]] = {}
         for kind in sorted(rows_by_kind):
             try:
-                head = self.current_artifact(project_id, kind, lock=True)
+                head = self.current_artifact(project_id, kind, lock=lock)
             except ConflictError as exc:
                 raise CompanyResearchIntegrityError(
                     "company research artifact history has multiple current heads"
@@ -1371,14 +1407,14 @@ class CompanyResearchRepository:
                 raise CompanyResearchIntegrityError(
                     "company research artifact history is incomplete"
                 )
-            chain = self.artifact_chain(head.id, lock=True)
+            chain = self.artifact_chain(head.id, lock=lock)
             if len(chain) != len(rows_by_kind[kind]):
                 raise CompanyResearchIntegrityError(
                     "company research artifact parent closure is invalid"
                 )
             artifact_heads[kind] = head
             artifact_chains[kind] = chain
-        events = self.events(preparation.id, lock=True)
+        events = self.events(preparation.id, lock=lock, fresh=not lock)
         mandate = foundation_heads[0]
         scope = foundation_heads[1]
         agenda = foundation_heads[2]
@@ -2575,11 +2611,13 @@ class CompanyResearchRepository:
             )
 
     def artifact(
-        self, artifact_id: UUID, *, lock: bool = False
+        self, artifact_id: UUID, *, lock: bool = False, fresh: bool = False
     ) -> CompanyResearchArtifactVersion | None:
         statement = select(CompanyResearchArtifactVersion).where(
             CompanyResearchArtifactVersion.id == artifact_id
         )
+        if fresh:
+            statement = statement.execution_options(populate_existing=True)
         if lock:
             statement = statement.with_for_update().execution_options(
                 populate_existing=True
@@ -2971,13 +3009,15 @@ class CompanyResearchRepository:
         )
 
     def events(
-        self, preparation_id: UUID, *, lock: bool = False
+        self, preparation_id: UUID, *, lock: bool = False, fresh: bool = False
     ) -> tuple[CompanyResearchEvent, ...]:
         statement = (
             select(CompanyResearchEvent)
             .where(CompanyResearchEvent.preparation_id == preparation_id)
             .order_by(CompanyResearchEvent.sequence)
         )
+        if fresh:
+            statement = statement.execution_options(populate_existing=True)
         if lock:
             statement = statement.with_for_update().execution_options(
                 populate_existing=True
