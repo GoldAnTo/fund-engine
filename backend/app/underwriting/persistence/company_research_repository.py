@@ -2094,6 +2094,8 @@ class CompanyResearchRepository:
         cutoff_at: datetime | None = None,
         fresh: bool = False,
         lock: bool = False,
+        frozen_company_id: UUID | None = None,
+        frozen_security_ids: Mapping[str, UUID] | None = None,
     ) -> None:
         if not bindings:
             return
@@ -2102,18 +2104,35 @@ class CompanyResearchRepository:
             if cutoff_at is not None
             else None
         )
-        project_record = ProductRepository(self._session).project(project_id)
-        if project_record is None:
-            raise ValidationError("company research market snapshot binding is invalid")
-        project, security_ids = project_record
-        securities = {
-            row.external_key: row.id
-            for row in (
-                self._session.get(UnderwritingResearchObject, value)
-                for value in security_ids
+        if frozen_company_id is None and frozen_security_ids is None:
+            project_record = ProductRepository(self._session).project(project_id)
+            if project_record is None:
+                raise ValidationError(
+                    "company research market snapshot binding is invalid"
+                )
+            project, security_ids = project_record
+            company_id = project.primary_company_id
+            securities = {
+                row.external_key: row.id
+                for row in (
+                    self._session.get(UnderwritingResearchObject, value)
+                    for value in security_ids
+                )
+                if row is not None and row.kind == "security"
+            }
+        elif (
+            type(frozen_company_id) is UUID
+            and isinstance(frozen_security_ids, Mapping)
+            and frozen_security_ids
+            and all(
+                isinstance(key, str) and key and type(value) is UUID
+                for key, value in frozen_security_ids.items()
             )
-            if row is not None and row.kind == "security"
-        }
+        ):
+            company_id = frozen_company_id
+            securities = dict(frozen_security_ids)
+        else:
+            raise ValidationError("company research market snapshot binding is invalid")
         expected_roles = (
             {(FrozenMarketSnapshotRole.PRICE, key) for key in securities}
             | {(FrozenMarketSnapshotRole.SECURITY_RIGHTS, key) for key in securities}
@@ -2233,7 +2252,7 @@ class CompanyResearchRepository:
                     "company research market snapshot binding is invalid"
                 )
             if binding.role is FrozenMarketSnapshotRole.CAPITAL_STRUCTURE and (
-                row.company_id != project.primary_company_id or row.currency != "USD"
+                row.company_id != company_id or row.currency != "USD"
             ):
                 raise ValidationError(
                     "company research market snapshot binding is invalid"

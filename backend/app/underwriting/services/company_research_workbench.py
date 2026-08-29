@@ -660,21 +660,22 @@ class CompanyResearchWorkbench:
         self,
         project_id: UUID,
         *,
+        lock: bool,
         expected_draft_id: UUID,
         expected_draft_lock_version: int,
         preparation: CompanyResearchPreparation,
         company_external_key: str,
     ) -> tuple[dict[str, WorkbenchArtifact], tuple[dict, ...]]:
         """Materialize all artifact families once; never query once per module."""
-        rows = tuple(
-            self._session.scalars(
-                select(CompanyResearchArtifactVersion)
-                .where(CompanyResearchArtifactVersion.project_id == project_id)
-                .limit(_MAX_ARTIFACT_HISTORY + 1)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
+        statement = (
+            select(CompanyResearchArtifactVersion)
+            .where(CompanyResearchArtifactVersion.project_id == project_id)
+            .limit(_MAX_ARTIFACT_HISTORY + 1)
+            .execution_options(populate_existing=True)
         )
+        if lock:
+            statement = statement.with_for_update()
+        rows = tuple(self._session.scalars(statement))
         if len(rows) > _MAX_ARTIFACT_HISTORY:
             raise ValidationError("company research artifact history limit exceeded")
         by_id = {row.id: row for row in rows}
@@ -733,7 +734,9 @@ class CompanyResearchWorkbench:
             head_rows[row.kind] = row
         if evidence_chain is not None:
             if source_research_gaps is None:
-                raise ValidationError("company research evidence audit history is invalid")
+                raise ValidationError(
+                    "company research evidence audit history is invalid"
+                )
             self._validate_evidence_review_chain(
                 evidence_chain,
                 research_gaps=source_research_gaps,
@@ -744,7 +747,7 @@ class CompanyResearchWorkbench:
                 preparation=preparation,
                 evidence_chain=evidence_chain,
                 research_gaps=source_research_gaps,
-                events=self._company.events(preparation.id, lock=True),
+                events=self._company.events(preparation.id, lock=lock, fresh=not lock),
             )
         judgment_head = head_rows.get("judgment_context")
         if judgment_head is not None:
@@ -783,7 +786,9 @@ class CompanyResearchWorkbench:
             raise ValidationError("research gaps payload is invalid")
         return heads, tuple(current_gap_values)
 
-    def workspace(self, *, project_id: UUID) -> CompanyResearchWorkspace:
+    def workspace(
+        self, *, project_id: UUID, lock: bool = True
+    ) -> CompanyResearchWorkspace:
         # This deliberately avoids ``ResearchProjectService.status()``: that
         # projection loads every Security identity one-by-one, while a company
         # workbench needs neither Security identity nor a mutable identity
@@ -793,7 +798,7 @@ class CompanyResearchWorkbench:
             raise ValidationError("company research project not found")
         project, _security_ids = record
         preparation = self._company.preparation_for_project(
-            project_id, fresh=True, lock=True
+            project_id, fresh=True, lock=lock
         )
         if preparation is None:
             raise ValidationError("company research preparation not found")
@@ -828,6 +833,7 @@ class CompanyResearchWorkbench:
             )
         heads, current_gap_values = self._heads(
             project_id,
+            lock=lock,
             expected_draft_id=draft.id,
             expected_draft_lock_version=draft.lock_version,
             preparation=preparation,
@@ -863,9 +869,7 @@ class CompanyResearchWorkbench:
                     valuation_state = "blocked"
                 else:
                     valuation_state = "pending"
-            visible_artifacts = (
-                artifacts if state in {"ready", "needs_review"} else ()
-            )
+            visible_artifacts = artifacts if state in {"ready", "needs_review"} else ()
             modules.append(
                 WorkbenchModule(key, state, visible_artifacts, valuation_state)
             )

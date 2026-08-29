@@ -8,6 +8,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
+from html import escape as html_escape
 from typing import Literal
 from uuid import UUID
 
@@ -61,7 +62,7 @@ from app.underwriting.services.kernel import canonical_hash
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _REVIEWER = "human:local-user"
 _MANIFEST_SCHEMA = "company-research.revision-manifest.v1"
-_BOUNDARY_SCHEMA = "company-research.revision-boundary.v1"
+_BOUNDARY_SCHEMA = "company-research.boundary.v1"
 _ASSESSMENT_SCHEMA = "company-research.research-assessment.v1"
 _MODEL_VERSION = "company-research-model.v1"
 _FROZEN_ARTIFACT_KINDS = (
@@ -487,7 +488,7 @@ class CompanyResearchPublicationService:
             )
 
     def _authenticate_workspace_model(
-        self, state: CompanyResearchPublicationState
+        self, state: CompanyResearchPublicationState, *, lock: bool
     ) -> CompanyResearchWorkspace:
         if state.draft.base_revision_id is not None:
             raise CompanyResearchIntegrityError(
@@ -496,7 +497,7 @@ class CompanyResearchPublicationService:
         try:
             workspace = CompanyResearchWorkbench(
                 self._session, now=self._now
-            ).workspace(project_id=state.project.id)
+            ).workspace(project_id=state.project.id, lock=lock)
         except ValidationError as exc:
             raise CompanyResearchIntegrityError(
                 "company research publication model closure is invalid"
@@ -525,7 +526,7 @@ class CompanyResearchPublicationService:
         return workspace
 
     def _authenticate_fresh_market_inputs(
-        self, state: CompanyResearchPublicationState
+        self, state: CompanyResearchPublicationState, *, lock: bool
     ) -> None:
         judgment = state.artifact_heads.get("judgment_context")
         evidence = state.artifact_heads.get("evidence_index")
@@ -549,7 +550,7 @@ class CompanyResearchPublicationService:
                 bindings=bindings,
                 cutoff_at=self._repository.evidence_cutoff(evidence),
                 fresh=True,
-                lock=True,
+                lock=lock,
             )
         except ValidationError as exc:
             raise CompanyResearchIntegrityError(
@@ -636,7 +637,7 @@ class CompanyResearchPublicationService:
             )
 
     def _authenticate_common_state(
-        self, state: CompanyResearchPublicationState
+        self, state: CompanyResearchPublicationState, *, lock: bool
     ) -> _AuthenticatedPublication:
         self._authenticate_lifecycle_chronology(state)
         if (
@@ -662,8 +663,8 @@ class CompanyResearchPublicationService:
         self._authenticate_identity_foundation_and_basis(
             state, source_contract=source_contract
         )
-        workspace = self._authenticate_workspace_model(state)
-        self._authenticate_fresh_market_inputs(state)
+        workspace = self._authenticate_workspace_model(state, lock=lock)
+        self._authenticate_fresh_market_inputs(state, lock=lock)
         self._authenticate_cross_artifact_chronology(state, workspace)
         memo = state.artifact_heads.get("memo")
         if memo is None:
@@ -1147,7 +1148,7 @@ class CompanyResearchPublicationService:
         expected_lock_version = self._expected_lock(expected_lock_version)
         with self._session.no_autoflush:
             state = self._repository.publication_state(project_id)
-            authenticated = self._authenticate_common_state(state)
+            authenticated = self._authenticate_common_state(state, lock=False)
             return self._preview_from_authenticated(
                 authenticated, expected_lock_version=expected_lock_version
             )
@@ -1263,6 +1264,9 @@ class CompanyResearchPublicationService:
                 "boundary_id",
                 "assessment_id",
                 "preview_manifest_hash",
+                "preparation_id",
+                "idempotency_key",
+                "published_at",
             }
             if (
                 set(manifest) != expected_manifest_keys
@@ -1274,6 +1278,61 @@ class CompanyResearchPublicationService:
                 raise CompanyResearchIntegrityError(
                     "company research revision manifest hash is invalid"
                 )
+            preparation_id = self._manifest_uuid(
+                manifest.get("preparation_id"),
+                "company research frozen preparation reference",
+            )
+            idempotency_key = manifest.get("idempotency_key")
+            raw_published_at = manifest.get("published_at")
+            try:
+                published_at = self._stored_utc(
+                    datetime.fromisoformat(raw_published_at),
+                    "company research frozen publication time",
+                )
+            except (TypeError, ValueError) as exc:
+                raise CompanyResearchIntegrityError(
+                    "company research frozen publication identity is invalid"
+                ) from exc
+            publication_events = tuple(
+                event
+                for event in self._repository.events(preparation_id, fresh=True)
+                if event.event_type == "company_research_published"
+                and event.payload.get("revision_id") == str(row.id)
+            )
+            if (
+                not isinstance(idempotency_key, str)
+                or not idempotency_key
+                or manifest_row.idempotency_key != idempotency_key
+                or raw_published_at != published_at.isoformat()
+                or len(publication_events) != 1
+                or publication_events[0].payload
+                != {
+                    "revision_id": str(row.id),
+                    "manifest_hash": manifest_row.content_hash,
+                    "idempotency_key": idempotency_key,
+                }
+                or any(
+                    self._stored_utc(value, field) != published_at
+                    for value, field in (
+                        (row.created_at, "company research revision created_at"),
+                        (
+                            manifest_row.created_at,
+                            "company research manifest created_at",
+                        ),
+                        (
+                            boundary_row.created_at,
+                            "company research boundary created_at",
+                        ),
+                        (
+                            publication_events[0].created_at,
+                            "company research publication event created_at",
+                        ),
+                    )
+                )
+            ):
+                raise CompanyResearchIntegrityError(
+                    "company research frozen publication identity is invalid"
+                )
             assessment_id = self._manifest_uuid(
                 manifest.get("assessment_id"),
                 "company research assessment reference",
@@ -1281,6 +1340,15 @@ class CompanyResearchPublicationService:
             assessment_row = product.assessment(assessment_id)
             assessment_payload = self._manifest_dict(
                 manifest.get("assessment"), "company research frozen assessment"
+            )
+            raw_parent_assessment_id = assessment_payload.get("parent_assessment_id")
+            parent_assessment_id = (
+                None
+                if raw_parent_assessment_id is None
+                else self._manifest_uuid(
+                    raw_parent_assessment_id,
+                    "company research parent assessment reference",
+                )
             )
             if (
                 assessment_row is None
@@ -1300,6 +1368,7 @@ class CompanyResearchPublicationService:
                 }
                 or assessment_payload.get("schema_version") != _ASSESSMENT_SCHEMA
                 or assessment_payload.get("project_id") != str(project_id)
+                or assessment_row.supersedes_id != parent_assessment_id
                 or assessment_payload.get("answerability")
                 != assessment_row.answerability
                 or assessment_payload.get("direction") != assessment_row.direction
@@ -1312,6 +1381,11 @@ class CompanyResearchPublicationService:
                 or assessment_payload.get("next_review_at") is not None
                 or assessment_row.next_review_at is not None
                 or assessment_row.content_hash != canonical_hash(assessment_payload)
+                or self._stored_utc(
+                    assessment_row.created_at,
+                    "company research assessment created_at",
+                )
+                != published_at
             ):
                 raise CompanyResearchIntegrityError(
                     "company research frozen assessment is invalid"
@@ -1441,22 +1515,6 @@ class CompanyResearchPublicationService:
                 raise CompanyResearchIntegrityError(
                     "company research frozen market boundary is invalid"
                 )
-            try:
-                bindings = tuple(
-                    self._repository.market_binding_from_payload(value)
-                    for value in binding_payloads
-                )
-                self._repository.validate_market_snapshot_bindings(
-                    project_id=project_id,
-                    bindings=bindings,
-                    cutoff_at=datetime.fromisoformat(manifest["cutoff_at"]),
-                    fresh=True,
-                    lock=False,
-                )
-            except (TypeError, ValueError, ValidationError) as exc:
-                raise CompanyResearchIntegrityError(
-                    "company research frozen market boundary is invalid"
-                ) from exc
             parent_id = row.supersedes_id
             if row.parent_ids != (
                 [str(parent_id)] if parent_id is not None else []
@@ -1524,6 +1582,26 @@ class CompanyResearchPublicationService:
                 raise CompanyResearchIntegrityError(
                     "company research frozen identity is invalid"
                 ) from exc
+            try:
+                bindings = tuple(
+                    self._repository.market_binding_from_payload(value)
+                    for value in binding_payloads
+                )
+                self._repository.validate_market_snapshot_bindings(
+                    project_id=project_id,
+                    bindings=bindings,
+                    cutoff_at=cutoff_at,
+                    fresh=True,
+                    lock=False,
+                    frozen_company_id=company.object_id,
+                    frozen_security_ids={
+                        value.external_key: value.object_id for value in securities
+                    },
+                )
+            except (TypeError, ValueError, ValidationError) as exc:
+                raise CompanyResearchIntegrityError(
+                    "company research frozen market boundary is invalid"
+                ) from exc
             historical_basis = self._manifest_dict(
                 manifest.get("historical_basis"),
                 "company research frozen historical basis",
@@ -1582,9 +1660,7 @@ class CompanyResearchPublicationService:
                 id=row.id,
                 project_id=project_id,
                 sequence=row.sequence,
-                published_at=self._stored_utc(
-                    row.created_at, "company research revision created_at"
-                ),
+                published_at=published_at,
                 boundary_id=boundary_row.id,
                 manifest_id=manifest_row.id,
                 manifest_hash=manifest_row.content_hash,
@@ -1622,6 +1698,34 @@ class CompanyResearchPublicationService:
             separators=(",", ":"),
         )
 
+    @classmethod
+    def _markdown_text(cls, value: object) -> str:
+        """Render untrusted data as one inert Markdown text fragment."""
+        text = (
+            cls._markdown_json(value)
+            if isinstance(value, (dict, list, tuple))
+            else str(value)
+        )
+        text = re.sub(r"[\x00-\x1f\x7f]+", " ", text).strip()
+        text = html_escape(text, quote=False)
+        return re.sub(r"([\\`*[\]{}()#+.!|>~-])", r"\\\1", text)
+
+    @classmethod
+    def _markdown_code(cls, value: object) -> str:
+        """Render one untrusted scalar inside a self-sizing inline-code fence."""
+        text = re.sub(
+            r"[\x00-\x1f\x7f]+", " ", html_escape(str(value), quote=False)
+        ).strip()
+        longest = max((len(match) for match in re.findall(r"`+", text)), default=0)
+        fence = "`" * max(1, longest + 1)
+        padding = " " if text.startswith("`") or text.endswith("`") else ""
+        return f"{fence}{padding}{text}{padding}{fence}"
+
+    @staticmethod
+    def _markdown_json_fence(payload: str) -> str:
+        longest = max((len(match) for match in re.findall(r"`+", payload)), default=0)
+        return "`" * max(3, longest + 1)
+
     def export(
         self, project_id: UUID, revision_id: UUID
     ) -> CompanyResearchMarkdownExport:
@@ -1644,28 +1748,38 @@ class CompanyResearchPublicationService:
             raise CompanyResearchIntegrityError(
                 "company research frozen export content is invalid"
             )
+        text_value = self._markdown_text
+        code_value = self._markdown_code
+        scenario_json = self._markdown_json(
+            {key: value for key, value in scenario_payload.items() if key != "_lineage"}
+        )
+        json_fence = self._markdown_json_fence(scenario_json)
         lines = [
-            f"# {frozen.company.canonical_name} Company Research",
+            f"# {text_value(frozen.company.canonical_name)} Company Research",
             "",
             "## Revision",
             "",
-            f"- Revision ID: `{frozen.id}`",
+            f"- Revision ID: {code_value(frozen.id)}",
             f"- Sequence: {frozen.sequence}",
             f"- Published at: {frozen.published_at.isoformat()}",
-            f"- Manifest hash: `{frozen.manifest_hash}`",
+            f"- Manifest hash: {code_value(frozen.manifest_hash)}",
             "",
             "## Company and Securities",
             "",
             (
-                f"- Company: {frozen.company.canonical_name} "
-                f"(`{frozen.company.external_key}`, `{frozen.company.object_id}`)"
+                f"- Company: {text_value(frozen.company.canonical_name)} "
+                f"({code_value(frozen.company.external_key)}, "
+                f"{code_value(frozen.company.object_id)})"
             ),
         ]
         lines.extend(
             (
-                f"- Security: {security.canonical_name} / {security.symbol} "
-                f"({security.exchange}, {security.share_class}, "
-                f"{security.trading_currency}; `{security.external_key}`)"
+                f"- Security: {text_value(security.canonical_name)} / "
+                f"{text_value(security.symbol)} "
+                f"({text_value(security.exchange)}, "
+                f"{text_value(security.share_class)}, "
+                f"{text_value(security.trading_currency)}; "
+                f"{code_value(security.external_key)})"
             )
             for security in frozen.securities
         )
@@ -1675,19 +1789,22 @@ class CompanyResearchPublicationService:
                 "## Historical Basis",
                 "",
                 f"- Cutoff: {frozen.cutoff_at.isoformat()}",
-                f"- Historical basis ID: `{frozen.historical_basis_id}`",
-                (f"- Historical basis hash: `{frozen.historical_basis_content_hash}`"),
+                f"- Historical basis ID: {code_value(frozen.historical_basis_id)}",
+                (
+                    "- Historical basis hash: "
+                    f"{code_value(frozen.historical_basis_content_hash)}"
+                ),
                 "",
                 "## Strategy and Model",
                 "",
-                f"- Strategy version: `{frozen.strategy_version}`",
-                f"- Model version: `{frozen.model_version}`",
+                f"- Strategy version: {code_value(frozen.strategy_version)}",
+                f"- Model version: {code_value(frozen.model_version)}",
                 "",
                 "## Assessment",
                 "",
-                f"- Answerability: `{frozen.assessment.answerability}`",
-                f"- Direction: {frozen.assessment.direction or 'null'}",
-                f"- Confidence: {frozen.assessment.confidence or 'null'}",
+                f"- Answerability: {code_value(frozen.assessment.answerability)}",
+                f"- Direction: {text_value(frozen.assessment.direction or 'null')}",
+                f"- Confidence: {text_value(frozen.assessment.confidence or 'null')}",
                 "- Value range: null",
                 "- Return range: null",
             ]
@@ -1710,9 +1827,11 @@ class CompanyResearchPublicationService:
                 raise CompanyResearchIntegrityError(
                     "company research frozen evidence fact is invalid"
                 )
-            lines.append(f"### {fact.get('fact_key')}")
+            lines.append(f"### {text_value(fact.get('fact_key'))}")
             lines.append("")
-            lines.append(f"- Review decision: {fact.get('review_decision')}")
+            lines.append(
+                f"- Review decision: {text_value(fact.get('review_decision'))}"
+            )
             for key in (
                 "business_module",
                 "metric_key",
@@ -1728,7 +1847,7 @@ class CompanyResearchPublicationService:
                 "raw_hash",
             ):
                 if key in fact:
-                    lines.append(f"- {key}: {fact[key]}")
+                    lines.append(f"- {key}: {text_value(fact[key])}")
             lines.append("")
         lines.extend(["## Research Gaps", ""])
         for gap in gaps:
@@ -1737,37 +1856,38 @@ class CompanyResearchPublicationService:
                     "company research frozen research gap is invalid"
                 )
             lines.append(
-                f"- `{gap.get('code')}` [{gap.get('severity')}] "
-                f"{gap.get('message')} (module: `{gap.get('module_key')}`)"
+                f"- {code_value(gap.get('code'))} "
+                f"[{text_value(gap.get('severity'))}] "
+                f"{text_value(gap.get('message'))} "
+                f"(module: {code_value(gap.get('module_key'))})"
             )
         lines.extend(
             [
                 "",
                 "## Assumptions",
                 "",
-                "```json",
-                self._markdown_json(
-                    {
-                        key: value
-                        for key, value in scenario_payload.items()
-                        if key != "_lineage"
-                    }
-                ),
-                "```",
+                f"{json_fence}json",
+                scenario_json,
+                json_fence,
                 "",
                 "## Strongest Counterevidence",
                 "",
             ]
         )
         lines.extend(
-            f"- {value['fact_key']} — {value['source_locator']} "
-            f"({value['source_url']}; `{value['raw_hash']}`)"
+            f"- {text_value(value['fact_key'])} — "
+            f"{text_value(value['source_locator'])} "
+            f"({text_value(value['source_url'])}; {code_value(value['raw_hash'])})"
             for value in frozen.strongest_counterevidence
         )
         lines.extend(["", "## Next Verification Events", ""])
-        lines.extend(f"- {value}" for value in frozen.next_verification_events)
+        lines.extend(
+            f"- {text_value(value)}" for value in frozen.next_verification_events
+        )
         content = "\n".join(lines).rstrip() + "\n"
-        slug = frozen.company.external_key.split(":")[1].lower()
+        key_parts = frozen.company.external_key.split(":")
+        slug_source = (key_parts[1] if len(key_parts) > 1 else key_parts[0]).lower()
+        slug = re.sub(r"[^a-z0-9]+", "-", slug_source).strip("-") or "company"
         return CompanyResearchMarkdownExport(
             filename=f"{slug}-company-research-{frozen.id}.md",
             media_type="text/markdown",
@@ -1845,7 +1965,7 @@ class CompanyResearchPublicationService:
                     or state.draft.lock_version != expected_lock_version
                 ):
                     raise ConflictError("company research publication is stale")
-                authenticated = self._authenticate_common_state(state)
+                authenticated = self._authenticate_common_state(state, lock=True)
                 preview = self._preview_from_authenticated(
                     authenticated, expected_lock_version=expected_lock_version
                 )
@@ -1892,6 +2012,9 @@ class CompanyResearchPublicationService:
                         "boundary_id": str(boundary.id),
                         "assessment_id": str(assessment.id),
                         "preview_manifest_hash": preview.manifest_hash,
+                        "preparation_id": str(state.preparation.id),
+                        "idempotency_key": key,
+                        "published_at": created_at.isoformat(),
                     }
                 )
                 manifest_hash = canonical_hash(manifest_payload)
@@ -1978,7 +2101,7 @@ class CompanyResearchPublicationService:
         try:
             with self._session.begin_nested():
                 state = self._repository.lock_publication_state(project_id)
-                authenticated = self._authenticate_common_state(state)
+                authenticated = self._authenticate_common_state(state, lock=True)
                 current_memo = authenticated.machine_or_confirmed_memo
                 if (
                     state.preparation.status == "ready_to_freeze"

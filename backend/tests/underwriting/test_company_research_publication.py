@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from hashlib import sha256
 from threading import Barrier, BrokenBarrierError
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -16,6 +18,10 @@ from sqlalchemy.orm import sessionmaker
 from app.models.ledger import Base, ConflictError, ValidationError
 from app.models.operational import Job
 from app.underwriting.hashing import canonical_hash
+from app.underwriting.domain.company_research import (
+    CompanyResearchCompany,
+    CompanyResearchSecurity,
+)
 from app.underwriting.domain.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
 )
@@ -32,6 +38,7 @@ from app.underwriting.persistence.product_models import (
     UnderwritingMarketCaptureEnvelope,
     UnderwritingPriceSnapshot,
     UnderwritingResearchAssessmentVersion,
+    UnderwritingResearchProjectSecurity,
     UnderwritingRevisionBoundary,
     UnderwritingRevisionManifest,
     UnderwritingWorkspaceDraft,
@@ -250,6 +257,7 @@ def test_publication_preview_is_zero_write_and_keeps_not_answerable_closed(
 
     monkeypatch.setattr(session, "flush", reject_flush)
     writes: list[str] = []
+    locked_reads: list[object] = []
 
     def capture_writes(_connection, _cursor, statement, _parameters, _context, _many):
         if statement.lstrip().split(None, 1)[0].upper() in {
@@ -259,7 +267,14 @@ def test_publication_preview_is_zero_write_and_keeps_not_answerable_closed(
         }:
             writes.append(statement)
 
+    def capture_locked_reads(
+        _connection, clauseelement, _multiparams, _params, _execution_options
+    ):
+        if getattr(clauseelement, "_for_update_arg", None) is not None:
+            locked_reads.append(clauseelement)
+
     event.listen(session.bind, "before_cursor_execute", capture_writes)
+    event.listen(session.bind, "before_execute", capture_locked_reads)
 
     try:
         preview = CompanyResearchPublicationService(
@@ -270,6 +285,7 @@ def test_publication_preview_is_zero_write_and_keeps_not_answerable_closed(
         )
     finally:
         event.remove(session.bind, "before_cursor_execute", capture_writes)
+        event.remove(session.bind, "before_execute", capture_locked_reads)
 
     assert preview.assessment.answerability == "not_answerable"
     assert preview.assessment.direction is None
@@ -279,6 +295,7 @@ def test_publication_preview_is_zero_write_and_keeps_not_answerable_closed(
     assert preview.blockers == tuple(confirmed_memo.payload["gap_keys"])
     assert pending in session.new
     assert writes == []
+    assert locked_reads == [], [str(value) for value in locked_reads]
     monkeypatch.setattr(session, "flush", original_flush)
     with session.no_autoflush:
         assert (
@@ -290,6 +307,29 @@ def test_publication_preview_is_zero_write_and_keeps_not_answerable_closed(
             )
             == before
         )
+
+
+def test_workbench_default_workspace_read_retains_locked_semantics(session) -> None:
+    initialized, _repository, _preparation, _job, _draft, _memo, _confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    locked_reads: list[object] = []
+
+    def capture_locked_reads(
+        _connection, clauseelement, _multiparams, _params, _execution_options
+    ):
+        if getattr(clauseelement, "_for_update_arg", None) is not None:
+            locked_reads.append(clauseelement)
+
+    event.listen(session.bind, "before_execute", capture_locked_reads)
+    try:
+        CompanyResearchWorkbench(session, now=lambda: FROZEN_AT).workspace(
+            project_id=initialized.project.id
+        )
+    finally:
+        event.remove(session.bind, "before_execute", capture_locked_reads)
+
+    assert locked_reads
 
 
 def test_publish_freezes_one_company_research_revision_and_exactly_replays(
@@ -375,6 +415,160 @@ def test_publish_freezes_one_company_research_revision_and_exactly_replays(
         "manifest_hash": revision.manifest_hash,
         "idempotency_key": "alphabet-first-freeze",
     }
+
+
+def test_company_research_boundary_schema_fits_the_persisted_column(session) -> None:
+    initialized, _repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="boundary-schema-shape",
+    )
+    boundary = session.get(UnderwritingRevisionBoundary, revision.boundary_id)
+    column_length = UnderwritingRevisionBoundary.__table__.c.schema_version.type.length
+
+    assert boundary is not None
+    assert column_length is not None
+    assert len(boundary.schema_version) <= column_length
+
+
+def test_revision_replay_does_not_depend_on_current_project_security_membership(
+    session,
+) -> None:
+    initialized, _repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="frozen-membership",
+    )
+    table = UnderwritingResearchProjectSecurity.__table__
+    connection = session.connection()
+    if connection.dialect.name == "postgresql":
+        connection.execute(text(f"ALTER TABLE {table.name} DISABLE TRIGGER USER"))
+    try:
+        connection.execute(
+            text(f"DELETE FROM {table.name} WHERE project_id = :project_id").bindparams(
+                bindparam("project_id", type_=table.c.project_id.type)
+            ),
+            {"project_id": initialized.project.id},
+        )
+    finally:
+        if connection.dialect.name == "postgresql":
+            connection.execute(text(f"ALTER TABLE {table.name} ENABLE TRIGGER USER"))
+    session.flush()
+    session.expire_all()
+
+    assert service.revision(initialized.project.id, revision.id) == revision
+    assert service.export(initialized.project.id, revision.id) == service.export(
+        initialized.project.id, revision.id
+    )
+
+
+def test_revision_replay_rejects_assessment_parent_substitution(session) -> None:
+    initialized, _repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="assessment-parent",
+    )
+    manifest = session.get(UnderwritingRevisionManifest, revision.manifest_id)
+    assert manifest is not None
+    assessment_id = UUID(manifest.manifest["assessment_id"])
+    successor = UnderwritingResearchAssessmentVersion(
+        project_id=initialized.project.id,
+        version=2,
+        supersedes_id=assessment_id,
+        answerability="not_answerable",
+        direction=None,
+        confidence=None,
+        publication_status="user_frozen",
+        blockers=[],
+        resolution_requirements=[],
+        next_review_at=None,
+        content_hash="a" * 64,
+        created_at=FROZEN_AT + timedelta(minutes=1),
+    )
+    session.add(successor)
+    session.flush()
+    _tamper_row(
+        session,
+        UnderwritingResearchAssessmentVersion,
+        assessment_id,
+        supersedes_id=successor.id,
+    )
+    session.expire_all()
+
+    with pytest.raises(CompanyResearchIntegrityError, match="assessment is invalid"):
+        service.revision(initialized.project.id, revision.id)
+
+
+def test_revision_replay_authenticates_idempotency_key_and_published_at(
+    session,
+) -> None:
+    initialized, _repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="frozen-publication-identity",
+    )
+
+    _tamper_row(
+        session,
+        UnderwritingRevisionManifest,
+        revision.manifest_id,
+        idempotency_key="substituted-publication-key",
+    )
+    session.expire_all()
+    with pytest.raises(CompanyResearchIntegrityError, match="publication identity"):
+        service.revision(initialized.project.id, revision.id)
+
+    _tamper_row(
+        session,
+        UnderwritingRevisionManifest,
+        revision.manifest_id,
+        idempotency_key="frozen-publication-identity",
+    )
+    _tamper_row(
+        session,
+        UnderwritingResearchVersion,
+        revision.id,
+        created_at=FROZEN_AT + timedelta(minutes=1),
+    )
+    session.expire_all()
+    with pytest.raises(CompanyResearchIntegrityError, match="publication identity"):
+        service.revision(initialized.project.id, revision.id)
 
 
 def _frozen_row_snapshot(session, *, project_id, preparation_id):
@@ -602,6 +796,95 @@ def test_export_is_deterministic_hashed_and_preserves_frozen_domain_order(
     )
 
 
+def test_export_escapes_all_non_memo_markdown_and_uses_a_safe_json_fence(
+    session, monkeypatch
+) -> None:
+    initialized, repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="hostile-export",
+    )
+    payloads = {
+        reference.id: deepcopy(repository.artifact(reference.id).payload)
+        for reference in revision.artifacts
+    }
+    by_kind = {reference.kind: reference.id for reference in revision.artifacts}
+    payloads[by_kind["evidence_index"]]["facts"][0]["source_locator"] = (
+        "Item 7\n## Evidence Injection <script>alert(1)</script>"
+    )
+    payloads[by_kind["scenario_set"]]["hostile_fence"] = "``````"
+    hostile_company = CompanyResearchCompany(
+        object_id=revision.company.object_id,
+        external_key=revision.company.external_key,
+        canonical_name="Alphabet\n## Identity Injection <img src=x>",
+    )
+    original_security = revision.securities[0]
+    hostile_security = CompanyResearchSecurity(
+        object_id=original_security.object_id,
+        company_id=original_security.company_id,
+        external_key=original_security.external_key,
+        canonical_name="Class A\n# Security Injection",
+        symbol="GOOGL\n- injected list",
+        exchange="NASDAQ <script>",
+        share_class=original_security.share_class,
+        trading_currency=original_security.trading_currency,
+    )
+    hostile_revision = replace(
+        revision,
+        company=hostile_company,
+        securities=(hostile_security, *revision.securities[1:]),
+        strategy_version="strategy\n## Strategy Injection",
+        model_version="model <script>",
+        memo_markdown="## Memo-owned Markdown\n\nThis stays *verbatim*.",
+        strongest_counterevidence=(
+            {
+                "fact_key": "hostile_counterevidence",
+                "source_locator": "locator\n## Counterevidence Injection",
+                "source_url": "https://example.test/(unsafe)",
+                "raw_hash": "b" * 64,
+            },
+        ),
+        next_verification_events=("next\n## Event Injection <script>",),
+    )
+
+    monkeypatch.setattr(service, "revision", lambda *_args: hostile_revision)
+    monkeypatch.setattr(
+        service._repository,
+        "artifact",
+        lambda artifact_id, *, fresh: SimpleNamespace(payload=payloads[artifact_id]),
+    )
+
+    first = service.export(initialized.project.id, revision.id)
+    second = service.export(initialized.project.id, revision.id)
+
+    assert first == second
+    assert "## Memo-owned Markdown\n\nThis stays *verbatim*." in first.content
+    assert "<script>" not in first.content
+    assert "<img src=x>" not in first.content
+    for injected in (
+        "## Identity Injection",
+        "# Security Injection",
+        "## Strategy Injection",
+        "## Evidence Injection",
+        "## Counterevidence Injection",
+        "## Event Injection",
+    ):
+        assert f"\n{injected}" not in first.content
+    assumptions = first.content.split("## Assumptions\n\n", 1)[1]
+    opening_fence = assumptions.splitlines()[0]
+    assert opening_fence.endswith("json")
+    assert len(opening_fence.removesuffix("json")) > 6
+
+
 def test_revision_replay_uses_frozen_artifact_ids_not_later_current_heads(
     session,
 ) -> None:
@@ -767,30 +1050,50 @@ def test_postgres_company_research_publication_if_configured(session, engine) ->
     )
     session.commit()
     sessions = sessionmaker(bind=engine, future=True)
-    first = sessions()
-    second = sessions()
+    barrier = Barrier(2)
+
+    def publish_once(key: str):
+        concurrent = sessions()
+        try:
+            barrier.wait()
+            result = CompanyResearchPublicationService(
+                concurrent, now=lambda: FROZEN_AT
+            ).publish(
+                project_id=project_id,
+                expected_lock_version=preview.expected_lock_version,
+                expected_manifest_hash=preview.manifest_hash,
+                idempotency_key=key,
+            )
+            concurrent.commit()
+            return result, None
+        except Exception as exc:  # noqa: BLE001 - assert public taxonomy below
+            concurrent.rollback()
+            return None, exc
+        finally:
+            concurrent.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = tuple(
+            executor.map(
+                publish_once,
+                ("company-research-pg-a", "company-research-pg-b"),
+            )
+        )
+    results = tuple(result for result, error in outcomes if error is None)
+    errors = tuple(error for result, error in outcomes if result is None)
+    assert len(results) == 1
+    assert len(errors) == 1
+    assert type(errors[0]) is ConflictError
+    verifier = sessions()
     try:
-        winner = CompanyResearchPublicationService(
-            first, now=lambda: FROZEN_AT
-        ).publish(
-            project_id=project_id,
-            expected_lock_version=preview.expected_lock_version,
-            expected_manifest_hash=preview.manifest_hash,
-            idempotency_key="company-research-pg",
+        assert (
+            verifier.scalar(
+                select(func.count()).select_from(UnderwritingResearchVersion)
+            )
+            == 1
         )
-        first.commit()
-        replayed = CompanyResearchPublicationService(
-            second, now=lambda: FROZEN_AT
-        ).publish(
-            project_id=project_id,
-            expected_lock_version=preview.expected_lock_version,
-            expected_manifest_hash=preview.manifest_hash,
-            idempotency_key="company-research-pg",
-        )
-        assert replayed == winner
     finally:
-        first.close()
-        second.close()
+        verifier.close()
 
 
 def _rewrite_one_event_type(
@@ -1276,6 +1579,51 @@ def test_confirmation_preserves_a_true_legacy_model_gap_successor(session) -> No
     assert decoded.candidate_status == "human_confirmed"
     assert decoded.reviewer == REVIEWER
     assert replay == result
+
+
+def test_legacy_model_gap_successor_can_publish_replay_and_export(session) -> None:
+    initialized, _workbench, repository = _model_workspace(session)
+    preparation = repository.preparation_for_project(initialized.project.id)
+    assert preparation is not None and preparation.job_id is not None
+    job = session.get(Job, preparation.job_id)
+    assert job is not None and job.started_at is not None
+    repository.append_event(
+        preparation_id=preparation.id,
+        event_type="model_stage_claimed",
+        payload={"stage": "model_bundle", "attempt": job.attempt},
+        created_at=CompanyResearchRepository._persisted_utc(job.started_at),
+    )
+    _source_gaps, legacy_gaps = _rewrite_as_legacy_model_gap_successor(
+        session, initialized, repository
+    )
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(initialized.project.id)
+    machine_memo = repository.current_artifact(initialized.project.id, "memo")
+    assert draft is not None and machine_memo is not None
+    service = CompanyResearchPublicationService(session, now=lambda: CONFIRMED_AT)
+    confirmation = service.confirm_judgment(
+        project_id=initialized.project.id,
+        **_confirmation_request(draft, machine_memo),
+    )
+    frozen_service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = frozen_service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = frozen_service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="legacy-model-gap-publication",
+    )
+
+    assert any(
+        reference.kind == "research_gaps" and reference.id == legacy_gaps.id
+        for reference in revision.artifacts
+    )
+    assert frozen_service.revision(initialized.project.id, revision.id) == revision
+    exported = frozen_service.export(initialized.project.id, revision.id)
+    assert exported.media_type == "text/markdown"
+    assert exported.content_hash == sha256(exported.content.encode("utf-8")).hexdigest()
 
 
 def test_confirmation_rejects_a_machine_memo_outside_the_exact_model_bundle_time(
