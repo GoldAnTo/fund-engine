@@ -303,9 +303,13 @@ class CompanyResearchNumericObservationResponse(_ClosedCompanyResearchPayloadMod
         if self.state == "derived" and not isinstance(
             self.source_ref, CompanyResearchComputationNumericSourceResponse
         ):
-            raise ValueError("derived numeric observation requires a computation source")
+            raise ValueError(
+                "derived numeric observation requires a computation source"
+            )
         if self.state == "assumption" and self.assumption_key is None:
-            raise ValueError("assumption numeric observation requires an assumption key")
+            raise ValueError(
+                "assumption numeric observation requires an assumption key"
+            )
         if self.state == "gap" and self.gap_key is None:
             raise ValueError("gap numeric observation requires a gap key")
         return self
@@ -602,7 +606,7 @@ class CompanyResearchMemoArtifactReferenceResponse(_ClosedCompanyResearchPayload
     content_hash: str = Field(pattern=SHA256_PATTERN)
 
 
-class CompanyResearchMemoPayloadResponse(_ClosedCompanyResearchPayloadModel):
+class _CompanyResearchMemoPayloadBaseResponse(_ClosedCompanyResearchPayloadModel):
     assessment_status: Literal["not_answerable", "partially_answerable", "answerable"]
     business_map_ref: CompanyResearchMemoArtifactReferenceResponse
     driver_map_ref: CompanyResearchMemoArtifactReferenceResponse
@@ -612,8 +616,37 @@ class CompanyResearchMemoPayloadResponse(_ClosedCompanyResearchPayloadModel):
     gap_keys: tuple[StrictStr, ...]
     strongest_counterevidence: tuple[CompanyResearchLineageSourceReferenceResponse, ...]
     next_verification_events: tuple[StrictStr, ...]
-    candidate_status: Literal["machine_draft"]
     lineage: CompanyResearchArtifactLineageResponse = Field(alias="_lineage")
+
+
+class CompanyResearchMachineMemoPayloadResponse(
+    _CompanyResearchMemoPayloadBaseResponse
+):
+    candidate_status: Literal["machine_draft"]
+
+
+class CompanyResearchConfirmedMemoPayloadResponse(
+    _CompanyResearchMemoPayloadBaseResponse
+):
+    candidate_status: Literal["human_confirmed"]
+    reviewer: Literal["human:local-user"]
+    markdown: StrictStr = Field(min_length=1, max_length=100_000)
+
+    @field_validator("markdown")
+    @classmethod
+    def normalized_confirmation_markdown(cls, value: str) -> str:
+        if not value.strip() or value != value.replace("\r\n", "\n").replace(
+            "\r", "\n"
+        ):
+            raise ValueError("confirmed memo is invalid")
+        return value
+
+
+CompanyResearchMemoPayloadResponse = Annotated[
+    CompanyResearchMachineMemoPayloadResponse
+    | CompanyResearchConfirmedMemoPayloadResponse,
+    Field(discriminator="candidate_status"),
+]
 
 
 class _CompanyResearchArtifactBaseResponse(UnderwritingModel):
@@ -860,8 +893,13 @@ class CompanyResearchWorkbenchModuleResponse(UnderwritingModel):
                 raise ValueError("ready and needs_review modules require an artifact")
             if self.state == "needs_review" and "evidence_index" not in kinds:
                 raise ValueError("only evidence can need review")
-            if self.key != "scenarios_valuation_implied_expectations" and kinds != allowed:
-                raise ValueError("ready module requires its exact static artifact contract")
+            if (
+                self.key != "scenarios_valuation_implied_expectations"
+                and kinds != allowed
+            ):
+                raise ValueError(
+                    "ready module requires its exact static artifact contract"
+                )
         elif self.artifact_refs:
             raise ValueError("non-ready modules cannot expose an artifact")
         if self.key == "scenarios_valuation_implied_expectations":
@@ -880,7 +918,9 @@ class CompanyResearchWorkbenchModuleResponse(UnderwritingModel):
             if self.valuation_state in {"ready", "blocked"} and self.state != "ready":
                 raise ValueError("resolved valuation state requires a ready module")
             if self.valuation_state == "pending" and self.state == "ready":
-                raise ValueError("ready scenario module requires a resolved valuation state")
+                raise ValueError(
+                    "ready scenario module requires a resolved valuation state"
+                )
         elif self.valuation_state != "not_applicable":
             raise ValueError("valuation state only belongs to the scenario module")
         return self
@@ -911,14 +951,20 @@ class CompanyResearchWorkspacePreparationResponse(UnderwritingModel):
             raise ValueError("awaiting_judgment_review must expose judgment_context")
         if self.status in {"blocked", "recoverable_failure"} and self.error is None:
             raise ValueError("failed preparation requires typed error semantics")
-        if self.status not in {"blocked", "recoverable_failure"} and self.error is not None:
+        if (
+            self.status not in {"blocked", "recoverable_failure"}
+            and self.error is not None
+        ):
             raise ValueError("non-failed preparation cannot expose an error")
         if self.error is not None:
             if self.error.failed_step != self.current_step:
                 raise ValueError("preparation error must match current step")
             if (self.status == "recoverable_failure") != self.error.retryable:
                 raise ValueError("recoverable status and retryability are inconsistent")
-            if self.status == "recoverable_failure" and self.error.next_attempt_at is None:
+            if (
+                self.status == "recoverable_failure"
+                and self.error.next_attempt_at is None
+            ):
                 raise ValueError("recoverable failure requires a retry time")
             if self.status == "blocked" and self.error.next_attempt_at is not None:
                 raise ValueError("blocked preparation cannot expose a retry time")
@@ -991,7 +1037,10 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
             artifact = registry.get(artifact_id)
             if artifact is None:
                 raise ValueError("artifact ref is absent from the response registry")
-            if artifact.kind != artifact_kind or artifact.content_hash != ref.content_hash:
+            if (
+                artifact.kind != artifact_kind
+                or artifact.content_hash != ref.content_hash
+            ):
                 raise ValueError("artifact ref does not match the response registry")
 
         for module in self.modules:
@@ -1049,7 +1098,11 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
             validate_computation_refs(payload)
 
         evidence = next(
-            (wrapper.root for wrapper in self.artifacts if wrapper.root.kind == "evidence_index"),
+            (
+                wrapper.root
+                for wrapper in self.artifacts
+                if wrapper.root.kind == "evidence_index"
+            ),
             None,
         )
         evidence_facts = (
@@ -1065,12 +1118,21 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
                     return
                 source = item.source_ref
                 if not isinstance(source, CompanyResearchExternalNumericSourceResponse):
-                    raise ValueError("reported observation requires exact evidence fact")
+                    raise ValueError(
+                        "reported observation requires exact evidence fact"
+                    )
                 fact = fact_registry.get(source.fact_key)
                 if fact is None:
-                    raise ValueError("reported observation requires exact evidence fact")
-                if require_confirmed and getattr(fact, "review_decision", None) != "confirmed":
-                    raise ValueError("downstream reported observation requires confirmed fact")
+                    raise ValueError(
+                        "reported observation requires exact evidence fact"
+                    )
+                if (
+                    require_confirmed
+                    and getattr(fact, "review_decision", None) != "confirmed"
+                ):
+                    raise ValueError(
+                        "downstream reported observation requires confirmed fact"
+                    )
                 fact_observation = fact.observation
                 if (
                     item.value,
@@ -1085,7 +1147,9 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
                     fact_observation.period,
                     fact_observation.source_ref,
                 ):
-                    raise ValueError("reported observation differs from its evidence fact")
+                    raise ValueError(
+                        "reported observation differs from its evidence fact"
+                    )
                 return
             if isinstance(item, BaseModel):
                 for child in item.__dict__.values():
@@ -1159,3 +1223,235 @@ class ReviewCompanyEvidenceRequest(UnderwritingModel):
 
 class CompanyResearchEvidenceReviewResponse(UnderwritingModel):
     evidence_artifact: CompanyResearchEvidenceIndexArtifactResponse
+
+
+class ConfirmCompanyResearchJudgmentRequest(UnderwritingModel):
+    expected_lock_version: StrictInt = Field(ge=1)
+    expected_memo_id: UUID
+    expected_memo_content_hash: StrictStr = Field(pattern=SHA256_PATTERN)
+    markdown: StrictStr = Field(min_length=1, max_length=100_000)
+
+
+class PreviewCompanyResearchPublicationRequest(UnderwritingModel):
+    expected_lock_version: StrictInt = Field(ge=1)
+
+
+class PublishCompanyResearchRequest(UnderwritingModel):
+    expected_lock_version: StrictInt = Field(ge=1)
+    expected_manifest_hash: StrictStr = Field(pattern=SHA256_PATTERN)
+
+
+class CompanyResearchPublicationPreparationResponse(UnderwritingModel):
+    id: UUID
+    status: Literal["ready_to_freeze"]
+    current_step: Literal["memo"]
+    progress: Literal[95]
+
+
+class CompanyResearchPublicationDraftResponse(UnderwritingModel):
+    id: UUID
+    lock_version: StrictInt = Field(ge=1)
+
+
+class CompanyResearchFrozenMemoIdentityResponse(UnderwritingModel):
+    id: UUID
+    content_hash: StrictStr = Field(pattern=SHA256_PATTERN)
+
+
+class CompanyResearchJudgmentConfirmationResponse(UnderwritingModel):
+    project_id: UUID
+    preparation: CompanyResearchPublicationPreparationResponse
+    draft: CompanyResearchPublicationDraftResponse
+    machine_memo: CompanyResearchFrozenMemoIdentityResponse
+    confirmed_memo: CompanyResearchFrozenMemoIdentityResponse
+    assessment_status: Literal["not_answerable", "partially_answerable", "answerable"]
+    reviewer: Literal["human:local-user"]
+    markdown: StrictStr = Field(min_length=1, max_length=100_000)
+    confirmed_at: datetime
+
+    @field_validator("confirmed_at")
+    @classmethod
+    def aware_confirmation_time(cls, value: datetime) -> datetime:
+        return _require_aware(value, "confirmed_at")
+
+
+class CompanyResearchFrozenSecurityResponse(CompanyResearchSecurityIdentityResponse):
+    company_id: UUID
+
+
+class CompanyResearchFrozenAssessmentResponse(UnderwritingModel):
+    answerability: Literal["not_answerable", "partially_answerable", "answerable"]
+    direction: (
+        Literal["provisional_bullish", "provisional_neutral", "provisional_cautious"]
+        | None
+    )
+    confidence: Literal["low", "medium", "high"] | None
+    content_hash: StrictStr = Field(pattern=SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def closed_optional_fields(self):
+        if self.answerability == "not_answerable" and (
+            self.direction is not None or self.confidence is not None
+        ):
+            raise ValueError("not_answerable assessment cannot carry investment fields")
+        return self
+
+
+class CompanyResearchValueRangeSummaryResponse(UnderwritingModel):
+    minimum: CanonicalDecimalString
+    maximum: CanonicalDecimalString
+    currency: Literal["CNY", "USD"]
+
+
+class CompanyResearchReturnRangeSummaryResponse(UnderwritingModel):
+    minimum: CanonicalDecimalString
+    maximum: CanonicalDecimalString
+
+
+class CompanyResearchFrozenArtifactDescriptorResponse(UnderwritingModel):
+    kind: CompanyResearchArtifactKind
+    id: UUID
+    version: StrictInt = Field(ge=1)
+    input_hash: StrictStr = Field(pattern=SHA256_PATTERN)
+    content_hash: StrictStr = Field(pattern=SHA256_PATTERN)
+
+
+class CompanyResearchPublicationPreviewResponse(UnderwritingModel):
+    project_id: UUID
+    expected_lock_version: StrictInt = Field(ge=1)
+    company: CompanyResearchIdentityResponse
+    securities: tuple[CompanyResearchFrozenSecurityResponse, ...] = Field(min_length=1)
+    cutoff_at: datetime
+    historical_basis_id: UUID
+    historical_basis_content_hash: StrictStr = Field(pattern=SHA256_PATTERN)
+    strategy_version: StrictStr = Field(min_length=1)
+    model_version: StrictStr = Field(min_length=1)
+    assessment: CompanyResearchFrozenAssessmentResponse
+    value_range: CompanyResearchValueRangeSummaryResponse | None
+    return_range: CompanyResearchReturnRangeSummaryResponse | None
+    blockers: tuple[StrictStr, ...]
+    strongest_counterevidence: tuple[CompanyResearchLineageSourceReferenceResponse, ...]
+    next_verification_events: tuple[StrictStr, ...]
+    memo_markdown: StrictStr = Field(min_length=1, max_length=100_000)
+    artifacts: tuple[CompanyResearchFrozenArtifactDescriptorResponse, ...] = Field(
+        min_length=8, max_length=9
+    )
+    manifest_hash: StrictStr = Field(pattern=SHA256_PATTERN)
+
+    @field_validator("cutoff_at")
+    @classmethod
+    def aware_publication_cutoff(cls, value: datetime) -> datetime:
+        return _require_aware(value, "cutoff_at")
+
+    @model_validator(mode="after")
+    def closed_publication_projection(self):
+        if any(item.company_id != self.company.object_id for item in self.securities):
+            raise ValueError("security identity is bound to the wrong company")
+        if len({item.object_id for item in self.securities}) != len(self.securities):
+            raise ValueError("security identities must be unique")
+        kinds = tuple(item.kind for item in self.artifacts)
+        required = {
+            "evidence_index",
+            "research_gaps",
+            "business_map",
+            "driver_map",
+            "financial_bridge",
+            "scenario_set",
+            "judgment_context",
+            "memo",
+        }
+        if set(kinds) not in (required, required | {"valuation_set"}):
+            raise ValueError("publication artifact descriptors are incomplete")
+        canonical_order = (
+            "evidence_index",
+            "research_gaps",
+            "business_map",
+            "driver_map",
+            "financial_bridge",
+            "scenario_set",
+            "valuation_set",
+            "judgment_context",
+            "memo",
+        )
+        if kinds != tuple(kind for kind in canonical_order if kind in set(kinds)):
+            raise ValueError("publication artifact descriptors are out of order")
+        if len(set(kinds)) != len(kinds) or len(
+            {item.id for item in self.artifacts}
+        ) != len(self.artifacts):
+            raise ValueError("publication artifact descriptors must be unique")
+        if self.assessment.answerability == "not_answerable" and (
+            self.value_range is not None or self.return_range is not None
+        ):
+            raise ValueError(
+                "not_answerable publication cannot carry investment ranges"
+            )
+        return self
+
+
+class CompanyResearchFrozenRevisionResponse(UnderwritingModel):
+    id: UUID
+    project_id: UUID
+    sequence: StrictInt = Field(ge=1)
+    published_at: datetime
+    boundary_id: UUID
+    manifest_id: UUID
+    manifest_hash: StrictStr = Field(pattern=SHA256_PATTERN)
+    company: CompanyResearchIdentityResponse
+    securities: tuple[CompanyResearchFrozenSecurityResponse, ...] = Field(min_length=1)
+    cutoff_at: datetime
+    historical_basis_id: UUID
+    historical_basis_content_hash: StrictStr = Field(pattern=SHA256_PATTERN)
+    strategy_version: StrictStr = Field(min_length=1)
+    model_version: StrictStr = Field(min_length=1)
+    assessment: CompanyResearchFrozenAssessmentResponse
+    value_range: CompanyResearchValueRangeSummaryResponse | None
+    return_range: CompanyResearchReturnRangeSummaryResponse | None
+    blockers: tuple[StrictStr, ...]
+    strongest_counterevidence: tuple[CompanyResearchLineageSourceReferenceResponse, ...]
+    next_verification_events: tuple[StrictStr, ...]
+    memo_markdown: StrictStr = Field(min_length=1, max_length=100_000)
+    artifacts: tuple[CompanyResearchFrozenArtifactDescriptorResponse, ...] = Field(
+        min_length=8, max_length=9
+    )
+    preparation_status: Literal["completed"]
+    current_step: None
+    progress: Literal[100]
+
+    @field_validator("published_at", "cutoff_at")
+    @classmethod
+    def aware_publication_time(cls, value: datetime) -> datetime:
+        return _require_aware(value, "publication datetime")
+
+    @model_validator(mode="after")
+    def closed_frozen_projection(self):
+        CompanyResearchPublicationPreviewResponse(
+            project_id=self.project_id,
+            expected_lock_version=1,
+            company=self.company,
+            securities=self.securities,
+            cutoff_at=self.cutoff_at,
+            historical_basis_id=self.historical_basis_id,
+            historical_basis_content_hash=self.historical_basis_content_hash,
+            strategy_version=self.strategy_version,
+            model_version=self.model_version,
+            assessment=self.assessment,
+            value_range=self.value_range,
+            return_range=self.return_range,
+            blockers=self.blockers,
+            strongest_counterevidence=self.strongest_counterevidence,
+            next_verification_events=self.next_verification_events,
+            memo_markdown=self.memo_markdown,
+            artifacts=self.artifacts,
+            manifest_hash=self.manifest_hash,
+        )
+        return self
+
+
+class CompanyResearchMarkdownExportResponse(UnderwritingModel):
+    filename: StrictStr = Field(
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*-company-research-"
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.md$"
+    )
+    media_type: Literal["text/markdown"]
+    content: StrictStr = Field(min_length=1)
+    content_hash: StrictStr = Field(pattern=SHA256_PATTERN)

@@ -10,13 +10,28 @@ from fastapi import APIRouter, Depends, Header, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.errors import NotFoundError, ValidationFailedError
-from app.models.ledger import ValidationError
+from app.errors import (
+    ConflictError as HttpConflictError,
+    NotFoundError,
+    ValidationFailedError,
+)
+from app.models.ledger import ConflictError as DomainConflictError, ValidationError
 from app.underwriting.api.company_research_schemas import (
+    ConfirmCompanyResearchJudgmentRequest,
     CompanyResearchAgendaModuleResponse,
     CompanyResearchArtifactResponse,
     CompanyResearchEvidenceReviewResponse,
+    CompanyResearchFrozenArtifactDescriptorResponse,
+    CompanyResearchFrozenAssessmentResponse,
+    CompanyResearchFrozenMemoIdentityResponse,
+    CompanyResearchFrozenRevisionResponse,
+    CompanyResearchFrozenSecurityResponse,
     CompanyResearchIdentityResponse,
+    CompanyResearchJudgmentConfirmationResponse,
+    CompanyResearchMarkdownExportResponse,
+    CompanyResearchPublicationDraftResponse,
+    CompanyResearchPublicationPreparationResponse,
+    CompanyResearchPublicationPreviewResponse,
     CompanyResearchPreparationResponse,
     CompanyResearchPreviewRequest,
     CompanyResearchPreviewResponse,
@@ -29,6 +44,8 @@ from app.underwriting.api.company_research_schemas import (
     CompanyResearchPreparationErrorResponse,
     CompanyResearchWorkspaceResponse,
     InitializeCompanyResearchRequest,
+    PreviewCompanyResearchPublicationRequest,
+    PublishCompanyResearchRequest,
     ReviewCompanyEvidenceRequest,
 )
 from app.underwriting.api.schemas import UnderwritingErrorEnvelope
@@ -39,6 +56,13 @@ from app.underwriting.services.company_research_initializer import (
     CompanyResearchInitializer,
     CompanyResearchPreparationService,
     CompanyResearchProjectStatus,
+)
+from app.underwriting.services.company_research_publication import (
+    CompanyResearchFrozenRevision,
+    CompanyResearchJudgmentConfirmation,
+    CompanyResearchMarkdownExport,
+    CompanyResearchPublicationPreview,
+    CompanyResearchPublicationService,
 )
 from app.underwriting.services.company_research_workbench import (
     CompanyResearchWorkbench,
@@ -212,7 +236,7 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                 value=fact["value"],
                 unit=fact["unit"],
                 currency=fact["currency"],
-                period=f'{fact["period_start"]}/{fact["period_end"]}',
+                period=f"{fact['period_start']}/{fact['period_end']}",
                 state=fact["value_kind"],
                 source_ref=_external_source(source),
             )
@@ -233,7 +257,7 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                     value=item["value"],
                     unit=item["unit"],
                     currency=item["currency"],
-                    period=f'{item["period_start"]}/{item["period_end"]}',
+                    period=f"{item['period_start']}/{item['period_end']}",
                     state="reported",
                     source_ref=_external_source(item["fact_ref"]),
                 )
@@ -275,7 +299,7 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                             value=item,
                             unit=fact["unit"],
                             currency=fact["currency"],
-                            period=f'{fact["period_start"]}/{fact["period_end"]}',
+                            period=f"{fact['period_start']}/{fact['period_end']}",
                             state=state,
                             source_ref=_external_source(source),
                         )
@@ -320,7 +344,7 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
         computation = _computation_source(payload, "financial_bridge.v1")
         driver_provenance = context.get("driver_provenance", {})
         for row in payload["rows"]:
-            period = f'FY{row["fiscal_year"]}'
+            period = f"FY{row['fiscal_year']}"
             observations = {}
             for metric in (
                 "revenue",
@@ -381,16 +405,16 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
         return {**payload, "rows": rows}
     if kind == "scenario_set":
         years = context.get("forecast_years", ())
-        period = (
-            f"FY{years[0]}/FY{years[-1]}" if years else "forecast_horizon"
-        )
+        period = f"FY{years[0]}/FY{years[-1]}" if years else "forecast_horizon"
         scenarios = []
         for scenario in payload["scenarios"]:
             overrides = []
             for override in scenario["driver_overrides"]:
                 state = override.get("state")
                 if state is None:
-                    raise ValidationError("scenario override requires an explicit state")
+                    raise ValidationError(
+                        "scenario override requires an explicit state"
+                    )
                 if state == "assumption":
                     provenance = {"assumption_key": override.get("assumption_key")}
                 elif state == "derived":
@@ -422,7 +446,7 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
             scenarios.append({**scenario, "driver_overrides": overrides})
         return {**payload, "scenarios": scenarios}
     if kind == "valuation_set":
-        period = f'as_of:{context.get("cutoff", "unknown")}'
+        period = f"as_of:{context.get('cutoff', 'unknown')}"
         computation = _computation_source(payload, "valuation_set.v1")
 
         def derived(key, item, unit="USD_million", currency="USD"):
@@ -438,15 +462,19 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
 
         def value_range(item, prefix, unit, currency):
             return {
-                "minimum": derived(f"{prefix}_minimum", item["minimum"], unit, currency),
-                "maximum": derived(f"{prefix}_maximum", item["maximum"], unit, currency),
+                "minimum": derived(
+                    f"{prefix}_minimum", item["minimum"], unit, currency
+                ),
+                "maximum": derived(
+                    f"{prefix}_maximum", item["maximum"], unit, currency
+                ),
             }
 
         dcf = [
             {
                 "scenario_id": item["scenario_id"],
                 "enterprise_value": derived(
-                    f'{item["scenario_id"]}_enterprise_value',
+                    f"{item['scenario_id']}_enterprise_value",
                     item["enterprise_value"],
                 ),
             }
@@ -457,13 +485,19 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
             reverse = {
                 "driver_key": reverse["driver_key"],
                 "implied_value": derived(
-                    "reverse_dcf_implied_value", reverse["implied_value"], "multiplier", "N/A"
+                    "reverse_dcf_implied_value",
+                    reverse["implied_value"],
+                    "multiplier",
+                    "N/A",
                 ),
                 "achieved_residual": derived(
                     "reverse_dcf_residual", reverse["achieved_residual"]
                 ),
                 "iteration_count": derived(
-                    "reverse_dcf_iteration_count", reverse["iteration_count"], "count", "N/A"
+                    "reverse_dcf_iteration_count",
+                    reverse["iteration_count"],
+                    "count",
+                    "N/A",
                 ),
             }
         ranges = []
@@ -474,7 +508,9 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                     "usd_per_share": value_range(
                         item["usd_per_share"], "usd_per_share", "USD_per_share", "USD"
                     ),
-                    "cny_return": value_range(item["cny_return"], "cny_return", "ratio", "CNY"),
+                    "cny_return": value_range(
+                        item["cny_return"], "cny_return", "ratio", "CNY"
+                    ),
                 }
             )
         comparisons = []
@@ -489,7 +525,7 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                         currency="CNY",
                         period=period,
                         state="assumption",
-                        assumption_key=f'{context["strategy_version"]}:required_return',
+                        assumption_key=f"{context['strategy_version']}:required_return",
                     ),
                     "achieved_return_range": value_range(
                         item["achieved_return_range"], "achieved_return", "ratio", "CNY"
@@ -509,7 +545,7 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                 currency="CNY",
                 period=period,
                 state="assumption",
-                assumption_key=f'{context["strategy_version"]}:required_return',
+                assumption_key=f"{context['strategy_version']}:required_return",
             ),
             "required_return_comparisons": comparisons,
         }
@@ -551,15 +587,20 @@ def _workspace_response(
         "strategy_version": value.preparation.strategy_version,
         "forecast_years": tuple(
             row["fiscal_year"] for row in financial.payload.get("rows", ())
-        ) if financial else (),
+        )
+        if financial
+        else (),
         "driver_provenance": {
             driver["driver_key"]: driver
             for driver in driver_map.payload.get("drivers", ())
-        } if driver_map else {},
+        }
+        if driver_map
+        else {},
         "evidence_facts": {
-            fact["fact_key"]: fact
-            for fact in evidence.payload.get("facts", ())
-        } if evidence else {},
+            fact["fact_key"]: fact for fact in evidence.payload.get("facts", ())
+        }
+        if evidence
+        else {},
     }
     artifacts = tuple(
         _artifact_response(item, project_id=value.project_id, context=context)
@@ -625,6 +666,8 @@ def _workspace_response(
 def _read(operation):
     try:
         return operation()
+    except DomainConflictError as exc:
+        raise HttpConflictError(str(exc)) from exc
     except ValidationError as exc:
         message = str(exc)
         if message in {
@@ -633,6 +676,159 @@ def _read(operation):
         }:
             raise NotFoundError(message) from exc
         raise ValidationFailedError(message) from exc
+
+
+def _publication_security_response(value) -> CompanyResearchFrozenSecurityResponse:
+    return CompanyResearchFrozenSecurityResponse(
+        object_id=value.object_id,
+        company_id=value.company_id,
+        external_key=value.external_key,
+        canonical_name=value.canonical_name,
+        symbol=value.symbol,
+        exchange=value.exchange,
+        share_class=value.share_class,
+        trading_currency=value.trading_currency,
+    )
+
+
+def _publication_assessment_response(value) -> CompanyResearchFrozenAssessmentResponse:
+    return CompanyResearchFrozenAssessmentResponse(
+        answerability=value.answerability,
+        direction=value.direction,
+        confidence=value.confidence,
+        content_hash=value.content_hash,
+    )
+
+
+def _publication_artifact_responses(
+    values,
+) -> tuple[CompanyResearchFrozenArtifactDescriptorResponse, ...]:
+    return tuple(
+        CompanyResearchFrozenArtifactDescriptorResponse(
+            kind=value.kind,
+            id=value.id,
+            version=value.version,
+            input_hash=value.input_hash,
+            content_hash=value.content_hash,
+        )
+        for value in values
+    )
+
+
+def _judgment_confirmation_response(
+    value: CompanyResearchJudgmentConfirmation,
+) -> CompanyResearchJudgmentConfirmationResponse:
+    return CompanyResearchJudgmentConfirmationResponse(
+        project_id=value.project_id,
+        preparation=CompanyResearchPublicationPreparationResponse(
+            id=value.preparation_id,
+            status="ready_to_freeze",
+            current_step="memo",
+            progress=95,
+        ),
+        draft=CompanyResearchPublicationDraftResponse(
+            id=value.draft_id,
+            lock_version=value.draft_lock_version,
+        ),
+        machine_memo=CompanyResearchFrozenMemoIdentityResponse(
+            id=value.machine_memo_id,
+            content_hash=value.machine_memo_content_hash,
+        ),
+        confirmed_memo=CompanyResearchFrozenMemoIdentityResponse(
+            id=value.confirmed_memo_id,
+            content_hash=value.confirmed_memo_content_hash,
+        ),
+        assessment_status=value.assessment_status,
+        reviewer=value.reviewer,
+        markdown=value.markdown,
+        confirmed_at=_stored_utc(value.confirmed_at),
+    )
+
+
+def _publication_preview_response(
+    value: CompanyResearchPublicationPreview,
+) -> CompanyResearchPublicationPreviewResponse:
+    return CompanyResearchPublicationPreviewResponse(
+        project_id=value.project_id,
+        expected_lock_version=value.expected_lock_version,
+        company=CompanyResearchIdentityResponse(**value.company.canonical_payload()),
+        securities=tuple(
+            _publication_security_response(item) for item in value.securities
+        ),
+        cutoff_at=_stored_utc(value.cutoff_at),
+        historical_basis_id=value.historical_basis_id,
+        historical_basis_content_hash=value.historical_basis_content_hash,
+        strategy_version=value.strategy_version,
+        model_version=value.model_version,
+        assessment=_publication_assessment_response(value.assessment),
+        value_range=value.value_range,
+        return_range=value.return_range,
+        blockers=value.blockers,
+        strongest_counterevidence=value.strongest_counterevidence,
+        next_verification_events=value.next_verification_events,
+        memo_markdown=value.memo_markdown,
+        artifacts=_publication_artifact_responses(value.artifacts),
+        manifest_hash=value.manifest_hash,
+    )
+
+
+def _frozen_revision_response(
+    value: CompanyResearchFrozenRevision,
+) -> CompanyResearchFrozenRevisionResponse:
+    return CompanyResearchFrozenRevisionResponse(
+        id=value.id,
+        project_id=value.project_id,
+        sequence=value.sequence,
+        published_at=_stored_utc(value.published_at),
+        boundary_id=value.boundary_id,
+        manifest_id=value.manifest_id,
+        manifest_hash=value.manifest_hash,
+        company=CompanyResearchIdentityResponse(**value.company.canonical_payload()),
+        securities=tuple(
+            _publication_security_response(item) for item in value.securities
+        ),
+        cutoff_at=_stored_utc(value.cutoff_at),
+        historical_basis_id=value.historical_basis_id,
+        historical_basis_content_hash=value.historical_basis_content_hash,
+        strategy_version=value.strategy_version,
+        model_version=value.model_version,
+        assessment=_publication_assessment_response(value.assessment),
+        value_range=value.value_range,
+        return_range=value.return_range,
+        blockers=value.blockers,
+        strongest_counterevidence=value.strongest_counterevidence,
+        next_verification_events=value.next_verification_events,
+        memo_markdown=value.memo_markdown,
+        artifacts=_publication_artifact_responses(value.artifacts),
+        preparation_status=value.preparation_status,
+        current_step=value.current_step,
+        progress=value.progress,
+    )
+
+
+def _export_response(
+    value: CompanyResearchMarkdownExport,
+) -> CompanyResearchMarkdownExportResponse:
+    return CompanyResearchMarkdownExportResponse(
+        filename=value.filename,
+        media_type=value.media_type,
+        content=value.content,
+        content_hash=value.content_hash,
+    )
+
+
+def _require_company_research_revision(
+    db: Session, *, project_id: UUID, revision_id: UUID
+) -> None:
+    from app.underwriting.persistence.models import UnderwritingResearchVersion
+
+    row = db.get(UnderwritingResearchVersion, revision_id)
+    if (
+        row is None
+        or row.project_id != project_id
+        or row.version_kind != "company_research"
+    ):
+        raise NotFoundError("company research revision not found")
 
 
 @router.post(
@@ -726,7 +922,10 @@ def get_company_research_workspace(
 ) -> CompanyResearchWorkspaceResponse:
     return _read(
         lambda: _workspace_response(
-            CompanyResearchWorkbench(db, now=_now).workspace(project_id=project_id),
+            CompanyResearchWorkbench(db, now=_now).workspace(
+                project_id=project_id,
+                allow_current_heads_after_revision=True,
+            ),
             expected_project_id=project_id,
         )
     )
@@ -752,9 +951,116 @@ def review_company_evidence(
             )
         ),
     )
-    artifact = _artifact_response(
-        result.evidence_artifact, project_id=project_id
-    ).root
+    artifact = _artifact_response(result.evidence_artifact, project_id=project_id).root
     if artifact.kind != "evidence_index":
         raise ValidationFailedError("evidence review returned the wrong artifact kind")
     return CompanyResearchEvidenceReviewResponse(evidence_artifact=artifact)
+
+
+@router.post(
+    "/projects/{project_id}/judgment-confirmations",
+    response_model=CompanyResearchJudgmentConfirmationResponse,
+    responses={**READ_ERROR_RESPONSES, **WRITE_ERROR_RESPONSES},
+)
+def confirm_company_research_judgment(
+    project_id: UUID,
+    payload: ConfirmCompanyResearchJudgmentRequest,
+    db: DbSession,
+) -> CompanyResearchJudgmentConfirmationResponse:
+    value = commit_write(
+        db,
+        lambda: CompanyResearchPublicationService(db, now=_now).confirm_judgment(
+            project_id=project_id,
+            expected_lock_version=payload.expected_lock_version,
+            expected_memo_id=payload.expected_memo_id,
+            expected_memo_content_hash=payload.expected_memo_content_hash,
+            markdown=payload.markdown,
+        ),
+    )
+    return _judgment_confirmation_response(value)
+
+
+@router.post(
+    "/projects/{project_id}/publication-preview",
+    response_model=CompanyResearchPublicationPreviewResponse,
+    responses={**READ_ERROR_RESPONSES, 409: {"model": UnderwritingErrorEnvelope}},
+)
+def preview_company_research_publication(
+    project_id: UUID,
+    payload: PreviewCompanyResearchPublicationRequest,
+    db: DbSession,
+) -> CompanyResearchPublicationPreviewResponse:
+    return _publication_preview_response(
+        _read(
+            lambda: CompanyResearchPublicationService(db, now=_now).preview(
+                project_id=project_id,
+                expected_lock_version=payload.expected_lock_version,
+            )
+        )
+    )
+
+
+@router.post(
+    "/projects/{project_id}/publish",
+    response_model=CompanyResearchFrozenRevisionResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={**READ_ERROR_RESPONSES, **WRITE_ERROR_RESPONSES},
+)
+def publish_company_research(
+    project_id: UUID,
+    payload: PublishCompanyResearchRequest,
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=1, max_length=120)
+    ],
+    db: DbSession,
+) -> CompanyResearchFrozenRevisionResponse:
+    value = commit_write(
+        db,
+        lambda: CompanyResearchPublicationService(db, now=_now).publish(
+            project_id=project_id,
+            expected_lock_version=payload.expected_lock_version,
+            expected_manifest_hash=payload.expected_manifest_hash,
+            idempotency_key=idempotency_key,
+        ),
+    )
+    return _frozen_revision_response(value)
+
+
+@router.get(
+    "/projects/{project_id}/revisions/{revision_id}",
+    response_model=CompanyResearchFrozenRevisionResponse,
+    responses=READ_ERROR_RESPONSES,
+)
+def get_company_research_revision(
+    project_id: UUID, revision_id: UUID, db: DbSession
+) -> CompanyResearchFrozenRevisionResponse:
+    _require_company_research_revision(
+        db, project_id=project_id, revision_id=revision_id
+    )
+    return _frozen_revision_response(
+        _read(
+            lambda: CompanyResearchPublicationService(db, now=_now).revision(
+                project_id, revision_id
+            )
+        )
+    )
+
+
+@router.get(
+    "/projects/{project_id}/revisions/{revision_id}/export",
+    response_model=CompanyResearchMarkdownExportResponse,
+    responses=READ_ERROR_RESPONSES,
+)
+def export_company_research_revision(
+    project_id: UUID, revision_id: UUID, db: DbSession
+) -> CompanyResearchMarkdownExportResponse:
+    _require_company_research_revision(
+        db, project_id=project_id, revision_id=revision_id
+    )
+    return _export_response(
+        _read(
+            lambda: CompanyResearchPublicationService(db, now=_now).export(
+                project_id, revision_id
+            )
+        )
+    )

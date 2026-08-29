@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from uuid import UUID
 
 import pytest
@@ -13,6 +14,7 @@ from sqlalchemy import bindparam, select, text
 from app.underwriting.api.company_research_schemas import (
     CompanyResearchArtifactResponse,
     CompanyResearchNumericObservationResponse,
+    CompanyResearchPublicationPreviewResponse,
     CompanyResearchWorkbenchModuleResponse,
     CompanyResearchWorkspaceCompanyResponse,
     CompanyResearchWorkspaceDraftResponse,
@@ -26,6 +28,7 @@ from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
     CompanyResearchPreparation,
 )
+from app.underwriting.persistence.product_models import UnderwritingRevisionManifest
 from app.underwriting.persistence.company_research_repository import (
     CompanyResearchRepository,
 )
@@ -41,6 +44,7 @@ from app.underwriting.services.workspace_draft import (
 )
 from app.underwriting.hashing import canonical_hash
 from tests.underwriting.test_company_research_workbench import _model_workspace
+from tests.underwriting.test_company_research_persistence import _tamper_row
 
 BASE = "/api/underwriting/v1/product/company-research"
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
@@ -60,6 +64,7 @@ EXPECTED_MODULES = (
     "counterevidence_risks_next_checks",
     "versions_changes_memo",
 )
+REJECTED_PUBLICATION_FACT_KEY = "fy2025_other_bets_revenue"
 
 
 def _evidence_artifact_payload() -> dict:
@@ -245,12 +250,10 @@ def test_company_research_workspace_requires_exact_module_order_and_state_artifa
     modules = tuple(
         CompanyResearchWorkbenchModuleResponse(
             key=key,
-            state=(
-                "needs_review"
-                if key == "evidence_and_gaps"
-                else "not_started"
-            ),
-            artifact_refs=(artifact_ref, gaps_ref) if key == "evidence_and_gaps" else (),
+            state=("needs_review" if key == "evidence_and_gaps" else "not_started"),
+            artifact_refs=(artifact_ref, gaps_ref)
+            if key == "evidence_and_gaps"
+            else (),
             valuation_state=(
                 "pending"
                 if key == "scenarios_valuation_implied_expectations"
@@ -403,7 +406,9 @@ def test_workspace_response_rejects_nonexistent_foreign_or_substituted_registry_
     substituted["modules"][1]["artifact_refs"][0]["content_hash"] = "b" * 64
     lineage_substitution = deepcopy(body)
     business = next(
-        item for item in lineage_substitution["artifacts"] if item["kind"] == "business_map"
+        item
+        for item in lineage_substitution["artifacts"]
+        if item["kind"] == "business_map"
     )
     business["payload"]["_lineage"]["artifact_refs"][0]["content_hash"] = "b" * 64
     duplicate = deepcopy(body)
@@ -463,7 +468,9 @@ def test_workspace_response_rejects_nonexistent_foreign_or_substituted_registry_
     ] = "fallback"
     wrong_scenario_unit = deepcopy(body)
     scenario = next(
-        item for item in wrong_scenario_unit["artifacts"] if item["kind"] == "scenario_set"
+        item
+        for item in wrong_scenario_unit["artifacts"]
+        if item["kind"] == "scenario_set"
     )
     scenario["payload"]["scenarios"][0]["driver_overrides"][0]["observation"][
         "unit"
@@ -547,7 +554,13 @@ def _initialize(
     )
 
 
-def _run_public_company_research_pipeline(api_client, session) -> dict:
+def _run_public_company_research_pipeline(
+    api_client,
+    session,
+    *,
+    fixed_model_clock: bool = False,
+    rejected_fact_key: str | None = None,
+) -> dict:
     cutoff = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
     company_id = _alphabet_id(session)
     preview = _preview(api_client, company_id, cutoff_at=cutoff)
@@ -577,13 +590,19 @@ def _run_public_company_research_pipeline(api_client, session) -> dict:
             json={
                 "evidence_artifact_id": current["id"],
                 "fact_key": fact["fact_key"],
-                "decision": "confirmed",
+                "decision": (
+                    "rejected" if fact["fact_key"] == rejected_fact_key else "confirmed"
+                ),
                 "expected_head_id": current["id"],
             },
         )
         assert reviewed.status_code == 200, reviewed.text
         current = reviewed.json()["evidence_artifact"]
-    worker = CompanyResearchPreparationWorker(session, now=lambda: datetime.now(UTC))
+    model_time = datetime.now(UTC)
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=(lambda: model_time) if fixed_model_clock else (lambda: datetime.now(UTC)),
+    )
     claim = worker.claim_next()
     assert claim is not None and claim.step == "model_bundle"
     outcome = worker.run_claim(claim)
@@ -597,6 +616,412 @@ def _run_public_company_research_pipeline(api_client, session) -> dict:
     return result.json()
 
 
+def _publication_invariants(workspace: dict) -> dict[str, object]:
+    artifacts = {item["kind"]: item for item in workspace["artifacts"]}
+    evidence = artifacts["evidence_index"]
+    gaps = artifacts["research_gaps"]
+    return {
+        "evidence": deepcopy(evidence),
+        "research_gaps": deepcopy(gaps),
+        "decisions": tuple(
+            (fact["fact_key"], fact["review_decision"])
+            for fact in evidence["payload"]["facts"]
+        ),
+    }
+
+
+def test_company_research_publication_closes_the_entire_public_http_workflow(
+    api_client, session
+) -> None:
+    workspace = _run_public_company_research_pipeline(
+        api_client,
+        session,
+        fixed_model_clock=True,
+        rejected_fact_key=REJECTED_PUBLICATION_FACT_KEY,
+    )
+    project_id = workspace["project_id"]
+    memo = next(item for item in workspace["artifacts"] if item["kind"] == "memo")
+    assert memo["payload"]["candidate_status"] == "machine_draft"
+    assert "reviewer" not in memo["payload"]
+    assert "markdown" not in memo["payload"]
+    before = _publication_invariants(workspace)
+    assert [decision for _key, decision in before["decisions"]].count("confirmed") == 6
+    assert [decision for _key, decision in before["decisions"]].count("rejected") == 1
+
+    confirmation = api_client.post(
+        f"{BASE}/projects/{project_id}/judgment-confirmations",
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": workspace["draft"]["lock_version"],
+            "expected_memo_id": memo["id"],
+            "expected_memo_content_hash": memo["content_hash"],
+            "markdown": "Current formal evidence is insufficient.\n",
+        },
+    )
+    assert confirmation.status_code == 200, confirmation.text
+    confirmed = confirmation.json()
+    assert confirmed["project_id"] == project_id
+    assert confirmed["preparation"]["status"] == "ready_to_freeze"
+    assert confirmed["preparation"]["current_step"] == "memo"
+    assert confirmed["preparation"]["progress"] == 95
+    assert confirmed["confirmed_memo"]["id"] != memo["id"]
+
+    ready_workspace = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    assert ready_workspace.status_code == 200, ready_workspace.text
+    confirmed_memo = next(
+        item for item in ready_workspace.json()["artifacts"] if item["kind"] == "memo"
+    )
+    assert confirmed_memo["payload"]["candidate_status"] == "human_confirmed"
+    assert confirmed_memo["payload"]["reviewer"] == "human:local-user"
+    assert confirmed_memo["payload"]["markdown"] == (
+        "Current formal evidence is insufficient."
+    )
+
+    preview = api_client.post(
+        f"{BASE}/projects/{project_id}/publication-preview",
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": confirmed["draft"]["lock_version"],
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    candidate = preview.json()
+    assert candidate["project_id"] == project_id
+    assert candidate["assessment"] == {
+        "schema_version": "underwriting.v1",
+        "answerability": "not_answerable",
+        "direction": None,
+        "confidence": None,
+        "content_hash": candidate["assessment"]["content_hash"],
+    }
+    assert candidate["value_range"] is None
+    assert candidate["return_range"] is None
+    assert set(item["kind"] for item in candidate["artifacts"]) == {
+        "evidence_index",
+        "research_gaps",
+        "business_map",
+        "driver_map",
+        "financial_bridge",
+        "scenario_set",
+        "judgment_context",
+        "memo",
+    }
+
+    published = api_client.post(
+        f"{BASE}/projects/{project_id}/publish",
+        headers={"Idempotency-Key": "alphabet-live-freeze"},
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": confirmed["draft"]["lock_version"],
+            "expected_manifest_hash": candidate["manifest_hash"],
+        },
+    )
+    assert published.status_code == 201, published.text
+    frozen = published.json()
+    revision_id = frozen["id"]
+    assert frozen["project_id"] == project_id
+    assert frozen["preparation_status"] == "completed"
+    assert frozen["current_step"] is None
+    assert frozen["progress"] == 100
+
+    replay = api_client.get(f"{BASE}/projects/{project_id}/revisions/{revision_id}")
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == frozen
+
+    exported = api_client.get(
+        f"{BASE}/projects/{project_id}/revisions/{revision_id}/export"
+    )
+    assert exported.status_code == 200, exported.text
+    envelope = exported.json()
+    assert envelope["media_type"] == "text/markdown"
+    assert envelope["filename"] == f"alphabet-company-research-{revision_id}.md"
+    assert (
+        envelope["content_hash"]
+        == sha256(envelope["content"].encode("utf-8")).hexdigest()
+    )
+
+    after_response = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    assert after_response.status_code == 200, after_response.text
+    after = after_response.json()
+    assert after["preparation"] == {
+        "schema_version": "underwriting.v1",
+        "id": workspace["preparation"]["id"],
+        "status": "completed",
+        "current_step": None,
+        "progress": 100,
+        "error": None,
+    }
+    assert _publication_invariants(after) == before
+
+
+def test_company_research_publication_http_errors_are_bounded_and_identity_bound(
+    api_client, session
+) -> None:
+    workspace = _run_public_company_research_pipeline(
+        api_client,
+        session,
+        fixed_model_clock=True,
+        rejected_fact_key=REJECTED_PUBLICATION_FACT_KEY,
+    )
+    project_id = workspace["project_id"]
+    memo = next(item for item in workspace["artifacts"] if item["kind"] == "memo")
+    request = {
+        "schema_version": "underwriting.v1",
+        "expected_lock_version": workspace["draft"]["lock_version"],
+        "expected_memo_id": memo["id"],
+        "expected_memo_content_hash": memo["content_hash"],
+        "markdown": "Current formal evidence is insufficient.\n",
+    }
+
+    for malformed in (
+        {**request, "expected_memo_content_hash": memo["content_hash"].upper()},
+        {**request, "provider_internal_payload": "must-not-be-accepted"},
+        {**request, "expected_lock_version": True},
+    ):
+        response = api_client.post(
+            f"{BASE}/projects/{project_id}/judgment-confirmations", json=malformed
+        )
+        assert response.status_code == 422
+
+    confirmation = api_client.post(
+        f"{BASE}/projects/{project_id}/judgment-confirmations", json=request
+    )
+    assert confirmation.status_code == 200, confirmation.text
+    confirmed = confirmation.json()
+
+    conflicting_confirmation = api_client.post(
+        f"{BASE}/projects/{project_id}/judgment-confirmations",
+        json={**request, "markdown": "A different conclusion.\n"},
+    )
+    assert conflicting_confirmation.status_code == 409
+    assert conflicting_confirmation.json()["error"]["code"] == "conflict"
+
+    stale_preview = api_client.post(
+        f"{BASE}/projects/{project_id}/publication-preview",
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": confirmed["draft"]["lock_version"] + 1,
+        },
+    )
+    assert stale_preview.status_code == 409
+
+    preview = api_client.post(
+        f"{BASE}/projects/{project_id}/publication-preview",
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": confirmed["draft"]["lock_version"],
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    candidate = preview.json()
+
+    missing_key = api_client.post(
+        f"{BASE}/projects/{project_id}/publish",
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": confirmed["draft"]["lock_version"],
+            "expected_manifest_hash": candidate["manifest_hash"],
+        },
+    )
+    assert missing_key.status_code == 422
+
+    mismatch = api_client.post(
+        f"{BASE}/projects/{project_id}/publish",
+        headers={"Idempotency-Key": "bounded-errors"},
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": confirmed["draft"]["lock_version"],
+            "expected_manifest_hash": "f" * 64,
+        },
+    )
+    assert mismatch.status_code == 422
+    assert mismatch.json()["error"]["code"] == "validation_failed"
+
+    published = api_client.post(
+        f"{BASE}/projects/{project_id}/publish",
+        headers={"Idempotency-Key": "bounded-errors"},
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": confirmed["draft"]["lock_version"],
+            "expected_manifest_hash": candidate["manifest_hash"],
+        },
+    )
+    assert published.status_code == 201, published.text
+    frozen = published.json()
+    revision_id = frozen["id"]
+
+    replayed_publish = api_client.post(
+        f"{BASE}/projects/{project_id}/publish",
+        headers={"Idempotency-Key": "bounded-errors"},
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": confirmed["draft"]["lock_version"],
+            "expected_manifest_hash": candidate["manifest_hash"],
+        },
+    )
+    assert replayed_publish.status_code == 201
+    assert replayed_publish.json() == frozen
+
+    reused_key = api_client.post(
+        f"{BASE}/projects/{project_id}/publish",
+        headers={"Idempotency-Key": "bounded-errors"},
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": confirmed["draft"]["lock_version"],
+            "expected_manifest_hash": "e" * 64,
+        },
+    )
+    assert reused_key.status_code == 409
+    assert reused_key.json()["error"]["code"] == "conflict"
+
+    foreign_project_id = "00000000-0000-4000-8000-000000000001"
+    for suffix in ("", "/export"):
+        foreign = api_client.get(
+            f"{BASE}/projects/{foreign_project_id}/revisions/{revision_id}{suffix}"
+        )
+        assert foreign.status_code == 404
+        assert foreign.json()["error"]["code"] == "not_found"
+
+    unknown = api_client.get(
+        f"{BASE}/projects/{project_id}/revisions/00000000-0000-4000-8000-000000000099"
+    )
+    assert unknown.status_code == 404
+
+    manifest = session.get(UnderwritingRevisionManifest, UUID(frozen["manifest_id"]))
+    assert manifest is not None
+    _tamper_row(
+        session,
+        UnderwritingRevisionManifest,
+        manifest.id,
+        content_hash="0" * 64,
+    )
+    corrupted = api_client.get(f"{BASE}/projects/{project_id}/revisions/{revision_id}")
+    assert corrupted.status_code == 422
+    error = corrupted.json()["error"]
+    assert error["code"] == "validation_failed"
+    assert "provider" not in error["message"].lower()
+    assert "internal" not in error["message"].lower()
+
+
+def test_company_research_publication_reads_never_take_transaction_control(
+    api_client, session, monkeypatch
+) -> None:
+    workspace = _run_public_company_research_pipeline(
+        api_client,
+        session,
+        fixed_model_clock=True,
+        rejected_fact_key=REJECTED_PUBLICATION_FACT_KEY,
+    )
+    project_id = workspace["project_id"]
+    memo = next(item for item in workspace["artifacts"] if item["kind"] == "memo")
+    confirmation = api_client.post(
+        f"{BASE}/projects/{project_id}/judgment-confirmations",
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": workspace["draft"]["lock_version"],
+            "expected_memo_id": memo["id"],
+            "expected_memo_content_hash": memo["content_hash"],
+            "markdown": "Current formal evidence is insufficient.\n",
+        },
+    )
+    assert confirmation.status_code == 200, confirmation.text
+    lock_version = confirmation.json()["draft"]["lock_version"]
+    calls: list[str] = []
+
+    def forbidden(name: str):
+        def operation(*_args, **_kwargs):
+            calls.append(name)
+            raise AssertionError(f"read route must not call {name}")
+
+        return operation
+
+    with monkeypatch.context() as context:
+        context.setattr(session, "commit", forbidden("commit"))
+        context.setattr(session, "rollback", forbidden("rollback"))
+        preview = api_client.post(
+            f"{BASE}/projects/{project_id}/publication-preview",
+            json={
+                "schema_version": "underwriting.v1",
+                "expected_lock_version": lock_version,
+            },
+        )
+        assert preview.status_code == 200, preview.text
+    assert calls == []
+
+    published = api_client.post(
+        f"{BASE}/projects/{project_id}/publish",
+        headers={"Idempotency-Key": "read-transaction-boundary"},
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": lock_version,
+            "expected_manifest_hash": preview.json()["manifest_hash"],
+        },
+    )
+    assert published.status_code == 201, published.text
+    revision_id = published.json()["id"]
+
+    with monkeypatch.context() as context:
+        context.setattr(session, "commit", forbidden("commit"))
+        context.setattr(session, "rollback", forbidden("rollback"))
+        replay = api_client.get(f"{BASE}/projects/{project_id}/revisions/{revision_id}")
+        exported = api_client.get(
+            f"{BASE}/projects/{project_id}/revisions/{revision_id}/export"
+        )
+        assert replay.status_code == 200, replay.text
+        assert exported.status_code == 200, exported.text
+    assert calls == []
+
+
+def test_company_research_publication_response_contract_is_closed_and_ordered(
+    api_client, session
+) -> None:
+    workspace = _run_public_company_research_pipeline(
+        api_client,
+        session,
+        fixed_model_clock=True,
+        rejected_fact_key=REJECTED_PUBLICATION_FACT_KEY,
+    )
+    project_id = workspace["project_id"]
+    memo = next(item for item in workspace["artifacts"] if item["kind"] == "memo")
+    confirmation = api_client.post(
+        f"{BASE}/projects/{project_id}/judgment-confirmations",
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": workspace["draft"]["lock_version"],
+            "expected_memo_id": memo["id"],
+            "expected_memo_content_hash": memo["content_hash"],
+            "markdown": "Current formal evidence is insufficient.\n",
+        },
+    )
+    assert confirmation.status_code == 200, confirmation.text
+    preview = api_client.post(
+        f"{BASE}/projects/{project_id}/publication-preview",
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": confirmation.json()["draft"]["lock_version"],
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    candidate = preview.json()
+    CompanyResearchPublicationPreviewResponse.model_validate(candidate)
+
+    unknown = {**candidate, "unexpected": True}
+    uppercase_hash = {**candidate, "manifest_hash": candidate["manifest_hash"].upper()}
+    open_investment_fields = deepcopy(candidate)
+    open_investment_fields["assessment"]["direction"] = "provisional_bullish"
+    reordered = deepcopy(candidate)
+    reordered["artifacts"] = list(reversed(reordered["artifacts"]))
+
+    for invalid in (
+        unknown,
+        uppercase_hash,
+        open_investment_fields,
+        reordered,
+    ):
+        with pytest.raises(PydanticValidationError):
+            CompanyResearchPublicationPreviewResponse.model_validate(invalid)
+
+
 def _rewrite_head_decision_as_malformed(session, head_id: UUID) -> None:
     repository = CompanyResearchRepository(session)
     head = session.get(CompanyResearchArtifactVersion, head_id)
@@ -606,9 +1031,7 @@ def _rewrite_head_decision_as_malformed(session, head_id: UUID) -> None:
     payload = deepcopy(head.payload)
     changes = [
         after
-        for before, after in zip(
-            parent.payload["facts"], payload["facts"], strict=True
-        )
+        for before, after in zip(parent.payload["facts"], payload["facts"], strict=True)
         if before != after
     ]
     assert len(changes) == 1
@@ -647,15 +1070,18 @@ def _rewrite_head_decision_as_malformed(session, head_id: UUID) -> None:
         ),
         bindparam("id", type_=CompanyResearchArtifactVersion.__table__.c.id.type),
     )
-    assert session.execute(
-        statement,
-        {
-            "payload": payload,
-            "input_hash": input_hash,
-            "content_hash": content_hash,
-            "id": head.id,
-        },
-    ).rowcount == 1
+    assert (
+        session.execute(
+            statement,
+            {
+                "payload": payload,
+                "input_hash": input_hash,
+                "content_hash": content_hash,
+                "id": head.id,
+            },
+        ).rowcount
+        == 1
+    )
     session.expire_all()
 
 
@@ -734,16 +1160,19 @@ def _rewrite_first_review_decision_chain(
             payload=payload,
             source_refs=row.source_refs,
         )
-        assert session.execute(
-            statement,
-            {
-                "parent_content_hash": parent_content_hash,
-                "payload": payload,
-                "input_hash": input_hash,
-                "content_hash": content_hash,
-                "id": row.id,
-            },
-        ).rowcount == 1
+        assert (
+            session.execute(
+                statement,
+                {
+                    "parent_content_hash": parent_content_hash,
+                    "payload": payload,
+                    "input_hash": input_hash,
+                    "content_hash": content_hash,
+                    "id": row.id,
+                },
+            ).rowcount
+            == 1
+        )
         rewritten_hashes[row.id] = content_hash
     session.expire_all()
 
@@ -779,10 +1208,13 @@ def _rewrite_evidence_fact_field(
         ),
         bindparam("id", type_=CompanyResearchArtifactVersion.__table__.c.id.type),
     )
-    assert session.execute(
-        statement,
-        {"payload": payload, "content_hash": content_hash, "id": head.id},
-    ).rowcount == 1
+    assert (
+        session.execute(
+            statement,
+            {"payload": payload, "content_hash": content_hash, "id": head.id},
+        ).rowcount
+        == 1
+    )
     session.expire_all()
 
 
@@ -817,9 +1249,7 @@ def _rewrite_complete_evidence_chain_company_key(session, head_id: UUID) -> None
         payload["company_external_key"] = "US:SUBSTITUTED:COMPANY"
         for fact in payload["facts"]:
             fact["company_external_key"] = "US:SUBSTITUTED:COMPANY"
-        parent_content_hash = (
-            rewritten_hashes[chain[index - 1].id] if index else None
-        )
+        parent_content_hash = rewritten_hashes[chain[index - 1].id] if index else None
         input_hash = row.input_hash
         if index:
             parent = chain[index - 1]
@@ -848,16 +1278,19 @@ def _rewrite_complete_evidence_chain_company_key(session, head_id: UUID) -> None
             payload=payload,
             source_refs=row.source_refs,
         )
-        assert session.execute(
-            statement,
-            {
-                "parent_content_hash": parent_content_hash,
-                "payload": payload,
-                "input_hash": input_hash,
-                "content_hash": content_hash,
-                "id": row.id,
-            },
-        ).rowcount == 1
+        assert (
+            session.execute(
+                statement,
+                {
+                    "parent_content_hash": parent_content_hash,
+                    "payload": payload,
+                    "input_hash": input_hash,
+                    "content_hash": content_hash,
+                    "id": row.id,
+                },
+            ).rowcount
+            == 1
+        )
         rewritten_hashes[row.id] = content_hash
     session.expire_all()
 
@@ -878,9 +1311,7 @@ def test_workspace_returns_422_for_hash_consistent_malformed_evidence_timestamp(
         project_id, "evidence_index"
     )
     assert evidence is not None
-    _rewrite_evidence_fact_field(
-        session, evidence.id, field="published_at", value={}
-    )
+    _rewrite_evidence_fact_field(session, evidence.id, field="published_at", value={})
     session.commit()
 
     response = api_client.get(f"{BASE}/projects/{project_id}/workspace")
@@ -920,9 +1351,7 @@ def test_workspace_returns_422_when_review_chain_contradicts_audit_events(
     )
     assert reviewed.status_code == 200, reviewed.text
     reviewed_id = UUID(reviewed.json()["evidence_artifact"]["id"])
-    _rewrite_first_review_decision_chain(
-        session, reviewed_id, decision="rejected"
-    )
+    _rewrite_first_review_decision_chain(session, reviewed_id, decision="rejected")
     session.commit()
 
     response = api_client.get(f"{BASE}/projects/{project_id}/workspace")
@@ -973,9 +1402,7 @@ def test_workspace_returns_422_for_hash_consistent_malformed_rejected_fact(
     )
     assert reviewed.status_code == 200, reviewed.text
     reviewed_id = UUID(reviewed.json()["evidence_artifact"]["id"])
-    _rewrite_evidence_fact_field(
-        session, reviewed_id, field=field, value=value
-    )
+    _rewrite_evidence_fact_field(session, reviewed_id, field=field, value=value)
     session.commit()
 
     response = api_client.get(f"{BASE}/projects/{project_id}/workspace")
@@ -1050,9 +1477,7 @@ def test_public_pipeline_exposes_every_current_artifact_once_and_references_them
         for module in body["modules"]
         if module["key"] == "scenarios_valuation_implied_expectations"
     )
-    assert [ref["kind"] for ref in scenario_module["artifact_refs"]] == [
-        "scenario_set"
-    ]
+    assert [ref["kind"] for ref in scenario_module["artifact_refs"]] == ["scenario_set"]
     assert scenario_module["state"] == "ready"
     assert scenario_module["valuation_state"] == "blocked"
     scenario = next(
@@ -1078,13 +1503,12 @@ def test_public_pipeline_exposes_every_current_artifact_once_and_references_them
         assert all(item["unit"] == "multiplier" for item in observations)
         assert all(item["currency"] == "N/A" for item in observations)
     overview = next(module for module in body["modules"] if module["key"] == "overview")
-    assert [ref["kind"] for ref in overview["artifact_refs"]] == [
-        "judgment_context"
-    ]
+    assert [ref["kind"] for ref in overview["artifact_refs"]] == ["judgment_context"]
     evidence = next(
         item for item in body["artifacts"] if item["kind"] == "evidence_index"
     )
     facts = {item["fact_key"]: item for item in evidence["payload"]["facts"]}
+
     def reported_observations(value):
         if isinstance(value, list):
             return [item for child in value for item in reported_observations(child)]
@@ -1108,7 +1532,9 @@ def test_public_pipeline_exposes_every_current_artifact_once_and_references_them
         assert source == fact["observation"]["source_ref"]
 
 
-def test_recoverable_workspace_exposes_typed_error_semantics(api_client, session) -> None:
+def test_recoverable_workspace_exposes_typed_error_semantics(
+    api_client, session
+) -> None:
     company_id = _alphabet_id(session)
     preview = _preview(api_client, company_id)
     initialized = _initialize(api_client, company_id, preview["preview_hash"])
@@ -1135,9 +1561,9 @@ def test_recoverable_workspace_exposes_typed_error_semantics(api_client, session
         "code": "source_unavailable",
         "failed_step": "evidence_index",
         "retryable": True,
-        "next_attempt_at": (NOW + timedelta(minutes=5)).isoformat().replace(
-            "+00:00", "Z"
-        ),
+        "next_attempt_at": (NOW + timedelta(minutes=5))
+        .isoformat()
+        .replace("+00:00", "Z"),
     }
 
 
@@ -1393,9 +1819,7 @@ def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
     )
     assert initialized.status_code == 201, initialized.text
     project_id = initialized.json()["project_id"]
-    worker = CompanyResearchPreparationWorker(
-        session, now=lambda: datetime.now(UTC)
-    )
+    worker = CompanyResearchPreparationWorker(session, now=lambda: datetime.now(UTC))
     source_claim = worker.claim_next()
     assert source_claim is not None
     assert worker.run_claim(source_claim) == "awaiting_evidence_review"
@@ -1419,9 +1843,9 @@ def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
         )
         assert reviewed.status_code == 200, reviewed.text
         current = reviewed.json()["evidence_artifact"]
-    assert [
-        fact["review_decision"] for fact in current["payload"]["facts"]
-    ] == ["confirmed"] * 6 + ["rejected"]
+    assert [fact["review_decision"] for fact in current["payload"]["facts"]] == [
+        "confirmed"
+    ] * 6 + ["rejected"]
     drafts = WorkspaceDraftService(session, now=lambda: datetime.now(UTC))
     draft = drafts.read(UUID(project_id))
     assert draft is not None and draft.content.historical_basis_id is not None
@@ -1502,9 +1926,10 @@ def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
     ) == blocked_draft_identity
     assert recovered.project_id == blocked_project_id
     assert recovered.lock_version == blocked_draft_lock_version + 1
-    assert recovered.content.model_copy(
-        update={"historical_basis_id": None}, deep=True
-    ) == blocked_draft_content
+    assert (
+        recovered.content.model_copy(update={"historical_basis_id": None}, deep=True)
+        == blocked_draft_content
+    )
     workspace_after = api_client.get(f"{BASE}/projects/{project_id}/workspace")
     assert workspace_after.status_code == 200, workspace_after.text
     artifacts_after = workspace_after.json()["artifacts"]
@@ -1783,9 +2208,7 @@ def test_workspace_and_evidence_review_routes_are_closed(api_client, session) ->
     initialized = _initialize(api_client, company_id, preview["preview_hash"])
     assert initialized.status_code == 201
     project_id = initialized.json()["project_id"]
-    worker = CompanyResearchPreparationWorker(
-        session, now=lambda: datetime.now(UTC)
-    )
+    worker = CompanyResearchPreparationWorker(session, now=lambda: datetime.now(UTC))
     claim = worker.claim_next()
     assert claim is not None and worker.run_claim(claim) == "awaiting_evidence_review"
 
@@ -1796,8 +2219,8 @@ def test_workspace_and_evidence_review_routes_are_closed(api_client, session) ->
         "schema_version",
         "project_id",
         "company",
-            "preparation",
-            "artifacts",
+        "preparation",
+        "artifacts",
         "modules",
         "source_count",
         "gap_count",
@@ -1853,9 +2276,7 @@ def test_rejected_evidence_counts_as_reviewed_but_cannot_feed_downstream(
     initialized = _initialize(api_client, company_id, preview["preview_hash"])
     assert initialized.status_code == 201
     project_id = initialized.json()["project_id"]
-    worker = CompanyResearchPreparationWorker(
-        session, now=lambda: datetime.now(UTC)
-    )
+    worker = CompanyResearchPreparationWorker(session, now=lambda: datetime.now(UTC))
     claim = worker.claim_next()
     assert claim is not None and worker.run_claim(claim) == "awaiting_evidence_review"
     before = api_client.get(f"{BASE}/projects/{project_id}/workspace").json()
