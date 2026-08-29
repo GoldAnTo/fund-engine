@@ -89,7 +89,7 @@ class _AuthenticatedPublication:
     source_contract: CompanyResearchEvidenceCompilation
 
 
-class CompanyResearchPublication:
+class CompanyResearchPublicationService:
     """Confirm one locked machine judgment without taking over caller commit."""
 
     def __init__(self, session: Session, *, now) -> None:

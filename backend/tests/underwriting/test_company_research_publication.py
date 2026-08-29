@@ -30,7 +30,7 @@ from app.underwriting.services.company_research_preparation import (
 )
 from app.underwriting.services.company_research_publication import (
     CompanyResearchJudgmentConfirmation,
-    CompanyResearchPublication,
+    CompanyResearchPublicationService,
 )
 from app.underwriting.services.company_research_workbench import (
     CompanyResearchWorkbench,
@@ -51,6 +51,12 @@ from tests.underwriting.test_company_research_workbench import (
 CONFIRMED_AT = NOW + timedelta(minutes=5)
 REVIEWER = "human:local-user"
 REJECTED_FACT_KEY = "fy2025_other_bets_revenue"
+
+
+def test_company_research_publication_service_is_the_public_confirmation_seam() -> None:
+    assert CompanyResearchPublicationService.__name__ == (
+        "CompanyResearchPublicationService"
+    )
 
 
 def _awaiting_judgment_confirmation(session):
@@ -342,7 +348,7 @@ def test_confirm_judgment_atomically_advances_the_publication_boundary(session) 
     prior_memo_payload = deepcopy(machine_memo.payload)
     prior_memo_source_refs = deepcopy(machine_memo.source_refs)
 
-    result = CompanyResearchPublication(
+    result = CompanyResearchPublicationService(
         session, now=lambda: CONFIRMED_AT
     ).confirm_judgment(
         project_id=project_id,
@@ -472,7 +478,9 @@ def test_confirmation_rejects_invalid_normalized_markdown_before_reading_state(
     before = session.scalar(select(func.count()).select_from(CompanyResearchEvent))
 
     with pytest.raises(ValidationError, match="markdown"):
-        CompanyResearchPublication(session, now=lambda: CONFIRMED_AT).confirm_judgment(
+        CompanyResearchPublicationService(
+            session, now=lambda: CONFIRMED_AT
+        ).confirm_judgment(
             project_id=uuid4(),
             expected_lock_version=1,
             expected_memo_id=uuid4(),
@@ -489,7 +497,7 @@ def test_confirmation_exact_replay_returns_the_existing_result_once(session) -> 
         _awaiting_judgment_confirmation(session)
     )
     request = _confirmation_request(draft, machine_memo)
-    service = CompanyResearchPublication(session, now=lambda: CONFIRMED_AT)
+    service = CompanyResearchPublicationService(session, now=lambda: CONFIRMED_AT)
 
     first = service.confirm_judgment(project_id=initialized.project.id, **request)
     session.commit()
@@ -519,7 +527,7 @@ def test_confirmation_replay_reauthenticates_the_model_claim_audit_prefix(
         _awaiting_judgment_confirmation(session)
     )
     request = _confirmation_request(draft, machine_memo)
-    service = CompanyResearchPublication(session, now=lambda: CONFIRMED_AT)
+    service = CompanyResearchPublicationService(session, now=lambda: CONFIRMED_AT)
     service.confirm_judgment(project_id=initialized.project.id, **request)
     session.commit()
     _rewrite_one_event_type(
@@ -563,7 +571,7 @@ def test_confirmation_replay_with_different_content_or_expectation_conflicts_wit
     initialized, _repository, preparation, job, draft, machine_memo = (
         _awaiting_judgment_confirmation(session)
     )
-    service = CompanyResearchPublication(session, now=lambda: CONFIRMED_AT)
+    service = CompanyResearchPublicationService(session, now=lambda: CONFIRMED_AT)
     request = _confirmation_request(draft, machine_memo)
     service.confirm_judgment(project_id=initialized.project.id, **request)
     session.commit()
@@ -620,7 +628,7 @@ def test_confirmation_failure_at_each_mutation_stage_rolls_back_the_outer_savepo
 
     monkeypatch.setattr(CompanyResearchRepository, stage_method, fail)
     with pytest.raises(_InjectedConfirmationFailure, match=stage_method):
-        CompanyResearchPublication(
+        CompanyResearchPublicationService(
             session, now=lambda: CONFIRMED_AT
         ).confirm_judgment(
             project_id=initialized.project.id,
@@ -819,7 +827,7 @@ def test_confirmation_tamper_and_stale_matrix_fails_closed_with_zero_writes(
     )
 
     with pytest.raises((ConflictError, ValidationError)):
-        CompanyResearchPublication(
+        CompanyResearchPublicationService(
             session, now=lambda: CONFIRMED_AT
         ).confirm_judgment(project_id=initialized.project.id, **request)
     session.commit()
@@ -860,7 +868,7 @@ def test_sqlite_two_session_confirmation_has_one_winner_and_exact_replay(tmp_pat
         concurrent = sessions()
         try:
             barrier.wait()
-            result = CompanyResearchPublication(
+            result = CompanyResearchPublicationService(
                 concurrent, now=lambda: CONFIRMED_AT
             ).confirm_judgment(project_id=project_id, **request)
             concurrent.commit()
