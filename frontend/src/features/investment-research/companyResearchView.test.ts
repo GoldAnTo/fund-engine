@@ -1,16 +1,84 @@
 import { describe, expect, it } from "vitest";
 
 import type { CompanyResearchWorkspace } from "../../data/investmentResearchApi";
+import * as companyResearchView from "./companyResearchView";
 import {
   COMPANY_RESEARCH_MODULES,
   answerabilityView,
   artifactByKind,
   numericObservationView,
+  publicationAction,
   preparationIsActive,
   workspaceSnapshotIsMonotonic,
 } from "./companyResearchView";
 
 describe("company research view model", () => {
+  it("exposes a publication action helper", () => {
+    expect((companyResearchView as Record<string, unknown>).publicationAction).toBeTypeOf("function");
+  });
+
+  it("maps the exact 85, 95, and 100 publication boundaries to one clear action", () => {
+    const atBoundary = (
+      status: CompanyResearchWorkspace["preparation"]["status"],
+      currentStep: string | null,
+      progress: number,
+      selectedRevision: string | null = null,
+    ) => ({
+      preparation: { status, current_step: currentStep, progress },
+      selected_revision: selectedRevision,
+    }) as CompanyResearchWorkspace;
+
+    expect(publicationAction(atBoundary("awaiting_judgment_review", "judgment_context", 85))).toEqual({
+      kind: "confirm_judgment",
+      label: "确认当前判断",
+    });
+    expect(publicationAction(atBoundary("ready_to_freeze", "memo", 95))).toEqual({
+      kind: "preview_freeze",
+      label: "预览冻结版本",
+    });
+    expect(publicationAction(atBoundary("completed", null, 100, "revision-1"))).toEqual({
+      kind: "replay_export",
+      label: "查看冻结版本",
+    });
+    expect(publicationAction(atBoundary("building_model", "model_bundle", 30))).toBeNull();
+  });
+
+  it.each([
+    ["awaiting_judgment_review", "memo", 85, null],
+    ["awaiting_judgment_review", "judgment_context", 84, null],
+    ["ready_to_freeze", "judgment_context", 95, null],
+    ["ready_to_freeze", "memo", 96, null],
+    ["completed", "memo", 100, "revision-1"],
+    ["completed", null, 99, "revision-1"],
+    ["completed", null, 100, null],
+  ] as const)("rejects the impossible publication boundary %s/%s/%s", (status, currentStep, progress, selectedRevision) => {
+    const candidate = {
+      preparation: { status, current_step: currentStep, progress },
+      selected_revision: selectedRevision,
+    } as CompanyResearchWorkspace;
+    expect(() => publicationAction(candidate)).toThrow("研究发布状态不一致");
+  });
+
+  it("accepts completed publication snapshots only as monotonic successors of ready-to-freeze", () => {
+    const ready = {
+      project_id: "project-1",
+      company: { id: "company-1" },
+      preparation: { id: "preparation-1", status: "ready_to_freeze", current_step: "memo", progress: 95 },
+      artifacts: [{ kind: "memo", id: "memo-2", content_hash: "hash-2", version: 2 }],
+      modules: [{ key: "overview", state: "ready", valuation_state: "not_applicable" }],
+      draft: { id: "draft-1", lock_version: 2, base_revision_id: null },
+      selected_revision: null,
+      change_summary: { reviewed_fact_count: 7, artifact_versions: { memo: 2 } },
+    } as unknown as CompanyResearchWorkspace;
+    const completed = structuredClone(ready);
+    Object.assign(completed.preparation, { status: "completed", current_step: null, progress: 100 });
+    completed.draft.lock_version = 3;
+    completed.selected_revision = "revision-1";
+
+    expect(workspaceSnapshotIsMonotonic(ready, completed)).toBe(true);
+    expect(workspaceSnapshotIsMonotonic(completed, ready)).toBe(false);
+  });
+
   it("keeps the approved nine modules in product order", () => {
     expect(COMPANY_RESEARCH_MODULES.map(({ key, label }) => [key, label])).toEqual([
       ["overview", "概览与当前判断"],

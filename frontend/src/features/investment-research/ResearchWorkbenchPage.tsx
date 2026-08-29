@@ -1,8 +1,25 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { COMPANY_RESEARCH_MODULE_ARTIFACTS, investmentResearchApi, type CompanyResearchWorkspace, type ProductProject } from "../../data/investmentResearchApi";
-import { COMPANY_RESEARCH_MODULES, answerabilityView, artifactByKind, type CompanyResearchModuleKey, numericObservationView, preparationIsActive, workspaceSnapshotIsMonotonic } from "./companyResearchView";
+import {
+  COMPANY_RESEARCH_MODULE_ARTIFACTS,
+  investmentResearchApi,
+  type CompanyResearchFrozenRevision,
+  type CompanyResearchPublicationPreview,
+  type CompanyResearchWorkspace,
+  type ProductProject,
+} from "../../data/investmentResearchApi";
+import {
+  COMPANY_RESEARCH_MODULES,
+  answerabilityView,
+  artifactByKind,
+  type CompanyResearchModuleKey,
+  type CompanyResearchPublicationAction,
+  numericObservationView,
+  preparationIsActive,
+  publicationAction,
+  workspaceSnapshotIsMonotonic,
+} from "./companyResearchView";
 
 type WorkspaceArtifact = CompanyResearchWorkspace["artifacts"][number];
 type EvidenceArtifact = Extract<WorkspaceArtifact, { kind: "evidence_index" }>;
@@ -12,6 +29,15 @@ type ReviewDecision = "confirmed" | "rejected";
 type ModuleState = CompanyResearchWorkspace["modules"][number]["state"];
 type ValuationState = CompanyResearchWorkspace["modules"][number]["valuation_state"];
 type CommittedReview = { factKey: string; decision: ReviewDecision; previousEvidence: EvidenceArtifact; successor: EvidenceArtifact };
+type PublicationMutation = "confirm" | "preview" | "publish" | "replay" | "export";
+type PublicationPreviewSession = {
+  data: CompanyResearchPublicationPreview;
+  workspaceLockVersion: number;
+  memoId: string;
+  memoContentHash: string;
+  idempotencyKey: string;
+};
+type MemoEditor = { memoId: string; value: string };
 
 const PREPARATION_LABELS: Record<CompanyResearchWorkspace["preparation"]["status"], string> = {
   queued: "已排队", preparing_sources: "准备来源", awaiting_evidence_review: "等待证据审核", building_model: "构建模型",
@@ -23,6 +49,33 @@ const MODULE_STATE_LABELS: Record<CompanyResearchWorkspace["modules"][number]["s
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
+}
+
+function normalizedMarkdown(value: string): string {
+  return value.replace(/\r\n?/g, "\n").trim();
+}
+
+function publicationFailureIsConflict(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "status" in error && error.status === 409;
+}
+
+function restoreFocus(button: HTMLButtonElement): void {
+  requestAnimationFrame(() => button.focus());
+}
+
+function machineMemoMarkdown(workspace: CompanyResearchWorkspace): string {
+  const memo = artifactByKind(workspace, "memo");
+  if (memo === null) return "";
+  if (memo.payload.candidate_status === "human_confirmed") return memo.payload.markdown;
+  const conclusion = memo.payload.assessment_status === "not_answerable"
+    ? "当前正式证据不足，不能形成投资方向、置信度、目标价或预期回报。"
+    : memo.payload.assessment_status === "partially_answerable"
+      ? "当前判断仅为暂定结论，必须先解除明确阻塞项。"
+      : "当前证据支持形成判断，仍需持续核验最强反证。";
+  const blockers = memo.payload.gap_keys.length > 0
+    ? `\n\n未关闭缺口：\n${memo.payload.gap_keys.map((gap) => `- ${gap}`).join("\n")}`
+    : "";
+  return `${conclusion}${blockers}`;
 }
 
 function jsonValueIsEqual(left: unknown, right: unknown): boolean {
@@ -178,6 +231,103 @@ function ModulePanel({ activeModule, moduleState, valuationState, workspace, rev
   return <VersionsPanel workspace={workspace} lastSuccess={lastSuccess} />;
 }
 
+function PublicationPanel({
+  action,
+  busy,
+  frozenRevision,
+  memoMarkdown,
+  onClosePreview,
+  onConfirm,
+  onExport,
+  onMemoChange,
+  onPreview,
+  onPublish,
+  onReplay,
+  preview,
+  workspace,
+}: {
+  action: CompanyResearchPublicationAction;
+  busy: boolean;
+  frozenRevision: CompanyResearchFrozenRevision | null;
+  memoMarkdown: string;
+  onClosePreview: () => void;
+  onConfirm: (button: HTMLButtonElement) => void;
+  onExport: (button: HTMLButtonElement) => void;
+  onMemoChange: (value: string) => void;
+  onPreview: (button: HTMLButtonElement) => void;
+  onPublish: (button: HTMLButtonElement) => void;
+  onReplay: (button: HTMLButtonElement) => void;
+  preview: CompanyResearchPublicationPreview | null;
+  workspace: CompanyResearchWorkspace;
+}) {
+  const dialogTitleId = useId();
+  if (action.kind === "confirm_judgment") {
+    return <section className="ir-version-summary" aria-labelledby="publication-judgment-title">
+      <h2 id="publication-judgment-title">确认研究判断</h2>
+      <p>请保留诚实的证据边界。确认会追加人工备忘录，不会补造估值、方向或置信度。</p>
+      <div className="ir-field">
+        <label htmlFor="company-research-memo">研究备忘录 Markdown</label>
+        <textarea
+          aria-describedby="company-research-memo-help"
+          disabled={busy}
+          id="company-research-memo"
+          maxLength={100_000}
+          onChange={(event) => onMemoChange(event.currentTarget.value)}
+          rows={10}
+          value={memoMarkdown}
+        />
+      </div>
+      <p id="company-research-memo-help">提交前会统一换行并移除首尾空白。</p>
+      <button className="ir-button ir-button--primary" disabled={busy || normalizedMarkdown(memoMarkdown).length === 0} onClick={(event) => onConfirm(event.currentTarget)} type="button">{action.label}</button>
+    </section>;
+  }
+  if (action.kind === "preview_freeze") {
+    return <section className="ir-version-summary" aria-labelledby="publication-preview-title">
+      <h2 id="publication-preview-title">冻结研究版本</h2>
+      <p>先读取零写入预览，再核对公司、证券、截止时间和证据边界。</p>
+      <button className="ir-button ir-button--primary" disabled={busy} onClick={(event) => onPreview(event.currentTarget)} type="button">{action.label}</button>
+      {preview ? <dialog aria-labelledby={dialogTitleId} open>
+        <h2 id={dialogTitleId}>确认冻结版本</h2>
+        <p><strong>{preview.company.canonical_name}</strong></p>
+        <p>{preview.securities.map((security) => `${security.symbol} · ${security.share_class}`).join("；")}</p>
+        <dl>
+          <div><dt>证据截止时间</dt><dd><time dateTime={preview.cutoff_at}>{preview.cutoff_at}</time></dd></div>
+          <div><dt>可回答性</dt><dd>{preview.assessment.answerability}</dd></div>
+          <div><dt>价值范围</dt><dd>{preview.value_range === null ? "未建立价值范围" : `${preview.value_range.minimum}–${preview.value_range.maximum}`}</dd></div>
+          <div><dt>回报范围</dt><dd>{preview.return_range === null ? "未建立回报范围" : `${preview.return_range.minimum}–${preview.return_range.maximum}`}</dd></div>
+        </dl>
+        <h3>最强反证</h3>
+        <SourceRefList refs={preview.strongest_counterevidence} />
+        <h3>阻塞项</h3>
+        <ul>{preview.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>
+        <p><strong>冻结后不可修改。</strong>发布会创建不可变版本，后续工作区变化不会改写它。</p>
+        <div className="ir-review-actions">
+          <button className="ir-button" disabled={busy} onClick={onClosePreview} type="button">返回检查</button>
+          <button className="ir-button ir-button--primary" disabled={busy} onClick={(event) => onPublish(event.currentTarget)} type="button">冻结并发布</button>
+        </div>
+      </dialog> : null}
+    </section>;
+  }
+  return <section className="ir-version-summary" aria-labelledby="publication-revision-title">
+    <h2 id="publication-revision-title">冻结版本</h2>
+    <p className="ir-publication-revision-id">{workspace.selected_revision}</p>
+    {frozenRevision ? <div aria-label="冻结版本回放">
+      <dl>
+        <div><dt>版本序号</dt><dd>{frozenRevision.sequence}</dd></div>
+        <div><dt>发布时间</dt><dd><time dateTime={frozenRevision.published_at}>{frozenRevision.published_at}</time></dd></div>
+        <div><dt>判断</dt><dd>{frozenRevision.assessment.answerability}</dd></div>
+      </dl>
+      <p>{frozenRevision.memo_markdown}</p>
+      <h3>冻结制品</h3>
+      <ul>{frozenRevision.artifacts.map((artifact) => <li key={artifact.kind}>{artifact.kind} v{artifact.version}</li>)}</ul>
+    </div> : <p>选择查看后，只从不可变版本记录载入内容。</p>}
+    <div className="ir-review-actions">
+      <button className="ir-button" disabled={busy} onClick={(event) => onReplay(event.currentTarget)} type="button">{action.label}</button>
+      <button className="ir-button ir-button--primary" disabled={busy || frozenRevision === null} onClick={(event) => onExport(event.currentTarget)} type="button">导出 Markdown</button>
+    </div>
+  </section>;
+}
+
 export default function ResearchWorkbenchPage() {
   const { projectId = "" } = useParams();
   const [project, setProject] = useState<ProductProject | null>(null);
@@ -190,6 +340,10 @@ export default function ResearchWorkbenchPage() {
   const [reviewingFact, setReviewingFact] = useState<string | null>(null);
   const [committedReview, setCommittedReview] = useState<CommittedReview | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [publicationMutation, setPublicationMutation] = useState<PublicationMutation | null>(null);
+  const [publicationPreview, setPublicationPreview] = useState<PublicationPreviewSession | null>(null);
+  const [frozenRevision, setFrozenRevision] = useState<CompanyResearchFrozenRevision | null>(null);
+  const [memoEditor, setMemoEditor] = useState<MemoEditor | null>(null);
   const [reloadAttempt, setReloadAttempt] = useState(0);
   const [pollTick, setPollTick] = useState(0);
   const [browserVisible, setBrowserVisible] = useState(() => document.visibilityState !== "hidden");
@@ -199,6 +353,7 @@ export default function ResearchWorkbenchPage() {
   const mutationActiveRef = useRef(false);
   const workspaceRef = useRef<CompanyResearchWorkspace | null>(null);
   const pollAttemptRef = useRef(0);
+  const previewTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   function commitWorkspace(nextWorkspace: CompanyResearchWorkspace) {
     workspaceRef.current = nextWorkspace;
@@ -216,7 +371,7 @@ export default function ResearchWorkbenchPage() {
   }, []);
   useEffect(() => {
     const lifecycle = ++lifecycleRef.current; pollGenerationRef.current += 1; mutationGenerationRef.current += 1; mutationActiveRef.current = false; let active = true;
-    setLoading(true); setLoadError(null); setActionError(null); setLastSuccess(null); setProject(null); workspaceRef.current = null; setWorkspace(null); setActiveModule("overview"); setReviewingFact(null); setCommittedReview(null); setRetrying(false); pollAttemptRef.current = 0;
+    setLoading(true); setLoadError(null); setActionError(null); setLastSuccess(null); setProject(null); workspaceRef.current = null; previewTriggerRef.current = null; setWorkspace(null); setActiveModule("overview"); setReviewingFact(null); setCommittedReview(null); setRetrying(false); setPublicationMutation(null); setPublicationPreview(null); setFrozenRevision(null); setMemoEditor(null); pollAttemptRef.current = 0;
     void Promise.all([investmentResearchApi.project(projectId), investmentResearchApi.companyResearchWorkspace(projectId)]).then(([nextProject, nextWorkspace]) => {
       if (!active || lifecycleRef.current !== lifecycle) return;
       if (nextWorkspace.project_id !== projectId || nextProject.id !== projectId) throw new Error("工作区项目身份与研究项目不一致");
@@ -298,17 +453,204 @@ export default function ResearchWorkbenchPage() {
     finally { if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { mutationActiveRef.current = false; setRetrying(false); } }
   }
 
+  async function refreshPublicationConflict(current: CompanyResearchWorkspace, lifecycle: number, mutation: number): Promise<void> {
+    const refreshed = await investmentResearchApi.companyResearchWorkspace(projectId);
+    if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
+    if (refreshed.project_id !== projectId || refreshed.company.id !== current.company.id
+      || !workspaceSnapshotIsMonotonic(current, refreshed)) throw new Error("最新工作区响应无效");
+    commitWorkspace(refreshed);
+  }
+
+  async function confirmJudgment(button: HTMLButtonElement) {
+    const current = workspaceRef.current;
+    if (current === null || mutationActiveRef.current) return;
+    const memo = artifactByKind(current, "memo");
+    const markdown = memoEditor !== null && memoEditor.memoId === memo?.id ? normalizedMarkdown(memoEditor.value) : normalizedMarkdown(machineMemoMarkdown(current));
+    if (memo === null || memo.payload.candidate_status !== "machine_draft" || markdown.length === 0) return;
+    mutationActiveRef.current = true; pollGenerationRef.current += 1;
+    const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current;
+    setPublicationMutation("confirm"); setActionError(null); setLastSuccess(null);
+    try {
+      await investmentResearchApi.confirmCompanyResearchJudgment(projectId, {
+        schema_version: "underwriting.v1",
+        expected_lock_version: current.draft.lock_version,
+        expected_memo_id: memo.id,
+        expected_memo_content_hash: memo.content_hash,
+        markdown,
+      });
+      const refreshed = await investmentResearchApi.companyResearchWorkspace(projectId);
+      if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
+      if (refreshed.project_id !== projectId || refreshed.company.id !== current.company.id
+        || !workspaceSnapshotIsMonotonic(current, refreshed)
+        || publicationAction(refreshed)?.kind !== "preview_freeze") throw new Error("确认已提交，但后继工作区响应无效");
+      commitWorkspace(refreshed); setMemoEditor(null); setPublicationPreview(null); setFrozenRevision(null);
+      setLastSuccess("判断已确认，可以冻结版本。");
+    } catch (error) {
+      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) {
+        if (publicationFailureIsConflict(error)) {
+          try { await refreshPublicationConflict(current, lifecycle, mutation); } catch { /* Keep the authenticated current snapshot. */ }
+          setActionError("工作区已更新，请审核最新判断后再确认。");
+        } else setActionError(errorMessage(error, "判断确认失败"));
+        restoreFocus(button);
+      }
+    } finally {
+      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { mutationActiveRef.current = false; setPublicationMutation(null); }
+    }
+  }
+
+  async function previewPublication(button: HTMLButtonElement) {
+    const current = workspaceRef.current;
+    if (current === null || mutationActiveRef.current) return;
+    const memo = artifactByKind(current, "memo");
+    if (memo === null || memo.payload.candidate_status !== "human_confirmed") return;
+    previewTriggerRef.current = button; mutationActiveRef.current = true; pollGenerationRef.current += 1;
+    const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current;
+    setPublicationMutation("preview"); setActionError(null); setLastSuccess(null);
+    try {
+      const preview = await investmentResearchApi.previewCompanyResearchPublication(projectId, {
+        schema_version: "underwriting.v1", expected_lock_version: current.draft.lock_version,
+      });
+      if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
+      const latest = workspaceRef.current; const latestMemo = latest ? artifactByKind(latest, "memo") : null;
+      if (latest === null || latest.draft.lock_version !== current.draft.lock_version
+        || latestMemo?.id !== memo.id || latestMemo.content_hash !== memo.content_hash) throw new Error("预览期间工作区已更新，请重新预览");
+      setPublicationPreview({
+        data: preview,
+        workspaceLockVersion: current.draft.lock_version,
+        memoId: memo.id,
+        memoContentHash: memo.content_hash,
+        idempotencyKey: crypto.randomUUID(),
+      });
+    } catch (error) {
+      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { setActionError(errorMessage(error, "冻结预览无法读取")); restoreFocus(button); }
+    } finally {
+      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { mutationActiveRef.current = false; setPublicationMutation(null); }
+    }
+  }
+
+  async function publishRevision(button: HTMLButtonElement) {
+    const current = workspaceRef.current; const session = publicationPreview;
+    if (current === null || session === null || mutationActiveRef.current) return;
+    const memo = artifactByKind(current, "memo");
+    if (current.draft.lock_version !== session.workspaceLockVersion || memo?.id !== session.memoId || memo.content_hash !== session.memoContentHash) return;
+    mutationActiveRef.current = true; pollGenerationRef.current += 1;
+    const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current;
+    setPublicationMutation("publish"); setActionError(null); setLastSuccess(null);
+    try {
+      const published = await investmentResearchApi.publishCompanyResearch(projectId, {
+        schema_version: "underwriting.v1",
+        expected_lock_version: session.data.expected_lock_version,
+        expected_manifest_hash: session.data.manifest_hash,
+      }, session.idempotencyKey);
+      const [refreshed, replayed] = await Promise.all([
+        investmentResearchApi.companyResearchWorkspace(projectId),
+        investmentResearchApi.companyResearchRevision(projectId, published.id),
+      ]);
+      if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
+      if (refreshed.project_id !== projectId || refreshed.company.id !== current.company.id
+        || refreshed.selected_revision !== published.id || replayed.id !== published.id
+        || replayed.manifest_hash !== published.manifest_hash
+        || !workspaceSnapshotIsMonotonic(current, refreshed)
+        || publicationAction(refreshed)?.kind !== "replay_export") throw new Error("版本已发布，但冻结回放响应无效");
+      commitWorkspace(refreshed); setFrozenRevision(replayed); setPublicationPreview(null);
+      setLastSuccess("冻结版本已发布，可以回放或导出。");
+    } catch (error) {
+      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) {
+        if (publicationFailureIsConflict(error)) {
+          try {
+            await refreshPublicationConflict(current, lifecycle, mutation);
+            setPublicationPreview(null);
+            setActionError("工作区已更新，请审核最新判断后重新预览。");
+            restoreFocus(previewTriggerRef.current ?? button);
+          } catch {
+            setActionError("发布发生冲突，且最新工作区无法读取；已保留当前预览。");
+            restoreFocus(button);
+          }
+        } else { setActionError(errorMessage(error, "冻结版本无法发布")); restoreFocus(button); }
+      }
+    } finally {
+      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { mutationActiveRef.current = false; setPublicationMutation(null); }
+    }
+  }
+
+  async function replayRevision(button: HTMLButtonElement) {
+    const current = workspaceRef.current; const revisionId = current?.selected_revision;
+    if (current === null || revisionId === null || revisionId === undefined || mutationActiveRef.current) return;
+    mutationActiveRef.current = true; pollGenerationRef.current += 1;
+    const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current;
+    setPublicationMutation("replay"); setActionError(null);
+    try {
+      const replayed = await investmentResearchApi.companyResearchRevision(projectId, revisionId);
+      if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
+      if (workspaceRef.current?.selected_revision !== replayed.id) throw new Error("冻结版本选择已变化，请重新查看");
+      setFrozenRevision(replayed); setLastSuccess("冻结版本已载入。");
+    } catch (error) {
+      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { setActionError(errorMessage(error, "冻结版本无法读取")); restoreFocus(button); }
+    } finally {
+      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { mutationActiveRef.current = false; setPublicationMutation(null); }
+    }
+  }
+
+  async function exportRevision(button: HTMLButtonElement) {
+    const current = workspaceRef.current; const revisionId = frozenRevision?.id;
+    if (current === null || revisionId === undefined || current.selected_revision !== revisionId || mutationActiveRef.current) return;
+    mutationActiveRef.current = true; pollGenerationRef.current += 1;
+    const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current;
+    setPublicationMutation("export"); setActionError(null);
+    try {
+      const envelope = await investmentResearchApi.exportCompanyResearchRevision(projectId, revisionId);
+      if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation || workspaceRef.current?.selected_revision !== revisionId) return;
+      const objectUrl = URL.createObjectURL(new Blob([envelope.content], { type: envelope.media_type }));
+      try {
+        const anchor = document.createElement("a"); anchor.href = objectUrl; anchor.download = envelope.filename;
+        document.body.append(anchor); anchor.click(); anchor.remove();
+      } finally { URL.revokeObjectURL(objectUrl); }
+      setLastSuccess("Markdown 已验证并下载。");
+    } catch (error) {
+      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { setActionError(errorMessage(error, "Markdown 导出失败")); restoreFocus(button); }
+    } finally {
+      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { mutationActiveRef.current = false; setPublicationMutation(null); }
+    }
+  }
+
   if (loading) return <main className="ir-page ir-workbench" aria-busy="true"><div className="ir-workbench-skeleton"><span /><span /><span /></div></main>;
   if (loadError || !project || !workspace) return <main className="ir-page ir-workbench"><div className="ir-alert" role="alert"><h1>研究项目无法读取</h1><p>{loadError ?? "工作区响应不完整"}</p><button className="ir-button" onClick={() => setReloadAttempt((value) => value + 1)} type="button">重试读取研究项目</button><Link to="/research">返回研究目录</Link></div></main>;
+  let currentPublicationAction: CompanyResearchPublicationAction | null;
+  try { currentPublicationAction = publicationAction(workspace); }
+  catch (error) { return <main className="ir-page ir-workbench"><div className="ir-alert" role="alert"><h1>研究发布状态无法读取</h1><p>{errorMessage(error, "研究发布状态不一致")}</p></div></main>; }
+  const currentMemo = artifactByKind(workspace, "memo");
+  const memoMarkdown = memoEditor !== null && memoEditor.memoId === currentMemo?.id ? memoEditor.value : machineMemoMarkdown(workspace);
+  const activePreview = publicationPreview !== null && currentMemo !== null
+    && publicationPreview.workspaceLockVersion === workspace.draft.lock_version
+    && publicationPreview.memoId === currentMemo.id
+    && publicationPreview.memoContentHash === currentMemo.content_hash
+    ? publicationPreview.data : null;
+  const activeFrozenRevision = frozenRevision?.id === workspace.selected_revision ? frozenRevision : null;
+  const mutationBusy = reviewingFact !== null || committedReview !== null || retrying || publicationMutation !== null;
   const activeDefinition = COMPANY_RESEARCH_MODULES.find((item) => item.key === activeModule) ?? COMPANY_RESEARCH_MODULES[0];
   const activeServerModule = workspace.modules.find((item) => item.key === activeModule);
   const preparationError = workspace.preparation.error;
-  return <main className="ir-page ir-workbench" aria-busy={reviewingFact !== null || retrying}>
+  return <main className="ir-page ir-workbench" aria-busy={mutationBusy}>
     <header className="ir-workbench-head"><div><p className="ir-eyebrow">Independent company research</p><h1>研究工作台</h1><h2>{workspace.company.canonical_name}</h2><p>{project.security_identities.map((security) => `${security.symbol} · ${security.share_class} · ${security.exchange}`).join("；")}</p></div><span className="ir-draft-state">草稿版本 {workspace.draft.lock_version}</span></header>
-    <section className="ir-preparation" aria-live="polite"><div><strong>{PREPARATION_LABELS[workspace.preparation.status]}</strong><span>{workspace.preparation.progress}% · {workspace.preparation.current_step ?? "全部阶段"}</span></div><progress aria-label="研究准备进度" aria-valuemax={100} aria-valuemin={0} aria-valuenow={workspace.preparation.progress} max="100" value={workspace.preparation.progress}>{workspace.preparation.progress}%</progress>{preparationError ? <div className="ir-stage-error"><p>{preparationError.code}</p>{preparationError.retryable ? <button className="ir-button" disabled={retrying} onClick={() => void retryPreparation()} type="button">重试 {preparationError.failed_step}</button> : null}</div> : null}</section>
+    <section className="ir-preparation" aria-live="polite"><div><strong>{PREPARATION_LABELS[workspace.preparation.status]}</strong><span>{workspace.preparation.progress}% · {workspace.preparation.current_step ?? "全部阶段"}</span></div><progress aria-label="研究准备进度" aria-valuemax={100} aria-valuemin={0} aria-valuenow={workspace.preparation.progress} max="100" value={workspace.preparation.progress}>{workspace.preparation.progress}%</progress>{preparationError ? <div className="ir-stage-error"><p>{preparationError.code}</p>{preparationError.retryable ? <button className="ir-button" disabled={mutationBusy} onClick={() => void retryPreparation()} type="button">重试 {preparationError.failed_step}</button> : null}</div> : null}</section>
     {actionError ? <div className="ir-alert" role="alert"><p>{actionError}</p>{committedReview ? <button className="ir-button" disabled={reviewingFact !== null} onClick={() => void retryCommittedReviewSync()} type="button">重试同步已提交审核</button> : null}</div> : null}{lastSuccess ? <p className="ir-confirmed" role="status">{lastSuccess}</p> : null}
+    {currentPublicationAction ? <PublicationPanel
+      action={currentPublicationAction}
+      busy={mutationBusy}
+      frozenRevision={activeFrozenRevision}
+      memoMarkdown={memoMarkdown}
+      onClosePreview={() => setPublicationPreview(null)}
+      onConfirm={(button) => void confirmJudgment(button)}
+      onExport={(button) => void exportRevision(button)}
+      onMemoChange={(value) => currentMemo && setMemoEditor({ memoId: currentMemo.id, value })}
+      onPreview={(button) => void previewPublication(button)}
+      onPublish={(button) => void publishRevision(button)}
+      onReplay={(button) => void replayRevision(button)}
+      preview={activePreview}
+      workspace={workspace}
+    /> : null}
     <div className="ir-workbench-grid"><nav className="ir-module-nav" aria-label="研究模块">{COMPANY_RESEARCH_MODULES.map((definition) => { const module = workspace.modules.find((item) => item.key === definition.key); return <button aria-current={activeModule === definition.key ? "page" : undefined} className={activeModule === definition.key ? "is-active" : ""} key={definition.key} onClick={() => setActiveModule(definition.key)} type="button"><span>{definition.label}</span><small>{module ? MODULE_STATE_LABELS[module.state] : "未开始"}</small></button>; })}</nav>
-      <section className="ir-module-content" aria-live="polite"><header><p className="ir-eyebrow">Company research module</p><h2>{activeDefinition.label}</h2></header><ModulePanel activeModule={activeModule} moduleState={activeServerModule?.state ?? "not_started"} valuationState={activeServerModule?.valuation_state ?? "not_applicable"} workspace={workspace} reviewLocked={reviewingFact !== null || committedReview !== null} onReview={reviewFact} lastSuccess={lastSuccess} /></section>
+      <section className="ir-module-content" aria-live="polite"><header><p className="ir-eyebrow">Company research module</p><h2>{activeDefinition.label}</h2></header><ModulePanel activeModule={activeModule} moduleState={activeServerModule?.state ?? "not_started"} valuationState={activeServerModule?.valuation_state ?? "not_applicable"} workspace={workspace} reviewLocked={mutationBusy} onReview={reviewFact} lastSuccess={lastSuccess} /></section>
       <aside className="ir-boundary" aria-label="研究状态摘要"><p className="ir-eyebrow">Research state</p><h2>准备状态</h2><dl><div><dt>来源</dt><dd>{workspace.source_count}</dd></div><div><dt>缺口</dt><dd>{workspace.gap_count}</dd></div><div><dt>已审核事实</dt><dd>{workspace.change_summary.reviewed_fact_count}</dd></div></dl><details id="audit-details"><summary>审计详情</summary><dl><div><dt>Project</dt><dd>{workspace.project_id}</dd></div><div><dt>Preparation</dt><dd>{workspace.preparation.id}</dd></div><div><dt>Draft</dt><dd>{workspace.draft.id}</dd></div><div><dt>Selected revision</dt><dd>{workspace.selected_revision ?? "尚未选择冻结版本"}</dd></div></dl>{Object.entries(workspace.change_summary.artifact_versions).map(([kind, version]) => <span id={`audit-${encodeURIComponent(kind)}`} key={kind}>{kind} v{version}</span>)}</details></aside>
     </div>
   </main>;

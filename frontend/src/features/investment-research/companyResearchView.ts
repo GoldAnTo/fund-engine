@@ -40,6 +40,28 @@ export const COMPANY_RESEARCH_MODULES = [
 
 export type CompanyResearchModuleKey = typeof COMPANY_RESEARCH_MODULES[number]["key"];
 
+export type CompanyResearchPublicationAction =
+  | { kind: "confirm_judgment"; label: "确认当前判断" }
+  | { kind: "preview_freeze"; label: "预览冻结版本" }
+  | { kind: "replay_export"; label: "查看冻结版本" };
+
+export function publicationAction(workspace: CompanyResearchWorkspace): CompanyResearchPublicationAction | null {
+  const { current_step: currentStep, progress, status } = workspace.preparation;
+  if (status === "awaiting_judgment_review") {
+    if (currentStep !== "judgment_context" || progress !== 85) throw new Error("研究发布状态不一致");
+    return { kind: "confirm_judgment", label: "确认当前判断" };
+  }
+  if (status === "ready_to_freeze") {
+    if (currentStep !== "memo" || progress !== 95) throw new Error("研究发布状态不一致");
+    return { kind: "preview_freeze", label: "预览冻结版本" };
+  }
+  if (status === "completed") {
+    if (currentStep !== null || progress !== 100 || workspace.selected_revision === null) throw new Error("研究发布状态不一致");
+    return { kind: "replay_export", label: "查看冻结版本" };
+  }
+  return null;
+}
+
 export function numericObservationView(observation: NumericObservation | null) {
   if (observation === null) return null;
   const source = observation.source_ref;
