@@ -420,6 +420,60 @@ def test_publish_freezes_one_company_research_revision_and_exactly_replays(
     }
 
 
+def _publish_two_revision_chain(session):
+    initialized, repository, preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    first_service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    first_preview = first_service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    first = first_service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=first_preview.expected_lock_version,
+        expected_manifest_hash=first_preview.manifest_hash,
+        idempotency_key="revision-chain-v1",
+    )
+    preparation.status = "ready_to_freeze"
+    preparation.current_step = "memo"
+    preparation.progress = 95
+    preparation.updated_at = FROZEN_AT + timedelta(minutes=1)
+    session.flush([preparation])
+    second_service = CompanyResearchPublicationService(
+        session, now=lambda: FROZEN_AT + timedelta(minutes=2)
+    )
+    second_preview = second_service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=first_preview.expected_lock_version + 1,
+    )
+    second = second_service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=second_preview.expected_lock_version,
+        expected_manifest_hash=second_preview.manifest_hash,
+        idempotency_key="revision-chain-v2",
+    )
+    return initialized, repository, first, second, second_service
+
+
+def test_two_revision_chain_publishes_replays_and_exports_every_frozen_node(
+    session,
+) -> None:
+    initialized, _repository, first, second, service = _publish_two_revision_chain(
+        session
+    )
+
+    assert (first.sequence, second.sequence) == (1, 2)
+    assert service.revision(initialized.project.id, first.id) == first
+    assert service.revision(initialized.project.id, second.id) == second
+    assert service.export(initialized.project.id, first.id) == service.export(
+        initialized.project.id, first.id
+    )
+    assert service.export(initialized.project.id, second.id) == service.export(
+        initialized.project.id, second.id
+    )
+
+
 _PUBLICATION_ONLY_MANIFEST_FIELDS = {
     "boundary_id",
     "assessment_id",
@@ -458,16 +512,18 @@ def _rehash_manifest_revision_and_publication_event(
         manifest=manifest_payload,
         content_hash=manifest_hash,
     )
+    revision_row = session.get(UnderwritingResearchVersion, revision.id)
+    assert revision_row is not None
     revision_hash = service._revision_content_hash(
-        project_id=revision.project_id,
-        object_id=revision.company.object_id,
-        basis_id=revision.historical_basis_id,
-        sequence=revision.sequence,
-        boundary_id=revision.boundary_id,
-        manifest_id=revision.manifest_id,
+        project_id=revision_row.project_id,
+        object_id=revision_row.object_id,
+        basis_id=revision_row.basis_id,
+        sequence=revision_row.sequence,
+        boundary_id=revision_row.boundary_id,
+        manifest_id=revision_row.manifest_id,
         manifest_hash=manifest_hash,
         assessment_id=UUID(manifest_payload["assessment_id"]),
-        parent_revision_id=None,
+        parent_revision_id=revision_row.supersedes_id,
     )
     _tamper_row(
         session,
@@ -492,22 +548,33 @@ def _rehash_manifest_revision_and_publication_event(
         "manifest_hash": manifest_hash,
         "idempotency_key": manifest_payload["idempotency_key"],
     }
-    event_hash = CompanyResearchRepository.event_content_hash_v2(
-        preparation_id=published.preparation_id,
-        sequence=published.sequence,
-        previous_event_hash=published.previous_event_hash,
-        event_type=published.event_type,
-        payload=event_payload,
-        created_at=published.created_at,
-    )
-    _tamper_row(
-        session,
-        CompanyResearchEvent,
-        published.id,
-        expire=False,
-        payload=event_payload,
-        content_hash=event_hash,
-    )
+    previous_hash = None
+    for event_row in session.scalars(
+        select(CompanyResearchEvent)
+        .where(CompanyResearchEvent.preparation_id == preparation_id)
+        .order_by(CompanyResearchEvent.sequence)
+    ):
+        rewritten_payload = (
+            event_payload if event_row.id == published.id else event_row.payload
+        )
+        event_hash = CompanyResearchRepository.event_content_hash_v2(
+            preparation_id=event_row.preparation_id,
+            sequence=event_row.sequence,
+            previous_event_hash=previous_hash,
+            event_type=event_row.event_type,
+            payload=rewritten_payload,
+            created_at=event_row.created_at,
+        )
+        _tamper_row(
+            session,
+            CompanyResearchEvent,
+            event_row.id,
+            expire=False,
+            previous_event_hash=previous_hash,
+            payload=rewritten_payload,
+            content_hash=event_hash,
+        )
+        previous_hash = event_hash
     session.expire_all()
     return manifest_hash
 
@@ -526,6 +593,244 @@ def _persisted_boundary_input(boundary: UnderwritingRevisionBoundary):
         ),
         parent_revision_id=boundary.parent_revision_id,
     )
+
+
+def _delete_immutable_row(session, model, row_id) -> None:
+    table = model.__table__
+    connection = session.connection()
+    if connection.dialect.name == "postgresql":
+        connection.execute(text(f"ALTER TABLE {table.name} DISABLE TRIGGER USER"))
+    try:
+        connection.execute(
+            text(f"DELETE FROM {table.name} WHERE id = :row_id").bindparams(
+                bindparam("row_id", type_=table.c.id.type)
+            ),
+            {"row_id": row_id},
+        )
+    finally:
+        if connection.dialect.name == "postgresql":
+            connection.execute(text(f"ALTER TABLE {table.name} ENABLE TRIGGER USER"))
+    session.expire_all()
+
+
+def test_successor_replay_fails_when_parent_assessment_is_missing(session) -> None:
+    initialized, _repository, first, second, service = _publish_two_revision_chain(
+        session
+    )
+    first_manifest = session.get(UnderwritingRevisionManifest, first.manifest_id)
+    second_manifest = session.get(UnderwritingRevisionManifest, second.manifest_id)
+    assert first_manifest is not None and second_manifest is not None
+    first_assessment_id = UUID(first_manifest.manifest["assessment_id"])
+    second_assessment_id = UUID(second_manifest.manifest["assessment_id"])
+    _tamper_row(
+        session,
+        UnderwritingResearchAssessmentVersion,
+        second_assessment_id,
+        supersedes_id=None,
+    )
+    _delete_immutable_row(
+        session, UnderwritingResearchAssessmentVersion, first_assessment_id
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="assessment"):
+        service.revision(initialized.project.id, second.id)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("boundary", "event", "preparation", "preview", "artifact", "market"),
+)
+def test_successor_replay_fully_authenticates_every_ancestor_node(
+    session, mutation: str
+) -> None:
+    initialized, repository, first, second, service = _publish_two_revision_chain(
+        session
+    )
+    first_manifest = session.get(UnderwritingRevisionManifest, first.manifest_id)
+    first_boundary = session.get(UnderwritingRevisionBoundary, first.boundary_id)
+    assert first_manifest is not None and first_boundary is not None
+    if mutation == "boundary":
+        _tamper_row(
+            session,
+            UnderwritingRevisionBoundary,
+            first.boundary_id,
+            content_hash="0" * 64,
+        )
+    elif mutation == "event":
+        _rewrite_one_event_type(
+            session,
+            UUID(first_manifest.manifest["preparation_id"]),
+            target_event_type="company_research_published",
+            replacement_event_type="ancestor_publication_replaced",
+        )
+    elif mutation == "preparation":
+        foreign_project = UnderwritingResearchProject(
+            primary_company_id=initialized.project.primary_company_id,
+            content_hash=research_project_content_hash(
+                primary_company_id=initialized.project.primary_company_id,
+                target_security_ids=(),
+            ),
+            created_at=FROZEN_AT,
+        )
+        session.add(foreign_project)
+        session.flush()
+        foreign_preparation = CompanyResearchPreparation(
+            project_id=foreign_project.id,
+            idempotency_key="foreign-ancestor-preparation",
+            request_hash="f" * 64,
+            strategy_version=first_manifest.manifest["strategy_version"],
+            status="completed",
+            current_step=None,
+            progress=100,
+            attempt=1,
+            next_attempt_at=None,
+            last_error_code=None,
+            job_id=None,
+            created_at=FROZEN_AT,
+            updated_at=FROZEN_AT,
+        )
+        session.add(foreign_preparation)
+        session.flush()
+        payload = deepcopy(first_manifest.manifest)
+        payload["preparation_id"] = str(foreign_preparation.id)
+        manifest_hash = canonical_hash(payload)
+        repository.append_event(
+            preparation_id=foreign_preparation.id,
+            event_type="company_research_published",
+            payload={
+                "revision_id": str(first.id),
+                "manifest_hash": manifest_hash,
+                "idempotency_key": payload["idempotency_key"],
+            },
+            created_at=FROZEN_AT,
+        )
+        _rehash_manifest_revision_and_publication_event(
+            session,
+            service=service,
+            revision=first,
+            manifest_payload=payload,
+        )
+    elif mutation in {"preview", "artifact"}:
+        payload = deepcopy(first_manifest.manifest)
+        if mutation == "preview":
+            payload["preview_manifest_hash"] = "f" * 64
+        else:
+            payload["artifacts"][0]["id"] = str(uuid4())
+            payload["preview_manifest_hash"] = _preview_hash_from_frozen_manifest(
+                payload
+            )
+        _rehash_manifest_revision_and_publication_event(
+            session,
+            service=service,
+            revision=first,
+            manifest_payload=payload,
+        )
+    else:
+        boundary = _persisted_boundary_input(first_boundary)
+        assert boundary.price_snapshot_ids
+        changed = replace(
+            boundary,
+            price_snapshot_ids=(uuid4(), *boundary.price_snapshot_ids[1:]),
+        )
+        boundary_hash = canonical_hash(
+            service._boundary_payload(initialized.project.id, changed)
+        )
+        _tamper_row(
+            session,
+            UnderwritingRevisionBoundary,
+            first_boundary.id,
+            expire=False,
+            price_snapshot_ids=[str(value) for value in changed.price_snapshot_ids],
+            content_hash=boundary_hash,
+        )
+        payload = deepcopy(first_manifest.manifest)
+        payload["boundary_hash"] = boundary_hash
+        payload["preview_manifest_hash"] = _preview_hash_from_frozen_manifest(payload)
+        _rehash_manifest_revision_and_publication_event(
+            session,
+            service=service,
+            revision=first,
+            manifest_payload=payload,
+        )
+
+    with pytest.raises(CompanyResearchIntegrityError):
+        service.revision(initialized.project.id, second.id)
+
+
+def test_successor_revision_cannot_reuse_the_root_assessment(session) -> None:
+    initialized, _repository, first, second, service = _publish_two_revision_chain(
+        session
+    )
+    first_manifest = session.get(UnderwritingRevisionManifest, first.manifest_id)
+    second_manifest = session.get(UnderwritingRevisionManifest, second.manifest_id)
+    assert first_manifest is not None and second_manifest is not None
+    payload = deepcopy(second_manifest.manifest)
+    payload["assessment_id"] = first_manifest.manifest["assessment_id"]
+    payload["assessment"] = deepcopy(first_manifest.manifest["assessment"])
+    payload["preview_manifest_hash"] = _preview_hash_from_frozen_manifest(payload)
+    _rehash_manifest_revision_and_publication_event(
+        session,
+        service=service,
+        revision=second,
+        manifest_payload=payload,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="assessment"):
+        service.revision(initialized.project.id, second.id)
+
+
+@pytest.mark.parametrize("field", ("strategy_version", "model_version"))
+def test_successor_revision_rejects_unbound_strategy_or_model_version(
+    session, field: str
+) -> None:
+    initialized, _repository, _first, second, service = _publish_two_revision_chain(
+        session
+    )
+    manifest = session.get(UnderwritingRevisionManifest, second.manifest_id)
+    assert manifest is not None
+    payload = deepcopy(manifest.manifest)
+    payload[field] = f"{field}.v999"
+    payload["preview_manifest_hash"] = _preview_hash_from_frozen_manifest(payload)
+    _rehash_manifest_revision_and_publication_event(
+        session,
+        service=service,
+        revision=second,
+        manifest_payload=payload,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="publication identity"):
+        service.revision(initialized.project.id, second.id)
+
+
+def test_successor_revision_rejects_a_forged_memo_projection(session) -> None:
+    initialized, _repository, _first, second, service = _publish_two_revision_chain(
+        session
+    )
+    manifest = session.get(UnderwritingRevisionManifest, second.manifest_id)
+    assert manifest is not None
+    payload = deepcopy(manifest.manifest)
+    payload["blockers"] = ["forged_blocker"]
+    payload["assessment"]["blockers"] = ["forged_blocker"]
+    assessment_id = UUID(payload["assessment_id"])
+    assessment_hash = canonical_hash(payload["assessment"])
+    _tamper_row(
+        session,
+        UnderwritingResearchAssessmentVersion,
+        assessment_id,
+        expire=False,
+        blockers=["forged_blocker"],
+        content_hash=assessment_hash,
+    )
+    payload["preview_manifest_hash"] = _preview_hash_from_frozen_manifest(payload)
+    _rehash_manifest_revision_and_publication_event(
+        session,
+        service=service,
+        revision=second,
+        manifest_payload=payload,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="judgment projection"):
+        service.revision(initialized.project.id, second.id)
 
 
 def test_company_research_boundary_schema_fits_the_persisted_column(session) -> None:

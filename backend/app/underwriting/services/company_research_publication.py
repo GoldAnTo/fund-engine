@@ -40,7 +40,6 @@ from app.underwriting.persistence.company_research_repository import (
 )
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.persistence.product_repository import ProductRepository
-from app.underwriting.persistence.models import UnderwritingResearchVersion
 from app.underwriting.services.company_research_boundary import (
     resolve_alphabet_company_research_boundary,
 )
@@ -504,14 +503,14 @@ class CompanyResearchPublicationService:
     def _authenticate_workspace_model(
         self, state: CompanyResearchPublicationState, *, lock: bool
     ) -> CompanyResearchWorkspace:
-        if state.draft.base_revision_id is not None:
-            raise CompanyResearchIntegrityError(
-                "company research judgment draft already names a frozen revision"
-            )
         try:
             workspace = CompanyResearchWorkbench(
                 self._session, now=self._now
-            ).workspace(project_id=state.project.id, lock=lock)
+            ).workspace(
+                project_id=state.project.id,
+                lock=lock,
+                allow_current_heads_after_revision=True,
+            )
         except ValidationError as exc:
             raise CompanyResearchIntegrityError(
                 "company research publication model closure is invalid"
@@ -823,6 +822,7 @@ class CompanyResearchPublicationService:
         expected_memo_id: UUID,
         expected_memo_content_hash: str,
         markdown: str,
+        allow_prior_publication: bool = False,
     ) -> CompanyResearchJudgmentConfirmation:
         state = authenticated.state
         confirmed_memo = authenticated.machine_or_confirmed_memo
@@ -839,7 +839,14 @@ class CompanyResearchPublicationService:
             or len(memo_chain) != 2
             or memo_chain[-1].id != confirmed_memo.id
             or len(judgment_events) != 1
-            or state.events[-1].id != judgment_events[0].id
+            or (
+                state.events[-1].id != judgment_events[0].id
+                and not allow_prior_publication
+            )
+            or any(
+                event.event_type != "company_research_published"
+                for event in state.events[judgment_events[0].sequence :]
+            )
         ):
             raise CompanyResearchIntegrityError(
                 "company research judgment confirmation projection is inconsistent"
@@ -908,15 +915,30 @@ class CompanyResearchPublicationService:
                 event.created_at, "company research judgment event created_at"
             )
             != confirmed_at
-            or self._stored_utc(
-                state.preparation.updated_at,
-                "company research preparation updated_at",
+            or (
+                self._stored_utc(
+                    state.preparation.updated_at,
+                    "company research preparation updated_at",
+                )
+                < confirmed_at
+                if allow_prior_publication
+                else self._stored_utc(
+                    state.preparation.updated_at,
+                    "company research preparation updated_at",
+                )
+                != confirmed_at
             )
-            != confirmed_at
-            or self._stored_utc(
-                state.draft.updated_at, "company research draft updated_at"
+            or (
+                self._stored_utc(
+                    state.draft.updated_at, "company research draft updated_at"
+                )
+                < confirmed_at
+                if allow_prior_publication
+                else self._stored_utc(
+                    state.draft.updated_at, "company research draft updated_at"
+                )
+                != confirmed_at
             )
-            != confirmed_at
         ):
             raise CompanyResearchIntegrityError(
                 "company research judgment confirmation audit is inconsistent"
@@ -1006,6 +1028,7 @@ class CompanyResearchPublicationService:
             expected_memo_id=memo_chain[-2].id,
             expected_memo_content_hash=memo_chain[-2].content_hash,
             markdown=memo.markdown,
+            allow_prior_publication=state.draft.base_revision_id is not None,
         )
         cutoff = self._repository.evidence_cutoff(
             state.artifact_heads["evidence_index"]
@@ -1055,6 +1078,20 @@ class CompanyResearchPublicationService:
             raise ConflictError(
                 "company research draft base revision is not the chain head"
             )
+        parent_assessment_id: UUID | None = None
+        if parent is not None:
+            self.revision(state.project.id, parent.id)
+            parent_manifest = product.manifest(parent.manifest_id)
+            if parent_manifest is None or not isinstance(
+                parent_manifest.manifest, dict
+            ):
+                raise CompanyResearchIntegrityError(
+                    "company research parent assessment is invalid"
+                )
+            parent_assessment_id = self._manifest_uuid(
+                parent_manifest.manifest.get("assessment_id"),
+                "company research parent assessment reference",
+            )
         try:
             boundary = RevisionBoundaryInput(
                 historical_basis_id=state.historical_basis.id,
@@ -1086,7 +1123,9 @@ class CompanyResearchPublicationService:
         assessment_payload = {
             "schema_version": _ASSESSMENT_SCHEMA,
             "project_id": str(state.project.id),
-            "parent_assessment_id": None,
+            "parent_assessment_id": (
+                str(parent_assessment_id) if parent_assessment_id is not None else None
+            ),
             "answerability": memo.assessment_status,
             "direction": None,
             "confidence": None,
@@ -1220,108 +1259,31 @@ class CompanyResearchPublicationService:
             }
         )
 
-    def _authenticate_revision_lineage(
-        self,
-        *,
-        product: ProductRepository,
-        row: UnderwritingResearchVersion,
-        project_id: UUID,
-    ) -> None:
-        """Authenticate the complete revision parent chain and boundary links."""
-        current = row
-        seen: set[UUID] = set()
-        while True:
-            if current.id in seen:
-                raise CompanyResearchIntegrityError(
-                    "company research revision lineage is invalid"
-                )
-            seen.add(current.id)
-            parent_id = current.supersedes_id
-            boundary = product.boundary(current.boundary_id)
-            manifest = product.manifest(current.manifest_id)
-            if (
-                boundary is None
-                or boundary.project_id != project_id
-                or boundary.schema_version != _BOUNDARY_SCHEMA
-                or boundary.parent_revision_id != parent_id
-            ):
-                raise CompanyResearchIntegrityError(
-                    "company research frozen boundary lineage is invalid"
-                )
-            if (
-                current.project_id != project_id
-                or current.object_id != row.object_id
-                or current.version_kind != "company_research"
-                or current.manifest_schema != _MANIFEST_SCHEMA
-                or current.publication_status != "user_frozen"
-                or type(current.sequence) is not int
-                or current.sequence < 1
-                or current.basis_id != boundary.historical_basis_id
-                or current.parent_ids
-                != ([str(parent_id)] if parent_id is not None else [])
-                or manifest is None
-                or manifest.project_id != project_id
-                or manifest.boundary_id != boundary.id
-                or not isinstance(manifest.manifest, dict)
-                or manifest.manifest.get("schema_version") != _MANIFEST_SCHEMA
-                or manifest.manifest.get("project_id") != str(project_id)
-                or manifest.manifest.get("boundary_id") != str(boundary.id)
-                or not isinstance(manifest.manifest.get("company"), dict)
-                or manifest.manifest["company"].get("object_id")
-                != str(current.object_id)
-                or manifest.content_hash != canonical_hash(manifest.manifest)
-            ):
-                raise CompanyResearchIntegrityError(
-                    "company research revision lineage is invalid"
-                )
-            assessment_id = self._manifest_uuid(
-                manifest.manifest.get("assessment_id"),
-                "company research lineage assessment reference",
-            )
-            if current.content_hash != self._revision_content_hash(
-                project_id=project_id,
-                object_id=current.object_id,
-                basis_id=current.basis_id,
-                sequence=current.sequence,
-                boundary_id=boundary.id,
-                manifest_id=manifest.id,
-                manifest_hash=manifest.content_hash,
-                assessment_id=assessment_id,
-                parent_revision_id=parent_id,
-            ):
-                raise CompanyResearchIntegrityError(
-                    "company research revision lineage is invalid"
-                )
-            if parent_id is None:
-                if current.sequence != 1:
-                    raise CompanyResearchIntegrityError(
-                        "company research revision lineage is invalid"
-                    )
-                return
-            parent = product.company_research_revision(parent_id)
-            if (
-                parent is None
-                or parent.sequence != current.sequence - 1
-                or self._stored_utc(
-                    parent.created_at,
-                    "company research parent revision created_at",
-                )
-                > self._stored_utc(
-                    current.created_at,
-                    "company research child revision created_at",
-                )
-            ):
-                raise CompanyResearchIntegrityError(
-                    "company research revision lineage is invalid"
-                )
-            current = parent
-
     def revision(
         self, project_id: UUID, revision_id: UUID
     ) -> CompanyResearchFrozenRevision:
         """Replay one revision exclusively from its authenticated frozen links."""
         project_id = self._uuid(project_id, "project_id")
         revision_id = self._uuid(revision_id, "revision_id")
+        with self._session.no_autoflush:
+            return self._authenticate_revision_node(
+                project_id=project_id,
+                revision_id=revision_id,
+                seen=frozenset(),
+            )
+
+    def _authenticate_revision_node(
+        self,
+        *,
+        project_id: UUID,
+        revision_id: UUID,
+        seen: frozenset[UUID],
+    ) -> CompanyResearchFrozenRevision:
+        """Authenticate one complete frozen node after its parent node."""
+        if revision_id in seen:
+            raise CompanyResearchIntegrityError(
+                "company research revision lineage is invalid"
+            )
         product = ProductRepository(self._session)
         with self._session.no_autoflush:
             row = product.company_research_revision(revision_id)
@@ -1337,11 +1299,29 @@ class CompanyResearchPublicationService:
                 raise CompanyResearchIntegrityError(
                     "company research revision identity is invalid"
                 )
-            self._authenticate_revision_lineage(
-                product=product,
-                row=row,
-                project_id=project_id,
+            parent_node = (
+                self._authenticate_revision_node(
+                    project_id=project_id,
+                    revision_id=row.supersedes_id,
+                    seen=seen | {revision_id},
+                )
+                if row.supersedes_id is not None
+                else None
             )
+            if (
+                row.parent_ids
+                != ([str(parent_node.id)] if parent_node is not None else [])
+                or row.sequence
+                != (parent_node.sequence + 1 if parent_node is not None else 1)
+                or parent_node is not None
+                and parent_node.published_at
+                > self._stored_utc(
+                    row.created_at, "company research child revision created_at"
+                )
+            ):
+                raise CompanyResearchIntegrityError(
+                    "company research revision lineage is invalid"
+                )
             manifest_row = product.manifest(row.manifest_id)
             boundary_row = product.boundary(row.boundary_id)
             if (
@@ -1418,13 +1398,24 @@ class CompanyResearchPublicationService:
                 raise CompanyResearchIntegrityError(
                     "company research frozen publication identity is invalid"
                 ) from exc
+            frozen_preparation = self._repository.frozen_publication_preparation(
+                preparation_id
+            )
             if (
                 canonical_idempotency_key != idempotency_key
-                or self._repository.preparation_project_id(preparation_id) != project_id
+                or frozen_preparation is None
+                or frozen_preparation.project_id != project_id
+                or manifest.get("strategy_version")
+                != frozen_preparation.strategy_version
+                or manifest.get("model_version") != _MODEL_VERSION
             ):
                 message = (
                     "company research frozen preparation owner is invalid"
                     if canonical_idempotency_key == idempotency_key
+                    and (
+                        frozen_preparation is None
+                        or frozen_preparation.project_id != project_id
+                    )
                     else "company research frozen publication identity is invalid"
                 )
                 raise CompanyResearchIntegrityError(message)
@@ -1474,6 +1465,11 @@ class CompanyResearchPublicationService:
                         ),
                     )
                 )
+                or self._stored_utc(
+                    frozen_preparation.created_at,
+                    "company research preparation created_at",
+                )
+                > published_at
             ):
                 raise CompanyResearchIntegrityError(
                     "company research frozen publication identity is invalid"
@@ -1495,12 +1491,32 @@ class CompanyResearchPublicationService:
                     "company research parent assessment reference",
                 )
             )
+            expected_parent_assessment_id: UUID | None = None
+            expected_assessment_version = 1
+            if parent_node is not None:
+                parent_manifest = product.manifest(parent_node.manifest_id)
+                if parent_manifest is None or not isinstance(
+                    parent_manifest.manifest, dict
+                ):
+                    raise CompanyResearchIntegrityError(
+                        "company research frozen assessment lineage is invalid"
+                    )
+                expected_parent_assessment_id = self._manifest_uuid(
+                    parent_manifest.manifest.get("assessment_id"),
+                    "company research parent assessment reference",
+                )
+                parent_assessment = product.assessment(expected_parent_assessment_id)
+                if parent_assessment is None:
+                    raise CompanyResearchIntegrityError(
+                        "company research frozen assessment lineage is invalid"
+                    )
+                expected_assessment_version = parent_assessment.version + 1
             if (
                 assessment_row is None
                 or assessment_row.project_id != project_id
-                or assessment_row.version != 1
-                or assessment_row.supersedes_id is not None
-                or parent_assessment_id is not None
+                or assessment_row.version != expected_assessment_version
+                or assessment_row.supersedes_id != expected_parent_assessment_id
+                or parent_assessment_id != expected_parent_assessment_id
                 or set(assessment_payload)
                 != {
                     "schema_version",
@@ -1566,6 +1582,8 @@ class CompanyResearchPublicationService:
             if (
                 boundary_row.schema_version != _BOUNDARY_SCHEMA
                 or boundary_row.content_hash != boundary_hash
+                or boundary.parent_revision_id
+                != (parent_node.id if parent_node is not None else None)
                 or manifest.get("boundary_hash") != boundary_hash
                 or row.boundary_id != boundary_row.id
                 or row.basis_id != boundary.historical_basis_id
@@ -1613,6 +1631,11 @@ class CompanyResearchPublicationService:
                     or artifact.version != descriptor.get("version")
                     or artifact.input_hash != descriptor.get("input_hash")
                     or artifact.content_hash != descriptor.get("content_hash")
+                    or self._stored_utc(
+                        artifact.created_at,
+                        "company research frozen artifact created_at",
+                    )
+                    > published_at
                 ):
                     raise CompanyResearchIntegrityError(
                         "company research frozen artifact identity is invalid"
@@ -1839,9 +1862,16 @@ class CompanyResearchPublicationService:
             counterevidence = manifest.get("strongest_counterevidence")
             blockers = manifest.get("blockers")
             next_events = manifest.get("next_verification_events")
+            expected_counterevidence = [
+                value.canonical_payload()
+                for value in durable_memo.strongest_counterevidence
+            ]
             if (
                 not isinstance(counterevidence, list)
                 or not all(isinstance(value, dict) for value in counterevidence)
+                or counterevidence != expected_counterevidence
+                or blockers != list(durable_memo.gap_keys)
+                or next_events != list(durable_memo.next_verification_events)
                 or blockers != assessment_row.blockers
                 or not isinstance(next_events, list)
                 or next_events != assessment_row.resolution_requirements
@@ -2189,7 +2219,15 @@ class CompanyResearchPublicationService:
                     resolution_requirements=list(preview.next_verification_events),
                     next_review_at=None,
                     content_hash=preview.assessment.content_hash,
-                    expected_parent_id=None,
+                    expected_parent_id=(
+                        self._manifest_uuid(
+                            preview.manifest["assessment"]["parent_assessment_id"],
+                            "company research parent assessment reference",
+                        )
+                        if preview.manifest["assessment"]["parent_assessment_id"]
+                        is not None
+                        else None
+                    ),
                     created_at=created_at,
                 )
                 boundary = product.append_boundary(

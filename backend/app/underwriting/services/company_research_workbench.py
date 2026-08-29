@@ -787,7 +787,11 @@ class CompanyResearchWorkbench:
         return heads, tuple(current_gap_values)
 
     def workspace(
-        self, *, project_id: UUID, lock: bool = True
+        self,
+        *,
+        project_id: UUID,
+        lock: bool = True,
+        allow_current_heads_after_revision: bool = False,
     ) -> CompanyResearchWorkspace:
         # This deliberately avoids ``ResearchProjectService.status()``: that
         # projection loads every Security identity one-by-one, while a company
@@ -818,19 +822,20 @@ class CompanyResearchWorkbench:
             # workbench model refs.  Serving the current artifact heads in
             # their place would fabricate a historical workspace, so fail
             # closed until a revision carries frozen company-research refs.
-            manifest = self._product_repository.manifest(revision.manifest_id)
-            refs = (
-                manifest.manifest.get("model_refs")
-                if manifest is not None and isinstance(manifest.manifest, dict)
-                else None
-            )
-            if not isinstance(refs, list) or not refs:
-                raise ValidationError(
-                    "workspace selected revision has no frozen company research manifest"
+            if not allow_current_heads_after_revision:
+                manifest = self._product_repository.manifest(revision.manifest_id)
+                refs = (
+                    manifest.manifest.get("model_refs")
+                    if manifest is not None and isinstance(manifest.manifest, dict)
+                    else None
                 )
-            raise ValidationError(
-                "frozen company research workspace replay is not implemented"
-            )
+                if not isinstance(refs, list) or not refs:
+                    raise ValidationError(
+                        "workspace selected revision has no frozen company research manifest"
+                    )
+                raise ValidationError(
+                    "frozen company research workspace replay is not implemented"
+                )
         heads, current_gap_values = self._heads(
             project_id,
             lock=lock,
