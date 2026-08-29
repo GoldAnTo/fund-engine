@@ -22,12 +22,14 @@ from app.underwriting.persistence.company_research_repository import (
     CompanyResearchGovernedBasisMismatch,
     CompanyResearchPersistedBundle,
     CompanyResearchRepository,
+    reconcile_company_research_evidence_audit,
 )
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.services.company_research_sources import (
     CompanyResearchEvidenceCompilation,
     CompanyResearchProviderInput,
     CompanyResearchSourceCompiler,
+    authenticate_governed_reviewed_evidence,
 )
 from app.underwriting.domain.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
@@ -58,6 +60,7 @@ from app.underwriting.fixtures.alphabet_golden_case import (
     AlphabetGoldenCaseFixtureError,
 )
 from app.underwriting.domain.company_research import CompanyResearchValidationError
+from app.underwriting.domain.company_research_provenance import canonical_source_refs
 
 
 COMPANY_RESEARCH_STAGES = (
@@ -693,6 +696,18 @@ class CompanyResearchPreparationWorker:
         )
         if evidence is None or gaps is None:
             raise ValidationError("reviewed evidence and research gaps are required")
+        evidence_chain = self._repository.artifact_chain(evidence.id)
+        source_contract = authenticate_governed_reviewed_evidence(
+            provider_input=self._provider_input(preparation),
+            evidence_chain=evidence_chain,
+            research_gaps=gaps,
+        )
+        reconcile_company_research_evidence_audit(
+            preparation=preparation,
+            evidence_chain=evidence_chain,
+            research_gaps=gaps,
+            events=self._repository.events(preparation.id, lock=True),
+        )
         cutoff = self._repository.evidence_cutoff(evidence)
         initializer = CompanyResearchInitializer(self._session, now=self._now)
         preview = initializer.preview(
@@ -703,7 +718,10 @@ class CompanyResearchPreparationWorker:
             project_id=preparation.project_id,
             cutoff_at=cutoff,
         )
-        expected_boundary = resolve_alphabet_company_research_boundary(cutoff)
+        expected_boundary = resolve_alphabet_company_research_boundary(
+            cutoff,
+            source_manifest_hash=source_contract.input_hash,
+        )
         draft = WorkspaceDraftService(self._session, now=self._now).read(
             preparation.project_id
         )
@@ -755,7 +773,9 @@ class CompanyResearchPreparationWorker:
             evidence_content_hash=canonical_hash(evidence.payload),
             evidence_payload=evidence.payload,
             gap_payload=gaps.payload,
-            source_refs=tuple(dict(value) for value in evidence.source_refs),
+            source_refs=canonical_source_refs(
+                tuple(dict(value) for value in evidence.source_refs)
+            ),
             model_template=governed.model_template,
             strategy_assumptions=governed.strategy_assumptions,
             market_context=governed.market_context,

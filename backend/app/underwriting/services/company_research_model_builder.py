@@ -644,7 +644,7 @@ def _validate_evidence_payload(
         if available_at > cutoff_at:
             raise ValidationError("evidence fact is unavailable at model cutoff")
         review = fact.get("review_decision")
-        if review not in {"confirmed", "rejected"}:
+        if not isinstance(review, str) or review not in {"confirmed", "rejected"}:
             raise ValidationError("evidence must be reviewed before model input")
         _model_fact_decimal(fact)
         if fact.get("value_kind") not in {

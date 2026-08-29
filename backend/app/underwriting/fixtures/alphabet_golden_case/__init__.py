@@ -30,6 +30,11 @@ _SOURCE_FACTS_SCHEMA = "alphabet.golden-case.source-facts.v1"
 _MARKET_INPUTS_SCHEMA = "alphabet.golden-case.market-inputs.v1"
 _STRATEGY_ASSUMPTIONS_SCHEMA = "alphabet.golden-case.strategy-assumptions.v1"
 BUNDLED_MANIFEST_CONTENT_SHA256 = "43a6d4e13d1dddbf2c24e097b4bc05dbe52bd9424a60e1233a054de138a0631a"
+# The first published evidence-only fixture.  Existing projects may retain
+# this manifest even though later fixture revisions added market/model files.
+LEGACY_EVIDENCE_MANIFEST_CONTENT_SHA256 = (
+    "632f9e40fb2707a16b3cc104910b45ab9d71b916bcc666e141e56b2d2046200b"
+)
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _MANIFEST_KEYS = frozenset({"schema_version", "content_hash", "cutoff", "files"})
 _JSON_FILE_KEYS = frozenset({"name", "content_hash"})

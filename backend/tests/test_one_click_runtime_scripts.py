@@ -307,9 +307,16 @@ def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> Non
     assert 'FRONTEND_URL="${ONE_CLICK_FRONTEND_URL:-http://127.0.0.1:' in script
     assert '"$API_URL/health"' in script
     assert '"$FRONTEND_URL/health"' in script
-    for service in ("postgres", "api", "research-worker", "acquisition-worker", "frontend"):
+    for service in (
+        "postgres",
+        "api",
+        "research-worker",
+        "acquisition-worker",
+        "company-research-worker",
+        "frontend",
+    ):
         assert service in script
-    assert "0065" in script
+    assert 'require_revision "$new_revision" 0070' in script
     assert "0062" in script
     assert "fund-engine-event" in script
     assert 'LEGACY_DATABASE_CONTAINER="fund-engine-event-postgres-1"' in script
@@ -318,6 +325,7 @@ def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> Non
     assert '"$legacy_project" == "$LEGACY_PROJECT"' in script
     assert '"$legacy_service" == "$LEGACY_DATABASE_SERVICE"' in script
     assert "require_expected_healthy_replicas" in script
+    assert "require_expected_healthy_replicas company-research-worker 1" in script
     assert 'require_expected_healthy_replicas research-worker 1' in script
     assert 'require_expected_healthy_replicas acquisition-worker 3' in script
     assert "compose ps --all --quiet" in script

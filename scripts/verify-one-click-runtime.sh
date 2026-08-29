@@ -80,11 +80,12 @@ main() {
 
   compose config -q
 
-  for service in postgres api research-worker acquisition-worker frontend; do
+  for service in postgres api research-worker acquisition-worker company-research-worker frontend; do
     require_running_service "$service"
   done
   require_expected_healthy_replicas research-worker 1
   require_expected_healthy_replicas acquisition-worker 3
+  require_expected_healthy_replicas company-research-worker 1
 
   curl --fail --silent --show-error "$API_URL/health" >/dev/null
   curl --fail --silent --show-error "$FRONTEND_URL/health" >/dev/null
@@ -106,7 +107,7 @@ if not required.issubset(keys):
     raise SystemExit("CATL object foundation is incomplete")
 '
   new_revision="$(compose exec -T postgres psql -U "$database_user" -d "$database_name" -Atc 'SELECT version_num FROM alembic_version;')"
-  require_revision "$new_revision" 0065
+  require_revision "$new_revision" 0070
 
   legacy_container="$(docker inspect --format '{{.Id}}' "$LEGACY_DATABASE_CONTAINER" 2>/dev/null)" \
     || die "legacy postgres container is unavailable: $LEGACY_DATABASE_CONTAINER"
@@ -121,7 +122,7 @@ if not required.issubset(keys):
   legacy_revision="$(docker exec "$legacy_container" sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT version_num FROM alembic_version;"')"
   require_revision "$legacy_revision" 0062
 
-  printf 'One-click investment-research runtime is healthy; isolated database is at 0065 and legacy database remains at 0062.\n'
+  printf 'One-click investment-research runtime is healthy; isolated database is at 0070 and legacy database remains at 0062.\n'
 }
 
 main "$@"

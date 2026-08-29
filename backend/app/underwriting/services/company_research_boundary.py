@@ -14,6 +14,7 @@ from app.underwriting.domain.product_contracts import (
     product_historical_basis_content_hash,
 )
 from app.underwriting.fixtures.alphabet_golden_case import (
+    LEGACY_EVIDENCE_MANIFEST_CONTENT_SHA256,
     load_alphabet_golden_case_fixture,
 )
 from app.underwriting.hashing import canonical_hash
@@ -69,6 +70,8 @@ class CompanyResearchHistoricalBoundary:
 
 def resolve_alphabet_company_research_boundary(
     requested_cutoff_at: datetime,
+    *,
+    source_manifest_hash: str | None = None,
 ) -> CompanyResearchHistoricalBoundary:
     requested_cutoff_at = _utc(requested_cutoff_at, "requested cutoff")
     fixture = load_alphabet_golden_case_fixture()
@@ -76,6 +79,16 @@ def resolve_alphabet_company_research_boundary(
         raise ValidationError(
             "requested cutoff precedes the authenticated Alphabet fixture"
         )
+    governed_source_hash = (
+        fixture.content_hash
+        if source_manifest_hash is None
+        else source_manifest_hash
+    )
+    if governed_source_hash not in {
+        fixture.content_hash,
+        LEGACY_EVIDENCE_MANIFEST_CONTENT_SHA256,
+    }:
+        raise ValidationError("Alphabet evidence manifest is not governed")
 
     template = AlphabetCompanyResearchAdapter().model_template()
     definition_bundle_hash = canonical_hash(
@@ -93,7 +106,7 @@ def resolve_alphabet_company_research_boundary(
     )
     basis_input = ProductHistoricalBasisInput(
         cutoff_at=fixture.cutoff,
-        source_manifest_hash=fixture.content_hash,
+        source_manifest_hash=governed_source_hash,
         definition_bundle_hash=definition_bundle_hash,
         parser_bundle_hash=parser_bundle_hash,
     )

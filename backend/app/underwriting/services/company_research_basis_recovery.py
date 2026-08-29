@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from copy import deepcopy
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -43,9 +42,8 @@ from app.underwriting.services.product_project import (
 )
 from app.underwriting.services.company_research_sources import (
     CompanyResearchProviderInput,
-    CompanyResearchSourceCompiler,
+    authenticate_governed_reviewed_evidence,
 )
-from app.underwriting.hashing import canonical_hash
 from app.underwriting.services.workspace_draft import (
     WorkspaceDraftPatch,
     WorkspaceDraftService,
@@ -200,30 +198,25 @@ class CompanyResearchHistoricalBasisRecovery:
         boundary: CompanyResearchHistoricalBoundary,
         security_keys: tuple[str, ...],
     ) -> None:
-        expected = CompanyResearchSourceCompiler().compile_evidence_index(
-            CompanyResearchProviderInput(
+        evidence_chain = state.evidence_chain
+        gaps_chain = state.research_gaps_chain
+        if len(gaps_chain) != 1:
+            raise ValidationError(
+                "company research historical basis recovery evidence is invalid"
+            )
+        expected = authenticate_governed_reviewed_evidence(
+            provider_input=CompanyResearchProviderInput(
                 preparation_id=state.preparation.id,
                 project_id=state.preparation.project_id,
                 company_external_key=_ALPHABET_COMPANY_KEY,
                 request_hash=state.preparation.request_hash,
                 strategy_version=state.preparation.strategy_version,
-            )
+            ),
+            evidence_chain=evidence_chain,
+            research_gaps=gaps_chain[0],
         )
-        evidence_chain = state.evidence_chain
-        gaps_chain = state.research_gaps_chain
-        root = evidence_chain[0]
-        expected_source_refs = list(expected.source_refs)
         if (
-            root.input_hash != expected.input_hash
-            or root.payload != expected.evidence_index_payload
-            or not isinstance(root.source_refs, list)
-            or root.source_refs != expected_source_refs
-            or len(gaps_chain) != 1
-            or gaps_chain[0].input_hash != expected.input_hash
-            or gaps_chain[0].payload != expected.research_gaps_payload
-            or not isinstance(gaps_chain[0].source_refs, list)
-            or gaps_chain[0].source_refs != expected_source_refs
-            or expected.input_hash != boundary.basis_input.source_manifest_hash
+            expected.input_hash != boundary.basis_input.source_manifest_hash
             or tuple(
                 expected.evidence_index_payload.get("security_external_keys", ())
             )
@@ -232,80 +225,6 @@ class CompanyResearchHistoricalBasisRecovery:
             raise ValidationError(
                 "company research historical basis recovery evidence is invalid"
             )
-        for parent, successor in zip(
-            evidence_chain, evidence_chain[1:], strict=False
-        ):
-            if (
-                not isinstance(successor.source_refs, list)
-                or successor.source_refs != expected_source_refs
-            ):
-                raise ValidationError(
-                    "company research historical basis recovery evidence is invalid"
-                )
-            parent_facts = parent.payload.get("facts")
-            successor_facts = successor.payload.get("facts")
-            if (
-                not isinstance(parent_facts, list)
-                or not isinstance(successor_facts, list)
-                or len(parent_facts) != len(successor_facts)
-            ):
-                raise ValidationError(
-                    "company research historical basis recovery evidence is invalid"
-                )
-            changes: list[tuple[int, str, str, dict[str, object]]] = []
-            for index, (before, after) in enumerate(
-                zip(parent_facts, successor_facts, strict=True)
-            ):
-                if before == after:
-                    continue
-                if not isinstance(before, Mapping) or not isinstance(after, Mapping):
-                    raise ValidationError(
-                        "company research historical basis recovery evidence is invalid"
-                    )
-                decision = after.get("review_decision")
-                fact_key = after.get("fact_key")
-                expected_after = dict(before)
-                if (
-                    "review_decision" in before
-                    or not isinstance(decision, str)
-                    or decision not in _TERMINAL_REVIEW_DECISIONS
-                    or not isinstance(fact_key, str)
-                    or not fact_key
-                ):
-                    raise ValidationError(
-                        "company research historical basis recovery evidence is invalid"
-                    )
-                expected_after["review_decision"] = decision
-                if after != expected_after:
-                    raise ValidationError(
-                        "company research historical basis recovery evidence is invalid"
-                    )
-                changes.append(
-                    (index, fact_key, decision, expected_after)
-                )
-            if len(changes) != 1:
-                raise ValidationError(
-                    "company research historical basis recovery evidence is invalid"
-                )
-            fact_index, fact_key, decision, expected_fact = changes[0]
-            expected_payload = dict(parent.payload)
-            expected_facts = deepcopy(parent_facts)
-            expected_facts[fact_index] = expected_fact
-            expected_payload["facts"] = expected_facts
-            if canonical_hash(successor.payload) != canonical_hash(expected_payload):
-                raise ValidationError(
-                    "company research historical basis recovery evidence is invalid"
-                )
-            if successor.input_hash != canonical_hash(
-                {
-                    "parent": parent.content_hash,
-                    "fact_key": fact_key,
-                    "decision": decision,
-                }
-            ):
-                raise ValidationError(
-                    "company research historical basis recovery evidence is invalid"
-                )
         head_facts = state.evidence.payload.get("facts")
         if (
             not isinstance(head_facts, list)
@@ -473,7 +392,13 @@ class CompanyResearchHistoricalBasisRecovery:
         security_keys = self._project_security_keys(state)
         try:
             cutoff = self._company.evidence_cutoff(state.evidence)
-            boundary = resolve_alphabet_company_research_boundary(cutoff)
+            source_manifest_hash = self._company.evidence_source_manifest_hash(
+                state.evidence
+            )
+            boundary = resolve_alphabet_company_research_boundary(
+                cutoff,
+                source_manifest_hash=source_manifest_hash,
+            )
         except ValidationError as exc:
             raise ValidationError(
                 "company research historical basis recovery evidence is invalid"

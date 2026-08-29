@@ -18,6 +18,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.models.ledger import Base, ConflictError, ValidationError
 from app.models.operational import Job, JobEvent
 from app.underwriting.domain.product_contracts import ProductHistoricalBasisInput
+from app.underwriting.fixtures.alphabet_golden_case import (
+    load_alphabet_golden_case_fixture,
+)
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
 from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.company_research_models import (
@@ -71,7 +74,10 @@ from app.underwriting.services.market_snapshots import (
 from app.underwriting.services.company_research_workbench import (
     CompanyResearchWorkbench,
 )
-from app.underwriting.services.company_research_sources import CompanyResearchSourceService
+from app.underwriting.services.company_research_sources import (
+    CompanyResearchSourceCompiler,
+    CompanyResearchSourceService,
+)
 from app.underwriting.services.product_foundation_fixture import ProductFoundationFixtureService
 from app.underwriting.services.product_project import (
     ResearchProjectService,
@@ -92,6 +98,54 @@ LEGACY_REQUEST_CUTOFF = datetime(2026, 8, 28, 4, 8, 33, 490000, tzinfo=UTC)
 LEGACY_PROJECT_CREATED = datetime(2026, 8, 28, 4, 8, 35, 304392, tzinfo=UTC)
 LEGACY_MANDATE_CREATED = datetime(2026, 8, 28, 4, 8, 35, 512718, tzinfo=UTC)
 LEGACY_PREPARATION_CREATED = datetime(2026, 8, 28, 4, 8, 35, 743556, tzinfo=UTC)
+LEGACY_EVIDENCE_MANIFEST_HASH = (
+    "632f9e40fb2707a16b3cc104910b45ab9d71b916bcc666e141e56b2d2046200b"
+)
+
+
+def _pre_market_evidence_compilation(provider_input):
+    compiled = CompanyResearchSourceCompiler().compile_evidence_index(provider_input)
+    evidence_payload = deepcopy(compiled.evidence_index_payload)
+    evidence_payload["fixture_content_hash"] = LEGACY_EVIDENCE_MANIFEST_HASH
+    gaps_payload = deepcopy(compiled.research_gaps_payload)
+    gaps_payload["fixture_content_hash"] = LEGACY_EVIDENCE_MANIFEST_HASH
+    legacy_reasons = {
+        "market_price_missing": "No authenticated market price is bundled.",
+        "usd_cny_fx_missing": "No authenticated USD/CNY FX rate is bundled.",
+    }
+    for gap in gaps_payload["gaps"]:
+        if gap["gap_key"] in legacy_reasons:
+            gap["reason"] = legacy_reasons[gap["gap_key"]]
+    return replace(
+        compiled,
+        input_hash=LEGACY_EVIDENCE_MANIFEST_HASH,
+        evidence_index_payload=evidence_payload,
+        research_gaps_payload=gaps_payload,
+    )
+
+
+def _original_pre_market_evidence_compilation(provider_input):
+    compiled = _pre_market_evidence_compilation(provider_input)
+    fixture = load_alphabet_golden_case_fixture()
+    source_refs = tuple(
+        {
+            "source_role": fact.source_role,
+            "source_url": fact.source_url,
+            "source_locator": fact.source_locator,
+            "raw_hash": fact.raw_hash,
+        }
+        for fact in sorted(
+            fixture.facts,
+            key=lambda item: (
+                item.source_role,
+                item.source_url,
+                item.source_locator,
+                item.fact_key,
+            ),
+        )
+    )
+    assert len(source_refs) == 7
+    return replace(compiled, source_refs=source_refs)
 
 
 def _initialized(session, *, idempotency_key="company-worker-alphabet"):
@@ -262,9 +316,13 @@ def _ready_for_model(session):
     return initialized
 
 
-def _legacy_blocked_missing_basis(session, *, initialized=None, now=NOW):
+def _legacy_blocked_missing_basis(
+    session, *, initialized=None, now=NOW, provider=None
+):
     initialized = initialized or _initialized(session)
-    worker = CompanyResearchPreparationWorker(session, now=lambda: now)
+    worker = CompanyResearchPreparationWorker(
+        session, now=lambda: now, provider=provider
+    )
     source_claim = worker.claim_next()
     assert source_claim is not None
     assert worker.run_claim(source_claim) == "awaiting_evidence_review"
@@ -350,6 +408,187 @@ def test_historical_basis_recovery_accepts_a_genuine_pre_7707036_request_cutoff(
     ]
     assert [event.hash_version for event in events[-2:]] == [2, 2]
     assert all(event.hash_version == 1 for event in events[:-2])
+
+
+@pytest.mark.parametrize(
+    "provider",
+    (_pre_market_evidence_compilation, _original_pre_market_evidence_compilation),
+)
+def test_historical_basis_recovery_accepts_the_authenticated_pre_market_evidence_manifest(
+    session, provider
+) -> None:
+    initialized = _genuine_legacy_initialized(session)
+    initialized, reviewed, gaps, blocked_draft = _legacy_blocked_missing_basis(
+        session,
+        initialized=initialized,
+        now=LEGACY_PREPARATION_CREATED + timedelta(seconds=1),
+        provider=provider,
+    )
+
+    result = CompanyResearchPreparationService(
+        session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=2)
+    ).retry(project_id=initialized.project.id)
+    recovered = WorkspaceDraftService(
+        session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=2)
+    ).read(initialized.project.id)
+
+    assert recovered is not None
+    assert recovered.lock_version == blocked_draft.lock_version + 1
+    assert recovered.content.historical_basis_id is not None
+    assert result.preparation.status == "building_model"
+    basis = ProductRepository(session).product_basis(
+        recovered.content.historical_basis_id
+    )
+    assert basis is not None
+    assert basis.source_manifest_hash == LEGACY_EVIDENCE_MANIFEST_HASH
+
+    model_worker = CompanyResearchPreparationWorker(
+        session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=3)
+    )
+    claim = model_worker.claim_next()
+    assert claim is not None and claim.step == "model_bundle"
+    assert model_worker.run_claim(claim) == "awaiting_judgment_review"
+    repository = CompanyResearchRepository(session)
+    evidence_after = repository.current_artifact(
+        initialized.project.id, "evidence_index"
+    )
+    gaps_after = repository.current_artifact(initialized.project.id, "research_gaps")
+    assert evidence_after is not None and gaps_after is not None
+    assert (evidence_after.id, evidence_after.content_hash) == (
+        reviewed.id,
+        reviewed.content_hash,
+    )
+    assert (gaps_after.id, gaps_after.content_hash) == (gaps.id, gaps.content_hash)
+
+
+@pytest.mark.parametrize("provider", (None, _pre_market_evidence_compilation))
+def test_workbench_rejects_rehashed_substitute_source_gaps_for_every_governed_manifest(
+    session, provider
+) -> None:
+    initialized = _genuine_legacy_initialized(session)
+    initialized, _reviewed, gaps, _blocked_draft = _legacy_blocked_missing_basis(
+        session,
+        initialized=initialized,
+        now=LEGACY_PREPARATION_CREATED + timedelta(seconds=1),
+        provider=provider,
+    )
+    payload = deepcopy(gaps.payload)
+    payload["gaps"][0]["reason"] = "Substituted after publication."
+    _durably_rewrite_artifact(session, gaps, payload=payload)
+
+    with pytest.raises(
+        ValidationError,
+        match="company research evidence lineage is invalid",
+    ):
+        CompanyResearchWorkbench(session, now=lambda: NOW).workspace(
+            project_id=initialized.project.id
+        )
+
+
+@pytest.mark.parametrize("provider", (None, _pre_market_evidence_compilation))
+def test_model_worker_rejects_rehashed_source_gaps_after_basis_recovery(
+    session, provider
+) -> None:
+    initialized = _genuine_legacy_initialized(session)
+    initialized, _reviewed, gaps, _blocked_draft = _legacy_blocked_missing_basis(
+        session,
+        initialized=initialized,
+        now=LEGACY_PREPARATION_CREATED + timedelta(seconds=1),
+        provider=provider,
+    )
+    CompanyResearchPreparationService(
+        session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=2)
+    ).retry(project_id=initialized.project.id)
+    payload = deepcopy(gaps.payload)
+    payload["gaps"][0]["reason"] = "Substituted after basis recovery."
+    _durably_rewrite_artifact(session, gaps, payload=payload)
+
+    def forbidden_model_provider(_build_input):
+        pytest.fail("model provider must not receive substituted source gaps")
+
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=3),
+        model_provider=forbidden_model_provider,
+    )
+    claim = worker.claim_next()
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "discarded"
+
+
+@pytest.mark.parametrize("provider", (None, _pre_market_evidence_compilation))
+def test_model_worker_rejects_a_rehashed_review_successor_after_basis_recovery(
+    session, provider
+) -> None:
+    initialized = _genuine_legacy_initialized(session)
+    initialized, reviewed, _gaps, _blocked_draft = _legacy_blocked_missing_basis(
+        session,
+        initialized=initialized,
+        now=LEGACY_PREPARATION_CREATED + timedelta(seconds=1),
+        provider=provider,
+    )
+    CompanyResearchPreparationService(
+        session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=2)
+    ).retry(project_id=initialized.project.id)
+    payload = deepcopy(reviewed.payload)
+    payload["facts"][0]["value"] = "999999"
+    _durably_rewrite_artifact(session, reviewed, payload=payload)
+
+    def forbidden_model_provider(_build_input):
+        pytest.fail("model provider must not receive substituted reviewed evidence")
+
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=3),
+        model_provider=forbidden_model_provider,
+    )
+    claim = worker.claim_next()
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "discarded"
+
+
+def test_review_rejects_the_original_legacy_seven_to_eight_ref_mutation_before_writing(
+    session,
+) -> None:
+    initialized = _genuine_legacy_initialized(session)
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=1),
+        provider=_original_pre_market_evidence_compilation,
+    )
+    claim = worker.claim_next()
+    assert claim is not None
+    assert worker.run_claim(claim) == "awaiting_evidence_review"
+    repository = CompanyResearchRepository(session)
+    evidence = repository.current_artifact(initialized.project.id, "evidence_index")
+    gaps = repository.current_artifact(initialized.project.id, "research_gaps")
+    assert evidence is not None and gaps is not None
+    invalid_refs = [*evidence.source_refs, dict(evidence.source_refs[0])]
+    _durably_rewrite_artifact(session, evidence, source_refs=invalid_refs)
+    _durably_rewrite_artifact(session, gaps, source_refs=invalid_refs)
+    artifact_count = session.scalar(
+        select(func.count())
+        .select_from(CompanyResearchArtifactVersion)
+        .where(CompanyResearchArtifactVersion.project_id == initialized.project.id)
+    )
+    event_count = len(repository.events(initialized.preparation.id))
+
+    with pytest.raises(ValidationError):
+        CompanyResearchWorkbench(session, now=lambda: NOW).review_evidence(
+            project_id=initialized.project.id,
+            evidence_artifact_id=evidence.id,
+            fact_key=evidence.payload["facts"][0]["fact_key"],
+            decision="confirmed",
+            expected_head_id=evidence.id,
+        )
+    session.commit()
+
+    assert session.scalar(
+        select(func.count())
+        .select_from(CompanyResearchArtifactVersion)
+        .where(CompanyResearchArtifactVersion.project_id == initialized.project.id)
+    ) == artifact_count
+    assert len(repository.events(initialized.preparation.id)) == event_count
 
 
 def test_missing_historical_basis_validation_diagnostic_is_safe_and_actionable(

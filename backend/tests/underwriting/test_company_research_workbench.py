@@ -5,7 +5,7 @@ import sys
 import uuid
 
 import pytest
-from sqlalchemy import bindparam, select, text
+from sqlalchemy import bindparam, func, select, text
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.ledger import ValidationError
@@ -251,6 +251,43 @@ def _rewrite_source_refs(session, row, source_refs) -> None:
         {"source_refs": copied, "content_hash": content_hash, "id": row.id},
     ).rowcount == 1
     session.expire_all()
+
+
+def test_review_rejects_an_unknown_current_source_ref_shape_before_appending(
+    session,
+) -> None:
+    initialized = _prepared(session)
+    repository = CompanyResearchRepository(session)
+    preparation = repository.preparation_for_project(initialized.project.id)
+    evidence = repository.current_artifact(initialized.project.id, "evidence_index")
+    gaps = repository.current_artifact(initialized.project.id, "research_gaps")
+    assert preparation is not None and evidence is not None and gaps is not None
+    invalid_refs = [*evidence.source_refs, dict(evidence.source_refs[0])]
+    _rewrite_source_refs(session, evidence, invalid_refs)
+    _rewrite_source_refs(session, gaps, invalid_refs)
+    artifact_count = session.scalar(
+        select(func.count())
+        .select_from(CompanyResearchArtifactVersion)
+        .where(CompanyResearchArtifactVersion.project_id == initialized.project.id)
+    )
+    event_count = len(repository.events(preparation.id))
+
+    with pytest.raises(ValidationError):
+        CompanyResearchWorkbench(session, now=lambda: NOW).review_evidence(
+            project_id=initialized.project.id,
+            evidence_artifact_id=evidence.id,
+            fact_key=evidence.payload["facts"][0]["fact_key"],
+            decision="confirmed",
+            expected_head_id=evidence.id,
+        )
+    session.commit()
+
+    assert session.scalar(
+        select(func.count())
+        .select_from(CompanyResearchArtifactVersion)
+        .where(CompanyResearchArtifactVersion.project_id == initialized.project.id)
+    ) == artifact_count
+    assert len(repository.events(preparation.id)) == event_count
 
 
 def _durably_rewrite_payload(
