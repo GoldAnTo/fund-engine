@@ -839,7 +839,7 @@ def _authenticated_workspace(
         project_id=project_id,
         allow_current_heads_after_revision=True,
     )
-    if value.selected_revision is None or value.preparation.status != "completed":
+    if value.selected_revision is None:
         return value
     frozen = CompanyResearchPublicationService(db, now=_now).revision(
         project_id, value.selected_revision

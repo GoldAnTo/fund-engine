@@ -767,6 +767,22 @@ def test_company_research_publication_closes_the_entire_public_http_workflow(
 
     repository = CompanyResearchRepository(session)
     session.expire_all()
+    preparation = repository.preparation_for_project(UUID(project_id), fresh=True)
+    assert preparation is not None
+    preparation.status = "ready_to_freeze"
+    preparation.current_step = "memo"
+    preparation.progress = 95
+    preparation.updated_at = datetime.now(UTC) + timedelta(seconds=1)
+    session.flush([preparation])
+    session.commit()
+
+    continued = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    assert continued.status_code == 200, continued.text
+    assert continued.json()["preparation"]["status"] == "ready_to_freeze"
+    assert continued.json()["preparation"]["current_step"] == "memo"
+    assert continued.json()["preparation"]["progress"] == 95
+
+    session.expire_all()
     durable_memo = repository.current_artifact(UUID(project_id), "memo")
     assert durable_memo is not None
     repository.append_artifact(
@@ -776,7 +792,7 @@ def test_company_research_publication_closes_the_entire_public_http_workflow(
         payload=durable_memo.payload,
         source_refs=durable_memo.source_refs,
         expected_parent_id=durable_memo.id,
-        created_at=datetime.now(UTC) + timedelta(seconds=1),
+        created_at=datetime.now(UTC) + timedelta(seconds=2),
     )
     session.commit()
 
