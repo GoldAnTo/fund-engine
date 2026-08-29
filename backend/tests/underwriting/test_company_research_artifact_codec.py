@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 
 from app.models.ledger import ValidationError
+from app.underwriting.domain.company_research import CompanyResearchValidationError
 from app.underwriting.services.company_research_model_builder import (
     CompanyResearchModelBuilder,
 )
@@ -26,6 +27,10 @@ def _artifacts() -> dict[str, object]:
         "research_gaps": result.gaps,
         "memo": result.memo,
     }
+
+
+def _machine_memo_payload() -> dict[str, object]:
+    return CompanyResearchArtifactCodec.encode("memo", _artifacts()["memo"])
 
 
 @pytest.mark.parametrize("kind", tuple(_artifacts()))
@@ -78,10 +83,57 @@ def test_artifact_codec_rejects_a_noncanonical_decimal_representation() -> None:
 
 
 def test_artifact_codec_reads_a_legacy_memo_without_derived_gaps() -> None:
-    payload = CompanyResearchArtifactCodec.encode("memo", _artifacts()["memo"])
+    payload = _machine_memo_payload()
     payload.pop("research_gaps")
 
     decoded = CompanyResearchArtifactCodec.decode("memo", payload)
 
     assert decoded.research_gaps == ()
     assert CompanyResearchArtifactCodec.validate_payload("memo", payload) == payload
+
+
+def test_human_confirmation_decodes_and_round_trips_exactly() -> None:
+    payload = {
+        **_machine_memo_payload(),
+        "candidate_status": "human_confirmed",
+        "reviewer": "human:local-user",
+        "markdown": "Evidence remains insufficient.\n",
+    }
+
+    decoded = CompanyResearchArtifactCodec.decode("memo", payload)
+
+    assert decoded.candidate_status == "human_confirmed"
+    assert decoded.reviewer == "human:local-user"
+    assert decoded.markdown == "Evidence remains insufficient.\n"
+    assert CompanyResearchArtifactCodec.encode("memo", decoded) == payload
+
+
+@pytest.mark.parametrize(
+    ("candidate_status", "reviewer", "markdown"),
+    (
+        ("machine_draft", "human:local-user", None),
+        ("machine_draft", None, "Evidence remains insufficient."),
+        ("human_confirmed", None, "Evidence remains insufficient."),
+        ("human_confirmed", "human:local-user", " \n\t "),
+        ("human_confirmed", "another-reviewer", "Evidence remains insufficient."),
+    ),
+)
+def test_mixed_or_open_confirmation_shapes_are_rejected(
+    candidate_status: str, reviewer: str | None, markdown: str | None
+) -> None:
+    memo = CompanyResearchArtifactCodec.decode("memo", _machine_memo_payload())
+
+    with pytest.raises(CompanyResearchValidationError):
+        replace(
+            memo,
+            candidate_status=candidate_status,
+            reviewer=reviewer,
+            markdown=markdown,
+        )
+
+
+def test_machine_memo_encoding_omits_unset_human_confirmation_fields() -> None:
+    payload = _machine_memo_payload()
+
+    assert "reviewer" not in payload
+    assert "markdown" not in payload

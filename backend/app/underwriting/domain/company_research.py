@@ -1648,7 +1648,7 @@ class CompanyResearchArtifactReference:
 
 @dataclass(frozen=True, slots=True)
 class CompanyResearchMemoArtifact:
-    """Structured machine draft awaiting judgment review; never a published memo."""
+    """A structured research candidate, optionally closed by local human review."""
 
     assessment_status: str
     business_map_ref: CompanyResearchArtifactReference
@@ -1661,11 +1661,32 @@ class CompanyResearchMemoArtifact:
     next_verification_events: tuple[str, ...]
     research_gaps: tuple[ResearchGap, ...] = ()
     candidate_status: str = "machine_draft"
+    reviewer: str | None = None
+    markdown: str | None = None
 
     def __post_init__(self) -> None:
-        if self.candidate_status != "machine_draft":
+        if self.candidate_status == "machine_draft":
+            if self.reviewer is not None or self.markdown is not None:
+                raise CompanyResearchValidationError(
+                    "machine_draft must not contain human confirmation"
+                )
+        elif self.candidate_status == "human_confirmed":
+            if self.reviewer != "human:local-user":
+                raise CompanyResearchValidationError(
+                    "human_confirmed must name the local human reviewer"
+                )
+            if (
+                not isinstance(self.markdown, str)
+                or not self.markdown.strip()
+                or len(self.markdown) > 100000
+                or "\r" in self.markdown
+            ):
+                raise CompanyResearchValidationError(
+                    "human_confirmed markdown must be non-blank canonical LF text"
+                )
+        else:
             raise CompanyResearchValidationError(
-                "company research memo must remain a machine_draft"
+                "company research memo candidate status is invalid"
             )
         if self.assessment_status not in {
             "not_answerable",

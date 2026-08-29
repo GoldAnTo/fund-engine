@@ -64,6 +64,14 @@ def _canonical_json(value: object) -> object:
     raise TypeError("company research artifact contains a non-JSON domain value")
 
 
+def _canonical_memo_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Keep legacy machine-draft payloads byte-for-byte unchanged."""
+    if payload.get("candidate_status") == "machine_draft":
+        payload.pop("reviewer", None)
+        payload.pop("markdown", None)
+    return payload
+
+
 class CompanyResearchArtifactCodec:
     """Rebuild domain objects and require their single canonical JSON encoding."""
 
@@ -86,6 +94,8 @@ class CompanyResearchArtifactCodec:
                 payload = _canonical_json(decoded)
             if not isinstance(payload, dict):
                 raise TypeError
+            if kind == "memo":
+                payload = _canonical_memo_payload(payload)
             return cls.validate_payload(kind, payload)
         except (
             AttributeError,
@@ -131,10 +141,11 @@ class CompanyResearchArtifactCodec:
         if (
             kind == "memo"
             and isinstance(candidate, dict)
-            and "research_gaps" not in candidate
             and isinstance(canonical, dict)
         ):
-            canonical.pop("research_gaps", None)
+            _canonical_memo_payload(canonical)
+            if "research_gaps" not in candidate:
+                canonical.pop("research_gaps", None)
         if not isinstance(canonical, dict) or canonical != candidate:
             raise ValidationError(f"{kind} payload is invalid")
         return canonical
