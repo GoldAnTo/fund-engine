@@ -13,7 +13,11 @@ from sqlalchemy import bindparam, select, text
 
 from app.underwriting.api.company_research_schemas import (
     CompanyResearchArtifactResponse,
+    CompanyResearchFrozenRevisionResponse,
+    CompanyResearchJudgmentConfirmationResponse,
+    CompanyResearchMarkdownExportResponse,
     CompanyResearchNumericObservationResponse,
+    CompanyResearchPreparationResponse,
     CompanyResearchPublicationPreviewResponse,
     CompanyResearchWorkbenchModuleResponse,
     CompanyResearchWorkspaceCompanyResponse,
@@ -659,6 +663,8 @@ def test_company_research_publication_closes_the_entire_public_http_workflow(
         },
     )
     assert confirmation.status_code == 200, confirmation.text
+    confirmation_body = confirmation.json()
+    CompanyResearchJudgmentConfirmationResponse.model_validate(confirmation_body)
     confirmed = confirmation.json()
     assert confirmed["project_id"] == project_id
     assert confirmed["preparation"]["status"] == "ready_to_freeze"
@@ -724,6 +730,12 @@ def test_company_research_publication_closes_the_entire_public_http_workflow(
     assert frozen["current_step"] is None
     assert frozen["progress"] == 100
 
+    project_status = api_client.get(f"{BASE}/projects/{project_id}")
+    assert project_status.status_code == 200, project_status.text
+    assert project_status.json()["preparation"]["status"] == "completed"
+    assert project_status.json()["preparation"]["current_step"] is None
+    assert project_status.json()["preparation"]["progress"] == 100
+
     replay = api_client.get(f"{BASE}/projects/{project_id}/revisions/{revision_id}")
     assert replay.status_code == 200, replay.text
     assert replay.json() == frozen
@@ -753,10 +765,34 @@ def test_company_research_publication_closes_the_entire_public_http_workflow(
     }
     assert _publication_invariants(after) == before
 
+    repository = CompanyResearchRepository(session)
+    session.expire_all()
+    durable_memo = repository.current_artifact(UUID(project_id), "memo")
+    assert durable_memo is not None
+    repository.append_artifact(
+        project_id=UUID(project_id),
+        kind="memo",
+        input_hash=durable_memo.input_hash,
+        payload=durable_memo.payload,
+        source_refs=durable_memo.source_refs,
+        expected_parent_id=durable_memo.id,
+        created_at=datetime.now(UTC) + timedelta(seconds=1),
+    )
+    session.commit()
+
+    mixed = api_client.get(f"{BASE}/projects/{project_id}/workspace")
+    assert mixed.status_code == 422
+    assert mixed.json()["error"]["code"] == "validation_failed"
+
 
 def test_company_research_publication_http_errors_are_bounded_and_identity_bound(
     api_client, session
 ) -> None:
+    def assert_bounded(response) -> None:
+        body = response.text.lower()
+        assert "provider" not in body
+        assert "internal" not in body
+
     workspace = _run_public_company_research_pipeline(
         api_client,
         session,
@@ -765,6 +801,41 @@ def test_company_research_publication_http_errors_are_bounded_and_identity_bound
     )
     project_id = workspace["project_id"]
     memo = next(item for item in workspace["artifacts"] if item["kind"] == "memo")
+    unknown_project_id = "00000000-0000-4000-8000-000000000099"
+    unknown_requests = (
+        api_client.post(
+            f"{BASE}/projects/{unknown_project_id}/judgment-confirmations",
+            json={
+                "schema_version": "underwriting.v1",
+                "expected_lock_version": 1,
+                "expected_memo_id": memo["id"],
+                "expected_memo_content_hash": memo["content_hash"],
+                "markdown": "Current formal evidence is insufficient.\n",
+            },
+        ),
+        api_client.post(
+            f"{BASE}/projects/{unknown_project_id}/publication-preview",
+            json={
+                "schema_version": "underwriting.v1",
+                "expected_lock_version": 1,
+            },
+        ),
+        api_client.post(
+            f"{BASE}/projects/{unknown_project_id}/publish",
+            headers={"Idempotency-Key": "unknown-project"},
+            json={
+                "schema_version": "underwriting.v1",
+                "expected_lock_version": 1,
+                "expected_manifest_hash": "a" * 64,
+            },
+        ),
+    )
+    assert [response.status_code for response in unknown_requests] == [404, 404, 404]
+    assert all(
+        response.json()["error"]["code"] == "not_found" for response in unknown_requests
+    )
+    for response in unknown_requests:
+        assert_bounded(response)
     request = {
         "schema_version": "underwriting.v1",
         "expected_lock_version": workspace["draft"]["lock_version"],
@@ -775,13 +846,14 @@ def test_company_research_publication_http_errors_are_bounded_and_identity_bound
 
     for malformed in (
         {**request, "expected_memo_content_hash": memo["content_hash"].upper()},
-        {**request, "provider_internal_payload": "must-not-be-accepted"},
+        {**request, "unexpected": "must-not-be-accepted"},
         {**request, "expected_lock_version": True},
     ):
         response = api_client.post(
             f"{BASE}/projects/{project_id}/judgment-confirmations", json=malformed
         )
         assert response.status_code == 422
+        assert_bounded(response)
 
     confirmation = api_client.post(
         f"{BASE}/projects/{project_id}/judgment-confirmations", json=request
@@ -795,6 +867,7 @@ def test_company_research_publication_http_errors_are_bounded_and_identity_bound
     )
     assert conflicting_confirmation.status_code == 409
     assert conflicting_confirmation.json()["error"]["code"] == "conflict"
+    assert_bounded(conflicting_confirmation)
 
     stale_preview = api_client.post(
         f"{BASE}/projects/{project_id}/publication-preview",
@@ -804,6 +877,7 @@ def test_company_research_publication_http_errors_are_bounded_and_identity_bound
         },
     )
     assert stale_preview.status_code == 409
+    assert_bounded(stale_preview)
 
     preview = api_client.post(
         f"{BASE}/projects/{project_id}/publication-preview",
@@ -824,6 +898,7 @@ def test_company_research_publication_http_errors_are_bounded_and_identity_bound
         },
     )
     assert missing_key.status_code == 422
+    assert_bounded(missing_key)
 
     mismatch = api_client.post(
         f"{BASE}/projects/{project_id}/publish",
@@ -836,6 +911,7 @@ def test_company_research_publication_http_errors_are_bounded_and_identity_bound
     )
     assert mismatch.status_code == 422
     assert mismatch.json()["error"]["code"] == "validation_failed"
+    assert_bounded(mismatch)
 
     published = api_client.post(
         f"{BASE}/projects/{project_id}/publish",
@@ -873,6 +949,7 @@ def test_company_research_publication_http_errors_are_bounded_and_identity_bound
     )
     assert reused_key.status_code == 409
     assert reused_key.json()["error"]["code"] == "conflict"
+    assert_bounded(reused_key)
 
     foreign_project_id = "00000000-0000-4000-8000-000000000001"
     for suffix in ("", "/export"):
@@ -881,11 +958,13 @@ def test_company_research_publication_http_errors_are_bounded_and_identity_bound
         )
         assert foreign.status_code == 404
         assert foreign.json()["error"]["code"] == "not_found"
+        assert_bounded(foreign)
 
     unknown = api_client.get(
         f"{BASE}/projects/{project_id}/revisions/00000000-0000-4000-8000-000000000099"
     )
     assert unknown.status_code == 404
+    assert_bounded(unknown)
 
     manifest = session.get(UnderwritingRevisionManifest, UUID(frozen["manifest_id"]))
     assert manifest is not None
@@ -899,8 +978,7 @@ def test_company_research_publication_http_errors_are_bounded_and_identity_bound
     assert corrupted.status_code == 422
     error = corrupted.json()["error"]
     assert error["code"] == "validation_failed"
-    assert "provider" not in error["message"].lower()
-    assert "internal" not in error["message"].lower()
+    assert_bounded(corrupted)
 
 
 def test_company_research_publication_reads_never_take_transaction_control(
@@ -994,6 +1072,8 @@ def test_company_research_publication_response_contract_is_closed_and_ordered(
         },
     )
     assert confirmation.status_code == 200, confirmation.text
+    confirmation_body = confirmation.json()
+    CompanyResearchJudgmentConfirmationResponse.model_validate(confirmation_body)
     preview = api_client.post(
         f"{BASE}/projects/{project_id}/publication-preview",
         json={
@@ -1020,6 +1100,65 @@ def test_company_research_publication_response_contract_is_closed_and_ordered(
     ):
         with pytest.raises(PydanticValidationError):
             CompanyResearchPublicationPreviewResponse.model_validate(invalid)
+
+    for invalid in (
+        {**confirmation_body, "unexpected": True},
+        {
+            **confirmation_body,
+            "confirmed_memo": {
+                **confirmation_body["confirmed_memo"],
+                "content_hash": "A" * 64,
+            },
+        },
+        {
+            **confirmation_body,
+            "preparation": {
+                **confirmation_body["preparation"],
+                "status": "completed",
+            },
+        },
+    ):
+        with pytest.raises(PydanticValidationError):
+            CompanyResearchJudgmentConfirmationResponse.model_validate(invalid)
+
+    published = api_client.post(
+        f"{BASE}/projects/{project_id}/publish",
+        headers={"Idempotency-Key": "closed-response-contract"},
+        json={
+            "schema_version": "underwriting.v1",
+            "expected_lock_version": confirmation_body["draft"]["lock_version"],
+            "expected_manifest_hash": candidate["manifest_hash"],
+        },
+    )
+    assert published.status_code == 201, published.text
+    frozen = published.json()
+    CompanyResearchFrozenRevisionResponse.model_validate(frozen)
+    exported = api_client.get(
+        f"{BASE}/projects/{project_id}/revisions/{frozen['id']}/export"
+    )
+    assert exported.status_code == 200, exported.text
+    export_body = exported.json()
+    CompanyResearchMarkdownExportResponse.model_validate(export_body)
+
+    foreign_security = deepcopy(frozen)
+    foreign_security["securities"][0]["company_id"] = str(ARTIFACT_ID)
+    for invalid in (
+        {**frozen, "unexpected": True},
+        {**frozen, "manifest_hash": "A" * 64},
+        {**frozen, "preparation_status": "ready_to_freeze"},
+        foreign_security,
+    ):
+        with pytest.raises(PydanticValidationError):
+            CompanyResearchFrozenRevisionResponse.model_validate(invalid)
+
+    for invalid in (
+        {**export_body, "unexpected": True},
+        {**export_body, "content_hash": "A" * 64},
+        {**export_body, "media_type": "text/html"},
+        {**export_body, "filename": "unsafe.md"},
+    ):
+        with pytest.raises(PydanticValidationError):
+            CompanyResearchMarkdownExportResponse.model_validate(invalid)
 
 
 def _rewrite_head_decision_as_malformed(session, head_id: UUID) -> None:
@@ -1659,6 +1798,67 @@ def test_failed_preparation_requires_closed_retry_timing(
                 "next_attempt_at": next_attempt_at,
             },
         )
+
+
+def test_company_research_public_preparation_lifecycle_is_closed() -> None:
+    project_base = {
+        "id": ARTIFACT_ID,
+        "project_id": PROJECT_ID,
+        "request_hash": HASH,
+        "strategy_version": "alphabet-five-year-v1",
+        "attempt": 1,
+        "next_attempt_at": None,
+        "last_error_code": None,
+    }
+    workspace_base = {"id": ARTIFACT_ID, "error": None}
+
+    for status, current_step, progress in (
+        ("awaiting_evidence_review", "research_gaps", 25),
+        ("awaiting_judgment_review", "judgment_context", 85),
+        ("ready_to_freeze", "memo", 95),
+        ("completed", None, 100),
+    ):
+        CompanyResearchPreparationResponse.model_validate(
+            {
+                **project_base,
+                "status": status,
+                "current_step": current_step,
+                "progress": progress,
+            }
+        )
+        CompanyResearchWorkspacePreparationResponse.model_validate(
+            {
+                **workspace_base,
+                "status": status,
+                "current_step": current_step,
+                "progress": progress,
+            }
+        )
+
+    for status, current_step, progress in (
+        ("ready_to_freeze", "judgment_context", 85),
+        ("ready_to_freeze", "memo", 85),
+        ("completed", "memo", 95),
+        ("completed", None, 95),
+    ):
+        with pytest.raises(PydanticValidationError):
+            CompanyResearchPreparationResponse.model_validate(
+                {
+                    **project_base,
+                    "status": status,
+                    "current_step": current_step,
+                    "progress": progress,
+                }
+            )
+        with pytest.raises(PydanticValidationError):
+            CompanyResearchWorkspacePreparationResponse.model_validate(
+                {
+                    **workspace_base,
+                    "status": status,
+                    "current_step": current_step,
+                    "progress": progress,
+                }
+            )
 
 
 def test_company_research_routes_are_closed_and_do_not_fall_through_to_legacy_routes(

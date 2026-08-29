@@ -65,6 +65,7 @@ from app.underwriting.services.company_research_publication import (
     CompanyResearchPublicationService,
 )
 from app.underwriting.services.company_research_workbench import (
+    CompanyResearchWorkspace,
     CompanyResearchWorkbench,
     WorkbenchArtifact,
 )
@@ -831,6 +832,46 @@ def _require_company_research_revision(
         raise NotFoundError("company research revision not found")
 
 
+def _authenticated_workspace(
+    db: Session, *, project_id: UUID
+) -> CompanyResearchWorkspace:
+    value = CompanyResearchWorkbench(db, now=_now).workspace(
+        project_id=project_id,
+        allow_current_heads_after_revision=True,
+    )
+    if value.selected_revision is None or value.preparation.status != "completed":
+        return value
+    frozen = CompanyResearchPublicationService(db, now=_now).revision(
+        project_id, value.selected_revision
+    )
+    current_descriptors = tuple(
+        (item.kind, item.id, item.version, item.input_hash, item.content_hash)
+        for item in value.artifacts
+    )
+    frozen_descriptors = tuple(
+        (item.kind, item.id, item.version, item.input_hash, item.content_hash)
+        for item in frozen.artifacts
+    )
+    if (
+        value.selected_revision != frozen.id
+        or current_descriptors != frozen_descriptors
+        or (
+            value.company.id,
+            value.company.external_key,
+            value.company.canonical_name,
+        )
+        != (
+            frozen.company.object_id,
+            frozen.company.external_key,
+            frozen.company.canonical_name,
+        )
+    ):
+        raise ValidationError(
+            "company research workspace differs from its selected frozen revision"
+        )
+    return value
+
+
 @router.post(
     "/preview",
     response_model=CompanyResearchPreviewResponse,
@@ -922,10 +963,7 @@ def get_company_research_workspace(
 ) -> CompanyResearchWorkspaceResponse:
     return _read(
         lambda: _workspace_response(
-            CompanyResearchWorkbench(db, now=_now).workspace(
-                project_id=project_id,
-                allow_current_heads_after_revision=True,
-            ),
+            _authenticated_workspace(db, project_id=project_id),
             expected_project_id=project_id,
         )
     )
@@ -969,12 +1007,14 @@ def confirm_company_research_judgment(
 ) -> CompanyResearchJudgmentConfirmationResponse:
     value = commit_write(
         db,
-        lambda: CompanyResearchPublicationService(db, now=_now).confirm_judgment(
-            project_id=project_id,
-            expected_lock_version=payload.expected_lock_version,
-            expected_memo_id=payload.expected_memo_id,
-            expected_memo_content_hash=payload.expected_memo_content_hash,
-            markdown=payload.markdown,
+        lambda: _read(
+            lambda: CompanyResearchPublicationService(db, now=_now).confirm_judgment(
+                project_id=project_id,
+                expected_lock_version=payload.expected_lock_version,
+                expected_memo_id=payload.expected_memo_id,
+                expected_memo_content_hash=payload.expected_memo_content_hash,
+                markdown=payload.markdown,
+            )
         ),
     )
     return _judgment_confirmation_response(value)
@@ -1016,11 +1056,13 @@ def publish_company_research(
 ) -> CompanyResearchFrozenRevisionResponse:
     value = commit_write(
         db,
-        lambda: CompanyResearchPublicationService(db, now=_now).publish(
-            project_id=project_id,
-            expected_lock_version=payload.expected_lock_version,
-            expected_manifest_hash=payload.expected_manifest_hash,
-            idempotency_key=idempotency_key,
+        lambda: _read(
+            lambda: CompanyResearchPublicationService(db, now=_now).publish(
+                project_id=project_id,
+                expected_lock_version=payload.expected_lock_version,
+                expected_manifest_hash=payload.expected_manifest_hash,
+                idempotency_key=idempotency_key,
+            )
         ),
     )
     return _frozen_revision_response(value)

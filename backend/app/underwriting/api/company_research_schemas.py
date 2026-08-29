@@ -112,10 +112,22 @@ class CompanyResearchPreparationResponse(UnderwritingModel):
             "preparing_sources": "evidence_index",
             "awaiting_evidence_review": "research_gaps",
             "awaiting_judgment_review": "judgment_context",
-            "ready_to_freeze": "memo",
         }
         if self.status in pairs and self.current_step != pairs[self.status]:
             raise ValueError("preparation status and current_step are inconsistent")
+        terminal = {
+            "ready_to_freeze": ("memo", 95),
+            "completed": (None, 100),
+        }
+        if (
+            self.status in terminal
+            and (
+                self.current_step,
+                self.progress,
+            )
+            != terminal[self.status]
+        ):
+            raise ValueError("preparation terminal lifecycle is inconsistent")
         return self
 
 
@@ -949,6 +961,19 @@ class CompanyResearchWorkspacePreparationResponse(UnderwritingModel):
             and self.current_step != "judgment_context"
         ):
             raise ValueError("awaiting_judgment_review must expose judgment_context")
+        terminal = {
+            "ready_to_freeze": ("memo", 95),
+            "completed": (None, 100),
+        }
+        if (
+            self.status in terminal
+            and (
+                self.current_step,
+                self.progress,
+            )
+            != terminal[self.status]
+        ):
+            raise ValueError("preparation terminal lifecycle is inconsistent")
         if self.status in {"blocked", "recoverable_failure"} and self.error is None:
             raise ValueError("failed preparation requires typed error semantics")
         if (
