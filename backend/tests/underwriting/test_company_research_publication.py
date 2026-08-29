@@ -3,11 +3,13 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from decimal import Decimal
+from threading import Barrier, BrokenBarrierError
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import bindparam, create_engine, func, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from app.models.ledger import Base, ConflictError, ValidationError
@@ -22,9 +24,14 @@ from app.underwriting.persistence.company_research_models import (
     CompanyResearchPreparation,
 )
 from app.underwriting.persistence.company_research_repository import (
+    CompanyResearchIntegrityError,
     CompanyResearchRepository,
 )
-from app.underwriting.persistence.product_models import UnderwritingWorkspaceDraft
+from app.underwriting.persistence.product_models import (
+    UnderwritingMarketCaptureEnvelope,
+    UnderwritingPriceSnapshot,
+    UnderwritingWorkspaceDraft,
+)
 from app.underwriting.services.company_research_preparation import (
     CompanyResearchPreparationWorker,
 )
@@ -44,7 +51,9 @@ from tests.underwriting.test_company_research_persistence import (
 from tests.underwriting.test_company_research_workbench import (
     NOW,
     _durably_rewrite_payload,
+    _model_workspace,
     _prepared,
+    _rewrite_as_legacy_model_gap_successor,
 )
 
 
@@ -64,19 +73,13 @@ def _awaiting_judgment_confirmation(session):
     workbench = CompanyResearchWorkbench(session, now=lambda: NOW)
     workspace = workbench.workspace(project_id=initialized.project.id)
     evidence = next(
-        item.artifact
-        for item in workspace.modules
-        if item.key == "evidence_and_gaps"
+        item.artifact for item in workspace.modules if item.key == "evidence_and_gaps"
     )
     assert evidence is not None
 
     current = evidence
     for fact in evidence.payload["facts"]:
-        decision = (
-            "rejected"
-            if fact["fact_key"] == REJECTED_FACT_KEY
-            else "confirmed"
-        )
+        decision = "rejected" if fact["fact_key"] == REJECTED_FACT_KEY else "confirmed"
         current = workbench.review_evidence(
             project_id=initialized.project.id,
             evidence_artifact_id=current.id,
@@ -91,9 +94,7 @@ def _awaiting_judgment_confirmation(session):
     assert worker.run_claim(claim) == "awaiting_judgment_review"
 
     repository = workbench._company
-    preparation = repository.preparation_for_project(
-        initialized.project.id, fresh=True
-    )
+    preparation = repository.preparation_for_project(initialized.project.id, fresh=True)
     assert preparation is not None and preparation.job_id is not None
     job = session.get(Job, preparation.job_id)
     draft = session.scalar(
@@ -218,14 +219,14 @@ def _rewrite_one_event_type(
     disable_trigger = text(
         "ALTER TABLE uw_company_research_events DISABLE TRIGGER USER"
     )
-    enable_trigger = text(
-        "ALTER TABLE uw_company_research_events ENABLE TRIGGER USER"
-    )
+    enable_trigger = text("ALTER TABLE uw_company_research_events ENABLE TRIGGER USER")
     if connection.dialect.name == "postgresql":
         connection.execute(disable_trigger)
     try:
         for row in rows:
-            event_type = replacement_event_type if row.id == target.id else row.event_type
+            event_type = (
+                replacement_event_type if row.id == target.id else row.event_type
+            )
             content_hash = CompanyResearchRepository.event_content_hash_v2(
                 preparation_id=row.preparation_id,
                 sequence=row.sequence,
@@ -234,15 +235,18 @@ def _rewrite_one_event_type(
                 payload=row.payload,
                 created_at=row.created_at,
             )
-            assert connection.execute(
-                statement,
-                {
-                    "previous_hash": previous_hash,
-                    "event_type": event_type,
-                    "content_hash": content_hash,
-                    "event_id": row.id,
-                },
-            ).rowcount == 1
+            assert (
+                connection.execute(
+                    statement,
+                    {
+                        "previous_hash": previous_hash,
+                        "event_type": event_type,
+                        "content_hash": content_hash,
+                        "event_id": row.id,
+                    },
+                ).rowcount
+                == 1
+            )
             previous_hash = content_hash
     finally:
         if connection.dialect.name == "postgresql":
@@ -286,9 +290,7 @@ def _make_event_time_nonmonotonic(session, preparation_id) -> None:
     disable_trigger = text(
         "ALTER TABLE uw_company_research_events DISABLE TRIGGER USER"
     )
-    enable_trigger = text(
-        "ALTER TABLE uw_company_research_events ENABLE TRIGGER USER"
-    )
+    enable_trigger = text("ALTER TABLE uw_company_research_events ENABLE TRIGGER USER")
     if connection.dialect.name == "postgresql":
         connection.execute(disable_trigger)
     try:
@@ -302,15 +304,18 @@ def _make_event_time_nonmonotonic(session, preparation_id) -> None:
                 payload=row.payload,
                 created_at=created_at,
             )
-            assert connection.execute(
-                statement,
-                {
-                    "previous_hash": previous_hash,
-                    "created_at": created_at,
-                    "content_hash": content_hash,
-                    "event_id": row.id,
-                },
-            ).rowcount == 1
+            assert (
+                connection.execute(
+                    statement,
+                    {
+                        "previous_hash": previous_hash,
+                        "created_at": created_at,
+                        "content_hash": content_hash,
+                        "event_id": row.id,
+                    },
+                ).rowcount
+                == 1
+            )
             previous_hash = content_hash
     finally:
         if connection.dialect.name == "postgresql":
@@ -395,7 +400,9 @@ def test_confirm_judgment_atomically_advances_the_publication_boundary(session) 
         "markdown": "Investment conclusion.\n\nSecond paragraph.",
     }
     assert confirmed.payload == expected_payload
-    assert CompanyResearchRepository._persisted_utc(confirmed.created_at) == CONFIRMED_AT
+    assert (
+        CompanyResearchRepository._persisted_utc(confirmed.created_at) == CONFIRMED_AT
+    )
 
     current_preparation = repository.preparation_for_project(project_id, fresh=True)
     current_draft = session.scalar(
@@ -418,9 +425,10 @@ def test_confirm_judgment_atomically_advances_the_publication_boundary(session) 
     assert current_draft.content == prior_draft_content
     assert current_draft.base_revision_id == prior_base_revision_id
     assert current_job is not None and _job_projection(current_job) == prior_job
-    assert session.scalar(
-        select(func.count()).select_from(Job).where(Job.id == job.id)
-    ) == prior_attempt_count
+    assert (
+        session.scalar(select(func.count()).select_from(Job).where(Job.id == job.id))
+        == prior_attempt_count
+    )
 
     assert {
         kind: (row.id, row.content_hash, row.version)
@@ -452,23 +460,31 @@ def test_confirm_judgment_atomically_advances_the_publication_boundary(session) 
         "reviewer": REVIEWER,
     }
     assert CompanyResearchRepository._persisted_utc(event.created_at) == CONFIRMED_AT
-    assert CompanyResearchRepository._persisted_utc(confirmed.created_at) == CONFIRMED_AT
-    assert session.scalar(
-        select(func.count())
-        .select_from(CompanyResearchArtifactVersion)
-        .where(
-            CompanyResearchArtifactVersion.project_id == project_id,
-            CompanyResearchArtifactVersion.kind == "memo",
+    assert (
+        CompanyResearchRepository._persisted_utc(confirmed.created_at) == CONFIRMED_AT
+    )
+    assert (
+        session.scalar(
+            select(func.count())
+            .select_from(CompanyResearchArtifactVersion)
+            .where(
+                CompanyResearchArtifactVersion.project_id == project_id,
+                CompanyResearchArtifactVersion.kind == "memo",
+            )
         )
-    ) == 2
-    assert session.scalar(
-        select(func.count())
-        .select_from(CompanyResearchEvent)
-        .where(
-            CompanyResearchEvent.preparation_id == preparation.id,
-            CompanyResearchEvent.event_type == "judgment_confirmed",
+        == 2
+    )
+    assert (
+        session.scalar(
+            select(func.count())
+            .select_from(CompanyResearchEvent)
+            .where(
+                CompanyResearchEvent.preparation_id == preparation.id,
+                CompanyResearchEvent.event_type == "judgment_confirmed",
+            )
         )
-    ) == 1
+        == 1
+    )
 
 
 @pytest.mark.parametrize("markdown", ("", " \r\n\t ", "x" * 100001))
@@ -489,7 +505,40 @@ def test_confirmation_rejects_invalid_normalized_markdown_before_reading_state(
         )
 
     session.commit()
-    assert session.scalar(select(func.count()).select_from(CompanyResearchEvent)) == before
+    assert (
+        session.scalar(select(func.count()).select_from(CompanyResearchEvent)) == before
+    )
+
+
+def test_confirmation_does_not_reclassify_a_non_lock_database_error(
+    session, monkeypatch
+) -> None:
+    injected = OperationalError(
+        "UPDATE uw_workspace_drafts",
+        {},
+        RuntimeError("disk I/O error"),
+    )
+
+    def fail_reservation(*_args, **_kwargs):
+        raise injected
+
+    monkeypatch.setattr(
+        CompanyResearchRepository,
+        "_reserve_sqlite_writer_before_ownership_read",
+        fail_reservation,
+    )
+
+    with pytest.raises(OperationalError) as captured:
+        CompanyResearchPublicationService(
+            session, now=lambda: CONFIRMED_AT
+        ).confirm_judgment(
+            project_id=uuid4(),
+            expected_lock_version=1,
+            expected_memo_id=uuid4(),
+            expected_memo_content_hash="a" * 64,
+            markdown="Reviewed conclusion.",
+        )
+    assert captured.value is injected
 
 
 def test_confirmation_exact_replay_returns_the_existing_result_once(session) -> None:
@@ -511,13 +560,159 @@ def test_confirmation_exact_replay_returns_the_existing_result_once(session) -> 
     session.commit()
 
     assert second == first
-    assert _durable_publication_snapshot(
+    assert (
+        _durable_publication_snapshot(
+            session,
+            project_id=initialized.project.id,
+            preparation_id=preparation.id,
+            job_id=job.id,
+        )
+        == after_first
+    )
+    assert len(repository.artifact_chain(first.confirmed_memo_id)) == 2
+
+
+def test_confirmation_freshly_authenticates_cached_market_rows(session) -> None:
+    initialized, repository, preparation, _job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    judgment = repository.current_artifact(initialized.project.id, "judgment_context")
+    assert judgment is not None
+    binding = next(
+        value
+        for value in judgment.payload["_lineage"]["market_snapshot_bindings"]
+        if value["snapshot_kind"] == "price"
+    )
+    price = session.get(UnderwritingPriceSnapshot, UUID(binding["snapshot_id"]))
+    capture = session.get(
+        UnderwritingMarketCaptureEnvelope,
+        UUID(binding["capture_envelope_id"]),
+    )
+    assert price is not None and capture is not None
+    original_price = price.price
+    original_lock_version = draft.lock_version
+    _tamper_row(
+        session,
+        UnderwritingPriceSnapshot,
+        price.id,
+        expire=False,
+        price=original_price + Decimal("1"),
+    )
+    assert price.price == original_price
+
+    with pytest.raises(CompanyResearchIntegrityError) as captured:
+        CompanyResearchPublicationService(
+            session, now=lambda: CONFIRMED_AT
+        ).confirm_judgment(
+            project_id=initialized.project.id,
+            **_confirmation_request(draft, machine_memo),
+        )
+    assert type(captured.value) is CompanyResearchIntegrityError
+    session.commit()
+
+    session.expire_all()
+    assert repository.current_artifact(initialized.project.id, "memo") == machine_memo
+    current_preparation = repository.preparation_for_project(
+        initialized.project.id, fresh=True
+    )
+    current_draft = session.scalar(
+        select(UnderwritingWorkspaceDraft)
+        .where(UnderwritingWorkspaceDraft.project_id == initialized.project.id)
+        .execution_options(populate_existing=True)
+    )
+    assert current_preparation is not None
+    assert current_preparation.status == "awaiting_judgment_review"
+    assert current_draft is not None
+    assert current_draft.lock_version == original_lock_version
+    assert not any(
+        event.event_type == "judgment_confirmed"
+        for event in repository.events(preparation.id)
+    )
+
+
+def test_confirmation_preserves_a_true_legacy_model_gap_successor(session) -> None:
+    initialized, _workbench, repository = _model_workspace(session)
+    preparation = repository.preparation_for_project(initialized.project.id)
+    assert preparation is not None and preparation.job_id is not None
+    job = session.get(Job, preparation.job_id)
+    assert job is not None and job.started_at is not None
+    repository.append_event(
+        preparation_id=preparation.id,
+        event_type="model_stage_claimed",
+        payload={"stage": "model_bundle", "attempt": job.attempt},
+        created_at=CompanyResearchRepository._persisted_utc(job.started_at),
+    )
+    source_gaps, legacy_gaps = _rewrite_as_legacy_model_gap_successor(
+        session, initialized, repository
+    )
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(initialized.project.id)
+    machine_memo = repository.current_artifact(initialized.project.id, "memo")
+    assert draft is not None and machine_memo is not None
+    assert "research_gaps" not in machine_memo.payload
+
+    service = CompanyResearchPublicationService(session, now=lambda: CONFIRMED_AT)
+    request = _confirmation_request(draft, machine_memo)
+    result = service.confirm_judgment(project_id=initialized.project.id, **request)
+    session.commit()
+    replay = service.confirm_judgment(project_id=initialized.project.id, **request)
+
+    confirmed = repository.current_artifact(initialized.project.id, "memo")
+    current_gaps = repository.current_artifact(initialized.project.id, "research_gaps")
+    assert confirmed is not None and confirmed.id == result.confirmed_memo_id
+    assert "research_gaps" not in confirmed.payload
+    assert current_gaps is not None
+    assert (current_gaps.id, current_gaps.supersedes_id) == (
+        legacy_gaps.id,
+        source_gaps.id,
+    )
+    decoded = CompanyResearchArtifactCodec.decode(
+        "memo",
+        {key: value for key, value in confirmed.payload.items() if key != "_lineage"},
+    )
+    assert decoded.candidate_status == "human_confirmed"
+    assert decoded.reviewer == REVIEWER
+    assert replay == result
+
+
+def test_confirmation_rejects_a_machine_memo_outside_the_exact_model_bundle_time(
+    session,
+) -> None:
+    initialized, _repository, preparation, job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        machine_memo.id,
+        created_at=machine_memo.created_at + timedelta(seconds=1),
+    )
+    session.commit()
+    before = _durable_publication_snapshot(
         session,
         project_id=initialized.project.id,
         preparation_id=preparation.id,
         job_id=job.id,
-    ) == after_first
-    assert len(repository.artifact_chain(first.confirmed_memo_id)) == 2
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError) as captured:
+        CompanyResearchPublicationService(
+            session, now=lambda: CONFIRMED_AT
+        ).confirm_judgment(
+            project_id=initialized.project.id,
+            **_confirmation_request(draft, machine_memo),
+        )
+    assert type(captured.value) is CompanyResearchIntegrityError
+    session.commit()
+
+    assert (
+        _durable_publication_snapshot(
+            session,
+            project_id=initialized.project.id,
+            preparation_id=preparation.id,
+            job_id=job.id,
+        )
+        == before
+    )
 
 
 def test_confirmation_replay_reauthenticates_the_model_claim_audit_prefix(
@@ -544,16 +739,104 @@ def test_confirmation_replay_reauthenticates_the_model_claim_audit_prefix(
         job_id=job.id,
     )
 
-    with pytest.raises((ConflictError, ValidationError)):
+    with pytest.raises(CompanyResearchIntegrityError) as captured:
         service.confirm_judgment(project_id=initialized.project.id, **request)
+    assert type(captured.value) is CompanyResearchIntegrityError
     session.commit()
 
-    assert _durable_publication_snapshot(
+    assert (
+        _durable_publication_snapshot(
+            session,
+            project_id=initialized.project.id,
+            preparation_id=preparation.id,
+            job_id=job.id,
+        )
+        == before
+    )
+
+
+def test_confirmation_replay_reports_a_missing_terminal_event_as_integrity_error(
+    session,
+) -> None:
+    initialized, _repository, preparation, job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    request = _confirmation_request(draft, machine_memo)
+    service = CompanyResearchPublicationService(session, now=lambda: CONFIRMED_AT)
+    service.confirm_judgment(project_id=initialized.project.id, **request)
+    session.commit()
+    _rewrite_one_event_type(
+        session,
+        preparation.id,
+        target_event_type="judgment_confirmed",
+        replacement_event_type="confirmation_event_removed",
+    )
+    session.commit()
+    before = _durable_publication_snapshot(
         session,
         project_id=initialized.project.id,
         preparation_id=preparation.id,
         job_id=job.id,
-    ) == before
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError) as captured:
+        service.confirm_judgment(project_id=initialized.project.id, **request)
+    assert type(captured.value) is CompanyResearchIntegrityError
+    session.commit()
+
+    assert (
+        _durable_publication_snapshot(
+            session,
+            project_id=initialized.project.id,
+            preparation_id=preparation.id,
+            job_id=job.id,
+        )
+        == before
+    )
+
+
+def test_confirmation_replay_rejects_an_extra_memo_successor_as_integrity_error(
+    session,
+) -> None:
+    initialized, repository, preparation, job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    request = _confirmation_request(draft, machine_memo)
+    service = CompanyResearchPublicationService(session, now=lambda: CONFIRMED_AT)
+    result = service.confirm_judgment(project_id=initialized.project.id, **request)
+    confirmed = repository.current_artifact(initialized.project.id, "memo")
+    assert confirmed is not None and confirmed.id == result.confirmed_memo_id
+    repository.append_artifact(
+        project_id=initialized.project.id,
+        kind="memo",
+        input_hash=confirmed.input_hash,
+        payload=confirmed.payload,
+        source_refs=confirmed.source_refs,
+        expected_parent_id=confirmed.id,
+        created_at=CONFIRMED_AT + timedelta(seconds=1),
+    )
+    session.commit()
+    before = _durable_publication_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+        job_id=job.id,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError) as captured:
+        service.confirm_judgment(project_id=initialized.project.id, **request)
+    assert type(captured.value) is CompanyResearchIntegrityError
+    session.commit()
+
+    assert (
+        _durable_publication_snapshot(
+            session,
+            project_id=initialized.project.id,
+            preparation_id=preparation.id,
+            job_id=job.id,
+        )
+        == before
+    )
 
 
 @pytest.mark.parametrize(
@@ -589,12 +872,15 @@ def test_confirmation_replay_with_different_content_or_expectation_conflicts_wit
         )
     session.commit()
 
-    assert _durable_publication_snapshot(
-        session,
-        project_id=initialized.project.id,
-        preparation_id=preparation.id,
-        job_id=job.id,
-    ) == before
+    assert (
+        _durable_publication_snapshot(
+            session,
+            project_id=initialized.project.id,
+            preparation_id=preparation.id,
+            job_id=job.id,
+        )
+        == before
+    )
 
 
 class _InjectedConfirmationFailure(RuntimeError):
@@ -636,12 +922,58 @@ def test_confirmation_failure_at_each_mutation_stage_rolls_back_the_outer_savepo
         )
     session.commit()
 
-    assert _durable_publication_snapshot(
+    assert (
+        _durable_publication_snapshot(
+            session,
+            project_id=initialized.project.id,
+            preparation_id=preparation.id,
+            job_id=job.id,
+        )
+        == before
+    )
+
+
+def test_confirmation_failure_after_event_insert_rolls_back_every_mutation(
+    session, monkeypatch
+) -> None:
+    initialized, _repository, preparation, job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    before = _durable_publication_snapshot(
         session,
         project_id=initialized.project.id,
         preparation_id=preparation.id,
         job_id=job.id,
-    ) == before
+    )
+    original = CompanyResearchRepository.append_judgment_confirmation_event
+
+    def append_then_fail(repository, *args, **kwargs):
+        original(repository, *args, **kwargs)
+        raise _InjectedConfirmationFailure("after_event_insert")
+
+    monkeypatch.setattr(
+        CompanyResearchRepository,
+        "append_judgment_confirmation_event",
+        append_then_fail,
+    )
+    with pytest.raises(_InjectedConfirmationFailure, match="after_event_insert"):
+        CompanyResearchPublicationService(
+            session, now=lambda: CONFIRMED_AT
+        ).confirm_judgment(
+            project_id=initialized.project.id,
+            **_confirmation_request(draft, machine_memo),
+        )
+    session.commit()
+
+    assert (
+        _durable_publication_snapshot(
+            session,
+            project_id=initialized.project.id,
+            preparation_id=preparation.id,
+            job_id=job.id,
+        )
+        == before
+    )
 
 
 def _tamper_stale_draft(
@@ -754,12 +1086,40 @@ def _tamper_malformed_memo(
     _durably_rewrite_payload(session, memo, payload)
 
 
+def _tamper_multiple_memo_heads(
+    session, initialized, _repository, _preparation, _job, _draft, memo, _request
+) -> None:
+    payload = deepcopy(memo.payload)
+    source_refs = deepcopy(memo.source_refs)
+    second_root = CompanyResearchArtifactVersion(
+        project_id=initialized.project.id,
+        kind="memo",
+        version=2,
+        supersedes_id=None,
+        parent_content_hash=None,
+        input_hash=memo.input_hash,
+        payload=payload,
+        source_refs=source_refs,
+        content_hash=CompanyResearchRepository.artifact_content_hash(
+            project_id=initialized.project.id,
+            kind="memo",
+            version=2,
+            supersedes_id=None,
+            parent_content_hash=None,
+            input_hash=memo.input_hash,
+            payload=payload,
+            source_refs=source_refs,
+        ),
+        created_at=memo.created_at,
+    )
+    session.add(second_root)
+    session.flush([second_root])
+
+
 def _tamper_nonmonotonic_artifact_time(
     session, initialized, repository, _preparation, _job, _draft, memo, _request
 ) -> None:
-    judgment = repository.current_artifact(
-        initialized.project.id, "judgment_context"
-    )
+    judgment = repository.current_artifact(initialized.project.id, "judgment_context")
     assert judgment is not None
     _tamper_row(
         session,
@@ -782,27 +1142,119 @@ def _tamper_nonmonotonic_event_time(
     _make_event_time_nonmonotonic(session, preparation.id)
 
 
+def test_confirmation_reports_foreign_model_lineage_as_exact_integrity_error(
+    session,
+) -> None:
+    initialized, repository, _preparation, _job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    request = _confirmation_request(draft, machine_memo)
+    _tamper_foreign_model_parent(
+        session,
+        initialized,
+        repository,
+        _preparation,
+        _job,
+        draft,
+        machine_memo,
+        request,
+    )
+    session.commit()
+
+    with pytest.raises(CompanyResearchIntegrityError) as captured:
+        CompanyResearchPublicationService(
+            session, now=lambda: CONFIRMED_AT
+        ).confirm_judgment(project_id=initialized.project.id, **request)
+    assert type(captured.value) is CompanyResearchIntegrityError
+
+
+def test_confirmation_reports_a_stale_user_lock_as_exact_conflict(session) -> None:
+    initialized, repository, preparation, job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    request = _confirmation_request(draft, machine_memo)
+    _tamper_stale_draft(
+        session,
+        initialized,
+        repository,
+        preparation,
+        job,
+        draft,
+        machine_memo,
+        request,
+    )
+    session.commit()
+
+    with pytest.raises(ConflictError) as captured:
+        CompanyResearchPublicationService(
+            session, now=lambda: CONFIRMED_AT
+        ).confirm_judgment(project_id=initialized.project.id, **request)
+    assert type(captured.value) is ConflictError
+
+
+def test_confirmation_reports_a_malformed_durable_memo_as_exact_integrity_error(
+    session,
+) -> None:
+    initialized, repository, preparation, job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    request = _confirmation_request(draft, machine_memo)
+    _tamper_malformed_memo(
+        session,
+        initialized,
+        repository,
+        preparation,
+        job,
+        draft,
+        machine_memo,
+        request,
+    )
+    session.commit()
+
+    with pytest.raises(CompanyResearchIntegrityError) as captured:
+        CompanyResearchPublicationService(
+            session, now=lambda: CONFIRMED_AT
+        ).confirm_judgment(project_id=initialized.project.id, **request)
+    assert type(captured.value) is CompanyResearchIntegrityError
+
+
 @pytest.mark.parametrize(
-    "tamper",
+    ("tamper", "expected_error"),
     (
-        _tamper_stale_draft,
-        _tamper_wrong_memo_id,
-        _tamper_wrong_memo_hash,
-        _tamper_preparation_chronology,
-        _tamper_draft_chronology,
-        _tamper_substitute_reviewed_evidence,
-        _tamper_missing_evidence_review_event,
-        _tamper_governed_gap_reason,
-        _tamper_historical_basis,
-        _tamper_foreign_model_parent,
-        _tamper_malformed_memo,
-        _tamper_nonmonotonic_artifact_time,
-        _tamper_nonmonotonic_event_time,
+        (_tamper_stale_draft, ConflictError),
+        (_tamper_wrong_memo_id, ConflictError),
+        (_tamper_wrong_memo_hash, ConflictError),
+        (_tamper_preparation_chronology, CompanyResearchIntegrityError),
+        (_tamper_draft_chronology, CompanyResearchIntegrityError),
+        (_tamper_substitute_reviewed_evidence, CompanyResearchIntegrityError),
+        (_tamper_missing_evidence_review_event, CompanyResearchIntegrityError),
+        (_tamper_governed_gap_reason, CompanyResearchIntegrityError),
+        (_tamper_historical_basis, CompanyResearchIntegrityError),
+        (_tamper_foreign_model_parent, CompanyResearchIntegrityError),
+        (_tamper_malformed_memo, CompanyResearchIntegrityError),
+        (_tamper_multiple_memo_heads, CompanyResearchIntegrityError),
+        (_tamper_nonmonotonic_artifact_time, CompanyResearchIntegrityError),
+        (_tamper_nonmonotonic_event_time, CompanyResearchIntegrityError),
     ),
-    ids=lambda value: value.__name__.removeprefix("_tamper_"),
+    ids=(
+        "stale_draft",
+        "wrong_memo_id",
+        "wrong_memo_hash",
+        "preparation_chronology",
+        "draft_chronology",
+        "substitute_reviewed_evidence",
+        "missing_evidence_review_event",
+        "governed_gap_reason",
+        "historical_basis",
+        "foreign_model_parent",
+        "malformed_memo",
+        "multiple_memo_heads",
+        "nonmonotonic_artifact_time",
+        "nonmonotonic_event_time",
+    ),
 )
 def test_confirmation_tamper_and_stale_matrix_fails_closed_with_zero_writes(
-    session, tamper
+    session, tamper, expected_error
 ) -> None:
     initialized, repository, preparation, job, draft, machine_memo = (
         _awaiting_judgment_confirmation(session)
@@ -826,21 +1278,27 @@ def test_confirmation_tamper_and_stale_matrix_fails_closed_with_zero_writes(
         job_id=job.id,
     )
 
-    with pytest.raises((ConflictError, ValidationError)):
+    with pytest.raises(expected_error) as captured:
         CompanyResearchPublicationService(
             session, now=lambda: CONFIRMED_AT
         ).confirm_judgment(project_id=initialized.project.id, **request)
+    assert type(captured.value) is expected_error
     session.commit()
 
-    assert _durable_publication_snapshot(
-        session,
-        project_id=initialized.project.id,
-        preparation_id=preparation.id,
-        job_id=job.id,
-    ) == before
+    assert (
+        _durable_publication_snapshot(
+            session,
+            project_id=initialized.project.id,
+            preparation_id=preparation.id,
+            job_id=job.id,
+        )
+        == before
+    )
 
 
-def test_sqlite_two_session_confirmation_has_one_winner_and_exact_replay(tmp_path) -> None:
+def test_sqlite_two_session_confirmation_has_one_winner_and_exact_replay(
+    tmp_path,
+) -> None:
     database_path = tmp_path / "company-research-confirmation.sqlite3"
     engine = create_engine(
         f"sqlite:///{database_path}",
@@ -890,13 +1348,129 @@ def test_sqlite_two_session_confirmation_has_one_winner_and_exact_replay(tmp_pat
             )
             artifacts = snapshot["artifacts"]
             events = snapshot["events"]
-            assert sum(
-                dict(row)["kind"] == "memo" for row in artifacts  # type: ignore[arg-type]
-            ) == 2
-            assert sum(
-                dict(row)["event_type"] == "judgment_confirmed"  # type: ignore[arg-type]
-                for row in events
-            ) == 1
+            assert (
+                sum(
+                    dict(row)["kind"] == "memo"
+                    for row in artifacts  # type: ignore[arg-type]
+                )
+                == 2
+            )
+            assert (
+                sum(
+                    dict(row)["event_type"] == "judgment_confirmed"  # type: ignore[arg-type]
+                    for row in events
+                )
+                == 1
+            )
+        finally:
+            verify.close()
+    finally:
+        engine.dispose()
+
+
+def test_sqlite_top_level_savepoints_reserve_the_writer_before_authentication(
+    tmp_path, monkeypatch
+) -> None:
+    database_path = tmp_path / "company-research-savepoint-confirmation.sqlite3"
+    engine = create_engine(
+        f"sqlite:///{database_path}",
+        future=True,
+        connect_args={"check_same_thread": False, "timeout": 1},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    setup = sessions()
+    try:
+        initialized, _repository, preparation, job, draft, machine_memo = (
+            _awaiting_judgment_confirmation(setup)
+        )
+        project_id = initialized.project.id
+        preparation_id = preparation.id
+        job_id = job.id
+        expected_lock_version = draft.lock_version
+        request = _confirmation_request(draft, machine_memo)
+        setup.commit()
+    finally:
+        setup.close()
+
+    callers_ready = Barrier(2)
+    append_barrier = Barrier(2)
+    original_append = CompanyResearchRepository.append_judgment_confirmation_memo
+
+    def synchronized_append(self, *args, **kwargs):
+        try:
+            append_barrier.wait(timeout=2)
+        except BrokenBarrierError:
+            pass
+        return original_append(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        CompanyResearchRepository,
+        "append_judgment_confirmation_memo",
+        synchronized_append,
+    )
+
+    def confirm_once(markdown: str):
+        concurrent = sessions()
+        try:
+            caught = None
+            result = None
+            with concurrent.begin_nested():
+                assert (
+                    concurrent.scalar(
+                        select(UnderwritingWorkspaceDraft.id).where(
+                            UnderwritingWorkspaceDraft.project_id == project_id
+                        )
+                    )
+                    is not None
+                )
+                callers_ready.wait()
+                try:
+                    result = CompanyResearchPublicationService(
+                        concurrent, now=lambda: CONFIRMED_AT
+                    ).confirm_judgment(
+                        project_id=project_id,
+                        **{**request, "markdown": markdown},
+                    )
+                except Exception as exc:  # noqa: BLE001 - assert the public taxonomy
+                    caught = exc
+            concurrent.commit()
+            return result, caught
+        finally:
+            concurrent.close()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = tuple(
+                executor.map(confirm_once, ("First review.", "Second review."))
+            )
+        results = tuple(result for result, _caught in outcomes if result is not None)
+        errors = tuple(caught for _result, caught in outcomes if caught is not None)
+        assert len(results) == 1
+        assert len(errors) == 1
+        assert type(errors[0]) is ConflictError
+
+        verify = sessions()
+        try:
+            snapshot = _durable_publication_snapshot(
+                verify,
+                project_id=project_id,
+                preparation_id=preparation_id,
+                job_id=job_id,
+            )
+            assert dict(snapshot["draft"])["lock_version"] == (
+                expected_lock_version + 1
+            )
+            assert (
+                sum(dict(row)["kind"] == "memo" for row in snapshot["artifacts"]) == 2
+            )
+            assert (
+                sum(
+                    dict(row)["event_type"] == "judgment_confirmed"
+                    for row in snapshot["events"]
+                )
+                == 1
+            )
         finally:
             verify.close()
     finally:

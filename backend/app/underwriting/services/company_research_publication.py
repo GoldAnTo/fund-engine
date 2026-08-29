@@ -10,6 +10,7 @@ from typing import Literal
 from uuid import UUID
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
 
 from app.models.ledger import ConflictError, ValidationError
 from app.underwriting.domain.company_research import CompanyResearchMemoArtifact
@@ -157,7 +158,7 @@ class CompanyResearchPublicationService:
                 "company research machine memo payload is invalid"
             )
         lineage = machine_memo.payload.get("_lineage")
-        if not isinstance(lineage, dict) or "research_gaps" not in machine_memo.payload:
+        if not isinstance(lineage, dict):
             raise CompanyResearchIntegrityError(
                 "company research machine memo payload is incomplete"
             )
@@ -182,6 +183,8 @@ class CompanyResearchPublicationService:
             markdown=markdown,
         )
         payload = CompanyResearchArtifactCodec.encode("memo", confirmed)
+        if "research_gaps" not in machine_memo.payload:
+            payload.pop("research_gaps", None)
         payload["_lineage"] = deepcopy(lineage)
         expected = {
             **deepcopy(machine_memo.payload),
@@ -203,15 +206,16 @@ class CompanyResearchPublicationService:
         if (
             evidence_chain is None
             or gaps_chain is None
-            or len(gaps_chain) != 1
+            or len(gaps_chain) not in {1, 2}
             or gaps_chain[0].version != 1
             or gaps_chain[0].supersedes_id is not None
             or state.artifact_heads.get("evidence_index") != evidence_chain[-1]
-            or state.artifact_heads.get("research_gaps") != gaps_chain[0]
+            or state.artifact_heads.get("research_gaps") != gaps_chain[-1]
         ):
             raise CompanyResearchIntegrityError(
                 "company research governed evidence closure is invalid"
             )
+        source_gaps = gaps_chain[0]
         try:
             source_contract = authenticate_governed_reviewed_evidence(
                 provider_input=CompanyResearchProviderInput(
@@ -222,12 +226,12 @@ class CompanyResearchPublicationService:
                     strategy_version=state.preparation.strategy_version,
                 ),
                 evidence_chain=evidence_chain,
-                research_gaps=gaps_chain[0],
+                research_gaps=source_gaps,
             )
             reconcile_company_research_evidence_audit(
                 preparation=state.preparation,
                 evidence_chain=evidence_chain,
-                research_gaps=gaps_chain[0],
+                research_gaps=source_gaps,
                 events=state.events,
             )
         except ValidationError as exc:
@@ -376,9 +380,14 @@ class CompanyResearchPublicationService:
             raise CompanyResearchIntegrityError(
                 "company research judgment draft already names a frozen revision"
             )
-        workspace = CompanyResearchWorkbench(
-            self._session, now=self._now
-        ).workspace(project_id=state.project.id)
+        try:
+            workspace = CompanyResearchWorkbench(
+                self._session, now=self._now
+            ).workspace(project_id=state.project.id)
+        except ValidationError as exc:
+            raise CompanyResearchIntegrityError(
+                "company research publication model closure is invalid"
+            ) from exc
         if (
             workspace.project_id != state.project.id
             or workspace.preparation.id != state.preparation.id
@@ -402,15 +411,45 @@ class CompanyResearchPublicationService:
                 )
         return workspace
 
+    def _authenticate_fresh_market_inputs(
+        self, state: CompanyResearchPublicationState
+    ) -> None:
+        judgment = state.artifact_heads.get("judgment_context")
+        evidence = state.artifact_heads.get("evidence_index")
+        lineage = judgment.payload.get("_lineage") if judgment is not None else None
+        binding_payloads = (
+            lineage.get("market_snapshot_bindings")
+            if isinstance(lineage, dict)
+            else None
+        )
+        if evidence is None or not isinstance(binding_payloads, list):
+            raise CompanyResearchIntegrityError(
+                "company research publication market boundary is incomplete"
+            )
+        try:
+            bindings = tuple(
+                self._repository.market_binding_from_payload(value)
+                for value in binding_payloads
+            )
+            self._repository.validate_market_snapshot_bindings(
+                project_id=state.project.id,
+                bindings=bindings,
+                cutoff_at=self._repository.evidence_cutoff(evidence),
+                fresh=True,
+                lock=True,
+            )
+        except ValidationError as exc:
+            raise CompanyResearchIntegrityError(
+                "company research publication market boundary is invalid"
+            ) from exc
+
     def _authenticate_cross_artifact_chronology(
         self,
         state: CompanyResearchPublicationState,
         workspace: CompanyResearchWorkspace,
     ) -> None:
         by_id = {
-            row.id: row
-            for chain in state.artifact_chains.values()
-            for row in chain
+            row.id: row for chain in state.artifact_chains.values() for row in chain
         }
         for artifact in workspace.artifacts:
             if artifact.kind not in _REQUIRED_MODEL_KINDS | {"valuation_set"}:
@@ -511,6 +550,7 @@ class CompanyResearchPublicationService:
             state, source_contract=source_contract
         )
         workspace = self._authenticate_workspace_model(state)
+        self._authenticate_fresh_market_inputs(state)
         self._authenticate_cross_artifact_chronology(state, workspace)
         memo = state.artifact_heads.get("memo")
         if memo is None:
@@ -538,8 +578,7 @@ class CompanyResearchPublicationService:
     ) -> None:
         if (
             claim.event_type != "model_stage_claimed"
-            or claim.payload
-            != {"stage": "model_bundle", "attempt": state.job.attempt}
+            or claim.payload != {"stage": "model_bundle", "attempt": state.job.attempt}
             or self._stored_utc(
                 claim.created_at, "company research model claim created_at"
             )
@@ -550,12 +589,53 @@ class CompanyResearchPublicationService:
                 machine_memo.created_at,
                 "company research machine memo created_at",
             )
-            < self._stored_utc(
+            != self._stored_utc(
                 claim.created_at, "company research model claim created_at"
             )
         ):
             raise CompanyResearchIntegrityError(
                 "company research model audit boundary is incomplete"
+            )
+
+    def _validate_model_bundle_chronology(
+        self,
+        *,
+        state: CompanyResearchPublicationState,
+        machine_memo: CompanyResearchArtifactVersion,
+        require_preparation_time: bool,
+    ) -> None:
+        model_time = self._stored_utc(
+            machine_memo.created_at, "company research machine memo created_at"
+        )
+        bundle_kinds = [
+            "business_map",
+            "driver_map",
+            "financial_bridge",
+            "scenario_set",
+            "judgment_context",
+        ]
+        if "valuation_set" in state.artifact_heads:
+            bundle_kinds.append("valuation_set")
+        gaps_chain = state.artifact_chains.get("research_gaps", ())
+        if len(gaps_chain) == 2:
+            bundle_kinds.append("research_gaps")
+        if any(
+            self._stored_utc(
+                state.artifact_heads[kind].created_at,
+                f"company research {kind} created_at",
+            )
+            != model_time
+            for kind in bundle_kinds
+        ) or (
+            require_preparation_time
+            and self._stored_utc(
+                state.preparation.updated_at,
+                "company research preparation updated_at",
+            )
+            != model_time
+        ):
+            raise CompanyResearchIntegrityError(
+                "company research model bundle chronology is invalid"
             )
 
     def _validate_initial_audit(
@@ -574,6 +654,11 @@ class CompanyResearchPublicationService:
             state=state,
             machine_memo=authenticated.machine_or_confirmed_memo,
             claim=state.events[-1],
+        )
+        self._validate_model_bundle_chronology(
+            state=state,
+            machine_memo=authenticated.machine_or_confirmed_memo,
+            require_preparation_time=True,
         )
 
     def _confirmation_result(
@@ -623,25 +708,44 @@ class CompanyResearchPublicationService:
             or state.preparation.progress != 95
             or state.preparation.next_attempt_at is not None
             or state.preparation.last_error_code is not None
-            or state.draft.lock_version != expected_lock_version + 1
-            or len(memo_chain) < 2
+            or len(memo_chain) != 2
             or memo_chain[-1].id != confirmed_memo.id
             or len(judgment_events) != 1
             or state.events[-1].id != judgment_events[0].id
         ):
+            raise CompanyResearchIntegrityError(
+                "company research judgment confirmation projection is inconsistent"
+            )
+        if state.draft.lock_version != expected_lock_version + 1:
             raise ConflictError("company research judgment confirmation is stale")
         machine_memo = memo_chain[-2]
         if (
             machine_memo.id != expected_memo_id
             or machine_memo.content_hash != expected_memo_content_hash
-            or confirmed_memo.supersedes_id != machine_memo.id
-            or confirmed_memo.parent_content_hash != machine_memo.content_hash
-            or confirmed_memo.source_refs != machine_memo.source_refs
         ):
             raise ConflictError("company research judgment confirmation conflicts")
-        expected_payload, confirmed = self._memo_payload(
-            machine_memo, markdown=markdown
+        durable_confirmed = authenticated.decoded_memo
+        if durable_confirmed.markdown is None:
+            raise CompanyResearchIntegrityError(
+                "company research confirmed memo is incomplete"
+            )
+        expected_payload, expected_confirmed = self._memo_payload(
+            machine_memo, markdown=durable_confirmed.markdown
         )
+        if (
+            confirmed_memo.supersedes_id != machine_memo.id
+            or confirmed_memo.parent_content_hash != machine_memo.content_hash
+            or confirmed_memo.source_refs != machine_memo.source_refs
+            or durable_confirmed.candidate_status != "human_confirmed"
+            or confirmed_memo.payload != expected_payload
+            or confirmed_memo.input_hash != machine_memo.input_hash
+            or expected_confirmed != durable_confirmed
+        ):
+            raise CompanyResearchIntegrityError(
+                "company research confirmed memo closure is inconsistent"
+            )
+        if durable_confirmed.markdown != markdown:
+            raise ConflictError("company research judgment confirmation conflicts")
         event = judgment_events[0]
         if event.sequence < 2:
             raise CompanyResearchIntegrityError(
@@ -652,12 +756,17 @@ class CompanyResearchPublicationService:
             machine_memo=machine_memo,
             claim=state.events[event.sequence - 2],
         )
+        self._validate_model_bundle_chronology(
+            state=state,
+            machine_memo=machine_memo,
+            require_preparation_time=False,
+        )
         expected_event_payload = {
             "machine_memo_id": str(machine_memo.id),
             "machine_memo_content_hash": machine_memo.content_hash,
             "confirmed_memo_id": str(confirmed_memo.id),
             "confirmed_memo_content_hash": confirmed_memo.content_hash,
-            "assessment_status": confirmed.assessment_status,
+            "assessment_status": durable_confirmed.assessment_status,
             "reviewer": _REVIEWER,
         }
         confirmed_at = self._stored_utc(
@@ -665,10 +774,7 @@ class CompanyResearchPublicationService:
             "company research confirmed memo created_at",
         )
         if (
-            authenticated.decoded_memo.candidate_status != "human_confirmed"
-            or confirmed_memo.payload != expected_payload
-            or confirmed_memo.input_hash != machine_memo.input_hash
-            or event.hash_version != 2
+            event.hash_version != 2
             or event.payload != expected_event_payload
             or self._stored_utc(
                 event.created_at, "company research judgment event created_at"
@@ -684,12 +790,14 @@ class CompanyResearchPublicationService:
             )
             != confirmed_at
         ):
-            raise ConflictError("company research judgment confirmation conflicts")
+            raise CompanyResearchIntegrityError(
+                "company research judgment confirmation audit is inconsistent"
+            )
         return self._confirmation_result(
             state=state,
             machine_memo=machine_memo,
             confirmed_memo=confirmed_memo,
-            confirmed=confirmed,
+            confirmed=durable_confirmed,
             draft_lock_version=state.draft.lock_version,
             confirmed_at=confirmed_at,
         )
@@ -711,7 +819,7 @@ class CompanyResearchPublicationService:
             expected_memo_content_hash, "expected_memo_content_hash"
         )
         normalized_markdown = self._normalize_markdown(markdown)
-        self._repository.reserve_publication_writer()
+        self._repository.reserve_publication_writer(project_id)
         try:
             with self._session.begin_nested():
                 state = self._repository.lock_publication_state(project_id)
@@ -719,8 +827,7 @@ class CompanyResearchPublicationService:
                 current_memo = authenticated.machine_or_confirmed_memo
                 if (
                     state.preparation.status == "ready_to_freeze"
-                    or authenticated.decoded_memo.candidate_status
-                    == "human_confirmed"
+                    or authenticated.decoded_memo.candidate_status == "human_confirmed"
                 ):
                     return self._idempotent_replay(
                         authenticated,
@@ -769,20 +876,16 @@ class CompanyResearchPublicationService:
                     raise ValidationError(
                         "company research judgment confirmation clock regressed"
                     )
-                confirmed_memo = (
-                    self._repository.append_judgment_confirmation_memo(
-                        state=state,
-                        payload=payload,
-                        input_hash=current_memo.input_hash,
-                        created_at=when,
-                    )
+                confirmed_memo = self._repository.append_judgment_confirmation_memo(
+                    state=state,
+                    payload=payload,
+                    input_hash=current_memo.input_hash,
+                    created_at=when,
                 )
-                updated_draft = (
-                    self._repository.compare_and_swap_publication_draft(
-                        state=state,
-                        expected_lock_version=expected_lock_version,
-                        updated_at=when,
-                    )
+                updated_draft = self._repository.compare_and_swap_publication_draft(
+                    state=state,
+                    expected_lock_version=expected_lock_version,
+                    updated_at=when,
                 )
                 self._repository.advance_judgment_confirmation(
                     state=state, updated_at=when
@@ -816,3 +919,10 @@ class CompanyResearchPublicationService:
             raise ConflictError(
                 "company research judgment confirmation is concurrent"
             ) from exc
+        except OperationalError as exc:
+            message = str(getattr(exc, "orig", exc)).lower()
+            if "locked" in message or "busy" in message:
+                raise ConflictError(
+                    "company research judgment confirmation is concurrent"
+                ) from exc
+            raise

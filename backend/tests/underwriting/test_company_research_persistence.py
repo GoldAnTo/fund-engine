@@ -261,6 +261,69 @@ def _complete_model_bundle(repository, preparation, bundle):
     )
 
 
+def test_complete_model_bundle_locks_project_preparation_job_in_canonical_order(
+    session, monkeypatch
+) -> None:
+    repository, _project, preparation, _job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    calls: list[str] = []
+    originals = {
+        "project": repository._project_for_update,
+        "preparation": repository._preparation_for_update,
+        "job": repository._job_for_update,
+    }
+
+    def recording(name):
+        def invoke(*args, **kwargs):
+            calls.append(name)
+            return originals[name](*args, **kwargs)
+
+        return invoke
+
+    monkeypatch.setattr(repository, "_project_for_update", recording("project"))
+    monkeypatch.setattr(repository, "_preparation_for_update", recording("preparation"))
+    monkeypatch.setattr(repository, "_job_for_update", recording("job"))
+
+    _complete_model_bundle(repository, preparation, bundle)
+
+    assert calls[:3] == ["project", "preparation", "job"]
+
+
+def test_complete_evidence_preparation_locks_project_preparation_job_in_canonical_order(
+    session, monkeypatch
+) -> None:
+    repository, _project, preparation, _job = _repository_with_evidence_job(session)
+    calls: list[str] = []
+    originals = {
+        "project": repository._project_for_update,
+        "preparation": repository._preparation_for_update,
+        "job": repository._job_for_update,
+    }
+
+    def recording(name):
+        def invoke(*args, **kwargs):
+            calls.append(name)
+            return originals[name](*args, **kwargs)
+
+        return invoke
+
+    monkeypatch.setattr(repository, "_project_for_update", recording("project"))
+    monkeypatch.setattr(repository, "_preparation_for_update", recording("preparation"))
+    monkeypatch.setattr(repository, "_job_for_update", recording("job"))
+
+    repository.complete_evidence_preparation(
+        preparation.id,
+        input_hash="c" * 64,
+        evidence_index_payload={"facts": []},
+        research_gaps_payload={"gaps": []},
+        source_refs=[],
+        created_at=NOW,
+    )
+
+    assert calls[:3] == ["project", "preparation", "job"]
+
+
 def _basis_for_workspace(session, project):
     draft = WorkspaceDraftService(session, now=lambda: NOW).read(project.id)
     assert draft is not None
@@ -2173,13 +2236,9 @@ def test_publication_state_reserves_and_locks_project_preparation_job_draft_in_o
         return invoke
 
     monkeypatch.setattr(repository, "_project_for_update", recording("project"))
-    monkeypatch.setattr(
-        repository, "_preparation_for_update", recording("preparation")
-    )
+    monkeypatch.setattr(repository, "_preparation_for_update", recording("preparation"))
     monkeypatch.setattr(repository, "_job_for_update", recording("job"))
-    monkeypatch.setattr(
-        repository, "_workspace_draft_for_update", recording("draft")
-    )
+    monkeypatch.setattr(repository, "_workspace_draft_for_update", recording("draft"))
 
     state = repository.lock_publication_state(initialized.project.id)
 

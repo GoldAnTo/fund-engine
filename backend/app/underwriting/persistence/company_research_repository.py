@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -111,11 +111,9 @@ def validate_company_research_derived_gap_semantics(
     if (
         (require_embedded_memo_gaps and memo.research_gaps != gaps)
         or tuple(gap.code for gap in gaps) != memo.gap_keys
-        or tuple(gap.message for gap in gaps)
-        != judgment.next_verification_events
+        or tuple(gap.message for gap in gaps) != judgment.next_verification_events
         or memo.next_verification_events != judgment.next_verification_events
-        or memo.strongest_counterevidence
-        != judgment.strongest_counterevidence
+        or memo.strongest_counterevidence != judgment.strongest_counterevidence
         or actual != expected
         or (
             any(gap.severity.value == "critical" for gap in gaps)
@@ -244,16 +242,17 @@ def reconcile_company_research_evidence_audit(
     if len(prepared) != 1:
         raise invalid
     prepared_event = prepared[0]
-    prepared_at = CompanyResearchRepository._persisted_utc(
-        prepared_event.created_at
-    )
-    if prepared_event.payload != {
-        "evidence_index_id": str(evidence_chain[0].id),
-        "research_gaps_id": str(research_gaps.id),
-    } or prepared_at != CompanyResearchRepository._persisted_utc(
-        evidence_chain[0].created_at
-    ) or prepared_at != CompanyResearchRepository._persisted_utc(
-        research_gaps.created_at
+    prepared_at = CompanyResearchRepository._persisted_utc(prepared_event.created_at)
+    if (
+        prepared_event.payload
+        != {
+            "evidence_index_id": str(evidence_chain[0].id),
+            "research_gaps_id": str(research_gaps.id),
+        }
+        or prepared_at
+        != CompanyResearchRepository._persisted_utc(evidence_chain[0].created_at)
+        or prepared_at
+        != CompanyResearchRepository._persisted_utc(research_gaps.created_at)
     ):
         raise invalid
     predecessor_index = prepared_event.sequence - 2
@@ -434,9 +433,7 @@ class CompanyResearchPersistedBundle:
         business_map = CompanyResearchArtifactCodec.decode(
             "business_map", self.business_map
         )
-        gaps = CompanyResearchArtifactCodec.decode(
-            "research_gaps", self.research_gaps
-        )
+        gaps = CompanyResearchArtifactCodec.decode("research_gaps", self.research_gaps)
         assert type(memo) is CompanyResearchMemoArtifact
         assert type(judgment) is JudgmentContextArtifact
         assert type(business_map) is BusinessMapArtifact
@@ -451,7 +448,10 @@ class CompanyResearchPersistedBundle:
             has_valuation=self.valuation_set is not None,
             require_embedded_memo_gaps=True,
         )
-        if bool(self.market_snapshot_bindings) != judgment.market_security_bridge_available:
+        if (
+            bool(self.market_snapshot_bindings)
+            != judgment.market_security_bridge_available
+        ):
             raise ValidationError(
                 "company research bundle market availability is inconsistent"
             )
@@ -502,7 +502,9 @@ class CompanyResearchRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def _reserve_sqlite_writer_before_ownership_read(self) -> None:
+    def _reserve_sqlite_writer_before_ownership_read(
+        self, project_id: UUID | None = None
+    ) -> None:
         """Serialize SQLite ownership validation without taking over caller work."""
         connection = self._session.connection()
         if connection.dialect.name != "sqlite":
@@ -516,6 +518,13 @@ class CompanyResearchRepository:
         # transaction, do not begin, commit, or replace it here.
         if not dbapi_connection.in_transaction:
             connection.exec_driver_sql("BEGIN IMMEDIATE")
+        elif project_id is not None:
+            self._session.execute(
+                update(UnderwritingWorkspaceDraft)
+                .where(UnderwritingWorkspaceDraft.project_id == project_id)
+                .values(lock_version=UnderwritingWorkspaceDraft.lock_version)
+                .execution_options(synchronize_session=False)
+            )
 
     def reserve_retry_writer(self) -> None:
         """Reserve SQLite retry ownership before an outer atomic savepoint.
@@ -649,8 +658,7 @@ class CompanyResearchRepository:
         )
         if (
             authenticated.cutoff_at != expected_cutoff
-            or authenticated.source_manifest_hash
-            != expected_input.source_manifest_hash
+            or authenticated.source_manifest_hash != expected_input.source_manifest_hash
             or authenticated.definition_bundle_hash
             != expected_input.definition_bundle_hash
             or authenticated.parser_bundle_hash != expected_input.parser_bundle_hash
@@ -719,7 +727,8 @@ class CompanyResearchRepository:
             )
         if (
             expected_historical_basis_content_hash is not None
-            and authenticated_basis.content_hash != expected_historical_basis_content_hash
+            and authenticated_basis.content_hash
+            != expected_historical_basis_content_hash
         ):
             raise ValidationError("company research historical basis is stale")
         bindings_by_role = {
@@ -806,6 +815,42 @@ class CompanyResearchRepository:
                 "company research preparation job ownership is invalid"
             )
         return job
+
+    def _locked_project_preparation_job(
+        self,
+        preparation_id: UUID,
+        *,
+        populate_existing: bool,
+    ) -> tuple[
+        UnderwritingResearchProject,
+        CompanyResearchPreparation,
+        Job,
+    ]:
+        """Lock a preparation owner in canonical project → preparation → Job order."""
+        project_id = self._session.scalar(
+            select(CompanyResearchPreparation.project_id).where(
+                CompanyResearchPreparation.id == preparation_id
+            )
+        )
+        if project_id is None:
+            raise ValidationError("company research preparation not found")
+        self._reserve_sqlite_writer_before_ownership_read(project_id)
+        project = self._project_for_update(project_id)
+        if project is None:
+            raise CompanyResearchIntegrityError(
+                "company research preparation project is missing"
+            )
+        preparation = self._preparation_for_update(
+            preparation_id, populate_existing=populate_existing
+        )
+        if preparation is None:
+            raise ValidationError("company research preparation not found")
+        if preparation.project_id != project.id:
+            raise CompanyResearchIntegrityError(
+                "company research preparation project ownership is invalid"
+            )
+        job = self._locked_prepare_job(preparation, populate_existing=populate_existing)
+        return project, preparation, job
 
     @staticmethod
     def _require_preparation_step(value: str | None, field: str) -> str:
@@ -1169,14 +1214,23 @@ class CompanyResearchRepository:
             statement = statement.execution_options(populate_existing=True)
         return self._session.scalar(statement)
 
-    def reserve_publication_writer(self) -> None:
-        """Reserve SQLite's sole writer before the publication savepoint."""
+    def reserve_publication_writer(
+        self, project_id: UUID
+    ) -> UnderwritingResearchProject:
+        """Lock the project and reserve SQLite's writer before authentication."""
         try:
-            self._reserve_sqlite_writer_before_ownership_read()
+            self._reserve_sqlite_writer_before_ownership_read(project_id)
         except OperationalError as exc:
-            raise ConflictError(
-                "company research judgment confirmation is concurrent"
-            ) from exc
+            message = str(getattr(exc, "orig", exc)).lower()
+            if "locked" in message or "busy" in message:
+                raise ConflictError(
+                    "company research judgment confirmation is concurrent"
+                ) from exc
+            raise
+        project = self._project_for_update(project_id)
+        if project is None:
+            raise ValidationError("company research project not found")
+        return project
 
     def lock_publication_state(
         self, project_id: UUID
@@ -1184,10 +1238,7 @@ class CompanyResearchRepository:
         """Capture every mutable owner and immutable authentication input freshly."""
         if type(project_id) is not UUID:
             raise ValidationError("project_id must be a UUID")
-        self.reserve_publication_writer()
-        project = self._project_for_update(project_id)
-        if project is None:
-            raise ValidationError("company research project not found")
+        project = self.reserve_publication_writer(project_id)
         preparation_id = self._session.scalar(
             select(CompanyResearchPreparation.id).where(
                 CompanyResearchPreparation.project_id == project_id
@@ -1308,11 +1359,14 @@ class CompanyResearchRepository:
             self._validate_artifact_row(row)
             rows_by_kind.setdefault(row.kind, []).append(row)
         artifact_heads: dict[str, CompanyResearchArtifactVersion] = {}
-        artifact_chains: dict[
-            str, tuple[CompanyResearchArtifactVersion, ...]
-        ] = {}
+        artifact_chains: dict[str, tuple[CompanyResearchArtifactVersion, ...]] = {}
         for kind in sorted(rows_by_kind):
-            head = self.current_artifact(project_id, kind, lock=True)
+            try:
+                head = self.current_artifact(project_id, kind, lock=True)
+            except ConflictError as exc:
+                raise CompanyResearchIntegrityError(
+                    "company research artifact history has multiple current heads"
+                ) from exc
             if head is None:
                 raise CompanyResearchIntegrityError(
                     "company research artifact history is incomplete"
@@ -1550,18 +1604,20 @@ class CompanyResearchRepository:
             )
             if project_id is None:
                 raise ValidationError("company research preparation not found")
-            locked_state = self.lock_retry_state(
-                project_id=project_id, retry_at=when
-            )
+            locked_state = self.lock_retry_state(project_id=project_id, retry_at=when)
         preparation = locked_state.preparation
         job = locked_state.job
         if preparation.id != preparation_id:
             raise ValidationError("company research preparation not found")
-        if preparation.next_attempt_at is not None and self._persisted_utc(
-            preparation.next_attempt_at
-        ) > when:
+        if (
+            preparation.next_attempt_at is not None
+            and self._persisted_utc(preparation.next_attempt_at) > when
+        ):
             raise ValidationError("company research preparation is not ready to retry")
-        if expected_recovered_basis_id is None and preparation.status != "recoverable_failure":
+        if (
+            expected_recovered_basis_id is None
+            and preparation.status != "recoverable_failure"
+        ):
             raise ValidationError("company research preparation is not recoverable")
         if expected_recovered_basis_id is not None and (
             preparation.status != "blocked"
@@ -1598,13 +1654,9 @@ class CompanyResearchRepository:
         # next attempt here.
         reserve_next_attempt = job.status == "failed"
         preparation.status = (
-            "building_model"
-            if preparation.current_step == "model_bundle"
-            else "queued"
+            "building_model" if preparation.current_step == "model_bundle" else "queued"
         )
-        preparation.progress = (
-            25 if preparation.current_step == "model_bundle" else 0
-        )
+        preparation.progress = 25 if preparation.current_step == "model_bundle" else 0
         preparation.next_attempt_at = None
         preparation.last_error_code = None
         preparation.updated_at = when
@@ -1645,12 +1697,11 @@ class CompanyResearchRepository:
         if preparation is None or preparation.project_id != project_id:
             raise ValidationError("company research preparation not found")
         job = self._locked_prepare_job(preparation, populate_existing=True)
-        if preparation.next_attempt_at is not None and self._persisted_utc(
-            preparation.next_attempt_at
-        ) > when:
-            raise ValidationError(
-                "company research preparation is not ready to retry"
-            )
+        if (
+            preparation.next_attempt_at is not None
+            and self._persisted_utc(preparation.next_attempt_at) > when
+        ):
+            raise ValidationError("company research preparation is not ready to retry")
         self._validate_prepare_job_step(
             preparation_step=preparation.current_step,
             preparation_status=preparation.status,
@@ -1681,14 +1732,10 @@ class CompanyResearchRepository:
         CompanyResearchEvent,
     ]:
         """Append the two source artifacts and atomically hand off to review."""
-        self._reserve_sqlite_writer_before_ownership_read()
         claimed = expected_claim_token is not None
-        preparation = self._preparation_for_update(
+        _project, preparation, job = self._locked_project_preparation_job(
             preparation_id, populate_existing=claimed
         )
-        if preparation is None:
-            raise ValidationError("company research preparation not found")
-        job = self._locked_prepare_job(preparation, populate_existing=claimed)
         self._validate_prepare_job_step(
             preparation_step=preparation.current_step,
             preparation_status=preparation.status,
@@ -1786,13 +1833,9 @@ class CompanyResearchRepository:
         the evidence head; a stale source claim can never be reinterpreted as a
         model claim.
         """
-        self._reserve_sqlite_writer_before_ownership_read()
-        preparation = self._preparation_for_update(
+        _project, preparation, job = self._locked_project_preparation_job(
             preparation_id, populate_existing=True
         )
-        if preparation is None:
-            raise ValidationError("company research preparation not found")
-        job = self._locked_prepare_job(preparation, populate_existing=True)
         if (
             preparation.status != "building_model"
             or preparation.current_step != "business_map"
@@ -2013,6 +2056,8 @@ class CompanyResearchRepository:
         project_id: UUID,
         bindings: Sequence[FrozenMarketSnapshotBinding],
         cutoff_at: datetime | None = None,
+        fresh: bool = False,
+        lock: bool = False,
     ) -> None:
         if not bindings:
             return
@@ -2083,6 +2128,15 @@ class CompanyResearchRepository:
                 security_rights_hash,
             ),
         }
+
+        def persisted_row(model, row_id):
+            statement = select(model).where(model.id == row_id).limit(1)
+            if lock:
+                statement = statement.with_for_update()
+            if fresh:
+                statement = statement.execution_options(populate_existing=True)
+            return self._session.scalar(statement)
+
         for binding in bindings:
             if (
                 binding.source_ref.source_role != "frozen_market_snapshot"
@@ -2093,7 +2147,7 @@ class CompanyResearchRepository:
                     "company research market snapshot binding is invalid"
                 )
             model, hasher = role_contracts[binding.role]
-            row = self._session.get(model, binding.snapshot_id)
+            row = persisted_row(model, binding.snapshot_id)
             if (
                 row is None
                 or row.content_hash != binding.snapshot_content_hash
@@ -2148,9 +2202,8 @@ class CompanyResearchRepository:
                 raise ValidationError(
                     "company research market snapshot binding is invalid"
                 )
-            capture = self._session.get(
-                UnderwritingMarketCaptureEnvelope,
-                binding.capture_envelope_id,
+            capture = persisted_row(
+                UnderwritingMarketCaptureEnvelope, binding.capture_envelope_id
             )
             expected_components = [
                 {
@@ -2230,13 +2283,9 @@ class CompanyResearchRepository:
         """Append one closed model bundle or leave every artifact family unchanged."""
         if type(bundle) is not CompanyResearchPersistedBundle:
             raise ValidationError("company research model bundle is invalid")
-        self._reserve_sqlite_writer_before_ownership_read()
-        preparation = self._preparation_for_update(
+        _project, preparation, job = self._locked_project_preparation_job(
             preparation_id, populate_existing=True
         )
-        if preparation is None:
-            raise ValidationError("company research preparation not found")
-        job = self._locked_prepare_job(preparation, populate_existing=True)
         if (
             preparation.status != "building_model"
             or preparation.current_step != "model_bundle"
@@ -2484,11 +2533,14 @@ class CompanyResearchRepository:
             raise CompanyResearchIntegrityError(
                 "company research artifact payload is invalid"
             )
-        CompanyResearchRepository._validate_typed_artifact_payload(
-            kind=row.kind,
-            payload=row.payload,
-            supersedes_id=row.supersedes_id,
-        )
+        try:
+            CompanyResearchRepository._validate_typed_artifact_payload(
+                kind=row.kind,
+                payload=row.payload,
+                supersedes_id=row.supersedes_id,
+            )
+        except ValidationError as exc:
+            raise CompanyResearchIntegrityError(str(exc)) from exc
 
     @staticmethod
     def _validate_event_row(row: CompanyResearchEvent) -> None:
@@ -2525,9 +2577,8 @@ class CompanyResearchRepository:
     def artifact(
         self, artifact_id: UUID, *, lock: bool = False
     ) -> CompanyResearchArtifactVersion | None:
-        statement = (
-            select(CompanyResearchArtifactVersion)
-            .where(CompanyResearchArtifactVersion.id == artifact_id)
+        statement = select(CompanyResearchArtifactVersion).where(
+            CompanyResearchArtifactVersion.id == artifact_id
         )
         if lock:
             statement = statement.with_for_update().execution_options(
@@ -2821,8 +2872,10 @@ class CompanyResearchRepository:
             CompanyResearchArtifactVersion.supersedes_id.in_(rows_by_id)
         )
         if lock:
-            successor_statement = successor_statement.with_for_update().execution_options(
-                populate_existing=True
+            successor_statement = (
+                successor_statement.with_for_update().execution_options(
+                    populate_existing=True
+                )
             )
         successors = tuple(self._session.scalars(successor_statement))
         parent_ids_with_successors: set[UUID] = set()
