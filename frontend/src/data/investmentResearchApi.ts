@@ -39,6 +39,13 @@ export type InitializeCompanyResearchRequest = Schemas["InitializeCompanyResearc
 export type CompanyResearchWorkspace = Schemas["CompanyResearchWorkspaceResponse"];
 export type ReviewCompanyEvidenceRequest = Schemas["ReviewCompanyEvidenceRequest"];
 export type CompanyResearchEvidenceReview = Schemas["CompanyResearchEvidenceReviewResponse"];
+export type ConfirmCompanyResearchJudgmentRequest = Schemas["ConfirmCompanyResearchJudgmentRequest"];
+export type PreviewCompanyResearchPublicationRequest = Schemas["PreviewCompanyResearchPublicationRequest"];
+export type PublishCompanyResearchRequest = Schemas["PublishCompanyResearchRequest"];
+export type CompanyResearchJudgmentConfirmation = Schemas["CompanyResearchJudgmentConfirmationResponse"];
+export type CompanyResearchPublicationPreview = Schemas["CompanyResearchPublicationPreviewResponse"];
+export type CompanyResearchFrozenRevision = Schemas["CompanyResearchFrozenRevisionResponse"];
+export type CompanyResearchMarkdownExport = Schemas["CompanyResearchMarkdownExportResponse"];
 
 type ErrorDetails = NonNullable<Schemas["UnderwritingErrorBody"]["details"]>;
 
@@ -1283,6 +1290,154 @@ function isCompanyResearchEvidenceReview(value: unknown): value is CompanyResear
     && isCompanyResearchArtifact(artifact) && isRecord(artifact) && artifact.kind === "evidence_index";
 }
 
+const COMPANY_RESEARCH_FROZEN_ARTIFACT_ORDER = [
+  "evidence_index",
+  "research_gaps",
+  "business_map",
+  "driver_map",
+  "financial_bridge",
+  "scenario_set",
+  "valuation_set",
+  "judgment_context",
+  "memo",
+] as const;
+
+function isFrozenMemoIdentity(value: unknown): boolean {
+  return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "id", "content_hash"])
+    && isUuid(value.id) && isHash(value.content_hash);
+}
+
+function isCompanyResearchJudgmentConfirmation(value: unknown): value is CompanyResearchJudgmentConfirmation {
+  if (!isProductDto(value)
+    || !hasExactKeys(value, ["schema_version", "project_id", "preparation", "draft", "machine_memo", "confirmed_memo", "assessment_status", "reviewer", "markdown", "confirmed_at"])
+    || !isUuid(value.project_id)
+    || !isProductDto(value.preparation)
+    || !hasExactKeys(value.preparation, ["schema_version", "id", "status", "current_step", "progress"])
+    || !isUuid(value.preparation.id) || value.preparation.status !== "ready_to_freeze"
+    || value.preparation.current_step !== "memo" || value.preparation.progress !== 95
+    || !isProductDto(value.draft)
+    || !hasExactKeys(value.draft, ["schema_version", "id", "lock_version"])
+    || !isUuid(value.draft.id) || !isPositiveInteger(value.draft.lock_version)
+    || !isFrozenMemoIdentity(value.machine_memo) || !isFrozenMemoIdentity(value.confirmed_memo)
+    || !isRecord(value.machine_memo) || !isRecord(value.confirmed_memo)
+    || value.machine_memo.id === value.confirmed_memo.id
+    || value.machine_memo.content_hash === value.confirmed_memo.content_hash
+    || !["not_answerable", "partially_answerable", "answerable"].includes(String(value.assessment_status))
+    || value.reviewer !== "human:local-user"
+    || !isNonEmptyString(value.markdown) || value.markdown.length > 100_000
+    || value.markdown.includes("\r") || value.markdown.trim() !== value.markdown
+    || !isDateTime(value.confirmed_at)) return false;
+  return true;
+}
+
+function isFrozenSecurity(value: unknown, companyId: string): boolean {
+  return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "object_id", "external_key", "canonical_name", "symbol", "exchange", "share_class", "trading_currency", "company_id"])
+    && isUuid(value.object_id) && isNonEmptyString(value.external_key)
+    && isNonEmptyString(value.canonical_name) && isNonEmptyString(value.symbol)
+    && isNonEmptyString(value.exchange) && isNonEmptyString(value.share_class)
+    && (value.trading_currency === "CNY" || value.trading_currency === "USD")
+    && value.company_id === companyId;
+}
+
+function isFrozenAssessment(value: unknown): boolean {
+  return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "answerability", "direction", "confidence", "content_hash"])
+    && ["not_answerable", "partially_answerable", "answerable"].includes(String(value.answerability))
+    && (value.direction === null || ["provisional_bullish", "provisional_neutral", "provisional_cautious"].includes(String(value.direction)))
+    && (value.confidence === null || ["low", "medium", "high"].includes(String(value.confidence)))
+    && isHash(value.content_hash)
+    && (value.answerability !== "not_answerable" || value.direction === null && value.confidence === null);
+}
+
+function isValueRangeSummary(value: unknown): boolean {
+  return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "minimum", "maximum", "currency"])
+    && isCanonicalDecimal(value.minimum) && isCanonicalDecimal(value.maximum)
+    && (value.currency === "CNY" || value.currency === "USD");
+}
+
+function isReturnRangeSummary(value: unknown): boolean {
+  return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "minimum", "maximum"])
+    && isCanonicalDecimal(value.minimum) && isCanonicalDecimal(value.maximum);
+}
+
+function isFrozenArtifactSummary(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length < 8 || value.length > 9) return false;
+  if (!value.every((item) => isProductDto(item)
+    && hasExactKeys(item, ["schema_version", "kind", "id", "version", "input_hash", "content_hash"])
+    && typeof item.kind === "string" && COMPANY_RESEARCH_ARTIFACT_KINDS.has(item.kind as typeof COMPANY_RESEARCH_STEPS[number])
+    && isUuid(item.id) && isPositiveInteger(item.version)
+    && isHash(item.input_hash) && isHash(item.content_hash))) return false;
+  const kinds = value.map((item) => isRecord(item) ? String(item.kind) : "");
+  const ids = value.map((item) => isRecord(item) ? item.id : null);
+  const expected = COMPANY_RESEARCH_FROZEN_ARTIFACT_ORDER.filter((kind) => kind !== "valuation_set" || kinds.includes(kind));
+  return sameOrderedStrings(kinds, expected)
+    && new Set(kinds).size === kinds.length
+    && new Set(ids).size === ids.length;
+}
+
+function isFrozenPublicationProjection(value: Record<string, unknown>): boolean {
+  const company = value.company;
+  if (!isCompanyResearchIdentity(company) || !isRecord(company)
+    || !Array.isArray(value.securities) || value.securities.length === 0
+    || !value.securities.every((security) => isFrozenSecurity(security, String(company.object_id)))
+    || new Set(value.securities.map((security) => isRecord(security) ? security.object_id : null)).size !== value.securities.length
+    || new Set(value.securities.map((security) => isRecord(security) ? security.external_key : null)).size !== value.securities.length
+    || !isDateTime(value.cutoff_at) || !isUuid(value.historical_basis_id)
+    || !isHash(value.historical_basis_content_hash)
+    || !isNonEmptyString(value.strategy_version) || !isNonEmptyString(value.model_version)
+    || !isFrozenAssessment(value.assessment) || !isRecord(value.assessment)
+    || !(value.value_range === null || isValueRangeSummary(value.value_range))
+    || !(value.return_range === null || isReturnRangeSummary(value.return_range))
+    || !isStringArray(value.blockers)
+    || !Array.isArray(value.strongest_counterevidence)
+    || !value.strongest_counterevidence.every((ref) => isCompanyResearchSourceRef(ref, true))
+    || !isStringArray(value.next_verification_events)
+    || !isNonEmptyString(value.memo_markdown) || value.memo_markdown.length > 100_000
+    || !isFrozenArtifactSummary(value.artifacts)) return false;
+  return value.assessment.answerability !== "not_answerable"
+    || value.value_range === null && value.return_range === null;
+}
+
+function isCompanyResearchPublicationPreview(value: unknown): value is CompanyResearchPublicationPreview {
+  return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "project_id", "expected_lock_version", "company", "securities", "cutoff_at", "historical_basis_id", "historical_basis_content_hash", "strategy_version", "model_version", "assessment", "value_range", "return_range", "blockers", "strongest_counterevidence", "next_verification_events", "memo_markdown", "artifacts", "manifest_hash"])
+    && isUuid(value.project_id) && isPositiveInteger(value.expected_lock_version)
+    && isFrozenPublicationProjection(value) && isHash(value.manifest_hash);
+}
+
+function isCompanyResearchFrozenRevision(value: unknown): value is CompanyResearchFrozenRevision {
+  return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "id", "project_id", "sequence", "published_at", "boundary_id", "manifest_id", "manifest_hash", "company", "securities", "cutoff_at", "historical_basis_id", "historical_basis_content_hash", "strategy_version", "model_version", "assessment", "value_range", "return_range", "blockers", "strongest_counterevidence", "next_verification_events", "memo_markdown", "artifacts", "preparation_status", "current_step", "progress"])
+    && isUuid(value.id) && isUuid(value.project_id) && isPositiveInteger(value.sequence)
+    && isDateTime(value.published_at) && isUuid(value.boundary_id) && isUuid(value.manifest_id)
+    && isHash(value.manifest_hash) && isFrozenPublicationProjection(value)
+    && value.preparation_status === "completed" && value.current_step === null && value.progress === 100;
+}
+
+const COMPANY_RESEARCH_EXPORT_FILENAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*-company-research-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.md$/;
+
+function isCompanyResearchMarkdownExport(value: unknown): value is CompanyResearchMarkdownExport {
+  return isProductDto(value)
+    && hasExactKeys(value, ["schema_version", "filename", "media_type", "content", "content_hash"])
+    && typeof value.filename === "string" && COMPANY_RESEARCH_EXPORT_FILENAME_PATTERN.test(value.filename)
+    && value.media_type === "text/markdown" && isNonEmptyString(value.content)
+    && isHash(value.content_hash);
+}
+
+function normalizePublicationMarkdown(value: string): string {
+  return value.replace(/\r\n?/g, "\n").trim();
+}
+
+async function sha256Utf8(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function safeParse(text: string): unknown | null {
   if (!text.trim()) return null;
   try {
@@ -1676,6 +1831,103 @@ export class InvestmentResearchApi {
     assertUuid(projectId, "projectId");
     const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/evidence-reviews`, isCompanyResearchEvidenceReview, 200, jsonInit("POST", body));
     if (value.evidence_artifact.kind !== "evidence_index") mismatch("company-research evidence review kind mismatch");
+    return value;
+  }
+
+  async confirmCompanyResearchJudgment(
+    projectId: string,
+    body: ConfirmCompanyResearchJudgmentRequest,
+  ): Promise<CompanyResearchJudgmentConfirmation> {
+    assertUuid(projectId, "projectId");
+    const value = await requestJson(
+      `${this.root}/company-research/projects/${encodeURIComponent(projectId)}/judgment-confirmations`,
+      isCompanyResearchJudgmentConfirmation,
+      200,
+      jsonInit("POST", body),
+    );
+    if (value.project_id !== projectId
+      || value.machine_memo.id !== body.expected_memo_id
+      || value.machine_memo.content_hash !== body.expected_memo_content_hash
+      || value.draft.lock_version !== body.expected_lock_version + 1
+      || value.markdown !== normalizePublicationMarkdown(body.markdown)) {
+      mismatch("company-research judgment confirmation binding mismatch");
+    }
+    return value;
+  }
+
+  async previewCompanyResearchPublication(
+    projectId: string,
+    body: PreviewCompanyResearchPublicationRequest,
+  ): Promise<CompanyResearchPublicationPreview> {
+    assertUuid(projectId, "projectId");
+    const value = await requestJson(
+      `${this.root}/company-research/projects/${encodeURIComponent(projectId)}/publication-preview`,
+      isCompanyResearchPublicationPreview,
+      200,
+      jsonInit("POST", body),
+    );
+    if (value.project_id !== projectId || value.expected_lock_version !== body.expected_lock_version) {
+      mismatch("company-research publication preview binding mismatch");
+    }
+    return value;
+  }
+
+  async publishCompanyResearch(
+    projectId: string,
+    body: PublishCompanyResearchRequest,
+    idempotencyKey: string,
+  ): Promise<CompanyResearchFrozenRevision> {
+    assertUuid(projectId, "projectId");
+    if (!idempotencyKey.trim()) {
+      throw new InvestmentResearchRequestError("idempotencyKey 不能为空", 0, "invalid_request", null);
+    }
+    const value = await requestJson(
+      `${this.root}/company-research/projects/${encodeURIComponent(projectId)}/publish`,
+      isCompanyResearchFrozenRevision,
+      201,
+      jsonInit("POST", body, { "Idempotency-Key": idempotencyKey }),
+    );
+    if (value.project_id !== projectId || value.manifest_hash !== body.expected_manifest_hash) {
+      mismatch("company-research published revision binding mismatch");
+    }
+    return value;
+  }
+
+  async companyResearchRevision(projectId: string, revisionId: string): Promise<CompanyResearchFrozenRevision> {
+    assertUuid(projectId, "projectId");
+    assertUuid(revisionId, "revisionId");
+    const value = await requestJson(
+      `${this.root}/company-research/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`,
+      isCompanyResearchFrozenRevision,
+      200,
+      { method: "GET" },
+    );
+    if (value.project_id !== projectId || value.id !== revisionId) {
+      mismatch("company-research frozen revision binding mismatch");
+    }
+    return value;
+  }
+
+  async exportCompanyResearchRevision(projectId: string, revisionId: string): Promise<CompanyResearchMarkdownExport> {
+    assertUuid(projectId, "projectId");
+    assertUuid(revisionId, "revisionId");
+    const value = await requestJson(
+      `${this.root}/company-research/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}/export`,
+      isCompanyResearchMarkdownExport,
+      200,
+      { method: "GET" },
+    );
+    if (!value.filename.endsWith(`-company-research-${revisionId}.md`)) {
+      mismatch("company-research export revision binding mismatch");
+    }
+    if (await sha256Utf8(value.content) !== value.content_hash) {
+      throw new InvestmentResearchRequestError(
+        "投资研究服务返回了无法验证的数据",
+        502,
+        "invalid_response",
+        null,
+      );
+    }
     return value;
   }
 }

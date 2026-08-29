@@ -31,6 +31,8 @@ const hash = "a".repeat(64);
 const agendaHash = "57e7c6fda6962645939bf3b4ac9ece70be170d1170a2571252593c42a50ece73";
 const now = "2026-08-24T00:00:00Z";
 const companyResearchHash = "c".repeat(64);
+const frozenMemoContent = "Frozen memo\n";
+const frozenMemoContentHash = "b7d509aff8f0bbd36bfd858fc726852570a72dd5ef3f9ec3079716fef8102bf0";
 
 function response(body: object, status = 200, requestId = "req-product"): Response {
   return new Response(JSON.stringify(body), {
@@ -80,6 +82,110 @@ function companyResearchProjectBody(status = "queued", currentStep: string | nul
       next_attempt_at: null,
       last_error_code: null,
     },
+  };
+}
+
+function companyResearchJudgmentConfirmationBody() {
+  return {
+    schema_version: "underwriting.v1",
+    project_id: ids.project,
+    preparation: {
+      schema_version: "underwriting.v1",
+      id: ids.draft,
+      status: "ready_to_freeze",
+      current_step: "memo",
+      progress: 95,
+    },
+    draft: { schema_version: "underwriting.v1", id: ids.draft, lock_version: 4 },
+    machine_memo: { schema_version: "underwriting.v1", id: ids.rightsA, content_hash: companyResearchHash },
+    confirmed_memo: { schema_version: "underwriting.v1", id: ids.rightsB, content_hash: hash },
+    assessment_status: "not_answerable",
+    reviewer: "human:local-user",
+    markdown: "Frozen memo",
+    confirmed_at: now,
+  };
+}
+
+const frozenArtifactKinds = [
+  "evidence_index",
+  "research_gaps",
+  "business_map",
+  "driver_map",
+  "financial_bridge",
+  "scenario_set",
+  "judgment_context",
+  "memo",
+] as const;
+
+function companyResearchPublicationPreviewBody() {
+  const artifactIds = [ids.agenda, ids.mandate, ids.scope, ids.basis, ids.fx, ids.boundary, ids.capital, ids.rightsB];
+  return {
+    schema_version: "underwriting.v1",
+    project_id: ids.project,
+    expected_lock_version: 4,
+    company: {
+      schema_version: "underwriting.v1",
+      object_id: ids.company,
+      external_key: "US:ALPHABET:COMPANY",
+      canonical_name: "Alphabet Inc.",
+    },
+    securities: [
+      { schema_version: "underwriting.v1", object_id: ids.securityA, external_key: "NASDAQ:GOOG", canonical_name: "Alphabet Inc. Class C", symbol: "GOOG", exchange: "NASDAQ", share_class: "Class C", trading_currency: "USD", company_id: ids.company },
+      { schema_version: "underwriting.v1", object_id: ids.securityB, external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD", company_id: ids.company },
+    ],
+    cutoff_at: now,
+    historical_basis_id: ids.basis,
+    historical_basis_content_hash: hash,
+    strategy_version: "company-research-default.v1",
+    model_version: "company-research-model.v1",
+    assessment: {
+      schema_version: "underwriting.v1",
+      answerability: "not_answerable",
+      direction: null,
+      confidence: null,
+      content_hash: companyResearchHash,
+    },
+    value_range: null,
+    return_range: null,
+    blockers: ["missing_market_bridge"],
+    strongest_counterevidence: [{ fact_key: "search_share", raw_hash: hash, source_locator: "p. 1", source_role: "regulatory_filing", source_url: "https://example.test/source" }],
+    next_verification_events: ["Verify search share."],
+    memo_markdown: "Frozen memo",
+    artifacts: frozenArtifactKinds.map((kind, index) => ({
+      schema_version: "underwriting.v1",
+      kind,
+      id: artifactIds[index],
+      version: 1,
+      input_hash: hash,
+      content_hash: index === frozenArtifactKinds.length - 1 ? companyResearchHash : hash,
+    })),
+    manifest_hash: companyResearchHash,
+  };
+}
+
+function companyResearchFrozenRevisionBody() {
+  const preview = companyResearchPublicationPreviewBody();
+  const { expected_lock_version: _expectedLockVersion, ...projection } = preview;
+  return {
+    ...projection,
+    id: ids.revision,
+    sequence: 1,
+    published_at: now,
+    boundary_id: ids.boundary,
+    manifest_id: ids.manifest,
+    preparation_status: "completed",
+    current_step: null,
+    progress: 100,
+  };
+}
+
+function companyResearchMarkdownExportBody() {
+  return {
+    schema_version: "underwriting.v1",
+    filename: `alphabet-company-research-${ids.revision}.md`,
+    media_type: "text/markdown",
+    content: frozenMemoContent,
+    content_hash: frozenMemoContentHash,
   };
 }
 
@@ -550,6 +656,153 @@ describe("InvestmentResearchApi", () => {
       [`/api/underwriting/v1/product/company-research/projects/${ids.project}/retry`, "POST"],
     ]);
     expect(fetchSpy.mock.calls[1][1]?.headers).toMatchObject({ "Idempotency-Key": "company-research-key" });
+  });
+
+  it("uses the five high-level company research publication routes and sends idempotency only for publish", async () => {
+    const api = new InvestmentResearchApi();
+    const confirmationRequest = {
+      schema_version: "underwriting.v1" as const,
+      expected_lock_version: 3,
+      expected_memo_id: ids.rightsA,
+      expected_memo_content_hash: companyResearchHash,
+      markdown: "Frozen memo",
+    };
+    const previewRequest = { schema_version: "underwriting.v1" as const, expected_lock_version: 4 };
+    const publishRequest = { schema_version: "underwriting.v1" as const, expected_lock_version: 4, expected_manifest_hash: companyResearchHash };
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(response(companyResearchJudgmentConfirmationBody()))
+      .mockResolvedValueOnce(response(companyResearchPublicationPreviewBody()))
+      .mockResolvedValueOnce(response(companyResearchFrozenRevisionBody(), 201))
+      .mockResolvedValueOnce(response(companyResearchFrozenRevisionBody()))
+      .mockResolvedValueOnce(response(companyResearchMarkdownExportBody()));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await api.confirmCompanyResearchJudgment(ids.project, confirmationRequest);
+    await api.previewCompanyResearchPublication(ids.project, previewRequest);
+    await api.publishCompanyResearch(ids.project, publishRequest, "alphabet-live-freeze");
+    await api.companyResearchRevision(ids.project, ids.revision);
+    await api.exportCompanyResearchRevision(ids.project, ids.revision);
+
+    const root = "/api/underwriting/v1/product/company-research/projects";
+    expect(fetchSpy.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      [`${root}/${ids.project}/judgment-confirmations`, "POST"],
+      [`${root}/${ids.project}/publication-preview`, "POST"],
+      [`${root}/${ids.project}/publish`, "POST"],
+      [`${root}/${ids.project}/revisions/${ids.revision}`, "GET"],
+      [`${root}/${ids.project}/revisions/${ids.revision}/export`, "GET"],
+    ]);
+    expect(fetchSpy.mock.calls[0][1]?.headers).not.toHaveProperty("Idempotency-Key");
+    expect(fetchSpy.mock.calls[1][1]?.headers).not.toHaveProperty("Idempotency-Key");
+    expect(fetchSpy.mock.calls[2][1]?.headers).toMatchObject({ "Idempotency-Key": "alphabet-live-freeze" });
+    expect(fetchSpy.mock.calls[3][1]?.headers).toBeUndefined();
+    expect(fetchSpy.mock.calls[4][1]?.headers).toBeUndefined();
+  });
+
+  it("rejects malformed and mismatched company research publication envelopes", async () => {
+    const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+    const confirmationRequest = {
+      schema_version: "underwriting.v1" as const,
+      expected_lock_version: 3,
+      expected_memo_id: ids.rightsA,
+      expected_memo_content_hash: companyResearchHash,
+      markdown: "Frozen memo",
+    };
+    const previewRequest = { schema_version: "underwriting.v1" as const, expected_lock_version: 4 };
+    const publishRequest = { schema_version: "underwriting.v1" as const, expected_lock_version: 4, expected_manifest_hash: companyResearchHash };
+
+    const wrongConfirmationProject = clone(companyResearchJudgmentConfirmationBody());
+    wrongConfirmationProject.project_id = ids.company;
+    const wrongConfirmationStatus = clone(companyResearchJudgmentConfirmationBody());
+    wrongConfirmationStatus.preparation.status = "completed";
+    const extraConfirmationMemo = clone(companyResearchJudgmentConfirmationBody());
+    Object.assign(extraConfirmationMemo.confirmed_memo, { unexpected: true });
+    const uppercaseConfirmationHash = clone(companyResearchJudgmentConfirmationBody());
+    uppercaseConfirmationHash.confirmed_memo.content_hash = "A".repeat(64);
+
+    const wrongPreviewProject = clone(companyResearchPublicationPreviewBody());
+    wrongPreviewProject.project_id = ids.company;
+    const wrongPreviewLock = clone(companyResearchPublicationPreviewBody());
+    wrongPreviewLock.expected_lock_version = 5;
+    const extraPreview = clone(companyResearchPublicationPreviewBody());
+    Object.assign(extraPreview, { unexpected: true });
+    const uppercasePreviewHash = clone(companyResearchPublicationPreviewBody());
+    uppercasePreviewHash.manifest_hash = "C".repeat(64);
+    const openNotAnswerable: any = clone(companyResearchPublicationPreviewBody());
+    openNotAnswerable.assessment.direction = "provisional_bullish";
+    const rangedNotAnswerable: any = clone(companyResearchPublicationPreviewBody());
+    rangedNotAnswerable.value_range = { schema_version: "underwriting.v1", minimum: "100", maximum: "120", currency: "USD" };
+    const reorderedArtifacts = clone(companyResearchPublicationPreviewBody());
+    reorderedArtifacts.artifacts.reverse();
+    const duplicateArtifact = clone(companyResearchPublicationPreviewBody());
+    duplicateArtifact.artifacts[1].id = duplicateArtifact.artifacts[0].id;
+
+    const wrongPublishedManifest = clone(companyResearchFrozenRevisionBody());
+    wrongPublishedManifest.manifest_hash = hash;
+    const wrongRevisionProject = clone(companyResearchFrozenRevisionBody());
+    wrongRevisionProject.project_id = ids.company;
+    const wrongRevisionId = clone(companyResearchFrozenRevisionBody());
+    wrongRevisionId.id = ids.manifest;
+    const wrongRevisionStatus = clone(companyResearchFrozenRevisionBody());
+    wrongRevisionStatus.preparation_status = "ready_to_freeze";
+    const extraRevision = clone(companyResearchFrozenRevisionBody());
+    Object.assign(extraRevision, { unexpected: true });
+
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(response(wrongConfirmationProject))
+      .mockResolvedValueOnce(response(wrongConfirmationStatus))
+      .mockResolvedValueOnce(response(extraConfirmationMemo))
+      .mockResolvedValueOnce(response(uppercaseConfirmationHash))
+      .mockResolvedValueOnce(response(wrongPreviewProject))
+      .mockResolvedValueOnce(response(wrongPreviewLock))
+      .mockResolvedValueOnce(response(extraPreview))
+      .mockResolvedValueOnce(response(uppercasePreviewHash))
+      .mockResolvedValueOnce(response(openNotAnswerable))
+      .mockResolvedValueOnce(response(rangedNotAnswerable))
+      .mockResolvedValueOnce(response(reorderedArtifacts))
+      .mockResolvedValueOnce(response(duplicateArtifact))
+      .mockResolvedValueOnce(response(wrongPublishedManifest, 201))
+      .mockResolvedValueOnce(response(wrongRevisionProject))
+      .mockResolvedValueOnce(response(wrongRevisionId))
+      .mockResolvedValueOnce(response(wrongRevisionStatus))
+      .mockResolvedValueOnce(response(extraRevision));
+    vi.stubGlobal("fetch", fetchSpy);
+    const api = new InvestmentResearchApi();
+
+    for (let index = 0; index < 4; index += 1) {
+      await expect(api.confirmCompanyResearchJudgment(ids.project, confirmationRequest)).rejects.toMatchObject({
+        code: index === 0 ? "identity_mismatch" : "invalid_response",
+      });
+    }
+    for (let index = 0; index < 8; index += 1) {
+      await expect(api.previewCompanyResearchPublication(ids.project, previewRequest)).rejects.toMatchObject({
+        code: index < 2 ? "identity_mismatch" : "invalid_response",
+      });
+    }
+    await expect(api.publishCompanyResearch(ids.project, publishRequest, "publish-key"))
+      .rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.companyResearchRevision(ids.project, ids.revision)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.companyResearchRevision(ids.project, ids.revision)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.companyResearchRevision(ids.project, ids.revision)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.companyResearchRevision(ids.project, ids.revision)).rejects.toMatchObject({ code: "invalid_response" });
+    expect(fetchSpy).toHaveBeenCalledTimes(17);
+  });
+
+  it("verifies company research publication export identity and UTF-8 content hash", async () => {
+    const badHash = companyResearchMarkdownExportBody();
+    badHash.content_hash = hash;
+    const wrongRevision = companyResearchMarkdownExportBody();
+    wrongRevision.filename = `alphabet-company-research-${ids.manifest}.md`;
+    const extraExport = companyResearchMarkdownExportBody();
+    Object.assign(extraExport, { unexpected: true });
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response(badHash))
+      .mockResolvedValueOnce(response(wrongRevision))
+      .mockResolvedValueOnce(response(extraExport)));
+    const api = new InvestmentResearchApi();
+
+    await expect(api.exportCompanyResearchRevision(ids.project, ids.revision)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.exportCompanyResearchRevision(ids.project, ids.revision)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.exportCompanyResearchRevision(ids.project, ids.revision)).rejects.toMatchObject({ code: "invalid_response" });
   });
 
   it.each([

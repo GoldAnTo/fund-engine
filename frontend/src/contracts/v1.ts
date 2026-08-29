@@ -2910,6 +2910,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/judgment-confirmations": {
+        parameters: { query?: never; header?: never; path?: never; cookie?: never };
+        get?: never;
+        put?: never;
+        /** Confirm Company Research Judgment */
+        post: operations["confirm_company_research_judgment_api_underwriting_v1_product_company_research_projects__project_id__judgment_confirmations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/publication-preview": {
+        parameters: { query?: never; header?: never; path?: never; cookie?: never };
+        get?: never;
+        put?: never;
+        /** Preview Company Research Publication */
+        post: operations["preview_company_research_publication_api_underwriting_v1_product_company_research_projects__project_id__publication_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/publish": {
+        parameters: { query?: never; header?: never; path?: never; cookie?: never };
+        get?: never;
+        put?: never;
+        /** Publish Company Research */
+        post: operations["publish_company_research_api_underwriting_v1_product_company_research_projects__project_id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/revisions/{revision_id}": {
+        parameters: { query?: never; header?: never; path?: never; cookie?: never };
+        /** Get Company Research Revision */
+        get: operations["get_company_research_revision_api_underwriting_v1_product_company_research_projects__project_id__revisions__revision_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/revisions/{revision_id}/export": {
+        parameters: { query?: never; header?: never; path?: never; cookie?: never };
+        /** Export Company Research Revision */
+        get: operations["export_company_research_revision_api_underwriting_v1_product_company_research_projects__project_id__revisions__revision_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -5108,6 +5168,91 @@ export interface components {
             /** Assumption Refs */
             assumption_refs: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
         };
+        /** CompanyResearchFrozenArtifactDescriptorResponse */
+        CompanyResearchFrozenArtifactDescriptorResponse: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            /** @enum {string} */
+            kind: "evidence_index" | "research_gaps" | "business_map" | "driver_map" | "financial_bridge" | "scenario_set" | "valuation_set" | "judgment_context" | "memo";
+            /** Format: uuid */
+            id: string;
+            version: number;
+            input_hash: string;
+            content_hash: string;
+        };
+        /** CompanyResearchFrozenAssessmentResponse */
+        CompanyResearchFrozenAssessmentResponse: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            /** @enum {string} */
+            answerability: "not_answerable" | "partially_answerable" | "answerable";
+            direction: ("provisional_bullish" | "provisional_neutral" | "provisional_cautious") | null;
+            confidence: ("low" | "medium" | "high") | null;
+            content_hash: string;
+        };
+        /** CompanyResearchFrozenMemoIdentityResponse */
+        CompanyResearchFrozenMemoIdentityResponse: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            /** Format: uuid */
+            id: string;
+            content_hash: string;
+        };
+        /** CompanyResearchFrozenRevisionResponse */
+        CompanyResearchFrozenRevisionResponse: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            project_id: string;
+            sequence: number;
+            /** Format: date-time */
+            published_at: string;
+            /** Format: uuid */
+            boundary_id: string;
+            /** Format: uuid */
+            manifest_id: string;
+            manifest_hash: string;
+            company: components["schemas"]["CompanyResearchIdentityResponse"];
+            securities: components["schemas"]["CompanyResearchFrozenSecurityResponse"][];
+            /** Format: date-time */
+            cutoff_at: string;
+            /** Format: uuid */
+            historical_basis_id: string;
+            historical_basis_content_hash: string;
+            strategy_version: string;
+            model_version: string;
+            assessment: components["schemas"]["CompanyResearchFrozenAssessmentResponse"];
+            value_range: components["schemas"]["CompanyResearchValueRangeSummaryResponse"] | null;
+            return_range: components["schemas"]["CompanyResearchReturnRangeSummaryResponse"] | null;
+            blockers: string[];
+            strongest_counterevidence: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
+            next_verification_events: string[];
+            memo_markdown: string;
+            artifacts: components["schemas"]["CompanyResearchFrozenArtifactDescriptorResponse"][];
+            /** @constant */
+            preparation_status: "completed";
+            current_step: null;
+            /** @constant */
+            progress: 100;
+        };
+        /** CompanyResearchFrozenSecurityResponse */
+        CompanyResearchFrozenSecurityResponse: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            /** Format: uuid */
+            object_id: string;
+            external_key: string;
+            canonical_name: string;
+            symbol: string;
+            exchange: string;
+            share_class: string;
+            /** @enum {string} */
+            trading_currency: "CNY" | "USD";
+            /** Format: uuid */
+            company_id: string;
+        };
         /** CompanyResearchGapResponse */
         CompanyResearchGapResponse: {
             /** Code */
@@ -5173,6 +5318,24 @@ export interface components {
             external_key: string;
             /** Canonical Name */
             canonical_name: string;
+        };
+        /** CompanyResearchJudgmentConfirmationResponse */
+        CompanyResearchJudgmentConfirmationResponse: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            /** Format: uuid */
+            project_id: string;
+            preparation: components["schemas"]["CompanyResearchPublicationPreparationResponse"];
+            draft: components["schemas"]["CompanyResearchPublicationDraftResponse"];
+            machine_memo: components["schemas"]["CompanyResearchFrozenMemoIdentityResponse"];
+            confirmed_memo: components["schemas"]["CompanyResearchFrozenMemoIdentityResponse"];
+            /** @enum {string} */
+            assessment_status: "not_answerable" | "partially_answerable" | "answerable";
+            /** @constant */
+            reviewer: "human:local-user";
+            markdown: string;
+            /** Format: date-time */
+            confirmed_at: string;
         };
         /** CompanyResearchJudgmentContextArtifactResponse */
         CompanyResearchJudgmentContextArtifactResponse: {
@@ -5270,6 +5433,16 @@ export interface components {
             source_url: string;
             /** Fact Key */
             fact_key: string;
+        };
+        /** CompanyResearchMarkdownExportResponse */
+        CompanyResearchMarkdownExportResponse: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            filename: string;
+            /** @constant */
+            media_type: "text/markdown";
+            content: string;
+            content_hash: string;
         };
         /** CompanyResearchMarketSnapshotBindingResponse */
         CompanyResearchMarketSnapshotBindingResponse: {
@@ -5461,6 +5634,53 @@ export interface components {
             /** Last Error Code */
             last_error_code: string | null;
         };
+        /** CompanyResearchPublicationDraftResponse */
+        CompanyResearchPublicationDraftResponse: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            /** Format: uuid */
+            id: string;
+            lock_version: number;
+        };
+        /** CompanyResearchPublicationPreparationResponse */
+        CompanyResearchPublicationPreparationResponse: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            /** Format: uuid */
+            id: string;
+            /** @constant */
+            status: "ready_to_freeze";
+            /** @constant */
+            current_step: "memo";
+            /** @constant */
+            progress: 95;
+        };
+        /** CompanyResearchPublicationPreviewResponse */
+        CompanyResearchPublicationPreviewResponse: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            /** Format: uuid */
+            project_id: string;
+            expected_lock_version: number;
+            company: components["schemas"]["CompanyResearchIdentityResponse"];
+            securities: components["schemas"]["CompanyResearchFrozenSecurityResponse"][];
+            /** Format: date-time */
+            cutoff_at: string;
+            /** Format: uuid */
+            historical_basis_id: string;
+            historical_basis_content_hash: string;
+            strategy_version: string;
+            model_version: string;
+            assessment: components["schemas"]["CompanyResearchFrozenAssessmentResponse"];
+            value_range: components["schemas"]["CompanyResearchValueRangeSummaryResponse"] | null;
+            return_range: components["schemas"]["CompanyResearchReturnRangeSummaryResponse"] | null;
+            blockers: string[];
+            strongest_counterevidence: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
+            next_verification_events: string[];
+            memo_markdown: string;
+            artifacts: components["schemas"]["CompanyResearchFrozenArtifactDescriptorResponse"][];
+            manifest_hash: string;
+        };
         /** CompanyResearchPreviewRequest */
         CompanyResearchPreviewRequest: {
             /**
@@ -5553,6 +5773,13 @@ export interface components {
             achieved_return_range: components["schemas"]["CompanyResearchValueRangeResponse"];
             /** Meets Required Return */
             meets_required_return: boolean;
+        };
+        /** CompanyResearchReturnRangeSummaryResponse */
+        CompanyResearchReturnRangeSummaryResponse: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            minimum: string;
+            maximum: string;
         };
         /** CompanyResearchReverseDcfResponse */
         CompanyResearchReverseDcfResponse: {
@@ -5817,6 +6044,15 @@ export interface components {
             minimum: components["schemas"]["CompanyResearchNumericObservationResponse"];
             maximum: components["schemas"]["CompanyResearchNumericObservationResponse"];
         };
+        /** CompanyResearchValueRangeSummaryResponse */
+        CompanyResearchValueRangeSummaryResponse: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            minimum: string;
+            maximum: string;
+            /** @enum {string} */
+            currency: "CNY" | "USD";
+        };
         /** CompanyResearchWorkbenchModuleResponse */
         CompanyResearchWorkbenchModuleResponse: {
             /**
@@ -6067,6 +6303,16 @@ export interface components {
             actor: string;
             /** Decisions */
             decisions: components["schemas"]["ClaimDecisionDTO"][];
+        };
+        /** ConfirmCompanyResearchJudgmentRequest */
+        ConfirmCompanyResearchJudgmentRequest: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            expected_lock_version: number;
+            /** Format: uuid */
+            expected_memo_id: string;
+            expected_memo_content_hash: string;
+            markdown: string;
         };
         /** ConfirmProtocolRequest */
         ConfirmProtocolRequest: {
@@ -9893,6 +10139,12 @@ export interface components {
             /** Artifact Sequence */
             artifact_sequence?: number | null;
         };
+        /** PreviewCompanyResearchPublicationRequest */
+        PreviewCompanyResearchPublicationRequest: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            expected_lock_version: number;
+        };
         /** PreviewProductRevisionRequest */
         PreviewProductRevisionRequest: {
             /**
@@ -10434,6 +10686,13 @@ export interface components {
             conclusion_id: string;
             /** State */
             state: string;
+        };
+        /** PublishCompanyResearchRequest */
+        PublishCompanyResearchRequest: {
+            /** @constant */
+            schema_version: "underwriting.v1";
+            expected_lock_version: number;
+            expected_manifest_hash: string;
         };
         /** PublishProductRevisionRequest */
         PublishProductRevisionRequest: {
@@ -19493,6 +19752,54 @@ export interface operations {
                     "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
                 };
             };
+        };
+    };
+    confirm_company_research_judgment_api_underwriting_v1_product_company_research_projects__project_id__judgment_confirmations_post: {
+        parameters: { query?: never; header?: never; path: { project_id: string }; cookie?: never };
+        requestBody: { content: { "application/json": components["schemas"]["ConfirmCompanyResearchJudgmentRequest"] } };
+        responses: {
+            200: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["CompanyResearchJudgmentConfirmationResponse"] } };
+            404: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["UnderwritingErrorEnvelope"] } };
+            409: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["UnderwritingErrorEnvelope"] } };
+            422: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["UnderwritingErrorEnvelope"] } };
+        };
+    };
+    preview_company_research_publication_api_underwriting_v1_product_company_research_projects__project_id__publication_preview_post: {
+        parameters: { query?: never; header?: never; path: { project_id: string }; cookie?: never };
+        requestBody: { content: { "application/json": components["schemas"]["PreviewCompanyResearchPublicationRequest"] } };
+        responses: {
+            200: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["CompanyResearchPublicationPreviewResponse"] } };
+            404: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["UnderwritingErrorEnvelope"] } };
+            409: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["UnderwritingErrorEnvelope"] } };
+            422: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["UnderwritingErrorEnvelope"] } };
+        };
+    };
+    publish_company_research_api_underwriting_v1_product_company_research_projects__project_id__publish_post: {
+        parameters: { query?: never; header: { "Idempotency-Key": string }; path: { project_id: string }; cookie?: never };
+        requestBody: { content: { "application/json": components["schemas"]["PublishCompanyResearchRequest"] } };
+        responses: {
+            201: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["CompanyResearchFrozenRevisionResponse"] } };
+            404: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["UnderwritingErrorEnvelope"] } };
+            409: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["UnderwritingErrorEnvelope"] } };
+            422: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["UnderwritingErrorEnvelope"] } };
+        };
+    };
+    get_company_research_revision_api_underwriting_v1_product_company_research_projects__project_id__revisions__revision_id__get: {
+        parameters: { query?: never; header?: never; path: { project_id: string; revision_id: string }; cookie?: never };
+        requestBody?: never;
+        responses: {
+            200: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["CompanyResearchFrozenRevisionResponse"] } };
+            404: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["UnderwritingErrorEnvelope"] } };
+            422: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["UnderwritingErrorEnvelope"] } };
+        };
+    };
+    export_company_research_revision_api_underwriting_v1_product_company_research_projects__project_id__revisions__revision_id__export_get: {
+        parameters: { query?: never; header?: never; path: { project_id: string; revision_id: string }; cookie?: never };
+        requestBody?: never;
+        responses: {
+            200: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["CompanyResearchMarkdownExportResponse"] } };
+            404: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["UnderwritingErrorEnvelope"] } };
+            422: { headers: { [name: string]: unknown }; content: { "application/json": components["schemas"]["UnderwritingErrorEnvelope"] } };
         };
     };
     health_health_get: {
