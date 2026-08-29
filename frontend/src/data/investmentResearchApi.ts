@@ -81,6 +81,10 @@ function isUuid(value: unknown): value is string {
   return typeof value === "string" && UUID_PATTERN.test(value);
 }
 
+function sameUuid(actual: unknown, expected: unknown): boolean {
+  return isUuid(actual) && isUuid(expected) && actual.toLowerCase() === expected.toLowerCase();
+}
+
 function assertUuid(value: string, fieldName: string): void {
   if (!isUuid(value)) {
     throw new InvestmentResearchRequestError(`${fieldName} 必须是有效 UUID`, 0, "invalid_request", null);
@@ -1058,13 +1062,20 @@ function isJudgmentContextPayload(value: unknown): boolean {
 }
 
 function isMemoPayload(value: unknown): boolean {
-  if (!isRecord(value) || !hasExactKeys(value, ["assessment_status", "business_map_ref", "driver_map_ref", "financial_bridge_ref", "scenario_set_ref", "valuation_set_ref", "gap_keys", "strongest_counterevidence", "next_verification_events", "candidate_status", "_lineage"])
+  const commonKeys = ["assessment_status", "business_map_ref", "driver_map_ref", "financial_bridge_ref", "scenario_set_ref", "valuation_set_ref", "gap_keys", "strongest_counterevidence", "next_verification_events", "candidate_status", "_lineage"];
+  if (!isRecord(value)
+    || !(value.candidate_status === "machine_draft" && hasExactKeys(value, commonKeys)
+      || value.candidate_status === "human_confirmed" && hasExactKeys(value, [...commonKeys, "reviewer", "markdown"]))
     || !["not_answerable", "partially_answerable", "answerable"].includes(String(value.assessment_status))
-    || value.candidate_status !== "machine_draft" || !isStringArray(value.gap_keys)
+    || !isStringArray(value.gap_keys)
     || !Array.isArray(value.strongest_counterevidence)
     || !value.strongest_counterevidence.every((ref) => isCompanyResearchSourceRef(ref, true))
     || !isStringArray(value.next_verification_events)
     || !isCompanyResearchLineage(value._lineage, ["judgment_context"])) return false;
+  if (value.candidate_status === "human_confirmed"
+    && (value.reviewer !== "human:local-user"
+      || !isNonEmptyString(value.markdown) || value.markdown.length > 100_000
+      || value.markdown.includes("\r") || normalizePublicationMarkdown(value.markdown) !== value.markdown)) return false;
   const refs: [string, unknown][] = [
     ["business_map", value.business_map_ref], ["driver_map", value.driver_map_ref],
     ["financial_bridge", value.financial_bridge_ref], ["scenario_set", value.scenario_set_ref],
@@ -1845,8 +1856,8 @@ export class InvestmentResearchApi {
       200,
       jsonInit("POST", body),
     );
-    if (value.project_id !== projectId
-      || value.machine_memo.id !== body.expected_memo_id
+    if (!sameUuid(value.project_id, projectId)
+      || !sameUuid(value.machine_memo.id, body.expected_memo_id)
       || value.machine_memo.content_hash !== body.expected_memo_content_hash
       || value.draft.lock_version !== body.expected_lock_version + 1
       || value.markdown !== normalizePublicationMarkdown(body.markdown)) {
@@ -1866,7 +1877,7 @@ export class InvestmentResearchApi {
       200,
       jsonInit("POST", body),
     );
-    if (value.project_id !== projectId || value.expected_lock_version !== body.expected_lock_version) {
+    if (!sameUuid(value.project_id, projectId) || value.expected_lock_version !== body.expected_lock_version) {
       mismatch("company-research publication preview binding mismatch");
     }
     return value;
@@ -1887,7 +1898,7 @@ export class InvestmentResearchApi {
       201,
       jsonInit("POST", body, { "Idempotency-Key": idempotencyKey }),
     );
-    if (value.project_id !== projectId || value.manifest_hash !== body.expected_manifest_hash) {
+    if (!sameUuid(value.project_id, projectId) || value.manifest_hash !== body.expected_manifest_hash) {
       mismatch("company-research published revision binding mismatch");
     }
     return value;
@@ -1902,7 +1913,7 @@ export class InvestmentResearchApi {
       200,
       { method: "GET" },
     );
-    if (value.project_id !== projectId || value.id !== revisionId) {
+    if (!sameUuid(value.project_id, projectId) || !sameUuid(value.id, revisionId)) {
       mismatch("company-research frozen revision binding mismatch");
     }
     return value;
@@ -1917,7 +1928,7 @@ export class InvestmentResearchApi {
       200,
       { method: "GET" },
     );
-    if (!value.filename.endsWith(`-company-research-${revisionId}.md`)) {
+    if (!value.filename.endsWith(`-company-research-${revisionId.toLowerCase()}.md`)) {
       mismatch("company-research export revision binding mismatch");
     }
     if (await sha256Utf8(value.content) !== value.content_hash) {

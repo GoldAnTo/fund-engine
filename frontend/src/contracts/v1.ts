@@ -5519,10 +5519,10 @@ export interface components {
              * @enum {string}
              */
             kind: "memo";
-            payload: components["schemas"]["CompanyResearchMemoPayloadResponse"];
+            payload: components["schemas"]["CompanyResearchMachineMemoPayloadResponse"] | components["schemas"]["CompanyResearchConfirmedMemoPayloadResponse"];
         };
-        /** CompanyResearchMemoPayloadResponse */
-        CompanyResearchMemoPayloadResponse: {
+        /** CompanyResearchMachineMemoPayloadResponse */
+        CompanyResearchMachineMemoPayloadResponse: {
             /**
              * Assessment Status
              * @enum {string}
@@ -5545,6 +5545,25 @@ export interface components {
              */
             candidate_status: "machine_draft";
             _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
+        };
+        /** CompanyResearchConfirmedMemoPayloadResponse */
+        CompanyResearchConfirmedMemoPayloadResponse: {
+            /** @enum {string} */
+            assessment_status: "not_answerable" | "partially_answerable" | "answerable";
+            business_map_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
+            driver_map_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
+            financial_bridge_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
+            scenario_set_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
+            valuation_set_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"] | null;
+            gap_keys: string[];
+            strongest_counterevidence: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
+            next_verification_events: string[];
+            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
+            /** @constant */
+            candidate_status: "human_confirmed";
+            /** @constant */
+            reviewer: "human:local-user";
+            markdown: string;
         };
         /** CompanyResearchModelGapsPayloadResponse */
         CompanyResearchModelGapsPayloadResponse: {

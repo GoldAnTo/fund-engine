@@ -31,8 +31,8 @@ const hash = "a".repeat(64);
 const agendaHash = "57e7c6fda6962645939bf3b4ac9ece70be170d1170a2571252593c42a50ece73";
 const now = "2026-08-24T00:00:00Z";
 const companyResearchHash = "c".repeat(64);
-const frozenMemoContent = "Frozen memo\n";
-const frozenMemoContentHash = "b7d509aff8f0bbd36bfd858fc726852570a72dd5ef3f9ec3079716fef8102bf0";
+const frozenMemoContent = "冻结判断 🧭\n";
+const frozenMemoContentHash = "e57b3c088060c3f291f537ceb844947011577bbe81a3e2f3a6ba1f5f5ec0cc11";
 
 function response(body: object, status = 200, requestId = "req-product"): Response {
   return new Response(JSON.stringify(body), {
@@ -369,6 +369,23 @@ function addClosedModelArtifacts(workspace: any, includeDerivedGaps = true): any
   return workspace;
 }
 
+function confirmedCompanyResearchWorkspaceBody(markdown = "Frozen memo"): any {
+  const workspace = addClosedModelArtifacts(companyResearchWorkspaceBody());
+  const memo = workspace.artifacts.find((item: any) => item.kind === "memo");
+  Object.assign(memo, { id: ids.rightsB, version: 2, content_hash: hash });
+  Object.assign(memo.payload, {
+    candidate_status: "human_confirmed",
+    reviewer: "human:local-user",
+    markdown,
+  });
+  Object.assign(workspace.preparation, { status: "ready_to_freeze", current_step: "memo", progress: 95 });
+  workspace.draft.lock_version = 4;
+  workspace.change_summary.artifact_versions.memo = 2;
+  const memoModule = workspace.modules.find((item: any) => item.key === "versions_changes_memo");
+  memoModule.artifact_refs = [{ id: memo.id, kind: memo.kind, content_hash: memo.content_hash }];
+  return workspace;
+}
+
 function industryCompanyBrowseBody(items: object[] = [
   { schema_version: "underwriting.v1", object_id: ids.company, kind: "company", external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc.", symbol: null, exchange: null, share_class: null, trading_currency: null },
   { schema_version: "underwriting.v1", object_id: ids.securityA, kind: "security", external_key: "NASDAQ:GOOGL", canonical_name: "Alphabet Inc. Class A", symbol: "GOOGL", exchange: "NASDAQ", share_class: "Class A", trading_currency: "USD" },
@@ -696,6 +713,104 @@ describe("InvestmentResearchApi", () => {
     expect(fetchSpy.mock.calls[2][1]?.headers).toMatchObject({ "Idempotency-Key": "alphabet-live-freeze" });
     expect(fetchSpy.mock.calls[3][1]?.headers).toBeUndefined();
     expect(fetchSpy.mock.calls[4][1]?.headers).toBeUndefined();
+  });
+
+  it("reads the ready-to-freeze workspace with its confirmed memo after judgment confirmation", async () => {
+    const confirmationRequest = {
+      schema_version: "underwriting.v1" as const,
+      expected_lock_version: 3,
+      expected_memo_id: ids.rightsA,
+      expected_memo_content_hash: companyResearchHash,
+      markdown: "Frozen memo",
+    };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response(companyResearchJudgmentConfirmationBody()))
+      .mockResolvedValueOnce(response(confirmedCompanyResearchWorkspaceBody())));
+    const api = new InvestmentResearchApi();
+
+    await expect(api.confirmCompanyResearchJudgment(ids.project, confirmationRequest))
+      .resolves.toMatchObject({ preparation: { status: "ready_to_freeze", progress: 95 } });
+    await expect(api.companyResearchWorkspace(ids.project)).resolves.toMatchObject({
+      preparation: { status: "ready_to_freeze", current_step: "memo", progress: 95 },
+      artifacts: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "memo",
+          payload: expect.objectContaining({
+            candidate_status: "human_confirmed",
+            reviewer: "human:local-user",
+            markdown: "Frozen memo",
+          }),
+        }),
+      ]),
+    });
+  });
+
+  it("rejects open or malformed machine and confirmed memo payloads", async () => {
+    const machineWithHumanFields = addClosedModelArtifacts(companyResearchWorkspaceBody());
+    Object.assign(machineWithHumanFields.artifacts.find((item: any) => item.kind === "memo").payload, {
+      reviewer: "human:local-user",
+      markdown: "Frozen memo",
+    });
+    const missingReviewer = confirmedCompanyResearchWorkspaceBody();
+    Reflect.deleteProperty(missingReviewer.artifacts.find((item: any) => item.kind === "memo").payload, "reviewer");
+    const wrongReviewer = confirmedCompanyResearchWorkspaceBody();
+    wrongReviewer.artifacts.find((item: any) => item.kind === "memo").payload.reviewer = "human:other";
+    const unnormalized = confirmedCompanyResearchWorkspaceBody("  Frozen memo\r\n");
+    const blank = confirmedCompanyResearchWorkspaceBody(" \n ");
+    const oversized = confirmedCompanyResearchWorkspaceBody("x".repeat(100_001));
+    const extra = confirmedCompanyResearchWorkspaceBody();
+    Object.assign(extra.artifacts.find((item: any) => item.kind === "memo").payload, { unexpected: true });
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response(machineWithHumanFields))
+      .mockResolvedValueOnce(response(missingReviewer))
+      .mockResolvedValueOnce(response(wrongReviewer))
+      .mockResolvedValueOnce(response(unnormalized))
+      .mockResolvedValueOnce(response(blank))
+      .mockResolvedValueOnce(response(oversized))
+      .mockResolvedValueOnce(response(extra)));
+    const api = new InvestmentResearchApi();
+
+    for (let index = 0; index < 7; index += 1) {
+      await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    }
+  });
+
+  it("normalizes UUID identity comparisons for company research publication", async () => {
+    const projectId = "a0000000-0000-4000-8000-000000000001";
+    const memoId = "b0000000-0000-4000-8000-000000000002";
+    const revisionId = "c0000000-0000-4000-8000-000000000003";
+    const confirmation = companyResearchJudgmentConfirmationBody();
+    confirmation.project_id = projectId;
+    confirmation.machine_memo.id = memoId;
+    const preview = companyResearchPublicationPreviewBody();
+    preview.project_id = projectId;
+    const revision = companyResearchFrozenRevisionBody();
+    revision.project_id = projectId;
+    revision.id = revisionId;
+    const exported = companyResearchMarkdownExportBody();
+    exported.filename = `alphabet-company-research-${revisionId}.md`;
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response(confirmation))
+      .mockResolvedValueOnce(response(preview))
+      .mockResolvedValueOnce(response(revision, 201))
+      .mockResolvedValueOnce(response(revision))
+      .mockResolvedValueOnce(response(exported)));
+    const api = new InvestmentResearchApi();
+    const confirmationRequest = {
+      schema_version: "underwriting.v1" as const,
+      expected_lock_version: 3,
+      expected_memo_id: memoId.toUpperCase(),
+      expected_memo_content_hash: companyResearchHash,
+      markdown: "Frozen memo",
+    };
+    const previewRequest = { schema_version: "underwriting.v1" as const, expected_lock_version: 4 };
+    const publishRequest = { schema_version: "underwriting.v1" as const, expected_lock_version: 4, expected_manifest_hash: companyResearchHash };
+
+    await expect(api.confirmCompanyResearchJudgment(projectId.toUpperCase(), confirmationRequest)).resolves.toMatchObject({ project_id: projectId });
+    await expect(api.previewCompanyResearchPublication(projectId.toUpperCase(), previewRequest)).resolves.toMatchObject({ project_id: projectId });
+    await expect(api.publishCompanyResearch(projectId.toUpperCase(), publishRequest, "case-key")).resolves.toMatchObject({ project_id: projectId });
+    await expect(api.companyResearchRevision(projectId.toUpperCase(), revisionId.toUpperCase())).resolves.toMatchObject({ id: revisionId });
+    await expect(api.exportCompanyResearchRevision(projectId.toUpperCase(), revisionId.toUpperCase())).resolves.toMatchObject({ filename: exported.filename });
   });
 
   it("rejects malformed and mismatched company research publication envelopes", async () => {
