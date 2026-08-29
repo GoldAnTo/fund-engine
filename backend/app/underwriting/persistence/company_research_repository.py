@@ -1190,6 +1190,16 @@ class CompanyResearchRepository:
     def preparation(self, preparation_id: UUID) -> CompanyResearchPreparation | None:
         return self._session.get(CompanyResearchPreparation, preparation_id)
 
+    def preparation_project_id(self, preparation_id: UUID) -> UUID | None:
+        """Read only the immutable project owner of one preparation, freshly."""
+        if type(preparation_id) is not UUID:
+            raise ValidationError("preparation_id must be a UUID")
+        return self._session.scalar(
+            select(CompanyResearchPreparation.project_id).where(
+                CompanyResearchPreparation.id == preparation_id
+            )
+        )
+
     def preparation_by_idempotency_key(
         self, idempotency_key: str
     ) -> CompanyResearchPreparation | None:

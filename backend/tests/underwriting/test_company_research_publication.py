@@ -22,6 +22,7 @@ from app.underwriting.domain.company_research import (
     CompanyResearchCompany,
     CompanyResearchSecurity,
 )
+from app.underwriting.domain.product_contracts import RevisionBoundaryInput
 from app.underwriting.domain.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
 )
@@ -38,6 +39,7 @@ from app.underwriting.persistence.product_models import (
     UnderwritingMarketCaptureEnvelope,
     UnderwritingPriceSnapshot,
     UnderwritingResearchAssessmentVersion,
+    UnderwritingResearchProject,
     UnderwritingResearchProjectSecurity,
     UnderwritingRevisionBoundary,
     UnderwritingRevisionManifest,
@@ -55,6 +57,7 @@ from app.underwriting.services.company_research_publication import (
 from app.underwriting.services.company_research_workbench import (
     CompanyResearchWorkbench,
 )
+from app.underwriting.services.product_project import research_project_content_hash
 from app.underwriting.services.workspace_draft import WorkspaceDraftService
 from tests.underwriting.test_company_research_persistence import (
     _rebind_historical_basis_without_updating_draft_lock,
@@ -417,6 +420,114 @@ def test_publish_freezes_one_company_research_revision_and_exactly_replays(
     }
 
 
+_PUBLICATION_ONLY_MANIFEST_FIELDS = {
+    "boundary_id",
+    "assessment_id",
+    "preview_manifest_hash",
+    "preparation_id",
+    "idempotency_key",
+    "published_at",
+}
+
+
+def _preview_hash_from_frozen_manifest(manifest: dict[str, object]) -> str:
+    return canonical_hash(
+        {
+            key: deepcopy(value)
+            for key, value in manifest.items()
+            if key not in _PUBLICATION_ONLY_MANIFEST_FIELDS
+        }
+    )
+
+
+def _rehash_manifest_revision_and_publication_event(
+    session,
+    *,
+    service: CompanyResearchPublicationService,
+    revision,
+    manifest_payload: dict[str, object],
+) -> str:
+    manifest_hash = canonical_hash(manifest_payload)
+    manifest = session.get(UnderwritingRevisionManifest, revision.manifest_id)
+    assert manifest is not None
+    _tamper_row(
+        session,
+        UnderwritingRevisionManifest,
+        manifest.id,
+        expire=False,
+        manifest=manifest_payload,
+        content_hash=manifest_hash,
+    )
+    revision_hash = service._revision_content_hash(
+        project_id=revision.project_id,
+        object_id=revision.company.object_id,
+        basis_id=revision.historical_basis_id,
+        sequence=revision.sequence,
+        boundary_id=revision.boundary_id,
+        manifest_id=revision.manifest_id,
+        manifest_hash=manifest_hash,
+        assessment_id=UUID(manifest_payload["assessment_id"]),
+        parent_revision_id=None,
+    )
+    _tamper_row(
+        session,
+        UnderwritingResearchVersion,
+        revision.id,
+        expire=False,
+        content_hash=revision_hash,
+    )
+    preparation_id = UUID(manifest_payload["preparation_id"])
+    published = next(
+        event
+        for event in session.scalars(
+            select(CompanyResearchEvent)
+            .where(CompanyResearchEvent.preparation_id == preparation_id)
+            .order_by(CompanyResearchEvent.sequence)
+        )
+        if event.event_type == "company_research_published"
+        and event.payload.get("revision_id") == str(revision.id)
+    )
+    event_payload = {
+        "revision_id": str(revision.id),
+        "manifest_hash": manifest_hash,
+        "idempotency_key": manifest_payload["idempotency_key"],
+    }
+    event_hash = CompanyResearchRepository.event_content_hash_v2(
+        preparation_id=published.preparation_id,
+        sequence=published.sequence,
+        previous_event_hash=published.previous_event_hash,
+        event_type=published.event_type,
+        payload=event_payload,
+        created_at=published.created_at,
+    )
+    _tamper_row(
+        session,
+        CompanyResearchEvent,
+        published.id,
+        expire=False,
+        payload=event_payload,
+        content_hash=event_hash,
+    )
+    session.expire_all()
+    return manifest_hash
+
+
+def _persisted_boundary_input(boundary: UnderwritingRevisionBoundary):
+    return RevisionBoundaryInput(
+        historical_basis_id=boundary.historical_basis_id,
+        mandate_id=boundary.mandate_id,
+        scope_id=boundary.scope_id,
+        agenda_id=boundary.agenda_id,
+        price_snapshot_ids=tuple(UUID(value) for value in boundary.price_snapshot_ids),
+        fx_snapshot_ids=tuple(UUID(value) for value in boundary.fx_snapshot_ids),
+        capital_structure_snapshot_id=boundary.capital_structure_snapshot_id,
+        security_rights_ids=tuple(
+            UUID(value) for value in boundary.security_rights_ids
+        ),
+        parent_revision_id=boundary.parent_revision_id,
+    )
+
+
 def test_company_research_boundary_schema_fits_the_persisted_column(session) -> None:
     initialized, _repository, _preparation, _job, _draft, _memo, confirmation = (
         _ready_to_freeze_workspace(session)
@@ -568,6 +679,300 @@ def test_revision_replay_authenticates_idempotency_key_and_published_at(
     )
     session.expire_all()
     with pytest.raises(CompanyResearchIntegrityError, match="publication identity"):
+        service.revision(initialized.project.id, revision.id)
+
+
+def test_revision_replay_rejects_noncanonical_idempotency_key(session) -> None:
+    initialized, _repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="canonical-key",
+    )
+    manifest = session.get(UnderwritingRevisionManifest, revision.manifest_id)
+    assert manifest is not None
+    payload = deepcopy(manifest.manifest)
+    payload["idempotency_key"] = " canonical-key "
+    _tamper_row(
+        session,
+        UnderwritingRevisionManifest,
+        manifest.id,
+        expire=False,
+        idempotency_key=" canonical-key ",
+    )
+    _rehash_manifest_revision_and_publication_event(
+        session,
+        service=service,
+        revision=revision,
+        manifest_payload=payload,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="publication identity"):
+        service.revision(initialized.project.id, revision.id)
+
+
+def test_revision_replay_rejects_assessment_version_substitution(session) -> None:
+    initialized, _repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="assessment-version",
+    )
+    manifest = session.get(UnderwritingRevisionManifest, revision.manifest_id)
+    assert manifest is not None
+    _tamper_row(
+        session,
+        UnderwritingResearchAssessmentVersion,
+        UUID(manifest.manifest["assessment_id"]),
+        version=99,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="assessment is invalid"):
+        service.revision(initialized.project.id, revision.id)
+
+
+def test_revision_replay_rejects_nonroot_sequence_without_a_parent(session) -> None:
+    initialized, _repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="root-sequence",
+    )
+    manifest = session.get(UnderwritingRevisionManifest, revision.manifest_id)
+    assert manifest is not None
+    changed_sequence = 99
+    revision_hash = service._revision_content_hash(
+        project_id=revision.project_id,
+        object_id=revision.company.object_id,
+        basis_id=revision.historical_basis_id,
+        sequence=changed_sequence,
+        boundary_id=revision.boundary_id,
+        manifest_id=revision.manifest_id,
+        manifest_hash=revision.manifest_hash,
+        assessment_id=UUID(manifest.manifest["assessment_id"]),
+        parent_revision_id=None,
+    )
+    _tamper_row(
+        session,
+        UnderwritingResearchVersion,
+        revision.id,
+        sequence=changed_sequence,
+        content_hash=revision_hash,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="revision lineage"):
+        service.revision(initialized.project.id, revision.id)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("self_parent", "price_snapshot"),
+)
+def test_revision_replay_cross_authenticates_boundary_and_judgment_lineage(
+    session, mutation: str
+) -> None:
+    initialized, _repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key=f"boundary-cross-{mutation}",
+    )
+    boundary_row = session.get(UnderwritingRevisionBoundary, revision.boundary_id)
+    manifest = session.get(UnderwritingRevisionManifest, revision.manifest_id)
+    assert boundary_row is not None and manifest is not None
+    boundary = _persisted_boundary_input(boundary_row)
+    if mutation == "self_parent":
+        changed = replace(boundary, parent_revision_id=revision.id)
+        boundary_values = {"parent_revision_id": revision.id}
+    else:
+        assert boundary.price_snapshot_ids
+        changed = replace(
+            boundary,
+            price_snapshot_ids=(uuid4(), *boundary.price_snapshot_ids[1:]),
+        )
+        boundary_values = {
+            "price_snapshot_ids": [str(value) for value in changed.price_snapshot_ids]
+        }
+    boundary_hash = canonical_hash(
+        service._boundary_payload(initialized.project.id, changed)
+    )
+    _tamper_row(
+        session,
+        UnderwritingRevisionBoundary,
+        boundary_row.id,
+        expire=False,
+        **boundary_values,
+        content_hash=boundary_hash,
+    )
+    payload = deepcopy(manifest.manifest)
+    payload["boundary_hash"] = boundary_hash
+    payload["preview_manifest_hash"] = _preview_hash_from_frozen_manifest(payload)
+    _rehash_manifest_revision_and_publication_event(
+        session,
+        service=service,
+        revision=revision,
+        manifest_payload=payload,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="boundary"):
+        service.revision(initialized.project.id, revision.id)
+
+
+def test_idempotent_replay_reconstructs_the_preview_manifest_hash(session) -> None:
+    initialized, _repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    key = "preview-hash-closure"
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key=key,
+    )
+    manifest = session.get(UnderwritingRevisionManifest, revision.manifest_id)
+    assert manifest is not None
+    forged_preview_hash = "f" * 64
+    payload = deepcopy(manifest.manifest)
+    payload["preview_manifest_hash"] = forged_preview_hash
+    _rehash_manifest_revision_and_publication_event(
+        session,
+        service=service,
+        revision=revision,
+        manifest_payload=payload,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="preview manifest"):
+        service.publish(
+            project_id=initialized.project.id,
+            expected_lock_version=preview.expected_lock_version,
+            expected_manifest_hash=forged_preview_hash,
+            idempotency_key=key,
+        )
+
+
+def test_revision_replay_rejects_a_publication_event_owned_by_a_foreign_project(
+    session,
+) -> None:
+    initialized, repository, _preparation, _job, _draft, _memo, confirmation = (
+        _ready_to_freeze_workspace(session)
+    )
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="foreign-event-owner",
+    )
+    foreign_project = UnderwritingResearchProject(
+        primary_company_id=initialized.project.primary_company_id,
+        content_hash=research_project_content_hash(
+            primary_company_id=initialized.project.primary_company_id,
+            target_security_ids=(),
+        ),
+        created_at=FROZEN_AT,
+    )
+    session.add(foreign_project)
+    session.flush()
+    foreign_preparation = CompanyResearchPreparation(
+        project_id=foreign_project.id,
+        idempotency_key="foreign-preparation-owner",
+        request_hash="c" * 64,
+        strategy_version="foreign-owner.v1",
+        status="completed",
+        current_step=None,
+        progress=100,
+        attempt=1,
+        next_attempt_at=None,
+        last_error_code=None,
+        job_id=None,
+        created_at=FROZEN_AT,
+        updated_at=FROZEN_AT,
+    )
+    session.add(foreign_preparation)
+    session.flush()
+    manifest = session.get(UnderwritingRevisionManifest, revision.manifest_id)
+    assert manifest is not None
+    payload = deepcopy(manifest.manifest)
+    payload["preparation_id"] = str(foreign_preparation.id)
+    manifest_hash = canonical_hash(payload)
+    repository.append_event(
+        preparation_id=foreign_preparation.id,
+        event_type="company_research_published",
+        payload={
+            "revision_id": str(revision.id),
+            "manifest_hash": manifest_hash,
+            "idempotency_key": payload["idempotency_key"],
+        },
+        created_at=FROZEN_AT,
+    )
+    _tamper_row(
+        session,
+        UnderwritingRevisionManifest,
+        manifest.id,
+        expire=False,
+        manifest=payload,
+        content_hash=manifest_hash,
+    )
+    revision_hash = service._revision_content_hash(
+        project_id=revision.project_id,
+        object_id=revision.company.object_id,
+        basis_id=revision.historical_basis_id,
+        sequence=revision.sequence,
+        boundary_id=revision.boundary_id,
+        manifest_id=revision.manifest_id,
+        manifest_hash=manifest_hash,
+        assessment_id=UUID(payload["assessment_id"]),
+        parent_revision_id=None,
+    )
+    _tamper_row(
+        session,
+        UnderwritingResearchVersion,
+        revision.id,
+        content_hash=revision_hash,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="preparation owner"):
         service.revision(initialized.project.id, revision.id)
 
 
@@ -1055,16 +1460,24 @@ def test_postgres_company_research_publication_if_configured(session, engine) ->
     def publish_once(key: str):
         concurrent = sessions()
         try:
-            barrier.wait()
-            result = CompanyResearchPublicationService(
-                concurrent, now=lambda: FROZEN_AT
-            ).publish(
-                project_id=project_id,
-                expected_lock_version=preview.expected_lock_version,
-                expected_manifest_hash=preview.manifest_hash,
-                idempotency_key=key,
-            )
-            concurrent.commit()
+            with concurrent.begin():
+                assert (
+                    concurrent.scalar(
+                        select(UnderwritingWorkspaceDraft.id).where(
+                            UnderwritingWorkspaceDraft.project_id == project_id
+                        )
+                    )
+                    is not None
+                )
+                barrier.wait()
+                result = CompanyResearchPublicationService(
+                    concurrent, now=lambda: FROZEN_AT
+                ).publish(
+                    project_id=project_id,
+                    expected_lock_version=preview.expected_lock_version,
+                    expected_manifest_hash=preview.manifest_hash,
+                    idempotency_key=key,
+                )
             return result, None
         except Exception as exc:  # noqa: BLE001 - assert public taxonomy below
             concurrent.rollback()

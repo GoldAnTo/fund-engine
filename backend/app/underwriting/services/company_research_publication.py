@@ -22,6 +22,9 @@ from app.underwriting.domain.company_research import (
     CompanyResearchSecurity,
 )
 from app.underwriting.domain.product_contracts import RevisionBoundaryInput
+from app.underwriting.domain.company_research_market_contracts import (
+    FrozenMarketSnapshotRole,
+)
 from app.underwriting.domain.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
 )
@@ -37,6 +40,7 @@ from app.underwriting.persistence.company_research_repository import (
 )
 from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.persistence.product_repository import ProductRepository
+from app.underwriting.persistence.models import UnderwritingResearchVersion
 from app.underwriting.services.company_research_boundary import (
     resolve_alphabet_company_research_boundary,
 )
@@ -65,6 +69,16 @@ _MANIFEST_SCHEMA = "company-research.revision-manifest.v1"
 _BOUNDARY_SCHEMA = "company-research.boundary.v1"
 _ASSESSMENT_SCHEMA = "company-research.research-assessment.v1"
 _MODEL_VERSION = "company-research-model.v1"
+_PUBLICATION_ONLY_MANIFEST_FIELDS = frozenset(
+    {
+        "boundary_id",
+        "assessment_id",
+        "preview_manifest_hash",
+        "preparation_id",
+        "idempotency_key",
+        "published_at",
+    }
+)
 _FROZEN_ARTIFACT_KINDS = (
     "evidence_index",
     "research_gaps",
@@ -1206,6 +1220,102 @@ class CompanyResearchPublicationService:
             }
         )
 
+    def _authenticate_revision_lineage(
+        self,
+        *,
+        product: ProductRepository,
+        row: UnderwritingResearchVersion,
+        project_id: UUID,
+    ) -> None:
+        """Authenticate the complete revision parent chain and boundary links."""
+        current = row
+        seen: set[UUID] = set()
+        while True:
+            if current.id in seen:
+                raise CompanyResearchIntegrityError(
+                    "company research revision lineage is invalid"
+                )
+            seen.add(current.id)
+            parent_id = current.supersedes_id
+            boundary = product.boundary(current.boundary_id)
+            manifest = product.manifest(current.manifest_id)
+            if (
+                boundary is None
+                or boundary.project_id != project_id
+                or boundary.schema_version != _BOUNDARY_SCHEMA
+                or boundary.parent_revision_id != parent_id
+            ):
+                raise CompanyResearchIntegrityError(
+                    "company research frozen boundary lineage is invalid"
+                )
+            if (
+                current.project_id != project_id
+                or current.object_id != row.object_id
+                or current.version_kind != "company_research"
+                or current.manifest_schema != _MANIFEST_SCHEMA
+                or current.publication_status != "user_frozen"
+                or type(current.sequence) is not int
+                or current.sequence < 1
+                or current.basis_id != boundary.historical_basis_id
+                or current.parent_ids
+                != ([str(parent_id)] if parent_id is not None else [])
+                or manifest is None
+                or manifest.project_id != project_id
+                or manifest.boundary_id != boundary.id
+                or not isinstance(manifest.manifest, dict)
+                or manifest.manifest.get("schema_version") != _MANIFEST_SCHEMA
+                or manifest.manifest.get("project_id") != str(project_id)
+                or manifest.manifest.get("boundary_id") != str(boundary.id)
+                or not isinstance(manifest.manifest.get("company"), dict)
+                or manifest.manifest["company"].get("object_id")
+                != str(current.object_id)
+                or manifest.content_hash != canonical_hash(manifest.manifest)
+            ):
+                raise CompanyResearchIntegrityError(
+                    "company research revision lineage is invalid"
+                )
+            assessment_id = self._manifest_uuid(
+                manifest.manifest.get("assessment_id"),
+                "company research lineage assessment reference",
+            )
+            if current.content_hash != self._revision_content_hash(
+                project_id=project_id,
+                object_id=current.object_id,
+                basis_id=current.basis_id,
+                sequence=current.sequence,
+                boundary_id=boundary.id,
+                manifest_id=manifest.id,
+                manifest_hash=manifest.content_hash,
+                assessment_id=assessment_id,
+                parent_revision_id=parent_id,
+            ):
+                raise CompanyResearchIntegrityError(
+                    "company research revision lineage is invalid"
+                )
+            if parent_id is None:
+                if current.sequence != 1:
+                    raise CompanyResearchIntegrityError(
+                        "company research revision lineage is invalid"
+                    )
+                return
+            parent = product.company_research_revision(parent_id)
+            if (
+                parent is None
+                or parent.sequence != current.sequence - 1
+                or self._stored_utc(
+                    parent.created_at,
+                    "company research parent revision created_at",
+                )
+                > self._stored_utc(
+                    current.created_at,
+                    "company research child revision created_at",
+                )
+            ):
+                raise CompanyResearchIntegrityError(
+                    "company research revision lineage is invalid"
+                )
+            current = parent
+
     def revision(
         self, project_id: UUID, revision_id: UUID
     ) -> CompanyResearchFrozenRevision:
@@ -1227,6 +1337,11 @@ class CompanyResearchPublicationService:
                 raise CompanyResearchIntegrityError(
                     "company research revision identity is invalid"
                 )
+            self._authenticate_revision_lineage(
+                product=product,
+                row=row,
+                project_id=project_id,
+            )
             manifest_row = product.manifest(row.manifest_id)
             boundary_row = product.boundary(row.boundary_id)
             if (
@@ -1283,6 +1398,36 @@ class CompanyResearchPublicationService:
                 "company research frozen preparation reference",
             )
             idempotency_key = manifest.get("idempotency_key")
+            preview_manifest_hash = manifest.get("preview_manifest_hash")
+            preview_projection = {
+                key: deepcopy(value)
+                for key, value in manifest.items()
+                if key not in _PUBLICATION_ONLY_MANIFEST_FIELDS
+            }
+            if (
+                not isinstance(preview_manifest_hash, str)
+                or _HASH.fullmatch(preview_manifest_hash) is None
+                or canonical_hash(preview_projection) != preview_manifest_hash
+            ):
+                raise CompanyResearchIntegrityError(
+                    "company research preview manifest hash is invalid"
+                )
+            try:
+                canonical_idempotency_key = self._idempotency_key(idempotency_key)
+            except ValidationError as exc:
+                raise CompanyResearchIntegrityError(
+                    "company research frozen publication identity is invalid"
+                ) from exc
+            if (
+                canonical_idempotency_key != idempotency_key
+                or self._repository.preparation_project_id(preparation_id) != project_id
+            ):
+                message = (
+                    "company research frozen preparation owner is invalid"
+                    if canonical_idempotency_key == idempotency_key
+                    else "company research frozen publication identity is invalid"
+                )
+                raise CompanyResearchIntegrityError(message)
             raw_published_at = manifest.get("published_at")
             try:
                 published_at = self._stored_utc(
@@ -1353,6 +1498,9 @@ class CompanyResearchPublicationService:
             if (
                 assessment_row is None
                 or assessment_row.project_id != project_id
+                or assessment_row.version != 1
+                or assessment_row.supersedes_id is not None
+                or parent_assessment_id is not None
                 or set(assessment_payload)
                 != {
                     "schema_version",
@@ -1587,6 +1735,51 @@ class CompanyResearchPublicationService:
                     self._repository.market_binding_from_payload(value)
                     for value in binding_payloads
                 )
+                price_snapshot_ids = tuple(
+                    sorted(
+                        (
+                            value.snapshot_id
+                            for value in bindings
+                            if value.role is FrozenMarketSnapshotRole.PRICE
+                        ),
+                        key=str,
+                    )
+                )
+                fx_snapshot_ids = tuple(
+                    sorted(
+                        (
+                            value.snapshot_id
+                            for value in bindings
+                            if value.role is FrozenMarketSnapshotRole.FX
+                        ),
+                        key=str,
+                    )
+                )
+                capital_structure_snapshot_ids = tuple(
+                    value.snapshot_id
+                    for value in bindings
+                    if value.role is FrozenMarketSnapshotRole.CAPITAL_STRUCTURE
+                )
+                security_rights_ids = tuple(
+                    sorted(
+                        (
+                            value.snapshot_id
+                            for value in bindings
+                            if value.role is FrozenMarketSnapshotRole.SECURITY_RIGHTS
+                        ),
+                        key=str,
+                    )
+                )
+                if (
+                    boundary.price_snapshot_ids != price_snapshot_ids
+                    or boundary.fx_snapshot_ids != fx_snapshot_ids
+                    or capital_structure_snapshot_ids
+                    != (boundary.capital_structure_snapshot_id,)
+                    or boundary.security_rights_ids != security_rights_ids
+                ):
+                    raise ValidationError(
+                        "company research frozen boundary snapshot roles are invalid"
+                    )
                 self._repository.validate_market_snapshot_bindings(
                     project_id=project_id,
                     bindings=bindings,
