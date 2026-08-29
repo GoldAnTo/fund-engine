@@ -1,0 +1,895 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import timedelta
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from uuid import UUID, uuid4
+
+import pytest
+from sqlalchemy import bindparam, create_engine, func, select, text
+from sqlalchemy.orm import sessionmaker
+
+from app.models.ledger import Base, ConflictError, ValidationError
+from app.models.operational import Job
+from app.underwriting.hashing import canonical_hash
+from app.underwriting.domain.company_research_artifact_codec import (
+    CompanyResearchArtifactCodec,
+)
+from app.underwriting.persistence.company_research_models import (
+    CompanyResearchArtifactVersion,
+    CompanyResearchEvent,
+    CompanyResearchPreparation,
+)
+from app.underwriting.persistence.company_research_repository import (
+    CompanyResearchRepository,
+)
+from app.underwriting.persistence.product_models import UnderwritingWorkspaceDraft
+from app.underwriting.services.company_research_preparation import (
+    CompanyResearchPreparationWorker,
+)
+from app.underwriting.services.company_research_publication import (
+    CompanyResearchJudgmentConfirmation,
+    CompanyResearchPublication,
+)
+from app.underwriting.services.company_research_workbench import (
+    CompanyResearchWorkbench,
+)
+from app.underwriting.services.workspace_draft import WorkspaceDraftService
+from tests.underwriting.test_company_research_persistence import (
+    _rebind_historical_basis_without_updating_draft_lock,
+    _substitute_basis,
+    _tamper_row,
+)
+from tests.underwriting.test_company_research_workbench import (
+    NOW,
+    _durably_rewrite_payload,
+    _prepared,
+)
+
+
+CONFIRMED_AT = NOW + timedelta(minutes=5)
+REVIEWER = "human:local-user"
+REJECTED_FACT_KEY = "fy2025_other_bets_revenue"
+
+
+def _awaiting_judgment_confirmation(session):
+    initialized = _prepared(session)
+    workbench = CompanyResearchWorkbench(session, now=lambda: NOW)
+    workspace = workbench.workspace(project_id=initialized.project.id)
+    evidence = next(
+        item.artifact
+        for item in workspace.modules
+        if item.key == "evidence_and_gaps"
+    )
+    assert evidence is not None
+
+    current = evidence
+    for fact in evidence.payload["facts"]:
+        decision = (
+            "rejected"
+            if fact["fact_key"] == REJECTED_FACT_KEY
+            else "confirmed"
+        )
+        current = workbench.review_evidence(
+            project_id=initialized.project.id,
+            evidence_artifact_id=current.id,
+            fact_key=fact["fact_key"],
+            decision=decision,
+            expected_head_id=current.id,
+        ).evidence_artifact
+
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "awaiting_judgment_review"
+
+    repository = workbench._company
+    preparation = repository.preparation_for_project(
+        initialized.project.id, fresh=True
+    )
+    assert preparation is not None and preparation.job_id is not None
+    job = session.get(Job, preparation.job_id)
+    draft = session.scalar(
+        select(UnderwritingWorkspaceDraft).where(
+            UnderwritingWorkspaceDraft.project_id == initialized.project.id
+        )
+    )
+    memo = repository.current_artifact(initialized.project.id, "memo")
+    assert job is not None and draft is not None and memo is not None
+    return initialized, repository, preparation, job, draft, memo
+
+
+def _job_projection(job: Job) -> tuple[object, ...]:
+    return (
+        job.id,
+        job.kind,
+        job.status,
+        job.progress,
+        job.attempt,
+        job.step,
+        job.error,
+        job.cancel_requested,
+        job.claim_token,
+        job.target_type,
+        job.target_id,
+        job.research_case_id,
+        job.started_at,
+        job.finished_at,
+    )
+
+
+def _row_projection(row) -> tuple[tuple[str, object], ...]:
+    return tuple(
+        (column.name, deepcopy(getattr(row, column.name)))
+        for column in row.__table__.columns
+    )
+
+
+def _durable_publication_snapshot(
+    session, *, project_id, preparation_id, job_id
+) -> dict[str, object]:
+    session.expire_all()
+    repository = CompanyResearchRepository(session)
+    preparation = repository.preparation_for_project(project_id, fresh=True)
+    draft = session.scalar(
+        select(UnderwritingWorkspaceDraft)
+        .where(UnderwritingWorkspaceDraft.project_id == project_id)
+        .execution_options(populate_existing=True)
+    )
+    job = session.scalar(
+        select(Job).where(Job.id == job_id).execution_options(populate_existing=True)
+    )
+    artifacts = tuple(
+        session.scalars(
+            select(CompanyResearchArtifactVersion)
+            .where(CompanyResearchArtifactVersion.project_id == project_id)
+            .order_by(
+                CompanyResearchArtifactVersion.kind,
+                CompanyResearchArtifactVersion.version,
+                CompanyResearchArtifactVersion.id,
+            )
+            .execution_options(populate_existing=True)
+        )
+    )
+    events = tuple(
+        session.scalars(
+            select(CompanyResearchEvent)
+            .where(CompanyResearchEvent.preparation_id == preparation_id)
+            .order_by(CompanyResearchEvent.sequence)
+            .execution_options(populate_existing=True)
+        )
+    )
+    assert preparation is not None and draft is not None and job is not None
+    return {
+        "preparation": _row_projection(preparation),
+        "draft": _row_projection(draft),
+        "job": _row_projection(job),
+        "artifacts": tuple(_row_projection(row) for row in artifacts),
+        "events": tuple(_row_projection(row) for row in events),
+        "job_count": session.scalar(select(func.count()).select_from(Job)),
+    }
+
+
+def _confirmation_request(draft, memo, **changes) -> dict[str, object]:
+    values: dict[str, object] = {
+        "expected_lock_version": draft.lock_version,
+        "expected_memo_id": memo.id,
+        "expected_memo_content_hash": memo.content_hash,
+        "markdown": "Reviewed conclusion.",
+    }
+    values.update(changes)
+    return values
+
+
+def _rewrite_one_event_type(
+    session,
+    preparation_id,
+    *,
+    target_event_type: str,
+    replacement_event_type: str,
+) -> None:
+    rows = tuple(
+        session.scalars(
+            select(CompanyResearchEvent)
+            .where(CompanyResearchEvent.preparation_id == preparation_id)
+            .order_by(CompanyResearchEvent.sequence)
+        )
+    )
+    target = next(row for row in rows if row.event_type == target_event_type)
+    previous_hash = None
+    table = CompanyResearchEvent.__table__
+    statement = text(
+        "UPDATE uw_company_research_events SET previous_event_hash = :previous_hash, "
+        "event_type = :event_type, content_hash = :content_hash WHERE id = :event_id"
+    ).bindparams(
+        bindparam("previous_hash", type_=table.c.previous_event_hash.type),
+        bindparam("event_type", type_=table.c.event_type.type),
+        bindparam("content_hash", type_=table.c.content_hash.type),
+        bindparam("event_id", type_=table.c.id.type),
+    )
+    connection = session.connection()
+    disable_trigger = text(
+        "ALTER TABLE uw_company_research_events DISABLE TRIGGER USER"
+    )
+    enable_trigger = text(
+        "ALTER TABLE uw_company_research_events ENABLE TRIGGER USER"
+    )
+    if connection.dialect.name == "postgresql":
+        connection.execute(disable_trigger)
+    try:
+        for row in rows:
+            event_type = replacement_event_type if row.id == target.id else row.event_type
+            content_hash = CompanyResearchRepository.event_content_hash_v2(
+                preparation_id=row.preparation_id,
+                sequence=row.sequence,
+                previous_event_hash=previous_hash,
+                event_type=event_type,
+                payload=row.payload,
+                created_at=row.created_at,
+            )
+            assert connection.execute(
+                statement,
+                {
+                    "previous_hash": previous_hash,
+                    "event_type": event_type,
+                    "content_hash": content_hash,
+                    "event_id": row.id,
+                },
+            ).rowcount == 1
+            previous_hash = content_hash
+    finally:
+        if connection.dialect.name == "postgresql":
+            connection.execute(enable_trigger)
+    session.expire_all()
+
+
+def _rewrite_event_chain_without_one_review(session, preparation_id) -> None:
+    _rewrite_one_event_type(
+        session,
+        preparation_id,
+        target_event_type="evidence_reviewed",
+        replacement_event_type="review_event_removed",
+    )
+
+
+def _make_event_time_nonmonotonic(session, preparation_id) -> None:
+    rows = tuple(
+        session.scalars(
+            select(CompanyResearchEvent)
+            .where(CompanyResearchEvent.preparation_id == preparation_id)
+            .order_by(CompanyResearchEvent.sequence)
+        )
+    )
+    target = next(row for row in rows if row.event_type == "model_stage_claimed")
+    target_index = rows.index(target)
+    assert target_index > 0
+    changed_time = rows[target_index - 1].created_at - timedelta(seconds=1)
+    previous_hash = None
+    table = CompanyResearchEvent.__table__
+    statement = text(
+        "UPDATE uw_company_research_events SET previous_event_hash = :previous_hash, "
+        "created_at = :created_at, content_hash = :content_hash WHERE id = :event_id"
+    ).bindparams(
+        bindparam("previous_hash", type_=table.c.previous_event_hash.type),
+        bindparam("created_at", type_=table.c.created_at.type),
+        bindparam("content_hash", type_=table.c.content_hash.type),
+        bindparam("event_id", type_=table.c.id.type),
+    )
+    connection = session.connection()
+    disable_trigger = text(
+        "ALTER TABLE uw_company_research_events DISABLE TRIGGER USER"
+    )
+    enable_trigger = text(
+        "ALTER TABLE uw_company_research_events ENABLE TRIGGER USER"
+    )
+    if connection.dialect.name == "postgresql":
+        connection.execute(disable_trigger)
+    try:
+        for row in rows:
+            created_at = changed_time if row.id == target.id else row.created_at
+            content_hash = CompanyResearchRepository.event_content_hash_v2(
+                preparation_id=row.preparation_id,
+                sequence=row.sequence,
+                previous_event_hash=previous_hash,
+                event_type=row.event_type,
+                payload=row.payload,
+                created_at=created_at,
+            )
+            assert connection.execute(
+                statement,
+                {
+                    "previous_hash": previous_hash,
+                    "created_at": created_at,
+                    "content_hash": content_hash,
+                    "event_id": row.id,
+                },
+            ).rowcount == 1
+            previous_hash = content_hash
+    finally:
+        if connection.dialect.name == "postgresql":
+            connection.execute(enable_trigger)
+    session.expire_all()
+
+
+def test_confirm_judgment_atomically_advances_the_publication_boundary(session) -> None:
+    initialized, repository, preparation, job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    project_id = initialized.project.id
+    prior_draft_lock_version = draft.lock_version
+    prior_draft_content = deepcopy(draft.content)
+    prior_base_revision_id = draft.base_revision_id
+    prior_job = _job_projection(job)
+    prior_attempt_count = session.scalar(
+        select(func.count()).select_from(Job).where(Job.id == job.id)
+    )
+    prior_heads = {
+        kind: (row.id, row.content_hash, row.version)
+        for kind in (
+            "evidence_index",
+            "research_gaps",
+            "business_map",
+            "driver_map",
+            "financial_bridge",
+            "scenario_set",
+            "valuation_set",
+            "judgment_context",
+        )
+        if (row := repository.current_artifact(project_id, kind)) is not None
+    }
+    prior_events = repository.events(preparation.id)
+    prior_memo_payload = deepcopy(machine_memo.payload)
+    prior_memo_source_refs = deepcopy(machine_memo.source_refs)
+
+    result = CompanyResearchPublication(
+        session, now=lambda: CONFIRMED_AT
+    ).confirm_judgment(
+        project_id=project_id,
+        expected_lock_version=draft.lock_version,
+        expected_memo_id=machine_memo.id,
+        expected_memo_content_hash=machine_memo.content_hash,
+        markdown="  Investment conclusion.\r\n\rSecond paragraph.\r  ",
+    )
+
+    assert type(result) is CompanyResearchJudgmentConfirmation
+    assert result.project_id == project_id
+    assert result.preparation_id == preparation.id
+    assert result.draft_id == draft.id
+    assert result.draft_lock_version == prior_draft_lock_version + 1
+    assert result.machine_memo_id == machine_memo.id
+    assert result.machine_memo_content_hash == machine_memo.content_hash
+    assert result.confirmed_memo_id != machine_memo.id
+    assert result.assessment_status == prior_memo_payload["assessment_status"]
+    assert result.reviewer == REVIEWER
+    assert result.markdown == "Investment conclusion.\n\nSecond paragraph."
+    assert result.confirmed_at == CONFIRMED_AT
+
+    session.expire_all()
+    confirmed = repository.current_artifact(project_id, "memo")
+    assert confirmed is not None
+    assert confirmed.id == result.confirmed_memo_id
+    assert confirmed.content_hash == result.confirmed_memo_content_hash
+    assert confirmed.version == machine_memo.version + 1
+    assert confirmed.supersedes_id == machine_memo.id
+    assert confirmed.parent_content_hash == machine_memo.content_hash
+    assert confirmed.source_refs == prior_memo_source_refs
+    assert confirmed.payload["_lineage"] == prior_memo_payload["_lineage"]
+    decoded = CompanyResearchArtifactCodec.decode(
+        "memo",
+        {key: value for key, value in confirmed.payload.items() if key != "_lineage"},
+    )
+    assert decoded.candidate_status == "human_confirmed"
+    assert decoded.reviewer == REVIEWER
+    assert decoded.markdown == "Investment conclusion.\n\nSecond paragraph."
+    expected_payload = {
+        **prior_memo_payload,
+        "candidate_status": "human_confirmed",
+        "reviewer": REVIEWER,
+        "markdown": "Investment conclusion.\n\nSecond paragraph.",
+    }
+    assert confirmed.payload == expected_payload
+    assert CompanyResearchRepository._persisted_utc(confirmed.created_at) == CONFIRMED_AT
+
+    current_preparation = repository.preparation_for_project(project_id, fresh=True)
+    current_draft = session.scalar(
+        select(UnderwritingWorkspaceDraft)
+        .where(UnderwritingWorkspaceDraft.project_id == project_id)
+        .execution_options(populate_existing=True)
+    )
+    current_job = session.scalar(
+        select(Job).where(Job.id == job.id).execution_options(populate_existing=True)
+    )
+    assert current_preparation is not None
+    assert (
+        current_preparation.status,
+        current_preparation.current_step,
+        current_preparation.progress,
+        current_preparation.last_error_code,
+    ) == ("ready_to_freeze", "memo", 95, None)
+    assert current_draft is not None
+    assert current_draft.lock_version == prior_draft_lock_version + 1
+    assert current_draft.content == prior_draft_content
+    assert current_draft.base_revision_id == prior_base_revision_id
+    assert current_job is not None and _job_projection(current_job) == prior_job
+    assert session.scalar(
+        select(func.count()).select_from(Job).where(Job.id == job.id)
+    ) == prior_attempt_count
+
+    assert {
+        kind: (row.id, row.content_hash, row.version)
+        for kind in prior_heads
+        if (row := repository.current_artifact(project_id, kind)) is not None
+    } == prior_heads
+    evidence = repository.current_artifact(project_id, "evidence_index")
+    assert evidence is not None
+    assert [fact["review_decision"] for fact in evidence.payload["facts"]] == [
+        "confirmed",
+        "confirmed",
+        "confirmed",
+        "confirmed",
+        "rejected",
+        "confirmed",
+        "confirmed",
+    ]
+    current_events = repository.events(preparation.id)
+    assert current_events[:-1] == prior_events
+    event = current_events[-1]
+    assert event.hash_version == 2
+    assert event.event_type == "judgment_confirmed"
+    assert event.payload == {
+        "machine_memo_id": str(machine_memo.id),
+        "machine_memo_content_hash": machine_memo.content_hash,
+        "confirmed_memo_id": str(confirmed.id),
+        "confirmed_memo_content_hash": confirmed.content_hash,
+        "assessment_status": decoded.assessment_status,
+        "reviewer": REVIEWER,
+    }
+    assert CompanyResearchRepository._persisted_utc(event.created_at) == CONFIRMED_AT
+    assert CompanyResearchRepository._persisted_utc(confirmed.created_at) == CONFIRMED_AT
+    assert session.scalar(
+        select(func.count())
+        .select_from(CompanyResearchArtifactVersion)
+        .where(
+            CompanyResearchArtifactVersion.project_id == project_id,
+            CompanyResearchArtifactVersion.kind == "memo",
+        )
+    ) == 2
+    assert session.scalar(
+        select(func.count())
+        .select_from(CompanyResearchEvent)
+        .where(
+            CompanyResearchEvent.preparation_id == preparation.id,
+            CompanyResearchEvent.event_type == "judgment_confirmed",
+        )
+    ) == 1
+
+
+@pytest.mark.parametrize("markdown", ("", " \r\n\t ", "x" * 100001))
+def test_confirmation_rejects_invalid_normalized_markdown_before_reading_state(
+    session, markdown
+) -> None:
+    before = session.scalar(select(func.count()).select_from(CompanyResearchEvent))
+
+    with pytest.raises(ValidationError, match="markdown"):
+        CompanyResearchPublication(session, now=lambda: CONFIRMED_AT).confirm_judgment(
+            project_id=uuid4(),
+            expected_lock_version=1,
+            expected_memo_id=uuid4(),
+            expected_memo_content_hash="a" * 64,
+            markdown=markdown,
+        )
+
+    session.commit()
+    assert session.scalar(select(func.count()).select_from(CompanyResearchEvent)) == before
+
+
+def test_confirmation_exact_replay_returns_the_existing_result_once(session) -> None:
+    initialized, repository, preparation, job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    request = _confirmation_request(draft, machine_memo)
+    service = CompanyResearchPublication(session, now=lambda: CONFIRMED_AT)
+
+    first = service.confirm_judgment(project_id=initialized.project.id, **request)
+    session.commit()
+    after_first = _durable_publication_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+        job_id=job.id,
+    )
+    second = service.confirm_judgment(project_id=initialized.project.id, **request)
+    session.commit()
+
+    assert second == first
+    assert _durable_publication_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+        job_id=job.id,
+    ) == after_first
+    assert len(repository.artifact_chain(first.confirmed_memo_id)) == 2
+
+
+def test_confirmation_replay_reauthenticates_the_model_claim_audit_prefix(
+    session,
+) -> None:
+    initialized, _repository, preparation, job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    request = _confirmation_request(draft, machine_memo)
+    service = CompanyResearchPublication(session, now=lambda: CONFIRMED_AT)
+    service.confirm_judgment(project_id=initialized.project.id, **request)
+    session.commit()
+    _rewrite_one_event_type(
+        session,
+        preparation.id,
+        target_event_type="model_stage_claimed",
+        replacement_event_type="model_claim_removed",
+    )
+    session.commit()
+    before = _durable_publication_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+        job_id=job.id,
+    )
+
+    with pytest.raises((ConflictError, ValidationError)):
+        service.confirm_judgment(project_id=initialized.project.id, **request)
+    session.commit()
+
+    assert _durable_publication_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+        job_id=job.id,
+    ) == before
+
+
+@pytest.mark.parametrize(
+    "request_change",
+    (
+        {"markdown": "A different conclusion."},
+        {"expected_memo_id": UUID(int=999)},
+        {"expected_memo_content_hash": "f" * 64},
+        {"expected_lock_version": 999},
+    ),
+)
+def test_confirmation_replay_with_different_content_or_expectation_conflicts_without_writes(
+    session, request_change
+) -> None:
+    initialized, _repository, preparation, job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    service = CompanyResearchPublication(session, now=lambda: CONFIRMED_AT)
+    request = _confirmation_request(draft, machine_memo)
+    service.confirm_judgment(project_id=initialized.project.id, **request)
+    session.commit()
+    before = _durable_publication_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+        job_id=job.id,
+    )
+
+    with pytest.raises(ConflictError):
+        service.confirm_judgment(
+            project_id=initialized.project.id,
+            **{**request, **request_change},
+        )
+    session.commit()
+
+    assert _durable_publication_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+        job_id=job.id,
+    ) == before
+
+
+class _InjectedConfirmationFailure(RuntimeError):
+    pass
+
+
+@pytest.mark.parametrize(
+    "stage_method",
+    (
+        "append_judgment_confirmation_memo",
+        "compare_and_swap_publication_draft",
+        "advance_judgment_confirmation",
+        "append_judgment_confirmation_event",
+    ),
+)
+def test_confirmation_failure_at_each_mutation_stage_rolls_back_the_outer_savepoint(
+    session, monkeypatch, stage_method
+) -> None:
+    initialized, _repository, preparation, job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    before = _durable_publication_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+        job_id=job.id,
+    )
+
+    def fail(*_args, **_kwargs):
+        raise _InjectedConfirmationFailure(stage_method)
+
+    monkeypatch.setattr(CompanyResearchRepository, stage_method, fail)
+    with pytest.raises(_InjectedConfirmationFailure, match=stage_method):
+        CompanyResearchPublication(
+            session, now=lambda: CONFIRMED_AT
+        ).confirm_judgment(
+            project_id=initialized.project.id,
+            **_confirmation_request(draft, machine_memo),
+        )
+    session.commit()
+
+    assert _durable_publication_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+        job_id=job.id,
+    ) == before
+
+
+def _tamper_stale_draft(
+    session, initialized, _repository, _preparation, _job, draft, _memo, request
+) -> None:
+    WorkspaceDraftService(session, now=lambda: NOW + timedelta(minutes=1)).save(
+        initialized.project.id,
+        expected_lock_version=draft.lock_version,
+        patch={},
+    )
+
+
+def _tamper_wrong_memo_id(
+    _session, _initialized, _repository, _preparation, _job, _draft, _memo, request
+) -> None:
+    request["expected_memo_id"] = uuid4()
+
+
+def _tamper_wrong_memo_hash(
+    _session, _initialized, _repository, _preparation, _job, _draft, _memo, request
+) -> None:
+    request["expected_memo_content_hash"] = "f" * 64
+
+
+def _tamper_preparation_chronology(
+    session, _initialized, _repository, preparation, _job, _draft, _memo, _request
+) -> None:
+    _tamper_row(
+        session,
+        CompanyResearchPreparation,
+        preparation.id,
+        updated_at=preparation.created_at - timedelta(seconds=1),
+    )
+
+
+def _tamper_draft_chronology(
+    session, _initialized, _repository, _preparation, _job, draft, _memo, _request
+) -> None:
+    _tamper_row(
+        session,
+        UnderwritingWorkspaceDraft,
+        draft.id,
+        updated_at=draft.created_at - timedelta(seconds=1),
+    )
+
+
+def _tamper_substitute_reviewed_evidence(
+    _session, initialized, repository, _preparation, _job, _draft, _memo, _request
+) -> None:
+    evidence = repository.current_artifact(initialized.project.id, "evidence_index")
+    assert evidence is not None
+    repository.append_artifact(
+        project_id=initialized.project.id,
+        kind="evidence_index",
+        input_hash=canonical_hash({"substitute": evidence.content_hash}),
+        payload=evidence.payload,
+        source_refs=evidence.source_refs,
+        expected_parent_id=evidence.id,
+        created_at=NOW,
+    )
+
+
+def _tamper_missing_evidence_review_event(
+    session,
+    _initialized,
+    _repository,
+    preparation,
+    _job,
+    _draft,
+    _memo,
+    _request,
+) -> None:
+    _rewrite_event_chain_without_one_review(session, preparation.id)
+
+
+def _tamper_governed_gap_reason(
+    session, initialized, repository, _preparation, _job, _draft, _memo, _request
+) -> None:
+    gaps = repository.current_artifact(initialized.project.id, "research_gaps")
+    assert gaps is not None
+    payload = deepcopy(gaps.payload)
+    payload["gaps"][0]["reason"] = "Recomputed but not governed."
+    _durably_rewrite_payload(session, gaps, payload)
+
+
+def _tamper_historical_basis(
+    session, initialized, _repository, _preparation, _job, _draft, _memo, _request
+) -> None:
+    replacement = _substitute_basis(session, initialized.project)
+    _rebind_historical_basis_without_updating_draft_lock(
+        session, initialized.project, replacement.id
+    )
+
+
+def _tamper_foreign_model_parent(
+    session, initialized, repository, _preparation, _job, _draft, _memo, _request
+) -> None:
+    driver = repository.current_artifact(initialized.project.id, "driver_map")
+    assert driver is not None
+    payload = deepcopy(driver.payload)
+    payload["_lineage"]["artifact_refs"][0]["artifact_id"] = str(uuid4())
+    _durably_rewrite_payload(session, driver, payload)
+
+
+def _tamper_malformed_memo(
+    session, _initialized, _repository, _preparation, _job, _draft, memo, _request
+) -> None:
+    payload = deepcopy(memo.payload)
+    payload["candidate_status"] = "unknown"
+    _durably_rewrite_payload(session, memo, payload)
+
+
+def _tamper_nonmonotonic_artifact_time(
+    session, initialized, repository, _preparation, _job, _draft, memo, _request
+) -> None:
+    judgment = repository.current_artifact(
+        initialized.project.id, "judgment_context"
+    )
+    assert judgment is not None
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        memo.id,
+        created_at=judgment.created_at - timedelta(seconds=1),
+    )
+
+
+def _tamper_nonmonotonic_event_time(
+    session,
+    _initialized,
+    _repository,
+    preparation,
+    _job,
+    _draft,
+    _memo,
+    _request,
+) -> None:
+    _make_event_time_nonmonotonic(session, preparation.id)
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        _tamper_stale_draft,
+        _tamper_wrong_memo_id,
+        _tamper_wrong_memo_hash,
+        _tamper_preparation_chronology,
+        _tamper_draft_chronology,
+        _tamper_substitute_reviewed_evidence,
+        _tamper_missing_evidence_review_event,
+        _tamper_governed_gap_reason,
+        _tamper_historical_basis,
+        _tamper_foreign_model_parent,
+        _tamper_malformed_memo,
+        _tamper_nonmonotonic_artifact_time,
+        _tamper_nonmonotonic_event_time,
+    ),
+    ids=lambda value: value.__name__.removeprefix("_tamper_"),
+)
+def test_confirmation_tamper_and_stale_matrix_fails_closed_with_zero_writes(
+    session, tamper
+) -> None:
+    initialized, repository, preparation, job, draft, machine_memo = (
+        _awaiting_judgment_confirmation(session)
+    )
+    request = _confirmation_request(draft, machine_memo)
+    tamper(
+        session,
+        initialized,
+        repository,
+        preparation,
+        job,
+        draft,
+        machine_memo,
+        request,
+    )
+    session.commit()
+    before = _durable_publication_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+        job_id=job.id,
+    )
+
+    with pytest.raises((ConflictError, ValidationError)):
+        CompanyResearchPublication(
+            session, now=lambda: CONFIRMED_AT
+        ).confirm_judgment(project_id=initialized.project.id, **request)
+    session.commit()
+
+    assert _durable_publication_snapshot(
+        session,
+        project_id=initialized.project.id,
+        preparation_id=preparation.id,
+        job_id=job.id,
+    ) == before
+
+
+def test_sqlite_two_session_confirmation_has_one_winner_and_exact_replay(tmp_path) -> None:
+    database_path = tmp_path / "company-research-confirmation.sqlite3"
+    engine = create_engine(
+        f"sqlite:///{database_path}",
+        future=True,
+        connect_args={"check_same_thread": False, "timeout": 15},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, future=True)
+    setup = sessions()
+    try:
+        initialized, _repository, preparation, job, draft, machine_memo = (
+            _awaiting_judgment_confirmation(setup)
+        )
+        project_id = initialized.project.id
+        preparation_id = preparation.id
+        job_id = job.id
+        request = _confirmation_request(draft, machine_memo)
+        setup.commit()
+    finally:
+        setup.close()
+
+    barrier = Barrier(2)
+
+    def confirm_once() -> CompanyResearchJudgmentConfirmation:
+        concurrent = sessions()
+        try:
+            barrier.wait()
+            result = CompanyResearchPublication(
+                concurrent, now=lambda: CONFIRMED_AT
+            ).confirm_judgment(project_id=project_id, **request)
+            concurrent.commit()
+            return result
+        finally:
+            concurrent.close()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = tuple(executor.map(lambda _index: confirm_once(), range(2)))
+        assert results[0] == results[1]
+        verify = sessions()
+        try:
+            snapshot = _durable_publication_snapshot(
+                verify,
+                project_id=project_id,
+                preparation_id=preparation_id,
+                job_id=job_id,
+            )
+            artifacts = snapshot["artifacts"]
+            events = snapshot["events"]
+            assert sum(
+                dict(row)["kind"] == "memo" for row in artifacts  # type: ignore[arg-type]
+            ) == 2
+            assert sum(
+                dict(row)["event_type"] == "judgment_confirmed"  # type: ignore[arg-type]
+                for row in events
+            ) == 1
+        finally:
+            verify.close()
+    finally:
+        engine.dispose()

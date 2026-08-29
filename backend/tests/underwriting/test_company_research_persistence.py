@@ -2149,3 +2149,48 @@ def test_repository_writes_remain_owned_by_the_callers_transaction(session) -> N
     session.rollback()
 
     assert session.scalar(select(CompanyResearchPreparation.id)) is None
+
+
+def test_publication_state_reserves_and_locks_project_preparation_job_draft_in_order(
+    session, monkeypatch
+) -> None:
+    from tests.underwriting.test_company_research_workbench import _model_workspace
+
+    initialized, _workbench, repository = _model_workspace(session)
+    calls: list[str] = []
+    originals = {
+        "project": repository._project_for_update,
+        "preparation": repository._preparation_for_update,
+        "job": repository._job_for_update,
+        "draft": repository._workspace_draft_for_update,
+    }
+
+    def recording(name):
+        def invoke(*args, **kwargs):
+            calls.append(name)
+            return originals[name](*args, **kwargs)
+
+        return invoke
+
+    monkeypatch.setattr(repository, "_project_for_update", recording("project"))
+    monkeypatch.setattr(
+        repository, "_preparation_for_update", recording("preparation")
+    )
+    monkeypatch.setattr(repository, "_job_for_update", recording("job"))
+    monkeypatch.setattr(
+        repository, "_workspace_draft_for_update", recording("draft")
+    )
+
+    state = repository.lock_publication_state(initialized.project.id)
+
+    assert calls[:4] == ["project", "preparation", "job", "draft"]
+    assert state.project.id == initialized.project.id
+    assert state.preparation.project_id == state.project.id
+    assert state.job.id == state.preparation.job_id
+    assert state.draft.project_id == state.project.id
+    assert state.draft_content == WorkspaceDraftService.decode_content(
+        state.draft.content
+    )
+    assert state.historical_basis.id == state.draft_content.historical_basis_id
+    assert state.artifact_heads["memo"] == state.artifact_chains["memo"][-1]
+    assert state.events == repository.events(state.preparation.id)

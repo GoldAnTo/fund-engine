@@ -182,6 +182,31 @@ class CompanyResearchBasisRecoveryState:
 
 
 @dataclass(frozen=True, slots=True)
+class CompanyResearchPublicationState:
+    """One fresh, project-first locked judgment-publication boundary."""
+
+    project: UnderwritingResearchProject
+    preparation: CompanyResearchPreparation
+    job: Job
+    draft: UnderwritingWorkspaceDraft
+    draft_content: WorkspaceDraftContent
+    company: UnderwritingResearchObject
+    securities: tuple[UnderwritingResearchObject, ...]
+    memberships: tuple[UnderwritingResearchProjectSecurity, ...]
+    historical_basis: UnderwritingHistoricalBasis
+    authenticated_basis: CompanyResearchAuthenticatedHistoricalBasis
+    mandate: UnderwritingMandateVersion | None
+    scope: UnderwritingResearchScopeVersion | None
+    agenda: UnderwritingResearchAgendaVersion | None
+    mandate_head_id: UUID | None
+    scope_head_id: UUID | None
+    agenda_head_id: UUID | None
+    artifact_heads: Mapping[str, CompanyResearchArtifactVersion]
+    artifact_chains: Mapping[str, tuple[CompanyResearchArtifactVersion, ...]]
+    events: tuple[CompanyResearchEvent, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class CompanyResearchRetryState:
     """Fresh project-first ownership boundary used to select a retry path."""
 
@@ -1143,6 +1168,187 @@ class CompanyResearchRepository:
         if fresh:
             statement = statement.execution_options(populate_existing=True)
         return self._session.scalar(statement)
+
+    def reserve_publication_writer(self) -> None:
+        """Reserve SQLite's sole writer before the publication savepoint."""
+        try:
+            self._reserve_sqlite_writer_before_ownership_read()
+        except OperationalError as exc:
+            raise ConflictError(
+                "company research judgment confirmation is concurrent"
+            ) from exc
+
+    def lock_publication_state(
+        self, project_id: UUID
+    ) -> CompanyResearchPublicationState:
+        """Capture every mutable owner and immutable authentication input freshly."""
+        if type(project_id) is not UUID:
+            raise ValidationError("project_id must be a UUID")
+        self.reserve_publication_writer()
+        project = self._project_for_update(project_id)
+        if project is None:
+            raise ValidationError("company research project not found")
+        preparation_id = self._session.scalar(
+            select(CompanyResearchPreparation.id).where(
+                CompanyResearchPreparation.project_id == project_id
+            )
+        )
+        if preparation_id is None:
+            raise ValidationError("company research preparation not found")
+        preparation = self._preparation_for_update(
+            preparation_id, populate_existing=True
+        )
+        if preparation is None or preparation.project_id != project_id:
+            raise ValidationError("company research preparation not found")
+        job = self._locked_prepare_job(preparation, populate_existing=True)
+        draft = self._workspace_draft_for_update(project_id)
+        if draft is None:
+            raise ValidationError("company research workspace draft is missing")
+        try:
+            draft_content = WorkspaceDraftService.decode_content(draft.content)
+        except ValidationError as exc:
+            raise CompanyResearchIntegrityError(
+                "company research workspace draft content is invalid"
+            ) from exc
+
+        memberships = tuple(
+            self._session.scalars(
+                select(UnderwritingResearchProjectSecurity)
+                .where(UnderwritingResearchProjectSecurity.project_id == project_id)
+                .order_by(UnderwritingResearchProjectSecurity.security_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+        authority_ids = tuple(
+            sorted(
+                {project.primary_company_id, *(row.security_id for row in memberships)},
+                key=str,
+            )
+        )
+        authorities = tuple(
+            self._session.scalars(
+                select(UnderwritingResearchObject)
+                .where(UnderwritingResearchObject.id.in_(authority_ids))
+                .order_by(UnderwritingResearchObject.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+        authority_by_id = {row.id: row for row in authorities}
+        company = authority_by_id.get(project.primary_company_id)
+        securities = tuple(
+            authority_by_id[row.security_id]
+            for row in memberships
+            if row.security_id in authority_by_id
+        )
+        if company is None or len(securities) != len(memberships):
+            raise CompanyResearchIntegrityError(
+                "company research project identity is incomplete"
+            )
+
+        historical_basis_id = draft_content.historical_basis_id
+        if historical_basis_id is None:
+            raise CompanyResearchIntegrityError(
+                "company research historical basis is missing"
+            )
+        historical_basis = self._session.scalar(
+            select(UnderwritingHistoricalBasis)
+            .where(UnderwritingHistoricalBasis.id == historical_basis_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if historical_basis is None:
+            raise CompanyResearchIntegrityError(
+                "company research historical basis is invalid"
+            )
+        authenticated_basis = self.authenticate_historical_basis(historical_basis)
+
+        foundation_heads: list[object | None] = []
+        for model in (
+            UnderwritingMandateVersion,
+            UnderwritingResearchScopeVersion,
+            UnderwritingResearchAgendaVersion,
+        ):
+            foundation_heads.append(
+                self._session.scalar(
+                    select(model)
+                    .where(model.project_id == project_id)
+                    .order_by(model.version.desc(), model.id.desc())
+                    .limit(1)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            )
+
+        all_artifacts = tuple(
+            self._session.scalars(
+                select(CompanyResearchArtifactVersion)
+                .where(CompanyResearchArtifactVersion.project_id == project_id)
+                .order_by(
+                    CompanyResearchArtifactVersion.kind,
+                    CompanyResearchArtifactVersion.version,
+                    CompanyResearchArtifactVersion.id,
+                )
+                .limit(2049)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+        if len(all_artifacts) > 2048:
+            raise CompanyResearchIntegrityError(
+                "company research artifact history limit exceeded"
+            )
+        rows_by_kind: dict[str, list[CompanyResearchArtifactVersion]] = {}
+        for row in all_artifacts:
+            if row.kind not in COMPANY_RESEARCH_ARTIFACT_KINDS:
+                raise CompanyResearchIntegrityError(
+                    "company research artifact kind is invalid"
+                )
+            self._validate_artifact_row(row)
+            rows_by_kind.setdefault(row.kind, []).append(row)
+        artifact_heads: dict[str, CompanyResearchArtifactVersion] = {}
+        artifact_chains: dict[
+            str, tuple[CompanyResearchArtifactVersion, ...]
+        ] = {}
+        for kind in sorted(rows_by_kind):
+            head = self.current_artifact(project_id, kind, lock=True)
+            if head is None:
+                raise CompanyResearchIntegrityError(
+                    "company research artifact history is incomplete"
+                )
+            chain = self.artifact_chain(head.id, lock=True)
+            if len(chain) != len(rows_by_kind[kind]):
+                raise CompanyResearchIntegrityError(
+                    "company research artifact parent closure is invalid"
+                )
+            artifact_heads[kind] = head
+            artifact_chains[kind] = chain
+        events = self.events(preparation.id, lock=True)
+        mandate = foundation_heads[0]
+        scope = foundation_heads[1]
+        agenda = foundation_heads[2]
+        return CompanyResearchPublicationState(
+            project=project,
+            preparation=preparation,
+            job=job,
+            draft=draft,
+            draft_content=draft_content,
+            company=company,
+            securities=securities,
+            memberships=memberships,
+            historical_basis=historical_basis,
+            authenticated_basis=authenticated_basis,
+            mandate=mandate,
+            scope=scope,
+            agenda=agenda,
+            mandate_head_id=mandate.id if mandate is not None else None,
+            scope_head_id=scope.id if scope is not None else None,
+            agenda_head_id=agenda.id if agenda is not None else None,
+            artifact_heads=artifact_heads,
+            artifact_chains=artifact_chains,
+            events=events,
+        )
 
     def lock_basis_recovery_state(
         self, preparation_id: UUID
@@ -2331,6 +2537,121 @@ class CompanyResearchRepository:
         if row is not None:
             self._validate_artifact_row(row)
         return row
+
+    def append_judgment_confirmation_memo(
+        self,
+        *,
+        state: CompanyResearchPublicationState,
+        payload: Mapping[str, object],
+        input_hash: str,
+        created_at: datetime,
+    ) -> CompanyResearchArtifactVersion:
+        """Append only the authenticated machine memo's human successor."""
+        machine_memo = state.artifact_heads.get("memo")
+        if machine_memo is None:
+            raise CompanyResearchIntegrityError(
+                "company research machine memo is missing"
+            )
+        return self.append_artifact(
+            project_id=state.project.id,
+            kind="memo",
+            input_hash=input_hash,
+            payload=payload,
+            source_refs=machine_memo.source_refs,
+            expected_parent_id=machine_memo.id,
+            created_at=created_at,
+        )
+
+    def compare_and_swap_publication_draft(
+        self,
+        *,
+        state: CompanyResearchPublicationState,
+        expected_lock_version: int,
+        updated_at: datetime,
+    ) -> UnderwritingWorkspaceDraft:
+        """Increment only the optimistic publication token on the locked draft."""
+        if (
+            state.draft.project_id != state.project.id
+            or state.draft.lock_version != expected_lock_version
+        ):
+            raise ConflictError("company research workspace draft is stale")
+        original_content = deepcopy(state.draft.content)
+        original_base_revision_id = state.draft.base_revision_id
+        updated = ProductRepository(self._session).compare_and_swap_workspace_draft(
+            project_id=state.project.id,
+            expected_lock_version=expected_lock_version,
+            content=original_content,
+            updated_at=updated_at,
+        )
+        if (
+            updated.id != state.draft.id
+            or updated.lock_version != expected_lock_version + 1
+            or updated.content != original_content
+            or updated.base_revision_id != original_base_revision_id
+        ):
+            raise CompanyResearchIntegrityError(
+                "company research publication draft CAS is invalid"
+            )
+        return updated
+
+    def advance_judgment_confirmation(
+        self,
+        *,
+        state: CompanyResearchPublicationState,
+        updated_at: datetime,
+    ) -> CompanyResearchPreparation:
+        """Advance only the lifecycle projection; the terminal Job is immutable here."""
+        preparation = state.preparation
+        job = state.job
+        if (
+            preparation.status != "awaiting_judgment_review"
+            or preparation.current_step != "judgment_context"
+            or preparation.progress != 85
+            or preparation.next_attempt_at is not None
+            or preparation.last_error_code is not None
+            or job.status != "waiting_for_review"
+            or job.step != "judgment_context"
+            or job.progress != 85
+        ):
+            raise ConflictError("company research judgment review is stale")
+        when = self._stored_datetime(updated_at, "updated_at")
+        if when < self._persisted_utc(preparation.updated_at):
+            raise ValidationError(
+                "company research judgment confirmation precedes preparation"
+            )
+        preparation.status = "ready_to_freeze"
+        preparation.current_step = "memo"
+        preparation.progress = 95
+        preparation.next_attempt_at = None
+        preparation.last_error_code = None
+        preparation.updated_at = when
+        self._session.flush([preparation])
+        return preparation
+
+    def append_judgment_confirmation_event(
+        self,
+        *,
+        state: CompanyResearchPublicationState,
+        machine_memo: CompanyResearchArtifactVersion,
+        confirmed_memo: CompanyResearchArtifactVersion,
+        assessment_status: str,
+        reviewer: str,
+        created_at: datetime,
+    ) -> CompanyResearchEvent:
+        """Append the exact v2 audit binding after the memo successor exists."""
+        return self.append_event(
+            preparation_id=state.preparation.id,
+            event_type="judgment_confirmed",
+            payload={
+                "machine_memo_id": str(machine_memo.id),
+                "machine_memo_content_hash": machine_memo.content_hash,
+                "confirmed_memo_id": str(confirmed_memo.id),
+                "confirmed_memo_content_hash": confirmed_memo.content_hash,
+                "assessment_status": assessment_status,
+                "reviewer": reviewer,
+            },
+            created_at=created_at,
+        )
 
     def append_artifact(
         self,
