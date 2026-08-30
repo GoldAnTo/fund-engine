@@ -24,6 +24,7 @@ readonly LEGACY_DATABASE_SERVICE="postgres"
 readonly LEGACY_DATABASE_CONTAINER="fund-engine-event-postgres-1"
 readonly API_URL="${ONE_CLICK_API_URL:-http://127.0.0.1:${ONE_CLICK_API_PORT:-8000}}" FRONTEND_URL="${ONE_CLICK_FRONTEND_URL:-http://127.0.0.1:${ONE_CLICK_FRONTEND_PORT:-8080}}"
 TMPDIR_EXACT='' SETUP_COMPLETE=false BASELINE_SNAPSHOT='' BASELINE_LEGACY_ID='' ACQUISITION_REPLICAS='' CONNECTION_CAP=''
+PREEXISTING_TEMP_PATHS=('')
 
 die() { printf 'one-click runtime verification: %s\n' "$*" >&2; exit 1; }
 require_command() { command -v "$1" >/dev/null 2>&1 || die "required command is unavailable: $1"; }
@@ -59,10 +60,23 @@ at_most() {
 }
 require_revision() { [[ "$1" == "$2" ]] || die "expected Alembic revision $2, got ${1:-none}"; }
 valid_private_directory() {
-  local relative_path
-  [[ -n "$TMPDIR_EXACT" && "$TMPDIR_EXACT" == "$REPO_ROOT/"* && -d "$TMPDIR_EXACT" ]] || return 1
+  local relative_path permissions path
+  [[ -n "$TMPDIR_EXACT" && "$TMPDIR_EXACT" == "$REPO_ROOT/"* && -d "$TMPDIR_EXACT" && ! -L "$TMPDIR_EXACT" && -O "$TMPDIR_EXACT" ]] || return 1
   relative_path="${TMPDIR_EXACT#"$REPO_ROOT/"}"
-  [[ "$relative_path" == .verify-one-click-runtime.* && "$relative_path" != */* && "$relative_path" != . && "$relative_path" != .. ]]
+  [[ "$relative_path" =~ ^\.verify-one-click-runtime\.[A-Za-z0-9]{6}$ ]] || return 1
+  for path in "${PREEXISTING_TEMP_PATHS[@]}"; do [[ "$path" != "$TMPDIR_EXACT" ]] || return 1; done
+  if ! permissions="$(stat -f %Lp "$TMPDIR_EXACT" 2>/dev/null)"; then
+    permissions="$(stat -c %a "$TMPDIR_EXACT" 2>/dev/null)" || return 1
+  fi
+  [[ "$permissions" == 700 ]]
+}
+record_existing_private_directories() {
+  local path
+  for path in "$REPO_ROOT"/.verify-one-click-runtime.*; do
+    if [[ -e "$path" || -L "$path" ]]; then
+      PREEXISTING_TEMP_PATHS[${#PREEXISTING_TEMP_PATHS[@]}]="$path"
+    fi
+  done
 }
 
 diagnostics() {
@@ -127,7 +141,7 @@ poll_runtime() {
 main() {
   local database_user database_name bearer_token pool_size max_overflow remaining sleep_seconds
   require_command docker; require_command curl; require_command python3; require_file "$STABILITY_HELPER"; require_file "$COMPOSE_FILE"; require_file "$BASE_ENV_FILE"; require_file "$RUNTIME_ENV_FILE"
-  umask 077; TMPDIR_EXACT="$(mktemp -d "$REPO_ROOT/.verify-one-click-runtime.XXXXXX")" || die 'unable to create private verification directory'
+  umask 077; record_existing_private_directories; TMPDIR_EXACT="$(mktemp -d "$REPO_ROOT/.verify-one-click-runtime.XXXXXX")" || die 'unable to create private verification directory'
   valid_private_directory || die 'private verification directory validation failed'
   trap cleanup EXIT; SETUP_COMPLETE=true
   compose config -q

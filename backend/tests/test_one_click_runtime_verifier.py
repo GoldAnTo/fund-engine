@@ -45,17 +45,21 @@ def copied_verifier(tmp_path: Path) -> tuple[Path, Path]:
     bin_dir.mkdir()
     (tmp_path / "calls").touch()
     _write(bin_dir / "python3", f"#!/bin/sh\nexec {shutil.which('python3')} \"$@\"\n", True)
-    _write(bin_dir / "mktemp", "#!/bin/sh\nif [ \"${HARNESS_MODE:-}\" = malicious-mktemp ]; then base=${1%.XXXXXX}; /bin/mkdir -p \"$base\"; /bin/mkdir -p \"$base/nested\"; echo \"$base/nested\"; exit 0; fi\npath=$(/usr/bin/mktemp \"$@\") || exit $?\necho \"mktemp:$path:$(stat -f %Lp \"$path\")\" >> \"$HARNESS_CALLS\"\necho \"$path\"\n", True)
+    _write(bin_dir / "mktemp", "#!/bin/sh\nfor template; do :; done\nbase=${template%.XXXXXX}\nif [ \"${HARNESS_MODE:-}\" = malicious-mktemp ]; then /bin/mkdir -p \"$base/nested\"; echo \"$base/nested\"; exit 0; fi\nif [ \"${HARNESS_MODE:-}\" = victim-mktemp ]; then echo \"${base}ABC123\"; exit 0; fi\npath=$(/usr/bin/mktemp \"$@\") || exit $?\necho \"mktemp:$path:$(stat -f %Lp \"$path\")\" >> \"$HARNESS_CALLS\"\necho \"$path\"\n", True)
     _write(bin_dir / "rm", "#!/bin/sh\necho rm:$* >> \"$HARNESS_CALLS\"\nif [ \"${HARNESS_RM_FAIL:-}\" = 1 ]; then /bin/rm \"$@\"; exit 71; fi\nexec /bin/rm \"$@\"\n", True)
-    _write(bin_dir / "sleep", "#!/bin/sh\n[ \"$#\" = 1 ] && { [ \"$1\" = 1 ] || [ \"$1\" = 5 ]; } || exit 96\necho sleep:$1 >> \"$HARNESS_CALLS\"\nexit 0\n", True)
+    _write(bin_dir / "sleep", "#!/bin/sh\n[ \"$#\" = 1 ] && { [ \"$1\" = 1 ] || [ \"$1\" = 5 ]; } || exit 97\necho sleep:$1 >> \"$HARNESS_CALLS\"\nexit 0\n", True)
     _write(bin_dir / "curl", r'''#!/usr/bin/env python3
 import os, sys
 calls = os.environ["HARNESS_CALLS"]
 args = sys.argv[1:]
 with open(calls, "a") as f: f.write("curl " + " ".join(args) + "\n")
 prefix = ["--fail", "--silent", "--show-error", "--connect-timeout", "2", "--max-time", "5"]
-if args[:7] != prefix or len(args) not in (8, 10) or (len(args) == 10 and args[7:9] != ["--header", "@-"]): sys.exit(96)
+if args[:7] != prefix or len(args) not in (8, 10) or (len(args) == 10 and args[7:9] != ["--header", "@-"]): sys.exit(97)
 url = args[-1]
+api = "http://127.0.0.1:8000"
+frontend = "http://127.0.0.1:8080"
+allowed = {f"{api}/health", f"{frontend}/health", f"{frontend}/research", f"{api}/api/underwriting/v1/product/objects?query=CATL"}
+if url not in allowed or (len(args) == 10 and url != f"{api}/api/underwriting/v1/product/objects?query=CATL"): sys.exit(97)
 counter = os.environ["HARNESS_ROOT"] + "/curl-count"
 try: n = int(open(counter).read()) + 1
 except OSError: n = 1
@@ -102,17 +106,19 @@ if args and args[0] == "compose":
 if args and args[0] == "inspect":
     if "--format" in args:
         fmt, target = args[args.index("--format") + 1], args[-1]
-        allowed_formats = {"{{.Id}}", "{{.Name}}", "{{ index .Config.Labels \"com.docker.compose.project\" }}", "{{ index .Config.Labels \"com.docker.compose.service\" }}", "{{.State.Running}}", "Name={{.Name}} state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} OOM={{.State.OOMKilled}} restarts={{.RestartCount}}"}
-        if len(args) != 4 or fmt not in allowed_formats: sys.exit(97)
-        legacy = target == "fund-engine-event-postgres-1" or target == ident("legacy")
-        if ".Id" in fmt: print(ident("legacy2") if mode == "legacy-replacement" and os.path.exists(root + "/legacy-seen") else ident("legacy")); open(root + "/legacy-seen", "w").write("1")
-        elif ".Name" in fmt: print("/fund-engine-event-postgres-1")
-        elif "compose.project" in fmt: print("fund-engine-event")
-        elif "compose.service" in fmt: print("postgres")
-        elif ".State.Running" in fmt: print("true")
-        else: print("healthy")
+        diagnostic = "Name={{.Name}} state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} OOM={{.State.OOMKilled}} restarts={{.RestartCount}}"
+        if len(args) != 4: sys.exit(97)
+        if fmt == diagnostic and target in ids(): print("Name=/" + services[ids().index(target)] + " state=running health=healthy OOM=False restarts=0"); sys.exit(0)
+        legacy_id = ident("legacy")
+        if fmt == "{{.Id}}" and target == "fund-engine-event-postgres-1": print(ident("legacy2") if mode == "legacy-replacement" and os.path.exists(root + "/legacy-seen") else legacy_id); open(root + "/legacy-seen", "w").write("1"); sys.exit(0)
+        if target not in {legacy_id, ident("legacy2")}: sys.exit(97)
+        if fmt == "{{.Name}}": print("/fund-engine-event-postgres-1")
+        elif fmt == "{{ index .Config.Labels \"com.docker.compose.project\" }}": print("fund-engine-event")
+        elif fmt == "{{ index .Config.Labels \"com.docker.compose.service\" }}": print("postgres")
+        elif fmt == "{{.State.Running}}": print("true")
+        else: sys.exit(97)
         sys.exit(0)
-    if not all(len(value) == 64 for value in args[1:]): sys.exit(97)
+    if args[1:] != ids(): sys.exit(97)
     count_file = root + "/snapshot-count"
     n = int(open(count_file).read()) + 1 if os.path.exists(count_file) else 1
     open(count_file, "w").write(str(n))
@@ -127,9 +133,42 @@ sys.exit(97)
 
 def run_verifier(tmp_path: Path, *arguments: str, mode: str = "healthy", **env_values: str) -> subprocess.CompletedProcess[str]:
     verifier, bin_dir = copied_verifier(tmp_path)
+    if mode == "victim-mktemp":
+        victim = tmp_path / ".verify-one-click-runtime.ABC123"
+        victim.mkdir()
+        (victim / "sentinel").touch()
     environment = {key: value for key, value in os.environ.items() if key not in PROFILE_KEYS}
     environment |= {"PATH": f"{bin_dir}:/usr/bin:/bin", "HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls"), "HARNESS_MODE": mode} | env_values
     return subprocess.run(["/bin/bash", str(verifier), *arguments], cwd=tmp_path, text=True, capture_output=True, env=environment)
+
+
+def assert_complete_poll_counts(calls: str, polls: int) -> None:
+    lines = calls.splitlines()
+    assert sum(line.endswith("http://127.0.0.1:8000/health") for line in lines) == polls
+    assert sum(line.endswith("http://127.0.0.1:8080/health") for line in lines) == polls
+    assert sum(line.endswith("http://127.0.0.1:8080/research") for line in lines) == polls
+    assert sum("product/objects?query=CATL" in line for line in lines) == polls
+    assert sum("pg_stat_activity" in line for line in lines) == polls
+    assert sum("docker compose" in line and "version_num" in line for line in lines) == polls
+    assert sum(line == "docker inspect --format {{.Id}} fund-engine-event-postgres-1" for line in lines) == polls
+    for fmt in ("{{.Name}}", '{{ index .Config.Labels "com.docker.compose.project" }}', '{{ index .Config.Labels "com.docker.compose.service" }}', "{{.State.Running}}"):
+        assert sum(line.startswith(f"docker inspect --format {fmt} ") for line in lines) == polls
+    assert sum(line.startswith("docker exec ") and "version_num" in line for line in lines) == polls
+    assert sum(line.startswith("docker inspect ") and " --format " not in line for line in lines) == polls
+
+
+def assert_no_lifecycle_commands(calls: str) -> None:
+    forbidden = {"up", "down", "stop", "start", "restart", "rm", "kill", "pause", "unpause", "create", "run", "scale"}
+    for line in calls.splitlines():
+        parts = line.split()
+        if not parts or parts[0] != "docker":
+            continue
+        command = parts[1:]
+        if command[:1] == ["compose"]:
+            command = command[1:]
+            while len(command) >= 2 and command[0] in {"-f", "--env-file"}:
+                command = command[2:]
+        assert not command or command[0] not in forbidden
 
 
 @pytest.mark.parametrize("argument", ["--stability-seconds", "--stability-seconds=-1", "--stability-seconds=01", "--stability-seconds=999999999999999999999"])
@@ -160,11 +199,11 @@ def test_stability_duration_polls_without_diagnostics(tmp_path: Path) -> None:
     calls = (tmp_path / "calls").read_text()
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "snapshot-count").read_text() == "2"
-    assert calls.count("pg_stat_activity") == 2
-    assert calls.count("version_num") == 4
+    assert_complete_poll_counts(calls, 2)
     assert calls.count("sleep:1") == 1
     assert calls.count("curl ") == 8
     assert "logs --tail 40" not in calls and "stats --no-stream" not in calls
+    assert_no_lifecycle_commands(calls)
 
 
 @pytest.mark.parametrize("mode, message", [("oom-first", "OOMKilled"), ("restart-second", "restart count changed"), ("replacement-second", "container identity changed"), ("connections", "connection count"), ("revision-second", "0070"), ("legacy-revision", "0062"), ("legacy-replacement", "identity")])
@@ -179,8 +218,7 @@ def test_failures_are_safe_and_collect_bounded_diagnostics(tmp_path: Path, mode:
     assert "not-for-output" not in result.stderr
     assert ".env.one-click.local" not in result.stderr
     assert '"Config"' not in result.stderr
-    for forbidden in (" compose up", " compose down", " compose stop", "docker stop", "docker start", "docker restart", "docker rm", "docker kill"):
-        assert forbidden not in calls
+    assert_no_lifecycle_commands(calls)
 
 
 def test_transient_second_poll_http_failure_is_diagnosed(tmp_path: Path) -> None:
@@ -209,6 +247,7 @@ def test_zero_duration_runs_one_complete_poll(tmp_path: Path) -> None:
     assert (tmp_path / "snapshot-count").read_text() == "1"
     assert "sleep:" not in (tmp_path / "calls").read_text()
     calls = (tmp_path / "calls").read_text()
+    assert_complete_poll_counts(calls, 1)
     assert "mktemp:" in calls and calls.split("mktemp:")[1].splitlines()[0].endswith(":700")
     assert not list(tmp_path.glob(".verify-one-click-runtime.*"))
 
@@ -230,6 +269,16 @@ def test_malicious_mktemp_path_is_rejected_without_rm(tmp_path: Path) -> None:
     assert "rm:" not in calls
 
 
+def test_preexisting_direct_child_mktemp_victim_is_rejected_without_rm(tmp_path: Path) -> None:
+    result = run_verifier(tmp_path, mode="victim-mktemp")
+    calls = (tmp_path / "calls").read_text()
+    victim = tmp_path / ".verify-one-click-runtime.ABC123"
+    assert result.returncode != 0
+    assert "private verification directory validation failed" in result.stderr
+    assert (victim / "sentinel").exists()
+    assert "rm:" not in calls
+
+
 def test_checked_compose_ps_failure_cannot_be_treated_as_a_snapshot(tmp_path: Path) -> None:
     result = run_verifier(tmp_path, mode="ps-partial")
     assert result.returncode != 0
@@ -243,15 +292,21 @@ def test_harness_rejects_an_unknown_docker_command(tmp_path: Path) -> None:
     assert result.returncode == 97
 
 
+@pytest.mark.parametrize(("program", "arguments"), [("curl", ("unexpected",)), ("sleep", ("2",))])
+def test_harness_rejects_unknown_curl_and_sleep_shapes(tmp_path: Path, program: str, arguments: tuple[str, ...]) -> None:
+    _, bin_dir = copied_verifier(tmp_path)
+    result = subprocess.run([str(bin_dir / program), *arguments], text=True, capture_output=True, env=os.environ | {"HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls")})
+    assert result.returncode == 97
+
+
 def test_long_duration_has_exact_poll_and_sleep_counts(tmp_path: Path) -> None:
     result = run_verifier(tmp_path, "--stability-seconds", "600")
     calls = (tmp_path / "calls").read_text()
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "snapshot-count").read_text() == "121"
     assert calls.count("sleep:5") == 120
-    assert calls.count("pg_stat_activity") == 121
-    assert calls.count("version_num") == 242
-    assert calls.count("curl ") == 484
+    assert_complete_poll_counts(calls, 121)
+    assert_no_lifecycle_commands(calls)
 
 
 @pytest.mark.parametrize(
