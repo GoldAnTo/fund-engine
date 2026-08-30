@@ -59,7 +59,8 @@ url = args[-1]
 api = "http://127.0.0.1:8000"
 frontend = "http://127.0.0.1:8080"
 allowed = {f"{api}/health", f"{frontend}/health", f"{frontend}/research", f"{api}/api/underwriting/v1/product/objects?query=CATL"}
-if url not in allowed or (len(args) == 10 and url != f"{api}/api/underwriting/v1/product/objects?query=CATL"): sys.exit(97)
+product = f"{api}/api/underwriting/v1/product/objects?query=CATL"
+if url not in allowed or not ((url == product and len(args) == 10 and args[7:9] == ["--header", "@-"]) or (url != product and len(args) == 8)): sys.exit(97)
 counter = os.environ["HARNESS_ROOT"] + "/curl-count"
 try: n = int(open(counter).read()) + 1
 except OSError: n = 1
@@ -83,6 +84,11 @@ def ids():
     for service in services:
         for replica in range(replicas if service == "acquisition-worker" else 1):
             result.append(ident(service + str(replica)))
+    return result
+def id_services():
+    result = {}
+    for service in services:
+        for replica in range(replicas if service == "acquisition-worker" else 1): result[ident(service + str(replica))] = service
     return result
 def item(service, replica=0):
     poll = int(open(root + "/snapshot-count").read()) if os.path.exists(root + "/snapshot-count") else 0
@@ -108,10 +114,14 @@ if args and args[0] == "inspect":
         fmt, target = args[args.index("--format") + 1], args[-1]
         diagnostic = "Name={{.Name}} state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} OOM={{.State.OOMKilled}} restarts={{.RestartCount}}"
         if len(args) != 4: sys.exit(97)
-        if fmt == diagnostic and target in ids(): print("Name=/" + services[ids().index(target)] + " state=running health=healthy OOM=False restarts=0"); sys.exit(0)
+        if fmt == diagnostic and target in id_services(): print("Name=/" + id_services()[target] + " state=running health=healthy OOM=False restarts=0"); sys.exit(0)
         legacy_id = ident("legacy")
-        if fmt == "{{.Id}}" and target == "fund-engine-event-postgres-1": print(ident("legacy2") if mode == "legacy-replacement" and os.path.exists(root + "/legacy-seen") else legacy_id); open(root + "/legacy-seen", "w").write("1"); sys.exit(0)
-        if target not in {legacy_id, ident("legacy2")}: sys.exit(97)
+        if fmt == "{{.Id}}" and target == "fund-engine-event-postgres-1":
+            current_legacy = ident("legacy2") if mode == "legacy-replacement" and os.path.exists(root + "/legacy-seen") else legacy_id
+            open(root + "/legacy-seen", "w").write("1"); open(root + "/legacy-current", "w").write(current_legacy); print(current_legacy); sys.exit(0)
+        try: current_legacy = open(root + "/legacy-current").read()
+        except OSError: current_legacy = legacy_id
+        if target != current_legacy: sys.exit(97)
         if fmt == "{{.Name}}": print("/fund-engine-event-postgres-1")
         elif fmt == "{{ index .Config.Labels \"com.docker.compose.project\" }}": print("fund-engine-event")
         elif fmt == "{{ index .Config.Labels \"com.docker.compose.service\" }}": print("postgres")
@@ -123,9 +133,13 @@ if args and args[0] == "inspect":
     n = int(open(count_file).read()) + 1 if os.path.exists(count_file) else 1
     open(count_file, "w").write(str(n))
     print(json.dumps([item(service, replica) for service in services for replica in range(replicas if service == "acquisition-worker" else 1)])); sys.exit(0)
-if args and args[0] == "exec" and len(args) == 5 and len(args[1]) == 64 and args[2:] == ["sh", "-c", args[4]] and "version_num" in args[4]: print("0061" if mode == "legacy-revision" and os.path.exists(root + "/legacy-revision-seen") else "0062"); open(root + "/legacy-revision-seen", "w").write("1"); sys.exit(0)
-if args and args[0] == "logs" and len(args) == 4 and args[1:3] == ["--tail", "40"] and len(args[3]) == 64: print("DIAGNOSTIC-SENTINEL"); sys.exit(0)
-if args and args[0] == "stats" and len(args) == 8 and args[1] == "--no-stream" and all(len(value) == 64 for value in args[2:]): print("DIAGNOSTIC-SENTINEL"); sys.exit(0)
+if args and args[0] == "exec" and len(args) == 5 and args[2:] == ["sh", "-c", args[4]] and "version_num" in args[4]:
+    try: current_legacy = open(root + "/legacy-current").read()
+    except OSError: current_legacy = ident("legacy")
+    if args[1] != current_legacy: sys.exit(97)
+    print("0061" if mode == "legacy-revision" and os.path.exists(root + "/legacy-revision-seen") else "0062"); open(root + "/legacy-revision-seen", "w").write("1"); sys.exit(0)
+if args and args[0] == "logs" and len(args) == 4 and args[1:3] == ["--tail", "40"] and args[3] in ids(): print("DIAGNOSTIC-SENTINEL"); sys.exit(0)
+if args and args[0] == "stats" and args == ["stats", "--no-stream", *ids()]: print("DIAGNOSTIC-SENTINEL"); sys.exit(0)
 sys.exit(97)
 ''', True)
     return verifier, bin_dir
@@ -139,7 +153,9 @@ def run_verifier(tmp_path: Path, *arguments: str, mode: str = "healthy", **env_v
         (victim / "sentinel").touch()
     environment = {key: value for key, value in os.environ.items() if key not in PROFILE_KEYS}
     environment |= {"PATH": f"{bin_dir}:/usr/bin:/bin", "HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls"), "HARNESS_MODE": mode} | env_values
-    return subprocess.run(["/bin/bash", str(verifier), *arguments], cwd=tmp_path, text=True, capture_output=True, env=environment)
+    result = subprocess.run(["/bin/bash", str(verifier), *arguments], cwd=tmp_path, text=True, capture_output=True, env=environment)
+    assert_no_lifecycle_commands((tmp_path / "calls").read_text())
+    return result
 
 
 def assert_complete_poll_counts(calls: str, polls: int) -> None:
@@ -297,6 +313,33 @@ def test_harness_rejects_unknown_curl_and_sleep_shapes(tmp_path: Path, program: 
     _, bin_dir = copied_verifier(tmp_path)
     result = subprocess.run([str(bin_dir / program), *arguments], text=True, capture_output=True, env=os.environ | {"HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls")})
     assert result.returncode == 97
+
+
+@pytest.mark.parametrize(
+    ("arguments",),
+    [
+        (("--fail", "--silent", "--show-error", "--connect-timeout", "2", "--max-time", "5", "http://127.0.0.1:8000/api/underwriting/v1/product/objects?query=CATL"),),
+        (("--fail", "--silent", "--show-error", "--connect-timeout", "2", "--max-time", "5", "--header", "@-", "http://127.0.0.1:8000/health"),),
+    ],
+)
+def test_harness_rejects_wrong_curl_header_shape(tmp_path: Path, arguments: tuple[str, ...]) -> None:
+    _, bin_dir = copied_verifier(tmp_path)
+    result = subprocess.run([str(bin_dir / "curl"), *arguments], text=True, capture_output=True, env=os.environ | {"HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls")})
+    assert result.returncode == 97
+
+
+def test_harness_rejects_wrong_legacy_logs_and_stats_container_ids(tmp_path: Path) -> None:
+    _, bin_dir = copied_verifier(tmp_path)
+    environment = os.environ | {"HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls")}
+    wrong = "f" * 64
+    commands = [
+        ("exec", wrong, "sh", "-c", "SELECT version_num FROM alembic_version;"),
+        ("logs", "--tail", "40", wrong),
+        ("stats", "--no-stream", *(wrong for _ in SERVICES)),
+    ]
+    for command in commands:
+        result = subprocess.run([str(bin_dir / "docker"), *command], text=True, capture_output=True, env=environment)
+        assert result.returncode == 97
 
 
 def test_long_duration_has_exact_poll_and_sleep_counts(tmp_path: Path) -> None:
