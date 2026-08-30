@@ -38,6 +38,19 @@ const WORKSPACE_STATES = new Set([
   "completed",
 ]);
 
+export function repositoryPythonVenvRoots(repositoryRoot) {
+  if (typeof repositoryRoot !== "string" || !path.isAbsolute(repositoryRoot)) {
+    throw new Error("repository root must be absolute");
+  }
+  const root = path.normalize(repositoryRoot);
+  const roots = [path.join(root, "backend", ".venv")];
+  const worktreesParent = path.dirname(root);
+  if (path.basename(worktreesParent) === ".worktrees") {
+    roots.push(path.join(path.dirname(worktreesParent), "backend", ".venv"));
+  }
+  return roots;
+}
+
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

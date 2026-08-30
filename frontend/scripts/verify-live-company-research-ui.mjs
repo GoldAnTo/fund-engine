@@ -21,6 +21,7 @@ import {
   createTrafficAudit,
   newOwnedBrowserContext,
   parseVerifierArgs,
+  repositoryPythonVenvRoots,
   removePrivateRuntime,
   startOwnedBrowser,
   startOwnedProcess,
@@ -58,15 +59,6 @@ function freePort() {
       server.close((error) => error ? reject(error) : resolve(address.port));
     });
   });
-}
-
-function repositoryVenvRoots() {
-  const roots = [path.join(backend, ".venv")];
-  const worktreesParent = path.dirname(root);
-  if (path.basename(worktreesParent) === ".worktrees") {
-    roots.push(path.join(path.dirname(worktreesParent), "backend", ".venv"));
-  }
-  return roots;
 }
 
 function trustedMode(stat) {
@@ -120,7 +112,7 @@ async function validatePythonLauncher(candidate, venvRoot, label) {
 }
 
 async function resolvePython() {
-  const allowedRoots = repositoryVenvRoots();
+  const allowedRoots = repositoryPythonVenvRoots(root);
   if (typeof process.env.PYTHON === "string" && process.env.PYTHON.length > 0) {
     const explicit = path.resolve(process.cwd(), process.env.PYTHON);
     const allowedRoot = allowedRoots.find((candidate) =>

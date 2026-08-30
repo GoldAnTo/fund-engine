@@ -5,6 +5,7 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, w
 import os from "node:os";
 import test from "node:test";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import * as supportModule from "./live-company-research-support.mjs";
 import {
@@ -273,6 +274,19 @@ function liveStackProcessIds() {
     .map((line) => line.trim().split(/\s+/u)[0]));
 }
 
+async function existingRepositoryPython(repositoryRoot) {
+  for (const venvRoot of supportModule.repositoryPythonVenvRoots(repositoryRoot)) {
+    const launcher = path.join(venvRoot, "bin", "python");
+    try {
+      await lstat(launcher);
+      return launcher;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  throw new Error("repository backend Python is unavailable for verifier probe");
+}
+
 test("createPrivateRuntime preflights cleanup before creating any runtime directory", async () => {
   const helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-preflight-first-"));
   const invalidHelper = path.join(helperDirectory, "invalid.py");
@@ -326,9 +340,25 @@ test("verifier rejects hostile PYTHON before secrets or private runtime creation
   }
 });
 
+test("repository Python venv policy resolves normal checkout and worktree layouts", () => {
+  assert.equal(typeof supportModule.repositoryPythonVenvRoots, "function");
+  assert.deepEqual(
+    supportModule.repositoryPythonVenvRoots("/workspace/fund-engine"),
+    ["/workspace/fund-engine/backend/.venv"],
+  );
+  assert.deepEqual(
+    supportModule.repositoryPythonVenvRoots("/workspace/fund-engine/.worktrees/topic"),
+    [
+      "/workspace/fund-engine/.worktrees/topic/backend/.venv",
+      "/workspace/fund-engine/backend/.venv",
+    ],
+  );
+});
+
 test("verifier missing-browser failure cleans its private temp root and owned stack", async () => {
   const probeRoot = await mkdtemp(path.join(os.tmpdir(), "live-company-research-missing-browser-"));
-  const trustedPython = path.resolve(process.cwd(), "../../../backend/.venv/bin/python");
+  const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const trustedPython = await existingRepositoryPython(repositoryRoot);
   const processesBefore = liveStackProcessIds();
   try {
     const result = spawnSync(
