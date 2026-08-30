@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import test from "node:test";
@@ -75,12 +76,40 @@ test("traffic audit enforces exact singleton request cardinality", () => {
   assert.equal(audit.requestCount("POST", pathname), 2);
 });
 
+test("traffic audit authorizes only exact local HTTP and WebSocket origins before send", () => {
+  const audit = createTrafficAudit("http://127.0.0.1:42000");
+  assert.doesNotThrow(() => audit.assertAllowedRequest("http://127.0.0.1:42000/research/new"));
+  assert.doesNotThrow(() => audit.assertAllowedRequest("data:text/plain,local"));
+  assert.doesNotThrow(() => audit.assertAllowedWebSocket("ws://127.0.0.1:42000/hmr"));
+
+  for (const url of [
+    "https://127.0.0.1:42000/research/new",
+    "http://127.0.0.1:42001/research/new",
+    "http://localhost:42000/research/new",
+    "http://2130706433:42000/research/new",
+    "https://example.com/collect?secret=hidden",
+  ]) assert.throws(() => audit.assertAllowedRequest(url), /external request/u);
+  for (const url of [
+    "wss://127.0.0.1:42000/hmr",
+    "ws://127.0.0.1:42001/hmr",
+    "ws://example.com/socket?secret=hidden",
+  ]) assert.throws(() => audit.assertAllowedWebSocket(url), /external WebSocket/u);
+});
+
+test("browser failure collector drains failures recorded after an earlier clean check", () => {
+  assert.equal(typeof supportModule.createBrowserFailureCollector, "function");
+  const failures = supportModule.createBrowserFailureCollector();
+  assert.doesNotThrow(() => failures.throwIfAny());
+  failures.capture(() => { throw new Error("late sanitized browser failure"); });
+  assert.throws(() => failures.throwIfAny(), /late sanitized browser failure/u);
+});
+
 test("review successor advances exactly one fact and one version", () => {
-  const before = { id: "e1", version: 1, payload: { facts: [
+  const before = { schema_version: "underwriting.v1", id: "e1", project_id: "p1", kind: "evidence_index", version: 1, source_refs: [{ source_role: "filing" }], payload: { facts: [
     { fact_key: "a", metric_key: "revenue", review_decision: null },
     { fact_key: "b", metric_key: "margin", review_decision: null },
   ] } };
-  const after = { id: "e2", version: 2, payload: { facts: [
+  const after = { ...before, id: "e2", version: 2, payload: { facts: [
     { fact_key: "a", metric_key: "revenue", review_decision: "confirmed" },
     { fact_key: "b", metric_key: "margin", review_decision: null },
   ] } };
@@ -92,14 +121,25 @@ test("review successor advances exactly one fact and one version", () => {
     ...after,
     payload: { facts: after.payload.facts.map((fact) => ({ ...fact, review_decision: "confirmed" })) },
   }, "a"), /unrelated fact/u);
+  for (const [field, value] of [
+    ["schema_version", "underwriting.v2"],
+    ["project_id", "p2"],
+    ["kind", "research_gaps"],
+    ["source_refs", [{ source_role: "company_material" }]],
+  ]) {
+    assert.throws(
+      () => assertExactReviewSuccessor(before, { ...after, [field]: value }, "a"),
+      new RegExp(field.replace("_", " "), "u"),
+    );
+  }
 });
 
 test("review successor preserves exact fact cardinality, identities, and contents", () => {
-  const before = { id: "e1", version: 7, payload: { facts: [
+  const before = { schema_version: "underwriting.v1", id: "e1", project_id: "p1", kind: "evidence_index", version: 7, source_refs: [], payload: { facts: [
     { fact_key: "a", metric_key: "revenue", review_decision: null },
     { fact_key: "b", metric_key: "margin", review_decision: "rejected" },
   ] } };
-  const validAfter = { id: "e2", version: 8, payload: { facts: [
+  const validAfter = { ...before, id: "e2", version: 8, payload: { facts: [
     { fact_key: "a", metric_key: "revenue", review_decision: "confirmed" },
     { fact_key: "b", metric_key: "margin", review_decision: "rejected" },
   ] } };
@@ -115,6 +155,50 @@ test("review successor preserves exact fact cardinality, identities, and content
     assert.throws(() => assertExactReviewSuccessor(before, invalidAfter, "a"), /fact|unrelated/u);
   }
   assert.throws(() => assertExactReviewSuccessor(before, validAfter, "missing"), /reviewed fact/u);
+});
+
+test("Alphabet binding validates every expected foundation security identity", () => {
+  assert.equal(typeof supportModule.assertAlphabetIdentityBinding, "function");
+  const foundation = {
+    schema_version: "product.foundation-identities.v1",
+    content_hash: "a".repeat(64),
+    companies: [{ external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc." }],
+    securities: [
+      { external_key: "NASDAQ:GOOGL", company_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Class A", symbol: "GOOGL", exchange: "NASDAQ", currency: "USD", share_class: "Class A" },
+      { external_key: "NASDAQ:GOOG", company_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Class C", symbol: "GOOG", exchange: "NASDAQ", currency: "USD", share_class: "Class C" },
+    ],
+  };
+  const company = { schema_version: "underwriting.v1", kind: "company", object_id: "00000000-0000-4000-8000-000000000001", external_key: "US:ALPHABET:COMPANY", canonical_name: "Alphabet Inc." };
+  const securities = foundation.securities.map((security, index) => ({
+    schema_version: "underwriting.v1",
+    kind: "security",
+    object_id: `00000000-0000-4000-8000-00000000000${index + 2}`,
+    external_key: security.external_key,
+    canonical_name: security.canonical_name,
+    symbol: security.symbol,
+    exchange: security.exchange,
+    share_class: security.share_class,
+    trading_currency: security.currency,
+  }));
+  const search = { items: [company, ...securities] };
+  const preview = {
+    company: { ...company },
+    securities: securities.map(({ kind: _kind, ...security }) => security),
+  };
+  assert.strictEqual(supportModule.assertAlphabetIdentityBinding({ foundation, search, preview }), company);
+
+  for (const [field, value] of [
+    ["external_key", "NASDAQ:WRONG"], ["object_id", company.object_id],
+    ["symbol", "WRONG"], ["share_class", "Wrong"], ["exchange", "NYSE"],
+    ["trading_currency", "CNY"],
+  ]) {
+    const mutated = structuredClone(preview);
+    mutated.securities[0][field] = value;
+    assert.throws(
+      () => supportModule.assertAlphabetIdentityBinding({ foundation, search, preview: mutated }),
+      /security identity/u,
+    );
+  }
 });
 
 function createTerminationHarness(outcomes) {
@@ -177,6 +261,207 @@ const TEST_CLEANUP_HELPER = Object.freeze({
 function createTestRuntime() {
   return createPrivateRuntime({ cleanupHelper: TEST_CLEANUP_HELPER });
 }
+
+function liveStackProcessIds() {
+  const output = execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" });
+  const markers = [
+    "app.scripts.run_company_research_worker --loop --poll-seconds 0.1",
+    "uvicorn app.main:app --host 127.0.0.1 --port",
+    "node_modules/vite/bin/vite.js --host 127.0.0.1 --port",
+  ];
+  return new Set(output.split("\n").filter((line) => markers.some((marker) => line.includes(marker)))
+    .map((line) => line.trim().split(/\s+/u)[0]));
+}
+
+test("createPrivateRuntime preflights cleanup before creating any runtime directory", async () => {
+  const helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-preflight-first-"));
+  const invalidHelper = path.join(helperDirectory, "invalid.py");
+  await writeFile(invalidHelper, "def broken(:\n");
+  const prefix = "fund-engine-live-company-research-";
+  const before = new Set((await readdir(os.tmpdir())).filter((entry) => entry.startsWith(prefix)));
+  let runtime = null;
+  let failure = null;
+  try {
+    runtime = await createPrivateRuntime({
+      cleanupHelper: { pythonExecutable: TEST_PYTHON, helperPath: invalidHelper },
+    });
+  } catch (error) {
+    failure = error;
+  }
+  try {
+    assert.equal(runtime, null);
+    assert.match(failure?.message ?? "", /preflight/u);
+    const after = (await readdir(os.tmpdir())).filter((entry) => entry.startsWith(prefix));
+    assert.deepEqual(after.filter((entry) => !before.has(entry)), []);
+  } finally {
+    if (runtime) await rm(runtime.directory, { recursive: true, force: true });
+    await rm(helperDirectory, { recursive: true, force: true });
+  }
+});
+
+test("verifier rejects hostile PYTHON before secrets or private runtime creation", async () => {
+  const hostileRoot = await mkdtemp(path.join(os.tmpdir(), "live-company-research-hostile-python-"));
+  const hostilePython = path.join(hostileRoot, "python");
+  const observed = path.join(hostileRoot, "observed");
+  const privateTmp = path.join(hostileRoot, "tmp");
+  await mkdir(privateTmp, { mode: 0o700 });
+  await writeFile(hostilePython, `#!/bin/sh\n/usr/bin/touch '${observed}'\nexit 0\n`);
+  await chmod(hostilePython, 0o700);
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve(process.cwd(), "scripts/verify-live-company-research-ui.mjs"), "--timeout-seconds", "30"],
+      {
+        cwd: process.cwd(),
+        env: { PATH: process.env.PATH ?? "", PYTHON: hostilePython, TMPDIR: privateTmp },
+        encoding: "utf8",
+        timeout: 10_000,
+      },
+    );
+    assert.notEqual(result.status, 0);
+    await assert.rejects(lstat(observed), { code: "ENOENT" });
+    assert.deepEqual(await readdir(privateTmp), []);
+  } finally {
+    await rm(hostileRoot, { recursive: true, force: true });
+  }
+});
+
+test("verifier missing-browser failure cleans its private temp root and owned stack", async () => {
+  const probeRoot = await mkdtemp(path.join(os.tmpdir(), "live-company-research-missing-browser-"));
+  const trustedPython = path.resolve(process.cwd(), "../../../backend/.venv/bin/python");
+  const processesBefore = liveStackProcessIds();
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve(process.cwd(), "scripts/verify-live-company-research-ui.mjs"), "--timeout-seconds", "30"],
+      {
+        cwd: process.cwd(),
+        env: {
+          PATH: process.env.PATH ?? "",
+          PYTHON: trustedPython,
+          PW_BROWSER_CHANNEL: "definitely-missing-browser",
+          TMPDIR: probeRoot,
+        },
+        encoding: "utf8",
+        timeout: 20_000,
+      },
+    );
+    assert.notEqual(result.status, 0);
+    assert.equal(result.signal, null);
+    assert.match(`${result.stdout}\n${result.stderr}`, /owned browser launch failed/u);
+    assert.deepEqual(await readdir(probeRoot), []);
+    const leakedProcesses = [...liveStackProcessIds()].filter((pid) => !processesBefore.has(pid));
+    assert.deepEqual(leakedProcesses, []);
+  } finally {
+    await rm(probeRoot, { recursive: true, force: true });
+  }
+});
+
+test("owned browser launch confines paths and leaves no sibling temporary directories on failure", async () => {
+  assert.equal(typeof supportModule.startOwnedBrowser, "function");
+  const runtime = await createTestRuntime();
+  const siblingPrefixes = ["playwright-artifacts-", "playwright_chromiumdev_profile-"];
+  const siblingsBefore = new Set((await readdir(runtime.parent)).filter((entry) =>
+    siblingPrefixes.some((prefix) => entry.startsWith(prefix))));
+  let launchOptions;
+  let launchTmpdir;
+  const hostTmpdir = os.tmpdir();
+  const browserType = {
+    async launchServer(options) {
+      launchOptions = options;
+      launchTmpdir = os.tmpdir();
+      throw new Error("injected missing browser");
+    },
+    async connect() { throw new Error("must not connect"); },
+  };
+  try {
+    await assert.rejects(
+      supportModule.startOwnedBrowser(browserType, runtime, { env: { PATH: "/tools" }, timeoutMs: 50 }),
+      /browser launch/u,
+    );
+    for (const key of ["artifactsDir", "downloadsPath", "tracesDir"]) {
+      assert.equal(path.dirname(launchOptions[key]).startsWith(runtime.directory), true);
+    }
+    for (const key of ["HOME", "TMPDIR", "TEMP", "TMP", "XDG_CACHE_HOME", "XDG_CONFIG_HOME"]) {
+      assert.equal(launchOptions.env[key].startsWith(runtime.directory), true);
+    }
+    assert.equal(launchTmpdir, launchOptions.env.TMPDIR);
+    assert.equal(os.tmpdir(), hostTmpdir);
+  } finally {
+    await removePrivateRuntime(runtime);
+  }
+  const siblingsAfter = (await readdir(runtime.parent)).filter((entry) =>
+    siblingPrefixes.some((prefix) => entry.startsWith(prefix)) && !siblingsBefore.has(entry));
+  assert.deepEqual(siblingsAfter, []);
+});
+
+test("owned browser close timeout kills the exact retained browser server capability", async () => {
+  assert.equal(typeof supportModule.startOwnedBrowser, "function");
+  assert.equal(typeof supportModule.closeOwnedBrowser, "function");
+  const runtime = await createTestRuntime();
+  let killed = 0;
+  const browserServer = {
+    close: () => new Promise(() => {}),
+    async kill() { killed += 1; },
+    wsEndpoint() { return "ws://127.0.0.1:41000/owned"; },
+  };
+  const browserType = {
+    async launchServer() { return browserServer; },
+    async connect() { return { newContext(options) { return options; } }; },
+  };
+  try {
+    const owned = await supportModule.startOwnedBrowser(
+      browserType, runtime, { env: { PATH: "/tools" }, timeoutMs: 50 },
+    );
+    const contextOptions = await supportModule.newOwnedBrowserContext(
+      owned, { serviceWorkers: "allow" },
+    );
+    assert.equal(contextOptions.serviceWorkers, "block");
+    await assert.rejects(
+      supportModule.closeOwnedBrowser(owned, { timeoutMs: 20 }),
+      /graceful close timed out/u,
+    );
+    assert.equal(killed, 1);
+  } finally {
+    await removePrivateRuntime(runtime);
+  }
+});
+
+test("owned browser close falls back to the exact retained child when server kill rejects", async () => {
+  const runtime = await createTestRuntime();
+  const child = new EventEmitter();
+  let signal = null;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = (nextSignal) => {
+    signal = nextSignal;
+    child.signalCode = nextSignal;
+    queueMicrotask(() => child.emit("exit", null, nextSignal));
+    return true;
+  };
+  const browserServer = {
+    close: () => new Promise(() => {}),
+    async kill() { throw new Error("injected kill rejection"); },
+    process() { return child; },
+    wsEndpoint() { return "ws://127.0.0.1:41000/owned"; },
+  };
+  const browserType = {
+    async launchServer() { return browserServer; },
+    async connect() { return { newContext() {} }; },
+  };
+  try {
+    const owned = await supportModule.startOwnedBrowser(
+      browserType, runtime, { env: { PATH: "/tools" }, timeoutMs: 50 },
+    );
+    await assert.rejects(
+      supportModule.closeOwnedBrowser(owned, { timeoutMs: 20 }),
+      /direct SIGKILL/u,
+    );
+    assert.equal(signal, "SIGKILL");
+  } finally {
+    await removePrivateRuntime(runtime);
+  }
+});
 
 async function waitForProcessExit(owned, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
@@ -346,31 +631,21 @@ test("createPrivateRuntime creates a private owned directory and removePrivateRu
   await assert.rejects(lstat(runtime.directory), { code: "ENOENT" });
 });
 
-test("createPrivateRuntime validates helper execution before quarantining a runtime", async () => {
+test("createPrivateRuntime rejects a non-Python cleanup executable before allocation", async () => {
   const helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-helper-"));
   const invalidPython = path.join(helperDirectory, "not-python");
   await writeFile(invalidPython, "not an executable format");
   await chmod(invalidPython, 0o700);
-  const runtime = await createPrivateRuntime({
-    cleanupHelper: { pythonExecutable: invalidPython, helperPath: TEST_CLEANUP_HELPER.helperPath },
-  });
-  await writeFile(`${runtime.directory}/sentinel`, "owned");
-
   try {
-    await assert.rejects(removePrivateRuntime(runtime));
-    assert.equal(await readFile(`${runtime.directory}/sentinel`, "utf8"), "owned");
+    await assert.rejects(createPrivateRuntime({
+      cleanupHelper: { pythonExecutable: invalidPython, helperPath: TEST_CLEANUP_HELPER.helperPath },
+    }));
   } finally {
-    await rm(runtime.directory, { recursive: true, force: true });
-    for (const entry of await readdir(runtime.parent)) {
-      if (entry.startsWith(`.${path.basename(runtime.directory)}.cleanup-`)) {
-        await rm(path.join(runtime.parent, entry), { recursive: true, force: true });
-      }
-    }
     await rm(helperDirectory, { recursive: true, force: true });
   }
 });
 
-test("helper self-test rejects invalid source and stalled preflight before quarantine", async () => {
+test("helper self-test rejects invalid source and stalled preflight before allocation", async () => {
   const helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-helper-source-"));
   const invalidHelper = path.join(helperDirectory, "invalid.py");
   const stalledHelper = path.join(helperDirectory, "stalled.py");
@@ -379,13 +654,9 @@ test("helper self-test rejects invalid source and stalled preflight before quara
 
   try {
     for (const helperPath of [invalidHelper, stalledHelper]) {
-      const runtime = await createPrivateRuntime({
+      await assert.rejects(createPrivateRuntime({
         cleanupHelper: { pythonExecutable: TEST_PYTHON, helperPath, timeoutMs: 100 },
-      });
-      await writeFile(`${runtime.directory}/sentinel`, "owned");
-      await assert.rejects(removePrivateRuntime(runtime), /preflight.*(?:exited|timed out)/);
-      assert.equal(await readFile(`${runtime.directory}/sentinel`, "utf8"), "owned");
-      await rm(runtime.directory, { recursive: true, force: true });
+      }), /preflight.*(?:exited|timed out)/);
     }
   } finally {
     await rm(helperDirectory, { recursive: true, force: true });

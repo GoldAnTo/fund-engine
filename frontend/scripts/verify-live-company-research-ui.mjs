@@ -12,12 +12,17 @@ import { chromium } from "@playwright/test";
 import {
   assertLoopbackUrl,
   assertProcessesRunning,
+  assertAlphabetIdentityBinding,
   buildVerifierEnvironment,
   chooseRunError,
+  closeOwnedBrowser,
+  createBrowserFailureCollector,
   createPrivateRuntime,
   createTrafficAudit,
+  newOwnedBrowserContext,
   parseVerifierArgs,
   removePrivateRuntime,
+  startOwnedBrowser,
   startOwnedProcess,
   stopOwnedProcess,
   waitUntil,
@@ -29,6 +34,9 @@ const backend = path.join(root, "backend");
 const cleanupHelperPath = path.join(backend, "app", "scripts", "remove_private_runtime_contents.py");
 const alphabetManifestPath = path.join(
   backend, "app", "underwriting", "fixtures", "alphabet_golden_case", "manifest.json",
+);
+const foundationManifestPath = path.join(
+  backend, "app", "underwriting", "fixtures", "product_foundation", "manifest.json",
 );
 const token = "live-company-research-verifier-token";
 const alphabetExternalKey = "US:ALPHABET:COMPANY";
@@ -52,39 +60,123 @@ function freePort() {
   });
 }
 
-async function validatePythonLauncher(candidate, label) {
+function repositoryVenvRoots() {
+  const roots = [path.join(backend, ".venv")];
+  const worktreesParent = path.dirname(root);
+  if (path.basename(worktreesParent) === ".worktrees") {
+    roots.push(path.join(path.dirname(worktreesParent), "backend", ".venv"));
+  }
+  return roots;
+}
+
+function trustedMode(stat) {
+  return (stat.mode & 0o022) === 0
+    && (typeof process.getuid !== "function" || stat.uid === process.getuid());
+}
+
+function fileIdentity(stat) {
+  return Object.freeze({
+    dev: stat.dev, ino: stat.ino, uid: stat.uid, mode: stat.mode & 0o777,
+  });
+}
+
+function sameFileIdentity(stat, expected) {
+  return stat.dev === expected.dev && stat.ino === expected.ino
+    && stat.uid === expected.uid && (stat.mode & 0o777) === expected.mode;
+}
+
+async function validatePythonLauncher(candidate, venvRoot, label) {
   const absolute = path.resolve(process.cwd(), candidate);
+  const absoluteRoot = path.resolve(venvRoot);
   try {
-    const [stat, canonical] = await Promise.all([lstat(absolute), realpath(absolute)]);
+    const [rootStat, binStat, launcherStat, canonicalRoot, canonical] = await Promise.all([
+      lstat(absoluteRoot),
+      lstat(path.join(absoluteRoot, "bin")),
+      lstat(absolute),
+      realpath(absoluteRoot),
+      realpath(absolute),
+    ]);
     const canonicalStat = await lstat(canonical);
     await access(absolute, fsConstants.X_OK);
-    if ((!stat.isFile() && !stat.isSymbolicLink()) || !canonicalStat.isFile()
-      || canonicalStat.isSymbolicLink() || (canonicalStat.mode & 0o111) === 0) {
+    if (canonicalRoot !== absoluteRoot
+      || absolute !== path.join(absoluteRoot, "bin", "python")
+      || !rootStat.isDirectory() || rootStat.isSymbolicLink() || !trustedMode(rootStat)
+      || !binStat.isDirectory() || binStat.isSymbolicLink() || !trustedMode(binStat)
+      || (!launcherStat.isFile() && !launcherStat.isSymbolicLink())
+      || !canonicalStat.isFile() || canonicalStat.isSymbolicLink()
+      || (canonicalStat.mode & 0o111) === 0 || !trustedMode(canonicalStat)) {
       throw new Error("invalid executable identity");
     }
-    return Object.freeze({ launcher: absolute, canonical });
+    return Object.freeze({
+      launcher: absolute,
+      canonical,
+      venvRoot: absoluteRoot,
+      launcherIdentity: fileIdentity(launcherStat),
+      canonicalIdentity: fileIdentity(canonicalStat),
+    });
   } catch {
     throw new Error(`${label} is not a validated Python executable`);
   }
 }
 
 async function resolvePython() {
+  const allowedRoots = repositoryVenvRoots();
   if (typeof process.env.PYTHON === "string" && process.env.PYTHON.length > 0) {
-    return validatePythonLauncher(process.env.PYTHON, "configured PYTHON");
+    const explicit = path.resolve(process.cwd(), process.env.PYTHON);
+    const allowedRoot = allowedRoots.find((candidate) =>
+      explicit === path.join(path.resolve(candidate), "bin", "python"));
+    if (!allowedRoot) throw new Error("configured PYTHON is outside the trusted repository venv");
+    return validatePythonLauncher(explicit, allowedRoot, "configured PYTHON");
   }
-  const candidates = [path.join(backend, ".venv", "bin", "python")];
-  const worktreesParent = path.dirname(root);
-  if (path.basename(worktreesParent) === ".worktrees") {
-    candidates.push(path.join(path.dirname(worktreesParent), "backend", ".venv", "bin", "python"));
-  }
-  for (const candidate of candidates) {
+  for (const venvRoot of allowedRoots) {
     try {
-      return await validatePythonLauncher(candidate, "repository backend Python");
+      return await validatePythonLauncher(
+        path.join(venvRoot, "bin", "python"), venvRoot, "repository backend Python",
+      );
     } catch {
       // Try only the repository-owned fallback locations listed above.
     }
   }
   throw new Error("repository backend Python is not a validated executable");
+}
+
+async function assertPythonIdentity(python) {
+  const [launcherStat, canonicalStat, canonical] = await Promise.all([
+    lstat(python.launcher), lstat(python.canonical), realpath(python.launcher),
+  ]);
+  if (canonical !== python.canonical
+    || !sameFileIdentity(launcherStat, python.launcherIdentity)
+    || !sameFileIdentity(canonicalStat, python.canonicalIdentity)) {
+    throw new Error("trusted Python identity changed");
+  }
+}
+
+function probePython(python) {
+  const probe = [
+    "import importlib, pathlib, sys",
+    "expected = pathlib.Path(sys.argv[1]).resolve()",
+    "assert pathlib.Path(sys.prefix).resolve() == expected",
+    "[importlib.import_module(name) for name in ('sqlalchemy', 'uvicorn', 'fastapi')]",
+    "backend = pathlib.Path(sys.argv[2]).resolve()",
+    "sys.path.insert(0, str(backend))",
+    "importlib.import_module('app.main')",
+  ].join("; ");
+  try {
+    execFileSync(python.launcher, ["-I", "-c", probe, python.venvRoot, backend], {
+      cwd: backend,
+      env: {
+        APP_ENV: "test",
+        DATABASE_URL: "sqlite:///:memory:",
+        RESEARCH_TENANT_TOKENS: "{}",
+        NO_PROXY: "127.0.0.1,localhost",
+        no_proxy: "127.0.0.1,localhost",
+      },
+      stdio: ["ignore", "ignore", "ignore"],
+      timeout: 10_000,
+    });
+  } catch {
+    throw new Error("trusted Python dependency probe failed");
+  }
 }
 
 async function alphabetFixtureCutoff() {
@@ -99,6 +191,14 @@ async function alphabetFixtureCutoff() {
     throw new Error("authenticated Alphabet fixture cutoff is invalid");
   }
   return manifest.cutoff;
+}
+
+async function alphabetFoundation() {
+  try {
+    return JSON.parse(await readFile(foundationManifestPath, "utf8"));
+  } catch {
+    throw new Error("authenticated product foundation manifest is unreadable");
+  }
 }
 
 async function responseJson(response) {
@@ -118,31 +218,22 @@ function remaining(deadline, label) {
   return milliseconds;
 }
 
-function boundedPromise(promise, timeoutMs, label) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-function captureBrowserFailure(failures, operation) {
-  try {
-    operation();
-  } catch (error) {
-    if (failures.length < 20) failures.push(error instanceof Error ? error : new Error("browser audit failure"));
-  }
-}
-
 function throwBrowserFailures(failures) {
-  if (failures.length > 0) throw failures[0];
+  failures.throwIfAny();
 }
 
-async function finalizeOwnedRuntime({ browser, worker, vite, api, runtime }) {
+async function finalizeOwnedRuntime({ browser, browserFailures, worker, vite, api, runtime }) {
   const cleanupErrors = [];
   if (browser) {
     try {
-      await boundedPromise(browser.close(), CLEANUP_TIMEOUT_MS, "browser cleanup");
+      await closeOwnedBrowser(browser, { timeoutMs: CLEANUP_TIMEOUT_MS });
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (browserFailures) {
+    try {
+      browserFailures.throwIfAny();
     } catch (error) {
       cleanupErrors.push(error);
     }
@@ -165,9 +256,10 @@ async function finalizeOwnedRuntime({ browser, worker, vite, api, runtime }) {
   return cleanupErrors;
 }
 
-function runBootstrap(python, args, { env, deadline, label }) {
+async function runBootstrap(python, args, { env, deadline, label }) {
+  await assertPythonIdentity(python);
   try {
-    execFileSync(python, args, {
+    execFileSync(python.launcher, args, {
       cwd: backend,
       env,
       stdio: ["ignore", "ignore", "pipe"],
@@ -178,7 +270,7 @@ function runBootstrap(python, args, { env, deadline, label }) {
   }
 }
 
-async function runBrowserWorkflow({ page, uiBase, audit, failures, deadline, processes }) {
+async function runBrowserWorkflow({ page, uiBase, audit, failures, deadline, processes, foundation }) {
   await page.goto(`${uiBase}/research/new`, {
     waitUntil: "networkidle",
     timeout: remaining(deadline, "new research navigation"),
@@ -206,17 +298,8 @@ async function runBrowserWorkflow({ page, uiBase, audit, failures, deadline, pro
   { timeout: remaining(deadline, "Alphabet preview") });
   await page.getByRole("button", { name: "研究 Alphabet" }).click();
   const preview = await responseJson(await previewResponsePromise);
-  if (preview?.company?.object_id !== alphabet.object_id
-    || preview.company.external_key !== alphabetExternalKey
-    || preview.company.canonical_name !== "Alphabet Inc.") {
-    throw new Error("preview company binding mismatch");
-  }
-  const securities = Array.isArray(preview.securities)
-    ? preview.securities.map((security) => `${security.symbol}:${security.share_class}`).sort()
-    : [];
-  if (securities.join(",") !== ["GOOG:Class C", "GOOGL:Class A"].sort().join(",")) {
-    throw new Error("preview security binding mismatch");
-  }
+  const boundAlphabet = assertAlphabetIdentityBinding({ foundation, search, preview });
+  if (boundAlphabet.object_id !== alphabet.object_id) throw new Error("Alphabet company binding changed");
   await page.getByRole("heading", { name: "确认默认研究方案" }).waitFor();
   await page.getByText("关联证券：GOOG Class C；GOOGL Class A", { exact: false }).waitFor();
   throwBrowserFailures(failures);
@@ -250,12 +333,15 @@ async function main() {
   const { timeoutMs } = parseVerifierArgs(process.argv.slice(2));
   const deadline = Date.now() + timeoutMs;
   const python = await resolvePython();
+  probePython(python);
+  await assertPythonIdentity(python);
   const canonicalCleanupHelper = await realpath(cleanupHelperPath);
   let runtime;
   let api;
   let worker;
   let vite;
   let browser;
+  let browserFailures;
   let primaryError = null;
   let cleanupErrors = [];
 
@@ -283,22 +369,24 @@ async function main() {
       TMP: runtime.directory,
     };
 
-    runBootstrap(
-      python.launcher,
+    await runBootstrap(
+      python,
       ["-c", "from app.models.ledger import Base; from app.db import engine; Base.metadata.create_all(engine)"],
       { env, deadline, label: "database schema creation" },
     );
-    runBootstrap(
-      python.launcher,
+    await runBootstrap(
+      python,
       ["-m", "app.scripts.load_product_foundation_fixture"],
       { env, deadline, label: "product foundation load" },
     );
 
+    await assertPythonIdentity(python);
     api = startOwnedProcess(
       python.launcher,
       ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(apiPort)],
       { cwd: backend, env, name: "api" },
     );
+    await assertPythonIdentity(python);
     worker = startOwnedProcess(
       python.launcher,
       ["-m", "app.scripts.run_company_research_worker", "--loop", "--poll-seconds", "0.1"],
@@ -332,47 +420,67 @@ async function main() {
       processes,
     });
 
-    browser = await boundedPromise(chromium.launch({
+    browser = await startOwnedBrowser(chromium, runtime, {
       channel: env.PW_BROWSER_CHANNEL || undefined,
-      env: Object.fromEntries(Object.entries({
-        PATH: env.PATH,
-        SystemRoot: env.SystemRoot,
-        WINDIR: env.WINDIR,
-        TMPDIR: runtime.directory,
-        TEMP: runtime.directory,
-        TMP: runtime.directory,
-        NO_PROXY: env.NO_PROXY,
-        no_proxy: env.no_proxy,
-      }).filter(([, value]) => typeof value === "string" && value.length > 0)),
-    }), remaining(deadline, "browser launch"), "browser launch");
-    const page = await browser.newPage();
-    page.setDefaultTimeout(Math.min(30_000, remaining(deadline, "browser workflow")));
-    page.setDefaultNavigationTimeout(Math.min(30_000, remaining(deadline, "browser workflow")));
-    const audit = createTrafficAudit(uiBase);
-    const failures = [];
-
-    page.on("pageerror", () => {
-      if (failures.length < 20) failures.push(new Error("unhandled page exception"));
+      env,
+      timeoutMs: remaining(deadline, "browser launch"),
     });
-    page.on("console", (message) => {
-      if (message.type() === "error" && failures.length < 20) {
-        failures.push(new Error("browser console error"));
+    const audit = createTrafficAudit(uiBase);
+    browserFailures = createBrowserFailureCollector();
+    const context = await newOwnedBrowserContext(browser);
+    await context.route("**/*", async (route) => {
+      try {
+        audit.assertAllowedRequest(route.request().url());
+      } catch (error) {
+        browserFailures.record(error);
+        await route.abort("blockedbyclient");
+        return;
+      }
+      await route.continue();
+    });
+    await context.routeWebSocket(/.*/u, (websocket) => {
+      try {
+        audit.assertAllowedWebSocket(websocket.url());
+        websocket.connectToServer();
+      } catch (error) {
+        browserFailures.record(error);
+        void websocket.close({ code: 1008, reason: "blocked by verifier" });
       }
     });
-    page.on("requestfailed", (request) => captureBrowserFailure(failures, () =>
+    const page = await context.newPage();
+    page.setDefaultTimeout(Math.min(30_000, remaining(deadline, "browser workflow")));
+    page.setDefaultNavigationTimeout(Math.min(30_000, remaining(deadline, "browser workflow")));
+
+    page.on("pageerror", () => {
+      browserFailures.record(new Error("unhandled page exception"));
+    });
+    page.on("console", (message) => {
+      if (message.type() === "error") browserFailures.record(new Error("browser console error"));
+    });
+    page.on("requestfailed", (request) => browserFailures.capture(() =>
       audit.recordRequestFailure(request.method(), request.url())));
-    page.on("request", (request) => captureBrowserFailure(failures, () =>
+    page.on("request", (request) => browserFailures.capture(() =>
       audit.recordRequest(request.method(), request.url())));
-    page.on("response", (response) => captureBrowserFailure(failures, () =>
+    page.on("response", (response) => browserFailures.capture(() =>
       audit.recordResponse(response.status(), response.request().method(), response.url())));
 
     await page.clock.setFixedTime(await alphabetFixtureCutoff());
 
-    await runBrowserWorkflow({ page, uiBase, audit, failures, deadline, processes });
+    await runBrowserWorkflow({
+      page,
+      uiBase,
+      audit,
+      failures: browserFailures,
+      deadline,
+      processes,
+      foundation: await alphabetFoundation(),
+    });
   } catch (error) {
     primaryError = error instanceof Error ? error : new Error("live company research verifier failed");
   } finally {
-    cleanupErrors = await finalizeOwnedRuntime({ browser, worker, vite, api, runtime });
+    cleanupErrors = await finalizeOwnedRuntime({
+      browser, browserFailures, worker, vite, api, runtime,
+    });
   }
 
   const runError = chooseRunError(primaryError, cleanupErrors);

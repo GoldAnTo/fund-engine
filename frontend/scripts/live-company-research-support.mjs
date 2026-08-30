@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { chmod, lstat, mkdtemp, open, realpath, rename, rmdir } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, open, realpath, rename, rmdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -15,6 +15,7 @@ const STOP_TIMEOUT_MS = 5_000;
 const HELPER_PHASE_TIMEOUT_MS = 5_000;
 const RUNTIME_AUTHORITIES = new WeakMap();
 const PROCESS_AUTHORITIES = new WeakMap();
+const BROWSER_AUTHORITIES = new WeakMap();
 const PRESERVED_ENVIRONMENT_KEYS = [
   "PATH",
   "SystemRoot",
@@ -348,6 +349,7 @@ async function validateCleanupHelper(cleanupHelper) {
 
 export async function createPrivateRuntime({ cleanupHelper } = {}) {
   const validatedCleanupHelper = await validateCleanupHelper(cleanupHelper);
+  await preflightCleanupHelper({ cleanupHelper: validatedCleanupHelper });
   const parent = await realpath(os.tmpdir());
   const directory = await mkdtemp(path.join(parent, PREFIX));
   await chmod(directory, 0o700);
@@ -405,6 +407,171 @@ export async function removePrivateRuntime(runtime) {
 
 export function chooseRunError(primary, cleanupErrors) {
   return primary ?? cleanupErrors[0] ?? null;
+}
+
+function ownedRuntimeAuthority(runtime) {
+  const authority = RUNTIME_AUTHORITIES.get(runtime);
+  if (!authority || authority.removed || authority.quarantine
+    || runtime.parent !== authority.parent || runtime.directory !== authority.directory
+    || runtime.dev !== authority.dev || runtime.ino !== authority.ino
+    || Object.isFrozen(runtime) === false) {
+    privateRuntimeIdentityChanged();
+  }
+  return authority;
+}
+
+async function createOwnedBrowserDirectories(runtime, authority) {
+  await assertPrivateRuntimeParent(authority);
+  const current = await lstat(runtime.directory);
+  assertPrivateRuntimeStat(current, authority);
+  const root = path.join(runtime.directory, "browser");
+  const directories = {
+    root,
+    artifacts: path.join(root, "artifacts"),
+    downloads: path.join(root, "downloads"),
+    traces: path.join(root, "traces"),
+    temporary: path.join(root, "tmp"),
+    home: path.join(root, "home"),
+    cache: path.join(root, "cache"),
+    config: path.join(root, "config"),
+    diskCache: path.join(root, "disk-cache"),
+    crashes: path.join(root, "crashes"),
+  };
+  await mkdir(root, { mode: 0o700 });
+  await Promise.all(Object.entries(directories)
+    .filter(([key]) => key !== "root")
+    .map(([, directory]) => mkdir(directory, { mode: 0o700 })));
+  return Object.freeze(directories);
+}
+
+function settleWithin(promise, timeoutMs) {
+  const timer = deadlineTimer(timeoutMs);
+  return Promise.race([
+    Promise.resolve(promise).then(
+      (value) => ({ kind: "fulfilled", value }),
+      (error) => ({ kind: "rejected", error }),
+    ),
+    timer.promise,
+  ]).finally(() => timer.cancel());
+}
+
+async function killExactBrowserServer(server, timeoutMs) {
+  const killed = await settleWithin(server.kill(), timeoutMs);
+  if (killed.kind === "fulfilled") return;
+  const child = typeof server.process === "function" ? server.process() : null;
+  if (!child || typeof child.kill !== "function" || child.kill("SIGKILL") !== true) {
+    throw new Error("exact browser server kill failed");
+  }
+  const exited = child.exitCode !== null || child.signalCode !== null
+    ? { kind: "fulfilled" }
+    : await settleWithin(new Promise((resolve) => {
+      child.once("exit", resolve);
+      child.once("error", resolve);
+    }), timeoutMs);
+  if (exited.kind !== "fulfilled") throw new Error("exact browser direct SIGKILL timed out");
+  throw new Error("exact browser server kill required direct SIGKILL");
+}
+
+async function withOwnedProcessTemp(directory, operation) {
+  const keys = ["TMPDIR", "TEMP", "TMP"];
+  const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) process.env[key] = directory;
+  try {
+    return await operation();
+  } finally {
+    for (const key of keys) {
+      const value = previous.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+export async function startOwnedBrowser(browserType, runtime, {
+  env = {}, channel, timeoutMs = 30_000,
+} = {}) {
+  if (!browserType || typeof browserType.launchServer !== "function"
+    || typeof browserType.connect !== "function"
+    || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("owned browser launch configuration is invalid");
+  }
+  const runtimeAuthority = ownedRuntimeAuthority(runtime);
+  const directories = await createOwnedBrowserDirectories(runtime, runtimeAuthority);
+  const browserEnv = Object.fromEntries(Object.entries({
+    PATH: env.PATH,
+    SystemRoot: env.SystemRoot,
+    WINDIR: env.WINDIR,
+    NO_PROXY: env.NO_PROXY,
+    no_proxy: env.no_proxy,
+    HOME: directories.home,
+    TMPDIR: directories.temporary,
+    TEMP: directories.temporary,
+    TMP: directories.temporary,
+    XDG_CACHE_HOME: directories.cache,
+    XDG_CONFIG_HOME: directories.config,
+  }).filter(([, value]) => typeof value === "string" && value.length > 0));
+  let server;
+  try {
+    server = await withOwnedProcessTemp(directories.temporary, () => browserType.launchServer({
+      channel: channel || undefined,
+      host: LOOPBACK_HOST,
+      port: 0,
+      timeout: timeoutMs,
+      env: browserEnv,
+      artifactsDir: directories.artifacts,
+      downloadsPath: directories.downloads,
+      tracesDir: directories.traces,
+      args: [
+        `--disk-cache-dir=${directories.diskCache}`,
+        `--crash-dumps-dir=${directories.crashes}`,
+      ],
+    }));
+  } catch {
+    throw new Error("owned browser launch failed");
+  }
+  let browser;
+  try {
+    browser = await browserType.connect(server.wsEndpoint(), {
+      exposeNetwork: "<loopback>",
+      timeout: timeoutMs,
+    });
+  } catch {
+    await killExactBrowserServer(server, timeoutMs);
+    throw new Error("owned browser connection failed");
+  }
+  const owned = Object.freeze({
+    directories,
+    get connected() { return browser.isConnected?.() ?? true; },
+  });
+  BROWSER_AUTHORITIES.set(owned, {
+    server, browser, directories, closePromise: null, closed: false,
+  });
+  return owned;
+}
+
+export async function newOwnedBrowserContext(owned, options = {}) {
+  const authority = BROWSER_AUTHORITIES.get(owned);
+  if (!authority || authority.closed) throw new Error("unowned browser handle");
+  return authority.browser.newContext({ ...options, serviceWorkers: "block" });
+}
+
+export async function closeOwnedBrowser(owned, { timeoutMs = STOP_TIMEOUT_MS } = {}) {
+  const authority = BROWSER_AUTHORITIES.get(owned);
+  if (!authority) throw new Error("unowned browser handle");
+  if (authority.closePromise) return authority.closePromise;
+  authority.closePromise = (async () => {
+    if (authority.closed) return;
+    const graceful = await settleWithin(authority.server.close(), timeoutMs);
+    if (graceful.kind === "fulfilled") {
+      authority.closed = true;
+      return;
+    }
+    await killExactBrowserServer(authority.server, timeoutMs);
+    authority.closed = true;
+    if (graceful.kind === "rejected") throw new Error("browser graceful close failed; exact browser server was killed");
+    throw new Error("browser graceful close timed out; exact browser server was killed");
+  })();
+  return authority.closePromise;
 }
 
 export function startOwnedProcess(command, args, { cwd, env, name }) {
@@ -643,6 +810,7 @@ export function buildVerifierEnvironment({ host, databaseUrl, token, backendUrl 
 
 export function createTrafficAudit(uiBase) {
   const origin = assertLoopbackUrl(uiBase).origin;
+  const websocketOrigin = origin.replace(/^http:/u, "ws:");
   const requests = [];
   const responses = [];
   const sanitizedUrl = (raw) => {
@@ -655,13 +823,33 @@ export function createTrafficAudit(uiBase) {
     return url;
   };
   const isAllowedLocalScheme = (url) => ["about:", "blob:", "data:"].includes(url.protocol);
+  const assertAllowedRequest = (raw) => {
+    const url = sanitizedUrl(raw);
+    const hasExactAuthority = typeof raw === "string"
+      && (raw === origin || raw.startsWith(`${origin}/`)
+        || raw.startsWith(`${origin}?`) || raw.startsWith(`${origin}#`));
+    if (!isAllowedLocalScheme(url)
+      && (url.protocol !== "http:" || url.origin !== origin || !hasExactAuthority)) {
+      throw new Error(`unexpected external request: ${url.origin}${url.pathname}`);
+    }
+    return url;
+  };
+  const assertAllowedWebSocket = (raw) => {
+    const url = sanitizedUrl(raw);
+    const hasExactAuthority = typeof raw === "string"
+      && (raw === websocketOrigin || raw.startsWith(`${websocketOrigin}/`)
+        || raw.startsWith(`${websocketOrigin}?`) || raw.startsWith(`${websocketOrigin}#`));
+    if (url.protocol !== "ws:" || url.origin !== websocketOrigin || !hasExactAuthority) {
+      throw new Error(`unexpected external WebSocket: ${url.origin}${url.pathname}`);
+    }
+    return url;
+  };
 
   return Object.freeze({
+    assertAllowedRequest,
+    assertAllowedWebSocket,
     recordRequest(method, raw) {
-      const url = sanitizedUrl(raw);
-      if (url.origin !== origin && !isAllowedLocalScheme(url)) {
-        throw new Error(`unexpected external request: ${url.origin}${url.pathname}`);
-      }
+      const url = assertAllowedRequest(raw);
       if (url.origin === origin && url.pathname.startsWith("/api/")) {
         requests.push(Object.freeze([method, url.pathname]));
       }
@@ -703,6 +891,97 @@ export function createTrafficAudit(uiBase) {
   });
 }
 
+export function createBrowserFailureCollector() {
+  const errors = [];
+  return Object.freeze({
+    record(error) {
+      if (errors.length < 20) {
+        errors.push(error instanceof Error ? error : new Error("browser audit failure"));
+      }
+    },
+    capture(operation) {
+      try {
+        operation();
+      } catch (error) {
+        this.record(error);
+      }
+    },
+    throwIfAny() {
+      if (errors.length > 0) throw errors[0];
+    },
+    count() { return errors.length; },
+  });
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+
+export function assertAlphabetIdentityBinding({ foundation, search, preview }) {
+  if (!isRecord(foundation)
+    || foundation.schema_version !== "product.foundation-identities.v1"
+    || !SHA256_PATTERN.test(foundation.content_hash)
+    || !Array.isArray(foundation.companies) || !Array.isArray(foundation.securities)
+    || !isRecord(search) || !Array.isArray(search.items) || !isRecord(preview)) {
+    throw new Error("Alphabet foundation identity contract is malformed");
+  }
+  const expectedCompanies = foundation.companies.filter((company) =>
+    isRecord(company) && company.external_key === "US:ALPHABET:COMPANY");
+  const expectedSecurities = foundation.securities.filter((security) =>
+    isRecord(security) && security.company_key === "US:ALPHABET:COMPANY");
+  if (expectedCompanies.length !== 1 || expectedCompanies[0].canonical_name !== "Alphabet Inc."
+    || expectedSecurities.length !== 2
+    || expectedSecurities.map((security) => security.external_key).sort().join(",")
+      !== ["NASDAQ:GOOG", "NASDAQ:GOOGL"].join(",")) {
+    throw new Error("Alphabet foundation identity contract is incomplete");
+  }
+
+  const companyMatches = search.items.filter((item) =>
+    isRecord(item) && item.external_key === "US:ALPHABET:COMPANY");
+  if (companyMatches.length !== 1) throw new Error("Alphabet company identity mismatch");
+  const company = companyMatches[0];
+  if (company.kind !== "company" || !UUID_PATTERN.test(company.object_id)
+    || company.canonical_name !== expectedCompanies[0].canonical_name
+    || !isRecord(preview.company) || preview.company.object_id !== company.object_id
+    || preview.company.external_key !== company.external_key
+    || preview.company.canonical_name !== company.canonical_name) {
+    throw new Error("Alphabet company identity mismatch");
+  }
+  if (!Array.isArray(preview.securities) || preview.securities.length !== expectedSecurities.length) {
+    throw new Error("Alphabet security identity mismatch");
+  }
+
+  const seenObjectIds = new Set();
+  for (const expected of expectedSecurities) {
+    const searched = search.items.filter((item) =>
+      isRecord(item) && item.external_key === expected.external_key);
+    const projected = preview.securities.filter((item) =>
+      isRecord(item) && item.external_key === expected.external_key);
+    if (searched.length !== 1 || projected.length !== 1) {
+      throw new Error("Alphabet security identity mismatch");
+    }
+    const searchSecurity = searched[0];
+    const previewSecurity = projected[0];
+    const expectedFields = {
+      canonical_name: expected.canonical_name,
+      symbol: expected.symbol,
+      exchange: expected.exchange,
+      share_class: expected.share_class,
+      trading_currency: expected.currency,
+    };
+    if (searchSecurity.kind !== "security" || !UUID_PATTERN.test(searchSecurity.object_id)
+      || previewSecurity.object_id !== searchSecurity.object_id
+      || previewSecurity.external_key !== searchSecurity.external_key
+      || Object.entries(expectedFields).some(([field, value]) =>
+        searchSecurity[field] !== value || previewSecurity[field] !== value)
+      || seenObjectIds.has(searchSecurity.object_id)) {
+      throw new Error("Alphabet security identity mismatch");
+    }
+    seenObjectIds.add(searchSecurity.object_id);
+  }
+  if (seenObjectIds.has(company.object_id)) throw new Error("Alphabet security identity mismatch");
+  return company;
+}
+
 function jsonValuesEqual(left, right) {
   if (Object.is(left, right)) return true;
   if (Array.isArray(left) || Array.isArray(right)) {
@@ -738,6 +1017,20 @@ function reviewFacts(artifact, label) {
 export function assertExactReviewSuccessor(before, after, factKey) {
   const previousFacts = reviewFacts(before, "previous");
   const nextFacts = reviewFacts(after, "successor");
+  for (const [field, label] of [
+    ["schema_version", "schema version"],
+    ["project_id", "project id"],
+    ["kind", "kind"],
+  ]) {
+    if (typeof before[field] !== "string" || before[field].length === 0
+      || after[field] !== before[field]) {
+      throw new Error(`review ${label} changed`);
+    }
+  }
+  if (!Array.isArray(before.source_refs) || !Array.isArray(after.source_refs)
+    || !jsonValuesEqual(after.source_refs, before.source_refs)) {
+    throw new Error("review source refs changed");
+  }
   if (after.id === before.id) throw new Error("review artifact identity did not advance");
   if (after.version !== before.version + 1) throw new Error("review version did not advance exactly once");
   if (previousFacts.length !== nextFacts.length) throw new Error("review fact cardinality changed");
