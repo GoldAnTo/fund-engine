@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
+import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
   assertLoopbackUrl,
   assertWorkspace,
   buildVerifierEnvironment,
+  chooseRunError,
+  createPrivateRuntime,
   parseVerifierArgs,
+  removePrivateRuntime,
+  startOwnedProcess,
+  stopOwnedProcess,
+  waitUntil,
 } from "./live-company-research-support.mjs";
 
 test("parseVerifierArgs accepts only the bounded two-token timeout option", () => {
@@ -155,4 +162,83 @@ test("assertWorkspace rejects snapshot drift while preserving a valid workspace"
     invalidLockVersion.draft.lock_version = lockVersion;
     assert.throws(() => assertWorkspace(invalidLockVersion, expected), /draft lock/);
   }
+});
+
+test("createPrivateRuntime creates a private owned directory and removePrivateRuntime is idempotent", async () => {
+  const runtime = await createPrivateRuntime();
+  const sentinel = `${runtime.directory}/owned-sentinel`;
+
+  assert.equal((await lstat(runtime.directory)).mode & 0o777, 0o700);
+  await writeFile(sentinel, "owned");
+  await removePrivateRuntime(runtime);
+  await removePrivateRuntime(runtime);
+  await assert.rejects(lstat(runtime.directory), { code: "ENOENT" });
+});
+
+test("removePrivateRuntime refuses a directory substituted after creation", async () => {
+  const runtime = await createPrivateRuntime();
+  const movedDirectory = `${runtime.directory}.moved`;
+  const victimSentinel = `${runtime.directory}/victim-sentinel`;
+
+  try {
+    await rename(runtime.directory, movedDirectory);
+    await mkdir(runtime.directory, { mode: 0o700 });
+    await writeFile(victimSentinel, "victim");
+
+    await assert.rejects(removePrivateRuntime(runtime), /identity changed/);
+    assert.equal(await readFile(victimSentinel, "utf8"), "victim");
+  } finally {
+    await rm(runtime.directory, { recursive: true, force: true });
+    await rm(movedDirectory, { recursive: true, force: true });
+  }
+});
+
+test("waitUntil times out for a running child and reports unexpected child exits", async () => {
+  const sleeper = startOwnedProcess(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"], {
+    cwd: process.cwd(),
+    env: { PATH: process.env.PATH ?? "" },
+    name: "sleeper",
+  });
+
+  try {
+    await assert.rejects(
+      waitUntil(() => false, {
+        label: "never ready",
+        timeoutMs: 30,
+        intervalMs: 5,
+        processes: [sleeper],
+      }),
+      /timed out/,
+    );
+  } finally {
+    await stopOwnedProcess(sleeper);
+  }
+
+  const worker = startOwnedProcess(process.execPath, ["-e", "process.exit(7)"], {
+    cwd: process.cwd(),
+    env: { PATH: process.env.PATH ?? "" },
+    name: "worker",
+  });
+  try {
+    await assert.rejects(
+      waitUntil(() => false, {
+        label: "never ready",
+        timeoutMs: 1_000,
+        intervalMs: 5,
+        processes: [worker],
+      }),
+      /worker exited with 7/,
+    );
+  } finally {
+    await stopOwnedProcess(worker);
+  }
+});
+
+test("chooseRunError preserves a workflow failure over cleanup failures", () => {
+  const workflowError = new Error("workflow failed");
+  const cleanupError = new Error("cleanup failed");
+
+  assert.strictEqual(chooseRunError(workflowError, [cleanupError]), workflowError);
+  assert.strictEqual(chooseRunError(null, [cleanupError]), cleanupError);
+  assert.strictEqual(chooseRunError(null, []), null);
 });
