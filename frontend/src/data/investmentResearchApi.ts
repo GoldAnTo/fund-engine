@@ -1898,7 +1898,7 @@ export class InvestmentResearchApi {
       201,
       jsonInit("POST", body, { "Idempotency-Key": idempotencyKey }),
     );
-    if (!sameUuid(value.project_id, projectId) || value.manifest_hash !== body.expected_manifest_hash) {
+    if (!sameUuid(value.project_id, projectId)) {
       mismatch("company-research published revision binding mismatch");
     }
     return value;

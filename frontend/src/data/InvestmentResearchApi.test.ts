@@ -715,6 +715,25 @@ describe("InvestmentResearchApi", () => {
     expect(fetchSpy.mock.calls[4][1]?.headers).toBeUndefined();
   });
 
+  it("accepts the persisted publication manifest hash after the preview hash is consumed", async () => {
+    const revision = companyResearchFrozenRevisionBody();
+    revision.manifest_hash = hash;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(revision, 201)));
+
+    await expect(new InvestmentResearchApi().publishCompanyResearch(
+      ids.project,
+      {
+        schema_version: "underwriting.v1",
+        expected_lock_version: 4,
+        expected_manifest_hash: companyResearchHash,
+      },
+      "persisted-manifest-hash",
+    )).resolves.toMatchObject({
+      project_id: ids.project,
+      manifest_hash: hash,
+    });
+  });
+
   it("reads the ready-to-freeze workspace with its confirmed memo after judgment confirmation", async () => {
     const confirmationRequest = {
       schema_version: "underwriting.v1" as const,
@@ -851,8 +870,8 @@ describe("InvestmentResearchApi", () => {
     const duplicateArtifact = clone(companyResearchPublicationPreviewBody());
     duplicateArtifact.artifacts[1].id = duplicateArtifact.artifacts[0].id;
 
-    const wrongPublishedManifest = clone(companyResearchFrozenRevisionBody());
-    wrongPublishedManifest.manifest_hash = hash;
+    const wrongPublishedProject = clone(companyResearchFrozenRevisionBody());
+    wrongPublishedProject.project_id = ids.company;
     const wrongRevisionProject = clone(companyResearchFrozenRevisionBody());
     wrongRevisionProject.project_id = ids.company;
     const wrongRevisionId = clone(companyResearchFrozenRevisionBody());
@@ -875,7 +894,7 @@ describe("InvestmentResearchApi", () => {
       .mockResolvedValueOnce(response(rangedNotAnswerable))
       .mockResolvedValueOnce(response(reorderedArtifacts))
       .mockResolvedValueOnce(response(duplicateArtifact))
-      .mockResolvedValueOnce(response(wrongPublishedManifest, 201))
+      .mockResolvedValueOnce(response(wrongPublishedProject, 201))
       .mockResolvedValueOnce(response(wrongRevisionProject))
       .mockResolvedValueOnce(response(wrongRevisionId))
       .mockResolvedValueOnce(response(wrongRevisionStatus))
