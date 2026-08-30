@@ -79,6 +79,11 @@ payload = "\n".join(
         f"RESEARCH_BEARER_TOKEN={bearer_token}",
         "RESEARCH_TENANT_TOKENS=" + json.dumps({bearer_token: "local-one-click"}, separators=(",", ":")),
         "ACQUISITION_ENABLED_ADAPTERS=sse,szse",
+        "ONE_CLICK_ACQUISITION_REPLICAS=1",
+        "DATABASE_POOL_SIZE=2",
+        "DATABASE_MAX_OVERFLOW=2",
+        "DATABASE_POOL_TIMEOUT_SECONDS=30",
+        "DATABASE_POOL_RECYCLE_SECONDS=300",
         "",
     )
 )
@@ -121,6 +126,96 @@ runtime_env_value() {
   value="${matches#*=}"
   [[ -n "$value" ]] || die "empty ${key} in runtime environment"
   printf '%s' "$value"
+}
+
+optional_runtime_env_value() {
+  local key="$1"
+  local default_value="$2"
+  local matches value
+  matches="$(grep -E "^${key}=" "$RUNTIME_ENV_FILE" || true)"
+  if [[ -n "$matches" ]]; then
+    [[ "$(printf '%s\n' "$matches" | wc -l | tr -d ' ')" == "1" ]] \
+      || die "missing or duplicate ${key} in runtime environment"
+    value="${matches#*=}"
+    [[ -n "$value" ]] || die "empty ${key} in runtime environment"
+    printf '%s' "$value"
+    return 0
+  fi
+
+  matches="$(grep -E "^${key}=" "$BASE_ENV_FILE" || true)"
+  if [[ -z "$matches" ]]; then
+    printf '%s' "$default_value"
+    return 0
+  fi
+  [[ "$(printf '%s\n' "$matches" | wc -l | tr -d ' ')" == "1" ]] \
+    || die "missing or duplicate ${key} in base environment"
+  value="${matches#*=}"
+  [[ -n "$value" ]] || die "empty ${key} in base environment"
+  printf '%s' "$value"
+}
+
+bounded_integer_value() {
+  local key="$1"
+  local default_value="$2"
+  local minimum="$3"
+  local maximum="$4"
+  local value
+  value="$(optional_runtime_env_value "$key" "$default_value")"
+  [[ "$value" =~ ^(0|[1-9][0-9]*)$ ]] \
+    && (( 10#$value >= minimum && 10#$value <= maximum )) \
+    || die "${key} must be an integer from ${minimum} through ${maximum}"
+  printf '%s' "$value"
+}
+
+validate_memory_limit() {
+  local key="$1"
+  local default_value="$2"
+  local value
+  value="$(optional_runtime_env_value "$key" "$default_value")"
+  [[ "$value" =~ ^[1-9][0-9]*[bkmg]$ ]] \
+    || die "${key} has an invalid one-click resource limit"
+}
+
+validate_cpu_limit() {
+  local key="$1"
+  local default_value="$2"
+  local value
+  value="$(optional_runtime_env_value "$key" "$default_value")"
+  [[ "$value" =~ ^([1-9][0-9]*)(\.[0-9]+)?$|^0\.[0-9]*[1-9][0-9]*$ ]] \
+    || die "${key} has an invalid one-click resource limit"
+}
+
+validate_one_click_runtime_profile() {
+  bounded_integer_value DATABASE_POOL_SIZE 2 1 10 >/dev/null
+  bounded_integer_value DATABASE_MAX_OVERFLOW 2 0 10 >/dev/null
+  bounded_integer_value DATABASE_POOL_TIMEOUT_SECONDS 30 1 120 >/dev/null
+  bounded_integer_value DATABASE_POOL_RECYCLE_SECONDS 300 30 3600 >/dev/null
+
+  validate_memory_limit ONE_CLICK_POSTGRES_MEMORY_LIMIT 1536m
+  validate_memory_limit ONE_CLICK_API_MEMORY_LIMIT 1536m
+  validate_memory_limit ONE_CLICK_RESEARCH_WORKER_MEMORY_LIMIT 768m
+  validate_memory_limit ONE_CLICK_ACQUISITION_WORKER_MEMORY_LIMIT 768m
+  validate_memory_limit ONE_CLICK_COMPANY_RESEARCH_WORKER_MEMORY_LIMIT 1280m
+  validate_memory_limit ONE_CLICK_FRONTEND_MEMORY_LIMIT 256m
+
+  validate_cpu_limit ONE_CLICK_POSTGRES_CPU_LIMIT 1.5
+  validate_cpu_limit ONE_CLICK_API_CPU_LIMIT 1.5
+  validate_cpu_limit ONE_CLICK_RESEARCH_WORKER_CPU_LIMIT 1.0
+  validate_cpu_limit ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT 1.0
+  validate_cpu_limit ONE_CLICK_COMPANY_RESEARCH_WORKER_CPU_LIMIT 1.5
+  validate_cpu_limit ONE_CLICK_FRONTEND_CPU_LIMIT 0.5
+}
+
+validate_docker_memory() {
+  local memory_bytes
+  memory_bytes="$(docker info --format '{{.MemTotal}}')" \
+    || die "Docker must expose at least 6 GiB"
+  [[ "$memory_bytes" =~ ^[1-9][0-9]*$ ]] \
+    && (( 10#$memory_bytes >= 6 * 1024 * 1024 * 1024 )) \
+    || die "Docker must expose at least 6 GiB"
+  if (( 10#$memory_bytes < 8 * 1024 * 1024 * 1024 )); then
+    printf 'one-click runtime: Docker exposes less than 8 GiB of memory; startup may be unstable\n' >&2
+  fi
 }
 
 files_volume_name() {
@@ -555,7 +650,7 @@ restore_legacy_application_services() {
 
 start_one_click_runtime() (
   local rollback_required="false"
-  local project_name="" postgres_volume=""
+  local project_name="" postgres_volume="" acquisition_replicas=""
   cleanup_start() {
     local status="$?"
     trap - EXIT INT TERM
@@ -577,8 +672,12 @@ start_one_click_runtime() (
   require_command docker
   init_runtime_environment
   require_runtime_files
+  validate_one_click_runtime_profile
   compose config -q
-  compose build
+  validate_docker_memory
+  acquisition_replicas="$(bounded_integer_value ONE_CLICK_ACQUISITION_REPLICAS 1 1 4)"
+  compose build migrate
+  compose build frontend
   project_name="$(compose_project_name)"
   postgres_volume="$(postgres_volume_name)"
   if volume_exists "$postgres_volume"; then
@@ -596,7 +695,7 @@ start_one_click_runtime() (
   # has no hash_version default, so an old writer can never be silently relabeled.
   compose stop api research-worker acquisition-worker company-research-worker frontend \
     || die "failed to stop existing one-click application services"
-  compose up -d --no-build --scale acquisition-worker=3 \
+  compose up -d --no-build --scale "acquisition-worker=${acquisition_replicas}" \
     || die "one-click startup failed"
   rollback_required="false"
   trap - EXIT INT TERM

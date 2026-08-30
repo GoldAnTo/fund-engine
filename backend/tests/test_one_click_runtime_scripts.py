@@ -24,7 +24,7 @@ def test_runtime_control_script_keeps_credentials_local_and_switches_only_app_se
     for service in ("api", "frontend", "research-worker", "acquisition-worker", "scheduler"):
         assert service in script
     assert "postgres" not in script[script.index("stop_legacy_application_services"): script.index("start_one_click_runtime")]
-    assert "--scale acquisition-worker=3" in script
+    assert '--scale "acquisition-worker=${acquisition_replicas}"' in script
     assert " down" in script
     assert "--volumes" not in script
 
@@ -114,18 +114,32 @@ def test_rollback_restarts_only_legacy_application_containers() -> None:
     assert "keycloak" not in legacy_restore
 
 
-def test_up_builds_before_cutover_and_restores_only_recorded_containers_on_failure(tmp_path: Path) -> None:
+def run_fake_up(
+    tmp_path: Path,
+    *,
+    docker_memory: int,
+    runtime_values: dict[str, str] | None = None,
+    fail_up: bool = False,
+    fail_down: bool = False,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     api_short = "89c5b6eb2322"
     api_full = api_short + "a" * 52
     frontend_short = "3d70c9b8e735"
     frontend_full = frontend_short + "b" * 52
     scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
+    scripts_dir.mkdir(parents=True)
     script = scripts_dir / "one-click-runtime.sh"
     shutil.copy(ROOT / "scripts" / "one-click-runtime.sh", script)
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     (tmp_path / "docker-compose.one-click.yml").touch()
     (tmp_path / ".env").touch()
+    runtime_env = tmp_path / ".env.one-click.local"
+    runtime_env.write_text(
+        "ONE_CLICK_POSTGRES_PASSWORD=test-password\n"
+        "RESEARCH_BEARER_TOKEN=test-token\n"
+        + "".join(f"{key}={value}\n" for key, value in (runtime_values or {}).items())
+    )
+    runtime_env.chmod(0o600)
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -140,8 +154,12 @@ case "$1" in
     [[ "$*" == *" config -q"* || "$*" == *" build"* ]] && exit 0
     [[ "$*" == *" create postgres"* ]] && exit 0
     [[ "$*" == *" stop api research-worker acquisition-worker company-research-worker frontend"* ]] && exit 0
-    [[ "$*" == *" up -d --no-build"* ]] && exit 1
+    [[ "$*" == *" up -d --no-build"* ]] && {{ [[ "${{FAIL_UP:-0}}" == 1 ]] && exit 1 || exit 0; }}
     [[ "$*" == *" down"* ]] && {{ [[ "${{FAIL_DOWN:-0}}" == 1 ]] && exit 39 || exit 0; }}
+    ;;
+  info)
+    [[ "$*" == *" --format {{{{.MemTotal}}}}"* ]] && {{ printf '%s\n' "$DOCKER_MEMORY"; exit 0; }}
+    exit 0
     ;;
   volume)
     [[ "$2" == "inspect" && "${{!#}}" == "test-db" ]] && {{ printf '%s\n' 'test-db|test-project|fund-engine-one-click-data|||'; exit 0; }}
@@ -170,39 +188,136 @@ esac
     )
     fake_docker.chmod(fake_docker.stat().st_mode | stat.S_IXUSR)
     log = tmp_path / "docker.log"
-    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}", "DOCKER_LOG": str(log)}
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "DOCKER_LOG": str(log),
+        "DOCKER_MEMORY": str(docker_memory),
+        "FAIL_UP": "1" if fail_up else "0",
+        "FAIL_DOWN": "1" if fail_down else "0",
+    }
 
     completed = subprocess.run([script, "up"], capture_output=True, text=True, env=env)
+    return completed, log.read_text().splitlines() if log.exists() else []
+
+
+def test_up_builds_before_cutover_and_restores_only_recorded_containers_on_failure(tmp_path: Path) -> None:
+    api_full = "89c5b6eb2322" + "a" * 52
+    frontend_full = "3d70c9b8e735" + "b" * 52
+    completed, commands = run_fake_up(
+        tmp_path,
+        docker_memory=8 * 1024**3,
+        fail_up=True,
+    )
 
     assert completed.returncode != 0
-    commands = log.read_text().splitlines()
     config_index = next(index for index, command in enumerate(commands) if " config -q" in command)
-    build_index = next(index for index, command in enumerate(commands) if command.endswith(" build"))
+    migrate_build_index = next(
+        index for index, command in enumerate(commands) if command.endswith(" build migrate")
+    )
+    frontend_build_index = next(
+        index for index, command in enumerate(commands) if command.endswith(" build frontend")
+    )
     first_stop_index = next(index for index, command in enumerate(commands) if command.startswith("stop "))
     up_index = next(index for index, command in enumerate(commands) if " up -d --no-build" in command)
     down_index = next(index for index, command in enumerate(commands) if command.endswith(" down"))
     first_start_index = next(
         index for index, command in enumerate(commands) if command.startswith("start ")
     )
-    assert config_index < build_index < first_stop_index < up_index
+    assert config_index < migrate_build_index < frontend_build_index < first_stop_index < up_index
+    assert commands[up_index].endswith("--scale acquisition-worker=1")
     assert up_index < down_index < first_start_index
     assert {command for command in commands if command.startswith("stop ")} == {f"stop {api_full}", f"stop {frontend_full}"}
     assert {command for command in commands if command.startswith("start ")} == {f"start {api_full}", f"start {frontend_full}"}
     assert not (tmp_path / ".one-click-runtime" / "legacy-stopped-containers").exists()
 
-    log.write_text("")
-    blocked = subprocess.run(
-        [script, "up"],
-        capture_output=True,
-        text=True,
-        env={**env, "FAIL_DOWN": "1"},
+    blocked, blocked_commands = run_fake_up(
+        tmp_path / "blocked",
+        docker_memory=8 * 1024**3,
+        fail_up=True,
+        fail_down=True,
     )
     assert blocked.returncode != 0
     assert "state is preserved for manual recovery" in blocked.stderr
-    blocked_commands = log.read_text().splitlines()
     assert any(command.endswith(" down") for command in blocked_commands)
     assert not any(command.startswith("start ") for command in blocked_commands)
-    assert (tmp_path / ".one-click-runtime" / "legacy-stopped-containers").exists()
+    assert (tmp_path / "blocked" / ".one-click-runtime" / "legacy-stopped-containers").exists()
+
+
+def test_up_uses_runtime_configured_acquisition_replica_count(tmp_path: Path) -> None:
+    completed, commands = run_fake_up(
+        tmp_path,
+        docker_memory=8 * 1024**3,
+        runtime_values={"ONE_CLICK_ACQUISITION_REPLICAS": "4"},
+    )
+
+    assert completed.returncode == 0
+    launch = next(command for command in commands if " up -d --no-build" in command)
+    assert launch.endswith("--scale acquisition-worker=4")
+
+
+@pytest.mark.parametrize("value", ("0", "5", "-1", "01", "many"))
+def test_up_rejects_invalid_acquisition_replica_count_before_build_or_cutover(
+    tmp_path: Path, value: str
+) -> None:
+    completed, commands = run_fake_up(
+        tmp_path,
+        docker_memory=8 * 1024**3,
+        runtime_values={"ONE_CLICK_ACQUISITION_REPLICAS": value},
+    )
+
+    assert completed.returncode != 0
+    assert "ONE_CLICK_ACQUISITION_REPLICAS must be an integer from 1 through 4" in completed.stderr
+    assert not any(" build" in command or command.startswith("stop ") for command in commands)
+
+
+def test_up_rejects_insufficient_docker_memory_before_build_or_cutover(tmp_path: Path) -> None:
+    completed, commands = run_fake_up(tmp_path, docker_memory=6 * 1024**3 - 1)
+
+    assert completed.returncode != 0
+    assert "Docker must expose at least 6 GiB" in completed.stderr
+    assert not any(" build" in command or command.startswith("stop ") for command in commands)
+
+
+@pytest.mark.parametrize("docker_memory", (6 * 1024**3, 8 * 1024**3 - 1))
+def test_up_warns_when_docker_memory_is_between_six_and_eight_gib(
+    tmp_path: Path, docker_memory: int
+) -> None:
+    completed, _ = run_fake_up(tmp_path, docker_memory=docker_memory)
+
+    assert completed.returncode == 0
+    assert "less than 8 GiB" in completed.stderr
+
+
+def test_up_does_not_warn_when_docker_memory_is_at_least_eight_gib(tmp_path: Path) -> None:
+    completed, _ = run_fake_up(tmp_path, docker_memory=8 * 1024**3)
+
+    assert completed.returncode == 0
+    assert "less than 8 GiB" not in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    (
+        ("ONE_CLICK_POSTGRES_MEMORY_LIMIT", "unbounded"),
+        ("ONE_CLICK_POSTGRES_MEMORY_LIMIT", "0m"),
+        ("ONE_CLICK_POSTGRES_CPU_LIMIT", "all"),
+        ("ONE_CLICK_POSTGRES_CPU_LIMIT", "0"),
+        ("ONE_CLICK_POSTGRES_CPU_LIMIT", "0.0"),
+    ),
+)
+def test_up_rejects_invalid_resource_limits_before_build_or_cutover(
+    tmp_path: Path, name: str, value: str
+) -> None:
+    completed, commands = run_fake_up(
+        tmp_path,
+        docker_memory=8 * 1024**3,
+        runtime_values={name: value},
+    )
+
+    assert completed.returncode != 0
+    assert f"{name} has an invalid one-click resource limit" in completed.stderr
+    assert not any(" build" in command or command.startswith("stop ") for command in commands)
 
 
 def test_up_restores_every_prerecorded_container_when_stop_reports_failure(
@@ -228,13 +343,17 @@ def test_up_restores_every_prerecorded_container_when_stop_reports_failure(
 set -euo pipefail
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
 case "$1" in
-  compose)
-    [[ "$*" == *" config --format json"* ]] && {{ printf '%s' '{{"name":"test-project","volumes":{{"fund-engine-one-click-data":{{"name":"test-db"}}}}}}'; exit 0; }}
-    [[ "$*" == *" config -q"* || "$*" == *" build"* ]] && exit 0
-    [[ "$*" == *" create postgres"* ]] && exit 0
-    [[ "$*" == *" down"* ]] && exit 0
-    ;;
-  volume)
+      compose)
+        [[ "$*" == *" config --format json"* ]] && {{ printf '%s' '{{"name":"test-project","volumes":{{"fund-engine-one-click-data":{{"name":"test-db"}}}}}}'; exit 0; }}
+        [[ "$*" == *" config -q"* || "$*" == *" build"* ]] && exit 0
+        [[ "$*" == *" create postgres"* ]] && exit 0
+        [[ "$*" == *" down"* ]] && exit 0
+        ;;
+      info)
+        [[ "$*" == *" --format {{{{.MemTotal}}}}"* ]] && {{ printf '%s\n' 8589934592; exit 0; }}
+        exit 0
+        ;;
+      volume)
     [[ "$2" == "inspect" && "${{!#}}" == "test-db" ]] && {{ printf '%s\n' 'test-db|test-project|fund-engine-one-click-data|||'; exit 0; }}
     ;;
   ps)
