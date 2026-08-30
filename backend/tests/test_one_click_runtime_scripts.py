@@ -10,6 +10,30 @@ import pytest
 
 ROOT = Path(__file__).parents[2]
 
+PROFILE_KEYS = (
+    "ONE_CLICK_ACQUISITION_REPLICAS",
+    "DATABASE_POOL_SIZE",
+    "DATABASE_MAX_OVERFLOW",
+    "DATABASE_POOL_TIMEOUT_SECONDS",
+    "DATABASE_POOL_RECYCLE_SECONDS",
+    "ONE_CLICK_POSTGRES_MEMORY_LIMIT",
+    "ONE_CLICK_API_MEMORY_LIMIT",
+    "ONE_CLICK_RESEARCH_WORKER_MEMORY_LIMIT",
+    "ONE_CLICK_ACQUISITION_WORKER_MEMORY_LIMIT",
+    "ONE_CLICK_COMPANY_RESEARCH_WORKER_MEMORY_LIMIT",
+    "ONE_CLICK_FRONTEND_MEMORY_LIMIT",
+    "ONE_CLICK_POSTGRES_CPU_LIMIT",
+    "ONE_CLICK_API_CPU_LIMIT",
+    "ONE_CLICK_RESEARCH_WORKER_CPU_LIMIT",
+    "ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT",
+    "ONE_CLICK_COMPANY_RESEARCH_WORKER_CPU_LIMIT",
+    "ONE_CLICK_FRONTEND_CPU_LIMIT",
+)
+
+
+def sanitized_process_environment() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if key not in PROFILE_KEYS}
+
 
 def test_runtime_control_script_keeps_credentials_local_and_switches_only_app_services() -> None:
     script = (ROOT / "scripts" / "one-click-runtime.sh").read_text()
@@ -190,27 +214,8 @@ esac
     )
     fake_docker.chmod(fake_docker.stat().st_mode | stat.S_IXUSR)
     log = tmp_path / "docker.log"
-    profile_keys = (
-        "ONE_CLICK_ACQUISITION_REPLICAS",
-        "DATABASE_POOL_SIZE",
-        "DATABASE_MAX_OVERFLOW",
-        "DATABASE_POOL_TIMEOUT_SECONDS",
-        "DATABASE_POOL_RECYCLE_SECONDS",
-        "ONE_CLICK_POSTGRES_MEMORY_LIMIT",
-        "ONE_CLICK_API_MEMORY_LIMIT",
-        "ONE_CLICK_RESEARCH_WORKER_MEMORY_LIMIT",
-        "ONE_CLICK_ACQUISITION_WORKER_MEMORY_LIMIT",
-        "ONE_CLICK_COMPANY_RESEARCH_WORKER_MEMORY_LIMIT",
-        "ONE_CLICK_FRONTEND_MEMORY_LIMIT",
-        "ONE_CLICK_POSTGRES_CPU_LIMIT",
-        "ONE_CLICK_API_CPU_LIMIT",
-        "ONE_CLICK_RESEARCH_WORKER_CPU_LIMIT",
-        "ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT",
-        "ONE_CLICK_COMPANY_RESEARCH_WORKER_CPU_LIMIT",
-        "ONE_CLICK_FRONTEND_CPU_LIMIT",
-    )
     env = {
-        **{key: value for key, value in os.environ.items() if key not in profile_keys},
+        **sanitized_process_environment(),
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "DOCKER_LOG": str(log),
         "DOCKER_MEMORY": str(docker_memory),
@@ -599,9 +604,9 @@ esac
     completed = subprocess.run(
         [script, "up"],
         capture_output=True,
-        text=True,
-        env={
-            **os.environ,
+            text=True,
+            env={
+                **sanitized_process_environment(),
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "DOCKER_LOG": str(log),
         },
