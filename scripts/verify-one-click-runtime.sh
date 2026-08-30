@@ -23,6 +23,7 @@ readonly LEGACY_PROJECT="fund-engine-event"
 readonly LEGACY_DATABASE_SERVICE="postgres"
 readonly LEGACY_DATABASE_CONTAINER="fund-engine-event-postgres-1"
 readonly API_URL="${ONE_CLICK_API_URL:-http://127.0.0.1:${ONE_CLICK_API_PORT:-8000}}" FRONTEND_URL="${ONE_CLICK_FRONTEND_URL:-http://127.0.0.1:${ONE_CLICK_FRONTEND_PORT:-8080}}"
+readonly MONITORED_SERVICES=(postgres api research-worker acquisition-worker company-research-worker frontend)
 TMPDIR_EXACT='' SETUP_COMPLETE=false BASELINE_SNAPSHOT='' BASELINE_LEGACY_ID='' ACQUISITION_REPLICAS='' CONNECTION_CAP=''
 PREEXISTING_TEMP_PATHS=('')
 
@@ -88,7 +89,7 @@ diagnostics() {
     if [[ ${#ids[@]} -lt 9 && "$id" =~ ^[0-9a-f]{64}$ ]]; then
       ids[${#ids[@]}]="$id"
     fi
-  done < <(compose ps --all --quiet 2>/dev/null || true)
+  done < <(compose ps --all --quiet "${MONITORED_SERVICES[@]}" 2>/dev/null || true)
   for id in "${ids[@]}"; do
     docker inspect --format 'Name={{.Name}} state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} OOM={{.State.OOMKilled}} restarts={{.RestartCount}}' "$id" >&2 || true
     docker logs --tail 40 "$id" >&2 || true
@@ -119,7 +120,7 @@ cleanup() {
 
 capture_snapshot() {
   local destination="$1" id ids=() ids_output
-  ids_output="$(compose ps --all --quiet)" || die 'unable to list one-click containers'
+  ids_output="$(compose ps --all --quiet "${MONITORED_SERVICES[@]}")" || die 'unable to list one-click containers'
   while IFS= read -r id; do
     [[ -n "$id" ]] || continue
     valid_container_id "$id" && [[ ${#ids[@]} -lt 9 ]] || die 'one-click container list is invalid'

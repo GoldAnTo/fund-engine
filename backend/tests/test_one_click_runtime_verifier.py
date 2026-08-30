@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from collections import Counter
 from hashlib import sha256
 import shutil
@@ -75,7 +74,7 @@ elif "product/objects" in url: print('{"items":[{"external_key":"CN:300750:COMPA
 else: print("ok")
 ''', True)
     _write(bin_dir / "docker", r'''#!/usr/bin/env python3
-import hashlib, json, os, sys
+import hashlib, json, os, shutil, sys
 root, calls, mode = os.environ["HARNESS_ROOT"], os.environ["HARNESS_CALLS"], os.environ.get("HARNESS_MODE", "healthy")
 args = sys.argv[1:]
 with open(calls, "a") as f: f.write("docker " + " ".join(args) + "\n")
@@ -98,22 +97,34 @@ def item(service, replica=0):
     ident_value = ident(service + str(replica))
     if mode == "replacement-second" and poll > 1 and service == "api": ident_value = ident("replacement")
     return {"Id": ident_value, "Name": "/" + service, "Config":{"Labels":{"com.docker.compose.service":service,"com.docker.compose.project":"test"}}, "State":{"Status":"running", "Health":{"Status":"healthy"}, "OOMKilled": mode == "oom-first" and poll == 1 and service == "api"}, "RestartCount": 1 if mode == "restart-second" and poll > 1 and service == "api" else 0}
+def mutate_private_directory():
+    if os.environ.get("HARNESS_MUTATE_TEMP") != "1": return
+    for line in open(calls):
+        if line.startswith("mktemp:"):
+            path = line.split(":", 2)[1]
+            shutil.rmtree(path)
+            os.symlink(root, path)
+            return
 if args and args[0] == "compose":
     command = args[1:]
     while len(command) >= 2 and command[0] in ("-f", "--env-file"):
         command = command[2:]
     if command == ["config", "-q"]: sys.exit(0)
     if command[:1] == ["ps"]:
-        if command == ["ps", "--all", "--quiet"]:
+        if command == ["ps", "--all", "--quiet", *services]:
             output = ids()
             if mode == "malformed-ps": output = ["not-a-container"]
             if mode == "too-many-ps": output = [ident(f"extra-{index}") for index in range(10)]
             print("\n".join(output)); sys.exit(23 if mode == "ps-partial" else 0)
+        if command == ["ps", "--all", "--quiet"]:
+            print("\n".join(ids() + [ident("migrate"), ident("file-store-init")])); sys.exit(0)
         if command == ["ps", "--all"]: print("diagnostic ps"); sys.exit(0)
     connection_query = "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database();"
     revision_query = "SELECT version_num FROM alembic_version;"
     exact_exec = ["exec", "-T", "postgres", "psql", "-U", "test_user", "-d", "test_db", "-Atc"]
-    if command == [*exact_exec, connection_query]: print("999" if mode == "connections" else "3"); sys.exit(0)
+    if command == [*exact_exec, connection_query]:
+        if mode == "connections": mutate_private_directory()
+        print("999" if mode == "connections" else "3"); sys.exit(0)
     if command == [*exact_exec, revision_query]: print("0069" if mode == "revision-second" and os.path.exists(root + "/seen-revision") else "0070"); open(root + "/seen-revision", "w").write("1"); sys.exit(0)
     sys.exit(97)
 if args and args[0] == "inspect":
@@ -144,6 +155,7 @@ if args and args[0] == "exec" and len(args) == 5 and args[2:] == ["sh", "-c", 'p
     try: current_legacy = open(root + "/legacy-current").read()
     except OSError: current_legacy = ident("legacy")
     if args[1] != current_legacy: sys.exit(97)
+    mutate_private_directory()
     print("0061" if mode == "legacy-revision" and os.path.exists(root + "/legacy-revision-seen") else "0062"); open(root + "/legacy-revision-seen", "w").write("1"); sys.exit(0)
 if args and args[0] == "logs" and len(args) == 4 and args[1:3] == ["--tail", "40"] and args[3] in ids(): print("DIAGNOSTIC-SENTINEL"); sys.exit(0)
 if args and args[0] == "stats" and args == ["stats", "--no-stream", *ids()]: print("DIAGNOSTIC-SENTINEL"); sys.exit(0)
@@ -152,13 +164,22 @@ sys.exit(97)
     return verifier, bin_dir
 
 
+def harness_environment(tmp_path: Path, bin_dir: Path, mode: str = "healthy", **values: str) -> dict[str, str]:
+    return {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "HARNESS_ROOT": str(tmp_path),
+        "HARNESS_CALLS": str(tmp_path / "calls"),
+        "HARNESS_MODE": mode,
+    } | values
+
+
 def run_verifier(tmp_path: Path, *arguments: str, mode: str = "healthy", **env_values: str) -> subprocess.CompletedProcess[str]:
     verifier, bin_dir = copied_verifier(tmp_path)
     if mode == "victim-mktemp":
         victim = tmp_path / ".verify-one-click-runtime.ABC123"
         victim.mkdir()
         (victim / "sentinel").touch()
-    environment = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls"), "HARNESS_MODE": mode} | env_values
+    environment = harness_environment(tmp_path, bin_dir, mode, **env_values)
     result = subprocess.run(["/bin/bash", str(verifier), *arguments], cwd=tmp_path, text=True, capture_output=True, env=environment)
     assert_no_lifecycle_commands((tmp_path / "calls").read_text())
     return result
@@ -200,20 +221,20 @@ def expected_ids() -> list[str]:
 @pytest.mark.parametrize("argument", ["--stability-seconds", "--stability-seconds=-1", "--stability-seconds=01", "--stability-seconds=999999999999999999999"])
 def test_invalid_duration_is_rejected_before_external_setup(tmp_path: Path, argument: str) -> None:
     verifier, bin_dir = copied_verifier(tmp_path)
-    result = subprocess.run(["/bin/bash", str(verifier), *argument.split()], cwd=tmp_path, text=True, capture_output=True, env={"PATH": "/usr/bin:/bin", "HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls")})
+    result = subprocess.run(["/bin/bash", str(verifier), *argument.split()], cwd=tmp_path, text=True, capture_output=True, env=harness_environment(tmp_path, bin_dir))
     assert result.returncode == 2
     assert "usage" in result.stderr.lower()
     assert not (tmp_path / "calls").read_text()
 
 
 def test_equals_duration_form_is_rejected_before_external_setup(tmp_path: Path) -> None:
-    verifier, _ = copied_verifier(tmp_path)
+    verifier, bin_dir = copied_verifier(tmp_path)
     result = subprocess.run(
         ["/bin/bash", str(verifier), "--stability-seconds=1"],
         cwd=tmp_path,
         text=True,
         capture_output=True,
-        env={"PATH": "/usr/bin:/bin"},
+        env=harness_environment(tmp_path, bin_dir),
     )
     assert result.returncode == 2
     assert "usage" in result.stderr.lower()
@@ -294,6 +315,13 @@ def test_explicit_profile_environment_values_still_override_fixture(tmp_path: Pa
     assert result.returncode == 0, result.stderr
 
 
+def test_verifier_filters_one_shot_compose_containers_and_allows_scale_four(tmp_path: Path) -> None:
+    result = run_verifier(tmp_path, ONE_CLICK_ACQUISITION_REPLICAS="4", HARNESS_REPLICAS="4")
+    assert result.returncode == 0, result.stderr
+    calls = (tmp_path / "calls").read_text()
+    assert "ps --all --quiet postgres api research-worker acquisition-worker company-research-worker frontend" in calls
+
+
 @pytest.mark.parametrize("value", ["", "01", "5", "999999999999999999999"])
 def test_invalid_exported_profile_value_fails_bounded_validation(tmp_path: Path, value: str) -> None:
     result = run_verifier(tmp_path, ONE_CLICK_ACQUISITION_REPLICAS=value)
@@ -319,6 +347,23 @@ def test_failure_cleans_private_directory_and_keeps_diagnostics_if_rm_fails(tmp_
     assert "connection count exceeds" in result.stderr
     assert "logs --tail 40" in calls and "stats --no-stream" in calls
     assert not list(tmp_path.glob(".verify-one-click-runtime.*"))
+
+
+def test_cleanup_revalidation_refuses_a_mutated_temp_directory_after_success(tmp_path: Path) -> None:
+    result = run_verifier(tmp_path, HARNESS_MUTATE_TEMP="1")
+    calls = (tmp_path / "calls").read_text()
+    assert result.returncode == 1
+    assert "private verification directory cleanup failed" in result.stderr
+    assert "rm:" not in calls
+
+
+def test_cleanup_revalidation_preserves_operational_failure_and_diagnoses(tmp_path: Path) -> None:
+    result = run_verifier(tmp_path, mode="connections", HARNESS_MUTATE_TEMP="1")
+    calls = (tmp_path / "calls").read_text()
+    assert result.returncode == 1
+    assert "connection count exceeds" in result.stderr
+    assert "cleanup validation failed" in result.stderr
+    assert "logs --tail 40" in calls and "rm:" not in calls
 
 
 def test_malicious_mktemp_path_is_rejected_without_rm(tmp_path: Path) -> None:
@@ -362,14 +407,14 @@ def test_invalid_compose_container_ids_are_never_inspected_or_diagnosed(tmp_path
 
 def test_harness_rejects_an_unknown_docker_command(tmp_path: Path) -> None:
     _, bin_dir = copied_verifier(tmp_path)
-    result = subprocess.run([str(bin_dir / "docker"), "definitely-unknown"], text=True, capture_output=True, env=os.environ | {"HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls")})
+    result = subprocess.run([str(bin_dir / "docker"), "definitely-unknown"], text=True, capture_output=True, env=harness_environment(tmp_path, bin_dir))
     assert result.returncode == 97
 
 
 @pytest.mark.parametrize(("program", "arguments"), [("curl", ("unexpected",)), ("sleep", ("2",))])
 def test_harness_rejects_unknown_curl_and_sleep_shapes(tmp_path: Path, program: str, arguments: tuple[str, ...]) -> None:
     _, bin_dir = copied_verifier(tmp_path)
-    result = subprocess.run([str(bin_dir / program), *arguments], text=True, capture_output=True, env=os.environ | {"HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls")})
+    result = subprocess.run([str(bin_dir / program), *arguments], text=True, capture_output=True, env=harness_environment(tmp_path, bin_dir))
     assert result.returncode == 97
 
 
@@ -382,13 +427,13 @@ def test_harness_rejects_unknown_curl_and_sleep_shapes(tmp_path: Path, program: 
 )
 def test_harness_rejects_wrong_curl_header_shape(tmp_path: Path, arguments: tuple[str, ...]) -> None:
     _, bin_dir = copied_verifier(tmp_path)
-    result = subprocess.run([str(bin_dir / "curl"), *arguments], text=True, capture_output=True, env=os.environ | {"HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls")})
+    result = subprocess.run([str(bin_dir / "curl"), *arguments], text=True, capture_output=True, env=harness_environment(tmp_path, bin_dir))
     assert result.returncode == 97
 
 
 def test_harness_rejects_wrong_legacy_logs_and_stats_container_ids(tmp_path: Path) -> None:
     _, bin_dir = copied_verifier(tmp_path)
-    environment = os.environ | {"HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls")}
+    environment = harness_environment(tmp_path, bin_dir)
     wrong = "f" * 64
     commands = [
         ("exec", wrong, "sh", "-c", "SELECT version_num FROM alembic_version;"),
@@ -402,7 +447,7 @@ def test_harness_rejects_wrong_legacy_logs_and_stats_container_ids(tmp_path: Pat
 
 def test_harness_allows_only_exact_read_only_compose_exec_argv_and_queries(tmp_path: Path) -> None:
     _, bin_dir = copied_verifier(tmp_path)
-    environment = os.environ | {"HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls")}
+    environment = harness_environment(tmp_path, bin_dir)
     prefix = ("compose", "-f", "compose.yml", "--env-file", "base", "--env-file", "runtime", "exec", "-T", "postgres")
     cases = [
         (*prefix, "definitely-unknown", "pg_stat_activity"),
@@ -415,7 +460,7 @@ def test_harness_allows_only_exact_read_only_compose_exec_argv_and_queries(tmp_p
 
 def test_harness_product_curl_requires_exact_stdin_header(tmp_path: Path) -> None:
     _, bin_dir = copied_verifier(tmp_path)
-    environment = os.environ | {"HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls")}
+    environment = harness_environment(tmp_path, bin_dir)
     command = [str(bin_dir / "curl"), "--fail", "--silent", "--show-error", "--connect-timeout", "2", "--max-time", "5", "--header", "@-", "http://127.0.0.1:8000/api/underwriting/v1/product/objects?query=CATL"]
     for payload, expected in (("", 97), ("Authorization: Bearer wrong\n", 97), ("Authorization: Bearer not-for-output\n", 0)):
         result = subprocess.run(command, input=payload, text=True, capture_output=True, env=environment)
@@ -471,8 +516,7 @@ def test_invalid_runtime_file_profile_values_fail_bounded_validation(tmp_path: P
         if key in original
         else original + f"{key}={value}\n"
     )
-    environment = {name: current for name, current in os.environ.items() if name not in PROFILE_KEYS}
-    environment |= {"PATH": f"{bin_dir}:/usr/bin:/bin", "HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls"), "HARNESS_MODE": "healthy"}
+    environment = harness_environment(tmp_path, bin_dir)
     result = subprocess.run(["/bin/bash", str(verifier)], cwd=tmp_path, text=True, capture_output=True, env=environment)
     assert result.returncode != 0
     assert message in result.stderr
