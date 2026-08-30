@@ -68,8 +68,19 @@ test("assertLoopbackUrl permits only credential-free HTTP on 127.0.0.1", () => {
 
   for (const url of [
     "https://example.com/a",
+    "https://127.0.0.1/a",
+    "http://localhost/a",
     "http://localhost.evil.test/a",
     "http://user:pass@127.0.0.1/a",
+    "http://user@127.0.0.1/a",
+    "http://:pass@127.0.0.1/a",
+    "http://:@127.0.0.1/a",
+    "not a URL",
+    "http://127.1/a",
+    "http://2130706433/a",
+    "http://0177.0.0.1/a",
+    "http://0x7f000001/a",
+    null,
   ]) {
     assert.throws(() => assertLoopbackUrl(url), /loopback/);
   }
@@ -107,4 +118,36 @@ test("assertWorkspace rejects snapshot drift while preserving a valid workspace"
   const progressDrift = structuredClone(workspace);
   progressDrift.preparation.progress = 24;
   assert.throws(() => assertWorkspace(progressDrift, expected), /progress/);
+
+  const schemaDrift = structuredClone(workspace);
+  schemaDrift.schema_version = "underwriting.v2";
+  assert.throws(() => assertWorkspace(schemaDrift, expected), /schema/);
+
+  const companyIdDrift = structuredClone(workspace);
+  companyIdDrift.company.id = "company-2";
+  assert.throws(() => assertWorkspace(companyIdDrift, expected), /company identity/);
+
+  const companyObjectIdDrift = structuredClone(workspace);
+  companyObjectIdDrift.company.object_id = "company-2";
+  assert.throws(() => assertWorkspace(companyObjectIdDrift, expected), /company identity/);
+
+  const unknownState = structuredClone(workspace);
+  unknownState.preparation.status = "unexpected";
+  assert.throws(() => assertWorkspace(unknownState, expected), /state/);
+
+  for (const [nestedRecord, pattern] of [
+    ["company", /company identity/],
+    ["preparation", /state/],
+    ["draft", /draft lock/],
+  ]) {
+    const missingNestedRecord = structuredClone(workspace);
+    delete missingNestedRecord[nestedRecord];
+    assert.throws(() => assertWorkspace(missingNestedRecord, expected), pattern);
+  }
+
+  for (const lockVersion of [0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const invalidLockVersion = structuredClone(workspace);
+    invalidLockVersion.draft.lock_version = lockVersion;
+    assert.throws(() => assertWorkspace(invalidLockVersion, expected), /draft lock/);
+  }
 });

@@ -1,5 +1,6 @@
 const USAGE = "usage: verify-live-company-research-ui.mjs [--timeout-seconds 30..300]";
 const LOOPBACK_HOST = "127.0.0.1";
+const EXACT_LOOPBACK_AUTHORITY = /^http:\/\/127\.0\.0\.1(?::\d+)?(?:[/?#]|$)/;
 const PRESERVED_ENVIRONMENT_KEYS = [
   "PATH",
   "SystemRoot",
@@ -48,6 +49,9 @@ export function parseVerifierArgs(args) {
 }
 
 export function assertLoopbackUrl(value) {
+  if (typeof value !== "string" || !EXACT_LOOPBACK_AUTHORITY.test(value)) {
+    throw new Error("verifier URL must be a credential-free HTTP loopback URL");
+  }
   let url;
   try {
     url = new URL(value);
