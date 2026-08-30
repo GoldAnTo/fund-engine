@@ -216,6 +216,48 @@ test("createPrivateRuntime validates helper execution before quarantining a runt
   }
 });
 
+test("helper self-test rejects invalid source and stalled preflight before quarantine", async () => {
+  const helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-helper-source-"));
+  const invalidHelper = path.join(helperDirectory, "invalid.py");
+  const stalledHelper = path.join(helperDirectory, "stalled.py");
+  await writeFile(invalidHelper, "def broken(:\n");
+  await writeFile(stalledHelper, "while True: pass\n");
+
+  try {
+    for (const helperPath of [invalidHelper, stalledHelper]) {
+      const runtime = await createPrivateRuntime({
+        cleanupHelper: { pythonExecutable: TEST_PYTHON, helperPath, timeoutMs: 100 },
+      });
+      await writeFile(`${runtime.directory}/sentinel`, "owned");
+      await assert.rejects(removePrivateRuntime(runtime), /preflight.*(?:exited|timed out)/);
+      assert.equal(await readFile(`${runtime.directory}/sentinel`, "utf8"), "owned");
+      await rm(runtime.directory, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(helperDirectory, { recursive: true, force: true });
+  }
+});
+
+test("stalled fd-relative cleanup helper is terminated without deleting a replacement", async () => {
+  const helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-stalled-cleanup-"));
+  const helperPath = path.join(helperDirectory, "cleanup.py");
+  await writeFile(helperPath, "import sys\nif sys.argv[1:] == ['--self-test']: raise SystemExit(0)\nwhile True: pass\n");
+  const runtime = await createPrivateRuntime({
+    cleanupHelper: { pythonExecutable: TEST_PYTHON, helperPath, timeoutMs: 100 },
+  });
+  let quarantine;
+  try {
+    await assert.rejects(removePrivateRuntime(runtime), /cleanup helper timed out/);
+    quarantine = (await readdir(runtime.parent)).find((entry) =>
+      entry.startsWith(`.${path.basename(runtime.directory)}.cleanup-`));
+    assert.ok(quarantine);
+  } finally {
+    await rm(runtime.directory, { recursive: true, force: true });
+    if (quarantine) await rm(path.join(runtime.parent, quarantine), { recursive: true, force: true });
+    await rm(helperDirectory, { recursive: true, force: true });
+  }
+});
+
 test("atomic cleanup claim uses this runtime's exact prefix under a hostile TMPDIR", async () => {
   const hostileParent = await mkdtemp(path.join(os.tmpdir(), "hostile-live-company-research-"));
   const priorTmpdir = process.env.TMPDIR;

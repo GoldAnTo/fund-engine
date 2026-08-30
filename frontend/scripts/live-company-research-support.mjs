@@ -12,6 +12,7 @@ const PREFIX = "fund-engine-live-company-research-";
 const MAX_LOG_BYTES = 16_384;
 const MAX_DIAGNOSTIC_FIELD_BYTES = 8_000;
 const STOP_TIMEOUT_MS = 5_000;
+const HELPER_PHASE_TIMEOUT_MS = 5_000;
 const RUNTIME_AUTHORITIES = new WeakMap();
 const PROCESS_AUTHORITIES = new WeakMap();
 const PRESERVED_ENVIRONMENT_KEYS = [
@@ -105,64 +106,72 @@ async function assertCleanupHelperIdentity(authority) {
   }
 }
 
-function runExactProcess(command, args, options, failureLabel) {
+function runBoundedExactProcess(command, args, options, failureLabel, timeoutMs) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, options);
+    let stdout = Buffer.alloc(0);
+    let stderr = Buffer.alloc(0);
     let settled = false;
+    let timedOut = false;
+    let termTimer;
+    let killTimer;
+    let finalTimer;
+    const clearTimers = () => {
+      clearTimeout(termTimer);
+      clearTimeout(killTimer);
+      clearTimeout(finalTimer);
+    };
     const fail = (error) => {
       if (!settled) {
         settled = true;
+        clearTimers();
         reject(error);
       }
     };
+    const finishTimeout = () => fail(new Error(boundedDiagnostic(
+      `${failureLabel} timed out: ${stderr.toString("utf8") || stdout.toString("utf8")}`,
+    )));
+    child.stdout?.on("data", (chunk) => { stdout = appendBoundedBuffer(stdout, chunk); });
+    child.stderr?.on("data", (chunk) => { stderr = appendBoundedBuffer(stderr, chunk); });
     child.once("error", fail);
     child.once("close", (code, signal) => {
       if (settled) return;
       settled = true;
-      if (code === 0) resolve(child);
-      else reject(new Error(`${failureLabel} exited with ${code ?? signal ?? "unknown"}`));
+      clearTimers();
+      if (timedOut) reject(new Error(boundedDiagnostic(`${failureLabel} timed out`)));
+      else if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(boundedDiagnostic(
+        `${failureLabel} exited with ${code ?? signal ?? "unknown"}: ${stderr.toString("utf8") || stdout.toString("utf8")}`,
+      )));
     });
+    termTimer = setTimeout(() => {
+      timedOut = true;
+      if (!child.kill("SIGTERM")) finishTimeout();
+      killTimer = setTimeout(() => {
+        if (!child.kill("SIGKILL")) finishTimeout();
+        finalTimer = setTimeout(finishTimeout, timeoutMs);
+      }, timeoutMs);
+    }, timeoutMs);
   });
 }
 
 async function preflightCleanupHelper(authority) {
   await assertCleanupHelperIdentity(authority);
-  await runExactProcess(authority.cleanupHelper.pythonExecutable, ["-I", "-c", ""], {
+  await runBoundedExactProcess(authority.cleanupHelper.pythonExecutable, ["-I", authority.cleanupHelper.helperPath, "--self-test"], {
     env: {}, stdio: "ignore",
-  }, "private runtime cleanup helper preflight");
+  }, "private runtime cleanup helper preflight", authority.cleanupHelper.timeoutMs);
 }
 
 async function runCleanupHelper(authority, directory) {
   const { pythonExecutable, helperPath } = authority.cleanupHelper;
   await assertCleanupHelperIdentity(authority);
-  await new Promise((resolve, reject) => {
-    const child = spawn(pythonExecutable, [
+  await runBoundedExactProcess(pythonExecutable, [
       "-I", helperPath, "3", String(authority.dev), String(authority.ino),
       String(authority.uid), String(authority.mode),
     ], {
       env: {},
       stdio: ["ignore", "pipe", "pipe", directory.fd],
-    });
-    let stdout = Buffer.alloc(0);
-    let stderr = Buffer.alloc(0);
-    child.stdout.on("data", (chunk) => { stdout = appendBoundedBuffer(stdout, chunk); });
-    child.stderr.on("data", (chunk) => { stderr = appendBoundedBuffer(stderr, chunk); });
-    let settled = false;
-    child.once("error", (error) => {
-      if (!settled) {
-        settled = true;
-        reject(error);
-      }
-    });
-    child.once("close", (code, signal) => {
-      if (settled) return;
-      settled = true;
-      if (code === 0) resolve();
-      else reject(new Error(boundedDiagnostic(
-        `private runtime cleanup helper exited with ${code ?? signal ?? "unknown"}: ${stderr.toString("utf8") || stdout.toString("utf8")}`,
-      )));
-    });
-  });
+    }, "private runtime cleanup helper", authority.cleanupHelper.timeoutMs);
 }
 
 function isRuntimeIdentityOpenError(error) {
@@ -204,10 +213,6 @@ async function removeAnchoredRuntimeDirectory(claimed, authority) {
 function appendBoundedLog(authority, stream, chunk) {
   const combined = Buffer.concat([authority[stream], Buffer.from(chunk)]);
   authority[stream] = combined.length > MAX_LOG_BYTES ? combined.subarray(-MAX_LOG_BYTES) : combined;
-}
-
-function sleep(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function waitForExit(owned, timeoutMs) {
@@ -312,6 +317,8 @@ async function validateCleanupHelper(cleanupHelper) {
     helperPath,
     python: Object.freeze({ dev: pythonStat.dev, ino: pythonStat.ino, uid: pythonStat.uid, mode: pythonStat.mode & 0o777 }),
     helper: Object.freeze({ dev: helperStat.dev, ino: helperStat.ino, uid: helperStat.uid, mode: helperStat.mode & 0o777 }),
+    timeoutMs: Number.isSafeInteger(cleanupHelper.timeoutMs) && cleanupHelper.timeoutMs > 0
+      ? cleanupHelper.timeoutMs : HELPER_PHASE_TIMEOUT_MS,
   });
 }
 
@@ -495,6 +502,7 @@ export async function waitUntil(probe, { label, timeoutMs, intervalMs = 100, pro
         assertProcessesRunning(processes);
         return outcome.value;
       }
+      latest = "probe returned a falsy value";
     } else {
       latest = boundedDiagnostic(
         outcome.error instanceof Error ? outcome.error.message : outcome.error,

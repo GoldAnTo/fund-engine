@@ -46,6 +46,8 @@ def remove_contents(fd):
 
 
 def main(argv):
+    if argv[1:] == ["--self-test"]:
+        return
     if len(argv) != 6:
         fail("usage: remove_private_runtime_contents.py FD DEV INO UID MODE")
     fd, dev, ino, uid, mode = (int(value, 10) for value in argv[1:])
