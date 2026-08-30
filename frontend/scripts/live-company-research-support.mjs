@@ -112,10 +112,27 @@ async function runCleanupHelper(authority, directory) {
   });
 }
 
+function isRuntimeIdentityOpenError(error) {
+  return ["EACCES", "EISDIR", "ELOOP", "ENOTDIR", "ENOENT", "EPERM"].includes(error?.code);
+}
+
 async function removeAnchoredRuntimeDirectory(claimed, authority) {
-  const directory = await open(claimed, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+  let directory;
   try {
-    if (!hasPrivateRuntimeIdentity(await directory.stat(), authority)) privateRuntimeIdentityChanged();
+    directory = await open(claimed, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+  } catch (error) {
+    if (isRuntimeIdentityOpenError(error)) privateRuntimeIdentityChanged();
+    throw error;
+  }
+  try {
+    let current;
+    try {
+      current = await directory.stat();
+    } catch (error) {
+      if (isRuntimeIdentityOpenError(error)) privateRuntimeIdentityChanged();
+      throw error;
+    }
+    if (!hasPrivateRuntimeIdentity(current, authority)) privateRuntimeIdentityChanged();
     await runCleanupHelper(authority, directory);
   } finally {
     await directory.close();

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import test from "node:test";
 import path from "node:path";
 
@@ -466,6 +466,56 @@ test("removePrivateRuntime preserves a nonempty victim substituted at its quaran
     await cleanup.catch(() => {});
     if (quarantine) await rm(path.join(runtime.parent, quarantine), { recursive: true, force: true });
     await rm(ownedMoved, { recursive: true, force: true });
+  }
+});
+
+test("removePrivateRuntime normalizes symlink, file, and mode substitutions", async () => {
+  const substitutions = [
+    async ({ runtime, moved }) => {
+      const victim = `${runtime.directory}.symlink-victim`;
+      await mkdir(victim, { mode: 0o700 });
+      await writeFile(`${victim}/sentinel`, "victim");
+      await symlink(victim, runtime.directory);
+      return { victim, sentinel: `${victim}/sentinel` };
+    },
+    async ({ runtime }) => {
+      await writeFile(runtime.directory, "victim");
+      return { victim: runtime.directory, sentinel: runtime.directory };
+    },
+    async ({ runtime }) => {
+      await mkdir(runtime.directory, { mode: 0o700 });
+      await chmod(runtime.directory, 0o000);
+      return { victim: runtime.directory, sentinel: null };
+    },
+  ];
+
+  for (const substitute of substitutions) {
+    const runtime = await createTestRuntime();
+    const moved = `${runtime.directory}.moved`;
+    let victim;
+    let quarantined;
+    try {
+      await rename(runtime.directory, moved);
+      victim = await substitute({ runtime, moved });
+      await assert.rejects(removePrivateRuntime(runtime), /private runtime identity changed; refusing cleanup/);
+      quarantined = (await readdir(runtime.parent)).find((entry) =>
+        entry.startsWith(`.${path.basename(runtime.directory)}.cleanup-`));
+      assert.ok(quarantined);
+      if (victim.sentinel) {
+        const preservedSentinel = victim.victim === runtime.directory
+          ? path.join(runtime.parent, quarantined)
+          : victim.sentinel;
+        assert.equal(await readFile(preservedSentinel, "utf8"), "victim");
+      }
+    } finally {
+      if (quarantined) await chmod(path.join(runtime.parent, quarantined), 0o700).catch(() => {});
+      if (quarantined) await rm(path.join(runtime.parent, quarantined), { recursive: true, force: true });
+      if (victim?.victim && victim.victim !== runtime.directory) {
+        await rm(victim.victim, { recursive: true, force: true });
+      }
+      await rm(runtime.directory, { recursive: true, force: true });
+      await rm(moved, { recursive: true, force: true });
+    }
   }
 });
 
