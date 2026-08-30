@@ -332,6 +332,7 @@ test("supervision diagnostics bound untrusted labels, names, and probe errors", 
     (error) => {
       assert.ok(error.message.length <= 16_384);
       assert.equal(error.message.includes("\n"), false);
+      assert.equal(error.message.includes("timed out"), true);
       return true;
     },
   );
@@ -352,6 +353,7 @@ test("supervision diagnostics bound untrusted labels, names, and probe errors", 
       (error) => {
         assert.ok(error.message.length <= 16_384);
         assert.equal(error.message.includes("\n"), false);
+        assert.equal(error.message.includes("exited with 7"), true);
         return true;
       },
     );

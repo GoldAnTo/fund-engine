@@ -9,6 +9,7 @@ const LOOPBACK_HOST = "127.0.0.1";
 const EXACT_LOOPBACK_AUTHORITY = /^http:\/\/127\.0\.0\.1(?::\d+)?(?:[/?#]|$)/;
 const PREFIX = "fund-engine-live-company-research-";
 const MAX_LOG_BYTES = 16_384;
+const MAX_DIAGNOSTIC_FIELD_BYTES = 8_000;
 const STOP_TIMEOUT_MS = 5_000;
 const RUNTIME_AUTHORITIES = new WeakMap();
 const OWNED_PROCESSES = new WeakSet();
@@ -116,18 +117,18 @@ async function waitForExit(owned, timeoutMs) {
   return exited;
 }
 
-function boundedDiagnostic(value) {
-  return String(value).replace(/[\u0000-\u001F\u007F]/g, " ").slice(0, MAX_LOG_BYTES);
+function boundedDiagnostic(value, limit = MAX_LOG_BYTES) {
+  return String(value).replace(/[\u0000-\u001F\u007F]/g, " ").slice(0, limit);
 }
 
 function processExitCode(owned) {
-  return boundedDiagnostic(owned.exitCode ?? owned.child.exitCode ?? owned.child.signalCode ?? "unknown");
+  return boundedDiagnostic(owned.exitCode ?? owned.child.exitCode ?? owned.child.signalCode ?? "unknown", MAX_DIAGNOSTIC_FIELD_BYTES);
 }
 
 function processFailure(owned) {
   const exited = owned.exited || owned.child.exitCode !== null || owned.child.signalCode !== null;
   if (!exited || owned.expectedStop) return null;
-  return new Error(boundedDiagnostic(`${boundedDiagnostic(owned.name)} exited with ${processExitCode(owned)}`));
+  return new Error(`${boundedDiagnostic(owned.name, MAX_DIAGNOSTIC_FIELD_BYTES)} exited with ${processExitCode(owned)}`);
 }
 
 function processFailureFor(processes) {
@@ -308,24 +309,24 @@ async function stopOwnedProcessImpl(owned) {
 
   try {
     if (!owned.child.kill("SIGTERM")) {
-      throw new Error(`${boundedDiagnostic(owned.name)} refused SIGTERM`);
+      throw new Error(`${boundedDiagnostic(owned.name, MAX_DIAGNOSTIC_FIELD_BYTES)} refused SIGTERM`);
     }
   } catch (error) {
     if (error?.code === "ESRCH" && owned.exited) return;
-    throw new Error(boundedDiagnostic(`${boundedDiagnostic(owned.name)} failed to send SIGTERM: ${error?.message ?? error}`));
+    throw new Error(`${boundedDiagnostic(owned.name, MAX_DIAGNOSTIC_FIELD_BYTES)} failed to send SIGTERM: ${boundedDiagnostic(error?.message ?? error, MAX_DIAGNOSTIC_FIELD_BYTES)}`);
   }
   await waitForExit(owned, STOP_TIMEOUT_MS);
   if (owned.exited) return;
   try {
     if (!owned.child.kill("SIGKILL")) {
-      throw new Error(`${boundedDiagnostic(owned.name)} refused SIGKILL`);
+      throw new Error(`${boundedDiagnostic(owned.name, MAX_DIAGNOSTIC_FIELD_BYTES)} refused SIGKILL`);
     }
   } catch (error) {
     if (error?.code === "ESRCH" && owned.exited) return;
-    throw new Error(boundedDiagnostic(`${boundedDiagnostic(owned.name)} failed to send SIGKILL: ${error?.message ?? error}`));
+    throw new Error(`${boundedDiagnostic(owned.name, MAX_DIAGNOSTIC_FIELD_BYTES)} failed to send SIGKILL: ${boundedDiagnostic(error?.message ?? error, MAX_DIAGNOSTIC_FIELD_BYTES)}`);
   }
   if (!await waitForExit(owned, STOP_TIMEOUT_MS)) {
-    throw new Error(`${boundedDiagnostic(owned.name)} did not exit after SIGKILL within ${STOP_TIMEOUT_MS}ms`);
+    throw new Error(`${boundedDiagnostic(owned.name, MAX_DIAGNOSTIC_FIELD_BYTES)} did not exit after SIGKILL within ${STOP_TIMEOUT_MS}ms`);
   }
 }
 
@@ -356,7 +357,10 @@ export async function waitUntil(probe, { label, timeoutMs, intervalMs = 100, pro
         return outcome.value;
       }
     } else {
-      latest = boundedDiagnostic(outcome.error instanceof Error ? outcome.error.message : outcome.error);
+      latest = boundedDiagnostic(
+        outcome.error instanceof Error ? outcome.error.message : outcome.error,
+        MAX_DIAGNOSTIC_FIELD_BYTES,
+      );
     }
     assertProcessesRunning(processes);
     const nextRemaining = deadline - Date.now();
@@ -364,7 +368,7 @@ export async function waitUntil(probe, { label, timeoutMs, intervalMs = 100, pro
     await sleep(Math.min(intervalMs, nextRemaining));
   }
   assertProcessesRunning(processes);
-  throw new Error(boundedDiagnostic(`${boundedDiagnostic(label)} timed out: ${boundedDiagnostic(latest)}`));
+  throw new Error(`${boundedDiagnostic(label, MAX_DIAGNOSTIC_FIELD_BYTES)} timed out: ${boundedDiagnostic(latest, MAX_DIAGNOSTIC_FIELD_BYTES)}`);
 }
 
 export function parseVerifierArgs(args) {
