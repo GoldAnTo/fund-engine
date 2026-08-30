@@ -624,11 +624,13 @@ test("removePrivateRuntime preserves a nonempty victim substituted at its quaran
   const ownedMoved = `${runtime.directory}.owned-moved`;
   await Promise.all(Array.from({ length: 400 }, (_, index) =>
     writeFile(`${runtime.directory}/owned-${index}`, "owned")));
+  const expectedPrefix = `.${path.basename(runtime.directory)}.cleanup-`;
   const cleanup = removePrivateRuntime(runtime);
+  const cleanupRejected = assert.rejects(cleanup, /private runtime identity changed|ENOTEMPTY/);
+  cleanupRejected.catch(() => {});
   let quarantine;
 
   try {
-    const expectedPrefix = `.${path.basename(runtime.directory)}.cleanup-`;
     for (let attempt = 0; attempt < 200 && !quarantine; attempt += 1) {
       quarantine = (await readdir(runtime.parent)).find((entry) => entry.startsWith(expectedPrefix));
       if (!quarantine) await new Promise((resolve) => setTimeout(resolve, 1));
@@ -640,11 +642,14 @@ test("removePrivateRuntime preserves a nonempty victim substituted at its quaran
     const victim = `${quarantinePath}/victim-sentinel`;
     await writeFile(victim, "victim");
 
-    await assert.rejects(cleanup, /private runtime identity changed|ENOTEMPTY/);
+    await cleanupRejected;
     assert.equal(await readFile(victim, "utf8"), "victim");
   } finally {
-    await cleanup.catch(() => {});
-    if (quarantine) await rm(path.join(runtime.parent, quarantine), { recursive: true, force: true });
+    await cleanupRejected.catch(() => {});
+    const quarantines = (await readdir(runtime.parent)).filter((entry) => entry.startsWith(expectedPrefix));
+    await Promise.all(quarantines.map((entry) =>
+      rm(path.join(runtime.parent, entry), { recursive: true, force: true })));
+    await rm(runtime.directory, { recursive: true, force: true });
     await rm(ownedMoved, { recursive: true, force: true });
   }
 });
