@@ -98,7 +98,7 @@ export function assertWorkspace(workspace, expected) {
   if (!isRecord(workspace.preparation)
     || !WORKSPACE_STATES.has(workspace.preparation.status)
     || workspace.preparation.status !== expected.status) {
-    workspaceError("state mismatch");
+    workspaceError("status mismatch");
   }
   if (workspace.preparation.progress !== expected.progress) workspaceError("progress mismatch");
   if (!isRecord(workspace.draft) || !isSafePositiveInteger(workspace.draft.lock_version)) {

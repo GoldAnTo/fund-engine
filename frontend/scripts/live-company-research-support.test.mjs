@@ -80,6 +80,7 @@ test("assertLoopbackUrl permits only credential-free HTTP on 127.0.0.1", () => {
     "http://2130706433/a",
     "http://0177.0.0.1/a",
     "http://0x7f000001/a",
+    "http://127.0.0.1:99999/a",
     null,
   ]) {
     assert.throws(() => assertLoopbackUrl(url), /loopback/);
@@ -133,11 +134,15 @@ test("assertWorkspace rejects snapshot drift while preserving a valid workspace"
 
   const unknownState = structuredClone(workspace);
   unknownState.preparation.status = "unexpected";
-  assert.throws(() => assertWorkspace(unknownState, expected), /state/);
+  assert.throws(() => assertWorkspace(unknownState, expected), /status/);
+
+  const allowedButUnexpectedState = structuredClone(workspace);
+  allowedButUnexpectedState.preparation.status = "building_model";
+  assert.throws(() => assertWorkspace(allowedButUnexpectedState, expected), /status/);
 
   for (const [nestedRecord, pattern] of [
     ["company", /company identity/],
-    ["preparation", /state/],
+    ["preparation", /status/],
     ["draft", /draft lock/],
   ]) {
     const missingNestedRecord = structuredClone(workspace);
