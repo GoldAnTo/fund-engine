@@ -473,12 +473,15 @@ upgrade_legacy_runtime_defaults() {
 }
 
 init_runtime_environment() {
+  local defer_legacy_upgrade="${1:-false}"
+  [[ "$defer_legacy_upgrade" == "true" || "$defer_legacy_upgrade" == "false" ]] \
+    || die "invalid runtime initialization mode"
   require_command openssl
   require_command python3
 
   if [[ -e "$RUNTIME_ENV_FILE" || -L "$RUNTIME_ENV_FILE" ]]; then
     validate_runtime_env_file
-    upgrade_legacy_runtime_defaults
+    [[ "$defer_legacy_upgrade" == "true" ]] || upgrade_legacy_runtime_defaults
     printf 'One-click runtime environment already exists.\n'
     return 0
   fi
@@ -677,10 +680,11 @@ start_one_click_runtime() (
   trap 'exit 143' TERM
 
   require_command docker
-  init_runtime_environment
+  init_runtime_environment true
   require_runtime_files
   validate_one_click_runtime_profile
   acquisition_replicas="$(bounded_integer_value ONE_CLICK_ACQUISITION_REPLICAS 1 1 4)"
+  upgrade_legacy_runtime_defaults
   compose config -q
   validate_docker_memory
   compose build migrate

@@ -314,6 +314,46 @@ def test_up_rejects_oversized_database_pool_settings_before_docker(
     assert commands == []
 
 
+@pytest.mark.parametrize(
+    ("runtime_values", "expected_error"),
+    (
+        (
+            {
+                "ACQUISITION_ENABLED_ADAPTERS": "sse,szse,gildata",
+                "ONE_CLICK_ACQUISITION_REPLICAS": "0",
+            },
+            "ONE_CLICK_ACQUISITION_REPLICAS must be an integer from 1 through 4",
+        ),
+        (
+            {
+                "ACQUISITION_ENABLED_ADAPTERS": "sse,szse,gildata",
+                "DATABASE_POOL_SIZE": "0",
+            },
+            "DATABASE_POOL_SIZE must be an integer from 1 through 10",
+        ),
+        (
+            {
+                "ACQUISITION_ENABLED_ADAPTERS": "sse,szse,gildata",
+                "ONE_CLICK_POSTGRES_MEMORY_LIMIT": "unbounded",
+            },
+            "ONE_CLICK_POSTGRES_MEMORY_LIMIT has an invalid one-click resource limit",
+        ),
+    ),
+)
+def test_up_validates_profile_before_upgrading_legacy_adapter_defaults(
+    tmp_path: Path, runtime_values: dict[str, str], expected_error: str
+) -> None:
+    completed, commands = run_fake_up(
+        tmp_path,
+        docker_memory=8 * 1024**3,
+        runtime_values=runtime_values,
+    )
+
+    assert completed.returncode != 0
+    assert completed.stderr == f"one-click runtime: {expected_error}\n"
+    assert commands == []
+
+
 def test_up_rejects_insufficient_docker_memory_before_build_or_cutover(tmp_path: Path) -> None:
     completed, commands = run_fake_up(tmp_path, docker_memory=6 * 1024**3 - 1)
 
