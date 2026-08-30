@@ -124,8 +124,14 @@ def test_compose_applies_the_low_resource_profile_without_exposing_database_to_f
 
     assert environment_values["ONE_CLICK_ACQUISITION_REPLICAS"] == "1"
 
-    assert "DATABASE_POOL_SIZE" not in frontend
-    assert "DATABASE_URL" not in frontend
+    for name in (
+        "DATABASE_POOL_SIZE",
+        "DATABASE_MAX_OVERFLOW",
+        "DATABASE_POOL_TIMEOUT_SECONDS",
+        "DATABASE_POOL_RECYCLE_SECONDS",
+        "DATABASE_URL",
+    ):
+        assert name not in frontend
 
 
 def test_compose_healthchecks_http_services_before_starting_frontend() -> None:
