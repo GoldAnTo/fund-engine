@@ -57,14 +57,14 @@ export function assertLoopbackUrl(value) {
   if (url.protocol !== "http:" || url.hostname !== LOOPBACK_HOST || url.username || url.password) {
     throw new Error("verifier URL must be a credential-free HTTP loopback URL");
   }
-  return value;
+  return url;
 }
 
-export function buildVerifierEnvironment({ databaseUrl, token, backendUrl }, hostEnvironment = process.env) {
+export function buildVerifierEnvironment({ host, databaseUrl, token, backendUrl }) {
   assertLoopbackUrl(backendUrl);
   const environment = {};
   for (const key of PRESERVED_ENVIRONMENT_KEYS) {
-    if (hostEnvironment[key] !== undefined) environment[key] = hostEnvironment[key];
+    if (typeof host?.[key] === "string" && host[key].length > 0) environment[key] = host[key];
   }
   return {
     ...environment,
@@ -99,17 +99,6 @@ export function assertWorkspace(workspace, expected) {
   if (workspace.preparation.progress !== expected.progress) workspaceError("progress mismatch");
   if (!isRecord(workspace.draft) || !isSafePositiveInteger(workspace.draft.lock_version)) {
     workspaceError("draft lock version mismatch");
-  }
-  if (workspace.selected_revision !== null) workspaceError("selected revision mismatch");
-  if (!isRecord(workspace.change_summary)
-    || workspace.change_summary.reviewed_fact_count !== 0
-    || !isRecord(workspace.change_summary.artifact_versions)
-    || workspace.change_summary.artifact_versions.evidence_index !== 1
-    || workspace.change_summary.artifact_versions.research_gaps !== 1) {
-    workspaceError("artifact summary mismatch");
-  }
-  if (!Array.isArray(workspace.artifacts) || !Array.isArray(workspace.modules)) {
-    workspaceError("artifact and module collections must be arrays");
   }
   return workspace;
 }

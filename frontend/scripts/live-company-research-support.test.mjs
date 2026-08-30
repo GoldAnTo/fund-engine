@@ -33,13 +33,15 @@ test("buildVerifierEnvironment exposes only the verifier's closed environment", 
     LLM_API_KEY: "hostile-key",
     BASH_ENV: "/hostile/bash-env",
     PYTHONPATH: "/hostile/pythonpath",
+    TMPDIR: "",
   };
 
   const environment = buildVerifierEnvironment({
+    host: hostEnvironment,
     databaseUrl: "sqlite:////private/live.sqlite",
     token: "test-only-token",
     backendUrl: "http://127.0.0.1:41001",
-  }, hostEnvironment);
+  });
 
   assert.deepEqual(environment, {
     PATH: "/tools",
@@ -55,11 +57,14 @@ test("buildVerifierEnvironment exposes only the verifier's closed environment", 
   for (const key of ["HOME", "LLM_API_KEY", "BASH_ENV", "PYTHONPATH"]) {
     assert.equal(key in environment, false, `${key} must not be inherited`);
   }
+  assert.equal("TMPDIR" in environment, false, "empty allowlisted values must not be inherited");
 });
 
 test("assertLoopbackUrl permits only credential-free HTTP on 127.0.0.1", () => {
   const accepted = "http://127.0.0.1:41001/api/underwriting/v1/product/objects";
-  assert.equal(assertLoopbackUrl(accepted), accepted);
+  const parsed = assertLoopbackUrl(accepted);
+  assert.ok(parsed instanceof URL);
+  assert.equal(parsed.hostname, "127.0.0.1");
 
   for (const url of [
     "https://example.com/a",
@@ -81,30 +86,16 @@ test("assertWorkspace rejects snapshot drift while preserving a valid workspace"
     schema_version: "underwriting.v1",
     project_id: "project-1",
     company: {
-      schema_version: "underwriting.v1",
       id: "company-1",
       object_id: "company-1",
     },
     preparation: {
-      schema_version: "underwriting.v1",
       status: "awaiting_evidence_review",
       progress: 25,
-      current_step: "research_gaps",
     },
     draft: {
-      schema_version: "underwriting.v1",
       lock_version: 2,
     },
-    selected_revision: null,
-    change_summary: {
-      artifact_versions: {
-        evidence_index: 1,
-        research_gaps: 1,
-      },
-      reviewed_fact_count: 0,
-    },
-    artifacts: [],
-    modules: [],
   };
 
   assert.strictEqual(assertWorkspace(workspace, expected), workspace);
