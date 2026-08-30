@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { chmod, lstat, mkdtemp, realpath, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, lstat, mkdtemp, realpath, rename, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -8,6 +9,9 @@ const LOOPBACK_HOST = "127.0.0.1";
 const EXACT_LOOPBACK_AUTHORITY = /^http:\/\/127\.0\.0\.1(?::\d+)?(?:[/?#]|$)/;
 const PREFIX = "fund-engine-live-company-research-";
 const MAX_LOG_BYTES = 16_384;
+const STOP_TIMEOUT_MS = 5_000;
+const RUNTIME_AUTHORITIES = new WeakMap();
+const OWNED_PROCESSES = new WeakSet();
 const PRESERVED_ENVIRONMENT_KEYS = [
   "PATH",
   "SystemRoot",
@@ -46,13 +50,50 @@ function privateRuntimeIdentityChanged() {
   throw new Error("private runtime identity changed; refusing cleanup");
 }
 
-function assertPrivateRuntimeStat(stat, runtime) {
+function hasPrivateRuntimeIdentity(stat, authority) {
+  return stat.isDirectory()
+    && !stat.isSymbolicLink()
+    && (stat.mode & 0o777) === authority.mode
+    && stat.uid === authority.uid
+    && stat.dev === authority.dev
+    && stat.ino === authority.ino;
+}
+
+function assertPrivateRuntimeStat(stat, authority) {
   if (!stat.isDirectory()
     || stat.isSymbolicLink()
     || (stat.mode & 0o777) !== 0o700
     || (typeof process.getuid === "function" && stat.uid !== process.getuid())
-    || (runtime && (stat.dev !== runtime.dev || stat.ino !== runtime.ino))) {
+    || (authority && !hasPrivateRuntimeIdentity(stat, authority))) {
     privateRuntimeIdentityChanged();
+  }
+}
+
+async function assertPrivateRuntimeParent(authority) {
+  const stat = await lstat(authority.parent);
+  if (!stat.isDirectory() || stat.isSymbolicLink()
+    || stat.dev !== authority.parentDev || stat.ino !== authority.parentIno) {
+    privateRuntimeIdentityChanged();
+  }
+}
+
+function quarantinePath(authority) {
+  return path.join(authority.parent, `.${PREFIX}cleanup-${randomUUID()}`);
+}
+
+async function restoreClaimedDirectoryIfSafe(authority, claimed) {
+  try {
+    await lstat(authority.directory);
+    return false;
+  } catch (error) {
+    if (error?.code !== "ENOENT") return false;
+  }
+  try {
+    await rename(claimed, authority.directory);
+    authority.quarantine = null;
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -68,48 +109,148 @@ function sleep(milliseconds) {
 async function waitForExit(owned, timeoutMs) {
   let timeout;
   const timedOut = new Promise((resolve) => {
-    timeout = setTimeout(resolve, timeoutMs);
+    timeout = setTimeout(() => resolve(false), timeoutMs);
   });
-  await Promise.race([owned.exitPromise, timedOut]);
+  const exited = await Promise.race([owned.exitPromise.then(() => true), timedOut]);
   clearTimeout(timeout);
+  return exited;
 }
 
-function boundedMessage(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.length > MAX_LOG_BYTES ? message.slice(-MAX_LOG_BYTES) : message;
+function boundedDiagnostic(value) {
+  return String(value).replace(/[\u0000-\u001F\u007F]/g, " ").slice(0, MAX_LOG_BYTES);
 }
 
 function processExitCode(owned) {
-  return owned.exitCode ?? owned.child.exitCode ?? owned.child.signalCode ?? "unknown";
+  return boundedDiagnostic(owned.exitCode ?? owned.child.exitCode ?? owned.child.signalCode ?? "unknown");
+}
+
+function processFailure(owned) {
+  const exited = owned.exited || owned.child.exitCode !== null || owned.child.signalCode !== null;
+  if (!exited || owned.expectedStop) return null;
+  return new Error(boundedDiagnostic(`${boundedDiagnostic(owned.name)} exited with ${processExitCode(owned)}`));
+}
+
+function processFailureFor(processes) {
+  for (const owned of processes) {
+    const failure = processFailure(owned);
+    if (failure) return failure;
+  }
+  return null;
+}
+
+function watchProcessFailures(processes) {
+  const failure = processFailureFor(processes);
+  if (failure) return { promise: Promise.resolve(failure), cancel() {} };
+
+  const listeners = [];
+  let resolveFailure;
+  const promise = new Promise((resolve) => {
+    resolveFailure = resolve;
+  });
+  const check = () => {
+    const nextFailure = processFailureFor(processes);
+    if (nextFailure) resolveFailure(nextFailure);
+  };
+  for (const owned of processes) {
+    owned.child.once("exit", check);
+    owned.child.once("error", check);
+    listeners.push([owned.child, "exit", check], [owned.child, "error", check]);
+  }
+  return {
+    promise,
+    cancel() {
+      for (const [child, event, listener] of listeners) child.removeListener(event, listener);
+    },
+  };
+}
+
+function deadlineTimer(milliseconds) {
+  let timeout;
+  return {
+    promise: new Promise((resolve) => {
+      timeout = setTimeout(() => resolve({ kind: "deadline" }), milliseconds);
+    }),
+    cancel() {
+      clearTimeout(timeout);
+    },
+  };
 }
 
 export async function createPrivateRuntime() {
   const parent = await realpath(os.tmpdir());
   const directory = await mkdtemp(path.join(parent, PREFIX));
   await chmod(directory, 0o700);
-  const stat = await lstat(directory);
+  const [stat, parentStat] = await Promise.all([lstat(directory), lstat(parent)]);
   assertPrivateRuntimeStat(stat);
-  return { parent, directory, dev: stat.dev, ino: stat.ino };
+  const runtime = Object.freeze({ parent, directory, dev: stat.dev, ino: stat.ino });
+  RUNTIME_AUTHORITIES.set(runtime, {
+    parent,
+    directory,
+    dev: stat.dev,
+    ino: stat.ino,
+    uid: stat.uid,
+    mode: stat.mode & 0o777,
+    parentDev: parentStat.dev,
+    parentIno: parentStat.ino,
+    quarantine: null,
+    removed: false,
+  });
+  return runtime;
 }
 
 export async function removePrivateRuntime(runtime) {
-  if (!runtime
-    || typeof runtime.parent !== "string"
-    || typeof runtime.directory !== "string"
-    || path.dirname(runtime.directory) !== runtime.parent
-    || !path.basename(runtime.directory).startsWith(PREFIX)) {
+  const authority = RUNTIME_AUTHORITIES.get(runtime);
+  if (!authority || runtime.parent !== authority.parent || runtime.directory !== authority.directory
+    || runtime.dev !== authority.dev || runtime.ino !== authority.ino || Object.isFrozen(runtime) === false) {
     privateRuntimeIdentityChanged();
+  }
+  if (path.dirname(authority.directory) !== authority.parent
+    || !path.basename(authority.directory).startsWith(PREFIX)) {
+    privateRuntimeIdentityChanged();
+  }
+  if (authority.removed) return;
+  await assertPrivateRuntimeParent(authority);
+
+  let claimed = authority.quarantine;
+  if (!claimed) {
+    claimed = quarantinePath(authority);
+    try {
+      await rename(authority.directory, claimed);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        authority.removed = true;
+        return;
+      }
+      throw error;
+    }
+    authority.quarantine = claimed;
   }
 
   let stat;
   try {
-    stat = await lstat(runtime.directory);
+    stat = await lstat(claimed);
   } catch (error) {
-    if (error?.code === "ENOENT") return;
+    if (error?.code === "ENOENT") {
+      authority.removed = true;
+      return;
+    }
     throw error;
   }
-  assertPrivateRuntimeStat(stat, runtime);
-  await rm(runtime.directory, { recursive: true });
+  if (!hasPrivateRuntimeIdentity(stat, authority)) {
+    await restoreClaimedDirectoryIfSafe(authority, claimed);
+    privateRuntimeIdentityChanged();
+  }
+
+  const finalClaim = quarantinePath(authority);
+  await rename(claimed, finalClaim);
+  authority.quarantine = finalClaim;
+  stat = await lstat(finalClaim);
+  if (!hasPrivateRuntimeIdentity(stat, authority)) {
+    await restoreClaimedDirectoryIfSafe(authority, finalClaim);
+    privateRuntimeIdentityChanged();
+  }
+  await rm(finalClaim, { recursive: true });
+  authority.removed = true;
 }
 
 export function chooseRunError(primary, cleanupErrors) {
@@ -143,55 +284,87 @@ export function startOwnedProcess(command, args, { cwd, env, name }) {
     owned.exitCode = error.code ?? error.message;
     resolveExit();
   });
+  OWNED_PROCESSES.add(owned);
   return owned;
 }
 
 export function assertProcessesRunning(processes) {
-  for (const owned of processes) {
-    if (owned.exited && !owned.expectedStop) {
-      throw new Error(`${owned.name} exited with ${processExitCode(owned)}`);
-    }
-  }
+  const failure = processFailureFor(processes);
+  if (failure) throw failure;
 }
 
 export async function stopOwnedProcess(owned) {
-  if (!owned || owned.expectedStop) return;
+  if (!OWNED_PROCESSES.has(owned)) {
+    throw new Error("refusing to stop an unowned process handle");
+  }
+  if (owned.stopPromise) return owned.stopPromise;
+  owned.stopPromise = stopOwnedProcessImpl(owned);
+  return owned.stopPromise;
+}
+
+async function stopOwnedProcessImpl(owned) {
   owned.expectedStop = true;
   if (owned.exited) return;
 
   try {
-    owned.child.kill("SIGTERM");
+    if (!owned.child.kill("SIGTERM")) {
+      throw new Error(`${boundedDiagnostic(owned.name)} refused SIGTERM`);
+    }
   } catch (error) {
-    if (error?.code !== "ESRCH") throw error;
+    if (error?.code === "ESRCH" && owned.exited) return;
+    throw new Error(boundedDiagnostic(`${boundedDiagnostic(owned.name)} failed to send SIGTERM: ${error?.message ?? error}`));
   }
-  await waitForExit(owned, 5_000);
+  await waitForExit(owned, STOP_TIMEOUT_MS);
   if (owned.exited) return;
   try {
-    owned.child.kill("SIGKILL");
+    if (!owned.child.kill("SIGKILL")) {
+      throw new Error(`${boundedDiagnostic(owned.name)} refused SIGKILL`);
+    }
   } catch (error) {
-    if (error?.code !== "ESRCH") throw error;
+    if (error?.code === "ESRCH" && owned.exited) return;
+    throw new Error(boundedDiagnostic(`${boundedDiagnostic(owned.name)} failed to send SIGKILL: ${error?.message ?? error}`));
   }
-  await owned.exitPromise;
+  if (!await waitForExit(owned, STOP_TIMEOUT_MS)) {
+    throw new Error(`${boundedDiagnostic(owned.name)} did not exit after SIGKILL within ${STOP_TIMEOUT_MS}ms`);
+  }
 }
 
 export async function waitUntil(probe, { label, timeoutMs, intervalMs = 100, processes = [] }) {
   const deadline = Date.now() + timeoutMs;
   let latest = "probe returned a falsy value";
-  while (Date.now() <= deadline) {
-    assertProcessesRunning(processes);
-    try {
-      const result = await probe();
-      if (result) return result;
-    } catch (error) {
-      latest = boundedMessage(error);
-    }
+  while (true) {
     assertProcessesRunning(processes);
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
-    await sleep(Math.min(intervalMs, remaining));
+    const timer = deadlineTimer(remaining);
+    const watcher = watchProcessFailures(processes);
+    const probeResult = Promise.resolve()
+      .then(probe)
+      .then((value) => ({ kind: "probe", value }), (error) => ({ kind: "probe-error", error }));
+    const outcome = await Promise.race([
+      probeResult,
+      timer.promise,
+      watcher.promise.then((error) => ({ kind: "process", error })),
+    ]);
+    timer.cancel();
+    watcher.cancel();
+    if (outcome.kind === "deadline") break;
+    if (outcome.kind === "process") throw outcome.error;
+    if (outcome.kind === "probe") {
+      if (outcome.value) {
+        assertProcessesRunning(processes);
+        return outcome.value;
+      }
+    } else {
+      latest = boundedDiagnostic(outcome.error instanceof Error ? outcome.error.message : outcome.error);
+    }
+    assertProcessesRunning(processes);
+    const nextRemaining = deadline - Date.now();
+    if (nextRemaining <= 0) break;
+    await sleep(Math.min(intervalMs, nextRemaining));
   }
   assertProcessesRunning(processes);
-  throw new Error(`${label} timed out: ${latest}`);
+  throw new Error(boundedDiagnostic(`${boundedDiagnostic(label)} timed out: ${boundedDiagnostic(latest)}`));
 }
 
 export function parseVerifierArgs(args) {

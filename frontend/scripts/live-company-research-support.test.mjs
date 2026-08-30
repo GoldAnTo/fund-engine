@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
   assertLoopbackUrl,
+  assertProcessesRunning,
   assertWorkspace,
   buildVerifierEnvironment,
   chooseRunError,
@@ -193,6 +194,31 @@ test("removePrivateRuntime refuses a directory substituted after creation", asyn
   }
 });
 
+test("removePrivateRuntime leaves a victim created after its atomic cleanup claim", async () => {
+  const runtime = await createPrivateRuntime();
+  const victimSentinel = `${runtime.directory}/victim-sentinel`;
+  await Promise.all(Array.from({ length: 200 }, (_, index) =>
+    writeFile(`${runtime.directory}/owned-${index}`, "owned")));
+
+  const cleanup = removePrivateRuntime(runtime);
+  try {
+    let claimed = false;
+    for (let attempt = 0; attempt < 100 && !claimed; attempt += 1) {
+      const entries = await readdir(runtime.parent);
+      claimed = entries.some((entry) => entry.startsWith(".fund-engine-live-company-research-cleanup-"));
+      if (!claimed) await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    assert.equal(claimed, true, "cleanup must atomically quarantine its owned directory");
+    await mkdir(runtime.directory, { mode: 0o700 });
+    await writeFile(victimSentinel, "victim");
+    await cleanup;
+    assert.equal(await readFile(victimSentinel, "utf8"), "victim");
+  } finally {
+    await cleanup.catch(() => {});
+    await rm(runtime.directory, { recursive: true, force: true });
+  }
+});
+
 test("waitUntil times out for a running child and reports unexpected child exits", async () => {
   const sleeper = startOwnedProcess(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"], {
     cwd: process.cwd(),
@@ -241,4 +267,158 @@ test("chooseRunError preserves a workflow failure over cleanup failures", () => 
   assert.strictEqual(chooseRunError(workflowError, [cleanupError]), workflowError);
   assert.strictEqual(chooseRunError(null, [cleanupError]), cleanupError);
   assert.strictEqual(chooseRunError(null, []), null);
+});
+
+test("removePrivateRuntime rejects forged handles without touching their targets", async () => {
+  const runtime = await createPrivateRuntime();
+  const sentinel = `${runtime.directory}/owned-sentinel`;
+  await writeFile(sentinel, "owned");
+  const forged = { ...runtime };
+
+  try {
+    assert.equal(Object.isFrozen(runtime), true);
+    await assert.rejects(removePrivateRuntime(forged), /identity changed/);
+    assert.equal(await readFile(sentinel, "utf8"), "owned");
+  } finally {
+    await removePrivateRuntime(runtime);
+  }
+});
+
+test("waitUntil enforces its deadline when a probe never settles", { timeout: 500 }, async () => {
+  await assert.rejects(
+    waitUntil(() => new Promise(() => {}), {
+      label: "stalled probe",
+      timeoutMs: 30,
+      intervalMs: 5,
+    }),
+    /stalled probe timed out/,
+  );
+});
+
+test("waitUntil fails when a child exits while a probe later reports ready", async () => {
+  const worker = startOwnedProcess(process.execPath, ["-e", "setTimeout(() => process.exit(7), 5)"], {
+    cwd: process.cwd(),
+    env: { PATH: process.env.PATH ?? "" },
+    name: "worker",
+  });
+
+  try {
+    await assert.rejects(
+      waitUntil(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return true;
+      }, {
+        label: "ready",
+        timeoutMs: 1_000,
+        processes: [worker],
+      }),
+      /worker exited with 7/,
+    );
+  } finally {
+    await stopOwnedProcess(worker);
+  }
+});
+
+test("supervision diagnostics bound untrusted labels, names, and probe errors", async () => {
+  const huge = `line\n${"x".repeat(20_000)}`;
+  await assert.rejects(
+    waitUntil(() => {
+      throw new Error(huge);
+    }, {
+      label: huge,
+      timeoutMs: 5,
+      intervalMs: 1,
+    }),
+    (error) => {
+      assert.ok(error.message.length <= 16_384);
+      assert.equal(error.message.includes("\n"), false);
+      return true;
+    },
+  );
+
+  const worker = startOwnedProcess(process.execPath, ["-e", "process.exit(7)"], {
+    cwd: process.cwd(),
+    env: { PATH: process.env.PATH ?? "" },
+    name: huge,
+  });
+  try {
+    await assert.rejects(
+      waitUntil(() => false, {
+        label: "ready",
+        timeoutMs: 500,
+        intervalMs: 5,
+        processes: [worker],
+      }),
+      (error) => {
+        assert.ok(error.message.length <= 16_384);
+        assert.equal(error.message.includes("\n"), false);
+        return true;
+      },
+    );
+  } finally {
+    await stopOwnedProcess(worker);
+  }
+});
+
+test("stopOwnedProcess rejects when its exact live child refuses termination", async () => {
+  const sleeper = startOwnedProcess(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"], {
+    cwd: process.cwd(),
+    env: { PATH: process.env.PATH ?? "" },
+    name: "sleeper",
+  });
+  const kill = sleeper.child.kill.bind(sleeper.child);
+  sleeper.child.kill = () => false;
+  const forcedRelease = setTimeout(() => kill("SIGKILL"), 50);
+
+  try {
+    await assert.rejects(stopOwnedProcess(sleeper), /refused SIGTERM/);
+  } finally {
+    clearTimeout(forcedRelease);
+    sleeper.child.kill = kill;
+    if (!sleeper.exited) kill("SIGKILL");
+    await sleeper.exitPromise;
+  }
+  assert.doesNotThrow(() => assertProcessesRunning([sleeper]));
+});
+
+test("supervision fails closed for spawn errors and signal-only exits", async () => {
+  const missing = startOwnedProcess("/definitely-not-a-live-company-research-command", [], {
+    cwd: process.cwd(),
+    env: { PATH: process.env.PATH ?? "" },
+    name: "missing",
+  });
+  try {
+    await assert.rejects(
+      waitUntil(() => false, {
+        label: "ready",
+        timeoutMs: 500,
+        intervalMs: 5,
+        processes: [missing],
+      }),
+      /missing exited with ENOENT/,
+    );
+  } finally {
+    await stopOwnedProcess(missing);
+  }
+
+  const signaled = startOwnedProcess(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"], {
+    cwd: process.cwd(),
+    env: { PATH: process.env.PATH ?? "" },
+    name: "signaled",
+  });
+  await new Promise((resolve) => signaled.child.once("spawn", resolve));
+  signaled.child.kill("SIGTERM");
+  try {
+    await assert.rejects(
+      waitUntil(() => false, {
+        label: "ready",
+        timeoutMs: 500,
+        intervalMs: 5,
+        processes: [signaled],
+      }),
+      /signaled exited with SIGTERM/,
+    );
+  } finally {
+    await stopOwnedProcess(signaled);
+  }
 });
