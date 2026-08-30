@@ -13,13 +13,16 @@ import {
   assertLoopbackUrl,
   assertExactReviewSuccessor,
   assertModelWorkspace,
+  assertProcessRunningBeforeIntentionalStop,
   assertProcessesRunning,
+  assertSameArtifactHead,
   assertAlphabetIdentityBinding,
   assertWorkspace,
   buildVerifierEnvironment,
   chooseRunError,
   closeOwnedBrowser,
   createBrowserFailureCollector,
+  createPendingObserverTracker,
   createPrivateRuntime,
   createTrafficAudit,
   newOwnedBrowserContext,
@@ -218,7 +221,7 @@ function throwBrowserFailures(failures) {
   failures.throwIfAny();
 }
 
-function createWorkspaceResponseCollector(page, failures) {
+function createWorkspaceResponseCollector(page, failures, observers) {
   const entries = [];
   let sequence = 0;
   page.on("response", (response) => {
@@ -227,9 +230,15 @@ function createWorkspaceResponseCollector(page, failures) {
     if (request.method() !== "GET" || !pathname.endsWith("/workspace")
       || !pathname.includes("/company-research/projects/")) return;
     const currentSequence = ++sequence;
-    void responseJson(response).then((workspace) => {
-      entries.push({ sequence: currentSequence, pathname, workspace });
-    }).catch((error) => failures.record(error));
+    observers.track(async () => {
+      try {
+        const workspace = await responseJson(response);
+        if (entries.length >= 64) throw new Error("browser workspace response queue exceeded its bound");
+        entries.push({ sequence: currentSequence, pathname, workspace });
+      } catch (error) {
+        failures.record(error);
+      }
+    });
   });
   return Object.freeze({
     cursor() { return sequence; },
@@ -272,11 +281,27 @@ function governedEvidenceArtifact(workspace) {
   return { evidence, factKeys };
 }
 
-async function finalizeOwnedRuntime({ browser, browserFailures, worker, vite, api, runtime }) {
+async function finalizeOwnedRuntime({
+  browser, browserFailures, pendingObservers, assertTraffic, worker, vite, api, runtime,
+}) {
   const cleanupErrors = [];
   if (browser) {
     try {
       await closeOwnedBrowser(browser, { timeoutMs: CLEANUP_TIMEOUT_MS });
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (pendingObservers) {
+    try {
+      await pendingObservers.drain({ timeoutMs: CLEANUP_TIMEOUT_MS });
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (assertTraffic) {
+    try {
+      assertTraffic();
     } catch (error) {
       cleanupErrors.push(error);
     }
@@ -322,9 +347,9 @@ async function runBootstrap(python, args, { env, deadline, label }) {
 
 async function runBrowserWorkflow({
   page, uiBase, audit, failures, deadline, runningProcesses, foundation,
-  stopWorkerForReview, restartWorker,
+  pendingObservers, stopWorkerForReview, restartWorker,
 }) {
-  const workspaceResponses = createWorkspaceResponseCollector(page, failures);
+  const workspaceResponses = createWorkspaceResponseCollector(page, failures, pendingObservers);
   await page.goto(`${uiBase}/research/new`, {
     waitUntil: "networkidle",
     timeout: remaining(deadline, "new research navigation"),
@@ -421,10 +446,10 @@ async function runBrowserWorkflow({
     progress: 25,
   });
   const stableEvidence = governedEvidenceArtifact(stableEvidenceWorkspace).evidence;
-  if (stableEvidence.id !== evidence.id || stableEvidence.version !== evidence.version
-    || stableEvidenceWorkspace.change_summary?.reviewed_fact_count !== 0) {
+  if (stableEvidenceWorkspace.change_summary?.reviewed_fact_count !== 0) {
     throw new Error("stopped worker did not preserve the exact evidence-review boundary");
   }
+  assertSameArtifactHead(evidence, stableEvidence);
   evidence = stableEvidence;
   await page.getByRole("button", { name: "来源、事实与缺口" }).click();
 
@@ -462,9 +487,7 @@ async function runBrowserWorkflow({
     }
     const workspaceEvidence = nextWorkspace.artifacts?.find((artifact) => artifact?.kind === "evidence_index");
     assertExactReviewSuccessor(previousEvidence, workspaceEvidence, factKey);
-    if (workspaceEvidence.id !== evidence.id || workspaceEvidence.version !== evidence.version) {
-      throw new Error("review response and successor workspace evidence identities differ");
-    }
+    assertSameArtifactHead(evidence, workspaceEvidence);
     await page.getByText(`事实 ${factKey} 已确认，证据版本 ${evidence.version}`, { exact: true }).waitFor({
       timeout: remaining(deadline, `visible evidence review ${factKey}`),
     });
@@ -495,7 +518,7 @@ async function runBrowserWorkflow({
     status: "awaiting_judgment_review",
     progress: 85,
   });
-  assertModelWorkspace(modelWorkspace);
+  assertModelWorkspace(modelWorkspace, { evidenceArtifact: evidence });
   if (modelWorkspace.change_summary?.reviewed_fact_count !== factKeys.length) {
     throw new Error("model workspace reviewed fact count differs from authenticated evidence");
   }
@@ -505,16 +528,24 @@ async function runBrowserWorkflow({
   });
   throwBrowserFailures(failures);
   assertProcessesRunning(runningProcesses());
-  audit.assertSingleton("GET", searchPath);
-  audit.assertSingleton("POST", previewPath);
-  audit.assertSingleton("POST", initializationPath);
-  if (audit.requestCount("POST", reviewPath) !== factKeys.length) {
-    throw new Error(`expected one evidence review request per governed fact; saw ${audit.requestCount("POST", reviewPath)}`);
-  }
-  const allowedWrites = new Set([previewPath, initializationPath, reviewPath]);
-  const unexpectedWrites = audit.snapshot().requests.filter(([method, pathname]) =>
-    method !== "GET" && !(method === "POST" && allowedWrites.has(pathname)));
-  if (unexpectedWrites.length > 0) throw new Error("unexpected Company Research browser write before judgment confirmation");
+  const assertTraffic = () => {
+    audit.assertSingleton("GET", searchPath);
+    audit.assertSingleton("POST", previewPath);
+    audit.assertSingleton("POST", initializationPath);
+    if (audit.requestCount("POST", reviewPath) !== factKeys.length) {
+      throw new Error(`expected one evidence review request per governed fact; saw ${audit.requestCount("POST", reviewPath)}`);
+    }
+    const allowedWrites = new Set([previewPath, initializationPath, reviewPath]);
+    const unexpectedWrites = audit.snapshot().requests.filter(([method, pathname]) =>
+      method !== "GET" && !(method === "POST" && allowedWrites.has(pathname)));
+    if (unexpectedWrites.length > 0) throw new Error("unexpected Company Research browser write before judgment confirmation");
+  };
+  await pendingObservers.drain({
+    timeoutMs: Math.min(CLEANUP_TIMEOUT_MS, remaining(deadline, "browser observer drain")),
+  });
+  throwBrowserFailures(failures);
+  assertTraffic();
+  return { assertTraffic };
 }
 
 async function main() {
@@ -530,6 +561,8 @@ async function main() {
   let vite;
   let browser;
   let browserFailures;
+  let pendingObservers;
+  let assertTraffic;
   let primaryError = null;
   let cleanupErrors = [];
 
@@ -619,6 +652,7 @@ async function main() {
     });
     const audit = createTrafficAudit(uiBase);
     browserFailures = createBrowserFailureCollector();
+    pendingObservers = createPendingObserverTracker();
     const context = await newOwnedBrowserContext(browser);
     await context.route("**/*", async (route) => {
       try {
@@ -649,16 +683,16 @@ async function main() {
     page.on("console", (message) => {
       if (message.type() === "error") browserFailures.record(new Error("browser console error"));
     });
-    page.on("requestfailed", (request) => browserFailures.capture(() =>
-      audit.recordRequestFailure(request.method(), request.url())));
-    page.on("request", (request) => browserFailures.capture(() =>
-      audit.recordRequest(request.method(), request.url())));
-    page.on("response", (response) => browserFailures.capture(() =>
-      audit.recordResponse(response.status(), response.request().method(), response.url())));
+    page.on("requestfailed", (request) => pendingObservers.track(() => browserFailures.capture(() =>
+      audit.recordRequestFailure(request.method(), request.url()))));
+    page.on("request", (request) => pendingObservers.track(() => browserFailures.capture(() =>
+      audit.recordRequest(request.method(), request.url()))));
+    page.on("response", (response) => pendingObservers.track(() => browserFailures.capture(() =>
+      audit.recordResponse(response.status(), response.request().method(), response.url()))));
 
     await page.clock.setFixedTime(await alphabetFixtureCutoff());
 
-    await runBrowserWorkflow({
+    const workflow = await runBrowserWorkflow({
       page,
       uiBase,
       audit,
@@ -666,9 +700,11 @@ async function main() {
       deadline,
       runningProcesses,
       foundation: await alphabetFoundation(),
+      pendingObservers,
       async stopWorkerForReview() {
         if (!worker) throw new Error("company research worker is absent before evidence review");
         const stoppedWorker = worker;
+        assertProcessRunningBeforeIntentionalStop(stoppedWorker);
         await stopOwnedProcess(stoppedWorker);
         if (worker !== stoppedWorker) throw new Error("company research worker identity changed during stop");
         worker = null;
@@ -679,11 +715,12 @@ async function main() {
         return worker;
       },
     });
+    assertTraffic = workflow.assertTraffic;
   } catch (error) {
     primaryError = error instanceof Error ? error : new Error("live company research verifier failed");
   } finally {
     cleanupErrors = await finalizeOwnedRuntime({
-      browser, browserFailures, worker, vite, api, runtime,
+      browser, browserFailures, pendingObservers, assertTraffic, worker, vite, api, runtime,
     });
   }
 

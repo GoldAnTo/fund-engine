@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, open, realpath, rename, rmdir } from "node:fs/promises";
 import os from "node:os";
@@ -641,6 +641,11 @@ export function assertProcessesRunning(processes) {
   if (failure) throw failure;
 }
 
+export function assertProcessRunningBeforeIntentionalStop(owned) {
+  assertProcessesRunning([owned]);
+  return owned;
+}
+
 export async function stopOwnedProcess(owned) {
   const authority = PROCESS_AUTHORITIES.get(owned);
   if (!authority) {
@@ -904,6 +909,40 @@ export function createTrafficAudit(uiBase) {
   });
 }
 
+export function createPendingObserverTracker() {
+  const pending = new Set();
+  let failed = false;
+  return Object.freeze({
+    track(operation) {
+      let tracked;
+      tracked = Promise.resolve().then(operation).catch(() => {
+        failed = true;
+      }).finally(() => {
+        pending.delete(tracked);
+      });
+      pending.add(tracked);
+    },
+    async drain({ timeoutMs }) {
+      if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+        throw new Error("pending browser observer drain requires a positive timeout");
+      }
+      const deadline = Date.now() + timeoutMs;
+      while (pending.size > 0) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error("pending browser observer drain timed out");
+        const timer = deadlineTimer(remaining);
+        const outcome = await Promise.race([
+          Promise.allSettled([...pending]).then(() => "settled"),
+          timer.promise.then(() => "timeout"),
+        ]);
+        timer.cancel();
+        if (outcome === "timeout") throw new Error("pending browser observer drain timed out");
+      }
+      if (failed) throw new Error("pending browser observer failed");
+    },
+  });
+}
+
 export function createBrowserFailureCollector() {
   const errors = [];
   return Object.freeze({
@@ -1009,11 +1048,354 @@ function jsonValuesEqual(left, right) {
       key === rightKeys[index] && jsonValuesEqual(left[key], right[key]));
 }
 
+const ARTIFACT_KEYS = Object.freeze([
+  "schema_version", "id", "project_id", "kind", "version", "input_hash",
+  "content_hash", "payload", "source_refs",
+]);
+const SOURCE_REF_KEYS = Object.freeze(["raw_hash", "source_locator", "source_role", "source_url"]);
+const LINEAGE_SOURCE_REF_KEYS = Object.freeze([...SOURCE_REF_KEYS, "fact_key"]);
+const LINEAGE_KEYS = Object.freeze(["artifact_refs", "market_snapshot_ids", "market_snapshot_bindings"]);
+const LINEAGE_PARENT_KEYS = Object.freeze(["artifact_id", "artifact_kind", "content_hash"]);
+const MARKET_BINDING_KEYS = Object.freeze([
+  "snapshot_id", "snapshot_kind", "snapshot_content_hash", "security_external_key", "source_ref",
+  "capture_envelope_id", "capture_content_hash", "provenance_role", "provider_policy_version", "raw_components",
+]);
+const RAW_COMPONENT_KEYS = Object.freeze(["raw_file", "raw_hash", "source_url", "source_locator"]);
+
+function hasExactKeys(value, keys) {
+  return isRecord(value) && Object.keys(value).length === keys.length
+    && keys.every((key) => Object.hasOwn(value, key));
+}
+
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function canonicalHash(value) {
+  const canonicalize = (item) => Array.isArray(item)
+    ? item.map(canonicalize)
+    : isRecord(item)
+      ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, canonicalize(item[key])]))
+      : item;
+  return createHash("sha256").update(JSON.stringify(canonicalize(value))).digest("hex");
+}
+
+function isStringArray(value, { nonempty = false } = {}) {
+  return Array.isArray(value) && (!nonempty || value.length > 0)
+    && value.every((item) => isNonEmptyString(item));
+}
+
+function isDateTime(value) {
+  if (typeof value !== "string") return false;
+  const parts = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.exec(value);
+  if (!parts || !Number.isFinite(Date.parse(value))) return false;
+  const wallClock = new Date(Date.UTC(
+    Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]),
+    Number(parts[4]), Number(parts[5]), Number(parts[6]),
+  ));
+  return wallClock.getUTCFullYear() === Number(parts[1])
+    && wallClock.getUTCMonth() + 1 === Number(parts[2])
+    && wallClock.getUTCDate() === Number(parts[3])
+    && wallClock.getUTCHours() === Number(parts[4])
+    && wallClock.getUTCMinutes() === Number(parts[5])
+    && wallClock.getUTCSeconds() === Number(parts[6]);
+}
+
+function canonicalDecimal(value) {
+  if (typeof value !== "string") return null;
+  const match = /^([+-]?)(\d+)(?:\.(\d*))?$/u.exec(value.trim());
+  if (!match) return null;
+  const integer = match[2].replace(/^0+(?=\d)/u, "");
+  const fraction = (match[3] ?? "").replace(/0+$/u, "");
+  const zero = integer === "0" && fraction === "";
+  return `${match[1] === "-" && !zero ? "-" : ""}${integer}${fraction ? `.${fraction}` : ""}`;
+}
+
+function isDateOnly(value) {
+  if (typeof value !== "string") return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
+  if (!match) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return date.getUTCFullYear() === Number(match[1])
+    && date.getUTCMonth() + 1 === Number(match[2])
+    && date.getUTCDate() === Number(match[3]);
+}
+
+function isSourceRef(value, withFactKey = false) {
+  const keys = withFactKey ? LINEAGE_SOURCE_REF_KEYS : SOURCE_REF_KEYS;
+  return hasExactKeys(value, keys) && SHA256_PATTERN.test(value.raw_hash)
+    && keys.filter((key) => key !== "raw_hash")
+      .every((key) => isNonEmptyString(value[key]) && value[key] === value[key].trim());
+}
+
+function sourceRefIdentity(value) {
+  return JSON.stringify([value.source_role, value.source_url, value.source_locator, value.raw_hash]);
+}
+
+function canonicalSourceRefs(values) {
+  const unique = new Map(values.map((value) => [sourceRefIdentity(value), value]));
+  return [...unique.keys()].sort().map((identity) => unique.get(identity));
+}
+
+function assertArtifactEnvelope(artifact, label) {
+  if (!hasExactKeys(artifact, ARTIFACT_KEYS)) throw new Error(`${label} artifact envelope mismatch`);
+  if (artifact.schema_version !== "underwriting.v1" || !UUID_PATTERN.test(artifact.id)
+    || !UUID_PATTERN.test(artifact.project_id) || !isNonEmptyString(artifact.kind)) {
+    throw new Error(`${label} artifact identity mismatch`);
+  }
+  if (!isSafePositiveInteger(artifact.version)) throw new Error(`${label} artifact version mismatch`);
+  if (!SHA256_PATTERN.test(artifact.input_hash) || !SHA256_PATTERN.test(artifact.content_hash)) {
+    throw new Error(`${label} artifact hash mismatch`);
+  }
+  if (!isRecord(artifact.payload)) throw new Error(`${label} artifact payload mismatch`);
+  if (!Array.isArray(artifact.source_refs) || artifact.source_refs.length === 0
+    || !artifact.source_refs.every((ref) => isSourceRef(ref))) {
+    throw new Error(`${label} artifact source refs mismatch`);
+  }
+  const sourceIdentities = artifact.source_refs.map(sourceRefIdentity);
+  if (new Set(sourceIdentities).size !== sourceIdentities.length) {
+    throw new Error(`${label} artifact source refs mismatch`);
+  }
+  return artifact;
+}
+
+function isNumericSource(value) {
+  if (!isRecord(value) || value.kind !== "external") return false;
+  const { kind: _kind, ...ref } = value;
+  return isSourceRef(ref, true);
+}
+
+function isComputationSource(value, lineage) {
+  if (!hasExactKeys(value, ["kind", "artifact_refs", "market_snapshot_ids", "equation_id"])
+    || value.kind !== "artifact_computation" || !isNonEmptyString(value.equation_id)
+    || !Array.isArray(value.artifact_refs) || value.artifact_refs.length === 0
+    || !value.artifact_refs.every((ref) => hasExactKeys(ref, LINEAGE_PARENT_KEYS)
+      && UUID_PATTERN.test(ref.artifact_id) && isNonEmptyString(ref.artifact_kind)
+      && SHA256_PATTERN.test(ref.content_hash))
+    || new Set(value.artifact_refs.map((ref) => ref.artifact_id)).size !== value.artifact_refs.length
+    || !Array.isArray(value.market_snapshot_ids)
+    || !value.market_snapshot_ids.every((id) => UUID_PATTERN.test(id))
+    || new Set(value.market_snapshot_ids).size !== value.market_snapshot_ids.length) return false;
+  return !lineage || (jsonValuesEqual(value.artifact_refs, lineage.artifact_refs)
+    && jsonValuesEqual(value.market_snapshot_ids, lineage.market_snapshot_ids));
+}
+
+function isNumericObservation(value, computationLineage) {
+  if (!hasExactKeys(value, [
+    "key", "value", "unit", "currency", "period", "state", "source_ref", "gap_key", "assumption_key",
+  ]) || !isNonEmptyString(value.key) || !isNonEmptyString(value.value)
+    || canonicalDecimal(value.value) !== value.value
+    || !isNonEmptyString(value.unit) || !isNonEmptyString(value.currency)
+    || !isNonEmptyString(value.period) || !["reported", "derived", "assumption", "gap"].includes(value.state)) return false;
+  const provenanceCount = [value.source_ref, value.gap_key, value.assumption_key]
+    .filter((item) => item !== null).length;
+  if (provenanceCount !== 1) return false;
+  if (value.state === "reported") return isNumericSource(value.source_ref);
+  if (value.state === "assumption") return isNonEmptyString(value.assumption_key);
+  if (value.state === "gap") return isNonEmptyString(value.gap_key);
+  return isComputationSource(value.source_ref, computationLineage);
+}
+
+function isEvidenceFact(value, { requireReviewed = false } = {}) {
+  const keys = [
+    "fact_key", "company_external_key", "business_module", "metric_key", "observation",
+    "period_start", "period_end", "published_at", "available_at", "source_role", "source_url",
+    "source_locator", "raw_hash",
+  ];
+  const exact = hasExactKeys(value, keys) || hasExactKeys(value, [...keys, "review_decision"]);
+  if (!exact || !["fact_key", "company_external_key", "business_module", "metric_key", "source_role", "source_url", "source_locator"]
+    .every((key) => isNonEmptyString(value[key]))
+    || !isNumericObservation(value.observation)
+    || !isDateOnly(value.period_start) || !isDateOnly(value.period_end) || value.period_start > value.period_end
+    || !isDateTime(value.published_at) || !isDateTime(value.available_at)
+    || Date.parse(value.published_at) > Date.parse(value.available_at)
+    || !SHA256_PATTERN.test(value.raw_hash)) return false;
+  if (requireReviewed && !["confirmed", "rejected"].includes(value.review_decision)) return false;
+  return !("review_decision" in value) || ["confirmed", "rejected"].includes(value.review_decision);
+}
+
+function isEvidencePayload(payload, sourceRefs, { requireReviewed = false } = {}) {
+  if (!hasExactKeys(payload, [
+    "fixture_content_hash", "cutoff", "company_external_key", "security_external_keys", "facts",
+  ]) || !SHA256_PATTERN.test(payload.fixture_content_hash) || !isDateTime(payload.cutoff)
+    || !isNonEmptyString(payload.company_external_key)
+    || !isStringArray(payload.security_external_keys, { nonempty: true })
+    || new Set(payload.security_external_keys).size !== payload.security_external_keys.length
+    || !Array.isArray(payload.facts) || payload.facts.length === 0
+    || !payload.facts.every((fact) => isEvidenceFact(fact, { requireReviewed }))) return false;
+  const factKeys = payload.facts.map((fact) => fact.fact_key);
+  if (new Set(factKeys).size !== factKeys.length) return false;
+  const sourceIdentities = new Set(sourceRefs.map(sourceRefIdentity));
+  if (!payload.facts.every((fact) => {
+    const source = fact.observation?.source_ref;
+    if (!isRecord(source) || source.kind !== "external") return false;
+    const { kind: _kind, fact_key: _factKey, ...ref } = source;
+    return sourceIdentities.has(sourceRefIdentity(ref));
+  })) return false;
+  const governedSources = canonicalSourceRefs(payload.facts.map((fact) => ({
+    source_role: fact.source_role,
+    source_url: fact.source_url,
+    source_locator: fact.source_locator,
+    raw_hash: fact.raw_hash,
+  })));
+  return jsonValuesEqual(sourceRefs, governedSources);
+}
+
+function isLineageSourceRefs(value) {
+  return Array.isArray(value) && value.every((ref) => isSourceRef(ref, true));
+}
+
+function isArtifactMemoRef(value, kind, registry) {
+  return hasExactKeys(value, ["artifact_kind", "content_hash"])
+    && value.artifact_kind === kind && SHA256_PATTERN.test(value.content_hash)
+    && registry.has(kind);
+}
+
+function isMarketBinding(value, expectedSnapshotId) {
+  if (!hasExactKeys(value, MARKET_BINDING_KEYS) || value.snapshot_id !== expectedSnapshotId
+    || !["price", "fx", "capital_structure", "security_rights"].includes(value.snapshot_kind)
+    || !SHA256_PATTERN.test(value.snapshot_content_hash)
+    || !isSourceRef(value.source_ref, true) || !UUID_PATTERN.test(value.capture_envelope_id)
+    || !SHA256_PATTERN.test(value.capture_content_hash) || value.provenance_role !== "primary"
+    || !isNonEmptyString(value.provider_policy_version)
+    || !Array.isArray(value.raw_components)
+    || !value.raw_components.every((component) => hasExactKeys(component, RAW_COMPONENT_KEYS)
+      && isNonEmptyString(component.raw_file) && SHA256_PATTERN.test(component.raw_hash)
+      && isNonEmptyString(component.source_url) && isNonEmptyString(component.source_locator))) return false;
+  const requiresSecurity = ["price", "security_rights"].includes(value.snapshot_kind);
+  return requiresSecurity ? isNonEmptyString(value.security_external_key) : value.security_external_key === null;
+}
+
+function assertArtifactLineage(payload, expectedKinds, registry, label) {
+  const lineage = payload?._lineage;
+  if (!hasExactKeys(lineage, LINEAGE_KEYS) || !Array.isArray(lineage.artifact_refs)
+    || lineage.artifact_refs.length !== expectedKinds.length
+    || !Array.isArray(lineage.market_snapshot_ids)
+    || !lineage.market_snapshot_ids.every((id) => UUID_PATTERN.test(id))
+    || new Set(lineage.market_snapshot_ids).size !== lineage.market_snapshot_ids.length
+    || !Array.isArray(lineage.market_snapshot_bindings)
+    || lineage.market_snapshot_bindings.length !== lineage.market_snapshot_ids.length) {
+    throw new Error(`${label} artifact lineage mismatch`);
+  }
+  for (const [index, kind] of expectedKinds.entries()) {
+    const ref = lineage.artifact_refs[index];
+    const parent = registry.get(kind);
+    if (!hasExactKeys(ref, LINEAGE_PARENT_KEYS) || !parent
+      || ref.artifact_kind !== kind || ref.artifact_id !== parent.id
+      || ref.content_hash !== parent.content_hash) {
+      throw new Error(`${label} artifact lineage mismatch`);
+    }
+  }
+  for (const [index, binding] of lineage.market_snapshot_bindings.entries()) {
+    if (!isMarketBinding(binding, lineage.market_snapshot_ids[index])) {
+      throw new Error(`${label} artifact lineage mismatch`);
+    }
+  }
+  return lineage;
+}
+
+function isResearchGapsPayload(payload) {
+  return hasExactKeys(payload, ["fixture_content_hash", "company_external_key", "gaps"])
+    && SHA256_PATTERN.test(payload.fixture_content_hash) && isNonEmptyString(payload.company_external_key)
+    && Array.isArray(payload.gaps) && payload.gaps.every((gap) =>
+      hasExactKeys(gap, ["gap_key", "business_module", "reason"])
+      && ["gap_key", "business_module", "reason"].every((key) => isNonEmptyString(gap[key])));
+}
+
+function isBusinessMapPayload(payload) {
+  return hasExactKeys(payload, ["modules", "_lineage"])
+    && Array.isArray(payload.modules) && payload.modules.length > 0
+    && payload.modules.every((module) => hasExactKeys(module, [
+      "module_key", "revenue_sources", "cost_structure", "capital_needs", "fact_refs", "gap_refs", "classified_evidence",
+    ]) && isNonEmptyString(module.module_key)
+      && isStringArray(module.revenue_sources, { nonempty: true })
+      && isStringArray(module.cost_structure, { nonempty: true })
+      && isStringArray(module.capital_needs, { nonempty: true })
+      && isLineageSourceRefs(module.fact_refs) && isStringArray(module.gap_refs)
+      && Array.isArray(module.classified_evidence)
+      && module.classified_evidence.every((item) => hasExactKeys(item, [
+        "fact_ref", "metric_key", "category", "observation", "period_start", "period_end",
+      ]) && isSourceRef(item.fact_ref, true) && isNonEmptyString(item.metric_key)
+        && ["revenue", "cost", "capital"].includes(item.category)
+        && isNumericObservation(item.observation, payload._lineage) && isDateOnly(item.period_start)
+        && isDateOnly(item.period_end) && item.period_start <= item.period_end));
+}
+
+function isDriverMapPayload(payload) {
+  return hasExactKeys(payload, ["drivers", "_lineage"])
+    && Array.isArray(payload.drivers) && payload.drivers.length > 0
+    && payload.drivers.every((driver) => hasExactKeys(driver, [
+      "driver_key", "module_key", "fact_refs", "assumption_refs", "equation", "output_metric",
+      "equation_id", "values", "assumption_rationale", "assumption_equation",
+    ]) && ["driver_key", "module_key", "equation", "output_metric"].every((key) => isNonEmptyString(driver[key]))
+      && isLineageSourceRefs(driver.fact_refs) && isLineageSourceRefs(driver.assumption_refs)
+      && (driver.equation_id === null || isNonEmptyString(driver.equation_id))
+      && Array.isArray(driver.values) && driver.values.length > 0
+      && driver.values.every((value) => isNumericObservation(value, payload._lineage))
+      && (driver.assumption_rationale === null || isNonEmptyString(driver.assumption_rationale))
+      && (driver.assumption_equation === null || isNonEmptyString(driver.assumption_equation)));
+}
+
+const FINANCIAL_OBSERVATION_KEYS = Object.freeze([
+  "revenue", "operating_income", "cash_tax_rate", "depreciation", "capex", "working_capital_change", "fcff",
+]);
+
+function isFinancialBridgePayload(payload) {
+  return hasExactKeys(payload, ["rows", "_lineage"])
+    && Array.isArray(payload.rows) && payload.rows.length === 5
+    && payload.rows.every((row) => hasExactKeys(row, [
+      "period", ...FINANCIAL_OBSERVATION_KEYS, "fact_refs", "assumption_refs",
+    ]) && isNonEmptyString(row.period)
+      && FINANCIAL_OBSERVATION_KEYS.every((key) => isNumericObservation(row[key], payload._lineage))
+      && isLineageSourceRefs(row.fact_refs) && isLineageSourceRefs(row.assumption_refs));
+}
+
+function isScenarioSetPayload(payload) {
+  if (!hasExactKeys(payload, ["scenarios", "_lineage"])
+    || !Array.isArray(payload.scenarios) || payload.scenarios.length !== 3) return false;
+  const scenarioIds = payload.scenarios.map((scenario) => scenario?.scenario_id).sort();
+  const mechanisms = payload.scenarios.map((scenario) => scenario?.mechanism_id);
+  if (!jsonValuesEqual(scenarioIds, ["base", "bear", "bull"])
+    || new Set(mechanisms).size !== payload.scenarios.length) return false;
+  return payload.scenarios.every((scenario) => hasExactKeys(scenario, ["scenario_id", "mechanism_id", "driver_overrides"])
+    && isNonEmptyString(scenario.mechanism_id)
+    && Array.isArray(scenario.driver_overrides) && scenario.driver_overrides.length > 0
+    && scenario.driver_overrides.every((item) => hasExactKeys(item, ["driver_key", "observation", "rationale", "equation"])
+      && isNonEmptyString(item.driver_key) && isNumericObservation(item.observation, payload._lineage)
+      && item.observation.unit === "multiplier" && item.observation.currency === "N/A"
+      && (item.rationale === null || isNonEmptyString(item.rationale))
+      && (item.equation === null || isNonEmptyString(item.equation))));
+}
+
+function isJudgmentContextPayload(payload) {
+  return hasExactKeys(payload, [
+    "operating_baseline_available", "financial_bridge_closed", "market_security_bridge_available",
+    "strongest_counterevidence", "next_verification_events", "_lineage",
+  ]) && ["operating_baseline_available", "financial_bridge_closed", "market_security_bridge_available"]
+    .every((key) => typeof payload[key] === "boolean")
+    && isLineageSourceRefs(payload.strongest_counterevidence)
+    && isStringArray(payload.next_verification_events);
+}
+
+function isMachineMemoPayload(payload, registry) {
+  return hasExactKeys(payload, [
+    "assessment_status", "business_map_ref", "driver_map_ref", "financial_bridge_ref",
+    "scenario_set_ref", "valuation_set_ref", "gap_keys", "strongest_counterevidence",
+    "next_verification_events", "candidate_status", "_lineage",
+  ]) && payload.assessment_status === "not_answerable" && payload.candidate_status === "machine_draft"
+    && payload.valuation_set_ref === null
+    && isArtifactMemoRef(payload.business_map_ref, "business_map", registry)
+    && isArtifactMemoRef(payload.driver_map_ref, "driver_map", registry)
+    && isArtifactMemoRef(payload.financial_bridge_ref, "financial_bridge", registry)
+    && isArtifactMemoRef(payload.scenario_set_ref, "scenario_set", registry)
+    && isStringArray(payload.gap_keys) && isLineageSourceRefs(payload.strongest_counterevidence)
+    && isStringArray(payload.next_verification_events);
+}
+
 function reviewFacts(artifact, label) {
-  if (!isRecord(artifact) || typeof artifact.id !== "string" || artifact.id.length === 0
-    || !isSafePositiveInteger(artifact.version) || !isRecord(artifact.payload)
-    || !Array.isArray(artifact.payload.facts)) {
-    throw new Error(`review ${label} artifact is malformed`);
+  assertArtifactEnvelope(artifact, "review");
+  if (artifact.kind !== "evidence_index" || !isEvidencePayload(artifact.payload, artifact.source_refs)) {
+    throw new Error(`review ${label} fact payload is malformed`);
   }
   const facts = artifact.payload.facts;
   const keys = new Set();
@@ -1028,8 +1410,6 @@ function reviewFacts(artifact, label) {
 }
 
 export function assertExactReviewSuccessor(before, after, factKey) {
-  const previousFacts = reviewFacts(before, "previous");
-  const nextFacts = reviewFacts(after, "successor");
   for (const [field, label] of [
     ["schema_version", "schema version"],
     ["project_id", "project id"],
@@ -1044,6 +1424,8 @@ export function assertExactReviewSuccessor(before, after, factKey) {
     || !jsonValuesEqual(after.source_refs, before.source_refs)) {
     throw new Error("review source refs changed");
   }
+  const previousFacts = reviewFacts(before, "previous");
+  const nextFacts = reviewFacts(after, "successor");
   if (after.id === before.id) throw new Error("review artifact identity did not advance");
   if (after.version !== before.version + 1) throw new Error("review version did not advance exactly once");
   if (previousFacts.length !== nextFacts.length) throw new Error("review fact cardinality changed");
@@ -1057,6 +1439,12 @@ export function assertExactReviewSuccessor(before, after, factKey) {
     || reviewedAfter.review_decision !== "confirmed") {
     throw new Error("reviewed fact successor mismatch");
   }
+  const expectedInputHash = canonicalHash({
+    parent: before.content_hash,
+    fact_key: factKey,
+    decision: "confirmed",
+  });
+  if (after.input_hash !== expectedInputHash) throw new Error("review input hash mismatch");
 
   for (const [key, previousFact] of previous) {
     const nextFact = next.get(key);
@@ -1076,7 +1464,15 @@ export function assertExactReviewSuccessor(before, after, factKey) {
   if (!jsonValuesEqual(after.payload, expectedPayload)) {
     throw new Error("review fact payload changed outside the exact decision successor");
   }
+  if (after.content_hash === before.content_hash) throw new Error("review content hash did not advance");
   return after;
+}
+
+export function assertSameArtifactHead(expected, actual) {
+  assertArtifactEnvelope(expected, "expected");
+  assertArtifactEnvelope(actual, "actual");
+  if (!jsonValuesEqual(actual, expected)) throw new Error("authenticated artifact head mismatch");
+  return expected;
 }
 
 const NOT_ANSWERABLE_MODEL_ARTIFACTS = Object.freeze([
@@ -1090,7 +1486,7 @@ const NOT_ANSWERABLE_MODEL_ARTIFACTS = Object.freeze([
   "scenario_set",
 ]);
 
-export function assertModelWorkspace(workspace) {
+export function assertModelWorkspace(workspace, expected) {
   if (!isRecord(workspace)
     || workspace.schema_version !== "underwriting.v1"
     || typeof workspace.project_id !== "string" || !UUID_PATTERN.test(workspace.project_id)) {
@@ -1109,23 +1505,90 @@ export function assertModelWorkspace(workspace) {
   }
   const identities = new Set();
   for (const artifact of workspace.artifacts) {
-    if (!isRecord(artifact) || artifact.schema_version !== "underwriting.v1"
-      || typeof artifact.id !== "string" || !UUID_PATTERN.test(artifact.id)
-      || artifact.project_id !== workspace.project_id || identities.has(artifact.id)) {
+    assertArtifactEnvelope(artifact, "model");
+    if (artifact.project_id !== workspace.project_id || identities.has(artifact.id)) {
       throw new Error("model artifact identity mismatch");
     }
     identities.add(artifact.id);
-    if (!isSafePositiveInteger(artifact.version)) throw new Error("model artifact version mismatch");
-    if (!isRecord(artifact.payload)) throw new Error("model artifact payload mismatch");
   }
-  const memo = workspace.artifacts.find((artifact) => artifact.kind === "memo");
-  const populatedInvestmentField = ["direction", "confidence", "target_value", "expected_return"]
-    .some((field) => memo.payload[field] !== undefined && memo.payload[field] !== null);
-  if (memo.payload.candidate_status !== "machine_draft"
-    || memo.payload.assessment_status !== "not_answerable"
-    || memo.payload.valuation_set_ref !== null
-    || populatedInvestmentField) {
-    throw new Error("not-answerable memo contract mismatch");
+  const registry = new Map(workspace.artifacts.map((artifact) => [artifact.kind, artifact]));
+  const modelSourceKinds = [
+    "business_map", "driver_map", "financial_bridge", "scenario_set", "judgment_context", "memo",
+  ];
+  const evidence = registry.get("evidence_index");
+  if (!isRecord(expected) || !isRecord(expected.evidenceArtifact)) {
+    throw new Error("expected reviewed evidence head is required");
+  }
+  try {
+    assertArtifactEnvelope(expected.evidenceArtifact, "expected reviewed evidence");
+  } catch {
+    throw new Error("expected reviewed evidence head is invalid");
+  }
+  if (!isEvidencePayload(expected.evidenceArtifact.payload, expected.evidenceArtifact.source_refs, { requireReviewed: true })
+    || !jsonValuesEqual(evidence, expected.evidenceArtifact)) {
+    throw new Error("model workspace reviewed evidence head mismatch");
+  }
+  if (!isEvidencePayload(evidence.payload, evidence.source_refs, { requireReviewed: true })) {
+    throw new Error("evidence_index payload mismatch");
+  }
+  const gaps = registry.get("research_gaps");
+  if (!isResearchGapsPayload(gaps.payload)) {
+    throw new Error("research_gaps payload mismatch");
+  }
+  if (!jsonValuesEqual(gaps.source_refs, canonicalSourceRefs(gaps.source_refs))) {
+    throw new Error("research_gaps source refs mismatch");
+  }
+  const business = registry.get("business_map");
+  if (!isBusinessMapPayload(business.payload)) throw new Error("business_map payload mismatch");
+  const modelLineage = assertArtifactLineage(
+    business.payload, ["evidence_index"], registry, "business_map",
+  );
+  const assertSharedMarketLineage = (lineage, label) => {
+    if (!jsonValuesEqual(lineage.market_snapshot_ids, modelLineage.market_snapshot_ids)
+      || !jsonValuesEqual(lineage.market_snapshot_bindings, modelLineage.market_snapshot_bindings)) {
+      throw new Error(`${label} artifact lineage mismatch`);
+    }
+  };
+  const driver = registry.get("driver_map");
+  if (!isDriverMapPayload(driver.payload)) throw new Error("driver_map payload mismatch");
+  assertSharedMarketLineage(
+    assertArtifactLineage(driver.payload, ["business_map"], registry, "driver_map"), "driver_map",
+  );
+  const financial = registry.get("financial_bridge");
+  if (!isFinancialBridgePayload(financial.payload)) throw new Error("financial_bridge payload mismatch");
+  assertSharedMarketLineage(
+    assertArtifactLineage(financial.payload, ["driver_map"], registry, "financial_bridge"), "financial_bridge",
+  );
+  const scenarios = registry.get("scenario_set");
+  if (!isScenarioSetPayload(scenarios.payload)) throw new Error("scenario_set payload mismatch");
+  assertSharedMarketLineage(
+    assertArtifactLineage(scenarios.payload, ["driver_map"], registry, "scenario_set"), "scenario_set",
+  );
+  const judgment = registry.get("judgment_context");
+  if (!isJudgmentContextPayload(judgment.payload)) throw new Error("judgment_context payload mismatch");
+  assertSharedMarketLineage(assertArtifactLineage(judgment.payload, [
+    "evidence_index", "business_map", "driver_map", "financial_bridge", "scenario_set", "research_gaps",
+  ], registry, "judgment_context"), "judgment_context");
+  if (judgment.payload.market_security_bridge_available !== (modelLineage.market_snapshot_ids.length > 0)) {
+    throw new Error("judgment_context payload mismatch");
+  }
+  const memo = registry.get("memo");
+  if (!isMachineMemoPayload(memo.payload, registry)) {
+    throw new Error("memo payload violates not-answerable memo contract");
+  }
+  assertSharedMarketLineage(
+    assertArtifactLineage(memo.payload, ["judgment_context"], registry, "memo"), "memo",
+  );
+  const marketSources = modelLineage.market_snapshot_bindings.map((binding) => {
+    const { fact_key: _factKey, ...source } = binding.source_ref;
+    return source;
+  });
+  const expectedModelSources = canonicalSourceRefs([
+    ...evidence.source_refs, ...gaps.source_refs, ...marketSources,
+  ]);
+  if (modelSourceKinds.some((kind) =>
+    !jsonValuesEqual(registry.get(kind).source_refs, expectedModelSources))) {
+    throw new Error("model artifact source refs do not match governed inputs");
   }
   return workspace;
 }

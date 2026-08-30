@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -36,30 +37,215 @@ const MODEL_ARTIFACT_KINDS = [
   "memo",
 ];
 
+const MODEL_PROJECT_ID = "00000000-0000-4000-8000-000000000001";
+const modelHash = (digit) => String(digit).repeat(64);
+const canonicalPayloadHash = (value) => {
+  const canonical = (item) => Array.isArray(item)
+    ? item.map(canonical)
+    : item !== null && typeof item === "object"
+      ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, canonical(item[key])]))
+      : item;
+  return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
+};
+const canonicalArtifactPayloadHash = (payload) => {
+  const { _lineage: _lineage, ...domainPayload } = payload;
+  return canonicalPayloadHash(domainPayload);
+};
+const modelUuid = (index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+const modelSourceRef = () => ({
+  raw_hash: modelHash("a"),
+  source_locator: "Alphabet 2025 10-K, p. 1",
+  source_role: "filing",
+  source_url: "https://www.sec.gov/example",
+});
+const lineageSourceRef = () => ({ ...modelSourceRef(), fact_key: "alphabet.revenue.2025" });
+const marketSourceRef = () => ({
+  raw_hash: modelHash("c"),
+  source_locator: "NASDAQ close 2026-08-29",
+  source_role: "market_data",
+  source_url: "https://example.test/market/alphabet",
+});
+const marketLineageSourceRef = () => ({ ...marketSourceRef(), fact_key: "market.price.googl" });
+const reportedObservation = (key = "company.revenue", { unit = "USD", currency = "USD" } = {}) => ({
+  key,
+  value: "1",
+  unit,
+  currency,
+  period: "2025",
+  state: "reported",
+  source_ref: { kind: "external", ...lineageSourceRef() },
+  gap_key: null,
+  assumption_key: null,
+});
+
 function modelWorkspace() {
-  const projectId = "00000000-0000-4000-8000-000000000001";
+  const artifacts = [];
+  const marketBinding = {
+    snapshot_id: modelUuid(70),
+    snapshot_kind: "price",
+    snapshot_content_hash: modelHash("d"),
+    security_external_key: "NASDAQ:GOOGL",
+    source_ref: marketLineageSourceRef(),
+    capture_envelope_id: modelUuid(71),
+    capture_content_hash: modelHash("e"),
+    provenance_role: "primary",
+    provider_policy_version: "fixture-market.v1",
+    raw_components: [{
+      raw_file: "alphabet-price.json",
+      raw_hash: modelHash("c"),
+      source_url: "https://example.test/market/alphabet",
+      source_locator: "NASDAQ close 2026-08-29",
+    }],
+  };
+  const artifact = (kind, payload) => {
+    const index = MODEL_ARTIFACT_KINDS.indexOf(kind) + 10;
+    const next = {
+      schema_version: "underwriting.v1",
+      id: modelUuid(index),
+      project_id: MODEL_PROJECT_ID,
+      kind,
+      version: kind === "evidence_index" ? 8 : 1,
+      input_hash: modelHash(String((index + 1) % 10)),
+      content_hash: modelHash(String((index + 2) % 10)),
+      payload,
+      source_refs: [
+        modelSourceRef(),
+        ...(!["evidence_index", "research_gaps"].includes(kind) ? [marketSourceRef()] : []),
+      ],
+    };
+    artifacts.push(next);
+    return next;
+  };
+  const parent = (kind) => {
+    const head = artifacts.find((item) => item.kind === kind);
+    return { artifact_id: head.id, artifact_kind: kind, content_hash: head.content_hash };
+  };
+  const lineage = (kinds) => ({
+    artifact_refs: kinds.map(parent),
+    market_snapshot_ids: [marketBinding.snapshot_id],
+    market_snapshot_bindings: [structuredClone(marketBinding)],
+  });
+  const evidence = artifact("evidence_index", {
+    fixture_content_hash: modelHash("b"),
+    cutoff: "2026-08-30T00:00:00Z",
+    company_external_key: "US:ALPHABET:COMPANY",
+    security_external_keys: ["US:GOOG", "US:GOOGL"],
+    facts: [{
+      fact_key: "alphabet.revenue.2025",
+      company_external_key: "US:ALPHABET:COMPANY",
+      business_module: "search",
+      metric_key: "company.revenue",
+      observation: reportedObservation(),
+      period_start: "2025-01-01",
+      period_end: "2025-12-31",
+      published_at: "2026-02-01T00:00:00Z",
+      available_at: "2026-02-01T00:00:00Z",
+      source_role: "filing",
+      source_url: "https://www.sec.gov/example",
+      source_locator: "Alphabet 2025 10-K, p. 1",
+      raw_hash: modelHash("a"),
+      review_decision: "confirmed",
+    }],
+  });
+  artifact("research_gaps", {
+    fixture_content_hash: modelHash("b"),
+    company_external_key: "US:ALPHABET:COMPANY",
+    gaps: [{ gap_key: "missing-segment-margin", business_module: "cloud", reason: "Not disclosed" }],
+  });
+  const business = artifact("business_map", {
+    modules: [{
+      module_key: "search",
+      revenue_sources: ["advertising"],
+      cost_structure: ["traffic acquisition"],
+      capital_needs: ["data centers"],
+      fact_refs: [lineageSourceRef()],
+      gap_refs: ["missing-segment-margin"],
+      classified_evidence: [{
+        fact_ref: lineageSourceRef(), metric_key: "company.revenue", category: "revenue",
+        observation: reportedObservation(), period_start: "2025-01-01", period_end: "2025-12-31",
+      }],
+    }],
+    _lineage: lineage(["evidence_index"]),
+  });
+  const driver = artifact("driver_map", {
+    drivers: [{
+      driver_key: "search-demand",
+      module_key: "search",
+      fact_refs: [lineageSourceRef()],
+      assumption_refs: [],
+      equation: "revenue = demand",
+      output_metric: "company.revenue",
+      equation_id: "search-revenue-v1",
+      values: [reportedObservation()],
+      assumption_rationale: null,
+      assumption_equation: null,
+    }],
+    _lineage: lineage(["business_map"]),
+  });
+  const bridgeObservationKeys = [
+    "revenue", "operating_income", "cash_tax_rate", "depreciation", "capex",
+    "working_capital_change", "fcff",
+  ];
+  artifact("financial_bridge", {
+    rows: Array.from({ length: 5 }, (_, index) => Object.fromEntries([
+      ["period", String(2025 + index)],
+      ...bridgeObservationKeys.map((key) => [key, reportedObservation(`company.${key}`)]),
+      ["fact_refs", [lineageSourceRef()]],
+      ["assumption_refs", []],
+    ])),
+    _lineage: lineage(["driver_map"]),
+  });
+  artifact("scenario_set", {
+    scenarios: ["base", "bull", "bear"].map((scenarioId) => ({
+      scenario_id: scenarioId,
+      mechanism_id: `${scenarioId}-mechanism`,
+      driver_overrides: [{
+        driver_key: "search-demand",
+        observation: reportedObservation("search-demand", { unit: "multiplier", currency: "N/A" }),
+        rationale: null, equation: null,
+      }],
+    })),
+    _lineage: lineage(["driver_map"]),
+  });
+  const judgment = artifact("judgment_context", {
+    operating_baseline_available: true,
+    financial_bridge_closed: false,
+    market_security_bridge_available: true,
+    strongest_counterevidence: [lineageSourceRef()],
+    next_verification_events: ["Next 10-Q"],
+    _lineage: lineage([
+      "evidence_index", "business_map", "driver_map", "financial_bridge", "scenario_set", "research_gaps",
+    ]),
+  });
+  artifact("memo", {
+    assessment_status: "not_answerable",
+    business_map_ref: { artifact_kind: "business_map", content_hash: canonicalArtifactPayloadHash(business.payload) },
+    driver_map_ref: { artifact_kind: "driver_map", content_hash: canonicalArtifactPayloadHash(driver.payload) },
+    financial_bridge_ref: { artifact_kind: "financial_bridge", content_hash: canonicalArtifactPayloadHash(artifacts.find((item) => item.kind === "financial_bridge").payload) },
+    scenario_set_ref: { artifact_kind: "scenario_set", content_hash: canonicalArtifactPayloadHash(artifacts.find((item) => item.kind === "scenario_set").payload) },
+    valuation_set_ref: null,
+    gap_keys: ["missing-segment-margin"],
+    strongest_counterevidence: [lineageSourceRef()],
+    next_verification_events: ["Next 10-Q"],
+    candidate_status: "machine_draft",
+    _lineage: {
+      artifact_refs: [{ artifact_id: judgment.id, artifact_kind: "judgment_context", content_hash: judgment.content_hash }],
+      market_snapshot_ids: [marketBinding.snapshot_id],
+      market_snapshot_bindings: [structuredClone(marketBinding)],
+    },
+  });
   return {
     schema_version: "underwriting.v1",
-    project_id: projectId,
+    project_id: MODEL_PROJECT_ID,
     preparation: { status: "awaiting_judgment_review", progress: 85 },
-    artifacts: MODEL_ARTIFACT_KINDS.map((kind, index) => ({
-      schema_version: "underwriting.v1",
-      id: `00000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}`,
-      project_id: projectId,
-      kind,
-      version: index + 1,
-      payload: kind === "memo" ? {
-        candidate_status: "machine_draft",
-        assessment_status: "not_answerable",
-        valuation_set_ref: null,
-      } : {},
-    })),
+    artifacts,
+    expectedEvidence: structuredClone(evidence),
   };
 }
 
 test("model workspace requires the exact unique not-answerable artifact set", () => {
-  const workspace = modelWorkspace();
-  assert.strictEqual(assertModelWorkspace(workspace), workspace);
+  const { expectedEvidence, ...workspace } = modelWorkspace();
+  assert.strictEqual(assertModelWorkspace(workspace, { evidenceArtifact: expectedEvidence }), workspace);
 
   for (const artifacts of [
     workspace.artifacts.slice(1),
@@ -69,14 +255,14 @@ test("model workspace requires the exact unique not-answerable artifact set", ()
     }],
   ]) {
     assert.throws(
-      () => assertModelWorkspace({ ...workspace, artifacts }),
+      () => assertModelWorkspace({ ...workspace, artifacts }, { evidenceArtifact: expectedEvidence }),
       /model artifact set/u,
     );
   }
 });
 
 test("model workspace requires exact state and valid artifact heads", () => {
-  const workspace = modelWorkspace();
+  const { expectedEvidence, ...workspace } = modelWorkspace();
   for (const [label, mutate, pattern] of [
     ["status", (next) => { next.preparation.status = "building_model"; }, /model workspace state/u],
     ["progress", (next) => { next.preparation.progress = 84; }, /model workspace state/u],
@@ -86,18 +272,17 @@ test("model workspace requires exact state and valid artifact heads", () => {
     ["foreign project", (next) => { next.artifacts[0].project_id = "project-2"; }, /artifact identity/u],
     ["zero version", (next) => { next.artifacts[0].version = 0; }, /artifact version/u],
     ["fractional version", (next) => { next.artifacts[0].version = 1.5; }, /artifact version/u],
-    ["missing payload", (next) => { delete next.artifacts[0].payload; }, /artifact payload/u],
+    ["missing payload", (next) => { delete next.artifacts[0].payload; }, /artifact (?:payload|envelope)/u],
     ["array payload", (next) => { next.artifacts[0].payload = []; }, /artifact payload/u],
   ]) {
     const next = structuredClone(workspace);
     mutate(next);
-    assert.throws(() => assertModelWorkspace(next), pattern, label);
+    assert.throws(() => assertModelWorkspace(next, { evidenceArtifact: expectedEvidence }), pattern, label);
   }
 });
 
 test("model workspace keeps every not-answerable memo investment field closed", () => {
-  const workspace = modelWorkspace();
-  const memo = workspace.artifacts.find((artifact) => artifact.kind === "memo");
+  const { expectedEvidence, ...workspace } = modelWorkspace();
   for (const [field, value] of [
     ["candidate_status", "human_confirmed"],
     ["assessment_status", "answerable"],
@@ -109,12 +294,175 @@ test("model workspace keeps every not-answerable memo investment field closed", 
   ]) {
     const next = structuredClone(workspace);
     next.artifacts.find((artifact) => artifact.kind === "memo").payload[field] = value;
-    assert.throws(() => assertModelWorkspace(next), /not-answerable memo contract/u, field);
+    assert.throws(() => assertModelWorkspace(next, { evidenceArtifact: expectedEvidence }), /not-answerable memo contract/u, field);
   }
+  assert.strictEqual(assertModelWorkspace(workspace, { evidenceArtifact: expectedEvidence }), workspace);
   for (const field of ["direction", "confidence", "target_value", "expected_return"]) {
-    memo.payload[field] = null;
+    const next = structuredClone(workspace);
+    next.artifacts.find((artifact) => artifact.kind === "memo").payload[field] = null;
+    assert.throws(
+      () => assertModelWorkspace(next, { evidenceArtifact: expectedEvidence }),
+      /memo payload/u,
+      field,
+    );
   }
-  assert.strictEqual(assertModelWorkspace(workspace), workspace);
+});
+
+test("model workspace validates closed artifact envelopes, hashes, sources, and payloads", () => {
+  const { expectedEvidence, ...workspace } = modelWorkspace();
+  for (const [label, mutate, pattern] of [
+    ["extra top-level key", (next) => { next.artifacts[0].fabricated = true; }, /artifact envelope/u],
+    ["missing input hash", (next) => { delete next.artifacts[0].input_hash; }, /artifact envelope/u],
+    ["missing content hash", (next) => { delete next.artifacts[0].content_hash; }, /artifact envelope/u],
+    ["bad input hash", (next) => { next.artifacts[0].input_hash = "not-a-hash"; }, /artifact hash/u],
+    ["bad content hash", (next) => { next.artifacts[0].content_hash = "not-a-hash"; }, /artifact hash/u],
+    ["empty source refs", (next) => { next.artifacts[0].source_refs = []; }, /artifact source refs/u],
+    ["source ref extra key", (next) => { next.artifacts[0].source_refs[0].secret = "junk"; }, /artifact source refs/u],
+    ["source ref bad hash", (next) => { next.artifacts[0].source_refs[0].raw_hash = "junk"; }, /artifact source refs/u],
+    ["duplicate source ref", (next) => { next.artifacts[0].source_refs.push(structuredClone(next.artifacts[0].source_refs[0])); }, /artifact source refs/u],
+    ["drift downstream source refs", (next) => { next.artifacts.find((item) => item.kind === "driver_map").source_refs[0].source_locator = "different but valid"; }, /model artifact source refs/u],
+    ["fabricated evidence payload", (next) => { next.artifacts.find((item) => item.kind === "evidence_index").payload = {}; }, /reviewed evidence|evidence_index payload/u],
+    ["fabricated gaps payload", (next) => { next.artifacts.find((item) => item.kind === "research_gaps").payload = {}; }, /research_gaps payload/u],
+    ["fabricated business payload", (next) => { next.artifacts.find((item) => item.kind === "business_map").payload = {}; }, /business_map payload/u],
+    ["junk driver payload", (next) => { next.artifacts.find((item) => item.kind === "driver_map").payload.drivers = [{}]; }, /driver_map payload/u],
+    ["junk financial payload", (next) => { next.artifacts.find((item) => item.kind === "financial_bridge").payload.rows = "junk"; }, /financial_bridge payload/u],
+    ["junk scenario payload", (next) => { next.artifacts.find((item) => item.kind === "scenario_set").payload.scenarios = []; }, /scenario_set payload/u],
+    ["invalid scenario observation", (next) => { next.artifacts.find((item) => item.kind === "scenario_set").payload.scenarios[0].driver_overrides[0].observation.unit = "USD"; }, /scenario_set payload/u],
+    ["junk judgment payload", (next) => { next.artifacts.find((item) => item.kind === "judgment_context").payload.operating_baseline_available = "yes"; }, /judgment_context payload/u],
+  ]) {
+    const next = structuredClone(workspace);
+    mutate(next);
+    assert.throws(() => assertModelWorkspace(next, { evidenceArtifact: expectedEvidence }), pattern, label);
+  }
+});
+
+test("model workspace requires exact typed memo reference envelopes", () => {
+  for (const mutate of [
+    (ref) => { delete ref.content_hash; },
+    (ref) => { ref.content_hash = "junk"; },
+    (ref) => { ref.artifact_kind = "driver_map"; },
+    (ref) => { ref.fabricated = true; },
+  ]) {
+    const { expectedEvidence, ...workspace } = modelWorkspace();
+    const ref = workspace.artifacts.find((artifact) => artifact.kind === "memo")
+      .payload.business_map_ref;
+    mutate(ref);
+    assert.throws(
+      () => assertModelWorkspace(workspace, { evidenceArtifact: expectedEvidence }),
+      /not-answerable memo contract/u,
+    );
+  }
+});
+
+test("model workspace requires exact lineage-bound derived observation provenance", () => {
+  const { expectedEvidence, ...workspace } = modelWorkspace();
+  const bridge = workspace.artifacts.find((artifact) => artifact.kind === "financial_bridge");
+  const memo = workspace.artifacts.find((artifact) => artifact.kind === "memo");
+  bridge.payload.rows[0].fcff = {
+    ...reportedObservation("fcff"),
+    state: "derived",
+    source_ref: {
+      kind: "artifact_computation",
+      artifact_refs: structuredClone(bridge.payload._lineage.artifact_refs),
+      market_snapshot_ids: structuredClone(bridge.payload._lineage.market_snapshot_ids),
+      equation_id: "financial_bridge.fcff.v1",
+    },
+  };
+  memo.payload.financial_bridge_ref.content_hash = canonicalArtifactPayloadHash(bridge.payload);
+  assert.strictEqual(
+    assertModelWorkspace(workspace, { evidenceArtifact: expectedEvidence }),
+    workspace,
+  );
+
+  for (const [label, mutate] of [
+    ["extra computation key", (source) => { source.fabricated = true; }],
+    ["missing equation", (source) => { delete source.equation_id; }],
+    ["wrong parent hash", (source) => { source.artifact_refs[0].content_hash = modelHash("f"); }],
+    ["wrong market lineage", (source) => { source.market_snapshot_ids = [modelUuid(97)]; }],
+  ]) {
+    const next = structuredClone(workspace);
+    const source = next.artifacts.find((artifact) => artifact.kind === "financial_bridge")
+      .payload.rows[0].fcff.source_ref;
+    mutate(source);
+    assert.throws(
+      () => assertModelWorkspace(next, { evidenceArtifact: expectedEvidence }),
+      /financial_bridge payload/u,
+      label,
+    );
+  }
+});
+
+test("model workspace binds every lineage parent and the final reviewed evidence head", () => {
+  const { expectedEvidence, ...workspace } = modelWorkspace();
+  for (const [label, mutate] of [
+    ["wrong lineage id", (next) => { next.artifacts.find((item) => item.kind === "business_map").payload._lineage.artifact_refs[0].artifact_id = modelUuid(99); }],
+    ["wrong lineage hash", (next) => { next.artifacts.find((item) => item.kind === "memo").payload._lineage.artifact_refs[0].content_hash = modelHash("f"); }],
+    ["wrong lineage order", (next) => { next.artifacts.find((item) => item.kind === "judgment_context").payload._lineage.artifact_refs.reverse(); }],
+  ]) {
+    const next = structuredClone(workspace);
+    mutate(next);
+    assert.throws(() => assertModelWorkspace(next, { evidenceArtifact: expectedEvidence }), /artifact lineage/u, label);
+  }
+  const wrongEvidence = structuredClone(expectedEvidence);
+  wrongEvidence.id = modelUuid(98);
+  assert.throws(
+    () => assertModelWorkspace(workspace, { evidenceArtifact: wrongEvidence }),
+    /reviewed evidence head/u,
+  );
+  assert.throws(() => assertModelWorkspace(workspace), /expected reviewed evidence/u);
+});
+
+test("model workspace validates full shared market bindings and governed model sources", () => {
+  for (const [label, mutate, pattern] of [
+    ["extra binding field", (next) => {
+      for (const artifact of next.artifacts.filter((item) => item.payload._lineage)) {
+        artifact.payload._lineage.market_snapshot_bindings[0].fabricated = true;
+      }
+    }, /artifact lineage/u],
+    ["bad binding hash", (next) => {
+      for (const artifact of next.artifacts.filter((item) => item.payload._lineage)) {
+        artifact.payload._lineage.market_snapshot_bindings[0].capture_content_hash = "junk";
+      }
+    }, /artifact lineage/u],
+    ["cross-artifact binding drift", (next) => {
+      next.artifacts.find((item) => item.kind === "driver_map")
+        .payload._lineage.market_snapshot_bindings[0].source_ref.source_locator = "drifted";
+    }, /artifact lineage/u],
+    ["consistent fabricated model source", (next) => {
+      const fabricated = {
+        raw_hash: modelHash("f"), source_locator: "fabricated", source_role: "third_party",
+        source_url: "https://attacker.invalid/source",
+      };
+      for (const artifact of next.artifacts.filter((item) => [
+        "business_map", "driver_map", "financial_bridge", "scenario_set", "judgment_context", "memo",
+      ].includes(item.kind))) artifact.source_refs.push(structuredClone(fabricated));
+    }, /model artifact source refs/u],
+  ]) {
+    const { expectedEvidence, ...workspace } = modelWorkspace();
+    mutate(workspace);
+    assert.throws(
+      () => assertModelWorkspace(workspace, { evidenceArtifact: expectedEvidence }),
+      pattern,
+      label,
+    );
+  }
+});
+
+test("model workspace rejects non-canonical evidence dates and decimals even when the expected head matches", () => {
+  for (const [label, mutate] of [
+    ["date", (evidence) => { evidence.payload.cutoff = "2026-08-30T00:00:00"; }],
+    ["decimal", (evidence) => { evidence.payload.facts[0].observation.value = "NaN"; }],
+  ]) {
+    const { expectedEvidence, ...workspace } = modelWorkspace();
+    const evidence = workspace.artifacts.find((artifact) => artifact.kind === "evidence_index");
+    mutate(evidence);
+    mutate(expectedEvidence);
+    assert.throws(
+      () => assertModelWorkspace(workspace, { evidenceArtifact: expectedEvidence }),
+      /reviewed evidence head|evidence_index payload/u,
+      label,
+    );
+  }
 });
 
 test("traffic audit retains only local API method, path, and status metadata", () => {
@@ -170,6 +518,46 @@ test("traffic audit enforces exact singleton request cardinality", () => {
   assert.equal(audit.requestCount("POST", pathname), 2);
 });
 
+test("pending observers expose late duplicate writes only after a bounded drain", async () => {
+  assert.equal(typeof supportModule.createPendingObserverTracker, "function");
+  const pathname = "/api/underwriting/v1/product/company-research/initializations";
+  const audit = createTrafficAudit("http://127.0.0.1:42000");
+  const observers = supportModule.createPendingObserverTracker();
+  audit.recordRequest("POST", `http://127.0.0.1:42000${pathname}`);
+  assert.doesNotThrow(() => audit.assertSingleton("POST", pathname));
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  observers.track(async () => {
+    await gate;
+    audit.recordRequest("POST", `http://127.0.0.1:42000${pathname}`);
+  });
+  release();
+  await observers.drain({ timeoutMs: 100 });
+  assert.throws(() => audit.assertSingleton("POST", pathname), /saw 2/u);
+});
+
+test("pending observer drain is bounded and reports parse failure without body diagnostics", async () => {
+  assert.equal(typeof supportModule.createPendingObserverTracker, "function");
+  const observers = supportModule.createPendingObserverTracker();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  observers.track(async () => {
+    await gate;
+    throw new Error("secret response body must not escape");
+  });
+  const draining = observers.drain({ timeoutMs: 100 });
+  release();
+  await assert.rejects(draining, (error) => {
+    assert.match(error.message, /pending browser observer failed/u);
+    assert.equal(error.message.includes("secret response body"), false);
+    return true;
+  });
+
+  const stalled = supportModule.createPendingObserverTracker();
+  stalled.track(() => new Promise(() => {}));
+  await assert.rejects(stalled.drain({ timeoutMs: 10 }), /pending browser observer drain timed out/u);
+});
+
 test("traffic audit authorizes only exact local HTTP and WebSocket origins before send", () => {
   const audit = createTrafficAudit("http://127.0.0.1:42000");
   assert.doesNotThrow(() => audit.assertAllowedRequest("http://127.0.0.1:42000/research/new"));
@@ -198,57 +586,108 @@ test("browser failure collector drains failures recorded after an earlier clean 
   assert.throws(() => failures.throwIfAny(), /late sanitized browser failure/u);
 });
 
-test("review successor advances exactly one fact and one version", () => {
-  const before = { schema_version: "underwriting.v1", id: "e1", project_id: "p1", kind: "evidence_index", version: 1, source_refs: [{ source_role: "filing" }], payload: { facts: [
-    { fact_key: "a", metric_key: "revenue", review_decision: null },
-    { fact_key: "b", metric_key: "margin", review_decision: null },
-  ] } };
-  const after = { ...before, id: "e2", version: 2, payload: { facts: [
-    { fact_key: "a", metric_key: "revenue", review_decision: "confirmed" },
-    { fact_key: "b", metric_key: "margin", review_decision: null },
-  ] } };
+function reviewArtifacts() {
+  const evidence = modelWorkspace().expectedEvidence;
+  const before = structuredClone(evidence);
+  before.id = modelUuid(30);
+  before.version = 7;
+  before.input_hash = modelHash("1");
+  before.content_hash = modelHash("2");
+  delete before.payload.facts[0].review_decision;
+  const second = structuredClone(before.payload.facts[0]);
+  second.fact_key = "alphabet.margin.2025";
+  second.metric_key = "company.margin";
+  second.observation.key = "company.margin";
+  second.observation.source_ref.fact_key = second.fact_key;
+  before.payload.facts.push(second);
+  const after = structuredClone(before);
+  after.id = modelUuid(31);
+  after.version = 8;
+  after.payload.facts[0].review_decision = "confirmed";
+  after.input_hash = canonicalPayloadHash({
+    parent: before.content_hash,
+    fact_key: before.payload.facts[0].fact_key,
+    decision: "confirmed",
+  });
+  after.content_hash = modelHash("4");
+  return { before, after };
+}
 
-  assert.strictEqual(assertExactReviewSuccessor(before, after, "a"), after);
-  assert.throws(() => assertExactReviewSuccessor(before, { ...after, id: before.id }, "a"), /identity/u);
-  assert.throws(() => assertExactReviewSuccessor(before, { ...after, version: 3 }, "a"), /version/u);
+test("review successor advances exactly one fact and one version", () => {
+  const { before, after } = reviewArtifacts();
+  const factKey = before.payload.facts[0].fact_key;
+
+  assert.strictEqual(assertExactReviewSuccessor(before, after, factKey), after);
+  assert.throws(() => assertExactReviewSuccessor(before, { ...after, id: before.id }, factKey), /identity/u);
+  assert.throws(() => assertExactReviewSuccessor(before, { ...after, version: 9 }, factKey), /version/u);
   assert.throws(() => assertExactReviewSuccessor(before, {
     ...after,
     payload: { facts: after.payload.facts.map((fact) => ({ ...fact, review_decision: "confirmed" })) },
-  }, "a"), /unrelated fact/u);
+  }, factKey), /unrelated fact|fact payload/u);
   for (const [field, value] of [
     ["schema_version", "underwriting.v2"],
-    ["project_id", "p2"],
+    ["project_id", modelUuid(90)],
     ["kind", "research_gaps"],
-    ["source_refs", [{ source_role: "company_material" }]],
+    ["source_refs", [{ ...modelSourceRef(), source_role: "company_material" }]],
   ]) {
     assert.throws(
-      () => assertExactReviewSuccessor(before, { ...after, [field]: value }, "a"),
+      () => assertExactReviewSuccessor(before, { ...after, [field]: value }, factKey),
       new RegExp(field.replace("_", " "), "u"),
     );
   }
 });
 
 test("review successor preserves exact fact cardinality, identities, and contents", () => {
-  const before = { schema_version: "underwriting.v1", id: "e1", project_id: "p1", kind: "evidence_index", version: 7, source_refs: [], payload: { facts: [
-    { fact_key: "a", metric_key: "revenue", review_decision: null },
-    { fact_key: "b", metric_key: "margin", review_decision: "rejected" },
-  ] } };
-  const validAfter = { ...before, id: "e2", version: 8, payload: { facts: [
-    { fact_key: "a", metric_key: "revenue", review_decision: "confirmed" },
-    { fact_key: "b", metric_key: "margin", review_decision: "rejected" },
-  ] } };
+  const { before, after: validAfter } = reviewArtifacts();
+  const factKey = before.payload.facts[0].fact_key;
 
   for (const invalidAfter of [
     { ...validAfter, payload: { facts: validAfter.payload.facts.slice(0, 1) } },
-    { ...validAfter, payload: { facts: [...validAfter.payload.facts, { fact_key: "c", review_decision: null }] } },
-    { ...validAfter, payload: { facts: [validAfter.payload.facts[0], { ...validAfter.payload.facts[1], fact_key: "a" }] } },
+    { ...validAfter, payload: { facts: [...validAfter.payload.facts, structuredClone(validAfter.payload.facts[1])] } },
+    { ...validAfter, payload: { facts: [validAfter.payload.facts[0], { ...validAfter.payload.facts[1], fact_key: factKey }] } },
     { ...validAfter, payload: { facts: [validAfter.payload.facts[0], { ...validAfter.payload.facts[1], metric_key: "changed" }] } },
     { ...validAfter, payload: { facts: [...validAfter.payload.facts].reverse() } },
     { ...validAfter, payload: { ...validAfter.payload, unrelated: "drift" } },
   ]) {
-    assert.throws(() => assertExactReviewSuccessor(before, invalidAfter, "a"), /fact|unrelated/u);
+    assert.throws(() => assertExactReviewSuccessor(before, invalidAfter, factKey), /fact|unrelated/u);
   }
   assert.throws(() => assertExactReviewSuccessor(before, validAfter, "missing"), /reviewed fact/u);
+});
+
+test("review successor requires the exact authenticated artifact envelope and new hashes", () => {
+  const { before, after } = reviewArtifacts();
+  const factKey = before.payload.facts[0].fact_key;
+  for (const [label, mutate, pattern] of [
+    ["extra key", (next) => { next.untrusted = true; }, /review artifact envelope/u],
+    ["invalid id", (next) => { next.id = "successor"; }, /review artifact identity/u],
+    ["missing input hash", (next) => { delete next.input_hash; }, /review artifact envelope/u],
+    ["bad content hash", (next) => { next.content_hash = "junk"; }, /review artifact hash/u],
+    ["stable input hash", (next) => { next.input_hash = before.input_hash; }, /input hash/u],
+    ["stable content hash", (next) => { next.content_hash = before.content_hash; }, /content hash/u],
+    ["fresh but incorrect input hash", (next) => { next.input_hash = modelHash("5"); }, /input hash/u],
+    ["source ref extra key", (next) => { next.source_refs[0].extra = true; }, /source refs/u],
+  ]) {
+    const next = structuredClone(after);
+    mutate(next);
+    assert.throws(() => assertExactReviewSuccessor(before, next, factKey), pattern, label);
+  }
+});
+
+test("authenticated artifact binding compares the complete reviewed head", () => {
+  assert.equal(typeof supportModule.assertSameArtifactHead, "function");
+  const { after } = reviewArtifacts();
+  assert.strictEqual(supportModule.assertSameArtifactHead(after, structuredClone(after)), after);
+  for (const [label, mutate] of [
+    ["id", (next) => { next.id = modelUuid(77); }],
+    ["input hash", (next) => { next.input_hash = modelHash("8"); }],
+    ["content hash", (next) => { next.content_hash = modelHash("9"); }],
+    ["source refs", (next) => { next.source_refs[0].source_locator = "different"; }],
+    ["payload", (next) => { next.payload.facts[0].metric_key = "different"; }],
+  ]) {
+    const next = structuredClone(after);
+    mutate(next);
+    assert.throws(() => supportModule.assertSameArtifactHead(after, next), /artifact head mismatch/u, label);
+  }
 });
 
 test("Alphabet binding validates every expected foundation security identity", () => {
@@ -1066,6 +1505,21 @@ test("stopOwnedProcess exposes no mutable child lifecycle capability", async () 
     if (!sleeper.exited) process.kill(sleeper.child.pid, "SIGKILL");
   }
   assert.doesNotThrow(() => assertProcessesRunning([sleeper]));
+});
+
+test("intentional worker stop rejects an already-exited worker before marking it expected", async () => {
+  assert.equal(typeof supportModule.assertProcessRunningBeforeIntentionalStop, "function");
+  const worker = startOwnedProcess(process.execPath, ["-e", "process.exit(7)"], {
+    cwd: process.cwd(), env: { PATH: process.env.PATH ?? "" }, name: "company-research-worker",
+  });
+  await waitForProcessExit(worker);
+  assert.equal(worker.expectedStop, false);
+  assert.throws(
+    () => supportModule.assertProcessRunningBeforeIntentionalStop(worker),
+    /company-research-worker exited with 7/u,
+  );
+  assert.equal(worker.expectedStop, false);
+  await stopOwnedProcess(worker);
 });
 
 test("supervision fails closed for spawn errors and signal-only exits", async () => {
