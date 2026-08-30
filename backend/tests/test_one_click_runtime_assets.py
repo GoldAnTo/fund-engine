@@ -63,6 +63,14 @@ def test_compose_applies_the_low_resource_profile_without_exposing_database_to_f
     compose = (ROOT / "docker-compose.one-click.yml").read_text()
     environment = (ROOT / ".env.one-click.example").read_text()
     frontend = compose[compose.index("  frontend:\n") : compose.index("\nvolumes:\n")]
+    environment_values: dict[str, str] = {}
+    for line in environment.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, value = line.split("=", 1)
+        assert name not in environment_values
+        environment_values[name] = value
 
     for name, value in (
         ("DATABASE_POOL_SIZE", "2"),
@@ -71,12 +79,14 @@ def test_compose_applies_the_low_resource_profile_without_exposing_database_to_f
         ("DATABASE_POOL_RECYCLE_SECONDS", "300"),
     ):
         assert f"{name}: ${{{name}:-{value}}}" in compose
-        assert f"{name}={value}" in environment
+        assert environment_values[name] == value
 
     service_slices = {
         service: compose[compose.index(f"  {service}:\n") : compose.index(f"\n  {next_service}:\n")]
         for service, next_service in (
             ("postgres", "migrate"),
+            ("migrate", "file-store-init"),
+            ("file-store-init", "api"),
             ("api", "research-worker"),
             ("research-worker", "acquisition-worker"),
             ("acquisition-worker", "company-research-worker"),
@@ -84,6 +94,11 @@ def test_compose_applies_the_low_resource_profile_without_exposing_database_to_f
         )
     }
     service_slices["frontend"] = frontend
+
+    for service in ("api", "research-worker", "acquisition-worker", "company-research-worker"):
+        assert "<<: *database-pool-environment" in service_slices[service]
+    for service in ("postgres", "migrate", "file-store-init", "frontend"):
+        assert "<<: *database-pool-environment" not in service_slices[service]
 
     for service, name, value in (
         ("postgres", "ONE_CLICK_POSTGRES_MEMORY_LIMIT", "1536m"),
@@ -94,7 +109,7 @@ def test_compose_applies_the_low_resource_profile_without_exposing_database_to_f
         ("frontend", "ONE_CLICK_FRONTEND_MEMORY_LIMIT", "256m"),
     ):
         assert f"mem_limit: ${{{name}:-{value}}}" in service_slices[service]
-        assert f"{name}={value}" in environment
+        assert environment_values[name] == value
 
     for service, name, value in (
         ("postgres", "ONE_CLICK_POSTGRES_CPU_LIMIT", "1.5"),
@@ -105,7 +120,9 @@ def test_compose_applies_the_low_resource_profile_without_exposing_database_to_f
         ("frontend", "ONE_CLICK_FRONTEND_CPU_LIMIT", "0.5"),
     ):
         assert f"cpus: ${{{name}:-{value}}}" in service_slices[service]
-        assert f"{name}={value}" in environment
+        assert environment_values[name] == value
+
+    assert environment_values["ONE_CLICK_ACQUISITION_REPLICAS"] == "1"
 
     assert "DATABASE_POOL_SIZE" not in frontend
     assert "DATABASE_URL" not in frontend
