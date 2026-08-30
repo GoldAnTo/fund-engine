@@ -90,11 +90,13 @@ function appendBoundedBuffer(buffer, chunk) {
 }
 
 function decodeBoundedUtf8(buffer) {
-  for (let end = buffer.length; end >= 0; end -= 1) {
-    try {
-      return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, end));
-    } catch {
-      // Drop only an incomplete trailing code point from a bounded stream.
+  for (let start = 0; start <= buffer.length; start += 1) {
+    for (let end = buffer.length; end >= start; end -= 1) {
+      try {
+        return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(start, end));
+      } catch {
+        // Keep searching for the largest complete UTF-8 interior.
+      }
     }
   }
   return "";
@@ -464,7 +466,7 @@ export async function stopOwnedProcess(owned) {
   return authority.stopPromise;
 }
 
-async function stopOwnedProcessImpl(authority) {
+async function stopOwnedProcessImpl(authority, wait = waitForExit) {
   authority.expectedStop = true;
   if (authority.exited) return;
 
@@ -476,7 +478,7 @@ async function stopOwnedProcessImpl(authority) {
     if (error?.code === "ESRCH" && authority.exited) return;
     throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} failed to send SIGTERM: ${boundedDiagnostic(error?.message ?? error, MAX_DIAGNOSTIC_FIELD_BYTES)}`);
   }
-  await waitForExit(authority, STOP_TIMEOUT_MS);
+  await wait(authority, STOP_TIMEOUT_MS);
   if (authority.exited) return;
   try {
     if (!authority.kill("SIGKILL")) {
@@ -486,9 +488,13 @@ async function stopOwnedProcessImpl(authority) {
     if (error?.code === "ESRCH" && authority.exited) return;
     throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} failed to send SIGKILL: ${boundedDiagnostic(error?.message ?? error, MAX_DIAGNOSTIC_FIELD_BYTES)}`);
   }
-  if (!await waitForExit(authority, STOP_TIMEOUT_MS)) {
+  if (!await wait(authority, STOP_TIMEOUT_MS)) {
     throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} did not exit after SIGKILL within ${STOP_TIMEOUT_MS}ms`);
   }
+}
+
+export async function __testOnlyStopAuthority(authority, wait = waitForExit) {
+  return stopOwnedProcessImpl(authority, wait);
 }
 
 export async function waitUntil(probe, { label, timeoutMs, intervalMs = 100, processes = [] }) {

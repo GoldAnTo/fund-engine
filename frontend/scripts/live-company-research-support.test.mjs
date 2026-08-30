@@ -6,6 +6,7 @@ import test from "node:test";
 import path from "node:path";
 
 import {
+  __testOnlyStopAuthority,
   assertLoopbackUrl,
   assertProcessesRunning,
   assertWorkspace,
@@ -18,6 +19,17 @@ import {
   stopOwnedProcess,
   waitUntil,
 } from "./live-company-research-support.mjs";
+
+function fakeStopAuthority(outcomes) {
+  const signals = [];
+  return {
+    authority: { name: "fake", expectedStop: false, exited: false, kill: (signal) => {
+      signals.push(signal);
+      return outcomes.shift();
+    } },
+    signals,
+  };
+}
 
 const TEST_PYTHON = execFileSync("which", ["python3"], { encoding: "utf8" }).trim();
 const TEST_CLEANUP_HELPER = Object.freeze({
@@ -269,12 +281,13 @@ test("stalled fd-relative cleanup helper is terminated without deleting a replac
 test("helper subprocess diagnostics preserve UTF-8 code points at the bound", async () => {
   const helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-unicode-helper-"));
   const helperPath = path.join(helperDirectory, "cleanup.py");
-  await writeFile(helperPath, "import sys\nif sys.argv[1:] == ['--self-test']: raise SystemExit(0)\nsys.stderr.write('火' * 10000)\nraise SystemExit(1)\n");
+  await writeFile(helperPath, "import sys\nif sys.argv[1:] == ['--self-test']: raise SystemExit(0)\nsys.stderr.write('火' * 1000)\nraise SystemExit(1)\n");
   const runtime = await createPrivateRuntime({ cleanupHelper: { pythonExecutable: TEST_PYTHON, helperPath } });
   try {
     await assert.rejects(removePrivateRuntime(runtime), (error) => {
       assert.equal(error.message.includes("\uFFFD"), false);
       assert.ok(Buffer.byteLength(error.message) <= 16_384);
+      assert.equal(error.message.includes("火"), true);
       return true;
     });
   } finally {
@@ -730,4 +743,22 @@ test("stopOwnedProcess escalates a SIGTERM-ignoring child to SIGKILL", async () 
   await stopOwnedProcess(sleeper);
   assert.ok(Date.now() - started >= 4_500);
   assert.equal(sleeper.child.signalCode, "SIGKILL");
+});
+
+test("SIGTERM refusal stops without delayed signals", async () => {
+  const { authority, signals } = fakeStopAuthority([false]);
+  await assert.rejects(__testOnlyStopAuthority(authority, async () => false), /refused SIGTERM/);
+  assert.deepEqual(signals, ["SIGTERM"]);
+});
+
+test("SIGKILL refusal stops without delayed signals", async () => {
+  const { authority, signals } = fakeStopAuthority([true, false]);
+  await assert.rejects(__testOnlyStopAuthority(authority, async () => false), /refused SIGKILL/);
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
+test("post-SIGKILL timeout stops without delayed signals", async () => {
+  const { authority, signals } = fakeStopAuthority([true, true]);
+  await assert.rejects(__testOnlyStopAuthority(authority, async () => false), /did not exit after SIGKILL/);
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
 });
