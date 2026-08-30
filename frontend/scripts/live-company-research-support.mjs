@@ -89,6 +89,17 @@ function appendBoundedBuffer(buffer, chunk) {
   return combined.length > MAX_LOG_BYTES ? combined.subarray(-MAX_LOG_BYTES) : combined;
 }
 
+function decodeBoundedUtf8(buffer) {
+  for (let end = buffer.length; end >= 0; end -= 1) {
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, end));
+    } catch {
+      // Drop only an incomplete trailing code point from a bounded stream.
+    }
+  }
+  return "";
+}
+
 function hasFileIdentity(current, expected) {
   return current.isFile() && !current.isSymbolicLink()
     && current.dev === expected.dev && current.ino === expected.ino
@@ -129,7 +140,7 @@ function runBoundedExactProcess(command, args, options, failureLabel, timeoutMs)
       }
     };
     const finishTimeout = () => fail(new Error(boundedDiagnostic(
-      `${failureLabel} timed out: ${stderr.toString("utf8") || stdout.toString("utf8")}`,
+      `${failureLabel} timed out: ${decodeBoundedUtf8(stderr) || decodeBoundedUtf8(stdout)}`,
     )));
     child.stdout?.on("data", (chunk) => { stdout = appendBoundedBuffer(stdout, chunk); });
     child.stderr?.on("data", (chunk) => { stderr = appendBoundedBuffer(stderr, chunk); });
@@ -141,7 +152,7 @@ function runBoundedExactProcess(command, args, options, failureLabel, timeoutMs)
       if (timedOut) reject(new Error(boundedDiagnostic(`${failureLabel} timed out`)));
       else if (code === 0) resolve({ stdout, stderr });
       else reject(new Error(boundedDiagnostic(
-        `${failureLabel} exited with ${code ?? signal ?? "unknown"}: ${stderr.toString("utf8") || stdout.toString("utf8")}`,
+        `${failureLabel} exited with ${code ?? signal ?? "unknown"}: ${decodeBoundedUtf8(stderr) || decodeBoundedUtf8(stdout)}`,
       )));
     });
     termTimer = setTimeout(() => {

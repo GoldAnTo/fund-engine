@@ -212,6 +212,11 @@ test("createPrivateRuntime validates helper execution before quarantining a runt
     assert.equal(await readFile(`${runtime.directory}/sentinel`, "utf8"), "owned");
   } finally {
     await rm(runtime.directory, { recursive: true, force: true });
+    for (const entry of await readdir(runtime.parent)) {
+      if (entry.startsWith(`.${path.basename(runtime.directory)}.cleanup-`)) {
+        await rm(path.join(runtime.parent, entry), { recursive: true, force: true });
+      }
+    }
     await rm(helperDirectory, { recursive: true, force: true });
   }
 });
@@ -245,15 +250,35 @@ test("stalled fd-relative cleanup helper is terminated without deleting a replac
   const runtime = await createPrivateRuntime({
     cleanupHelper: { pythonExecutable: TEST_PYTHON, helperPath, timeoutMs: 100 },
   });
+  const sentinel = `${runtime.directory}/sentinel`;
+  await writeFile(sentinel, "preserve");
   let quarantine;
   try {
     await assert.rejects(removePrivateRuntime(runtime), /cleanup helper timed out/);
     quarantine = (await readdir(runtime.parent)).find((entry) =>
       entry.startsWith(`.${path.basename(runtime.directory)}.cleanup-`));
     assert.ok(quarantine);
+    assert.equal(await readFile(path.join(runtime.parent, quarantine, "sentinel"), "utf8"), "preserve");
   } finally {
     await rm(runtime.directory, { recursive: true, force: true });
     if (quarantine) await rm(path.join(runtime.parent, quarantine), { recursive: true, force: true });
+    await rm(helperDirectory, { recursive: true, force: true });
+  }
+});
+
+test("helper subprocess diagnostics preserve UTF-8 code points at the bound", async () => {
+  const helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-unicode-helper-"));
+  const helperPath = path.join(helperDirectory, "cleanup.py");
+  await writeFile(helperPath, "import sys\nif sys.argv[1:] == ['--self-test']: raise SystemExit(0)\nsys.stderr.write('火' * 10000)\nraise SystemExit(1)\n");
+  const runtime = await createPrivateRuntime({ cleanupHelper: { pythonExecutable: TEST_PYTHON, helperPath } });
+  try {
+    await assert.rejects(removePrivateRuntime(runtime), (error) => {
+      assert.equal(error.message.includes("\uFFFD"), false);
+      assert.ok(Buffer.byteLength(error.message) <= 16_384);
+      return true;
+    });
+  } finally {
+    await rm(runtime.directory, { recursive: true, force: true });
     await rm(helperDirectory, { recursive: true, force: true });
   }
 });
