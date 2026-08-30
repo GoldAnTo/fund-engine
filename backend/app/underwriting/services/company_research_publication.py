@@ -215,6 +215,7 @@ class _AuthenticatedPublication:
     machine_or_confirmed_memo: CompanyResearchArtifactVersion
     decoded_memo: CompanyResearchMemoArtifact
     source_contract: CompanyResearchEvidenceCompilation
+    legacy_request_cutoff_at: datetime | None
 
 
 class CompanyResearchPublicationService:
@@ -385,7 +386,7 @@ class CompanyResearchPublicationService:
         state: CompanyResearchPublicationState,
         *,
         source_contract: CompanyResearchEvidenceCompilation,
-    ) -> None:
+    ) -> datetime | None:
         evidence = state.artifact_heads["evidence_index"]
         cutoff = self._repository.evidence_cutoff(evidence)
         project_created_at = self._stored_utc(
@@ -520,6 +521,7 @@ class CompanyResearchPublicationService:
             raise CompanyResearchIntegrityError(
                 "company research historical foundation boundary is invalid"
             )
+        return authenticated_legacy_request_cutoff
 
     def _authenticate_workspace_model(
         self, state: CompanyResearchPublicationState, *, lock: bool
@@ -694,7 +696,7 @@ class CompanyResearchPublicationService:
                 "company research judgment review job is invalid"
             )
         source_contract = self._authenticate_evidence(state)
-        self._authenticate_identity_foundation_and_basis(
+        legacy_request_cutoff_at = self._authenticate_identity_foundation_and_basis(
             state, source_contract=source_contract
         )
         workspace = self._authenticate_workspace_model(state, lock=lock)
@@ -715,6 +717,7 @@ class CompanyResearchPublicationService:
             machine_or_confirmed_memo=memo,
             decoded_memo=decoded,
             source_contract=source_contract,
+            legacy_request_cutoff_at=legacy_request_cutoff_at,
         )
 
     def _validate_model_claim_audit(
@@ -723,22 +726,25 @@ class CompanyResearchPublicationService:
         state: CompanyResearchPublicationState,
         machine_memo: CompanyResearchArtifactVersion,
         claim: CompanyResearchEvent,
+        allow_legacy_completion_delay: bool,
     ) -> None:
+        claim_time = self._stored_utc(
+            claim.created_at, "company research model claim created_at"
+        )
+        model_time = self._stored_utc(
+            machine_memo.created_at,
+            "company research machine memo created_at",
+        )
         if (
             claim.event_type != "model_stage_claimed"
             or claim.payload != {"stage": "model_bundle", "attempt": state.job.attempt}
-            or self._stored_utc(
-                claim.created_at, "company research model claim created_at"
-            )
+            or claim_time
             != self._stored_utc(
                 state.job.started_at, "company research model job started_at"
             )
-            or self._stored_utc(
-                machine_memo.created_at,
-                "company research machine memo created_at",
-            )
-            != self._stored_utc(
-                claim.created_at, "company research model claim created_at"
+            or (
+                model_time != claim_time
+                and not (allow_legacy_completion_delay and claim_time < model_time)
             )
         ):
             raise CompanyResearchIntegrityError(
@@ -802,6 +808,9 @@ class CompanyResearchPublicationService:
             state=state,
             machine_memo=authenticated.machine_or_confirmed_memo,
             claim=state.events[-1],
+            allow_legacy_completion_delay=(
+                authenticated.legacy_request_cutoff_at is not None
+            ),
         )
         self._validate_model_bundle_chronology(
             state=state,
@@ -911,6 +920,9 @@ class CompanyResearchPublicationService:
             state=state,
             machine_memo=machine_memo,
             claim=state.events[event.sequence - 2],
+            allow_legacy_completion_delay=(
+                authenticated.legacy_request_cutoff_at is not None
+            ),
         )
         self._validate_model_bundle_chronology(
             state=state,

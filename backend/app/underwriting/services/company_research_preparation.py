@@ -95,6 +95,7 @@ class CompanyResearchClaim:
     request_hash: str
     strategy_version: str
     step: str
+    claimed_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +276,7 @@ class CompanyResearchPreparationWorker:
                     request_hash=preparation.request_hash,
                     strategy_version=preparation.strategy_version,
                     step=stage,
+                    claimed_at=now,
                 )
         return None
 
@@ -942,7 +944,7 @@ class CompanyResearchPreparationWorker:
                 self._repository.complete_model_bundle(
                     claim.preparation_id,
                     bundle=bundle,
-                    created_at=self._utcnow(),
+                    created_at=claim.claimed_at,
                     expected_claim_token=claim.claim_token,
                     expected_request_hash=claim.request_hash,
                     expected_strategy_version=claim.strategy_version,

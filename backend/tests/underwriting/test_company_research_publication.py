@@ -94,7 +94,7 @@ def test_company_research_publication_service_is_the_public_confirmation_seam() 
     )
 
 
-def _awaiting_judgment_confirmation(session):
+def _awaiting_judgment_confirmation(session, *, model_now=None):
     initialized = _prepared(session)
     workbench = CompanyResearchWorkbench(session, now=lambda: NOW)
     workspace = workbench.workspace(project_id=initialized.project.id)
@@ -114,7 +114,9 @@ def _awaiting_judgment_confirmation(session):
             expected_head_id=current.id,
         ).evidence_artifact
 
-    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    worker = CompanyResearchPreparationWorker(
+        session, now=model_now if model_now is not None else lambda: NOW
+    )
     claim = worker.claim_next()
     assert claim is not None and claim.step == "model_bundle"
     assert worker.run_claim(claim) == "awaiting_judgment_review"
@@ -131,6 +133,24 @@ def _awaiting_judgment_confirmation(session):
     memo = repository.current_artifact(initialized.project.id, "memo")
     assert job is not None and draft is not None and memo is not None
     return initialized, repository, preparation, job, draft, memo
+
+
+def test_model_worker_anchors_the_bundle_to_its_durable_claim_time(session) -> None:
+    tick = 0
+
+    def advancing_clock():
+        nonlocal tick
+        tick += 1
+        return NOW + timedelta(milliseconds=tick)
+
+    initialized, repository, preparation, _job, _draft, memo = (
+        _awaiting_judgment_confirmation(session, model_now=advancing_clock)
+    )
+    model_claim = repository.events(preparation.id)[-1]
+
+    assert model_claim.event_type == "model_stage_claimed"
+    assert memo.created_at == model_claim.created_at
+    assert initialized.project.id == memo.project_id
 
 
 def _job_projection(job: Job) -> tuple[object, ...]:
@@ -2135,12 +2155,20 @@ def test_confirmation_authenticates_a_legacy_request_cutoff_after_evidence_cutof
     CompanyResearchPreparationService(
         session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=2)
     ).retry(project_id=initialized.project.id)
-    worker = CompanyResearchPreparationWorker(
-        session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=3)
-    )
+    tick = 0
+
+    def advancing_model_clock():
+        nonlocal tick
+        tick += 1
+        return LEGACY_PREPARATION_CREATED + timedelta(seconds=3, milliseconds=tick)
+
+    worker = CompanyResearchPreparationWorker(session, now=advancing_model_clock)
     claim = worker.claim_next()
     assert claim is not None and claim.step == "model_bundle"
-    assert worker.run_claim(claim) == "awaiting_judgment_review"
+    legacy_claim = replace(
+        claim, claimed_at=claim.claimed_at + timedelta(milliseconds=250)
+    )
+    assert worker.run_claim(legacy_claim) == "awaiting_judgment_review"
     draft = WorkspaceDraftService(
         session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=3)
     ).read(initialized.project.id)
@@ -2148,6 +2176,11 @@ def test_confirmation_authenticates_a_legacy_request_cutoff_after_evidence_cutof
         initialized.project.id, "memo"
     )
     assert draft is not None and machine_memo is not None
+    model_claim = CompanyResearchRepository(session).events(initialized.preparation.id)[
+        -1
+    ]
+    assert model_claim.event_type == "model_stage_claimed"
+    assert machine_memo.created_at > model_claim.created_at
     expected_lock_version = draft.lock_version
 
     result = CompanyResearchPublicationService(
