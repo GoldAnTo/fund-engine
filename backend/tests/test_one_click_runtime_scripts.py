@@ -687,6 +687,24 @@ def test_readme_documents_the_local_one_click_runtime_without_secrets() -> None:
     assert "`.env`" in readme
     assert "不会打印密钥" in readme
     assert "旧版 PostgreSQL 和 Keycloak" in readme
+    for text in (
+        "ONE_CLICK_ACQUISITION_REPLICAS=1",
+        "默认只启动一个资料采集 worker",
+        "适合 16 GiB Mac",
+        "Docker Desktop 分配约 8 GiB",
+        "Docker Desktop 至少分配 6 GiB",
+        "停止旧服务前",
+        "允许值为 1–4",
+        "scripts/verify-one-click-runtime.sh --stability-seconds 600",
+        "DATABASE_POOL_SIZE",
+        "DATABASE_MAX_OVERFLOW",
+        "DATABASE_POOL_TIMEOUT_SECONDS",
+        "DATABASE_POOL_RECYCLE_SECONDS",
+        "高级本地调优",
+        ".env.one-click.example",
+        "资源上限",
+    ):
+        assert text in readme
 
 
 def test_init_generates_private_local_credentials_without_echoing_them(tmp_path: Path) -> None:

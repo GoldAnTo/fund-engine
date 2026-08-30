@@ -655,11 +655,12 @@ def test_up_refuses_foreign_postgres_volume_before_start_or_legacy_stop(
         "  *' config -q'*) exit 0 ;;\n"
         "  *' build'*) exit 0 ;;\n"
         "esac\n"
+        'if [[ "$*" == "info --format {{.MemTotal}}" ]]; then printf \'8589934592\\n\'; exit 0; fi\n'
         'if [[ "$1 $2" == "volume inspect" && "${!#}" == "expected-db" ]]; then\n'
         "  printf '%s\\n' 'expected-db|foreign-project|fund-engine-one-click-data|||'\n"
         "  exit 0\n"
         "fi\n"
-        "exit 0\n"
+        "exit 64\n"
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
 
@@ -700,14 +701,24 @@ def test_up_creates_and_validates_fresh_postgres_volume_before_full_start(
         "  *' config -q'*) exit 0 ;;\n"
         "  *' build'*) exit 0 ;;\n"
         "  *' create postgres'*) : > \"$VOLUME_STATE\"; exit 0 ;;\n"
+        "  *' stop api research-worker acquisition-worker company-research-worker frontend'*) exit 0 ;;\n"
         "  *' up -d --no-build'*) exit 0 ;;\n"
         "esac\n"
+        'if [[ "$*" == "info --format {{.MemTotal}}" ]]; then printf \'8589934592\\n\'; exit 0; fi\n'
         'if [[ "$1 $2" == "volume inspect" && "${!#}" == "fresh-db" ]]; then\n'
         "  if [[ ! -e \"$VOLUME_STATE\" ]]; then printf 'No such volume: fresh-db\\n' >&2; exit 1; fi\n"
         "  printf '%s\\n' 'fresh-db|fresh-project|fund-engine-one-click-data|||'\n"
         "  exit 0\n"
         "fi\n"
-        "exit 0\n"
+        'if [[ "$*" == "volume ls --quiet" ]]; then exit 0; fi\n'
+        'case "$*" in\n'
+        '  "ps -q --filter label=com.docker.compose.project=fund-engine-event --filter label=com.docker.compose.service=api") exit 0 ;;\n'
+        '  "ps -q --filter label=com.docker.compose.project=fund-engine-event --filter label=com.docker.compose.service=frontend") exit 0 ;;\n'
+        '  "ps -q --filter label=com.docker.compose.project=fund-engine-event --filter label=com.docker.compose.service=research-worker") exit 0 ;;\n'
+        '  "ps -q --filter label=com.docker.compose.project=fund-engine-event --filter label=com.docker.compose.service=acquisition-worker") exit 0 ;;\n'
+        '  "ps -q --filter label=com.docker.compose.project=fund-engine-event --filter label=com.docker.compose.service=scheduler") exit 0 ;;\n'
+        "esac\n"
+        "exit 64\n"
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
 
@@ -756,9 +767,10 @@ def test_up_fails_closed_when_postgres_volume_inspection_is_uncertain(
         "  *' config -q'*) exit 0 ;;\n"
         "  *' build'*) exit 0 ;;\n"
         "esac\n"
+        'if [[ "$*" == "info --format {{.MemTotal}}" ]]; then printf \'8589934592\\n\'; exit 0; fi\n'
         'if [[ "$1 ${2:-}" == "volume inspect" ]]; then printf \'daemon timeout\\n\' >&2; exit 71; fi\n'
-        'if [[ "$1" == "info" ]]; then exit 0; fi\n'
-        "exit 0\n"
+        'if [[ "$*" == "info" ]]; then exit 0; fi\n'
+        "exit 64\n"
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
 

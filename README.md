@@ -94,6 +94,26 @@ scripts/one-click-runtime.sh up
 scripts/verify-one-click-runtime.sh
 ```
 
+默认只启动一个资料采集 worker，适合 16 GiB Mac、Docker Desktop 分配约 8 GiB
+的本地环境。Docker Desktop 至少分配 6 GiB；不足时 `up` 会在停止旧服务前失败关闭。
+
+需要提高采集吞吐时，编辑受保护的 `.env.one-click.local`：
+
+```dotenv
+ONE_CLICK_ACQUISITION_REPLICAS=1
+```
+
+允许值为 1–4。扩容后仍必须运行同一稳定性门禁，持续检查容器健康、重启、OOM、
+数据库连接预算和 HTTP 端点：
+
+```bash
+scripts/verify-one-click-runtime.sh --stability-seconds 600
+```
+
+`DATABASE_POOL_SIZE`、`DATABASE_MAX_OVERFLOW`、`DATABASE_POOL_TIMEOUT_SECONDS` 和
+`DATABASE_POOL_RECYCLE_SECONDS` 仅用于高级本地调优。各服务的内存、CPU 资源上限及
+默认值在 `.env.one-click.example` 中列出，可通过同名变量配置。
+
 独立投资研究入口是 [http://127.0.0.1:8080/research](http://127.0.0.1:8080/research)；
 旧事件研究入口仍是 [http://127.0.0.1:8080/events/new](http://127.0.0.1:8080/events/new)。
 API 地址是 [http://127.0.0.1:8000](http://127.0.0.1:8000)。查看状态、停止新运行环境或
