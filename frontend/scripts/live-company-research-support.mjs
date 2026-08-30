@@ -943,6 +943,43 @@ export function createPendingObserverTracker() {
   });
 }
 
+export function createSequencedResponseQueue({ maximumEntries = 64 } = {}) {
+  if (!Number.isSafeInteger(maximumEntries) || maximumEntries < 1) {
+    throw new Error("response queue bound must be a positive integer");
+  }
+  const authorities = new WeakMap();
+  const entries = [];
+  let sequence = 0;
+  return Object.freeze({
+    begin(metadata) {
+      const token = Object.freeze({});
+      authorities.set(token, { sequence: ++sequence, metadata });
+      return token;
+    },
+    complete(token, value) {
+      const authority = authorities.get(token);
+      if (!authority) throw new Error("response queue token is invalid");
+      authorities.delete(token);
+      if (entries.length >= maximumEntries) throw new Error("response queue exceeded its bound");
+      entries.push({ ...authority, value });
+    },
+    cursor() {
+      return sequence;
+    },
+    takeAfter(after, predicate) {
+      if (!Number.isSafeInteger(after) || after < 0 || typeof predicate !== "function") {
+        throw new Error("response queue selection is invalid");
+      }
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        if (entries[index].sequence <= after) entries.splice(index, 1);
+      }
+      const index = entries.findIndex((entry) => predicate(entry));
+      if (index < 0) return null;
+      return entries.splice(index, 1)[0].value;
+    },
+  });
+}
+
 export function createBrowserFailureCollector() {
   const errors = [];
   return Object.freeze({
@@ -1210,6 +1247,13 @@ function isEvidenceFact(value, { requireReviewed = false } = {}) {
     || !isDateTime(value.published_at) || !isDateTime(value.available_at)
     || Date.parse(value.published_at) > Date.parse(value.available_at)
     || !SHA256_PATTERN.test(value.raw_hash)) return false;
+  const source = value.observation.source_ref;
+  if (value.observation.key !== value.metric_key
+    || value.observation.period !== `${value.period_start}/${value.period_end}`
+    || !isRecord(source) || source.kind !== "external"
+    || source.fact_key !== value.fact_key
+    || ["source_role", "source_url", "source_locator", "raw_hash"]
+      .some((key) => source[key] !== value[key])) return false;
   if (requireReviewed && !["confirmed", "rejected"].includes(value.review_decision)) return false;
   return !("review_decision" in value) || ["confirmed", "rejected"].includes(value.review_decision);
 }
@@ -1242,6 +1286,11 @@ function isEvidencePayload(payload, sourceRefs, { requireReviewed = false } = {}
 }
 
 function isLineageSourceRefs(value) {
+  return Array.isArray(value) && value.every((ref) => isSourceRef(ref, true))
+    && new Set(value.map(lineageRefIdentity)).size === value.length;
+}
+
+function isLineageSourceRefArray(value) {
   return Array.isArray(value) && value.every((ref) => isSourceRef(ref, true));
 }
 
@@ -1303,7 +1352,7 @@ function isResearchGapsPayload(payload) {
 }
 
 function isBusinessMapPayload(payload) {
-  return hasExactKeys(payload, ["modules", "_lineage"])
+  if (!(hasExactKeys(payload, ["modules", "_lineage"])
     && Array.isArray(payload.modules) && payload.modules.length > 0
     && payload.modules.every((module) => hasExactKeys(module, [
       "module_key", "revenue_sources", "cost_structure", "capital_needs", "fact_refs", "gap_refs", "classified_evidence",
@@ -1318,11 +1367,28 @@ function isBusinessMapPayload(payload) {
       ]) && isSourceRef(item.fact_ref, true) && isNonEmptyString(item.metric_key)
         && ["revenue", "cost", "capital"].includes(item.category)
         && isNumericObservation(item.observation, payload._lineage) && isDateOnly(item.period_start)
-        && isDateOnly(item.period_end) && item.period_start <= item.period_end));
+        && isDateOnly(item.period_end) && item.period_start <= item.period_end)))) return false;
+  if (new Set(payload.modules.map((module) => module.module_key)).size !== payload.modules.length) return false;
+  return payload.modules.every((module) => {
+    const facts = module.fact_refs.map(lineageRefIdentity);
+    const classified = module.classified_evidence.map((item) => lineageRefIdentity(item.fact_ref));
+    return new Set(module.gap_refs).size === module.gap_refs.length
+      && classified.length === facts.length
+      && jsonValuesEqual([...classified].sort(), [...facts].sort())
+      && module.classified_evidence.every((item) => item.observation.key === item.metric_key
+        && item.observation.period === `${item.period_start}/${item.period_end}`
+        && item.observation.state === "reported");
+  });
 }
 
 function isDriverMapPayload(payload) {
-  return hasExactKeys(payload, ["drivers", "_lineage"])
+  const equations = new Set([
+    "revenue = volume * monetization", "operating_income = revenue * operating_margin",
+    "cash_tax_rate = reported_tax_rate", "depreciation = reported_depreciation",
+    "capex = reported_capex", "working_capital_change = reported_working_capital_change",
+    "fcff = nopat + depreciation - capex - working_capital_change", "reported_value = reviewed_fact",
+  ]);
+  if (!(hasExactKeys(payload, ["drivers", "_lineage"])
     && Array.isArray(payload.drivers) && payload.drivers.length > 0
     && payload.drivers.every((driver) => hasExactKeys(driver, [
       "driver_key", "module_key", "fact_refs", "assumption_refs", "equation", "output_metric",
@@ -1333,7 +1399,32 @@ function isDriverMapPayload(payload) {
       && Array.isArray(driver.values) && driver.values.length > 0
       && driver.values.every((value) => isNumericObservation(value, payload._lineage))
       && (driver.assumption_rationale === null || isNonEmptyString(driver.assumption_rationale))
-      && (driver.assumption_equation === null || isNonEmptyString(driver.assumption_equation)));
+      && (driver.assumption_equation === null || isNonEmptyString(driver.assumption_equation))))) return false;
+  if (new Set(payload.drivers.map((driver) => driver.driver_key)).size !== payload.drivers.length) return false;
+  return payload.drivers.every((driver) => {
+    const states = new Set(driver.values.map((value) => value.state));
+    if (!equations.has(driver.equation) || states.size !== 1
+      || driver.values.some((value) => value.key !== driver.output_metric)
+      || Boolean(driver.assumption_rationale) !== Boolean(driver.assumption_equation)) return false;
+    const [state] = states;
+    if (state === "reported") {
+      return driver.equation_id === null && driver.assumption_refs.length === 0
+        && driver.fact_refs.length === driver.values.length
+        && driver.values.every((value, index) => {
+          const { kind: _kind, ...source } = value.source_ref;
+          return jsonValuesEqual(source, driver.fact_refs[index]);
+        });
+    }
+    if (state === "derived") {
+      return driver.fact_refs.length > 0 && driver.assumption_refs.length === 0
+        && equations.has(driver.equation_id);
+    }
+    return state === "assumption" && driver.fact_refs.length === 0
+      && driver.assumption_refs.length > 0
+      && /^[a-z][a-z0-9_.-]*\.v[1-9][0-9]*:[a-z][a-z0-9_]*$/u.test(driver.values[0].assumption_key)
+      && driver.values.every((value) => value.assumption_key === driver.values[0].assumption_key)
+      && driver.equation_id === null;
+  });
 }
 
 const FINANCIAL_OBSERVATION_KEYS = Object.freeze([
@@ -1341,13 +1432,19 @@ const FINANCIAL_OBSERVATION_KEYS = Object.freeze([
 ]);
 
 function isFinancialBridgePayload(payload) {
-  return hasExactKeys(payload, ["rows", "_lineage"])
+  if (!(hasExactKeys(payload, ["rows", "_lineage"])
     && Array.isArray(payload.rows) && payload.rows.length === 5
     && payload.rows.every((row) => hasExactKeys(row, [
       "period", ...FINANCIAL_OBSERVATION_KEYS, "fact_refs", "assumption_refs",
     ]) && isNonEmptyString(row.period)
       && FINANCIAL_OBSERVATION_KEYS.every((key) => isNumericObservation(row[key], payload._lineage))
-      && isLineageSourceRefs(row.fact_refs) && isLineageSourceRefs(row.assumption_refs));
+      && isLineageSourceRefs(row.fact_refs) && isLineageSourceRefs(row.assumption_refs)))) return false;
+  const years = payload.rows.map((row) => /^FY([0-9]{4})$/u.exec(row.period));
+  if (years.some((match) => match === null)) return false;
+  const first = Number(years[0][1]);
+  return payload.rows.every((row, index) => Number(years[index][1]) === first + index
+    && FINANCIAL_OBSERVATION_KEYS.every((key) => row[key].key === key && row[key].period === row.period)
+    && ["operating_income", "fcff"].every((key) => row[key].state === "derived"));
 }
 
 function isScenarioSetPayload(payload) {
@@ -1360,8 +1457,10 @@ function isScenarioSetPayload(payload) {
   return payload.scenarios.every((scenario) => hasExactKeys(scenario, ["scenario_id", "mechanism_id", "driver_overrides"])
     && isNonEmptyString(scenario.mechanism_id)
     && Array.isArray(scenario.driver_overrides) && scenario.driver_overrides.length > 0
+    && new Set(scenario.driver_overrides.map((item) => item.driver_key)).size === scenario.driver_overrides.length
     && scenario.driver_overrides.every((item) => hasExactKeys(item, ["driver_key", "observation", "rationale", "equation"])
       && isNonEmptyString(item.driver_key) && isNumericObservation(item.observation, payload._lineage)
+      && item.observation.key === item.driver_key && ["assumption", "derived"].includes(item.observation.state)
       && item.observation.unit === "multiplier" && item.observation.currency === "N/A"
       && (item.rationale === null || isNonEmptyString(item.rationale))
       && (item.equation === null || isNonEmptyString(item.equation))));
@@ -1373,7 +1472,7 @@ function isJudgmentContextPayload(payload) {
     "strongest_counterevidence", "next_verification_events", "_lineage",
   ]) && ["operating_baseline_available", "financial_bridge_closed", "market_security_bridge_available"]
     .every((key) => typeof payload[key] === "boolean")
-    && isLineageSourceRefs(payload.strongest_counterevidence)
+    && isLineageSourceRefArray(payload.strongest_counterevidence)
     && isStringArray(payload.next_verification_events);
 }
 
@@ -1388,8 +1487,167 @@ function isMachineMemoPayload(payload, registry) {
     && isArtifactMemoRef(payload.driver_map_ref, "driver_map", registry)
     && isArtifactMemoRef(payload.financial_bridge_ref, "financial_bridge", registry)
     && isArtifactMemoRef(payload.scenario_set_ref, "scenario_set", registry)
-    && isStringArray(payload.gap_keys) && isLineageSourceRefs(payload.strongest_counterevidence)
+    && isStringArray(payload.gap_keys) && isLineageSourceRefArray(payload.strongest_counterevidence)
     && isStringArray(payload.next_verification_events);
+}
+
+function withoutLineage(payload) {
+  const { _lineage: _lineage, ...domainPayload } = payload;
+  return domainPayload;
+}
+
+function storedBusinessPayload(payload) {
+  return {
+    ...payload,
+    modules: payload.modules.map((module) => ({
+      ...module,
+      classified_evidence: module.classified_evidence.map((item) => {
+        const { observation, ...stored } = item;
+        return { ...stored, value: observation.value, currency: observation.currency, unit: observation.unit };
+      }),
+    })),
+  };
+}
+
+function storedDriverPayload(payload) {
+  return {
+    ...payload,
+    drivers: payload.drivers.map((driver) => {
+      const state = driver.values[0].state;
+      return {
+        ...driver,
+        input_state: state,
+        assumption_key: state === "assumption" ? driver.values[0].assumption_key : null,
+        values: driver.values.map((value) => value.value),
+      };
+    }),
+  };
+}
+
+const SCENARIO_FINANCIAL_DRIVER_KEYS = Object.freeze([
+  "revenue", "operating_margin", "cash_tax_rate", "depreciation", "capex", "working_capital_change",
+]);
+
+function storedFinancialPayload(payload, storedDriver) {
+  const statesByDriver = new Map(storedDriver.drivers.map((driver) => [driver.driver_key, driver.input_state]));
+  return {
+    ...payload,
+    rows: payload.rows.map((row) => {
+      const governedStates = SCENARIO_FINANCIAL_DRIVER_KEYS.map((key) => statesByDriver.get(key));
+      if (governedStates.some((state) => state === undefined)) {
+        throw new Error("financial_bridge payload lacks governed driver provenance");
+      }
+      return {
+        fiscal_year: Number(row.period.replace(/^FY/u, "")),
+        ...Object.fromEntries(FINANCIAL_OBSERVATION_KEYS.map((key) => [key, row[key].value])),
+        fact_refs: row.fact_refs,
+        assumption_refs: row.assumption_refs,
+        input_states: [...new Set(governedStates)],
+      };
+    }),
+  };
+}
+
+function storedScenarioPayload(payload) {
+  return {
+    ...payload,
+    scenarios: payload.scenarios.map((scenario) => ({
+      ...scenario,
+      driver_overrides: scenario.driver_overrides.map((override) => ({
+        driver_key: override.driver_key,
+        value: override.observation.value,
+        state: override.observation.state,
+        assumption_key: override.observation.state === "assumption"
+          ? override.observation.assumption_key
+          : null,
+        rationale: override.rationale,
+        equation: override.equation,
+      })),
+    })),
+  };
+}
+
+function artifactRootContentHash(artifact, storedPayload) {
+  return canonicalHash({
+    schema_version: "company-research-artifact.v1",
+    project_id: artifact.project_id,
+    kind: artifact.kind,
+    version: artifact.version,
+    supersedes_id: null,
+    parent_content_hash: null,
+    input_hash: artifact.input_hash,
+    payload: storedPayload,
+    source_refs: artifact.source_refs,
+  });
+}
+
+function assertRootArtifactContent(artifact, storedPayload, label) {
+  if (artifact.version !== 1 || artifact.content_hash !== artifactRootContentHash(artifact, storedPayload)) {
+    throw new Error(`${label} content hash mismatch`);
+  }
+}
+
+function lineageRefIdentity(value) {
+  return JSON.stringify([
+    value.fact_key, value.source_role, value.source_url, value.source_locator, value.raw_hash,
+  ]);
+}
+
+function builderGapMessage(key) {
+  for (const [prefix, message] of [
+    ["builder_generated_operating_baseline_missing_", "Reviewed operating baseline is missing: "],
+    ["builder_generated_missing_module_evidence_", "No confirmed evidence or governed gap covers "],
+    ["builder_generated_operating_driver_missing_", "Confirmed numeric input is missing for "],
+  ]) {
+    if (key.startsWith(prefix)) return `${message}${key.slice(prefix.length)}`;
+  }
+  return null;
+}
+
+function closedMemoGaps({ gaps, business, judgment, memo, hasMarket }) {
+  const gapKeys = memo.payload.gap_keys;
+  if ([gapKeys, judgment.payload.next_verification_events, memo.payload.next_verification_events]
+    .some((values) => !Array.isArray(values) || values.length !== gapKeys.length)
+    || !jsonValuesEqual(memo.payload.next_verification_events, judgment.payload.next_verification_events)
+    || !jsonValuesEqual([...gapKeys].sort(), gapKeys)
+    || new Set(gapKeys).size !== gapKeys.length) {
+    throw new Error("model memo gap semantics mismatch");
+  }
+  const sourceGaps = new Map(gaps.payload.gaps.map((gap) => [gap.gap_key, gap]));
+  const moduleByGap = new Map();
+  for (const module of business.payload.modules) {
+    for (const key of module.gap_refs) {
+      if (moduleByGap.has(key)) throw new Error("model memo gap semantics mismatch");
+      moduleByGap.set(key, module.module_key);
+    }
+  }
+  if (moduleByGap.size !== gapKeys.length || gapKeys.some((key) => !moduleByGap.has(key))) {
+    throw new Error("model memo gap semantics mismatch");
+  }
+  const active = gapKeys.map((key, index) => {
+    const source = sourceGaps.get(key);
+    const generatedMessage = builderGapMessage(key);
+    const message = judgment.payload.next_verification_events[index];
+    if (source) {
+      if (source.business_module !== moduleByGap.get(key) || source.reason !== message) {
+        throw new Error("model memo gap semantics mismatch");
+      }
+      return { code: key, module_key: source.business_module, severity: "high", message };
+    }
+    if (generatedMessage === null || generatedMessage !== message) {
+      throw new Error("model memo gap semantics mismatch");
+    }
+    return { code: key, module_key: moduleByGap.get(key), severity: "critical", message };
+  });
+  const closedSourceKeys = new Set(["forward_model_missing"]);
+  if (hasMarket) {
+    closedSourceKeys.add("market_price_missing");
+    closedSourceKeys.add("usd_cny_fx_missing");
+  }
+  if ([...sourceGaps.keys()].some((key) => !gapKeys.includes(key) && !closedSourceKeys.has(key))) {
+    throw new Error("model memo gap semantics mismatch");
+  }
+  return active;
 }
 
 function reviewFacts(artifact, label) {
@@ -1407,6 +1665,31 @@ function reviewFacts(artifact, label) {
     keys.add(fact.fact_key);
   }
   return facts;
+}
+
+function storedEvidencePayload(projectedPayload) {
+  return {
+    ...projectedPayload,
+    cutoff: projectedPayload.cutoff.endsWith("Z")
+      ? `${projectedPayload.cutoff.slice(0, -1)}+00:00`
+      : projectedPayload.cutoff,
+    facts: projectedPayload.facts.map((fact) => {
+      const { observation, ...storedFact } = fact;
+      return {
+        ...storedFact,
+        published_at: fact.published_at.endsWith("Z")
+          ? `${fact.published_at.slice(0, -1)}+00:00`
+          : fact.published_at,
+        available_at: fact.available_at.endsWith("Z")
+          ? `${fact.available_at.slice(0, -1)}+00:00`
+          : fact.available_at,
+        value: observation.value,
+        value_kind: observation.state,
+        currency: observation.currency,
+        unit: observation.unit,
+      };
+    }),
+  };
 }
 
 export function assertExactReviewSuccessor(before, after, factKey) {
@@ -1464,7 +1747,18 @@ export function assertExactReviewSuccessor(before, after, factKey) {
   if (!jsonValuesEqual(after.payload, expectedPayload)) {
     throw new Error("review fact payload changed outside the exact decision successor");
   }
-  if (after.content_hash === before.content_hash) throw new Error("review content hash did not advance");
+  const expectedContentHash = canonicalHash({
+    schema_version: "company-research-artifact.v1",
+    project_id: after.project_id,
+    kind: after.kind,
+    version: after.version,
+    supersedes_id: before.id,
+    parent_content_hash: before.content_hash,
+    input_hash: after.input_hash,
+    payload: storedEvidencePayload(after.payload),
+    source_refs: after.source_refs,
+  });
+  if (after.content_hash !== expectedContentHash) throw new Error("review content hash mismatch");
   return after;
 }
 
@@ -1532,9 +1826,21 @@ export function assertModelWorkspace(workspace, expected) {
     throw new Error("evidence_index payload mismatch");
   }
   const gaps = registry.get("research_gaps");
+  if (!isRecord(expected.researchGapsArtifact)) {
+    throw new Error("expected research gaps head is required");
+  }
+  try {
+    assertArtifactEnvelope(expected.researchGapsArtifact, "expected research gaps");
+  } catch {
+    throw new Error("expected research gaps head is invalid");
+  }
+  if (!jsonValuesEqual(gaps, expected.researchGapsArtifact)) {
+    throw new Error("model workspace research gaps head mismatch");
+  }
   if (!isResearchGapsPayload(gaps.payload)) {
     throw new Error("research_gaps payload mismatch");
   }
+  assertRootArtifactContent(gaps, gaps.payload, "research_gaps");
   if (!jsonValuesEqual(gaps.source_refs, canonicalSourceRefs(gaps.source_refs))) {
     throw new Error("research_gaps source refs mismatch");
   }
@@ -1590,6 +1896,50 @@ export function assertModelWorkspace(workspace, expected) {
     !jsonValuesEqual(registry.get(kind).source_refs, expectedModelSources))) {
     throw new Error("model artifact source refs do not match governed inputs");
   }
+  const storedBusiness = storedBusinessPayload(business.payload);
+  const storedDriver = storedDriverPayload(driver.payload);
+  const storedFinancial = storedFinancialPayload(financial.payload, storedDriver);
+  const storedScenarios = storedScenarioPayload(scenarios.payload);
+  const storedJudgment = structuredClone(judgment.payload);
+  const evidenceLineage = new Set(evidence.payload.facts.map((fact) => lineageRefIdentity({
+    fact_key: fact.fact_key,
+    source_role: fact.source_role,
+    source_url: fact.source_url,
+    source_locator: fact.source_locator,
+    raw_hash: fact.raw_hash,
+  })));
+  const counterevidence = judgment.payload.strongest_counterevidence;
+  const counterIdentities = counterevidence.map(lineageRefIdentity);
+  if (new Set(counterIdentities).size !== counterIdentities.length
+    || counterIdentities.some((identity) => !evidenceLineage.has(identity))
+    || !jsonValuesEqual(memo.payload.strongest_counterevidence, counterevidence)) {
+    throw new Error("model counterevidence semantics mismatch");
+  }
+  const memoGaps = closedMemoGaps({
+    gaps, business, judgment, memo, hasMarket: modelLineage.market_snapshot_ids.length > 0,
+  });
+  for (const [artifact, storedPayload] of [
+    [business, storedBusiness],
+    [driver, storedDriver],
+    [financial, storedFinancial],
+    [scenarios, storedScenarios],
+    [judgment, storedJudgment],
+  ]) assertRootArtifactContent(artifact, storedPayload, artifact.kind);
+
+  const referencedPayloads = new Map([
+    ["business_map", storedBusiness],
+    ["driver_map", storedDriver],
+    ["financial_bridge", storedFinancial],
+    ["scenario_set", storedScenarios],
+  ]);
+  for (const kind of referencedPayloads.keys()) {
+    const ref = memo.payload[`${kind}_ref`];
+    if (ref.content_hash !== canonicalHash(withoutLineage(referencedPayloads.get(kind)))) {
+      throw new Error("model memo reference hash mismatch");
+    }
+  }
+  const storedMemo = { ...memo.payload, research_gaps: memoGaps };
+  assertRootArtifactContent(memo, storedMemo, "memo");
   return workspace;
 }
 

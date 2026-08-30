@@ -24,6 +24,7 @@ import {
   createBrowserFailureCollector,
   createPendingObserverTracker,
   createPrivateRuntime,
+  createSequencedResponseQueue,
   createTrafficAudit,
   newOwnedBrowserContext,
   parseVerifierArgs,
@@ -222,42 +223,62 @@ function throwBrowserFailures(failures) {
 }
 
 function createWorkspaceResponseCollector(page, failures, observers) {
-  const entries = [];
-  let sequence = 0;
+  const queue = createSequencedResponseQueue();
+  const requests = new WeakMap();
+  page.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() !== "GET" || !pathname.endsWith("/workspace")
+      || !pathname.includes("/company-research/projects/")) return;
+    requests.set(request, queue.begin({ pathname }));
+  });
   page.on("response", (response) => {
     const request = response.request();
     const pathname = new URL(response.url()).pathname;
     if (request.method() !== "GET" || !pathname.endsWith("/workspace")
       || !pathname.includes("/company-research/projects/")) return;
-    const currentSequence = ++sequence;
+    const token = requests.get(request);
     observers.track(async () => {
       try {
+        if (!token) throw new Error("browser workspace response lacks request initiation");
         const workspace = await responseJson(response);
-        if (entries.length >= 64) throw new Error("browser workspace response queue exceeded its bound");
-        entries.push({ sequence: currentSequence, pathname, workspace });
+        queue.complete(token, { pathname, workspace });
       } catch (error) {
         failures.record(error);
       }
     });
   });
   return Object.freeze({
-    cursor() { return sequence; },
+    cursor() { return queue.cursor(); },
     takeAfter(after, predicate) {
-      const index = entries.findIndex((entry) => entry.sequence > after && predicate(entry));
-      if (index < 0) return null;
-      return entries.splice(index, 1)[0].workspace;
+      return queue.takeAfter(after, ({ value }) => predicate(value))?.workspace ?? null;
     },
   });
 }
 
-async function waitForBrowserWorkspace({ collector, after, projectId, status, progress, deadline, processes }) {
+async function waitForBrowserWorkspace({
+  collector, after, projectId, status, progress, reviewedCount, evidenceArtifact, deadline, processes,
+}) {
   const workspacePath = projectId
     ? `/api/underwriting/v1/product/company-research/projects/${encodeURIComponent(projectId)}/workspace`
     : null;
-  return waitUntil(async () => collector.takeAfter(after, ({ pathname, workspace }) =>
-    (workspacePath === null || pathname === workspacePath)
+  return waitUntil(async () => collector.takeAfter(after, ({ pathname, workspace }) => {
+    const evidenceHeads = workspace?.artifacts?.filter((artifact) => artifact?.kind === "evidence_index");
+    let exactEvidence = evidenceArtifact === undefined;
+    if (!exactEvidence && evidenceHeads?.length === 1) {
+      try {
+        assertSameArtifactHead(evidenceArtifact, evidenceHeads[0]);
+        exactEvidence = true;
+      } catch {
+        exactEvidence = false;
+      }
+    }
+    return (workspacePath === null || pathname === workspacePath)
       && workspace?.preparation?.status === status
-      && workspace?.preparation?.progress === progress), {
+      && workspace?.preparation?.progress === progress
+      && (reviewedCount === undefined
+        || workspace?.change_summary?.reviewed_fact_count === reviewedCount)
+      && exactEvidence;
+  }), {
     label: `browser workspace ${status}/${progress}`,
     timeoutMs: remaining(deadline, `browser workspace ${status}/${progress}`),
     processes,
@@ -279,6 +300,14 @@ function governedEvidenceArtifact(workspace) {
     throw new Error("authenticated evidence artifact contains a pre-reviewed fact");
   }
   return { evidence, factKeys };
+}
+
+function governedResearchGapsArtifact(workspace) {
+  const artifacts = workspace.artifacts?.filter((artifact) => artifact?.kind === "research_gaps");
+  if (artifacts?.length !== 1) {
+    throw new Error("evidence workspace must expose exactly one research gaps artifact");
+  }
+  return artifacts[0];
 }
 
 async function finalizeOwnedRuntime({
@@ -409,6 +438,7 @@ async function runBrowserWorkflow({
     projectId,
     status: "awaiting_evidence_review",
     progress: 25,
+    reviewedCount: 0,
     deadline,
     processes: runningProcesses(),
   });
@@ -422,6 +452,7 @@ async function runBrowserWorkflow({
     throw new Error("evidence workspace must begin with zero reviewed facts");
   }
   let { evidence, factKeys } = governedEvidenceArtifact(evidenceWorkspace);
+  let researchGaps = governedResearchGapsArtifact(evidenceWorkspace);
 
   await stopWorkerForReview();
   assertProcessesRunning(runningProcesses());
@@ -436,6 +467,8 @@ async function runBrowserWorkflow({
     projectId,
     status: "awaiting_evidence_review",
     progress: 25,
+    reviewedCount: 0,
+    evidenceArtifact: evidence,
     deadline,
     processes: runningProcesses(),
   });
@@ -450,7 +483,10 @@ async function runBrowserWorkflow({
     throw new Error("stopped worker did not preserve the exact evidence-review boundary");
   }
   assertSameArtifactHead(evidence, stableEvidence);
+  const stableResearchGaps = governedResearchGapsArtifact(stableEvidenceWorkspace);
+  assertSameArtifactHead(researchGaps, stableResearchGaps);
   evidence = stableEvidence;
+  researchGaps = stableResearchGaps;
   await page.getByRole("button", { name: "来源、事实与缺口" }).click();
 
   const reviewPath = `/api/underwriting/v1/product/company-research/projects/${encodeURIComponent(projectId)}/evidence-reviews`;
@@ -473,6 +509,8 @@ async function runBrowserWorkflow({
       projectId,
       status: isFinalFact ? "building_model" : "awaiting_evidence_review",
       progress: 25,
+      reviewedCount: index + 1,
+      evidenceArtifact: evidence,
       deadline,
       processes: runningProcesses(),
     });
@@ -509,6 +547,8 @@ async function runBrowserWorkflow({
     projectId,
     status: "awaiting_judgment_review",
     progress: 85,
+    reviewedCount: factKeys.length,
+    evidenceArtifact: evidence,
     deadline,
     processes: runningProcesses(),
   });
@@ -518,7 +558,7 @@ async function runBrowserWorkflow({
     status: "awaiting_judgment_review",
     progress: 85,
   });
-  assertModelWorkspace(modelWorkspace, { evidenceArtifact: evidence });
+  assertModelWorkspace(modelWorkspace, { evidenceArtifact: evidence, researchGapsArtifact: researchGaps });
   if (modelWorkspace.change_summary?.reviewed_fact_count !== factKeys.length) {
     throw new Error("model workspace reviewed fact count differs from authenticated evidence");
   }
