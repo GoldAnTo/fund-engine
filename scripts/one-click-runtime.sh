@@ -159,10 +159,17 @@ bounded_integer_value() {
   local default_value="$2"
   local minimum="$3"
   local maximum="$4"
-  local value
+  local value value_length maximum_length
   value="$(optional_runtime_env_value "$key" "$default_value")"
   [[ "$value" =~ ^(0|[1-9][0-9]*)$ ]] \
-    && (( 10#$value >= minimum && 10#$value <= maximum )) \
+    || die "${key} must be an integer from ${minimum} through ${maximum}"
+  value_length="${#value}"
+  maximum_length="${#maximum}"
+  if (( value_length > maximum_length )) \
+    || { (( value_length == maximum_length )) && [[ "$value" > "$maximum" ]]; }; then
+    die "${key} must be an integer from ${minimum} through ${maximum}"
+  fi
+  (( 10#$value >= minimum && 10#$value <= maximum )) \
     || die "${key} must be an integer from ${minimum} through ${maximum}"
   printf '%s' "$value"
 }
@@ -673,9 +680,9 @@ start_one_click_runtime() (
   init_runtime_environment
   require_runtime_files
   validate_one_click_runtime_profile
+  acquisition_replicas="$(bounded_integer_value ONE_CLICK_ACQUISITION_REPLICAS 1 1 4)"
   compose config -q
   validate_docker_memory
-  acquisition_replicas="$(bounded_integer_value ONE_CLICK_ACQUISITION_REPLICAS 1 1 4)"
   compose build migrate
   compose build frontend
   project_name="$(compose_project_name)"

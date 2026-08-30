@@ -268,7 +268,50 @@ def test_up_rejects_invalid_acquisition_replica_count_before_build_or_cutover(
 
     assert completed.returncode != 0
     assert "ONE_CLICK_ACQUISITION_REPLICAS must be an integer from 1 through 4" in completed.stderr
-    assert not any(" build" in command or command.startswith("stop ") for command in commands)
+    assert commands == []
+
+
+@pytest.mark.parametrize("value", ("18446744073709551617", "9" * 100))
+def test_up_rejects_oversized_acquisition_replica_count_before_docker(
+    tmp_path: Path, value: str
+) -> None:
+    completed, commands = run_fake_up(
+        tmp_path,
+        docker_memory=8 * 1024**3,
+        runtime_values={"ONE_CLICK_ACQUISITION_REPLICAS": value},
+    )
+
+    assert completed.returncode != 0
+    assert completed.stderr == (
+        "one-click runtime: ONE_CLICK_ACQUISITION_REPLICAS must be an integer "
+        "from 1 through 4\n"
+    )
+    assert commands == []
+
+
+@pytest.mark.parametrize(
+    ("name", "minimum", "maximum"),
+    (
+        ("DATABASE_POOL_SIZE", 1, 10),
+        ("DATABASE_MAX_OVERFLOW", 0, 10),
+        ("DATABASE_POOL_TIMEOUT_SECONDS", 1, 120),
+        ("DATABASE_POOL_RECYCLE_SECONDS", 30, 3600),
+    ),
+)
+def test_up_rejects_oversized_database_pool_settings_before_docker(
+    tmp_path: Path, name: str, minimum: int, maximum: int
+) -> None:
+    completed, commands = run_fake_up(
+        tmp_path,
+        docker_memory=8 * 1024**3,
+        runtime_values={name: "18446744073709551617"},
+    )
+
+    assert completed.returncode != 0
+    assert completed.stderr == (
+        f"one-click runtime: {name} must be an integer from {minimum} through {maximum}\n"
+    )
+    assert commands == []
 
 
 def test_up_rejects_insufficient_docker_memory_before_build_or_cutover(tmp_path: Path) -> None:
