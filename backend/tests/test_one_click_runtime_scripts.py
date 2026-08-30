@@ -689,8 +689,10 @@ def test_readme_documents_the_local_one_click_runtime_without_secrets() -> None:
     assert "旧版 PostgreSQL 和 Keycloak" in readme
     for text in (
         "ONE_CLICK_ACQUISITION_REPLICAS=1",
+        "ONE_CLICK_ACQUISITION_REPLICAS=2",
         "默认只启动一个资料采集 worker",
-        "适合 16 GiB Mac",
+        "该变量默认值为 1",
+        "提高吞吐时请改为 2–4",
         "Docker Desktop 分配约 8 GiB",
         "Docker Desktop 至少分配 6 GiB",
         "停止旧服务前",
@@ -700,11 +702,17 @@ def test_readme_documents_the_local_one_click_runtime_without_secrets() -> None:
         "DATABASE_MAX_OVERFLOW",
         "DATABASE_POOL_TIMEOUT_SECONDS",
         "DATABASE_POOL_RECYCLE_SECONDS",
-        "高级本地调优",
         ".env.one-click.example",
         "资源上限",
     ):
         assert text in readme
+    default_description = readme.index("该变量默认值为 1")
+    default_example = readme.index("ONE_CLICK_ACQUISITION_REPLICAS=1")
+    scaling_description = readme.index("提高吞吐时请改为 2–4")
+    scaling_example = readme.index("ONE_CLICK_ACQUISITION_REPLICAS=2")
+    assert (
+        default_description < default_example < scaling_description < scaling_example
+    )
 
 
 def test_init_generates_private_local_credentials_without_echoing_them(tmp_path: Path) -> None:

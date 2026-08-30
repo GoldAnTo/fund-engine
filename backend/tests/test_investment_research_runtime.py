@@ -639,8 +639,9 @@ def test_restore_refuses_foreign_live_files_volume_before_mutation(
 
 
 def test_up_refuses_foreign_postgres_volume_before_start_or_legacy_stop(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("ONE_CLICK_ACQUISITION_REPLICAS", "5")
     script = _runtime_copy(tmp_path)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -669,7 +670,6 @@ def test_up_refuses_foreign_postgres_volume_before_start_or_legacy_stop(
         capture_output=True,
         text=True,
         env={
-            **os.environ,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "DOCKER_LOG": str(log),
         },
@@ -684,8 +684,9 @@ def test_up_refuses_foreign_postgres_volume_before_start_or_legacy_stop(
 
 
 def test_up_creates_and_validates_fresh_postgres_volume_before_full_start(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("ONE_CLICK_ACQUISITION_REPLICAS", "5")
     script = _runtime_copy(tmp_path)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -727,7 +728,6 @@ def test_up_creates_and_validates_fresh_postgres_volume_before_full_start(
         capture_output=True,
         text=True,
         env={
-            **os.environ,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "DOCKER_LOG": str(log),
             "VOLUME_STATE": str(state),
@@ -751,8 +751,9 @@ def test_up_creates_and_validates_fresh_postgres_volume_before_full_start(
 
 
 def test_up_fails_closed_when_postgres_volume_inspection_is_uncertain(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("ONE_CLICK_ACQUISITION_REPLICAS", "5")
     script = _runtime_copy(tmp_path)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -779,7 +780,6 @@ def test_up_fails_closed_when_postgres_volume_inspection_is_uncertain(
         capture_output=True,
         text=True,
         env={
-            **os.environ,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "DOCKER_LOG": str(log),
         },
