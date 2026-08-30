@@ -217,6 +217,8 @@ Expected production-facing files:
 
 - `frontend/scripts/verify-live-company-research-ui.mjs` for lifecycle and
   browser orchestration;
+- `backend/app/scripts/remove_private_runtime_contents.py` for fd-relative,
+  fail-closed deletion of the verifier's authenticated private runtime;
 - `frontend/package.json` for the stable command;
 - `README.md` for prerequisites, invocation, coverage, and isolation semantics.
 

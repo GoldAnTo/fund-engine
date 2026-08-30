@@ -186,6 +186,8 @@ git commit -m "test: define live company research verifier contracts"
 **Files:**
 - Modify: `frontend/scripts/live-company-research-support.mjs`
 - Modify: `frontend/scripts/live-company-research-support.test.mjs`
+- Create: `backend/app/scripts/remove_private_runtime_contents.py`
+- Create: `backend/tests/test_remove_private_runtime_contents.py`
 
 - [ ] **Step 1: Add failing dynamic tests for private storage, mutation-safe cleanup, timeout, and early exit**
 
@@ -607,7 +609,7 @@ node scripts/with-project-node.mjs --check scripts/verify-live-company-research-
 node scripts/with-project-node.mjs --test scripts/live-company-research-support.test.mjs
 ```
 
-Expected: syntax check exits 0 and 10 support tests pass.
+Expected: syntax check exits 0 and the complete support suite passes.
 
 - [ ] **Step 6: Commit isolated stack startup and browser creation**
 
