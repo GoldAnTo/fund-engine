@@ -114,8 +114,8 @@ def _parse_expect(values):
         if not isinstance(raw, str) or raw.count("=") != 1:
             raise ValueError("--expect value is malformed")
         service, count = raw.split("=")
-        if (not service or service in result or not count.isdigit()
-                or count == "0" or count.startswith("0")
+        if (not service or not re.fullmatch(r"[1-9][0-9]*", count)
+                or service in result
                 or len(count) > 10 or (len(count) == 10 and count > "2147483647")):
             raise ValueError("--expect value is malformed")
         result[service] = int(count)

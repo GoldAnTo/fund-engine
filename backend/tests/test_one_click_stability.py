@@ -38,6 +38,16 @@ def test_validate_exact_healthy_six_service_snapshot():
     assert all(set(item) == {"id", "restart_count"} for items in actual.values() for item in items)
 
 
+def test_validate_snapshot_sorts_container_ids():
+    first = inspect_item("acquisition-worker", "a")
+    second = inspect_item("acquisition-worker", "b")
+    payload = [second, first]
+    actual = validate_snapshot(payload, {"acquisition-worker": 2})
+    assert [entry["id"] for entry in actual["acquisition-worker"]] == sorted(
+        [first["Id"], second["Id"]]
+    )
+
+
 def test_validate_acquisition_missing_and_extra_replicas():
     expected = {service: 1 for service in SERVICES} | {"acquisition-worker": 2}
     payload = snapshot_payload() + [inspect_item("acquisition-worker", "b")]
@@ -85,6 +95,14 @@ def test_validate_malformed_shapes_are_bounded(payload):
     assert "Traceback" not in str(exc.value) and (payload is None or "secret" not in str(exc.value))
 
 
+@pytest.mark.parametrize("state", [None, []])
+def test_validate_expected_container_state_malformed(state):
+    item = inspect_item("api")
+    item["State"] = state
+    with pytest.raises(ValueError, match="container state is malformed"):
+        validate_snapshot([item], {"api": 1})
+
+
 @pytest.mark.parametrize("label", [None, [], {}, ""])
 def test_validate_bad_service_labels_are_bounded(label):
     item = inspect_item("api"); item["Config"]["Labels"]["com.docker.compose.service"] = label
@@ -104,6 +122,23 @@ def test_stable_snapshot_success_is_silent():
 @pytest.mark.parametrize("bad", [None, [], {"api": {}}, {"api": [1]}, {"api": [{"id": "x"}]}, {"api": [{"id": "a" * 64, "restart_count": "0"}]}])
 def test_stable_snapshot_malformed_is_bounded(bad):
     with pytest.raises(ValueError): stable_snapshot(bad, {})
+
+
+def test_stable_snapshot_malformed_current_is_bounded():
+    baseline = {"api": [{"id": "a" * 64, "restart_count": 0}]}
+    malformed = [None, {"api": [1]}, {"api": [{"id": "a" * 64}]},
+                 {"api": [{"id": "x" * 64, "restart_count": 0}]},
+                 {"api": [{"id": "a" * 64, "restart_count": "0"}]}]
+    for current in malformed:
+        with pytest.raises(ValueError):
+            stable_snapshot(baseline, current)
+
+
+def test_stable_snapshot_service_set_mismatch_is_bounded():
+    baseline = {"api": [{"id": "a" * 64, "restart_count": 0}]}
+    current = {"worker": [{"id": "a" * 64, "restart_count": 0}]}
+    with pytest.raises(ValueError, match="stability snapshot service structure is malformed"):
+        stable_snapshot(baseline, current)
 
 
 def test_stable_snapshot_rejects_identity_and_restart_changes():
@@ -130,6 +165,104 @@ def test_cli_snapshot_round_trip_and_errors(tmp_path):
     base = tmp_path / "base.json"; base.write_text(result.stdout)
     cur = tmp_path / "cur.json"; cur.write_text(result.stdout)
     compared = subprocess.run([sys.executable, str(script), "compare", str(base), str(cur)], capture_output=True, text=True)
-    assert compared.returncode == 0 and compared.stdout == ""
+    assert compared.returncode == 0 and compared.stdout == "" and compared.stderr == ""
     bad = subprocess.run([sys.executable, str(script), "connection-cap", "--replicas", "0", "--pool-size", "1", "--max-overflow", "0"], capture_output=True, text=True)
     assert bad.returncode == 2 and "Traceback" not in bad.stderr
+
+
+def test_cli_snapshot_exact_canonical_output():
+    root = Path(__file__).parents[2]
+    script = root / "scripts" / "one_click_stability.py"
+    item = inspect_item("api")
+    expected = {"api": [{"id": item["Id"], "restart_count": 0}]}
+    result = subprocess.run(
+        [sys.executable, str(script), "snapshot", "--expect", "api=1"],
+        input=json.dumps([item]), text=True, capture_output=True,
+    )
+    assert result.returncode == 0
+    assert result.stdout == json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n"
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("raw", ["api=1", "api", "=1", "api=0", "api=01",
+                                  "api=" + "1" * 100, "api=١", "api=²"])
+def test_cli_malformed_expect_is_fixed_error(raw):
+    root = Path(__file__).parents[2]
+    script = root / "scripts" / "one_click_stability.py"
+    args = [sys.executable, str(script), "snapshot", "--expect", raw]
+    if raw == "api=1":
+        args.extend(["--expect", raw])
+    result = subprocess.run(args, input="{}", text=True, capture_output=True)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr == "error: --expect value is malformed\n"
+    assert "Traceback" not in result.stderr and raw not in result.stderr
+
+
+def test_cli_invalid_json_does_not_echo_secret():
+    root = Path(__file__).parents[2]
+    script = root / "scripts" / "one_click_stability.py"
+    secret = "do-not-echo-secret"
+    result = subprocess.run(
+        [sys.executable, str(script), "snapshot", "--expect", "api=1"],
+        input="{" + secret, text=True, capture_output=True,
+    )
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr == "error: JSON input is invalid\n"
+    assert secret not in result.stderr
+
+
+def test_cli_compare_errors_are_bounded(tmp_path):
+    root = Path(__file__).parents[2]
+    script = root / "scripts" / "one_click_stability.py"
+    baseline = {"api": [{"id": "a" * 64, "restart_count": 0}]}
+    valid = tmp_path / "valid.json"
+    valid.write_text(json.dumps(baseline))
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text("do-not-echo-secret")
+    for paths, expected in [
+        ((tmp_path / "missing.json", valid), "error: JSON file is unreadable or invalid\n"),
+        ((malformed, valid), "error: JSON file is unreadable or invalid\n"),
+        ((valid, tmp_path / "bad-current.json"), "error: current snapshot is malformed\n"),
+    ]:
+        if not paths[1].exists():
+            paths[1].write_text("[]")
+        result = subprocess.run([sys.executable, str(script), "compare", str(paths[0]), str(paths[1])], capture_output=True, text=True)
+        assert result.returncode == 2
+        assert result.stderr == expected
+        assert "do-not-echo-secret" not in result.stderr
+        assert str(paths[0]) not in result.stderr
+
+    bad_baseline = tmp_path / "bad-baseline.json"
+    bad_baseline.write_text("[]")
+    result = subprocess.run([sys.executable, str(script), "compare", str(bad_baseline), str(valid)], capture_output=True, text=True)
+    assert result.returncode == 2
+    assert result.stderr == "error: baseline snapshot is malformed\n"
+
+    bad_current = tmp_path / "bad-current-map.json"
+    bad_current.write_text("[]")
+    result = subprocess.run([sys.executable, str(script), "compare", str(valid), str(bad_current)], capture_output=True, text=True)
+    assert result.returncode == 2
+    assert result.stderr == "error: current snapshot is malformed\n"
+
+    mismatch = tmp_path / "mismatch.json"
+    mismatch.write_text(json.dumps({"worker": baseline["api"]}))
+    result = subprocess.run([sys.executable, str(script), "compare", str(valid), str(mismatch)], capture_output=True, text=True)
+    assert result.returncode == 2
+    assert result.stderr == "error: stability snapshot service structure is malformed\n"
+
+
+@pytest.mark.parametrize("values", [("0", "1", "0"), ("1", "0", "0"), ("1", "1", "-1"),
+                                     ("x", "1", "0"), ("01", "1", "0"), ("١", "1", "0"),
+                                     ("1" * 100, "1", "0")])
+def test_cli_connection_cap_invalid_is_fixed_error(values):
+    root = Path(__file__).parents[2]
+    script = root / "scripts" / "one_click_stability.py"
+    args = [sys.executable, str(script), "connection-cap", "--replicas", values[0],
+            "--pool-size", values[1], "--max-overflow", values[2]]
+    result = subprocess.run(args, capture_output=True, text=True)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr == "error: connection-cap inputs are invalid\n"
+    assert "Traceback" not in result.stderr
