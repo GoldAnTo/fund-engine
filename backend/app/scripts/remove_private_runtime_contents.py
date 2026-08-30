@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Delete a private runtime directory's contents through an inherited fd only."""
+"""Delete contents through an inherited private-directory fd only.
+
+The caller excludes concurrent same-UID mutation while the held directory fd is
+being traversed; this helper never follows symlinks and never removes the root.
+"""
 
 import os
 import stat

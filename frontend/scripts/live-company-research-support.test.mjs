@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdir, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import os from "node:os";
 import test from "node:test";
 import path from "node:path";
 
@@ -17,13 +19,22 @@ import {
   waitUntil,
 } from "./live-company-research-support.mjs";
 
+const TEST_PYTHON = execFileSync("which", ["python3"], { encoding: "utf8" }).trim();
 const TEST_CLEANUP_HELPER = Object.freeze({
-  pythonExecutable: "/opt/homebrew/bin/python3",
+  pythonExecutable: TEST_PYTHON,
   helperPath: path.resolve(process.cwd(), "../backend/app/scripts/remove_private_runtime_contents.py"),
 });
 
 function createTestRuntime() {
   return createPrivateRuntime({ cleanupHelper: TEST_CLEANUP_HELPER });
+}
+
+async function waitForProcessExit(owned, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (owned.child.exitCode === null && owned.child.signalCode === null) {
+    if (Date.now() >= deadline) throw new Error("process did not exit");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 test("parseVerifierArgs accepts only the bounded two-token timeout option", () => {
@@ -186,6 +197,50 @@ test("createPrivateRuntime creates a private owned directory and removePrivateRu
   await assert.rejects(lstat(runtime.directory), { code: "ENOENT" });
 });
 
+test("createPrivateRuntime validates helper execution before quarantining a runtime", async () => {
+  const helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-helper-"));
+  const invalidPython = path.join(helperDirectory, "not-python");
+  await writeFile(invalidPython, "not an executable format");
+  await chmod(invalidPython, 0o700);
+  const runtime = await createPrivateRuntime({
+    cleanupHelper: { pythonExecutable: invalidPython, helperPath: TEST_CLEANUP_HELPER.helperPath },
+  });
+  await writeFile(`${runtime.directory}/sentinel`, "owned");
+
+  try {
+    await assert.rejects(removePrivateRuntime(runtime));
+    assert.equal(await readFile(`${runtime.directory}/sentinel`, "utf8"), "owned");
+  } finally {
+    await rm(runtime.directory, { recursive: true, force: true });
+    await rm(helperDirectory, { recursive: true, force: true });
+  }
+});
+
+test("atomic cleanup claim uses this runtime's exact prefix under a hostile TMPDIR", async () => {
+  const hostileParent = await mkdtemp(path.join(os.tmpdir(), "hostile-live-company-research-"));
+  const priorTmpdir = process.env.TMPDIR;
+  process.env.TMPDIR = hostileParent;
+  let runtime;
+  try {
+    runtime = await createTestRuntime();
+    await Promise.all(Array.from({ length: 200 }, (_, index) =>
+      writeFile(`${runtime.directory}/owned-${index}`, "owned")));
+    const cleanup = removePrivateRuntime(runtime);
+    let claimed = false;
+    const exactPrefix = `.${path.basename(runtime.directory)}.cleanup-`;
+    for (let attempt = 0; attempt < 100 && !claimed; attempt += 1) {
+      claimed = (await readdir(hostileParent)).some((entry) => entry.startsWith(exactPrefix));
+      if (!claimed) await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    assert.equal(claimed, true);
+    await cleanup;
+  } finally {
+    if (priorTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = priorTmpdir;
+    await rm(hostileParent, { recursive: true, force: true });
+  }
+});
+
 test("removePrivateRuntime refuses a directory substituted after creation", async () => {
   const runtime = await createTestRuntime();
   const movedDirectory = `${runtime.directory}.moved`;
@@ -221,7 +276,8 @@ test("removePrivateRuntime leaves a victim created after its atomic cleanup clai
     let claimed = false;
     for (let attempt = 0; attempt < 100 && !claimed; attempt += 1) {
       const entries = await readdir(runtime.parent);
-      claimed = entries.some((entry) => entry.startsWith(".fund-engine-live-company-research-cleanup-"));
+      claimed = entries.some((entry) =>
+        entry.startsWith(`.${path.basename(runtime.directory)}.cleanup-`));
       if (!claimed) await new Promise((resolve) => setTimeout(resolve, 1));
     }
     assert.equal(claimed, true, "cleanup must atomically quarantine its owned directory");
@@ -378,21 +434,19 @@ test("supervision diagnostics bound untrusted labels, names, and probe errors", 
   }
 });
 
-test("stopOwnedProcess uses its captured kill capability despite public child mutation", async () => {
+test("stopOwnedProcess exposes no mutable child lifecycle capability", async () => {
   const sleeper = startOwnedProcess(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"], {
     cwd: process.cwd(),
     env: { PATH: process.env.PATH ?? "" },
     name: "sleeper",
   });
-  const kill = sleeper.child.kill.bind(sleeper.child);
-  sleeper.child.kill = () => false;
-
   try {
+    assert.equal(typeof sleeper.child.kill, "undefined");
+    assert.equal(typeof sleeper.child.emit, "undefined");
+    assert.equal(Object.isFrozen(sleeper.child), true);
     await stopOwnedProcess(sleeper);
   } finally {
-    sleeper.child.kill = kill;
-    if (!sleeper.exited) kill("SIGKILL");
-    await sleeper.exitPromise;
+    if (!sleeper.exited) process.kill(sleeper.child.pid, "SIGKILL");
   }
   assert.doesNotThrow(() => assertProcessesRunning([sleeper]));
 });
@@ -422,8 +476,8 @@ test("supervision fails closed for spawn errors and signal-only exits", async ()
     env: { PATH: process.env.PATH ?? "" },
     name: "signaled",
   });
-  await new Promise((resolve) => signaled.child.once("spawn", resolve));
-  signaled.child.kill("SIGTERM");
+  while (!signaled.child.pid) await new Promise((resolve) => setTimeout(resolve, 1));
+  process.kill(signaled.child.pid, "SIGTERM");
   try {
     await assert.rejects(
       waitUntil(() => false, {
@@ -528,23 +582,19 @@ test("owned process handles cannot be redirected to another child", async () => 
   });
   const firstChild = first.child;
   const secondChild = second.child;
-  const firstExited = new Promise((resolve) => firstChild.once("exit", resolve));
-  const fallback = setTimeout(() => firstChild.kill("SIGKILL"), 100);
 
   try {
     try {
       first.child = secondChild;
-      first.exitPromise = Promise.resolve();
       first.name = "redirected";
     } catch {
       // Frozen public capabilities reject mutation in ESM strict mode.
     }
     await stopOwnedProcess(first);
-    await firstExited;
+    await waitForProcessExit(first);
     assert.equal(secondChild.exitCode, null);
     assert.equal(secondChild.signalCode, null);
   } finally {
-    clearTimeout(fallback);
     await stopOwnedProcess(second);
   }
 });
@@ -588,7 +638,8 @@ test("stopOwnedProcess escalates a SIGTERM-ignoring child to SIGKILL", async () 
   const sleeper = startOwnedProcess(process.execPath, ["-e", "process.on('SIGTERM', () => {}); process.stdout.write('ready'); setTimeout(() => {}, 60_000)"], {
     cwd: process.cwd(), env: { PATH: process.env.PATH ?? "" }, name: "term-ignoring",
   });
-  await new Promise((resolve) => sleeper.child.stdout.once("data", resolve));
+  while (!sleeper.child.pid) await new Promise((resolve) => setTimeout(resolve, 1));
+  await new Promise((resolve) => setTimeout(resolve, 50));
   const started = Date.now();
   await stopOwnedProcess(sleeper);
   assert.ok(Date.now() - started >= 4_500);

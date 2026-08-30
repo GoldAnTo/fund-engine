@@ -88,8 +88,53 @@ function appendBoundedBuffer(buffer, chunk) {
   return combined.length > MAX_LOG_BYTES ? combined.subarray(-MAX_LOG_BYTES) : combined;
 }
 
+function hasFileIdentity(current, expected) {
+  return current.isFile() && !current.isSymbolicLink()
+    && current.dev === expected.dev && current.ino === expected.ino
+    && current.uid === expected.uid && (current.mode & 0o777) === expected.mode;
+}
+
+async function assertCleanupHelperIdentity(authority) {
+  const [pythonStat, helperStat] = await Promise.all([
+    lstat(authority.cleanupHelper.pythonExecutable),
+    lstat(authority.cleanupHelper.helperPath),
+  ]);
+  if (!hasFileIdentity(pythonStat, authority.cleanupHelper.python)
+    || !hasFileIdentity(helperStat, authority.cleanupHelper.helper)) {
+    throw new Error("private runtime cleanup helper identity changed");
+  }
+}
+
+function runExactProcess(command, args, options, failureLabel) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, options);
+    let settled = false;
+    const fail = (error) => {
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    };
+    child.once("error", fail);
+    child.once("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      if (code === 0) resolve(child);
+      else reject(new Error(`${failureLabel} exited with ${code ?? signal ?? "unknown"}`));
+    });
+  });
+}
+
+async function preflightCleanupHelper(authority) {
+  await assertCleanupHelperIdentity(authority);
+  await runExactProcess(authority.cleanupHelper.pythonExecutable, ["-I", "-c", ""], {
+    env: {}, stdio: "ignore",
+  }, "private runtime cleanup helper preflight");
+}
+
 async function runCleanupHelper(authority, directory) {
   const { pythonExecutable, helperPath } = authority.cleanupHelper;
+  await assertCleanupHelperIdentity(authority);
   await new Promise((resolve, reject) => {
     const child = spawn(pythonExecutable, [
       "-I", helperPath, "3", String(authority.dev), String(authority.ino),
@@ -102,8 +147,16 @@ async function runCleanupHelper(authority, directory) {
     let stderr = Buffer.alloc(0);
     child.stdout.on("data", (chunk) => { stdout = appendBoundedBuffer(stdout, chunk); });
     child.stderr.on("data", (chunk) => { stderr = appendBoundedBuffer(stderr, chunk); });
-    child.once("error", (error) => reject(error));
-    child.once("exit", (code, signal) => {
+    let settled = false;
+    child.once("error", (error) => {
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    child.once("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
       if (code === 0) resolve();
       else reject(new Error(boundedDiagnostic(
         `private runtime cleanup helper exited with ${code ?? signal ?? "unknown"}: ${stderr.toString("utf8") || stdout.toString("utf8")}`,
@@ -137,6 +190,9 @@ async function removeAnchoredRuntimeDirectory(claimed, authority) {
   } finally {
     await directory.close();
   }
+  // Darwin exposes no inode-conditional rmdir. The caller must exclude concurrent
+  // same-UID replacement after fd-authenticated cleanup; rmdir can only remove an
+  // empty replacement, while any nonempty victim is preserved by ENOTEMPTY.
   try {
     await rmdir(claimed);
   } catch (error) {
@@ -243,13 +299,19 @@ async function validateCleanupHelper(cleanupHelper) {
     || !path.isAbsolute(cleanupHelper.pythonExecutable) || !path.isAbsolute(cleanupHelper.helperPath)) {
     throw new Error("private runtime cleanup helper must use exact absolute executable and helper paths");
   }
-  const helperStat = await lstat(cleanupHelper.helperPath);
-  if (!helperStat.isFile() || helperStat.isSymbolicLink()) {
-    throw new Error("private runtime cleanup helper must be a regular file");
+  const [pythonExecutable, helperPath] = await Promise.all([
+    realpath(cleanupHelper.pythonExecutable), realpath(cleanupHelper.helperPath),
+  ]);
+  const [pythonStat, helperStat] = await Promise.all([lstat(pythonExecutable), lstat(helperPath)]);
+  if (!pythonStat.isFile() || pythonStat.isSymbolicLink() || (pythonStat.mode & 0o111) === 0) {
+    throw new Error("private runtime cleanup helper Python executable must be a regular executable file");
   }
+  if (!helperStat.isFile() || helperStat.isSymbolicLink()) throw new Error("private runtime cleanup helper must be a regular file");
   return Object.freeze({
-    pythonExecutable: cleanupHelper.pythonExecutable,
-    helperPath: cleanupHelper.helperPath,
+    pythonExecutable,
+    helperPath,
+    python: Object.freeze({ dev: pythonStat.dev, ino: pythonStat.ino, uid: pythonStat.uid, mode: pythonStat.mode & 0o777 }),
+    helper: Object.freeze({ dev: helperStat.dev, ino: helperStat.ino, uid: helperStat.uid, mode: helperStat.mode & 0o777 }),
   });
 }
 
@@ -289,6 +351,7 @@ export async function removePrivateRuntime(runtime) {
   }
   if (authority.removed) return;
   await assertPrivateRuntimeParent(authority);
+  await preflightCleanupHelper(authority);
 
   let claimed = authority.quarantine;
   if (!claimed) {
@@ -330,10 +393,21 @@ export function startOwnedProcess(command, args, { cwd, env, name }) {
     kill: child.kill.bind(child),
     stopPromise: null,
   };
-  const owned = {};
-  for (const key of ["child", "name", "stdout", "stderr", "expectedStop", "exited", "exitCode", "exitPromise"]) {
-    Object.defineProperty(owned, key, { enumerable: true, get: () => authority[key] });
+  const childFacade = {};
+  for (const key of ["pid", "exitCode", "signalCode", "killed"]) {
+    Object.defineProperty(childFacade, key, { enumerable: true, get: () => authority.child[key] });
   }
+  Object.freeze(childFacade);
+  const owned = {};
+  Object.defineProperties(owned, {
+    child: { enumerable: true, get: () => childFacade },
+    name: { enumerable: true, get: () => authority.name },
+    stdout: { enumerable: true, get: () => Buffer.from(authority.stdout) },
+    stderr: { enumerable: true, get: () => Buffer.from(authority.stderr) },
+    expectedStop: { enumerable: true, get: () => authority.expectedStop },
+    exited: { enumerable: true, get: () => authority.exited },
+    exitCode: { enumerable: true, get: () => authority.exitCode },
+  });
   Object.freeze(owned);
   PROCESS_AUTHORITIES.set(owned, authority);
   child.stdout.on("data", (chunk) => appendBoundedLog(authority, "stdout", chunk));
@@ -430,7 +504,15 @@ export async function waitUntil(probe, { label, timeoutMs, intervalMs = 100, pro
     assertProcessesRunning(processes);
     const nextRemaining = deadline - Date.now();
     if (nextRemaining <= 0) break;
-    await sleep(Math.min(intervalMs, nextRemaining));
+    const interval = deadlineTimer(Math.min(intervalMs, nextRemaining));
+    const intervalWatcher = watchProcessFailures(processes);
+    const intervalOutcome = await Promise.race([
+      interval.promise,
+      intervalWatcher.promise.then((error) => ({ kind: "process", error })),
+    ]);
+    interval.cancel();
+    intervalWatcher.cancel();
+    if (intervalOutcome.kind === "process") throw intervalOutcome.error;
   }
   assertProcessesRunning(processes);
   throw new Error(`${boundedDiagnostic(label, MAX_DIAGNOSTIC_FIELD_BYTES)} timed out: ${boundedDiagnostic(latest, MAX_DIAGNOSTIC_FIELD_BYTES)}`);
