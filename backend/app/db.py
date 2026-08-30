@@ -9,12 +9,14 @@ from collections.abc import Iterator
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.db_runtime import database_engine_kwargs
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+psycopg://evidence:evidence@localhost:5432/evidence",
 )
 
-engine = create_engine(DATABASE_URL, future=True)
+engine = create_engine(DATABASE_URL, **database_engine_kwargs(DATABASE_URL))
 if engine.dialect.name == "sqlite":
     @event.listens_for(engine, "connect")
     def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
