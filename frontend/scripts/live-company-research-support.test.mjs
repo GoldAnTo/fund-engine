@@ -661,6 +661,24 @@ test("waitUntil aborts a stalled probe's owned resource at its deadline", async 
   assert.equal(aborted, true);
 });
 
+test("waitUntil discards a stale probe exception after a later falsy result", async () => {
+  let first = true;
+  await assert.rejects(
+    waitUntil(() => {
+      if (first) {
+        first = false;
+        throw new Error("stale failure");
+      }
+      return false;
+    }, { label: "reset latest", timeoutMs: 10, intervalMs: 1 }),
+    (error) => {
+      assert.equal(error.message.includes("stale failure"), false);
+      assert.equal(error.message.includes("probe returned a falsy value"), true);
+      return true;
+    },
+  );
+});
+
 test("bounded diagnostics count UTF-8 bytes without splitting code points", async () => {
   const huge = "火".repeat(20_000);
   await assert.rejects(
@@ -680,8 +698,9 @@ test("stopOwnedProcess escalates a SIGTERM-ignoring child to SIGKILL", async () 
   const sleeper = startOwnedProcess(process.execPath, ["-e", "process.on('SIGTERM', () => {}); process.stdout.write('ready'); setTimeout(() => {}, 60_000)"], {
     cwd: process.cwd(), env: { PATH: process.env.PATH ?? "" }, name: "term-ignoring",
   });
-  while (!sleeper.child.pid) await new Promise((resolve) => setTimeout(resolve, 1));
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  while (!sleeper.stdout.toString("utf8").includes("ready")) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
   const started = Date.now();
   await stopOwnedProcess(sleeper);
   assert.ok(Date.now() - started >= 4_500);

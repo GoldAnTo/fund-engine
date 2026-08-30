@@ -146,9 +146,15 @@ function runBoundedExactProcess(command, args, options, failureLabel, timeoutMs)
     });
     termTimer = setTimeout(() => {
       timedOut = true;
-      if (!child.kill("SIGTERM")) finishTimeout();
+      if (!child.kill("SIGTERM")) {
+        finishTimeout();
+        return;
+      }
       killTimer = setTimeout(() => {
-        if (!child.kill("SIGKILL")) finishTimeout();
+        if (!child.kill("SIGKILL")) {
+          finishTimeout();
+          return;
+        }
         finalTimer = setTimeout(finishTimeout, timeoutMs);
       }, timeoutMs);
     }, timeoutMs);
