@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, mkdtemp, realpath, rename, rm } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { chmod, lstat, mkdtemp, open, realpath, rename, rmdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -12,7 +13,7 @@ const MAX_LOG_BYTES = 16_384;
 const MAX_DIAGNOSTIC_FIELD_BYTES = 8_000;
 const STOP_TIMEOUT_MS = 5_000;
 const RUNTIME_AUTHORITIES = new WeakMap();
-const OWNED_PROCESSES = new WeakSet();
+const PROCESS_AUTHORITIES = new WeakMap();
 const PRESERVED_ENVIRONMENT_KEYS = [
   "PATH",
   "SystemRoot",
@@ -79,28 +80,57 @@ async function assertPrivateRuntimeParent(authority) {
 }
 
 function quarantinePath(authority) {
-  return path.join(authority.parent, `.${PREFIX}cleanup-${randomUUID()}`);
+  return path.join(authority.parent, `.${path.basename(authority.directory)}.cleanup-${randomUUID()}`);
 }
 
-async function restoreClaimedDirectoryIfSafe(authority, claimed) {
+function appendBoundedBuffer(buffer, chunk) {
+  const combined = Buffer.concat([buffer, Buffer.from(chunk)]);
+  return combined.length > MAX_LOG_BYTES ? combined.subarray(-MAX_LOG_BYTES) : combined;
+}
+
+async function runCleanupHelper(authority, directory) {
+  const { pythonExecutable, helperPath } = authority.cleanupHelper;
+  await new Promise((resolve, reject) => {
+    const child = spawn(pythonExecutable, [
+      "-I", helperPath, "3", String(authority.dev), String(authority.ino),
+      String(authority.uid), String(authority.mode),
+    ], {
+      env: {},
+      stdio: ["ignore", "pipe", "pipe", directory.fd],
+    });
+    let stdout = Buffer.alloc(0);
+    let stderr = Buffer.alloc(0);
+    child.stdout.on("data", (chunk) => { stdout = appendBoundedBuffer(stdout, chunk); });
+    child.stderr.on("data", (chunk) => { stderr = appendBoundedBuffer(stderr, chunk); });
+    child.once("error", (error) => reject(error));
+    child.once("exit", (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(boundedDiagnostic(
+        `private runtime cleanup helper exited with ${code ?? signal ?? "unknown"}: ${stderr.toString("utf8") || stdout.toString("utf8")}`,
+      )));
+    });
+  });
+}
+
+async function removeAnchoredRuntimeDirectory(claimed, authority) {
+  const directory = await open(claimed, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
   try {
-    await lstat(authority.directory);
-    return false;
+    if (!hasPrivateRuntimeIdentity(await directory.stat(), authority)) privateRuntimeIdentityChanged();
+    await runCleanupHelper(authority, directory);
+  } finally {
+    await directory.close();
+  }
+  try {
+    await rmdir(claimed);
   } catch (error) {
-    if (error?.code !== "ENOENT") return false;
-  }
-  try {
-    await rename(claimed, authority.directory);
-    authority.quarantine = null;
-    return true;
-  } catch {
-    return false;
+    if (error?.code === "ENOTEMPTY" || error?.code === "EEXIST") privateRuntimeIdentityChanged();
+    throw error;
   }
 }
 
-function appendBoundedLog(owned, stream, chunk) {
-  const combined = Buffer.concat([owned[stream], Buffer.from(chunk)]);
-  owned[stream] = combined.length > MAX_LOG_BYTES ? combined.subarray(-MAX_LOG_BYTES) : combined;
+function appendBoundedLog(authority, stream, chunk) {
+  const combined = Buffer.concat([authority[stream], Buffer.from(chunk)]);
+  authority[stream] = combined.length > MAX_LOG_BYTES ? combined.subarray(-MAX_LOG_BYTES) : combined;
 }
 
 function sleep(milliseconds) {
@@ -118,17 +148,28 @@ async function waitForExit(owned, timeoutMs) {
 }
 
 function boundedDiagnostic(value, limit = MAX_LOG_BYTES) {
-  return String(value).replace(/[\u0000-\u001F\u007F]/g, " ").slice(0, limit);
+  const sanitized = String(value).replace(/[\u0000-\u001F\u007F]/g, " ");
+  let bytes = 0;
+  let result = "";
+  for (const codePoint of sanitized) {
+    const width = Buffer.byteLength(codePoint);
+    if (bytes + width > limit) break;
+    result += codePoint;
+    bytes += width;
+  }
+  return result;
 }
 
-function processExitCode(owned) {
-  return boundedDiagnostic(owned.exitCode ?? owned.child.exitCode ?? owned.child.signalCode ?? "unknown", MAX_DIAGNOSTIC_FIELD_BYTES);
+function processExitCode(authority) {
+  return boundedDiagnostic(authority.exitCode ?? authority.child.exitCode ?? authority.child.signalCode ?? "unknown", MAX_DIAGNOSTIC_FIELD_BYTES);
 }
 
 function processFailure(owned) {
-  const exited = owned.exited || owned.child.exitCode !== null || owned.child.signalCode !== null;
-  if (!exited || owned.expectedStop) return null;
-  return new Error(`${boundedDiagnostic(owned.name, MAX_DIAGNOSTIC_FIELD_BYTES)} exited with ${processExitCode(owned)}`);
+  const authority = PROCESS_AUTHORITIES.get(owned);
+  if (!authority) return new Error("refusing an unowned process handle");
+  const exited = authority.exited || authority.child.exitCode !== null || authority.child.signalCode !== null;
+  if (!exited || authority.expectedStop) return null;
+  return new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} exited with ${processExitCode(authority)}`);
 }
 
 function processFailureFor(processes) {
@@ -153,9 +194,11 @@ function watchProcessFailures(processes) {
     if (nextFailure) resolveFailure(nextFailure);
   };
   for (const owned of processes) {
-    owned.child.once("exit", check);
-    owned.child.once("error", check);
-    listeners.push([owned.child, "exit", check], [owned.child, "error", check]);
+    const authority = PROCESS_AUTHORITIES.get(owned);
+    if (!authority) continue;
+    authority.child.once("exit", check);
+    authority.child.once("error", check);
+    listeners.push([authority.child, "exit", check], [authority.child, "error", check]);
   }
   return {
     promise,
@@ -177,7 +220,24 @@ function deadlineTimer(milliseconds) {
   };
 }
 
-export async function createPrivateRuntime() {
+async function validateCleanupHelper(cleanupHelper) {
+  if (!cleanupHelper || typeof cleanupHelper.pythonExecutable !== "string"
+    || typeof cleanupHelper.helperPath !== "string"
+    || !path.isAbsolute(cleanupHelper.pythonExecutable) || !path.isAbsolute(cleanupHelper.helperPath)) {
+    throw new Error("private runtime cleanup helper must use exact absolute executable and helper paths");
+  }
+  const helperStat = await lstat(cleanupHelper.helperPath);
+  if (!helperStat.isFile() || helperStat.isSymbolicLink()) {
+    throw new Error("private runtime cleanup helper must be a regular file");
+  }
+  return Object.freeze({
+    pythonExecutable: cleanupHelper.pythonExecutable,
+    helperPath: cleanupHelper.helperPath,
+  });
+}
+
+export async function createPrivateRuntime({ cleanupHelper } = {}) {
+  const validatedCleanupHelper = await validateCleanupHelper(cleanupHelper);
   const parent = await realpath(os.tmpdir());
   const directory = await mkdtemp(path.join(parent, PREFIX));
   await chmod(directory, 0o700);
@@ -195,6 +255,7 @@ export async function createPrivateRuntime() {
     parentIno: parentStat.ino,
     quarantine: null,
     removed: false,
+    cleanupHelper: validatedCleanupHelper,
   });
   return runtime;
 }
@@ -227,30 +288,7 @@ export async function removePrivateRuntime(runtime) {
     authority.quarantine = claimed;
   }
 
-  let stat;
-  try {
-    stat = await lstat(claimed);
-  } catch (error) {
-    if (error?.code === "ENOENT") {
-      authority.removed = true;
-      return;
-    }
-    throw error;
-  }
-  if (!hasPrivateRuntimeIdentity(stat, authority)) {
-    await restoreClaimedDirectoryIfSafe(authority, claimed);
-    privateRuntimeIdentityChanged();
-  }
-
-  const finalClaim = quarantinePath(authority);
-  await rename(claimed, finalClaim);
-  authority.quarantine = finalClaim;
-  stat = await lstat(finalClaim);
-  if (!hasPrivateRuntimeIdentity(stat, authority)) {
-    await restoreClaimedDirectoryIfSafe(authority, finalClaim);
-    privateRuntimeIdentityChanged();
-  }
-  await rm(finalClaim, { recursive: true });
+  await removeAnchoredRuntimeDirectory(claimed, authority);
   authority.removed = true;
 }
 
@@ -261,7 +299,7 @@ export function chooseRunError(primary, cleanupErrors) {
 export function startOwnedProcess(command, args, { cwd, env, name }) {
   const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   let resolveExit;
-  const owned = {
+  const authority = {
     child,
     name,
     stdout: Buffer.alloc(0),
@@ -272,20 +310,27 @@ export function startOwnedProcess(command, args, { cwd, env, name }) {
     exitPromise: new Promise((resolve) => {
       resolveExit = resolve;
     }),
+    kill: child.kill.bind(child),
+    stopPromise: null,
   };
-  child.stdout.on("data", (chunk) => appendBoundedLog(owned, "stdout", chunk));
-  child.stderr.on("data", (chunk) => appendBoundedLog(owned, "stderr", chunk));
+  const owned = {};
+  for (const key of ["child", "name", "stdout", "stderr", "expectedStop", "exited", "exitCode", "exitPromise"]) {
+    Object.defineProperty(owned, key, { enumerable: true, get: () => authority[key] });
+  }
+  Object.freeze(owned);
+  PROCESS_AUTHORITIES.set(owned, authority);
+  child.stdout.on("data", (chunk) => appendBoundedLog(authority, "stdout", chunk));
+  child.stderr.on("data", (chunk) => appendBoundedLog(authority, "stderr", chunk));
   child.once("exit", (code, signal) => {
-    owned.exited = true;
-    owned.exitCode = code ?? signal;
+    authority.exited = true;
+    authority.exitCode = code ?? signal;
     resolveExit();
   });
   child.once("error", (error) => {
-    owned.exited = true;
-    owned.exitCode = error.code ?? error.message;
+    authority.exited = true;
+    authority.exitCode = error.code ?? error.message;
     resolveExit();
   });
-  OWNED_PROCESSES.add(owned);
   return owned;
 }
 
@@ -295,38 +340,39 @@ export function assertProcessesRunning(processes) {
 }
 
 export async function stopOwnedProcess(owned) {
-  if (!OWNED_PROCESSES.has(owned)) {
+  const authority = PROCESS_AUTHORITIES.get(owned);
+  if (!authority) {
     throw new Error("refusing to stop an unowned process handle");
   }
-  if (owned.stopPromise) return owned.stopPromise;
-  owned.stopPromise = stopOwnedProcessImpl(owned);
-  return owned.stopPromise;
+  if (authority.stopPromise) return authority.stopPromise;
+  authority.stopPromise = stopOwnedProcessImpl(authority);
+  return authority.stopPromise;
 }
 
-async function stopOwnedProcessImpl(owned) {
-  owned.expectedStop = true;
-  if (owned.exited) return;
+async function stopOwnedProcessImpl(authority) {
+  authority.expectedStop = true;
+  if (authority.exited) return;
 
   try {
-    if (!owned.child.kill("SIGTERM")) {
-      throw new Error(`${boundedDiagnostic(owned.name, MAX_DIAGNOSTIC_FIELD_BYTES)} refused SIGTERM`);
+    if (!authority.kill("SIGTERM")) {
+      throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} refused SIGTERM`);
     }
   } catch (error) {
-    if (error?.code === "ESRCH" && owned.exited) return;
-    throw new Error(`${boundedDiagnostic(owned.name, MAX_DIAGNOSTIC_FIELD_BYTES)} failed to send SIGTERM: ${boundedDiagnostic(error?.message ?? error, MAX_DIAGNOSTIC_FIELD_BYTES)}`);
+    if (error?.code === "ESRCH" && authority.exited) return;
+    throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} failed to send SIGTERM: ${boundedDiagnostic(error?.message ?? error, MAX_DIAGNOSTIC_FIELD_BYTES)}`);
   }
-  await waitForExit(owned, STOP_TIMEOUT_MS);
-  if (owned.exited) return;
+  await waitForExit(authority, STOP_TIMEOUT_MS);
+  if (authority.exited) return;
   try {
-    if (!owned.child.kill("SIGKILL")) {
-      throw new Error(`${boundedDiagnostic(owned.name, MAX_DIAGNOSTIC_FIELD_BYTES)} refused SIGKILL`);
+    if (!authority.kill("SIGKILL")) {
+      throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} refused SIGKILL`);
     }
   } catch (error) {
-    if (error?.code === "ESRCH" && owned.exited) return;
-    throw new Error(`${boundedDiagnostic(owned.name, MAX_DIAGNOSTIC_FIELD_BYTES)} failed to send SIGKILL: ${boundedDiagnostic(error?.message ?? error, MAX_DIAGNOSTIC_FIELD_BYTES)}`);
+    if (error?.code === "ESRCH" && authority.exited) return;
+    throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} failed to send SIGKILL: ${boundedDiagnostic(error?.message ?? error, MAX_DIAGNOSTIC_FIELD_BYTES)}`);
   }
-  if (!await waitForExit(owned, STOP_TIMEOUT_MS)) {
-    throw new Error(`${boundedDiagnostic(owned.name, MAX_DIAGNOSTIC_FIELD_BYTES)} did not exit after SIGKILL within ${STOP_TIMEOUT_MS}ms`);
+  if (!await waitForExit(authority, STOP_TIMEOUT_MS)) {
+    throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} did not exit after SIGKILL within ${STOP_TIMEOUT_MS}ms`);
   }
 }
 
@@ -339,8 +385,9 @@ export async function waitUntil(probe, { label, timeoutMs, intervalMs = 100, pro
     if (remaining <= 0) break;
     const timer = deadlineTimer(remaining);
     const watcher = watchProcessFailures(processes);
+    const controller = new AbortController();
     const probeResult = Promise.resolve()
-      .then(probe)
+      .then(() => probe({ signal: controller.signal }))
       .then((value) => ({ kind: "probe", value }), (error) => ({ kind: "probe-error", error }));
     const outcome = await Promise.race([
       probeResult,
@@ -349,6 +396,7 @@ export async function waitUntil(probe, { label, timeoutMs, intervalMs = 100, pro
     ]);
     timer.cancel();
     watcher.cancel();
+    controller.abort();
     if (outcome.kind === "deadline") break;
     if (outcome.kind === "process") throw outcome.error;
     if (outcome.kind === "probe") {
