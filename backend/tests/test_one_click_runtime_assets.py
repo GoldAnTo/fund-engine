@@ -73,23 +73,39 @@ def test_compose_applies_the_low_resource_profile_without_exposing_database_to_f
         assert f"{name}: ${{{name}:-{value}}}" in compose
         assert f"{name}={value}" in environment
 
-    for assignment in (
-        "ONE_CLICK_POSTGRES_MEMORY_LIMIT=1536m",
-        "ONE_CLICK_API_MEMORY_LIMIT=1536m",
-        "ONE_CLICK_RESEARCH_WORKER_MEMORY_LIMIT=768m",
-        "ONE_CLICK_ACQUISITION_WORKER_MEMORY_LIMIT=768m",
-        "ONE_CLICK_COMPANY_RESEARCH_WORKER_MEMORY_LIMIT=1280m",
-        "ONE_CLICK_FRONTEND_MEMORY_LIMIT=256m",
-        "ONE_CLICK_POSTGRES_CPU_LIMIT=1.5",
-        "ONE_CLICK_API_CPU_LIMIT=1.5",
-        "ONE_CLICK_RESEARCH_WORKER_CPU_LIMIT=1.0",
-        "ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT=1.0",
-        "ONE_CLICK_COMPANY_RESEARCH_WORKER_CPU_LIMIT=1.5",
-        "ONE_CLICK_FRONTEND_CPU_LIMIT=0.5",
+    service_slices = {
+        service: compose[compose.index(f"  {service}:\n") : compose.index(f"\n  {next_service}:\n")]
+        for service, next_service in (
+            ("postgres", "migrate"),
+            ("api", "research-worker"),
+            ("research-worker", "acquisition-worker"),
+            ("acquisition-worker", "company-research-worker"),
+            ("company-research-worker", "frontend"),
+        )
+    }
+    service_slices["frontend"] = frontend
+
+    for service, name, value in (
+        ("postgres", "ONE_CLICK_POSTGRES_MEMORY_LIMIT", "1536m"),
+        ("api", "ONE_CLICK_API_MEMORY_LIMIT", "1536m"),
+        ("research-worker", "ONE_CLICK_RESEARCH_WORKER_MEMORY_LIMIT", "768m"),
+        ("acquisition-worker", "ONE_CLICK_ACQUISITION_WORKER_MEMORY_LIMIT", "768m"),
+        ("company-research-worker", "ONE_CLICK_COMPANY_RESEARCH_WORKER_MEMORY_LIMIT", "1280m"),
+        ("frontend", "ONE_CLICK_FRONTEND_MEMORY_LIMIT", "256m"),
     ):
-        name, value = assignment.split("=", 1)
-        assert f"${{{name}:-{value}}}" in compose
-        assert assignment in environment
+        assert f"mem_limit: ${{{name}:-{value}}}" in service_slices[service]
+        assert f"{name}={value}" in environment
+
+    for service, name, value in (
+        ("postgres", "ONE_CLICK_POSTGRES_CPU_LIMIT", "1.5"),
+        ("api", "ONE_CLICK_API_CPU_LIMIT", "1.5"),
+        ("research-worker", "ONE_CLICK_RESEARCH_WORKER_CPU_LIMIT", "1.0"),
+        ("acquisition-worker", "ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT", "1.0"),
+        ("company-research-worker", "ONE_CLICK_COMPANY_RESEARCH_WORKER_CPU_LIMIT", "1.5"),
+        ("frontend", "ONE_CLICK_FRONTEND_CPU_LIMIT", "0.5"),
+    ):
+        assert f"cpus: ${{{name}:-{value}}}" in service_slices[service]
+        assert f"{name}={value}" in environment
 
     assert "DATABASE_POOL_SIZE" not in frontend
     assert "DATABASE_URL" not in frontend
