@@ -659,10 +659,9 @@ def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> Non
     assert '"$legacy_name" == "/$LEGACY_DATABASE_CONTAINER"' in script
     assert '"$legacy_project" == "$LEGACY_PROJECT"' in script
     assert '"$legacy_service" == "$LEGACY_DATABASE_SERVICE"' in script
-    assert "require_expected_healthy_replicas" in script
-    assert "require_expected_healthy_replicas company-research-worker 1" in script
-    assert 'require_expected_healthy_replicas research-worker 1' in script
-    assert 'require_expected_healthy_replicas acquisition-worker 3' in script
+    assert "one_click_stability.py" in script
+    assert '--expect "acquisition-worker=${ACQUISITION_REPLICAS}"' in script
+    assert "acquisition-worker 3" not in script
     assert "compose ps --all --quiet" in script
     assert "mapfile" not in script
     for shell_script in ("one-click-runtime.sh", "verify-one-click-runtime.sh"):
