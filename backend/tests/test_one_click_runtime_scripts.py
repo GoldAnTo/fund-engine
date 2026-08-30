@@ -604,9 +604,9 @@ esac
     completed = subprocess.run(
         [script, "up"],
         capture_output=True,
-            text=True,
-            env={
-                **sanitized_process_environment(),
+        text=True,
+        env={
+            **sanitized_process_environment(),
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "DOCKER_LOG": str(log),
         },
