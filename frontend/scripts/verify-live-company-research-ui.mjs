@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Start the isolated live Company Research stack and create Alphabet through the UI. */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { access, lstat, readFile, realpath } from "node:fs/promises";
 import http from "node:http";
@@ -53,6 +54,213 @@ const previewPath = "/api/underwriting/v1/product/company-research/preview";
 const searchPath = "/api/underwriting/v1/product/objects";
 const CLEANUP_TIMEOUT_MS = 10_000;
 const CLOSED_ANSWERABILITY_MESSAGE = "当前正式证据不足，不形成投资方向、置信度、目标价或预期回报。";
+const HUMAN_MEMO = "Current formal evidence is insufficient.";
+const PASS_LINE = "PASS: default frontend completed live Alphabet company research through reviewed evidence, frozen revision replay, and verified Markdown export";
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const FROZEN_ARTIFACT_KINDS = Object.freeze([
+  "evidence_index",
+  "research_gaps",
+  "business_map",
+  "driver_map",
+  "financial_bridge",
+  "scenario_set",
+  "judgment_context",
+  "memo",
+]);
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function jsonValuesEqual(left, right) {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length
+      && left.every((item, index) => jsonValuesEqual(item, right[index]));
+  }
+  if (!isRecord(left) || !isRecord(right)) return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key, index) =>
+      key === rightKeys[index] && jsonValuesEqual(left[key], right[key]));
+}
+
+function canonicalHash(value) {
+  const canonicalize = (item) => Array.isArray(item)
+    ? item.map(canonicalize)
+    : isRecord(item)
+      ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, canonicalize(item[key])]))
+      : item;
+  return createHash("sha256").update(JSON.stringify(canonicalize(value))).digest("hex");
+}
+
+function artifactDescriptor(artifact) {
+  return {
+    schema_version: artifact.schema_version,
+    kind: artifact.kind,
+    id: artifact.id,
+    version: artifact.version,
+    input_hash: artifact.input_hash,
+    content_hash: artifact.content_hash,
+  };
+}
+
+function exactArtifactDescriptors(workspace) {
+  if (!Array.isArray(workspace?.artifacts) || workspace.artifacts.length !== FROZEN_ARTIFACT_KINDS.length) {
+    throw new Error("prepublication workspace artifact cardinality mismatch");
+  }
+  const byKind = new Map(workspace.artifacts.map((artifact) => [artifact?.kind, artifact]));
+  if (byKind.size !== FROZEN_ARTIFACT_KINDS.length
+    || FROZEN_ARTIFACT_KINDS.some((kind) => !byKind.has(kind))) {
+    throw new Error("prepublication workspace artifact identities mismatch");
+  }
+  return FROZEN_ARTIFACT_KINDS.map((kind) => artifactDescriptor(byKind.get(kind)));
+}
+
+function assertExactFrozenDescriptors(actual, expected, label) {
+  if (!jsonValuesEqual(actual, expected)) throw new Error(`${label} frozen artifact descriptors mismatch`);
+  return actual;
+}
+
+function savedEvidenceDecisions(evidence) {
+  const facts = evidence?.payload?.facts;
+  if (!Array.isArray(facts) || facts.length === 0) throw new Error("saved evidence decisions are absent");
+  const decisions = facts.map((fact) => ({ fact_key: fact?.fact_key, review_decision: fact?.review_decision }));
+  if (decisions.some((decision) => typeof decision.fact_key !== "string"
+    || decision.review_decision !== "confirmed")
+    || new Set(decisions.map((decision) => decision.fact_key)).size !== decisions.length) {
+    throw new Error("saved evidence decisions are invalid");
+  }
+  return decisions;
+}
+
+function assertSavedEvidenceDecisions(workspace, expected, label) {
+  const evidence = workspace?.artifacts?.find((artifact) => artifact?.kind === "evidence_index");
+  if (!jsonValuesEqual(savedEvidenceDecisions(evidence), expected)) {
+    throw new Error(`${label} evidence decisions changed`);
+  }
+  return evidence;
+}
+
+function storedMemoResearchGaps(workspace, memo) {
+  const gaps = workspace?.artifacts?.find((artifact) => artifact?.kind === "research_gaps")?.payload?.gaps;
+  const modules = workspace?.artifacts?.find((artifact) => artifact?.kind === "business_map")?.payload?.modules;
+  const nextEvents = workspace?.artifacts?.find((artifact) => artifact?.kind === "judgment_context")
+    ?.payload?.next_verification_events;
+  const gapKeys = memo?.payload?.gap_keys;
+  if (!Array.isArray(gaps) || !Array.isArray(modules) || !Array.isArray(nextEvents)
+    || !Array.isArray(gapKeys) || gapKeys.length !== nextEvents.length) {
+    throw new Error("confirmed memo stored gap codec mismatch");
+  }
+  const sourceGaps = new Map(gaps.map((gap) => [gap?.gap_key, gap]));
+  const moduleByGap = new Map();
+  for (const module of modules) {
+    if (!Array.isArray(module?.gap_refs)) throw new Error("confirmed memo stored gap codec mismatch");
+    for (const gapKey of module.gap_refs) {
+      if (moduleByGap.has(gapKey)) throw new Error("confirmed memo stored gap codec mismatch");
+      moduleByGap.set(gapKey, module.module_key);
+    }
+  }
+  const generatedMessage = (gapKey) => {
+    for (const [prefix, text] of [
+      ["builder_generated_operating_baseline_missing_", "Reviewed operating baseline is missing: "],
+      ["builder_generated_missing_module_evidence_", "No confirmed evidence or governed gap covers "],
+      ["builder_generated_operating_driver_missing_", "Confirmed numeric input is missing for "],
+    ]) if (gapKey.startsWith(prefix)) return `${text}${gapKey.slice(prefix.length)}`;
+    return null;
+  };
+  return gapKeys.map((gapKey, index) => {
+    const source = sourceGaps.get(gapKey);
+    const moduleKey = moduleByGap.get(gapKey);
+    const message = nextEvents[index];
+    if (typeof moduleKey !== "string" || typeof message !== "string") {
+      throw new Error("confirmed memo stored gap codec mismatch");
+    }
+    if (source) {
+      if (source.business_module !== moduleKey || source.reason !== message) {
+        throw new Error("confirmed memo stored gap codec mismatch");
+      }
+      return { code: gapKey, module_key: moduleKey, severity: "high", message };
+    }
+    if (generatedMessage(gapKey) !== message) throw new Error("confirmed memo stored gap codec mismatch");
+    return { code: gapKey, module_key: moduleKey, severity: "critical", message };
+  });
+}
+
+function assertExactConfirmedMemo(machineMemo, confirmedMemo, markdown, workspace) {
+  if (!isRecord(machineMemo) || !isRecord(confirmedMemo)
+    || machineMemo.kind !== "memo" || confirmedMemo.kind !== "memo"
+    || confirmedMemo.schema_version !== machineMemo.schema_version
+    || confirmedMemo.project_id !== machineMemo.project_id
+    || confirmedMemo.id === machineMemo.id
+    || confirmedMemo.version !== machineMemo.version + 1
+    || confirmedMemo.input_hash !== machineMemo.input_hash
+    || !jsonValuesEqual(confirmedMemo.source_refs, machineMemo.source_refs)) {
+    throw new Error("confirmed memo successor identity mismatch");
+  }
+  const expectedPayload = {
+    ...structuredClone(machineMemo.payload),
+    candidate_status: "human_confirmed",
+    reviewer: "human:local-user",
+    markdown,
+  };
+  if (!jsonValuesEqual(confirmedMemo.payload, expectedPayload)
+    || confirmedMemo.payload.assessment_status !== "not_answerable"
+    || Object.hasOwn(confirmedMemo.payload, "direction")
+    || Object.hasOwn(confirmedMemo.payload, "confidence")
+    || Object.hasOwn(confirmedMemo.payload, "target_value")
+    || Object.hasOwn(confirmedMemo.payload, "value_range")
+    || Object.hasOwn(confirmedMemo.payload, "return_range")) {
+    throw new Error("confirmed memo full codec successor mismatch");
+  }
+  const storedPayload = {
+    ...expectedPayload,
+    research_gaps: storedMemoResearchGaps(workspace, machineMemo),
+  };
+  const expectedHash = canonicalHash({
+    schema_version: "company-research-artifact.v1",
+    project_id: confirmedMemo.project_id,
+    kind: "memo",
+    version: confirmedMemo.version,
+    supersedes_id: machineMemo.id,
+    parent_content_hash: machineMemo.content_hash,
+    input_hash: confirmedMemo.input_hash,
+    payload: storedPayload,
+    source_refs: confirmedMemo.source_refs,
+  });
+  if (confirmedMemo.content_hash !== expectedHash) throw new Error("confirmed memo content hash mismatch");
+  return confirmedMemo;
+}
+
+function assertExactPublicationProjection(actual, preview, label) {
+  const fields = [
+    "company", "securities", "cutoff_at", "historical_basis_id", "historical_basis_content_hash",
+    "strategy_version", "model_version", "assessment", "value_range", "return_range", "blockers",
+    "strongest_counterevidence", "next_verification_events", "memo_markdown", "artifacts",
+  ];
+  if (fields.some((field) => !jsonValuesEqual(actual?.[field], preview?.[field]))) {
+    throw new Error(`${label} publication projection mismatch`);
+  }
+  return actual;
+}
+
+function retainPrimaryFailure(promise) {
+  void promise.catch(() => {});
+  return promise;
+}
+
+function componentTail(owned) {
+  if (!owned) return "";
+  const raw = owned.stderr.length > 0 ? owned.stderr.toString("utf8") : owned.stdout.toString("utf8");
+  const sanitized = raw
+    .replaceAll(token, "[redacted]")
+    .replace(/authorization\s*[:=]\s*[^\s,;]+/giu, "authorization=[redacted]")
+    .replace(/[\u0000-\u001F\u007F]/gu, " ");
+  const tail = Array.from(sanitized).slice(-180).join("").trim();
+  return `\n${owned.name} output tail: ${tail || "[empty]"}`;
+}
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -376,7 +584,7 @@ async function runBootstrap(python, args, { env, deadline, label }) {
 
 async function runBrowserWorkflow({
   page, uiBase, audit, failures, deadline, runningProcesses, foundation,
-  pendingObservers, stopWorkerForReview, restartWorker,
+  pendingObservers, browserRuntimeDirectory, stopWorkerForReview, restartWorker,
 }) {
   const workspaceResponses = createWorkspaceResponseCollector(page, failures, pendingObservers);
   await page.goto(`${uiBase}/research/new`, {
@@ -568,24 +776,322 @@ async function runBrowserWorkflow({
   });
   throwBrowserFailures(failures);
   assertProcessesRunning(runningProcesses());
+
+  const machineMemos = modelWorkspace.artifacts.filter((artifact) => artifact?.kind === "memo");
+  if (machineMemos.length !== 1) throw new Error("model workspace did not expose exactly one machine memo");
+  const machineMemo = machineMemos[0];
+  if (machineMemo.payload?.candidate_status !== "machine_draft"
+    || machineMemo.payload?.assessment_status !== "not_answerable") {
+    throw new Error("pre-confirmation machine memo boundary mismatch");
+  }
+  const prepublicationDecisions = savedEvidenceDecisions(evidence);
+  const confirmationPath = `/api/underwriting/v1/product/company-research/projects/${encodeURIComponent(projectId)}/judgment-confirmations`;
+  const readyWorkspaceCursor = workspaceResponses.cursor();
+  const confirmationResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
+    response.request().method() === "POST" && new URL(response.url()).pathname === confirmationPath,
+  { timeout: remaining(deadline, "judgment confirmation") }));
+  await page.getByLabel("研究备忘录 Markdown").fill(HUMAN_MEMO);
+  await page.getByRole("button", { name: "确认当前判断", exact: true }).click();
+  const confirmation = await responseJson(await confirmationResponsePromise);
+  if (confirmation?.project_id !== projectId
+    || confirmation?.preparation?.id !== modelWorkspace.preparation.id
+    || confirmation.preparation.status !== "ready_to_freeze"
+    || confirmation.preparation.current_step !== "memo"
+    || confirmation.preparation.progress !== 95
+    || confirmation?.draft?.id !== modelWorkspace.draft.id
+    || confirmation.draft.lock_version !== modelWorkspace.draft.lock_version + 1
+    || confirmation.markdown !== HUMAN_MEMO
+    || confirmation.assessment_status !== "not_answerable"
+    || confirmation.reviewer !== "human:local-user"
+    || confirmation?.machine_memo?.id !== machineMemo.id
+    || confirmation.machine_memo.content_hash !== machineMemo.content_hash
+    || confirmation?.confirmed_memo?.id === machineMemo.id
+    || !SHA256_PATTERN.test(confirmation?.confirmed_memo?.content_hash ?? "")) {
+    throw new Error("judgment confirmation successor mismatch");
+  }
+  await page.getByText("判断已确认，可以冻结版本。", { exact: true }).waitFor({
+    timeout: remaining(deadline, "visible judgment confirmation"),
+  });
+  const readyWorkspace = await waitForBrowserWorkspace({
+    collector: workspaceResponses,
+    after: readyWorkspaceCursor,
+    projectId,
+    status: "ready_to_freeze",
+    progress: 95,
+    reviewedCount: factKeys.length,
+    evidenceArtifact: evidence,
+    deadline,
+    processes: runningProcesses(),
+  });
+  assertWorkspace(readyWorkspace, {
+    projectId,
+    companyId: alphabet.object_id,
+    status: "ready_to_freeze",
+    progress: 95,
+  });
+  if (readyWorkspace.preparation.current_step !== "memo"
+    || readyWorkspace.selected_revision !== null
+    || readyWorkspace.draft.id !== confirmation.draft.id
+    || readyWorkspace.draft.lock_version !== confirmation.draft.lock_version) {
+    throw new Error("ready-to-freeze workspace identity mismatch");
+  }
+  const confirmedMemos = readyWorkspace.artifacts.filter((artifact) => artifact?.kind === "memo");
+  if (confirmedMemos.length !== 1) throw new Error("ready workspace did not expose exactly one confirmed memo");
+  const confirmedMemo = assertExactConfirmedMemo(
+    machineMemo, confirmedMemos[0], HUMAN_MEMO, modelWorkspace,
+  );
+  if (confirmation.confirmed_memo.id !== confirmedMemo.id
+    || confirmation.confirmed_memo.content_hash !== confirmedMemo.content_hash) {
+    throw new Error("judgment response confirmed memo binding mismatch");
+  }
+  for (const modelArtifact of modelWorkspace.artifacts) {
+    if (modelArtifact.kind === "memo") continue;
+    const readyArtifact = readyWorkspace.artifacts.find((artifact) => artifact?.kind === modelArtifact.kind);
+    assertSameArtifactHead(modelArtifact, readyArtifact);
+  }
+  assertSavedEvidenceDecisions(readyWorkspace, prepublicationDecisions, "confirmed workspace");
+  const prepublicationDescriptors = exactArtifactDescriptors(readyWorkspace);
+
+  const publicationPreviewPath = `/api/underwriting/v1/product/company-research/projects/${encodeURIComponent(projectId)}/publication-preview`;
+  const publicationPreviewResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
+    response.request().method() === "POST" && new URL(response.url()).pathname === publicationPreviewPath,
+  { timeout: remaining(deadline, "publication preview") }));
+  await page.getByRole("button", { name: "预览冻结版本", exact: true }).click();
+  const publicationPreview = await responseJson(await publicationPreviewResponsePromise);
+  const expectedSecurityByKey = new Map(preview.securities.map((security) => [security.external_key, security]));
+  const previewSecuritiesAreExact = Array.isArray(publicationPreview?.securities)
+    && publicationPreview.securities.length === expectedSecurityByKey.size
+    && publicationPreview.securities.every((security) => {
+      const expected = expectedSecurityByKey.get(security?.external_key);
+      return expected !== undefined
+        && security.object_id === expected.object_id
+        && security.canonical_name === expected.canonical_name
+        && security.symbol === expected.symbol
+        && security.exchange === expected.exchange
+        && security.share_class === expected.share_class
+        && security.trading_currency === expected.trading_currency
+        && security.company_id === alphabet.object_id;
+    });
+  if (publicationPreview?.project_id !== projectId
+    || publicationPreview.expected_lock_version !== readyWorkspace.draft.lock_version
+    || publicationPreview?.company?.object_id !== alphabet.object_id
+    || publicationPreview.company.external_key !== alphabetExternalKey
+    || publicationPreview.company.canonical_name !== alphabet.canonical_name
+    || !previewSecuritiesAreExact
+    || publicationPreview.cutoff_at !== preview.cutoff_at
+    || publicationPreview.cutoff_at !== evidence.payload.cutoff
+    || publicationPreview.assessment?.answerability !== "not_answerable"
+    || publicationPreview.assessment.direction !== null
+    || publicationPreview.assessment.confidence !== null
+    || !SHA256_PATTERN.test(publicationPreview.assessment.content_hash ?? "")
+    || publicationPreview.value_range !== null
+    || publicationPreview.return_range !== null
+    || publicationPreview.memo_markdown !== HUMAN_MEMO
+    || !SHA256_PATTERN.test(publicationPreview.manifest_hash ?? "")) {
+    throw new Error("publication preview contract mismatch");
+  }
+  assertExactFrozenDescriptors(publicationPreview.artifacts, prepublicationDescriptors, "preview");
+  const previewDialog = page.getByRole("dialog", { name: "确认冻结版本" });
+  await previewDialog.waitFor({ timeout: remaining(deadline, "publication preview dialog") });
+  for (const value of [
+    projectId,
+    publicationPreview.company.object_id,
+    publicationPreview.company.external_key,
+    publicationPreview.company.canonical_name,
+    publicationPreview.cutoff_at,
+    publicationPreview.assessment.answerability,
+    publicationPreview.assessment.content_hash,
+    publicationPreview.manifest_hash,
+  ]) await previewDialog.getByText(value, { exact: false }).first().waitFor();
+  await previewDialog.getByText("未建立价值范围", { exact: true }).waitFor();
+  await previewDialog.getByText("未建立回报范围", { exact: true }).waitFor();
+  for (const security of publicationPreview.securities) {
+    const visible = `${security.schema_version} · ${security.canonical_name} · ${security.external_key} · ${security.symbol} · ${security.exchange} · ${security.share_class} · ${security.trading_currency} · ${security.company_id} · ${security.object_id}`;
+    await previewDialog.getByText(visible, { exact: true }).waitFor();
+  }
+  for (const artifact of publicationPreview.artifacts) {
+    const visible = `${artifact.schema_version} ${artifact.kind} ${artifact.id} v${artifact.version} input ${artifact.input_hash} content ${artifact.content_hash}`;
+    await previewDialog.getByText(visible, { exact: true }).waitFor();
+  }
+
+  const publishPath = `/api/underwriting/v1/product/company-research/projects/${encodeURIComponent(projectId)}/publish`;
+  const publishResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
+    response.request().method() === "POST" && new URL(response.url()).pathname === publishPath,
+  { timeout: remaining(deadline, "publication") }));
+  const publishedWorkspaceCursor = workspaceResponses.cursor();
+  const automaticReplayResponsePromise = retainPrimaryFailure(page.waitForResponse((response) => {
+    const pathname = new URL(response.url()).pathname;
+    return response.request().method() === "GET"
+      && pathname.includes(`/projects/${encodeURIComponent(projectId)}/revisions/`)
+      && !pathname.endsWith("/export");
+  }, { timeout: remaining(deadline, "automatic frozen revision replay") }));
+  await page.getByRole("button", { name: "冻结并发布", exact: true }).click();
+  const frozen = await responseJson(await publishResponsePromise);
+  if (frozen?.project_id !== projectId || frozen.sequence !== 1
+    || frozen.preparation_status !== "completed" || frozen.current_step !== null
+    || frozen.progress !== 100 || frozen.manifest_hash === publicationPreview.manifest_hash
+    || !UUID_PATTERN.test(frozen.id ?? "") || !UUID_PATTERN.test(frozen.boundary_id ?? "")
+    || !UUID_PATTERN.test(frozen.manifest_id ?? "")
+    || !SHA256_PATTERN.test(frozen.manifest_hash ?? "")) {
+    throw new Error("published revision contract mismatch");
+  }
+  assertExactPublicationProjection(frozen, publicationPreview, "published revision");
+  const automaticReplay = await responseJson(await automaticReplayResponsePromise);
+  if (!jsonValuesEqual(automaticReplay, frozen)) throw new Error("automatic frozen revision replay mismatch");
+  const publishedWorkspace = await waitForBrowserWorkspace({
+    collector: workspaceResponses,
+    after: publishedWorkspaceCursor,
+    projectId,
+    status: "completed",
+    progress: 100,
+    reviewedCount: factKeys.length,
+    evidenceArtifact: evidence,
+    deadline,
+    processes: runningProcesses(),
+  });
+  assertWorkspace(publishedWorkspace, {
+    projectId,
+    companyId: alphabet.object_id,
+    status: "completed",
+    progress: 100,
+  });
+  if (publishedWorkspace.preparation.current_step !== null
+    || publishedWorkspace.selected_revision !== frozen.id
+    || publishedWorkspace.draft.id !== readyWorkspace.draft.id
+    || publishedWorkspace.draft.lock_version !== readyWorkspace.draft.lock_version + 1) {
+    throw new Error("published workspace revision identity mismatch");
+  }
+  assertSavedEvidenceDecisions(publishedWorkspace, prepublicationDecisions, "published workspace");
+  assertExactFrozenDescriptors(exactArtifactDescriptors(publishedWorkspace), prepublicationDescriptors, "published workspace");
+  await page.getByText(`冻结版本 ${frozen.id}`, { exact: true }).first().waitFor({
+    timeout: remaining(deadline, "visible automatic frozen revision replay"),
+  });
+
+  const revisionPath = `/api/underwriting/v1/product/company-research/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(frozen.id)}`;
+  const explicitReplayResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
+    response.request().method() === "GET" && new URL(response.url()).pathname === revisionPath,
+  { timeout: remaining(deadline, "explicit frozen revision replay") }));
+  await page.getByRole("button", { name: "查看冻结版本", exact: true }).click();
+  const explicitReplay = await responseJson(await explicitReplayResponsePromise);
+  if (!jsonValuesEqual(explicitReplay, frozen)) throw new Error("explicit frozen revision replay mismatch");
+  assertExactFrozenDescriptors(explicitReplay.artifacts, prepublicationDescriptors, "explicit replay");
+  assertSavedEvidenceDecisions(publishedWorkspace, prepublicationDecisions, "explicit replay workspace");
+  await page.getByText("冻结版本已载入。", { exact: true }).waitFor({
+    timeout: remaining(deadline, "visible explicit frozen revision replay"),
+  });
+
+  const exportPath = `${revisionPath}/export`;
+  let downloadCount = 0;
+  page.on("download", () => { downloadCount += 1; });
+  const exportResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
+    response.request().method() === "GET" && new URL(response.url()).pathname === exportPath,
+  { timeout: remaining(deadline, "Markdown export response") }));
+  const downloadPromise = retainPrimaryFailure(page.waitForEvent("download", {
+    timeout: remaining(deadline, "Markdown download"),
+  }));
+  await page.getByRole("button", { name: "导出 Markdown", exact: true }).click();
+  const [download, exportHttpResponse] = await Promise.all([downloadPromise, exportResponsePromise]);
+  const envelope = await responseJson(exportHttpResponse);
+  const downloadFailure = await download.failure();
+  if (downloadFailure !== null) throw new Error("Markdown download did not produce a file");
+  const downloadPath = path.join(browserRuntimeDirectory, "downloads", `verified-${frozen.id}.md`);
+  await download.saveAs(downloadPath);
+  const [canonicalBrowserRuntime, canonicalDownload, downloadStat] = await Promise.all([
+    realpath(browserRuntimeDirectory),
+    realpath(downloadPath),
+    lstat(downloadPath),
+  ]);
+  if (!(canonicalDownload.startsWith(`${canonicalBrowserRuntime}${path.sep}`))
+    || !downloadStat.isFile() || downloadStat.isSymbolicLink()
+    || (typeof process.getuid === "function" && downloadStat.uid !== process.getuid())) {
+    throw new Error("Markdown download escaped the authenticated browser runtime");
+  }
+  const bytes = await readFile(canonicalDownload);
+  const contentHash = createHash("sha256").update(bytes).digest("hex");
+  if (download.suggestedFilename() !== envelope.filename
+    || envelope.filename !== `alphabet-company-research-${frozen.id}.md`
+    || envelope.media_type !== "text/markdown"
+    || bytes.length === 0
+    || contentHash !== envelope.content_hash
+    || bytes.toString("utf8") !== envelope.content) {
+    throw new Error("Markdown download contract mismatch");
+  }
+  await page.getByText("Markdown 已验证并下载。", { exact: true }).waitFor({
+    timeout: remaining(deadline, "visible Markdown download"),
+  });
+  if (downloadCount !== 1) throw new Error(`expected one Markdown download; saw ${downloadCount}`);
+
+  const reloadWorkspaceCursor = workspaceResponses.cursor();
+  const reloadReplayResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
+    response.request().method() === "GET" && new URL(response.url()).pathname === revisionPath,
+  { timeout: remaining(deadline, "reloaded frozen revision replay") }));
+  await page.reload({
+    waitUntil: "networkidle",
+    timeout: remaining(deadline, "completed project reload"),
+  });
+  const finalWorkspace = await waitForBrowserWorkspace({
+    collector: workspaceResponses,
+    after: reloadWorkspaceCursor,
+    projectId,
+    status: "completed",
+    progress: 100,
+    reviewedCount: factKeys.length,
+    evidenceArtifact: evidence,
+    deadline,
+    processes: runningProcesses(),
+  });
+  const reloadedRevision = await responseJson(await reloadReplayResponsePromise);
+  assertWorkspace(finalWorkspace, {
+    projectId,
+    companyId: alphabet.object_id,
+    status: "completed",
+    progress: 100,
+  });
+  if (finalWorkspace.preparation.current_step !== null
+    || finalWorkspace.selected_revision !== frozen.id
+    || finalWorkspace.draft.id !== publishedWorkspace.draft.id
+    || finalWorkspace.draft.lock_version !== publishedWorkspace.draft.lock_version
+    || !jsonValuesEqual(reloadedRevision, frozen)) {
+    throw new Error("reloaded completed workspace revision mismatch");
+  }
+  assertSavedEvidenceDecisions(finalWorkspace, prepublicationDecisions, "reloaded workspace");
+  assertExactFrozenDescriptors(exactArtifactDescriptors(finalWorkspace), prepublicationDescriptors, "reloaded workspace");
+  assertExactFrozenDescriptors(reloadedRevision.artifacts, prepublicationDescriptors, "reloaded replay");
+  await page.getByText(`冻结版本 ${frozen.id}`, { exact: true }).first().waitFor({
+    timeout: remaining(deadline, "visible reloaded frozen revision"),
+  });
+  if (downloadCount !== 1 || contentHash !== envelope.content_hash) {
+    throw new Error("final completed workspace or download hash changed");
+  }
+
   const assertTraffic = () => {
     audit.assertSingleton("GET", searchPath);
     audit.assertSingleton("POST", previewPath);
     audit.assertSingleton("POST", initializationPath);
+    audit.assertSingleton("POST", confirmationPath);
+    audit.assertSingleton("POST", publicationPreviewPath);
+    audit.assertSingleton("POST", publishPath);
+    audit.assertSingleton("GET", exportPath);
     if (audit.requestCount("POST", reviewPath) !== factKeys.length) {
       throw new Error(`expected one evidence review request per governed fact; saw ${audit.requestCount("POST", reviewPath)}`);
     }
-    const allowedWrites = new Set([previewPath, initializationPath, reviewPath]);
+    if (audit.requestCount("GET", revisionPath) !== 3) {
+      throw new Error(`expected three authenticated revision replays; saw ${audit.requestCount("GET", revisionPath)}`);
+    }
+    const allowedWrites = new Set([
+      previewPath, initializationPath, reviewPath, confirmationPath, publicationPreviewPath, publishPath,
+    ]);
     const unexpectedWrites = audit.snapshot().requests.filter(([method, pathname]) =>
       method !== "GET" && !(method === "POST" && allowedWrites.has(pathname)));
-    if (unexpectedWrites.length > 0) throw new Error("unexpected Company Research browser write before judgment confirmation");
+    if (unexpectedWrites.length > 0) throw new Error("unexpected Company Research browser write");
+    if (downloadCount !== 1) throw new Error(`expected one Markdown download; saw ${downloadCount}`);
   };
   await pendingObservers.drain({
     timeoutMs: Math.min(CLEANUP_TIMEOUT_MS, remaining(deadline, "browser observer drain")),
   });
   throwBrowserFailures(failures);
   assertTraffic();
-  return { assertTraffic };
+  return { assertTraffic, finalWorkspace, frozen, contentHash };
 }
 
 async function main() {
@@ -603,6 +1109,7 @@ async function main() {
   let browserFailures;
   let pendingObservers;
   let assertTraffic;
+  let finalProof;
   let primaryError = null;
   let cleanupErrors = [];
 
@@ -693,7 +1200,7 @@ async function main() {
     const audit = createTrafficAudit(uiBase);
     browserFailures = createBrowserFailureCollector();
     pendingObservers = createPendingObserverTracker();
-    const context = await newOwnedBrowserContext(browser);
+    const context = await newOwnedBrowserContext(browser, { acceptDownloads: true });
     await context.route("**/*", async (route) => {
       try {
         audit.assertAllowedRequest(route.request().url());
@@ -741,6 +1248,7 @@ async function main() {
       runningProcesses,
       foundation: await alphabetFoundation(),
       pendingObservers,
+      browserRuntimeDirectory: browser.directories.root,
       async stopWorkerForReview() {
         if (!worker) throw new Error("company research worker is absent before evidence review");
         const stoppedWorker = worker;
@@ -756,6 +1264,7 @@ async function main() {
       },
     });
     assertTraffic = workflow.assertTraffic;
+    finalProof = workflow;
   } catch (error) {
     primaryError = error instanceof Error ? error : new Error("live company research verifier failed");
   } finally {
@@ -765,7 +1274,17 @@ async function main() {
   }
 
   const runError = chooseRunError(primaryError, cleanupErrors);
-  if (runError) throw runError;
+  if (runError) {
+    throw new Error(`${runError.message}${[api, worker, vite].map(componentTail).join("")}`);
+  }
+  if (finalProof?.finalWorkspace?.preparation?.status !== "completed"
+    || finalProof.finalWorkspace.preparation.current_step !== null
+    || finalProof.finalWorkspace.preparation.progress !== 100
+    || finalProof.finalWorkspace.selected_revision !== finalProof?.frozen?.id
+    || !SHA256_PATTERN.test(finalProof?.contentHash ?? "")) {
+    throw new Error("final completed workspace or download hash proof is absent");
+  }
+  console.log(PASS_LINE);
 }
 
 function safeOuterDiagnostic(error) {
