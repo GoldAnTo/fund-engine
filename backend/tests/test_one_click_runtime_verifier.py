@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections import Counter
+from hashlib import sha256
 import shutil
 import stat
 import subprocess
@@ -61,6 +63,7 @@ frontend = "http://127.0.0.1:8080"
 allowed = {f"{api}/health", f"{frontend}/health", f"{frontend}/research", f"{api}/api/underwriting/v1/product/objects?query=CATL"}
 product = f"{api}/api/underwriting/v1/product/objects?query=CATL"
 if url not in allowed or not ((url == product and len(args) == 10 and args[7:9] == ["--header", "@-"]) or (url != product and len(args) == 8)): sys.exit(97)
+if url == product and sys.stdin.read() != "Authorization: Bearer not-for-output\n": sys.exit(97)
 counter = os.environ["HARNESS_ROOT"] + "/curl-count"
 try: n = int(open(counter).read()) + 1
 except OSError: n = 1
@@ -104,10 +107,11 @@ if args and args[0] == "compose":
         if command == ["ps", "--all", "--quiet"]:
             print("\n".join(ids())); sys.exit(23 if mode == "ps-partial" else 0)
         if command == ["ps", "--all"]: print("diagnostic ps"); sys.exit(0)
-    if command[:3] == ["exec", "-T", "postgres"]:
-        query = " ".join(command)
-        if "pg_stat_activity" in query: print("999" if mode == "connections" else "3"); sys.exit(0)
-        if "version_num" in query: print("0069" if mode == "revision-second" and os.path.exists(root + "/seen-revision") else "0070"); open(root + "/seen-revision", "w").write("1"); sys.exit(0)
+    connection_query = "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database();"
+    revision_query = "SELECT version_num FROM alembic_version;"
+    exact_exec = ["exec", "-T", "postgres", "psql", "-U", "test_user", "-d", "test_db", "-Atc"]
+    if command == [*exact_exec, connection_query]: print("999" if mode == "connections" else "3"); sys.exit(0)
+    if command == [*exact_exec, revision_query]: print("0069" if mode == "revision-second" and os.path.exists(root + "/seen-revision") else "0070"); open(root + "/seen-revision", "w").write("1"); sys.exit(0)
     sys.exit(97)
 if args and args[0] == "inspect":
     if "--format" in args:
@@ -133,7 +137,7 @@ if args and args[0] == "inspect":
     n = int(open(count_file).read()) + 1 if os.path.exists(count_file) else 1
     open(count_file, "w").write(str(n))
     print(json.dumps([item(service, replica) for service in services for replica in range(replicas if service == "acquisition-worker" else 1)])); sys.exit(0)
-if args and args[0] == "exec" and len(args) == 5 and args[2:] == ["sh", "-c", args[4]] and "version_num" in args[4]:
+if args and args[0] == "exec" and len(args) == 5 and args[2:] == ["sh", "-c", 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT version_num FROM alembic_version;"']:
     try: current_legacy = open(root + "/legacy-current").read()
     except OSError: current_legacy = ident("legacy")
     if args[1] != current_legacy: sys.exit(97)
@@ -187,6 +191,10 @@ def assert_no_lifecycle_commands(calls: str) -> None:
         assert not command or command[0] not in forbidden
 
 
+def expected_ids() -> list[str]:
+    return [sha256(f"{service}0".encode()).hexdigest() for service in SERVICES]
+
+
 @pytest.mark.parametrize("argument", ["--stability-seconds", "--stability-seconds=-1", "--stability-seconds=01", "--stability-seconds=999999999999999999999"])
 def test_invalid_duration_is_rejected_before_external_setup(tmp_path: Path, argument: str) -> None:
     verifier, bin_dir = copied_verifier(tmp_path)
@@ -231,6 +239,13 @@ def test_failures_are_safe_and_collect_bounded_diagnostics(tmp_path: Path, mode:
     assert "logs --tail 40" in calls and "stats --no-stream" in calls
     assert calls.count("docker logs --tail 40") == 6
     assert calls.count("docker stats --no-stream") == 1
+    expected = expected_ids()
+    formatted = [line.rsplit(" ", 1)[1] for line in calls.splitlines() if line.startswith("docker inspect --format Name=")]
+    logs = [line.rsplit(" ", 1)[1] for line in calls.splitlines() if line.startswith("docker logs --tail 40 ")]
+    stats = [line.split()[3:] for line in calls.splitlines() if line.startswith("docker stats --no-stream ")]
+    assert Counter(formatted) == Counter(expected)
+    assert Counter(logs) == Counter(expected)
+    assert stats == [expected]
     assert "not-for-output" not in result.stderr
     assert ".env.one-click.local" not in result.stderr
     assert '"Config"' not in result.stderr
@@ -340,6 +355,28 @@ def test_harness_rejects_wrong_legacy_logs_and_stats_container_ids(tmp_path: Pat
     for command in commands:
         result = subprocess.run([str(bin_dir / "docker"), *command], text=True, capture_output=True, env=environment)
         assert result.returncode == 97
+
+
+def test_harness_allows_only_exact_read_only_compose_exec_argv_and_queries(tmp_path: Path) -> None:
+    _, bin_dir = copied_verifier(tmp_path)
+    environment = os.environ | {"HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls")}
+    prefix = ("compose", "-f", "compose.yml", "--env-file", "base", "--env-file", "runtime", "exec", "-T", "postgres")
+    cases = [
+        (*prefix, "definitely-unknown", "pg_stat_activity"),
+        (*prefix, "psql", "-U", "test_user", "-d", "test_db", "-Atc", "SELECT version_num FROM alembic_version; DROP TABLE x;"),
+    ]
+    for command in cases:
+        result = subprocess.run([str(bin_dir / "docker"), *command], text=True, capture_output=True, env=environment)
+        assert result.returncode == 97
+
+
+def test_harness_product_curl_requires_exact_stdin_header(tmp_path: Path) -> None:
+    _, bin_dir = copied_verifier(tmp_path)
+    environment = os.environ | {"HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls")}
+    command = [str(bin_dir / "curl"), "--fail", "--silent", "--show-error", "--connect-timeout", "2", "--max-time", "5", "--header", "@-", "http://127.0.0.1:8000/api/underwriting/v1/product/objects?query=CATL"]
+    for payload, expected in (("", 97), ("Authorization: Bearer wrong\n", 97), ("Authorization: Bearer not-for-output\n", 0)):
+        result = subprocess.run(command, input=payload, text=True, capture_output=True, env=environment)
+        assert result.returncode == expected
 
 
 def test_long_duration_has_exact_poll_and_sleep_counts(tmp_path: Path) -> None:
