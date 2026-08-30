@@ -5,8 +5,8 @@ import os from "node:os";
 import test from "node:test";
 import path from "node:path";
 
+import * as supportModule from "./live-company-research-support.mjs";
 import {
-  __testOnlyStopAuthority,
   assertLoopbackUrl,
   assertProcessesRunning,
   assertWorkspace,
@@ -20,13 +20,53 @@ import {
   waitUntil,
 } from "./live-company-research-support.mjs";
 
-function fakeStopAuthority(outcomes) {
+function createTerminationHarness(outcomes) {
+  let now = 0;
+  let nextTimerId = 1;
+  let state;
   const signals = [];
+  const timers = new Map();
+
+  const schedule = (delayMs, callback) => {
+    const id = nextTimerId;
+    nextTimerId += 1;
+    timers.set(id, { at: now + delayMs, callback });
+  };
+  const pump = () => {
+    if (state.effect === "signal") {
+      signals.push(state.signal);
+      const accepted = outcomes.shift();
+      state = supportModule.advanceTerminationState(state, {
+        type: accepted ? "signal-accepted" : "signal-refused",
+      });
+      pump();
+    } else if (state.effect === "wait") {
+      schedule(state.timeoutMs, () => {
+        state = supportModule.advanceTerminationState(state, { type: "deadline" });
+        pump();
+      });
+    }
+  };
+
+  state = supportModule.advanceTerminationState(undefined, { type: "start" });
+  pump();
   return {
-    authority: { name: "fake", expectedStop: false, exited: false, kill: (signal) => {
-      signals.push(signal);
-      return outcomes.shift();
-    } },
+    advanceBy(milliseconds) {
+      const target = now + milliseconds;
+      while (true) {
+        const due = [...timers.entries()]
+          .filter(([, timer]) => timer.at <= target)
+          .sort((left, right) => left[1].at - right[1].at)[0];
+        if (!due) break;
+        const [id, timer] = due;
+        timers.delete(id);
+        now = timer.at;
+        timer.callback();
+      }
+      now = target;
+    },
+    get pendingTimers() { return timers.size; },
+    get state() { return state; },
     signals,
   };
 }
@@ -281,17 +321,23 @@ test("stalled fd-relative cleanup helper is terminated without deleting a replac
 test("helper subprocess diagnostics preserve UTF-8 code points at the bound", async () => {
   const helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-unicode-helper-"));
   const helperPath = path.join(helperDirectory, "cleanup.py");
-  await writeFile(helperPath, "import sys\nif sys.argv[1:] == ['--self-test']: raise SystemExit(0)\nsys.stderr.write('火' * 1000)\nraise SystemExit(1)\n");
+  await writeFile(helperPath, "import sys\nif sys.argv[1:] == ['--self-test']: raise SystemExit(0)\nsys.stderr.write('火' * 10000)\nraise SystemExit(1)\n");
   const runtime = await createPrivateRuntime({ cleanupHelper: { pythonExecutable: TEST_PYTHON, helperPath } });
+  const quarantinePrefix = `.${path.basename(runtime.directory)}.cleanup-`;
   try {
     await assert.rejects(removePrivateRuntime(runtime), (error) => {
       assert.equal(error.message.includes("\uFFFD"), false);
       assert.ok(Buffer.byteLength(error.message) <= 16_384);
-      assert.equal(error.message.includes("火"), true);
+      assert.ok((error.message.match(/火/gu) ?? []).length > 5_400);
       return true;
     });
+    const quarantine = (await readdir(runtime.parent)).filter((entry) => entry.startsWith(quarantinePrefix));
+    assert.equal(quarantine.length, 1);
   } finally {
     await rm(runtime.directory, { recursive: true, force: true });
+    const quarantines = (await readdir(runtime.parent)).filter((entry) => entry.startsWith(quarantinePrefix));
+    await Promise.all(quarantines.map((entry) =>
+      rm(path.join(runtime.parent, entry), { recursive: true, force: true })));
     await rm(helperDirectory, { recursive: true, force: true });
   }
 });
@@ -745,20 +791,43 @@ test("stopOwnedProcess escalates a SIGTERM-ignoring child to SIGKILL", async () 
   assert.equal(sleeper.child.signalCode, "SIGKILL");
 });
 
-test("SIGTERM refusal stops without delayed signals", async () => {
-  const { authority, signals } = fakeStopAuthority([false]);
-  await assert.rejects(__testOnlyStopAuthority(authority, async () => false), /refused SIGTERM/);
-  assert.deepEqual(signals, ["SIGTERM"]);
+test("support exports no stop hook that accepts raw process authority", () => {
+  assert.equal("__testOnlyStopAuthority" in supportModule, false);
 });
 
-test("SIGKILL refusal stops without delayed signals", async () => {
-  const { authority, signals } = fakeStopAuthority([true, false]);
-  await assert.rejects(__testOnlyStopAuthority(authority, async () => false), /refused SIGKILL/);
-  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+test("stopOwnedProcess rejects raw process authority without signaling", async () => {
+  let signaled = false;
+  await assert.rejects(stopOwnedProcess({
+    kill() { signaled = true; },
+  }), /unowned process handle/);
+  assert.equal(signaled, false);
 });
 
-test("post-SIGKILL timeout stops without delayed signals", async () => {
-  const { authority, signals } = fakeStopAuthority([true, true]);
-  await assert.rejects(__testOnlyStopAuthority(authority, async () => false), /did not exit after SIGKILL/);
-  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+test("SIGTERM refusal reaches a terminal state without delayed signals", () => {
+  const harness = createTerminationHarness([false]);
+  assert.equal(harness.state.failure, "refused-sigterm");
+  assert.deepEqual(harness.signals, ["SIGTERM"]);
+  harness.advanceBy(15_000);
+  assert.deepEqual(harness.signals, ["SIGTERM"]);
+  assert.equal(harness.pendingTimers, 0);
+});
+
+test("SIGKILL refusal reaches a terminal state without delayed signals", () => {
+  const harness = createTerminationHarness([true, false]);
+  harness.advanceBy(5_000);
+  assert.equal(harness.state.failure, "refused-sigkill");
+  assert.deepEqual(harness.signals, ["SIGTERM", "SIGKILL"]);
+  harness.advanceBy(15_000);
+  assert.deepEqual(harness.signals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(harness.pendingTimers, 0);
+});
+
+test("post-SIGKILL timeout reaches a terminal state without delayed signals", () => {
+  const harness = createTerminationHarness([true, true]);
+  harness.advanceBy(10_000);
+  assert.equal(harness.state.failure, "sigkill-timeout");
+  assert.deepEqual(harness.signals, ["SIGTERM", "SIGKILL"]);
+  harness.advanceBy(15_000);
+  assert.deepEqual(harness.signals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(harness.pendingTimers, 0);
 });

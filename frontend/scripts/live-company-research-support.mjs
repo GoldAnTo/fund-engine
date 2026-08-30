@@ -90,16 +90,21 @@ function appendBoundedBuffer(buffer, chunk) {
 }
 
 function decodeBoundedUtf8(buffer) {
-  for (let start = 0; start <= buffer.length; start += 1) {
-    for (let end = buffer.length; end >= start; end -= 1) {
+  let best = "";
+  let bestLength = 0;
+  for (let leading = 0; leading <= Math.min(3, buffer.length); leading += 1) {
+    for (let trailing = 0; trailing <= Math.min(3, buffer.length - leading); trailing += 1) {
+      const candidate = buffer.subarray(leading, buffer.length - trailing);
+      if (candidate.length === 0 || candidate.length <= bestLength) continue;
       try {
-        return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(start, end));
+        best = new TextDecoder("utf-8", { fatal: true }).decode(candidate);
+        bestLength = candidate.length;
       } catch {
-        // Keep searching for the largest complete UTF-8 interior.
+        // A bounded byte tail can split one code point at either edge.
       }
     }
   }
-  return "";
+  return best;
 }
 
 function hasFileIdentity(current, expected) {
@@ -466,35 +471,74 @@ export async function stopOwnedProcess(owned) {
   return authority.stopPromise;
 }
 
-async function stopOwnedProcessImpl(authority, wait = waitForExit) {
+function terminationState(values) {
+  return Object.freeze(values);
+}
+
+export function advanceTerminationState(state, event) {
+  const phase = state?.phase ?? "running";
+  if (phase === "stopped" || phase === "failed") return state;
+  if (phase === "running" && event?.type === "start") {
+    return terminationState({ phase: "signal-term", effect: "signal", signal: "SIGTERM" });
+  }
+  if (phase === "signal-term" && event?.type === "signal-accepted") {
+    return terminationState({ phase: "wait-term", effect: "wait", timeoutMs: STOP_TIMEOUT_MS });
+  }
+  if (phase === "signal-term" && event?.type === "signal-refused") {
+    return terminationState({ phase: "failed", failure: "refused-sigterm" });
+  }
+  if (phase === "wait-term" && event?.type === "exited") {
+    return terminationState({ phase: "stopped" });
+  }
+  if (phase === "wait-term" && event?.type === "deadline") {
+    return terminationState({ phase: "signal-kill", effect: "signal", signal: "SIGKILL" });
+  }
+  if (phase === "signal-kill" && event?.type === "signal-accepted") {
+    return terminationState({ phase: "wait-kill", effect: "wait", timeoutMs: STOP_TIMEOUT_MS });
+  }
+  if (phase === "signal-kill" && event?.type === "signal-refused") {
+    return terminationState({ phase: "failed", failure: "refused-sigkill" });
+  }
+  if (phase === "wait-kill" && event?.type === "exited") {
+    return terminationState({ phase: "stopped" });
+  }
+  if (phase === "wait-kill" && event?.type === "deadline") {
+    return terminationState({ phase: "failed", failure: "sigkill-timeout" });
+  }
+  throw new Error("invalid process termination transition");
+}
+
+function stopFailure(authority, failure) {
+  const name = boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES);
+  if (failure === "refused-sigterm") return new Error(`${name} refused SIGTERM`);
+  if (failure === "refused-sigkill") return new Error(`${name} refused SIGKILL`);
+  return new Error(`${name} did not exit after SIGKILL within ${STOP_TIMEOUT_MS}ms`);
+}
+
+async function stopOwnedProcessImpl(authority) {
   authority.expectedStop = true;
   if (authority.exited) return;
 
-  try {
-    if (!authority.kill("SIGTERM")) {
-      throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} refused SIGTERM`);
+  let state = advanceTerminationState(undefined, { type: "start" });
+  while (state.phase !== "stopped" && state.phase !== "failed") {
+    if (state.effect === "signal") {
+      try {
+        const accepted = authority.kill(state.signal);
+        state = advanceTerminationState(state, {
+          type: accepted ? "signal-accepted" : "signal-refused",
+        });
+      } catch (error) {
+        if (error?.code === "ESRCH" && authority.exited) return;
+        throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} failed to send ${state.signal}: ${boundedDiagnostic(error?.message ?? error, MAX_DIAGNOSTIC_FIELD_BYTES)}`);
+      }
+      continue;
     }
-  } catch (error) {
-    if (error?.code === "ESRCH" && authority.exited) return;
-    throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} failed to send SIGTERM: ${boundedDiagnostic(error?.message ?? error, MAX_DIAGNOSTIC_FIELD_BYTES)}`);
+    const exited = await waitForExit(authority, state.timeoutMs);
+    state = advanceTerminationState(state, {
+      type: exited || authority.exited ? "exited" : "deadline",
+    });
   }
-  await wait(authority, STOP_TIMEOUT_MS);
-  if (authority.exited) return;
-  try {
-    if (!authority.kill("SIGKILL")) {
-      throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} refused SIGKILL`);
-    }
-  } catch (error) {
-    if (error?.code === "ESRCH" && authority.exited) return;
-    throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} failed to send SIGKILL: ${boundedDiagnostic(error?.message ?? error, MAX_DIAGNOSTIC_FIELD_BYTES)}`);
-  }
-  if (!await wait(authority, STOP_TIMEOUT_MS)) {
-    throw new Error(`${boundedDiagnostic(authority.name, MAX_DIAGNOSTIC_FIELD_BYTES)} did not exit after SIGKILL within ${STOP_TIMEOUT_MS}ms`);
-  }
-}
-
-export async function __testOnlyStopAuthority(authority, wait = waitForExit) {
-  return stopOwnedProcessImpl(authority, wait);
+  if (state.failure) throw stopFailure(authority, state.failure);
 }
 
 export async function waitUntil(probe, { label, timeoutMs, intervalMs = 100, processes = [] }) {
