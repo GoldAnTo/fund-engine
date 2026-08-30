@@ -1,9 +1,17 @@
 name: fund-engine-one-click
 
+x-database-pool-environment: &database-pool-environment
+  DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-2}
+  DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-2}
+  DATABASE_POOL_TIMEOUT_SECONDS: ${DATABASE_POOL_TIMEOUT_SECONDS:-30}
+  DATABASE_POOL_RECYCLE_SECONDS: ${DATABASE_POOL_RECYCLE_SECONDS:-300}
+
 services:
   postgres:
     image: postgres:16
     restart: unless-stopped
+    mem_limit: ${ONE_CLICK_POSTGRES_MEMORY_LIMIT:-1536m}
+    cpus: ${ONE_CLICK_POSTGRES_CPU_LIMIT:-1.5}
     environment:
       POSTGRES_DB: ${ONE_CLICK_POSTGRES_DB:?}
       POSTGRES_USER: ${ONE_CLICK_POSTGRES_USER:?}
@@ -43,9 +51,12 @@ services:
   api:
     image: ${ONE_CLICK_BACKEND_IMAGE:-fund-engine-one-click-backend:local}
     restart: unless-stopped
+    mem_limit: ${ONE_CLICK_API_MEMORY_LIMIT:-1536m}
+    cpus: ${ONE_CLICK_API_CPU_LIMIT:-1.5}
     ports:
       - 127.0.0.1:${ONE_CLICK_API_PORT:-8000}:8000
     environment:
+      <<: *database-pool-environment
       APP_ENV: production
       DATABASE_URL: postgresql+psycopg://${ONE_CLICK_POSTGRES_USER:?}:${ONE_CLICK_POSTGRES_PASSWORD:?}@postgres:5432/${ONE_CLICK_POSTGRES_DB:?}
       RESEARCH_TENANT_TOKENS: ${RESEARCH_TENANT_TOKENS:?}
@@ -70,8 +81,11 @@ services:
   research-worker:
     image: ${ONE_CLICK_BACKEND_IMAGE:-fund-engine-one-click-backend:local}
     restart: unless-stopped
+    mem_limit: ${ONE_CLICK_RESEARCH_WORKER_MEMORY_LIMIT:-768m}
+    cpus: ${ONE_CLICK_RESEARCH_WORKER_CPU_LIMIT:-1.0}
     command: ["python", "-m", "app.scripts.run_research_worker", "--loop", "--poll-seconds", "1"]
     environment:
+      <<: *database-pool-environment
       APP_ENV: production
       DATABASE_URL: postgresql+psycopg://${ONE_CLICK_POSTGRES_USER:?}:${ONE_CLICK_POSTGRES_PASSWORD:?}@postgres:5432/${ONE_CLICK_POSTGRES_DB:?}
       LLM_API_KEY: ${LLM_API_KEY:-}
@@ -94,8 +108,11 @@ services:
   acquisition-worker:
     image: ${ONE_CLICK_BACKEND_IMAGE:-fund-engine-one-click-backend:local}
     restart: unless-stopped
+    mem_limit: ${ONE_CLICK_ACQUISITION_WORKER_MEMORY_LIMIT:-768m}
+    cpus: ${ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT:-1.0}
     command: ["python", "-m", "app.scripts.run_acquisition_worker", "--loop", "--poll-seconds", "1"]
     environment:
+      <<: *database-pool-environment
       APP_ENV: production
       DATABASE_URL: postgresql+psycopg://${ONE_CLICK_POSTGRES_USER:?}:${ONE_CLICK_POSTGRES_PASSWORD:?}@postgres:5432/${ONE_CLICK_POSTGRES_DB:?}
       GILDATA_TOKEN: ${GILDATA_TOKEN:-}
@@ -120,8 +137,11 @@ services:
   company-research-worker:
     image: ${ONE_CLICK_BACKEND_IMAGE:-fund-engine-one-click-backend:local}
     restart: unless-stopped
+    mem_limit: ${ONE_CLICK_COMPANY_RESEARCH_WORKER_MEMORY_LIMIT:-1280m}
+    cpus: ${ONE_CLICK_COMPANY_RESEARCH_WORKER_CPU_LIMIT:-1.5}
     command: ["python", "-m", "app.scripts.run_company_research_worker", "--loop", "--poll-seconds", "1"]
     environment:
+      <<: *database-pool-environment
       APP_ENV: production
       DATABASE_URL: postgresql+psycopg://${ONE_CLICK_POSTGRES_USER:?}:${ONE_CLICK_POSTGRES_PASSWORD:?}@postgres:5432/${ONE_CLICK_POSTGRES_DB:?}
       LLM_API_KEY: ${LLM_API_KEY:-}
@@ -146,6 +166,8 @@ services:
     build:
       context: ./frontend
     restart: unless-stopped
+    mem_limit: ${ONE_CLICK_FRONTEND_MEMORY_LIMIT:-256m}
+    cpus: ${ONE_CLICK_FRONTEND_CPU_LIMIT:-0.5}
     ports:
       - 127.0.0.1:${ONE_CLICK_FRONTEND_PORT:-8080}:8080
     environment:

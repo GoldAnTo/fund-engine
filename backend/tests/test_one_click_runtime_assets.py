@@ -59,6 +59,42 @@ def test_compose_has_separate_data_and_automatic_services() -> None:
     assert ".env.one-click.local" in ignore
 
 
+def test_compose_applies_the_low_resource_profile_without_exposing_database_to_frontend() -> None:
+    compose = (ROOT / "docker-compose.one-click.yml").read_text()
+    environment = (ROOT / ".env.one-click.example").read_text()
+    frontend = compose[compose.index("  frontend:\n") : compose.index("\nvolumes:\n")]
+
+    for name, value in (
+        ("DATABASE_POOL_SIZE", "2"),
+        ("DATABASE_MAX_OVERFLOW", "2"),
+        ("DATABASE_POOL_TIMEOUT_SECONDS", "30"),
+        ("DATABASE_POOL_RECYCLE_SECONDS", "300"),
+    ):
+        assert f"{name}: ${{{name}:-{value}}}" in compose
+        assert f"{name}={value}" in environment
+
+    for assignment in (
+        "ONE_CLICK_POSTGRES_MEMORY_LIMIT=1536m",
+        "ONE_CLICK_API_MEMORY_LIMIT=1536m",
+        "ONE_CLICK_RESEARCH_WORKER_MEMORY_LIMIT=768m",
+        "ONE_CLICK_ACQUISITION_WORKER_MEMORY_LIMIT=768m",
+        "ONE_CLICK_COMPANY_RESEARCH_WORKER_MEMORY_LIMIT=1280m",
+        "ONE_CLICK_FRONTEND_MEMORY_LIMIT=256m",
+        "ONE_CLICK_POSTGRES_CPU_LIMIT=1.5",
+        "ONE_CLICK_API_CPU_LIMIT=1.5",
+        "ONE_CLICK_RESEARCH_WORKER_CPU_LIMIT=1.0",
+        "ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT=1.0",
+        "ONE_CLICK_COMPANY_RESEARCH_WORKER_CPU_LIMIT=1.5",
+        "ONE_CLICK_FRONTEND_CPU_LIMIT=0.5",
+    ):
+        name, value = assignment.split("=", 1)
+        assert f"${{{name}:-{value}}}" in compose
+        assert assignment in environment
+
+    assert "DATABASE_POOL_SIZE" not in frontend
+    assert "DATABASE_URL" not in frontend
+
+
 def test_compose_healthchecks_http_services_before_starting_frontend() -> None:
     compose = (ROOT / "docker-compose.one-click.yml").read_text()
     api = compose[compose.index("  api:\n") : compose.index("  research-worker:\n")]
