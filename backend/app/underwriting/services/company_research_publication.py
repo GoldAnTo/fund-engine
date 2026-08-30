@@ -400,6 +400,10 @@ class CompanyResearchPublicationService:
         expected_security_keys = tuple(
             source_contract.evidence_index_payload.get("security_external_keys", ())
         )
+        if state.mandate is None or state.scope is None or state.agenda is None:
+            raise CompanyResearchIntegrityError(
+                "company research foundation boundary is incomplete"
+            )
         if (
             state.company.kind != "company"
             or not state.securities
@@ -433,29 +437,43 @@ class CompanyResearchPublicationService:
             raise CompanyResearchIntegrityError(
                 "company research historical boundary identity is invalid"
             )
+        mandate_effective_at = self._stored_utc(
+            state.mandate.effective_at,
+            "company research mandate effective_at",
+        )
         preview = build_alphabet_company_research_preview_at_cutoff(
             self._session,
             company_id=state.company.id,
             cutoff_at=cutoff,
         )
-        preview_security_ids = tuple(
-            sorted((row.object_id for row in preview.securities), key=str)
-        )
-        if (
-            preview.input_hash != state.preparation.request_hash
-            or preview.strategy_version != state.preparation.strategy_version
-            or preview.company.object_id != state.company.id
-            or preview.company.external_key != state.company.external_key
-            or preview_security_ids != tuple(sorted(security_ids, key=str))
-        ):
+        expected_security_ids = tuple(sorted(security_ids, key=str))
+
+        def preview_matches_request() -> bool:
+            return (
+                preview.input_hash == state.preparation.request_hash
+                and preview.strategy_version == state.preparation.strategy_version
+                and preview.company.object_id == state.company.id
+                and preview.company.external_key == state.company.external_key
+                and tuple(
+                    sorted((row.object_id for row in preview.securities), key=str)
+                )
+                == expected_security_ids
+            )
+
+        authenticated_legacy_request_cutoff = None
+        if not preview_matches_request():
+            preview = build_alphabet_company_research_preview_at_cutoff(
+                self._session,
+                company_id=state.company.id,
+                cutoff_at=mandate_effective_at,
+            )
+            authenticated_legacy_request_cutoff = mandate_effective_at
+        if not preview_matches_request():
             raise CompanyResearchIntegrityError(
                 "company research historical boundary identity is invalid"
             )
         if (
-            state.mandate is None
-            or state.scope is None
-            or state.agenda is None
-            or state.draft_content.mandate_id != state.mandate_head_id
+            state.draft_content.mandate_id != state.mandate_head_id
             or state.draft_content.scope_id != state.scope_head_id
             or state.draft_content.agenda_id != state.agenda_head_id
             or state.draft_content.historical_basis_id != state.historical_basis.id
@@ -479,6 +497,9 @@ class CompanyResearchPublicationService:
                 mandate=state.mandate,
                 scope=state.scope,
                 agenda=state.agenda,
+                authenticated_legacy_request_cutoff_at=(
+                    authenticated_legacy_request_cutoff
+                ),
             )
             boundary = resolve_alphabet_company_research_boundary(
                 cutoff,

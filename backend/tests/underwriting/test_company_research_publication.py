@@ -50,6 +50,9 @@ from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.services.company_research_preparation import (
     CompanyResearchPreparationWorker,
 )
+from app.underwriting.services.company_research_initializer import (
+    CompanyResearchPreparationService,
+)
 from app.underwriting.services.company_research_publication import (
     CompanyResearchJudgmentConfirmation,
     CompanyResearchPublicationService,
@@ -70,6 +73,12 @@ from tests.underwriting.test_company_research_workbench import (
     _model_workspace,
     _prepared,
     _rewrite_as_legacy_model_gap_successor,
+)
+from tests.underwriting.test_company_research_worker import (
+    LEGACY_PREPARATION_CREATED,
+    _durably_rewrite_events_as_legacy_v1,
+    _genuine_legacy_initialized,
+    _legacy_blocked_missing_basis,
 )
 
 
@@ -2071,6 +2080,7 @@ def test_confirm_judgment_atomically_advances_the_publication_boundary(session) 
         "confirmed",
         "confirmed",
     ]
+
     current_events = repository.events(preparation.id)
     assert current_events[:-1] == prior_events
     event = current_events[-1]
@@ -2110,6 +2120,45 @@ def test_confirm_judgment_atomically_advances_the_publication_boundary(session) 
         )
         == 1
     )
+
+
+def test_confirmation_authenticates_a_legacy_request_cutoff_after_evidence_cutoff(
+    session,
+) -> None:
+    initialized = _genuine_legacy_initialized(session)
+    _legacy_blocked_missing_basis(
+        session,
+        initialized=initialized,
+        now=LEGACY_PREPARATION_CREATED + timedelta(seconds=1),
+    )
+    _durably_rewrite_events_as_legacy_v1(session, initialized.preparation.id)
+    CompanyResearchPreparationService(
+        session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=2)
+    ).retry(project_id=initialized.project.id)
+    worker = CompanyResearchPreparationWorker(
+        session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=3)
+    )
+    claim = worker.claim_next()
+    assert claim is not None and claim.step == "model_bundle"
+    assert worker.run_claim(claim) == "awaiting_judgment_review"
+    draft = WorkspaceDraftService(
+        session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=3)
+    ).read(initialized.project.id)
+    machine_memo = CompanyResearchRepository(session).current_artifact(
+        initialized.project.id, "memo"
+    )
+    assert draft is not None and machine_memo is not None
+    expected_lock_version = draft.lock_version
+
+    result = CompanyResearchPublicationService(
+        session, now=lambda: LEGACY_PREPARATION_CREATED + timedelta(seconds=4)
+    ).confirm_judgment(
+        project_id=initialized.project.id,
+        **_confirmation_request(draft, machine_memo),
+    )
+
+    assert result.project_id == initialized.project.id
+    assert result.draft_lock_version == expected_lock_version + 1
 
 
 @pytest.mark.parametrize("markdown", ("", " \r\n\t ", "x" * 100001))
