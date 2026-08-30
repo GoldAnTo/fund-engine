@@ -13,12 +13,109 @@ import {
   buildVerifierEnvironment,
   chooseRunError,
   createPrivateRuntime,
+  createTrafficAudit,
+  assertExactReviewSuccessor,
   parseVerifierArgs,
   removePrivateRuntime,
   startOwnedProcess,
   stopOwnedProcess,
   waitUntil,
 } from "./live-company-research-support.mjs";
+
+test("traffic audit retains only local API method, path, and status metadata", () => {
+  const audit = createTrafficAudit("http://127.0.0.1:42000", "must-not-be-recorded");
+  audit.recordRequest(
+    "POST",
+    "http://127.0.0.1:42000/api/underwriting/v1/product/company-research/preview?secret=query",
+    { authorization: "Bearer must-not-be-recorded" },
+    "must-not-be-recorded",
+  );
+  audit.recordResponse(
+    200,
+    "POST",
+    "http://127.0.0.1:42000/api/underwriting/v1/product/company-research/preview?secret=query",
+  );
+
+  assert.deepEqual(audit.snapshot(), {
+    requests: [["POST", "/api/underwriting/v1/product/company-research/preview"]],
+    responses: [[200, "POST", "/api/underwriting/v1/product/company-research/preview"]],
+  });
+  assert.equal(JSON.stringify(audit.snapshot()).includes("must-not-be-recorded"), false);
+  assert.equal(JSON.stringify(audit.snapshot()).includes("secret=query"), false);
+});
+
+test("traffic audit rejects external requests, request failures, and non-2xx API responses", () => {
+  const audit = createTrafficAudit("http://127.0.0.1:42000");
+
+  assert.throws(
+    () => audit.recordRequest("GET", "https://example.com/tracker", { authorization: "secret" }),
+    /external request/u,
+  );
+  assert.throws(
+    () => audit.recordRequestFailure("GET", "http://127.0.0.1:42000/api/x", "secret failure text"),
+    /API request failed.*GET \/api\/x/u,
+  );
+  assert.throws(
+    () => audit.recordResponse(500, "GET", "http://127.0.0.1:42000/api/x"),
+    /API response 500 GET \/api\/x/u,
+  );
+});
+
+test("traffic audit enforces exact singleton request cardinality", () => {
+  const pathname = "/api/underwriting/v1/product/company-research/initializations";
+  const audit = createTrafficAudit("http://127.0.0.1:42000");
+  assert.throws(() => audit.assertSingleton("POST", pathname), /saw 0/u);
+
+  audit.recordRequest("POST", `http://127.0.0.1:42000${pathname}`);
+  assert.doesNotThrow(() => audit.assertSingleton("POST", pathname));
+  assert.equal(audit.requestCount("POST", pathname), 1);
+
+  audit.recordRequest("POST", `http://127.0.0.1:42000${pathname}`);
+  assert.throws(() => audit.assertSingleton("POST", pathname), /saw 2/u);
+  assert.equal(audit.requestCount("POST", pathname), 2);
+});
+
+test("review successor advances exactly one fact and one version", () => {
+  const before = { id: "e1", version: 1, payload: { facts: [
+    { fact_key: "a", metric_key: "revenue", review_decision: null },
+    { fact_key: "b", metric_key: "margin", review_decision: null },
+  ] } };
+  const after = { id: "e2", version: 2, payload: { facts: [
+    { fact_key: "a", metric_key: "revenue", review_decision: "confirmed" },
+    { fact_key: "b", metric_key: "margin", review_decision: null },
+  ] } };
+
+  assert.strictEqual(assertExactReviewSuccessor(before, after, "a"), after);
+  assert.throws(() => assertExactReviewSuccessor(before, { ...after, id: before.id }, "a"), /identity/u);
+  assert.throws(() => assertExactReviewSuccessor(before, { ...after, version: 3 }, "a"), /version/u);
+  assert.throws(() => assertExactReviewSuccessor(before, {
+    ...after,
+    payload: { facts: after.payload.facts.map((fact) => ({ ...fact, review_decision: "confirmed" })) },
+  }, "a"), /unrelated fact/u);
+});
+
+test("review successor preserves exact fact cardinality, identities, and contents", () => {
+  const before = { id: "e1", version: 7, payload: { facts: [
+    { fact_key: "a", metric_key: "revenue", review_decision: null },
+    { fact_key: "b", metric_key: "margin", review_decision: "rejected" },
+  ] } };
+  const validAfter = { id: "e2", version: 8, payload: { facts: [
+    { fact_key: "a", metric_key: "revenue", review_decision: "confirmed" },
+    { fact_key: "b", metric_key: "margin", review_decision: "rejected" },
+  ] } };
+
+  for (const invalidAfter of [
+    { ...validAfter, payload: { facts: validAfter.payload.facts.slice(0, 1) } },
+    { ...validAfter, payload: { facts: [...validAfter.payload.facts, { fact_key: "c", review_decision: null }] } },
+    { ...validAfter, payload: { facts: [validAfter.payload.facts[0], { ...validAfter.payload.facts[1], fact_key: "a" }] } },
+    { ...validAfter, payload: { facts: [validAfter.payload.facts[0], { ...validAfter.payload.facts[1], metric_key: "changed" }] } },
+    { ...validAfter, payload: { facts: [...validAfter.payload.facts].reverse() } },
+    { ...validAfter, payload: { ...validAfter.payload, unrelated: "drift" } },
+  ]) {
+    assert.throws(() => assertExactReviewSuccessor(before, invalidAfter, "a"), /fact|unrelated/u);
+  }
+  assert.throws(() => assertExactReviewSuccessor(before, validAfter, "missing"), /reviewed fact/u);
+});
 
 function createTerminationHarness(outcomes) {
   let now = 0;

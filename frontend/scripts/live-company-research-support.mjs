@@ -641,6 +641,138 @@ export function buildVerifierEnvironment({ host, databaseUrl, token, backendUrl 
   };
 }
 
+export function createTrafficAudit(uiBase) {
+  const origin = assertLoopbackUrl(uiBase).origin;
+  const requests = [];
+  const responses = [];
+  const sanitizedUrl = (raw) => {
+    let url;
+    try {
+      url = new URL(raw);
+    } catch {
+      throw new Error("unexpected malformed browser request URL");
+    }
+    return url;
+  };
+  const isAllowedLocalScheme = (url) => ["about:", "blob:", "data:"].includes(url.protocol);
+
+  return Object.freeze({
+    recordRequest(method, raw) {
+      const url = sanitizedUrl(raw);
+      if (url.origin !== origin && !isAllowedLocalScheme(url)) {
+        throw new Error(`unexpected external request: ${url.origin}${url.pathname}`);
+      }
+      if (url.origin === origin && url.pathname.startsWith("/api/")) {
+        requests.push(Object.freeze([method, url.pathname]));
+      }
+    },
+    recordRequestFailure(method, raw) {
+      const url = sanitizedUrl(raw);
+      if (url.origin !== origin && !isAllowedLocalScheme(url)) {
+        throw new Error(`unexpected external request failure: ${url.origin}${url.pathname}`);
+      }
+      if (url.origin === origin) {
+        const label = url.pathname.startsWith("/api/") ? "API request failed" : "browser request failed";
+        throw new Error(`${label}: ${method} ${url.pathname}`);
+      }
+    },
+    recordResponse(status, method, raw) {
+      const url = sanitizedUrl(raw);
+      if (url.origin === origin && url.pathname.startsWith("/api/")) {
+        if (!Number.isSafeInteger(status) || status < 200 || status >= 300) {
+          throw new Error(`unexpected API response ${status} ${method} ${url.pathname}`);
+        }
+        responses.push(Object.freeze([status, method, url.pathname]));
+      }
+    },
+    assertSingleton(method, pathname) {
+      const count = requests.filter(([seenMethod, seenPath]) =>
+        seenMethod === method && seenPath === pathname).length;
+      if (count !== 1) throw new Error(`expected one ${method} ${pathname}; saw ${count}`);
+    },
+    requestCount(method, pathname) {
+      return requests.filter(([seenMethod, seenPath]) =>
+        seenMethod === method && seenPath === pathname).length;
+    },
+    snapshot() {
+      return {
+        requests: requests.map((entry) => [...entry]),
+        responses: responses.map((entry) => [...entry]),
+      };
+    },
+  });
+}
+
+function jsonValuesEqual(left, right) {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length
+      && left.every((item, index) => jsonValuesEqual(item, right[index]));
+  }
+  if (!isRecord(left) || !isRecord(right)) return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key, index) =>
+      key === rightKeys[index] && jsonValuesEqual(left[key], right[key]));
+}
+
+function reviewFacts(artifact, label) {
+  if (!isRecord(artifact) || typeof artifact.id !== "string" || artifact.id.length === 0
+    || !isSafePositiveInteger(artifact.version) || !isRecord(artifact.payload)
+    || !Array.isArray(artifact.payload.facts)) {
+    throw new Error(`review ${label} artifact is malformed`);
+  }
+  const facts = artifact.payload.facts;
+  const keys = new Set();
+  for (const fact of facts) {
+    if (!isRecord(fact) || typeof fact.fact_key !== "string" || fact.fact_key.length === 0
+      || keys.has(fact.fact_key)) {
+      throw new Error(`review ${label} fact identities are invalid`);
+    }
+    keys.add(fact.fact_key);
+  }
+  return facts;
+}
+
+export function assertExactReviewSuccessor(before, after, factKey) {
+  const previousFacts = reviewFacts(before, "previous");
+  const nextFacts = reviewFacts(after, "successor");
+  if (after.id === before.id) throw new Error("review artifact identity did not advance");
+  if (after.version !== before.version + 1) throw new Error("review version did not advance exactly once");
+  if (previousFacts.length !== nextFacts.length) throw new Error("review fact cardinality changed");
+
+  const previous = new Map(previousFacts.map((fact) => [fact.fact_key, fact]));
+  const next = new Map(nextFacts.map((fact) => [fact.fact_key, fact]));
+  const reviewedBefore = previous.get(factKey);
+  const reviewedAfter = next.get(factKey);
+  if (!reviewedBefore || !reviewedAfter
+    || (reviewedBefore.review_decision ?? null) !== null
+    || reviewedAfter.review_decision !== "confirmed") {
+    throw new Error("reviewed fact successor mismatch");
+  }
+
+  for (const [key, previousFact] of previous) {
+    const nextFact = next.get(key);
+    if (!nextFact) throw new Error("review fact identity changed");
+    if (key === factKey) {
+      const expected = { ...previousFact, review_decision: "confirmed" };
+      if (!jsonValuesEqual(nextFact, expected)) throw new Error("reviewed fact contents changed");
+    } else if (!jsonValuesEqual(nextFact, previousFact)) {
+      throw new Error("review changed an unrelated fact");
+    }
+  }
+  const expectedPayload = {
+    ...before.payload,
+    facts: previousFacts.map((fact) =>
+      fact.fact_key === factKey ? { ...fact, review_decision: "confirmed" } : fact),
+  };
+  if (!jsonValuesEqual(after.payload, expectedPayload)) {
+    throw new Error("review fact payload changed outside the exact decision successor");
+  }
+  return after;
+}
+
 export function assertWorkspace(workspace, expected) {
   if (!isRecord(workspace) || workspace.schema_version !== "underwriting.v1") {
     workspaceError("schema version mismatch");
