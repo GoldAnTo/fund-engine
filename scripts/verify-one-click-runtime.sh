@@ -58,6 +58,7 @@ at_most() {
   [[ "$actual" =~ ^(0|[1-9][0-9]*)$ ]] || die 'database connection count is invalid'
   if (( ${#actual} > ${#maximum} )) || { (( ${#actual} == ${#maximum} )) && [[ "$actual" > "$maximum" ]]; }; then die 'database connection count exceeds configured cap'; fi
 }
+valid_container_id() { [[ "$1" =~ ^[0-9a-f]{64}$ ]]; }
 require_revision() { [[ "$1" == "$2" ]] || die "expected Alembic revision $2, got ${1:-none}"; }
 valid_private_directory() {
   local relative_path permissions path
@@ -83,7 +84,11 @@ diagnostics() {
   local id ids=()
   printf 'one-click runtime verification diagnostics (read-only):\n' >&2
   compose ps --all >&2 || true
-  while IFS= read -r id; do [[ -n "$id" ]] && ids[${#ids[@]}]="$id"; done < <(compose ps --all --quiet 2>/dev/null || true)
+  while IFS= read -r id; do
+    if [[ ${#ids[@]} -lt 9 && "$id" =~ ^[0-9a-f]{64}$ ]]; then
+      ids[${#ids[@]}]="$id"
+    fi
+  done < <(compose ps --all --quiet 2>/dev/null || true)
   for id in "${ids[@]}"; do
     docker inspect --format 'Name={{.Name}} state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} OOM={{.State.OOMKilled}} restarts={{.RestartCount}}' "$id" >&2 || true
     docker logs --tail 40 "$id" >&2 || true
@@ -93,11 +98,18 @@ diagnostics() {
 cleanup() {
   local status="$?" cleanup_failed=false
   trap - EXIT
-  if [[ -n "$TMPDIR_EXACT" ]] && valid_private_directory; then
-    rm -rf -- "$TMPDIR_EXACT" || cleanup_failed=true
+  if [[ -n "$TMPDIR_EXACT" ]]; then
+    if valid_private_directory; then
+      rm -rf -- "$TMPDIR_EXACT" || cleanup_failed=true
+    elif [[ -e "$TMPDIR_EXACT" || -L "$TMPDIR_EXACT" ]]; then
+      cleanup_failed=true
+    fi
   fi
   [[ "$status" -eq 0 || "$SETUP_COMPLETE" != true ]] || diagnostics
-  if [[ "$status" -ne 0 ]]; then exit "$status"; fi
+  if [[ "$status" -ne 0 ]]; then
+    [[ "$cleanup_failed" != true ]] || printf 'one-click runtime verification: private verification directory cleanup validation failed\n' >&2
+    exit "$status"
+  fi
   if [[ "$cleanup_failed" == true ]]; then
     printf 'one-click runtime verification: private verification directory cleanup failed\n' >&2
     exit 1
@@ -108,7 +120,11 @@ cleanup() {
 capture_snapshot() {
   local destination="$1" id ids=() ids_output
   ids_output="$(compose ps --all --quiet)" || die 'unable to list one-click containers'
-  while IFS= read -r id; do [[ -n "$id" ]] && ids[${#ids[@]}]="$id"; done <<< "$ids_output"
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    valid_container_id "$id" && [[ ${#ids[@]} -lt 9 ]] || die 'one-click container list is invalid'
+    ids[${#ids[@]}]="$id"
+  done <<< "$ids_output"
   [[ ${#ids[@]} -gt 0 ]] || die 'one-click compose project has no containers'
   if ! docker inspect "${ids[@]}" | python3 "$STABILITY_HELPER" snapshot --expect postgres=1 --expect api=1 --expect research-worker=1 --expect "acquisition-worker=${ACQUISITION_REPLICAS}" --expect company-research-worker=1 --expect frontend=1 > "$destination"; then die 'container snapshot is invalid'; fi
 }

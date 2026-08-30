@@ -105,7 +105,10 @@ if args and args[0] == "compose":
     if command == ["config", "-q"]: sys.exit(0)
     if command[:1] == ["ps"]:
         if command == ["ps", "--all", "--quiet"]:
-            print("\n".join(ids())); sys.exit(23 if mode == "ps-partial" else 0)
+            output = ids()
+            if mode == "malformed-ps": output = ["not-a-container"]
+            if mode == "too-many-ps": output = [ident(f"extra-{index}") for index in range(10)]
+            print("\n".join(output)); sys.exit(23 if mode == "ps-partial" else 0)
         if command == ["ps", "--all"]: print("diagnostic ps"); sys.exit(0)
     connection_query = "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database();"
     revision_query = "SELECT version_num FROM alembic_version;"
@@ -155,8 +158,7 @@ def run_verifier(tmp_path: Path, *arguments: str, mode: str = "healthy", **env_v
         victim = tmp_path / ".verify-one-click-runtime.ABC123"
         victim.mkdir()
         (victim / "sentinel").touch()
-    environment = {key: value for key, value in os.environ.items() if key not in PROFILE_KEYS}
-    environment |= {"PATH": f"{bin_dir}:/usr/bin:/bin", "HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls"), "HARNESS_MODE": mode} | env_values
+    environment = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HARNESS_ROOT": str(tmp_path), "HARNESS_CALLS": str(tmp_path / "calls"), "HARNESS_MODE": mode} | env_values
     result = subprocess.run(["/bin/bash", str(verifier), *arguments], cwd=tmp_path, text=True, capture_output=True, env=environment)
     assert_no_lifecycle_commands((tmp_path / "calls").read_text())
     return result
@@ -265,6 +267,33 @@ def test_exported_replica_count_controls_the_exact_snapshot_expectation(tmp_path
     assert result.returncode == 0, result.stderr
 
 
+def test_harness_uses_only_explicit_environment_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    hostile = {
+        "ONE_CLICK_API_URL": "http://hostile.invalid",
+        "ONE_CLICK_FRONTEND_URL": "http://hostile.invalid",
+        "ONE_CLICK_API_PORT": "9999",
+        "ONE_CLICK_FRONTEND_PORT": "9998",
+        "ONE_CLICK_POSTGRES_USER": "hostile",
+        "ONE_CLICK_POSTGRES_DB": "hostile",
+        "RESEARCH_BEARER_TOKEN": "hostile",
+        "ONE_CLICK_ACQUISITION_REPLICAS": "4",
+        "DATABASE_POOL_SIZE": "10",
+        "DATABASE_MAX_OVERFLOW": "10",
+        "BASH_ENV": "/hostile/bash-env",
+        "CDPATH": "/hostile/cdpath",
+        "ENV": "/hostile/env",
+    }
+    for key, value in hostile.items():
+        monkeypatch.setenv(key, value)
+    result = run_verifier(tmp_path)
+    assert result.returncode == 0, result.stderr
+
+
+def test_explicit_profile_environment_values_still_override_fixture(tmp_path: Path) -> None:
+    result = run_verifier(tmp_path, ONE_CLICK_ACQUISITION_REPLICAS="2", HARNESS_REPLICAS="2")
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("value", ["", "01", "5", "999999999999999999999"])
 def test_invalid_exported_profile_value_fails_bounded_validation(tmp_path: Path, value: str) -> None:
     result = run_verifier(tmp_path, ONE_CLICK_ACQUISITION_REPLICAS=value)
@@ -315,6 +344,20 @@ def test_checked_compose_ps_failure_cannot_be_treated_as_a_snapshot(tmp_path: Pa
     assert result.returncode != 0
     assert "unable to list one-click containers" in result.stderr
     assert "logs --tail 40" in (tmp_path / "calls").read_text()
+
+
+@pytest.mark.parametrize("mode", ["malformed-ps", "too-many-ps"])
+def test_invalid_compose_container_ids_are_never_inspected_or_diagnosed(tmp_path: Path, mode: str) -> None:
+    result = run_verifier(tmp_path, mode=mode)
+    calls = (tmp_path / "calls").read_text()
+    assert result.returncode != 0
+    assert "one-click container list is invalid" in result.stderr
+    assert "not-a-container" not in calls
+    assert not any(line.startswith("docker inspect ") and "--format" not in line for line in calls.splitlines())
+    if mode == "malformed-ps":
+        assert "docker logs" not in calls and "docker stats" not in calls
+    else:
+        assert calls.count("docker logs") <= 9
 
 
 def test_harness_rejects_an_unknown_docker_command(tmp_path: Path) -> None:
