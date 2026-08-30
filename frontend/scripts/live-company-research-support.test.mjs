@@ -11,6 +11,7 @@ import * as supportModule from "./live-company-research-support.mjs";
 import {
   assertLoopbackUrl,
   assertProcessesRunning,
+  assertModelWorkspace,
   assertWorkspace,
   buildVerifierEnvironment,
   chooseRunError,
@@ -23,6 +24,98 @@ import {
   stopOwnedProcess,
   waitUntil,
 } from "./live-company-research-support.mjs";
+
+const MODEL_ARTIFACT_KINDS = [
+  "evidence_index",
+  "research_gaps",
+  "business_map",
+  "driver_map",
+  "financial_bridge",
+  "scenario_set",
+  "judgment_context",
+  "memo",
+];
+
+function modelWorkspace() {
+  const projectId = "00000000-0000-4000-8000-000000000001";
+  return {
+    schema_version: "underwriting.v1",
+    project_id: projectId,
+    preparation: { status: "awaiting_judgment_review", progress: 85 },
+    artifacts: MODEL_ARTIFACT_KINDS.map((kind, index) => ({
+      schema_version: "underwriting.v1",
+      id: `00000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}`,
+      project_id: projectId,
+      kind,
+      version: index + 1,
+      payload: kind === "memo" ? {
+        candidate_status: "machine_draft",
+        assessment_status: "not_answerable",
+        valuation_set_ref: null,
+      } : {},
+    })),
+  };
+}
+
+test("model workspace requires the exact unique not-answerable artifact set", () => {
+  const workspace = modelWorkspace();
+  assert.strictEqual(assertModelWorkspace(workspace), workspace);
+
+  for (const artifacts of [
+    workspace.artifacts.slice(1),
+    [...workspace.artifacts, { ...workspace.artifacts[0], id: "duplicate-kind" }],
+    [...workspace.artifacts, {
+      ...workspace.artifacts[0], id: "valuation-1", kind: "valuation_set",
+    }],
+  ]) {
+    assert.throws(
+      () => assertModelWorkspace({ ...workspace, artifacts }),
+      /model artifact set/u,
+    );
+  }
+});
+
+test("model workspace requires exact state and valid artifact heads", () => {
+  const workspace = modelWorkspace();
+  for (const [label, mutate, pattern] of [
+    ["status", (next) => { next.preparation.status = "building_model"; }, /model workspace state/u],
+    ["progress", (next) => { next.preparation.progress = 84; }, /model workspace state/u],
+    ["schema", (next) => { next.artifacts[0].schema_version = "underwriting.v2"; }, /artifact identity/u],
+    ["invalid id", (next) => { next.artifacts[0].id = "not-a-uuid"; }, /artifact identity/u],
+    ["duplicate id", (next) => { next.artifacts[1].id = next.artifacts[0].id; }, /artifact identity/u],
+    ["foreign project", (next) => { next.artifacts[0].project_id = "project-2"; }, /artifact identity/u],
+    ["zero version", (next) => { next.artifacts[0].version = 0; }, /artifact version/u],
+    ["fractional version", (next) => { next.artifacts[0].version = 1.5; }, /artifact version/u],
+    ["missing payload", (next) => { delete next.artifacts[0].payload; }, /artifact payload/u],
+    ["array payload", (next) => { next.artifacts[0].payload = []; }, /artifact payload/u],
+  ]) {
+    const next = structuredClone(workspace);
+    mutate(next);
+    assert.throws(() => assertModelWorkspace(next), pattern, label);
+  }
+});
+
+test("model workspace keeps every not-answerable memo investment field closed", () => {
+  const workspace = modelWorkspace();
+  const memo = workspace.artifacts.find((artifact) => artifact.kind === "memo");
+  for (const [field, value] of [
+    ["candidate_status", "human_confirmed"],
+    ["assessment_status", "answerable"],
+    ["valuation_set_ref", { artifact_kind: "valuation_set", content_hash: "hash" }],
+    ["direction", "provisional_bullish"],
+    ["confidence", "high"],
+    ["target_value", 200],
+    ["expected_return", 0.2],
+  ]) {
+    const next = structuredClone(workspace);
+    next.artifacts.find((artifact) => artifact.kind === "memo").payload[field] = value;
+    assert.throws(() => assertModelWorkspace(next), /not-answerable memo contract/u, field);
+  }
+  for (const field of ["direction", "confidence", "target_value", "expected_return"]) {
+    memo.payload[field] = null;
+  }
+  assert.strictEqual(assertModelWorkspace(workspace), workspace);
+});
 
 test("traffic audit retains only local API method, path, and status metadata", () => {
   const audit = createTrafficAudit("http://127.0.0.1:42000", "must-not-be-recorded");

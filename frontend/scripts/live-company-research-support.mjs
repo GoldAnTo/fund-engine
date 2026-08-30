@@ -1079,6 +1079,57 @@ export function assertExactReviewSuccessor(before, after, factKey) {
   return after;
 }
 
+const NOT_ANSWERABLE_MODEL_ARTIFACTS = Object.freeze([
+  "business_map",
+  "driver_map",
+  "evidence_index",
+  "financial_bridge",
+  "judgment_context",
+  "memo",
+  "research_gaps",
+  "scenario_set",
+]);
+
+export function assertModelWorkspace(workspace) {
+  if (!isRecord(workspace)
+    || workspace.schema_version !== "underwriting.v1"
+    || typeof workspace.project_id !== "string" || !UUID_PATTERN.test(workspace.project_id)) {
+    throw new Error("model workspace identity mismatch");
+  }
+  if (!isRecord(workspace.preparation)
+    || workspace.preparation.status !== "awaiting_judgment_review"
+    || workspace.preparation.progress !== 85) {
+    throw new Error("model workspace state mismatch");
+  }
+  if (!Array.isArray(workspace.artifacts)) throw new Error("model artifact set mismatch");
+  const kinds = workspace.artifacts.map((artifact) => artifact?.kind).sort();
+  if (kinds.length !== NOT_ANSWERABLE_MODEL_ARTIFACTS.length
+    || !jsonValuesEqual(kinds, NOT_ANSWERABLE_MODEL_ARTIFACTS)) {
+    throw new Error("model artifact set mismatch");
+  }
+  const identities = new Set();
+  for (const artifact of workspace.artifacts) {
+    if (!isRecord(artifact) || artifact.schema_version !== "underwriting.v1"
+      || typeof artifact.id !== "string" || !UUID_PATTERN.test(artifact.id)
+      || artifact.project_id !== workspace.project_id || identities.has(artifact.id)) {
+      throw new Error("model artifact identity mismatch");
+    }
+    identities.add(artifact.id);
+    if (!isSafePositiveInteger(artifact.version)) throw new Error("model artifact version mismatch");
+    if (!isRecord(artifact.payload)) throw new Error("model artifact payload mismatch");
+  }
+  const memo = workspace.artifacts.find((artifact) => artifact.kind === "memo");
+  const populatedInvestmentField = ["direction", "confidence", "target_value", "expected_return"]
+    .some((field) => memo.payload[field] !== undefined && memo.payload[field] !== null);
+  if (memo.payload.candidate_status !== "machine_draft"
+    || memo.payload.assessment_status !== "not_answerable"
+    || memo.payload.valuation_set_ref !== null
+    || populatedInvestmentField) {
+    throw new Error("not-answerable memo contract mismatch");
+  }
+  return workspace;
+}
+
 export function assertWorkspace(workspace, expected) {
   if (!isRecord(workspace) || workspace.schema_version !== "underwriting.v1") {
     workspaceError("schema version mismatch");

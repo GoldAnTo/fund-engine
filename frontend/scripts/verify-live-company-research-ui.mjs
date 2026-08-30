@@ -11,8 +11,11 @@ import { chromium } from "@playwright/test";
 
 import {
   assertLoopbackUrl,
+  assertExactReviewSuccessor,
+  assertModelWorkspace,
   assertProcessesRunning,
   assertAlphabetIdentityBinding,
+  assertWorkspace,
   buildVerifierEnvironment,
   chooseRunError,
   closeOwnedBrowser,
@@ -45,6 +48,7 @@ const initializationPath = "/api/underwriting/v1/product/company-research/initia
 const previewPath = "/api/underwriting/v1/product/company-research/preview";
 const searchPath = "/api/underwriting/v1/product/objects";
 const CLEANUP_TIMEOUT_MS = 10_000;
+const CLOSED_ANSWERABILITY_MESSAGE = "当前正式证据不足，不形成投资方向、置信度、目标价或预期回报。";
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -214,6 +218,60 @@ function throwBrowserFailures(failures) {
   failures.throwIfAny();
 }
 
+function createWorkspaceResponseCollector(page, failures) {
+  const entries = [];
+  let sequence = 0;
+  page.on("response", (response) => {
+    const request = response.request();
+    const pathname = new URL(response.url()).pathname;
+    if (request.method() !== "GET" || !pathname.endsWith("/workspace")
+      || !pathname.includes("/company-research/projects/")) return;
+    const currentSequence = ++sequence;
+    void responseJson(response).then((workspace) => {
+      entries.push({ sequence: currentSequence, pathname, workspace });
+    }).catch((error) => failures.record(error));
+  });
+  return Object.freeze({
+    cursor() { return sequence; },
+    takeAfter(after, predicate) {
+      const index = entries.findIndex((entry) => entry.sequence > after && predicate(entry));
+      if (index < 0) return null;
+      return entries.splice(index, 1)[0].workspace;
+    },
+  });
+}
+
+async function waitForBrowserWorkspace({ collector, after, projectId, status, progress, deadline, processes }) {
+  const workspacePath = projectId
+    ? `/api/underwriting/v1/product/company-research/projects/${encodeURIComponent(projectId)}/workspace`
+    : null;
+  return waitUntil(async () => collector.takeAfter(after, ({ pathname, workspace }) =>
+    (workspacePath === null || pathname === workspacePath)
+      && workspace?.preparation?.status === status
+      && workspace?.preparation?.progress === progress), {
+    label: `browser workspace ${status}/${progress}`,
+    timeoutMs: remaining(deadline, `browser workspace ${status}/${progress}`),
+    processes,
+  });
+}
+
+function governedEvidenceArtifact(workspace) {
+  const evidenceArtifacts = workspace.artifacts?.filter((artifact) => artifact?.kind === "evidence_index");
+  if (evidenceArtifacts?.length !== 1) throw new Error("evidence workspace must expose exactly one evidence artifact");
+  const evidence = evidenceArtifacts[0];
+  const facts = evidence?.payload?.facts;
+  if (!Array.isArray(facts) || facts.length === 0) throw new Error("authenticated evidence artifact has no governed facts");
+  const factKeys = facts.map((fact) => fact?.fact_key);
+  if (factKeys.some((factKey) => typeof factKey !== "string" || factKey.length === 0)
+    || new Set(factKeys).size !== factKeys.length) {
+    throw new Error("authenticated evidence artifact fact identities are invalid");
+  }
+  if (facts.some((fact) => (fact.review_decision ?? null) !== null)) {
+    throw new Error("authenticated evidence artifact contains a pre-reviewed fact");
+  }
+  return { evidence, factKeys };
+}
+
 async function finalizeOwnedRuntime({ browser, browserFailures, worker, vite, api, runtime }) {
   const cleanupErrors = [];
   if (browser) {
@@ -262,7 +320,11 @@ async function runBootstrap(python, args, { env, deadline, label }) {
   }
 }
 
-async function runBrowserWorkflow({ page, uiBase, audit, failures, deadline, processes, foundation }) {
+async function runBrowserWorkflow({
+  page, uiBase, audit, failures, deadline, runningProcesses, foundation,
+  stopWorkerForReview, restartWorker,
+}) {
+  const workspaceResponses = createWorkspaceResponseCollector(page, failures);
   await page.goto(`${uiBase}/research/new`, {
     waitUntil: "networkidle",
     timeout: remaining(deadline, "new research navigation"),
@@ -299,6 +361,7 @@ async function runBrowserWorkflow({ page, uiBase, audit, failures, deadline, pro
   const initializeResponsePromise = page.waitForResponse((response) =>
     response.request().method() === "POST" && new URL(response.url()).pathname === initializationPath,
   { timeout: remaining(deadline, "company research initialization") });
+  const evidenceWorkspaceCursor = workspaceResponses.cursor();
   await page.getByRole("button", { name: "开始研究" }).click();
   const initialized = await responseJson(await initializeResponsePromise);
   if (initialized?.company_id !== alphabet.object_id
@@ -314,11 +377,144 @@ async function runBrowserWorkflow({ page, uiBase, audit, failures, deadline, pro
   await page.getByRole("heading", { name: "研究工作台" }).waitFor({
     timeout: remaining(deadline, "created project workbench"),
   });
+  const projectId = initialized.project_id;
+  const evidenceWorkspace = await waitForBrowserWorkspace({
+    collector: workspaceResponses,
+    after: evidenceWorkspaceCursor,
+    projectId,
+    status: "awaiting_evidence_review",
+    progress: 25,
+    deadline,
+    processes: runningProcesses(),
+  });
+  assertWorkspace(evidenceWorkspace, {
+    projectId,
+    companyId: alphabet.object_id,
+    status: "awaiting_evidence_review",
+    progress: 25,
+  });
+  if (evidenceWorkspace.change_summary?.reviewed_fact_count !== 0) {
+    throw new Error("evidence workspace must begin with zero reviewed facts");
+  }
+  let { evidence, factKeys } = governedEvidenceArtifact(evidenceWorkspace);
+
+  await stopWorkerForReview();
+  assertProcessesRunning(runningProcesses());
+  const stableWorkspaceCursor = workspaceResponses.cursor();
+  await page.reload({
+    waitUntil: "networkidle",
+    timeout: remaining(deadline, "stopped-worker workspace reload"),
+  });
+  const stableEvidenceWorkspace = await waitForBrowserWorkspace({
+    collector: workspaceResponses,
+    after: stableWorkspaceCursor,
+    projectId,
+    status: "awaiting_evidence_review",
+    progress: 25,
+    deadline,
+    processes: runningProcesses(),
+  });
+  assertWorkspace(stableEvidenceWorkspace, {
+    projectId,
+    companyId: alphabet.object_id,
+    status: "awaiting_evidence_review",
+    progress: 25,
+  });
+  const stableEvidence = governedEvidenceArtifact(stableEvidenceWorkspace).evidence;
+  if (stableEvidence.id !== evidence.id || stableEvidence.version !== evidence.version
+    || stableEvidenceWorkspace.change_summary?.reviewed_fact_count !== 0) {
+    throw new Error("stopped worker did not preserve the exact evidence-review boundary");
+  }
+  evidence = stableEvidence;
+  await page.getByRole("button", { name: "来源、事实与缺口" }).click();
+
+  const reviewPath = `/api/underwriting/v1/product/company-research/projects/${encodeURIComponent(projectId)}/evidence-reviews`;
+  const reviewResponses = [];
+  let finalReviewWorkspace = null;
+  for (const [index, factKey] of factKeys.entries()) {
+    const previousEvidence = evidence;
+    const reviewResponsePromise = page.waitForResponse((response) =>
+      response.request().method() === "POST" && new URL(response.url()).pathname === reviewPath,
+    { timeout: remaining(deadline, `evidence review ${factKey}`) });
+    const reviewWorkspaceCursor = workspaceResponses.cursor();
+    await page.getByRole("button", { name: `确认事实 ${factKey}`, exact: true }).click();
+    const reviewed = await responseJson(await reviewResponsePromise);
+    reviewResponses.push(reviewed);
+    evidence = assertExactReviewSuccessor(previousEvidence, reviewed?.evidence_artifact, factKey);
+    const isFinalFact = index === factKeys.length - 1;
+    const nextWorkspace = await waitForBrowserWorkspace({
+      collector: workspaceResponses,
+      after: reviewWorkspaceCursor,
+      projectId,
+      status: isFinalFact ? "building_model" : "awaiting_evidence_review",
+      progress: 25,
+      deadline,
+      processes: runningProcesses(),
+    });
+    assertWorkspace(nextWorkspace, {
+      projectId,
+      companyId: alphabet.object_id,
+      status: isFinalFact ? "building_model" : "awaiting_evidence_review",
+      progress: 25,
+    });
+    if (nextWorkspace.change_summary?.reviewed_fact_count !== index + 1) {
+      throw new Error("reviewed fact count did not advance exactly once");
+    }
+    const workspaceEvidence = nextWorkspace.artifacts?.find((artifact) => artifact?.kind === "evidence_index");
+    assertExactReviewSuccessor(previousEvidence, workspaceEvidence, factKey);
+    if (workspaceEvidence.id !== evidence.id || workspaceEvidence.version !== evidence.version) {
+      throw new Error("review response and successor workspace evidence identities differ");
+    }
+    await page.getByText(`事实 ${factKey} 已确认，证据版本 ${evidence.version}`, { exact: true }).waitFor({
+      timeout: remaining(deadline, `visible evidence review ${factKey}`),
+    });
+    if (isFinalFact) finalReviewWorkspace = nextWorkspace;
+    throwBrowserFailures(failures);
+    assertProcessesRunning(runningProcesses());
+  }
+  if (reviewResponses.length !== factKeys.length || finalReviewWorkspace === null
+    || finalReviewWorkspace.preparation.status !== "building_model"
+    || finalReviewWorkspace.change_summary.reviewed_fact_count !== factKeys.length) {
+    throw new Error("final evidence review did not enter the exact model-build boundary");
+  }
+
+  const modelWorkspaceCursor = workspaceResponses.cursor();
+  await restartWorker();
+  const modelWorkspace = await waitForBrowserWorkspace({
+    collector: workspaceResponses,
+    after: modelWorkspaceCursor,
+    projectId,
+    status: "awaiting_judgment_review",
+    progress: 85,
+    deadline,
+    processes: runningProcesses(),
+  });
+  assertWorkspace(modelWorkspace, {
+    projectId,
+    companyId: alphabet.object_id,
+    status: "awaiting_judgment_review",
+    progress: 85,
+  });
+  assertModelWorkspace(modelWorkspace);
+  if (modelWorkspace.change_summary?.reviewed_fact_count !== factKeys.length) {
+    throw new Error("model workspace reviewed fact count differs from authenticated evidence");
+  }
+  await page.getByRole("button", { name: "概览与当前判断" }).click();
+  await page.getByText(CLOSED_ANSWERABILITY_MESSAGE, { exact: true }).waitFor({
+    timeout: remaining(deadline, "closed answerability message"),
+  });
   throwBrowserFailures(failures);
-  assertProcessesRunning(processes);
+  assertProcessesRunning(runningProcesses());
   audit.assertSingleton("GET", searchPath);
   audit.assertSingleton("POST", previewPath);
   audit.assertSingleton("POST", initializationPath);
+  if (audit.requestCount("POST", reviewPath) !== factKeys.length) {
+    throw new Error(`expected one evidence review request per governed fact; saw ${audit.requestCount("POST", reviewPath)}`);
+  }
+  const allowedWrites = new Set([previewPath, initializationPath, reviewPath]);
+  const unexpectedWrites = audit.snapshot().requests.filter(([method, pathname]) =>
+    method !== "GET" && !(method === "POST" && allowedWrites.has(pathname)));
+  if (unexpectedWrites.length > 0) throw new Error("unexpected Company Research browser write before judgment confirmation");
 }
 
 async function main() {
@@ -378,12 +574,15 @@ async function main() {
       ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(apiPort)],
       { cwd: backend, env, name: "api" },
     );
-    await assertPythonIdentity(python);
-    worker = startOwnedProcess(
-      python.launcher,
-      ["-m", "app.scripts.run_company_research_worker", "--loop", "--poll-seconds", "0.1"],
-      { cwd: backend, env, name: "company-research-worker" },
-    );
+    const launchWorker = async () => {
+      await assertPythonIdentity(python);
+      return startOwnedProcess(
+        python.launcher,
+        ["-m", "app.scripts.run_company_research_worker", "--loop", "--poll-seconds", "0.1"],
+        { cwd: backend, env, name: "company-research-worker" },
+      );
+    };
+    worker = await launchWorker();
     const backendProcesses = [api, worker];
     await waitUntil(async ({ signal }) => {
       const response = await fetch(`${apiOrigin}${searchPath}?query=Alphabet&limit=20`, {
@@ -402,7 +601,8 @@ async function main() {
       ["./node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", String(uiPort), "--strictPort"],
       { cwd: frontend, env, name: "vite" },
     );
-    const processes = [api, worker, vite];
+    const runningProcesses = () => [api, worker, vite].filter((owned) => owned !== null && owned !== undefined);
+    const processes = runningProcesses();
     await waitUntil(async ({ signal }) => {
       const response = await fetch(`${uiBase}/research/new`, { signal });
       return response.ok;
@@ -464,8 +664,20 @@ async function main() {
       audit,
       failures: browserFailures,
       deadline,
-      processes,
+      runningProcesses,
       foundation: await alphabetFoundation(),
+      async stopWorkerForReview() {
+        if (!worker) throw new Error("company research worker is absent before evidence review");
+        const stoppedWorker = worker;
+        await stopOwnedProcess(stoppedWorker);
+        if (worker !== stoppedWorker) throw new Error("company research worker identity changed during stop");
+        worker = null;
+      },
+      async restartWorker() {
+        if (worker) throw new Error("company research worker was not stopped before restart");
+        worker = await launchWorker();
+        return worker;
+      },
     });
   } catch (error) {
     primaryError = error instanceof Error ? error : new Error("live company research verifier failed");
