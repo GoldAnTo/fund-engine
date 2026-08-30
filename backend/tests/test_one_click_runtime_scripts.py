@@ -117,10 +117,12 @@ def test_rollback_restarts_only_legacy_application_containers() -> None:
 def run_fake_up(
     tmp_path: Path,
     *,
-    docker_memory: int,
+    docker_memory: int | str,
     runtime_values: dict[str, str] | None = None,
+    process_values: dict[str, str] | None = None,
     fail_up: bool = False,
     fail_down: bool = False,
+    fail_docker_memory_query: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     api_short = "89c5b6eb2322"
     api_full = api_short + "a" * 52
@@ -158,7 +160,7 @@ case "$1" in
     [[ "$*" == *" down"* ]] && {{ [[ "${{FAIL_DOWN:-0}}" == 1 ]] && exit 39 || exit 0; }}
     ;;
   info)
-    [[ "$*" == *" --format {{{{.MemTotal}}}}"* ]] && {{ printf '%s\n' "$DOCKER_MEMORY"; exit 0; }}
+    [[ "$*" == *" --format {{{{.MemTotal}}}}"* ]] && {{ [[ "${{FAIL_DOCKER_MEMORY_QUERY:-0}}" == 1 ]] && exit 41 || {{ printf '%s\n' "$DOCKER_MEMORY"; exit 0; }}; }}
     exit 0
     ;;
   volume)
@@ -188,13 +190,34 @@ esac
     )
     fake_docker.chmod(fake_docker.stat().st_mode | stat.S_IXUSR)
     log = tmp_path / "docker.log"
+    profile_keys = (
+        "ONE_CLICK_ACQUISITION_REPLICAS",
+        "DATABASE_POOL_SIZE",
+        "DATABASE_MAX_OVERFLOW",
+        "DATABASE_POOL_TIMEOUT_SECONDS",
+        "DATABASE_POOL_RECYCLE_SECONDS",
+        "ONE_CLICK_POSTGRES_MEMORY_LIMIT",
+        "ONE_CLICK_API_MEMORY_LIMIT",
+        "ONE_CLICK_RESEARCH_WORKER_MEMORY_LIMIT",
+        "ONE_CLICK_ACQUISITION_WORKER_MEMORY_LIMIT",
+        "ONE_CLICK_COMPANY_RESEARCH_WORKER_MEMORY_LIMIT",
+        "ONE_CLICK_FRONTEND_MEMORY_LIMIT",
+        "ONE_CLICK_POSTGRES_CPU_LIMIT",
+        "ONE_CLICK_API_CPU_LIMIT",
+        "ONE_CLICK_RESEARCH_WORKER_CPU_LIMIT",
+        "ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT",
+        "ONE_CLICK_COMPANY_RESEARCH_WORKER_CPU_LIMIT",
+        "ONE_CLICK_FRONTEND_CPU_LIMIT",
+    )
     env = {
-        **os.environ,
+        **{key: value for key, value in os.environ.items() if key not in profile_keys},
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "DOCKER_LOG": str(log),
         "DOCKER_MEMORY": str(docker_memory),
         "FAIL_UP": "1" if fail_up else "0",
         "FAIL_DOWN": "1" if fail_down else "0",
+        "FAIL_DOCKER_MEMORY_QUERY": "1" if fail_docker_memory_query else "0",
+        **(process_values or {}),
     }
 
     completed = subprocess.run([script, "up"], capture_output=True, text=True, env=env)
@@ -254,6 +277,54 @@ def test_up_uses_runtime_configured_acquisition_replica_count(tmp_path: Path) ->
     assert completed.returncode == 0
     launch = next(command for command in commands if " up -d --no-build" in command)
     assert launch.endswith("--scale acquisition-worker=4")
+
+
+def test_up_prefers_exported_acquisition_replica_count_over_runtime_file(tmp_path: Path) -> None:
+    completed, commands = run_fake_up(
+        tmp_path,
+        docker_memory=8 * 1024**3,
+        runtime_values={"ONE_CLICK_ACQUISITION_REPLICAS": "1"},
+        process_values={"ONE_CLICK_ACQUISITION_REPLICAS": "4"},
+    )
+
+    assert completed.returncode == 0
+    launch = next(command for command in commands if " up -d --no-build" in command)
+    assert launch.endswith("--scale acquisition-worker=4")
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "expected_error"),
+    (
+        ("DATABASE_POOL_SIZE", "999", "DATABASE_POOL_SIZE must be an integer from 1 through 10"),
+        (
+            "ONE_CLICK_ACQUISITION_REPLICAS",
+            "",
+            "ONE_CLICK_ACQUISITION_REPLICAS must be an integer from 1 through 4",
+        ),
+        (
+            "ONE_CLICK_API_MEMORY_LIMIT",
+            "0m",
+            "ONE_CLICK_API_MEMORY_LIMIT has an invalid one-click resource limit",
+        ),
+        (
+            "ONE_CLICK_FRONTEND_CPU_LIMIT",
+            "0",
+            "ONE_CLICK_FRONTEND_CPU_LIMIT has an invalid one-click resource limit",
+        ),
+    ),
+)
+def test_up_validates_exported_profile_values_before_docker(
+    tmp_path: Path, name: str, value: str, expected_error: str
+) -> None:
+    completed, commands = run_fake_up(
+        tmp_path,
+        docker_memory=8 * 1024**3,
+        process_values={name: value},
+    )
+
+    assert completed.returncode != 0
+    assert completed.stderr == f"one-click runtime: {expected_error}\n"
+    assert commands == []
 
 
 @pytest.mark.parametrize("value", ("0", "5", "-1", "01", "many"))
@@ -362,6 +433,29 @@ def test_up_rejects_insufficient_docker_memory_before_build_or_cutover(tmp_path:
     assert not any(" build" in command or command.startswith("stop ") for command in commands)
 
 
+def test_up_reports_unreadable_docker_memory_before_build_or_cutover(tmp_path: Path) -> None:
+    completed, commands = run_fake_up(
+        tmp_path,
+        docker_memory=8 * 1024**3,
+        fail_docker_memory_query=True,
+    )
+
+    assert completed.returncode != 0
+    assert completed.stderr == "one-click runtime: unable to read Docker memory\n"
+    assert not any(" build" in command or command.startswith("stop ") for command in commands)
+
+
+@pytest.mark.parametrize("docker_memory", ("0", "01", "not-a-number"))
+def test_up_rejects_invalid_docker_memory_total_before_build_or_cutover(
+    tmp_path: Path, docker_memory: str
+) -> None:
+    completed, commands = run_fake_up(tmp_path, docker_memory=docker_memory)
+
+    assert completed.returncode != 0
+    assert completed.stderr == "one-click runtime: Docker reported an invalid memory total\n"
+    assert not any(" build" in command or command.startswith("stop ") for command in commands)
+
+
 @pytest.mark.parametrize("docker_memory", (6 * 1024**3, 8 * 1024**3 - 1))
 def test_up_warns_when_docker_memory_is_between_six_and_eight_gib(
     tmp_path: Path, docker_memory: int
@@ -379,6 +473,16 @@ def test_up_does_not_warn_when_docker_memory_is_at_least_eight_gib(tmp_path: Pat
     assert "less than 8 GiB" not in completed.stderr
 
 
+def test_up_accepts_an_oversized_canonical_docker_memory_total(tmp_path: Path) -> None:
+    completed, _ = run_fake_up(
+        tmp_path,
+        docker_memory="18446744073709551617",
+    )
+
+    assert completed.returncode == 0
+    assert "less than 8 GiB" not in completed.stderr
+
+
 @pytest.mark.parametrize(
     ("name", "value"),
     (
@@ -387,6 +491,11 @@ def test_up_does_not_warn_when_docker_memory_is_at_least_eight_gib(tmp_path: Pat
         ("ONE_CLICK_POSTGRES_CPU_LIMIT", "all"),
         ("ONE_CLICK_POSTGRES_CPU_LIMIT", "0"),
         ("ONE_CLICK_POSTGRES_CPU_LIMIT", "0.0"),
+        ("ONE_CLICK_API_MEMORY_LIMIT", "unbounded"),
+        ("ONE_CLICK_FRONTEND_MEMORY_LIMIT", "0m"),
+        ("ONE_CLICK_API_CPU_LIMIT", "all"),
+        ("ONE_CLICK_FRONTEND_CPU_LIMIT", "0"),
+        ("ONE_CLICK_FRONTEND_CPU_LIMIT", "0.0"),
     ),
 )
 def test_up_rejects_invalid_resource_limits_before_build_or_cutover(
@@ -400,6 +509,25 @@ def test_up_rejects_invalid_resource_limits_before_build_or_cutover(
 
     assert completed.returncode != 0
     assert f"{name} has an invalid one-click resource limit" in completed.stderr
+    assert not any(" build" in command or command.startswith("stop ") for command in commands)
+
+
+def test_up_does_not_upgrade_legacy_adapter_when_docker_memory_is_insufficient(
+    tmp_path: Path,
+) -> None:
+    completed, commands = run_fake_up(
+        tmp_path,
+        docker_memory=6 * 1024**3 - 1,
+        runtime_values={"ACQUISITION_ENABLED_ADAPTERS": "sse,szse,gildata"},
+    )
+
+    assert completed.returncode != 0
+    assert "Docker must expose at least 6 GiB" in completed.stderr
+    assert (tmp_path / ".env.one-click.local").read_text() == (
+        "ONE_CLICK_POSTGRES_PASSWORD=test-password\n"
+        "RESEARCH_BEARER_TOKEN=test-token\n"
+        "ACQUISITION_ENABLED_ADAPTERS=sse,szse,gildata\n"
+    )
     assert not any(" build" in command or command.startswith("stop ") for command in commands)
 
 

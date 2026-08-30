@@ -132,6 +132,10 @@ optional_runtime_env_value() {
   local key="$1"
   local default_value="$2"
   local matches value
+  if [[ -n "${!key+x}" ]]; then
+    printf '%s' "${!key}"
+    return 0
+  fi
   matches="$(grep -E "^${key}=" "$RUNTIME_ENV_FILE" || true)"
   if [[ -n "$matches" ]]; then
     [[ "$(printf '%s\n' "$matches" | wc -l | tr -d ' ')" == "1" ]] \
@@ -213,14 +217,28 @@ validate_one_click_runtime_profile() {
   validate_cpu_limit ONE_CLICK_FRONTEND_CPU_LIMIT 0.5
 }
 
+decimal_value_is_less_than() {
+  local value="$1"
+  local threshold="$2"
+  local value_length="${#value}"
+  local threshold_length="${#threshold}"
+  if (( value_length < threshold_length )) \
+    || { (( value_length == threshold_length )) && [[ "$value" < "$threshold" ]]; }; then
+    return 0
+  fi
+  return 1
+}
+
 validate_docker_memory() {
   local memory_bytes
   memory_bytes="$(docker info --format '{{.MemTotal}}')" \
-    || die "Docker must expose at least 6 GiB"
+    || die "unable to read Docker memory"
   [[ "$memory_bytes" =~ ^[1-9][0-9]*$ ]] \
-    && (( 10#$memory_bytes >= 6 * 1024 * 1024 * 1024 )) \
-    || die "Docker must expose at least 6 GiB"
-  if (( 10#$memory_bytes < 8 * 1024 * 1024 * 1024 )); then
+    || die "Docker reported an invalid memory total"
+  if decimal_value_is_less_than "$memory_bytes" 6442450944; then
+    die "Docker must expose at least 6 GiB"
+  fi
+  if decimal_value_is_less_than "$memory_bytes" 8589934592; then
     printf 'one-click runtime: Docker exposes less than 8 GiB of memory; startup may be unstable\n' >&2
   fi
 }
@@ -684,9 +702,9 @@ start_one_click_runtime() (
   require_runtime_files
   validate_one_click_runtime_profile
   acquisition_replicas="$(bounded_integer_value ONE_CLICK_ACQUISITION_REPLICAS 1 1 4)"
-  upgrade_legacy_runtime_defaults
   compose config -q
   validate_docker_memory
+  upgrade_legacy_runtime_defaults
   compose build migrate
   compose build frontend
   project_name="$(compose_project_name)"
