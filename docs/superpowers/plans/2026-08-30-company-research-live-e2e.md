@@ -367,7 +367,7 @@ export async function waitUntil(probe, { label, timeoutMs, intervalMs = 100, pro
 
 Run the Step 2 command.
 
-Expected: 7 tests pass and no child process remains.
+Expected: 8 tests pass and no child process remains.
 
 - [ ] **Step 5: Commit the runtime boundary**
 
@@ -607,7 +607,7 @@ node scripts/with-project-node.mjs --check scripts/verify-live-company-research-
 node scripts/with-project-node.mjs --test scripts/live-company-research-support.test.mjs
 ```
 
-Expected: syntax check exits 0 and 9 support tests pass.
+Expected: syntax check exits 0 and 10 support tests pass.
 
 - [ ] **Step 6: Commit isolated stack startup and browser creation**
 
@@ -702,7 +702,7 @@ await page.getByText("当前正式证据不足，不形成投资方向、置信�
 
 Run Task 3 Step 5 commands.
 
-Expected: syntax exits 0 and 10 support tests pass.
+Expected: syntax exits 0 and 11 support tests pass.
 
 - [ ] **Step 6: Commit evidence and model phases**
 
