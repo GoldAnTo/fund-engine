@@ -136,14 +136,16 @@ optional_runtime_env_value() {
     printf '%s' "${!key}"
     return 0
   fi
-  matches="$(grep -E "^${key}=" "$RUNTIME_ENV_FILE" || true)"
-  if [[ -n "$matches" ]]; then
-    [[ "$(printf '%s\n' "$matches" | wc -l | tr -d ' ')" == "1" ]] \
-      || die "missing or duplicate ${key} in runtime environment"
-    value="${matches#*=}"
-    [[ -n "$value" ]] || die "empty ${key} in runtime environment"
-    printf '%s' "$value"
-    return 0
+  if [[ -e "$RUNTIME_ENV_FILE" || -L "$RUNTIME_ENV_FILE" ]]; then
+    matches="$(grep -E "^${key}=" "$RUNTIME_ENV_FILE" || true)"
+    if [[ -n "$matches" ]]; then
+      [[ "$(printf '%s\n' "$matches" | wc -l | tr -d ' ')" == "1" ]] \
+        || die "missing or duplicate ${key} in runtime environment"
+      value="${matches#*=}"
+      [[ -n "$value" ]] || die "empty ${key} in runtime environment"
+      printf '%s' "$value"
+      return 0
+    fi
   fi
 
   matches="$(grep -E "^${key}=" "$BASE_ENV_FILE" || true)"
@@ -215,6 +217,16 @@ validate_one_click_runtime_profile() {
   validate_cpu_limit ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT 1.0
   validate_cpu_limit ONE_CLICK_COMPANY_RESEARCH_WORKER_CPU_LIMIT 1.5
   validate_cpu_limit ONE_CLICK_FRONTEND_CPU_LIMIT 0.5
+}
+
+prevalidate_one_click_profile() {
+  [[ -f "$COMPOSE_FILE" ]] || die "missing compose file: $COMPOSE_FILE"
+  [[ -f "$BASE_ENV_FILE" ]] || die "missing base environment file: $BASE_ENV_FILE"
+  if [[ -e "$RUNTIME_ENV_FILE" || -L "$RUNTIME_ENV_FILE" ]]; then
+    validate_runtime_env_file
+  fi
+  validate_one_click_runtime_profile
+  bounded_integer_value ONE_CLICK_ACQUISITION_REPLICAS 1 1 4 >/dev/null
 }
 
 decimal_value_is_less_than() {
@@ -698,6 +710,7 @@ start_one_click_runtime() (
   trap 'exit 143' TERM
 
   require_command docker
+  prevalidate_one_click_profile
   init_runtime_environment true
   require_runtime_files
   validate_one_click_runtime_profile

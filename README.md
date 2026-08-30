@@ -91,7 +91,7 @@ cd frontend && PYTHON=../backend/.venv/bin/python PW_BROWSER_CHANNEL=chrome node
 # `.env` 保留你已有的 LLM、资料提供商等外部凭证；init 只生成本机运行所需凭证。
 scripts/one-click-runtime.sh init
 scripts/one-click-runtime.sh up
-scripts/verify-one-click-runtime.sh
+scripts/verify-one-click-runtime.sh --stability-seconds 600
 ```
 
 默认只启动一个资料采集 worker，适合 16 GiB Mac、Docker Desktop 分配约 8 GiB

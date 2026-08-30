@@ -229,6 +229,76 @@ esac
     return completed, log.read_text().splitlines() if log.exists() else []
 
 
+@pytest.mark.parametrize(
+    ("base_environment", "process_values", "expected_error"),
+    (
+        (
+            "",
+            {"ONE_CLICK_ACQUISITION_REPLICAS": "5"},
+            "ONE_CLICK_ACQUISITION_REPLICAS must be an integer from 1 through 4",
+        ),
+        (
+            "DATABASE_POOL_SIZE=0\n",
+            {},
+            "DATABASE_POOL_SIZE must be an integer from 1 through 10",
+        ),
+        (
+            "ONE_CLICK_API_MEMORY_LIMIT=unbounded\n",
+            {},
+            "ONE_CLICK_API_MEMORY_LIMIT has an invalid one-click resource limit",
+        ),
+    ),
+)
+def test_first_up_rejects_invalid_profile_before_credential_creation_or_commands(
+    tmp_path: Path,
+    base_environment: str,
+    process_values: dict[str, str],
+    expected_error: str,
+) -> None:
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    script = scripts_dir / "one-click-runtime.sh"
+    shutil.copy(ROOT / "scripts" / "one-click-runtime.sh", script)
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    (tmp_path / "docker-compose.one-click.yml").touch()
+    (tmp_path / ".env").write_text(base_environment)
+
+    command_log = tmp_path / "commands.log"
+    command_log.write_text("")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    openssl = fake_bin / "openssl"
+    openssl.write_text(
+        "#!/bin/sh\n"
+        'printf \'openssl %s\\n\' "$*" >> "$COMMAND_LOG"\n'
+        "printf '%064d\\n' 0\n"
+    )
+    openssl.chmod(openssl.stat().st_mode | stat.S_IXUSR)
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        'printf \'docker %s\\n\' "$*" >> "$COMMAND_LOG"\n'
+        "exit 64\n"
+    )
+    docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+
+    completed = subprocess.run(
+        [script, "up"],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "COMMAND_LOG": str(command_log),
+            **process_values,
+        },
+    )
+
+    assert completed.returncode != 0
+    assert completed.stderr == f"one-click runtime: {expected_error}\n"
+    assert not (tmp_path / ".env.one-click.local").exists()
+    assert command_log.read_text() == ""
+
+
 def test_up_builds_before_cutover_and_restores_only_recorded_containers_on_failure(tmp_path: Path) -> None:
     api_full = "89c5b6eb2322" + "a" * 52
     frontend_full = "3d70c9b8e735" + "b" * 52
@@ -710,9 +780,14 @@ def test_readme_documents_the_local_one_click_runtime_without_secrets() -> None:
     default_example = readme.index("ONE_CLICK_ACQUISITION_REPLICAS=1")
     scaling_description = readme.index("提高吞吐时请改为 2–4")
     scaling_example = readme.index("ONE_CLICK_ACQUISITION_REPLICAS=2")
+    default_up = readme.index("scripts/one-click-runtime.sh up")
+    stability_gate = "scripts/verify-one-click-runtime.sh --stability-seconds 600"
+    first_gate = readme.index(stability_gate, default_up)
+    repeated_gate = readme.index(stability_gate, scaling_example)
     assert (
         default_description < default_example < scaling_description < scaling_example
     )
+    assert default_up < first_gate < scaling_description < scaling_example < repeated_gate
 
 
 def test_init_generates_private_local_credentials_without_echoing_them(tmp_path: Path) -> None:
