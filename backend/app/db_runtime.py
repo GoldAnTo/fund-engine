@@ -28,6 +28,11 @@ def _bounded_integer(
     value = environment.get(name, str(default))
     if not isinstance(value, str) or not _CANONICAL_INTEGER.fullmatch(value):
         raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
+    maximum_text = str(maximum)
+    if len(value) > len(maximum_text) or (
+        len(value) == len(maximum_text) and value > maximum_text
+    ):
+        raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
     integer = int(value)
     if not minimum <= integer <= maximum:
         raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")

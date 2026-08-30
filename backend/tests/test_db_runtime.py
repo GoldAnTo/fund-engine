@@ -79,3 +79,12 @@ def test_sqlite_ignores_postgres_pool_environment_and_executes() -> None:
     engine = create_engine("sqlite://", **options)
     with engine.connect() as connection:
         assert connection.execute(text("SELECT 1")).scalar_one() == 1
+
+
+def test_oversized_pool_value_uses_bounded_error() -> None:
+    value = "1" * 4301
+    with pytest.raises(
+        ValueError,
+        match=r"^DATABASE_POOL_SIZE must be an integer from 1 through 10$",
+    ):
+        database_engine_kwargs(POSTGRES_URL, {"DATABASE_POOL_SIZE": value})
