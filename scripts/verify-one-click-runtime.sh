@@ -7,7 +7,6 @@ parse_arguments() {
   STABILITY_SECONDS=0
   case "$#" in
     0) ;;
-    1) [[ "$1" == --stability-seconds=* ]] || { usage; exit 2; }; STABILITY_SECONDS="${1#*=}" ;;
     2) [[ "$1" == --stability-seconds ]] || { usage; exit 2; }; STABILITY_SECONDS="$2" ;;
     *) usage; exit 2 ;;
   esac
@@ -59,6 +58,12 @@ at_most() {
   if (( ${#actual} > ${#maximum} )) || { (( ${#actual} == ${#maximum} )) && [[ "$actual" > "$maximum" ]]; }; then die 'database connection count exceeds configured cap'; fi
 }
 require_revision() { [[ "$1" == "$2" ]] || die "expected Alembic revision $2, got ${1:-none}"; }
+valid_private_directory() {
+  local relative_path
+  [[ -n "$TMPDIR_EXACT" && "$TMPDIR_EXACT" == "$REPO_ROOT/"* && -d "$TMPDIR_EXACT" ]] || return 1
+  relative_path="${TMPDIR_EXACT#"$REPO_ROOT/"}"
+  [[ "$relative_path" == .verify-one-click-runtime.* && "$relative_path" != */* && "$relative_path" != . && "$relative_path" != .. ]]
+}
 
 diagnostics() {
   local id ids=()
@@ -72,15 +77,24 @@ diagnostics() {
   [[ ${#ids[@]} -eq 0 ]] || docker stats --no-stream "${ids[@]}" >&2 || true
 }
 cleanup() {
-  local status="$?"; trap - EXIT
-  if [[ -n "$TMPDIR_EXACT" && -d "$TMPDIR_EXACT" && "$TMPDIR_EXACT" == "$REPO_ROOT"/.verify-one-click-runtime.* ]]; then rm -rf -- "$TMPDIR_EXACT"; fi
+  local status="$?" cleanup_failed=false
+  trap - EXIT
+  if [[ -n "$TMPDIR_EXACT" ]] && valid_private_directory; then
+    rm -rf -- "$TMPDIR_EXACT" || cleanup_failed=true
+  fi
   [[ "$status" -eq 0 || "$SETUP_COMPLETE" != true ]] || diagnostics
-  exit "$status"
+  if [[ "$status" -ne 0 ]]; then exit "$status"; fi
+  if [[ "$cleanup_failed" == true ]]; then
+    printf 'one-click runtime verification: private verification directory cleanup failed\n' >&2
+    exit 1
+  fi
+  exit 0
 }
 
 capture_snapshot() {
-  local destination="$1" id ids=()
-  while IFS= read -r id; do [[ -n "$id" ]] && ids[${#ids[@]}]="$id"; done < <(compose ps --all --quiet)
+  local destination="$1" id ids=() ids_output
+  ids_output="$(compose ps --all --quiet)" || die 'unable to list one-click containers'
+  while IFS= read -r id; do [[ -n "$id" ]] && ids[${#ids[@]}]="$id"; done <<< "$ids_output"
   [[ ${#ids[@]} -gt 0 ]] || die 'one-click compose project has no containers'
   if ! docker inspect "${ids[@]}" | python3 "$STABILITY_HELPER" snapshot --expect postgres=1 --expect api=1 --expect research-worker=1 --expect "acquisition-worker=${ACQUISITION_REPLICAS}" --expect company-research-worker=1 --expect frontend=1 > "$destination"; then die 'container snapshot is invalid'; fi
 }
@@ -114,7 +128,7 @@ main() {
   local database_user database_name bearer_token pool_size max_overflow remaining sleep_seconds
   require_command docker; require_command curl; require_command python3; require_file "$STABILITY_HELPER"; require_file "$COMPOSE_FILE"; require_file "$BASE_ENV_FILE"; require_file "$RUNTIME_ENV_FILE"
   umask 077; TMPDIR_EXACT="$(mktemp -d "$REPO_ROOT/.verify-one-click-runtime.XXXXXX")" || die 'unable to create private verification directory'
-  [[ -n "$TMPDIR_EXACT" && -d "$TMPDIR_EXACT" && "$TMPDIR_EXACT" == "$REPO_ROOT"/.verify-one-click-runtime.* ]] || die 'private verification directory validation failed'
+  valid_private_directory || die 'private verification directory validation failed'
   trap cleanup EXIT; SETUP_COMPLETE=true
   compose config -q
   ACQUISITION_REPLICAS="$(bounded_integer_value ONE_CLICK_ACQUISITION_REPLICAS 1 1 4)"; pool_size="$(bounded_integer_value DATABASE_POOL_SIZE 2 1 10)"; max_overflow="$(bounded_integer_value DATABASE_MAX_OVERFLOW 2 0 10)"
