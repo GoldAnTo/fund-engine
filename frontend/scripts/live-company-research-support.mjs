@@ -571,16 +571,55 @@ async function withOwnedProcessTemp(directory, operation) {
   }
 }
 
+function observeAbort(signal) {
+  if (!signal) return { promise: new Promise(() => {}), cancel() {} };
+  if (signal.aborted) {
+    return { promise: Promise.resolve({ kind: "aborted" }), cancel() {} };
+  }
+  let resolveAbort;
+  const promise = new Promise((resolve) => { resolveAbort = resolve; });
+  const onAbort = () => resolveAbort({ kind: "aborted" });
+  signal.addEventListener("abort", onAbort, { once: true });
+  return {
+    promise,
+    cancel() { signal.removeEventListener("abort", onAbort); },
+  };
+}
+
+async function retainedOperationOrAbort(operation, signal) {
+  const abort = observeAbort(signal);
+  try {
+    return await Promise.race([
+      Promise.resolve(operation).then(
+        (value) => ({ kind: "fulfilled", value }),
+        (error) => ({ kind: "rejected", error }),
+      ),
+      abort.promise,
+    ]);
+  } finally {
+    abort.cancel();
+  }
+}
+
+function browserStartupAborted() {
+  return new Error("owned browser startup aborted");
+}
+
 export async function startOwnedBrowser(browserType, runtime, {
-  env = {}, channel, timeoutMs = 30_000,
+  env = {}, channel, timeoutMs = 30_000, signal,
 } = {}) {
   if (!browserType || typeof browserType.launchServer !== "function"
     || typeof browserType.connect !== "function"
-    || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0
+    || (signal !== undefined && (!signal || typeof signal.aborted !== "boolean"
+      || typeof signal.addEventListener !== "function"
+      || typeof signal.removeEventListener !== "function"))) {
     throw new Error("owned browser launch configuration is invalid");
   }
+  if (signal?.aborted) throw browserStartupAborted();
   const runtimeAuthority = ownedRuntimeAuthority(runtime);
   const directories = await createOwnedBrowserDirectories(runtime, runtimeAuthority);
+  if (signal?.aborted) throw browserStartupAborted();
   const browserEnv = Object.fromEntries(Object.entries({
     PATH: env.PATH,
     SystemRoot: env.SystemRoot,
@@ -594,9 +633,10 @@ export async function startOwnedBrowser(browserType, runtime, {
     XDG_CACHE_HOME: directories.cache,
     XDG_CONFIG_HOME: directories.config,
   }).filter(([, value]) => typeof value === "string" && value.length > 0));
-  let server;
-  try {
-    server = await withOwnedProcessTemp(directories.temporary, () => browserType.launchServer({
+  const cleanupTimeoutMs = Math.min(STOP_TIMEOUT_MS, timeoutMs);
+  const launchPromise = retainPrimaryFailure(withOwnedProcessTemp(
+    directories.temporary,
+    () => browserType.launchServer({
       channel: channel || undefined,
       host: LOOPBACK_HOST,
       port: 0,
@@ -612,10 +652,21 @@ export async function startOwnedBrowser(browserType, runtime, {
         `--disk-cache-dir=${directories.diskCache}`,
         `--crash-dumps-dir=${directories.crashes}`,
       ],
-    }));
-  } catch {
+    }),
+  ));
+  let launchOutcome = await retainedOperationOrAbort(launchPromise, signal);
+  const launchWasAborted = launchOutcome.kind === "aborted";
+  if (launchWasAborted) {
+    launchOutcome = await Promise.resolve(launchPromise).then(
+      (value) => ({ kind: "fulfilled", value }),
+      (error) => ({ kind: "rejected", error }),
+    );
+  }
+  if (launchOutcome.kind === "rejected") {
+    if (launchWasAborted || signal?.aborted) throw browserStartupAborted();
     throw new Error("owned browser launch failed");
   }
+  const server = launchOutcome.value;
   const browserProcess = typeof server.process === "function" ? server.process() : null;
   let processGroup;
   try {
@@ -623,20 +674,47 @@ export async function startOwnedBrowser(browserType, runtime, {
       || browserProcess.exitCode !== null || browserProcess.signalCode !== null) {
       throw new Error("Playwright browser process group capability is unavailable");
     }
-    processGroup = await readExactProcessGroupId(browserProcess.pid, timeoutMs);
+    processGroup = await readExactProcessGroupId(
+      browserProcess.pid,
+      launchWasAborted || signal?.aborted ? cleanupTimeoutMs : timeoutMs,
+    );
   } catch (error) {
-    await cleanupUnauthenticatedBrowserServer(server, timeoutMs);
+    await cleanupUnauthenticatedBrowserServer(server, cleanupTimeoutMs);
+    if (launchWasAborted || signal?.aborted) throw browserStartupAborted();
     throw new Error(`owned browser process group authentication failed: ${error?.message ?? "unavailable"}`);
   }
-  let browser;
-  try {
-    browser = await browserType.connect(server.wsEndpoint(), {
+  if (launchWasAborted || signal?.aborted) {
+    await terminateExactBrowserProcessGroup(processGroup, cleanupTimeoutMs);
+    throw browserStartupAborted();
+  }
+  const connectPromise = retainPrimaryFailure(Promise.resolve().then(() => browserType.connect(
+    server.wsEndpoint(), {
       exposeNetwork: "<loopback>",
       timeout: timeoutMs,
-    });
-  } catch {
-    await terminateExactBrowserProcessGroup(processGroup, timeoutMs);
+    },
+  )));
+  let connectOutcome = await retainedOperationOrAbort(connectPromise, signal);
+  const connectWasAborted = connectOutcome.kind === "aborted";
+  if (connectWasAborted) {
+    const terminationPromise = retainPrimaryFailure(
+      terminateExactBrowserProcessGroup(processGroup, cleanupTimeoutMs),
+    );
+    connectOutcome = await Promise.resolve(connectPromise).then(
+      (value) => ({ kind: "fulfilled", value }),
+      (error) => ({ kind: "rejected", error }),
+    );
+    await terminationPromise;
+    throw browserStartupAborted();
+  }
+  if (connectOutcome.kind === "rejected") {
+    await terminateExactBrowserProcessGroup(processGroup, cleanupTimeoutMs);
+    if (signal?.aborted) throw browserStartupAborted();
     throw new Error("owned browser connection failed");
+  }
+  const browser = connectOutcome.value;
+  if (signal?.aborted) {
+    await terminateExactBrowserProcessGroup(processGroup, cleanupTimeoutMs);
+    throw browserStartupAborted();
   }
   const owned = Object.freeze({
     directories,

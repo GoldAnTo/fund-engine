@@ -1058,6 +1058,12 @@ Inspect the final diff and confirm all of these statements are true:
 - [x] Give the verifier cooperative signal ownership and cover the Python outer
   timeout with a real detached browser tree, exact recorded signals, and absence
   checks for every recorded PID and PGID.
+- [x] Retain an abortable browser-startup promise before awaiting it. On a signal
+  during launch or connection, finish the bounded ownership transition, remove
+  the exact authenticated browser group, observe all late promises, and only
+  then remove the private runtime.
+- [x] After the outer TERM grace, check the exact npm PGID even if its leader has
+  already exited; KILL any same-group survivor and boundedly verify group absence.
 - [x] Separate realistic cleanup-helper preflight time from the deterministic
   cleanup-stall bound, allocate test resources inside `try/finally`, and stress
   the case at least 30 times without helper or runtime residue.

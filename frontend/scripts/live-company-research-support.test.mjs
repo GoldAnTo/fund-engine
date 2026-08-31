@@ -1337,6 +1337,157 @@ test("owned browser launch fails closed without an authenticated POSIX group lea
   }
 });
 
+test("cooperative abort during browser launch waits for late server ownership and removes its group", {
+  skip: !["darwin", "linux"].includes(process.platform),
+}, async () => {
+  let runtime;
+  let browserProcess;
+  let releaseLaunch;
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    runtime = await createTestRuntime();
+    const launchGate = new Promise((resolve) => { releaseLaunch = resolve; });
+    let launchStarted = false;
+    const browserType = {
+      async launchServer() {
+        launchStarted = true;
+        await launchGate;
+        browserProcess = (await import("node:child_process")).spawn(
+          process.execPath,
+          ["-e", "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],
+          { detached: true, stdio: "ignore" },
+        );
+        return {
+          close: () => new Promise(() => {}),
+          process: () => browserProcess,
+          wsEndpoint: () => "ws://127.0.0.1:41000/owned",
+        };
+      },
+      async connect() { throw new Error("connect must not start after launch abort"); },
+    };
+    const controller = new AbortController();
+    const startup = supportModule.retainPrimaryFailure(supportModule.startOwnedBrowser(
+      browserType,
+      runtime,
+      { env: { PATH: process.env.PATH ?? "" }, signal: controller.signal, timeoutMs: 500 },
+    ));
+    while (!launchStarted) await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+    let settled = false;
+    void startup.then(() => { settled = true; }, () => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(settled, false, "startup must retain late launch ownership before rejecting");
+    releaseLaunch();
+    const signalFailure = new Error("live verifier received SIGTERM");
+    let startupFailure;
+    await assert.rejects(startup, (error) => {
+      startupFailure = error;
+      assert.match(error.message, /startup aborted/u);
+      return true;
+    });
+    assert.equal(chooseRunError(signalFailure, [startupFailure]), signalFailure);
+    assert.ok(browserProcess?.pid);
+    assert.throws(() => process.kill(-browserProcess.pid, 0), { code: "ESRCH" });
+    await removePrivateRuntime(runtime);
+    await assert.rejects(lstat(runtime.directory), { code: "ENOENT" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    if (browserProcess?.pid) {
+      try { process.kill(-browserProcess.pid, "SIGKILL"); } catch {}
+    }
+    releaseLaunch?.();
+    if (runtime) await rm(runtime.directory, { recursive: true, force: true });
+  }
+});
+
+test("cooperative abort during browser connect kills its authenticated group before startup settles", {
+  skip: !["darwin", "linux"].includes(process.platform),
+}, async () => {
+  let runtime;
+  let browserProcess;
+  let releaseConnect;
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    runtime = await createTestRuntime();
+    browserProcess = (await import("node:child_process")).spawn(
+      process.execPath,
+      ["-e", "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],
+      { detached: true, stdio: "ignore" },
+    );
+    const connectGate = new Promise((resolve) => { releaseConnect = resolve; });
+    let connectStarted = false;
+    const browserType = {
+      async launchServer() {
+        return {
+          close: () => new Promise(() => {}),
+          process: () => browserProcess,
+          wsEndpoint: () => "ws://127.0.0.1:41000/owned",
+        };
+      },
+      async connect() {
+        connectStarted = true;
+        await connectGate;
+        return { newContext() {} };
+      },
+    };
+    const controller = new AbortController();
+    const startup = supportModule.retainPrimaryFailure(supportModule.startOwnedBrowser(
+      browserType,
+      runtime,
+      { env: { PATH: process.env.PATH ?? "" }, signal: controller.signal, timeoutMs: 500 },
+    ));
+    while (!connectStarted) await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(-browserProcess.pid, 0);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      } catch (error) {
+        if (error?.code !== "ESRCH") throw error;
+        break;
+      }
+    }
+    assert.throws(() => process.kill(-browserProcess.pid, 0), { code: "ESRCH" });
+    releaseConnect();
+    let startupFailure;
+    await assert.rejects(startup, (error) => {
+      startupFailure = error;
+      assert.match(error.message, /startup aborted/u);
+      return true;
+    });
+    const signalFailure = new Error("live verifier received SIGTERM");
+    assert.equal(chooseRunError(signalFailure, [startupFailure]), signalFailure);
+    await removePrivateRuntime(runtime);
+    await assert.rejects(lstat(runtime.directory), { code: "ENOENT" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    if (browserProcess?.pid) {
+      try { process.kill(-browserProcess.pid, "SIGKILL"); } catch {}
+    }
+    releaseConnect?.();
+    if (runtime) await rm(runtime.directory, { recursive: true, force: true });
+  }
+});
+
+test("verifier retains and aborts browser startup before signal cleanup touches runtime", async () => {
+  const verifier = await readFile(
+    path.resolve(process.cwd(), "scripts/verify-live-company-research-ui.mjs"),
+    "utf8",
+  );
+  assert.match(verifier, /const browserStartupController = new AbortController\(\)/u);
+  assert.match(verifier, /browserStartupPromise = retainPrimaryFailure\(startOwnedBrowser/u);
+  assert.match(verifier, /browserStartupController\.abort\(\)[\s\S]*await browserStartupPromise/u);
+});
+
 async function waitForProcessExit(owned, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
   while (owned.child.exitCode === null && owned.child.signalCode === null) {

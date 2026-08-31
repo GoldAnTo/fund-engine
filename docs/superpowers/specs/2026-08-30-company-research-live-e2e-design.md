@@ -219,15 +219,22 @@ Shutdown is idempotent and bounded. It first asks owned child processes to exit,
 then escalates only against the exact processes it started. On macOS and Linux,
 browser launch must authenticate and retain privately that Playwright's browser
 process is its POSIX process-group leader; otherwise launch fails before the
-workflow. Browser cleanup signals that exact group with bounded TERM/KILL and
-verifies its absence, including renderer descendants. The verifier handles
-outer TERM/HUP/INT cooperatively so the Python npm-session owner cannot strand
-the browser's separate process group. Cleanup preserves the original business
-failure code. A cleanup failure is reported without masking an earlier failure;
-if cleanup is the only failure, the run exits nonzero. Every Playwright response
-or event wait has a rejection handler attached before the click that triggers it,
-so a primary action failure cannot be overtaken by an abandoned wait during
-browser shutdown.
+workflow. Browser startup is a retained, abortable ownership transition: a
+signal during launch waits for the bounded launch to expose its process, then
+authenticates and removes that exact group, while a signal during connection
+removes the already-authenticated group immediately and observes the late
+connection result. Runtime removal waits for that transition to settle. Browser
+cleanup signals that exact group with bounded TERM/KILL and verifies its
+absence, including renderer descendants. The verifier handles outer
+TERM/HUP/INT cooperatively so the Python npm-session owner cannot strand the
+browser's separate process group. After its TERM grace, the Python owner checks
+the exact npm PGID even if the session leader has exited, escalates against any
+remaining members, and verifies group absence. Cleanup preserves the original
+business failure code. A cleanup failure is reported without masking an earlier
+failure; if cleanup is the only failure, the run exits nonzero. Every Playwright
+response or event wait has a rejection handler attached before the click that
+triggers it, so a primary action failure cannot be overtaken by an abandoned wait
+during browser shutdown.
 
 ## Implementation Shape
 

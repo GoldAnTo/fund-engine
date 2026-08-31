@@ -54,6 +54,7 @@ const initializationPath = "/api/underwriting/v1/product/company-research/initia
 const previewPath = "/api/underwriting/v1/product/company-research/preview";
 const searchPath = "/api/underwriting/v1/product/objects";
 const CLEANUP_TIMEOUT_MS = 10_000;
+const BROWSER_STARTUP_TIMEOUT_MS = 30_000;
 const COOPERATIVE_SHUTDOWN_TIMEOUT_MS = 60_000;
 const CLOSED_ANSWERABILITY_MESSAGE = "当前正式证据不足，不形成投资方向、置信度、目标价或预期回报。";
 const HUMAN_MEMO = "Current formal evidence is insufficient.";
@@ -1232,6 +1233,8 @@ async function main() {
   let finalProof;
   let primaryError = null;
   let cleanupErrors = [];
+  const browserStartupController = new AbortController();
+  let browserStartupPromise = null;
   let signalFinalizationPromise = null;
   let shutdownSignal = null;
   let shutdownWatchdog = null;
@@ -1243,9 +1246,19 @@ async function main() {
     shutdownSignal = signalName;
     primaryError ??= new Error(`live verifier received ${signalName}`);
     shutdownWatchdog = setTimeout(() => process.exit(1), COOPERATIVE_SHUTDOWN_TIMEOUT_MS);
-    signalFinalizationPromise = finalizeOwnedRuntime({
-      browser, browserFailures, pendingObservers, assertTraffic, worker, vite, api, runtime,
-    });
+    browserStartupController.abort();
+    signalFinalizationPromise = (async () => {
+      if (browserStartupPromise) {
+        try {
+          browser = await browserStartupPromise;
+        } catch {
+          // Startup owns and removes any late browser process group before settling.
+        }
+      }
+      return finalizeOwnedRuntime({
+        browser, browserFailures, pendingObservers, assertTraffic, worker, vite, api, runtime,
+      });
+    })();
     void signalFinalizationPromise.then((errors) => {
       cleanupErrors = errors;
     }, () => process.exit(1));
@@ -1342,11 +1355,13 @@ async function main() {
     });
     assertNotShuttingDown();
 
-    browser = await startOwnedBrowser(chromium, runtime, {
+    browserStartupPromise = retainPrimaryFailure(startOwnedBrowser(chromium, runtime, {
       channel: env.PW_BROWSER_CHANNEL || undefined,
       env,
-      timeoutMs: remaining(deadline, "browser launch"),
-    });
+      signal: browserStartupController.signal,
+      timeoutMs: Math.min(BROWSER_STARTUP_TIMEOUT_MS, remaining(deadline, "browser launch")),
+    }));
+    browser = await browserStartupPromise;
     assertNotShuttingDown();
     const audit = createTrafficAudit(uiBase);
     browserFailures = createBrowserFailureCollector();

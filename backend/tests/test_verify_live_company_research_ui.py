@@ -68,6 +68,25 @@ class OwnedProcessGroupTimeout(TimeoutError):
         self.process_group_id = process_group_id
 
 
+def _process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _wait_for_process_group_absence(process_group_id: int, *, deadline: float) -> bool:
+    while _process_group_exists(process_group_id):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.01, remaining))
+    return True
+
+
 def run_owned_process_group(
     command: Sequence[str],
     *,
@@ -99,24 +118,34 @@ def run_owned_process_group(
     except ProcessLookupError:
         pass
     # A cooperative verifier handles SIGTERM by cleaning its separately detached
-    # browser PGID before exiting. Reap only when that bounded cleanup completes;
-    # otherwise retain the live session leader as the exact outer-group anchor.
+    # browser PGID before exiting. The numeric PGID remains the exact outer-group
+    # capability even after its session leader has been reaped.
+    leader_reaped = False
     try:
         process.communicate(timeout=term_grace_seconds)
     except subprocess.TimeoutExpired:
         pass
     else:
-        raise OwnedProcessGroupTimeout(process_group_id)
-    try:
-        kill_group(process_group_id, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    try:
-        process.communicate(timeout=kill_grace_seconds)
-    except subprocess.TimeoutExpired as error:
+        leader_reaped = True
+
+    cleanup_deadline = time.monotonic() + kill_grace_seconds
+    if _process_group_exists(process_group_id):
+        try:
+            kill_group(process_group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if not leader_reaped:
+        remaining = max(0, cleanup_deadline - time.monotonic())
+        try:
+            process.communicate(timeout=remaining)
+        except subprocess.TimeoutExpired as error:
+            raise AssertionError(
+                "exact live verifier process group did not exit after SIGKILL"
+            ) from error
+    if not _wait_for_process_group_absence(process_group_id, deadline=cleanup_deadline):
         raise AssertionError(
-            "exact live verifier process group did not exit after SIGKILL"
-        ) from error
+            "exact live verifier process group remained after bounded cleanup"
+        )
     raise OwnedProcessGroupTimeout(process_group_id)
 
 
@@ -268,6 +297,67 @@ def test_owned_process_group_timeout_stops_term_ignoring_descendant(
         if time.monotonic() >= deadline:
             raise AssertionError(f"owned descendant {child_pid} remained running")
         time.sleep(0.05)
+
+
+def test_outer_timeout_kills_same_group_survivor_after_leader_exits(
+    tmp_path: Path,
+) -> None:
+    child_pid_path = tmp_path / "same-group-child.pid"
+    child_program = (
+        "import signal,time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "time.sleep(60)"
+    )
+    parent_program = (
+        "import pathlib,signal,subprocess,sys,time; "
+        f"child=subprocess.Popen([sys.executable, '-c', {child_program!r}], "
+        "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
+        "stderr=subprocess.DEVNULL); "
+        f"pathlib.Path({str(child_pid_path)!r}).write_text(str(child.pid)); "
+        "signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(143))); "
+        "time.sleep(60)"
+    )
+    sent_signals: list[tuple[int, signal.Signals]] = []
+
+    def kill_group(process_group_id: int, sent_signal: signal.Signals) -> None:
+        sent_signals.append((process_group_id, sent_signal))
+        os.killpg(process_group_id, sent_signal)
+
+    process_group_id: int | None = None
+    try:
+        with pytest.raises(OwnedProcessGroupTimeout) as captured:
+            run_owned_process_group(
+                [sys.executable, "-c", parent_program],
+                cwd=tmp_path,
+                env={"PATH": os.environ["PATH"]},
+                timeout_seconds=0.5,
+                term_grace_seconds=0.5,
+                kill_grace_seconds=1.0,
+                kill_group=kill_group,
+            )
+        process_group_id = captured.value.process_group_id
+        assert sent_signals == [
+            (process_group_id, signal.SIGTERM),
+            (process_group_id, signal.SIGKILL),
+        ]
+        with pytest.raises(ProcessLookupError):
+            os.killpg(process_group_id, 0)
+        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        state = subprocess.run(
+            ["/bin/ps", "-o", "stat=", "-p", str(child_pid)],
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        assert not state or state.startswith("Z")
+    finally:
+        if process_group_id is None and sent_signals:
+            process_group_id = sent_signals[0][0]
+        if process_group_id is not None:
+            try:
+                os.killpg(process_group_id, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def test_outer_timeout_allows_cooperative_cleanup_of_detached_browser_tree(
