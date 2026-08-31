@@ -925,9 +925,11 @@ session-leader supervisor that starts npm in the same process group, reports
 npm's exit status over a private pipe, and remains alive until the outer owner
 removes the group. Block TERM/HUP/INT across `Popen` so the new leader is
 protected before its Python startup code runs, immediately restore the owner's
-mask, and explicitly reset the command child's dispositions and mask. The
-verifier has a 180-second internal bound; allow a 300-second outer bound so its
-sequential browser/process/private-runtime cleanup retains a 120-second margin.
+mask, and immediately transfer the returned handle, PGID, streams, and lifecycle
+phase to one owner primitive before any later startup operation. Explicitly
+reset the command child's dispositions and mask. The verifier has a 180-second
+internal bound; allow a 300-second outer bound so its sequential
+browser/process/private-runtime cleanup retains a 120-second margin.
 On outer timeout, signal only the exact anchored group with TERM and give the
 verifier's
 bounded signal handler time to remove its separately detached, authenticated
@@ -936,7 +938,8 @@ that same exact group and only afterward reap. On normal child status or spawn
 failure, likewise remove the entire anchored group before reap, returning the
 status received through the private pipe. Block asynchronous signals around the
 KILL transition and irreversibly retire the numeric PGID capability before
-wait/reap, so a late wait or pipe exception cannot signal a reused group. Verify
+wait/reap. Mask restoration, status-pipe, stream, thread, and workflow failures
+all use this same owner cleanup path, so none can signal a reused group. Verify
 every recorded detached browser descendant is absent.
 Success is return code zero, exactly one PASS line on stdout, and empty stderr.
 Failure output must be checked for sensitive names and values before returning
@@ -1072,10 +1075,10 @@ Inspect the final diff and confirm all of these statements are true:
   the exact authenticated browser group, observe all late promises, and only
   then remove the private runtime.
 - [x] Anchor the npm group with a dedicated non-reaped session leader and report
-  the child status through a private pipe. On normal status, spawn failure,
-  exception, or timeout, remove the exact group while the anchor is still live
-  and atomically retire numeric PGID authority before reaping; later exceptions
-  may retry only handle-based reap and pipe closure.
+  the child status through a private pipe. Immediately give one owner primitive
+  the returned Popen handle, PGID, streams, and phase. Startup, normal, error,
+  and timeout paths all remove the exact group while its anchor is live, then
+  retire numeric authority before bounded handle-based reap and closure.
 - [x] Separate realistic cleanup-helper preflight time from the deterministic
   cleanup-stall bound, allocate test resources inside `try/finally`, and stress
   the case at least 30 times without helper or runtime residue.

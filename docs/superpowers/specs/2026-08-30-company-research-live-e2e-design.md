@@ -231,16 +231,16 @@ browser's separate process group. A dedicated session-leader supervisor anchors
 the npm group. The owner blocks cooperative signals across `Popen` so the new
 leader inherits protection before its Python startup code can run; the
 supervisor keeps those signals blocked, explicitly resets them for npm, and
-reports npm's child status over a private pipe without exiting. On normal child
-status, spawn failure, or outer timeout, the Python owner removes the exact
-group while that anchor is still live, then boundedly reaps it; child status,
-not the killed supervisor's status, preserves normal command semantics. On
-timeout it first sends TERM and waits the fixed grace without polling or reaping
-the anchor. With asynchronous signals blocked, a successful exact-group KILL
-irreversibly retires the numeric PGID capability before any wait can reap the
-leader. Later wait, pipe, or signal-mask restoration failures may retry only
-handle-based reap and pipe closure. Cleanup preserves the original business
-failure code. A cleanup failure is reported without masking an earlier failure;
+reports npm's child status over a private pipe without exiting. As soon as
+`Popen` returns, one owner object takes exclusive custody of the process-group
+capability, Popen handle, output streams, and irreversible lifecycle phase.
+Startup mask restoration, status-pipe closure, output capture, normal status,
+spawn failure, and outer timeout all share that owner's cleanup path. With
+asynchronous signals blocked, a successful exact-group KILL irreversibly retires
+the numeric PGID capability before any wait can reap the leader. Later wait,
+pipe, stream, or signal-mask restoration failures may retry only bounded
+handle-based reap and closure. Cleanup preserves the original business failure
+code. A cleanup failure is retained as its cause without masking it;
 if cleanup is the only failure, the run exits nonzero. Every Playwright response
 or event wait has a rejection handler attached before the click that triggers
 it, so a primary action failure cannot be overtaken by an abandoned wait during
