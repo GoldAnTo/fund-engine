@@ -920,15 +920,17 @@ test as skipped; once opted in, missing Node, npm, repository backend venv,
 frontend dependencies, or browser must fail rather than skip.
 
 Invoke the public `npm run --silent verify:live-company-research` contract in a
-minimal environment with `PYTHON=sys.executable`. Own npm as a new POSIX session
-leader. The verifier has a 180-second internal bound; allow a 300-second outer
-bound so its sequential browser/process/private-runtime cleanup retains a
-120-second margin. On outer timeout, signal only the exact owned npm process
-group with TERM and give the verifier's bounded signal handler time to remove
-its separately detached, authenticated browser process group. If the npm group
-does not exit, retain its unreaped leader as the exact capability, then send
-KILL. Verify both the npm group and every recorded detached browser descendant
-or group are absent.
+minimal environment with `PYTHON=sys.executable`. Launch a dedicated POSIX
+session-leader supervisor that starts npm in the same process group and remains
+alive after npm exits during cooperative shutdown. The verifier has a 180-second
+internal bound; allow a 300-second outer bound so its sequential
+browser/process/private-runtime cleanup retains a 120-second margin. On outer
+timeout, signal only the exact anchored group with TERM and give the verifier's
+bounded signal handler time to remove its separately detached, authenticated
+browser process group. Without polling or reaping the anchor, then send KILL to
+that same exact group and only afterward communicate and reap. Never signal or
+probe its bare PGID after reaping. Verify every recorded detached browser
+descendant is absent.
 Success is return code zero, exactly one PASS line on stdout, and empty stderr.
 Failure output must be checked for sensitive names and values before returning
 only a bounded prerequisite classification or generic safe diagnostic.
@@ -1062,8 +1064,9 @@ Inspect the final diff and confirm all of these statements are true:
   during launch or connection, finish the bounded ownership transition, remove
   the exact authenticated browser group, observe all late promises, and only
   then remove the private runtime.
-- [x] After the outer TERM grace, check the exact npm PGID even if its leader has
-  already exited; KILL any same-group survivor and boundedly verify group absence.
+- [x] Anchor the npm group with a dedicated non-reaped session leader. After the
+  outer TERM grace, KILL the exact group while its anchor is still live, and only
+  then communicate/reap; never signal or probe a bare PGID after leader reap.
 - [x] Separate realistic cleanup-helper preflight time from the deterministic
   cleanup-stall bound, allocate test resources inside `try/finally`, and stress
   the case at least 30 times without helper or runtime residue.

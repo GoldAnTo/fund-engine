@@ -227,14 +227,16 @@ connection result. Runtime removal waits for that transition to settle. Browser
 cleanup signals that exact group with bounded TERM/KILL and verifies its
 absence, including renderer descendants. The verifier handles outer
 TERM/HUP/INT cooperatively so the Python npm-session owner cannot strand the
-browser's separate process group. After its TERM grace, the Python owner checks
-the exact npm PGID even if the session leader has exited, escalates against any
-remaining members, and verifies group absence. Cleanup preserves the original
-business failure code. A cleanup failure is reported without masking an earlier
-failure; if cleanup is the only failure, the run exits nonzero. Every Playwright
-response or event wait has a rejection handler attached before the click that
-triggers it, so a primary action failure cannot be overtaken by an abandoned wait
-during browser shutdown.
+browser's separate process group. A dedicated session-leader supervisor anchors
+the npm group and remains alive after npm exits during cooperative shutdown. The
+Python owner sends TERM, waits the fixed grace without polling or reaping the
+anchor, sends KILL while that exact capability is still live, and only then
+communicates with and reaps it. It never signals or probes a bare PGID after
+reaping its leader. Cleanup preserves the original business failure code. A
+cleanup failure is reported without masking an earlier failure; if cleanup is
+the only failure, the run exits nonzero. Every Playwright response or event wait
+has a rejection handler attached before the click that triggers it, so a primary
+action failure cannot be overtaken by an abandoned wait during browser shutdown.
 
 ## Implementation Shape
 
