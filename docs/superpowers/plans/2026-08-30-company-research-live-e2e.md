@@ -851,6 +851,8 @@ git commit -m "test: close live company research publication flow"
 **Files:**
 - Modify: `frontend/package.json:8-18`
 - Create: `backend/tests/test_verify_live_company_research_ui.py`
+- Modify: `backend/pyproject.toml`
+- Modify: `.github/workflows/backend.yml`
 - Modify: `README.md:55-84`
 
 - [ ] **Step 1: Write the failing command-contract test**
@@ -912,42 +914,35 @@ Expected: 1 test passes.
 
 - [ ] **Step 5: Add the real full-flow pytest acceptance**
 
-Append:
+Register the `live_company_research` marker and gate only the real browser test
+behind `RUN_LIVE_COMPANY_RESEARCH=1`. Ordinary backend pytest must report the
+test as skipped; once opted in, missing Node, npm, repository backend venv,
+frontend dependencies, or browser must fail rather than skip.
 
-```python
-def test_live_company_research_browser_closes_the_full_public_workflow() -> None:
-    node = shutil.which("node")
-    assert node, "Node.js is required for the live frontend verifier"
-    env = {
-        "PATH": os.environ["PATH"],
-        "PYTHON": sys.executable,
-        "PW_BROWSER_CHANNEL": os.environ.get("PW_BROWSER_CHANNEL", "chrome"),
-    }
-    result = subprocess.run(
-        [node, "scripts/with-project-node.mjs", "scripts/verify-live-company-research-ui.mjs"],
-        cwd=FRONTEND,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=210,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert PASS_LINE in result.stdout
-    for secret_name in ("DATABASE_URL", "RESEARCH_TENANT_TOKENS", "Authorization", "Bearer"):
-        assert secret_name not in result.stdout
-        assert secret_name not in result.stderr
-```
+Invoke the public `npm run --silent verify:live-company-research` contract in a
+minimal environment with `PYTHON=sys.executable`. Own npm as a new POSIX session
+leader. The verifier has a 180-second internal bound; allow a 300-second outer
+bound so its sequential browser/process/private-runtime cleanup retains a
+120-second margin. On outer timeout, signal only the exact owned process group
+with TERM, wait boundedly, then KILL and verify that no descendant remains.
+Success is return code zero, exactly one PASS line on stdout, and empty stderr.
+Failure output must be checked for sensitive names and values before returning
+only a bounded prerequisite classification or generic safe diagnostic.
 
 - [ ] **Step 6: Run the real browser acceptance**
 
 ```bash
-cd backend
-PW_BROWSER_CHANNEL=chrome .venv/bin/python -m pytest tests/test_verify_live_company_research_ui.py -q
+cd "$(git rev-parse --show-toplevel)"
+if test -x backend/.venv/bin/python; then
+  BACKEND_PYTHON="$(pwd)/backend/.venv/bin/python"
+else
+  BACKEND_PYTHON="$(cd ../.. && pwd)/backend/.venv/bin/python"
+fi
+PW_BROWSER_CHANNEL=chrome RUN_LIVE_COMPANY_RESEARCH=1 "$BACKEND_PYTHON" -m pytest backend/tests/test_verify_live_company_research_ui.py -q
 ```
 
-Expected: 2 tests pass. The live test starts from a fresh database and prints
-the exact PASS line.
+Expected: all verifier harness tests and the opted-in live test pass. The live
+test starts from a fresh database and accepts exactly the single PASS line.
 
 - [ ] **Step 7: Document the public command and boundary**
 
@@ -980,26 +975,35 @@ git commit -m "docs: expose live company research acceptance"
 - [ ] **Step 1: Run focused Node, frontend, and backend tests**
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"
+if test -x backend/.venv/bin/python; then
+  BACKEND_PYTHON="$(pwd)/backend/.venv/bin/python"
+else
+  BACKEND_PYTHON="$(cd ../.. && pwd)/backend/.venv/bin/python"
+fi
+"$BACKEND_PYTHON" -m pip install -e "./backend[dev]"
 cd frontend
 npm run test:live-company-research-support
 npm test -- --run src/features/investment-research/NewResearchPage.test.tsx src/features/investment-research/ResearchWorkbenchPage.test.tsx
-cd ../backend
-.venv/bin/python -m pytest \
-  tests/test_verify_live_company_research_ui.py \
-  tests/underwriting/test_company_research_api.py::test_company_research_publication_closes_the_entire_public_http_workflow \
-  tests/underwriting/test_company_research_worker.py::test_claim_is_exclusive_and_success_stops_at_evidence_review \
-  tests/underwriting/test_company_research_worker.py::test_worker_builds_all_model_artifacts_after_last_evidence_review -q
+cd ..
+RUN_LIVE_COMPANY_RESEARCH=1 "$BACKEND_PYTHON" -m pytest \
+  backend/tests/test_verify_live_company_research_ui.py \
+  backend/tests/underwriting/test_company_research_api.py::test_company_research_publication_closes_the_entire_public_http_workflow \
+  backend/tests/underwriting/test_company_research_worker.py::test_claim_is_exclusive_and_success_stops_at_evidence_review \
+  backend/tests/underwriting/test_company_research_worker.py::test_worker_builds_all_model_artifacts_after_last_evidence_review -q
 ```
 
-Expected: all Node tests, 87 frontend tests, both live-verifier tests, the full
-HTTP publication test, and both worker transition tests pass.
+Expected: all Node tests, 87 frontend tests, all live-verifier harness tests,
+the opted-in browser acceptance, the full HTTP publication test, and both
+worker transition tests pass.
 
 - [ ] **Step 2: Run existing browser regression and the new live command**
 
 ```bash
 cd frontend
 npm run e2e
-PYTHON=../backend/.venv/bin/python PW_BROWSER_CHANNEL=chrome npm run verify:live-company-research
+PYTHON="$BACKEND_PYTHON" PW_BROWSER_CHANNEL=chrome npm run verify:live-company-research
+cd ..
 ```
 
 Expected: existing mock Playwright tests pass; the live command prints the
@@ -1013,9 +1017,8 @@ npm run typecheck
 npm run build
 node scripts/with-project-node.mjs --check scripts/live-company-research-support.mjs
 node scripts/with-project-node.mjs --check scripts/verify-live-company-research-ui.mjs
-cd ../backend
-.venv/bin/python -m ruff check tests/test_verify_live_company_research_ui.py
 cd ..
+"$BACKEND_PYTHON" -m ruff check backend/tests/test_verify_live_company_research_ui.py
 git diff --check
 git status --short
 ```
