@@ -925,10 +925,12 @@ session-leader supervisor that starts npm in the same process group, reports
 npm's exit status over a private pipe, and remains alive until the outer owner
 removes the group. Block TERM/HUP/INT across `Popen` so the new leader is
 protected before its Python startup code runs. Allocate the owner and its output
-buffers before resource acquisition, then atomically block TERM/HUP/INT while
-obtaining the old mask before `os.pipe`. Capture the new descriptors in owner
-slots, transfer the returned Popen handle through one no-throw slot assignment,
-and only then restore the mask. That primitive exclusively owns the handle,
+buffers before resource acquisition, query the baseline signal mask without a
+side effect, and enter a restore `try/finally`. Block TERM/HUP/INT, acquire and
+capture the pipe descriptors, and transfer the returned Popen handle through one
+no-throw slot assignment inside that region; then restore the exact baseline.
+The query-to-block window owns no OS resource, while a failure after the block's
+side effect still runs restoration. That primitive exclusively owns the handle,
 PGID, and descriptors;
 it retires numeric FD authority before an ambiguous close and never retries a
 side-effect-unknown close. Explicitly reset the command child's dispositions and
@@ -1089,9 +1091,10 @@ Inspect the final diff and confirm all of these statements are true:
   then remove the private runtime.
 - [x] Anchor the npm group with a dedicated non-reaped session leader and report
   the child status through a private pipe. Allocate one owner primitive before
-  resource acquisition, block cooperative signals before `os.pipe`, and capture
-  the descriptors and returned Popen handle in pre-existing slots before mask
-  restoration.
+  resource acquisition, query the baseline mask without side effects, then block
+  cooperative signals inside a restore `try/finally` before `os.pipe`. Capture
+  the descriptors and returned Popen handle in pre-existing slots before exact
+  mask restoration.
   Startup, normal, error, and timeout paths all remove the exact group while its
   anchor is live, then retire numeric authority before bounded handle-based reap
   and closure. Numeric FDs retire before ambiguous close, output capture uses

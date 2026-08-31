@@ -412,10 +412,11 @@ def run_owned_process_group(
     child_returncode: int | None = None
     cleanup_deadline: float | None = None
     try:
-        previous_signal_mask = signal.pthread_sigmask(
-            signal.SIG_BLOCK, OWNED_PROCESS_GROUP_SHUTDOWN_SIGNALS
-        )
+        previous_signal_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
         try:
+            signal.pthread_sigmask(
+                signal.SIG_BLOCK, OWNED_PROCESS_GROUP_SHUTDOWN_SIGNALS
+            )
             owner.status_read_fd, owner.status_write_fd = os.pipe()
             supervisor_command = [
                 sys.executable,
@@ -1055,6 +1056,66 @@ def test_owned_pipe_acquisition_is_signal_blocked_until_owner_capture(
                 os.close(descriptor)
             except OSError:
                 pass
+
+
+def test_owned_acquisition_restores_mask_when_blocking_raises_after_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_pthread_sigmask = signal.pthread_sigmask
+    original_pipe = os.pipe
+    original_popen = subprocess.Popen
+    initial_mask = original_pthread_sigmask(signal.SIG_BLOCK, set())
+    pipe_calls = 0
+    process_calls = 0
+    block_failure_injected = False
+
+    def interrupt_acquisition_block_after_apply(
+        how: int, mask: set[signal.Signals] | tuple[signal.Signals, ...]
+    ) -> set[signal.Signals]:
+        nonlocal block_failure_injected
+        previous_mask = original_pthread_sigmask(how, mask)
+        if (
+            how == signal.SIG_BLOCK
+            and set(mask) == set(OWNED_PROCESS_GROUP_SHUTDOWN_SIGNALS)
+            and not block_failure_injected
+        ):
+            block_failure_injected = True
+            raise KeyboardInterrupt
+        return previous_mask
+
+    def recording_pipe() -> tuple[int, int]:
+        nonlocal pipe_calls
+        pipe_calls += 1
+        return original_pipe()
+
+    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        nonlocal process_calls
+        process_calls += 1
+        return original_popen(*args, **kwargs)
+
+    monkeypatch.setattr(
+        signal, "pthread_sigmask", interrupt_acquisition_block_after_apply
+    )
+    monkeypatch.setattr(os, "pipe", recording_pipe)
+    monkeypatch.setattr(subprocess, "Popen", recording_popen)
+
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            run_owned_process_group(
+                [sys.executable, "-c", "raise SystemExit(0)"],
+                cwd=tmp_path,
+                env={"PATH": os.environ["PATH"]},
+                timeout_seconds=1,
+                term_grace_seconds=0.05,
+                kill_grace_seconds=1,
+            )
+
+        assert block_failure_injected
+        assert pipe_calls == 0
+        assert process_calls == 0
+        assert original_pthread_sigmask(signal.SIG_BLOCK, set()) == initial_mask
+    finally:
+        original_pthread_sigmask(signal.SIG_SETMASK, initial_mask)
 
 
 def test_owned_status_writer_retires_before_ambiguous_close(

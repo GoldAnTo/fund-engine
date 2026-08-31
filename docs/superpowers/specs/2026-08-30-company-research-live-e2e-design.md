@@ -232,11 +232,14 @@ the npm group. The owner blocks cooperative signals across `Popen` so the new
 leader inherits protection before its Python startup code can run; the
 supervisor keeps those signals blocked, explicitly resets them for npm, and
 reports npm's child status over a private pipe without exiting. The owner object
-and its output buffers are allocated before acquiring resources. One atomic
-signal-mask call blocks TERM/HUP/INT and returns the old mask before pipe
-acquisition; the new descriptors are captured in owner slots and the `Popen`
-handle is captured by one pre-existing slot assignment before the mask is
-restored. That owner takes exclusive custody of the process-group capability,
+and its output buffers are allocated before acquiring resources. A no-side-effect
+mask query records the baseline before entering a restore `try/finally`; the
+actual block, pipe acquisition, and `Popen` occur inside that protected region.
+Thus a signal before the block aborts while no OS resource exists, and an
+exception after the block's side effect restores the exact baseline. The new
+descriptors are captured in owner slots and the `Popen` handle is captured by
+one pre-existing slot assignment before the mask is restored. That owner takes
+exclusive custody of the process-group capability,
 Popen handle, pipe descriptors, and irreversible lifecycle phase. Numeric
 descriptor authority is retired before every potentially ambiguous close and is
 never retried after an unknown side effect. Output pipes are binary and
