@@ -236,12 +236,15 @@ status, spawn failure, or outer timeout, the Python owner removes the exact
 group while that anchor is still live, then boundedly reaps it; child status,
 not the killed supervisor's status, preserves normal command semantics. On
 timeout it first sends TERM and waits the fixed grace without polling or reaping
-the anchor. It never signals or probes a bare PGID after reaping its leader.
-Cleanup preserves the original business failure code. A cleanup failure is
-reported without masking an earlier
-failure; if cleanup is the only failure, the run exits nonzero. Every Playwright
-has a rejection handler attached before the click that triggers it, so a primary
-action failure cannot be overtaken by an abandoned wait during browser shutdown.
+the anchor. With asynchronous signals blocked, a successful exact-group KILL
+irreversibly retires the numeric PGID capability before any wait can reap the
+leader. Later wait, pipe, or signal-mask restoration failures may retry only
+handle-based reap and pipe closure. Cleanup preserves the original business
+failure code. A cleanup failure is reported without masking an earlier failure;
+if cleanup is the only failure, the run exits nonzero. Every Playwright response
+or event wait has a rejection handler attached before the click that triggers
+it, so a primary action failure cannot be overtaken by an abandoned wait during
+browser shutdown.
 
 ## Implementation Shape
 

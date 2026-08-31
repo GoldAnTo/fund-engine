@@ -156,7 +156,7 @@ def run_owned_process_group(
         raise
     assert process is not None
     process_group_id = process.pid
-    anchor_reaped = False
+    ownership_phase = "anchored"
     stdout_parts: list[str] = []
     stderr_parts: list[str] = []
 
@@ -178,16 +178,61 @@ def run_owned_process_group(
     )
     output_threads: list[threading.Thread] = []
 
-    def reap_after_kill() -> None:
-        nonlocal anchor_reaped
-        deadline = time.monotonic() + kill_grace_seconds
+    def reap_anchor_if_exited() -> bool:
+        nonlocal ownership_phase
         try:
-            process.wait(timeout=max(0, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired as error:
-            raise AssertionError(
-                "exact live verifier process group did not exit after SIGKILL"
-            ) from error
-        anchor_reaped = True
+            waited_pid, wait_status = os.waitpid(process.pid, os.WNOHANG)
+        except ChildProcessError:
+            ownership_phase = "reaped"
+            return True
+        if waited_pid == 0:
+            return False
+        ownership_phase = "reaped"
+        process.returncode = os.waitstatus_to_exitcode(wait_status)
+        return True
+
+    def enter_kill_sent_phase(
+        send_kill: Callable[[int, signal.Signals], None],
+    ) -> None:
+        nonlocal ownership_phase
+        if ownership_phase != "anchored":
+            raise AssertionError("numeric process-group capability is no longer live")
+        blockable_signals = signal.valid_signals() - {signal.SIGKILL, signal.SIGSTOP}
+        previous_signal_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+        try:
+            signal.pthread_sigmask(signal.SIG_BLOCK, blockable_signals)
+            try:
+                send_kill(process_group_id, signal.SIGKILL)
+            except BaseException as signal_error:
+                if reap_anchor_if_exited():
+                    raise
+                try:
+                    os.killpg(process_group_id, signal.SIGKILL)
+                except BaseException as fallback_error:  # noqa: BLE001
+                    if not reap_anchor_if_exited():
+                        signal_error.add_note(
+                            f"fallback exact-group SIGKILL failed: {fallback_error!r}"
+                        )
+                    raise signal_error
+                ownership_phase = "kill_sent"
+                raise
+            ownership_phase = "kill_sent"
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
+
+    def reap_after_kill() -> None:
+        nonlocal ownership_phase
+        if ownership_phase == "anchored":
+            raise AssertionError("cannot reap before exact-group SIGKILL")
+        deadline = time.monotonic() + kill_grace_seconds
+        if ownership_phase != "reaped":
+            try:
+                process.wait(timeout=max(0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired as error:
+                raise AssertionError(
+                    "exact live verifier process group did not exit after SIGKILL"
+                ) from error
+            ownership_phase = "reaped"
         for thread in output_threads:
             thread.join(timeout=max(0, deadline - time.monotonic()))
         if any(thread.is_alive() for thread in output_threads):
@@ -197,15 +242,10 @@ def run_owned_process_group(
 
     def kill_and_reap() -> None:
         try:
-            kill_group(process_group_id, signal.SIGKILL)
-        except BaseException as signal_error:
-            try:
-                os.killpg(process_group_id, signal.SIGKILL)
-            except OSError as fallback_error:
-                signal_error.add_note(
-                    f"fallback exact-group SIGKILL failed: {fallback_error!r}"
-                )
-            reap_after_kill()
+            enter_kill_sent_phase(kill_group)
+        except BaseException:
+            if ownership_phase != "anchored":
+                reap_after_kill()
             raise
         reap_after_kill()
 
@@ -234,19 +274,29 @@ def run_owned_process_group(
         kill_and_reap()
         raise OwnedProcessGroupTimeout(process_group_id)
     except BaseException as primary_error:
-        if not anchor_reaped:
+        if ownership_phase == "anchored":
             try:
-                os.killpg(process_group_id, signal.SIGKILL)
-            except OSError as group_error:
-                primary_error.add_note(
-                    f"emergency exact-group SIGKILL failed: {group_error!r}"
-                )
-                try:
-                    process.kill()
-                except OSError as anchor_error:
+                enter_kill_sent_phase(os.killpg)
+            except BaseException as group_error:  # noqa: BLE001
+                if ownership_phase == "anchored":
                     primary_error.add_note(
-                        f"emergency anchor SIGKILL failed: {anchor_error!r}"
+                        f"emergency exact-group SIGKILL failed: {group_error!r}"
                     )
+        if ownership_phase == "anchored":
+            try:
+                process.kill()
+            except OSError as anchor_error:
+                primary_error.add_note(
+                    f"emergency anchor SIGKILL failed: {anchor_error!r}"
+                )
+        if ownership_phase != "reaped":
+            if ownership_phase == "anchored":
+                try:
+                    process.wait(timeout=kill_grace_seconds)
+                except BaseException as cleanup_error:
+                    raise cleanup_error from primary_error
+                ownership_phase = "reaped"
+                raise
             try:
                 reap_after_kill()
             except BaseException as cleanup_error:
@@ -735,6 +785,185 @@ def test_owned_process_group_status_pipe_close_error_still_reaps_anchor(
     assert started_processes[0].stderr.closed
     with pytest.raises(ChildProcessError):
         os.waitpid(started_processes[0].pid, os.WNOHANG)
+
+
+def test_owned_process_group_never_signals_group_after_wait_reaps_then_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_popen = subprocess.Popen
+    original_killpg = os.killpg
+    sent_signals: list[tuple[int, signal.Signals]] = []
+    wait_failure_injected = False
+
+    def popen_with_wait_failure(
+        *args: object, **kwargs: object
+    ) -> subprocess.Popen[str]:
+        process = original_popen(*args, **kwargs)
+        original_wait = process.wait
+
+        def wait_then_raise(*wait_args: object, **wait_kwargs: object) -> int:
+            nonlocal wait_failure_injected
+            returncode = original_wait(*wait_args, **wait_kwargs)
+            if not wait_failure_injected:
+                wait_failure_injected = True
+                raise RuntimeError("injected failure after OS reap")
+            return returncode
+
+        process.wait = wait_then_raise  # type: ignore[method-assign]
+        return process
+
+    def recording_killpg(process_group_id: int, sent_signal: signal.Signals) -> None:
+        sent_signals.append((process_group_id, sent_signal))
+        original_killpg(process_group_id, sent_signal)
+
+    monkeypatch.setattr(subprocess, "Popen", popen_with_wait_failure)
+    monkeypatch.setattr(os, "killpg", recording_killpg)
+
+    with pytest.raises(RuntimeError, match="injected failure after OS reap"):
+        run_owned_process_group(
+            [sys.executable, "-c", "raise SystemExit(0)"],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=1,
+            term_grace_seconds=0.05,
+            kill_grace_seconds=1,
+            kill_group=recording_killpg,
+        )
+
+    assert wait_failure_injected
+    assert len(sent_signals) == 1
+    assert sent_signals[0][1] == signal.SIGKILL
+
+
+def test_owned_process_group_distinguishes_post_signal_keyboard_interrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_killpg = os.killpg
+    sent_signals: list[tuple[int, signal.Signals]] = []
+
+    def kill_then_interrupt(process_group_id: int, sent_signal: signal.Signals) -> None:
+        sent_signals.append((process_group_id, sent_signal))
+        original_killpg(process_group_id, sent_signal)
+        deadline = time.monotonic() + 1
+        while True:
+            state = _process_state(process_group_id)
+            if not state or state.startswith("Z"):
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError("anchor did not exit after injected SIGKILL")
+            time.sleep(0.01)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(os, "killpg", kill_then_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        run_owned_process_group(
+            [sys.executable, "-c", "raise SystemExit(0)"],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=1,
+            term_grace_seconds=0.05,
+            kill_grace_seconds=1,
+            kill_group=kill_then_interrupt,
+        )
+
+    assert len(sent_signals) == 1
+    assert sent_signals[0][1] == signal.SIGKILL
+    with pytest.raises(ChildProcessError):
+        os.waitpid(sent_signals[0][0], os.WNOHANG)
+
+
+def test_owned_process_group_signal_mask_closes_keyboard_interrupt_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_killpg = os.killpg
+    original_pthread_sigmask = signal.pthread_sigmask
+    sent_signals: list[tuple[int, signal.Signals]] = []
+    restore_count = 0
+
+    def recording_killpg(process_group_id: int, sent_signal: signal.Signals) -> None:
+        sent_signals.append((process_group_id, sent_signal))
+        original_killpg(process_group_id, sent_signal)
+
+    def interrupt_second_mask_restore(
+        how: int, mask: set[signal.Signals]
+    ) -> set[signal.Signals]:
+        nonlocal restore_count
+        previous_mask = original_pthread_sigmask(how, mask)
+        if how == signal.SIG_SETMASK:
+            restore_count += 1
+            if restore_count == 2:
+                raise KeyboardInterrupt
+        return previous_mask
+
+    monkeypatch.setattr(os, "killpg", recording_killpg)
+    monkeypatch.setattr(signal, "pthread_sigmask", interrupt_second_mask_restore)
+
+    with pytest.raises(KeyboardInterrupt):
+        run_owned_process_group(
+            [sys.executable, "-c", "raise SystemExit(0)"],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=1,
+            term_grace_seconds=0.05,
+            kill_grace_seconds=1,
+            kill_group=recording_killpg,
+        )
+
+    assert restore_count == 2
+    assert len(sent_signals) == 1
+    assert sent_signals[0][1] == signal.SIGKILL
+    with pytest.raises(ChildProcessError):
+        os.waitpid(sent_signals[0][0], os.WNOHANG)
+
+
+def test_owned_process_group_restores_mask_if_blocking_raises_after_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_killpg = os.killpg
+    original_pthread_sigmask = signal.pthread_sigmask
+    initial_mask = original_pthread_sigmask(signal.SIG_BLOCK, set())
+    sent_signals: list[tuple[int, signal.Signals]] = []
+    block_count = 0
+
+    def recording_killpg(process_group_id: int, sent_signal: signal.Signals) -> None:
+        sent_signals.append((process_group_id, sent_signal))
+        original_killpg(process_group_id, sent_signal)
+
+    def interrupt_second_mask_block(
+        how: int, mask: set[signal.Signals]
+    ) -> set[signal.Signals]:
+        nonlocal block_count
+        previous_mask = original_pthread_sigmask(how, mask)
+        if how == signal.SIG_BLOCK and mask:
+            block_count += 1
+            if block_count == 2:
+                raise KeyboardInterrupt
+        return previous_mask
+
+    monkeypatch.setattr(os, "killpg", recording_killpg)
+    monkeypatch.setattr(signal, "pthread_sigmask", interrupt_second_mask_block)
+
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            run_owned_process_group(
+                [sys.executable, "-c", "raise SystemExit(0)"],
+                cwd=tmp_path,
+                env={"PATH": os.environ["PATH"]},
+                timeout_seconds=1,
+                term_grace_seconds=0.05,
+                kill_grace_seconds=1,
+                kill_group=recording_killpg,
+            )
+
+        assert block_count >= 2
+        assert original_pthread_sigmask(signal.SIG_BLOCK, set()) == initial_mask
+        assert len(sent_signals) == 1
+        assert sent_signals[0][1] == signal.SIGKILL
+        with pytest.raises(ChildProcessError):
+            os.waitpid(sent_signals[0][0], os.WNOHANG)
+    finally:
+        original_pthread_sigmask(signal.SIG_SETMASK, initial_mask)
 
 
 @pytest.mark.parametrize("raise_before_signal", [False, True])

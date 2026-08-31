@@ -934,8 +934,10 @@ bounded signal handler time to remove its separately detached, authenticated
 browser process group. Without polling or reaping the anchor, then send KILL to
 that same exact group and only afterward reap. On normal child status or spawn
 failure, likewise remove the entire anchored group before reap, returning the
-status received through the private pipe. Never signal or probe its bare PGID
-after reaping. Verify every recorded detached browser descendant is absent.
+status received through the private pipe. Block asynchronous signals around the
+KILL transition and irreversibly retire the numeric PGID capability before
+wait/reap, so a late wait or pipe exception cannot signal a reused group. Verify
+every recorded detached browser descendant is absent.
 Success is return code zero, exactly one PASS line on stdout, and empty stderr.
 Failure output must be checked for sensitive names and values before returning
 only a bounded prerequisite classification or generic safe diagnostic.
@@ -1072,7 +1074,8 @@ Inspect the final diff and confirm all of these statements are true:
 - [x] Anchor the npm group with a dedicated non-reaped session leader and report
   the child status through a private pipe. On normal status, spawn failure,
   exception, or timeout, remove the exact group while the anchor is still live
-  and only then reap; never signal or probe a bare PGID after leader reap.
+  and atomically retire numeric PGID authority before reaping; later exceptions
+  may retry only handle-based reap and pipe closure.
 - [x] Separate realistic cleanup-helper preflight time from the deterministic
   cleanup-stall bound, allocate test resources inside `try/finally`, and stress
   the case at least 30 times without helper or runtime residue.
