@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -13,7 +13,6 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import pytest
-
 
 ROOT = Path(__file__).parents[2]
 FRONTEND = ROOT / "frontend"
@@ -269,23 +268,31 @@ def test_owned_process_group_timeout_stops_term_ignoring_descendant(
     (
         (
             "owned browser launch failed at /private/raw/path",
-            "live company research verifier could not launch its browser; install "
-            "Playwright Chromium or select an installed Chrome channel",
+            (
+                "live company research verifier could not launch its browser; install "
+                "Playwright Chromium or select an installed Chrome channel"
+            ),
         ),
         (
             "Error [ERR_MODULE_NOT_FOUND]: Cannot find package at /private/raw/path",
-            "live company research verifier is missing frontend dependencies; "
-            "run npm ci in frontend",
+            (
+                "live company research verifier is missing frontend dependencies; "
+                "run npm ci in frontend"
+            ),
         ),
         (
             "Node 24+ is required; install it under /private/raw/path",
-            "live company research verifier requires the Node major pinned in .nvmrc; "
-            "run nvm install and nvm use",
+            (
+                "live company research verifier requires the Node major pinned in .nvmrc; "
+                "run nvm install and nvm use"
+            ),
         ),
         (
             "repository backend Python is not a validated executable: /private/raw/path",
-            "live company research verifier requires backend/.venv with backend[dev] "
-            "dependencies installed",
+            (
+                "live company research verifier requires backend/.venv with backend[dev] "
+                "dependencies installed"
+            ),
         ),
     ),
 )
