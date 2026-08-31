@@ -8,11 +8,11 @@ import subprocess
 import sys
 import tempfile
 import time
-import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import pytest
+import tomllib
 
 ROOT = Path(__file__).parents[2]
 FRONTEND = ROOT / "frontend"
