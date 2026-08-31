@@ -771,9 +771,17 @@ const publishResponse = page.waitForResponse((response) => response.request().me
 await page.getByRole("button", { name: "冻结并发布" }).click();
 const frozen = await responseJson(await publishResponse);
 if (frozen.project_id !== projectId || frozen.preparation_status !== "completed"
-  || frozen.current_step !== null || frozen.progress !== 100 || frozen.manifest_hash !== preview.manifest_hash)
+  || frozen.current_step !== null || frozen.progress !== 100
+  || frozen.manifest_hash === preview.manifest_hash
+  || frozen.manifest.preview_manifest_hash !== preview.manifest_hash)
   throw new Error("published revision contract mismatch");
 ```
+
+The preview hash authenticates the pre-publication projection. Publication
+adds the durable boundary, assessment, preparation, idempotency, and timestamp
+identities before hashing the frozen manifest, so the frozen hash must differ;
+its `preview_manifest_hash` field binds the durable revision back to the exact
+preview shown in the dialog.
 
 - [ ] **Step 3: Add replay and actual-download hashing**
 
