@@ -79,6 +79,30 @@ cd .. && python backend/scripts/verify_live_event_api.py
 cd frontend && PYTHON=../backend/.venv/bin/python PW_BROWSER_CHANNEL=chrome node scripts/with-project-node.mjs scripts/verify-live-event-ui.mjs
 ```
 
+```bash
+# 真实 Company Research 浏览器闭环：隔离 SQLite + 真实 API/worker + 非 mock 前端
+cd frontend
+PYTHON=../backend/.venv/bin/python PW_BROWSER_CHANNEL=chrome npm run verify:live-company-research
+```
+
+Company Research 验收要求使用仓库 `backend/.venv` 中已安装完整依赖的 Python、已完成
+`npm ci` 的前端依赖，以及已安装且与 `PW_BROWSER_CHANNEL` 匹配的 Playwright 浏览器；
+上例选择本地 Chrome。使用仓库 CI 已安装的 Playwright Chromium 时可不设置 channel。
+当前命令只声明仓库现有 macOS/Linux 验证路径，不声明其他平台支持。
+在 `.worktrees/<name>` checkout 中没有本地 `backend/.venv` 时，不设置 `PYTHON`；命令会
+按仓库受信策略查找主 checkout 的 `backend/.venv/bin/python`，不会退回宿主 Python。
+
+该命令为每次运行创建独立 SQLite，并启动真实 FastAPI、Company Research worker、
+Bearer 代理和非 mock Vite 前端。它只加载受治理的 Alphabet 身份底座，研究内容来自
+仓库内冻结且已认证的 Alphabet fixture；不会访问外部资料提供商或 LLM。初始化、逐条
+证据确认、判断确认和发布等所有人工写入都由浏览器控件触发。验收必须生成冻结 revision，
+通过浏览器回放该 revision，并校验下载的 Markdown 文件名、正文和内容哈希。
+
+无论成功还是失败，命令都会有界停止自己启动的进程并删除本次隔离数据库和私有临时目录。
+若进程停止或临时目录身份复核失败，命令会非零退出；它不会删除未通过父目录、所有者、权限
+和文件身份检查的路径，也不会用清理错误覆盖原始业务失败。失败诊断有界且脱敏，不输出令牌、
+请求正文、数据库内容或宿主环境。
+
 本仓库要求 Node.js 20+（`.nvmrc` 固定为 24）。真实人工闭环需要同时运行 API
 与后台 worker：`cd backend && python -m app.scripts.run_research_worker --loop`。
 
