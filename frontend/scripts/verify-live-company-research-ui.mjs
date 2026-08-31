@@ -251,6 +251,29 @@ function retainPrimaryFailure(promise) {
   return promise;
 }
 
+async function waitForProcessAwareOutcome(promise, { label, deadline, processes }) {
+  let outcome = null;
+  void promise.then(
+    (value) => { outcome = { kind: "fulfilled", value }; },
+    (error) => { outcome = { kind: "rejected", error }; },
+  );
+  const settled = await waitUntil(() => outcome, {
+    label,
+    timeoutMs: remaining(deadline, label),
+    processes,
+  });
+  if (settled.kind === "rejected") throw settled.error;
+  return settled.value;
+}
+
+async function waitForProcessAwareVisible(locator, { label, deadline, processes }) {
+  return waitUntil(() => locator.isVisible(), {
+    label,
+    timeoutMs: remaining(deadline, label),
+    processes,
+  });
+}
+
 function componentTail(owned) {
   if (!owned) return "";
   const raw = owned.stderr.length > 0 ? owned.stderr.toString("utf8") : owned.stdout.toString("utf8");
@@ -260,6 +283,19 @@ function componentTail(owned) {
     .replace(/[\u0000-\u001F\u007F]/gu, " ");
   const tail = Array.from(sanitized).slice(-180).join("").trim();
   return `\n${owned.name} output tail: ${tail || "[empty]"}`;
+}
+
+function cleanupFailure(label, error) {
+  const raw = error instanceof Error ? error.message : "cleanup failed";
+  const sanitized = raw
+    .replaceAll(token, "[redacted]")
+    .replace(/[^\s]*fund-engine-live-company-research-[^\s:]*/gu, "[private-runtime]")
+    .replace(/[^\s]*company-research\.sqlite/gu, "[private-database]")
+    .replace(/authorization\s*[:=]\s*[^\s,;]+/giu, "authorization=[redacted]")
+    .replace(/\b(env(?:ironment)?|headers?|(?:request|response)?\s*body)\s*[:=]\s*(?:\{[^}]*\}|\[[^\]]*\]|"[^"]*"|'[^']*'|[^\s,;]+)/giu, "$1=[redacted]")
+    .replace(/[\u0000-\u001F\u007F]/gu, " ");
+  const bounded = Array.from(sanitized).slice(0, 180).join("");
+  return new Error(`${label}: ${bounded}`, { cause: error });
 }
 
 function freePort() {
@@ -522,47 +558,59 @@ async function finalizeOwnedRuntime({
   browser, browserFailures, pendingObservers, assertTraffic, worker, vite, api, runtime,
 }) {
   const cleanupErrors = [];
+  const record = (label, error) => cleanupErrors.push(cleanupFailure(label, error));
+  const processes = [worker, vite, api].filter((owned) => owned !== null && owned !== undefined);
+  try {
+    assertProcessesRunning(processes);
+  } catch (error) {
+    record("pre-cleanup component health failure", error);
+  }
   if (browser) {
     try {
       await closeOwnedBrowser(browser, { timeoutMs: CLEANUP_TIMEOUT_MS });
     } catch (error) {
-      cleanupErrors.push(error);
+      record("browser cleanup failure", error);
     }
   }
   if (pendingObservers) {
     try {
       await pendingObservers.drain({ timeoutMs: CLEANUP_TIMEOUT_MS });
     } catch (error) {
-      cleanupErrors.push(error);
+      record("browser observer cleanup failure", error);
     }
   }
   if (assertTraffic) {
     try {
       assertTraffic();
     } catch (error) {
-      cleanupErrors.push(error);
+      record("traffic cleanup assertion failure", error);
     }
   }
   if (browserFailures) {
     try {
       browserFailures.throwIfAny();
     } catch (error) {
-      cleanupErrors.push(error);
+      record("browser failure cleanup assertion", error);
     }
   }
-  for (const owned of [worker, vite, api]) {
+  for (const [index, owned] of processes.entries()) {
     if (!owned) continue;
+    try {
+      assertProcessesRunning(processes.slice(index));
+    } catch (error) {
+      record(`${owned.name} pre-stop component health failure`, error);
+    }
     try {
       await stopOwnedProcess(owned);
     } catch (error) {
-      cleanupErrors.push(error);
+      record(`${owned.name} cleanup stop failure`, error);
     }
   }
   if (runtime) {
     try {
       await removePrivateRuntime(runtime);
     } catch (error) {
-      cleanupErrors.push(error);
+      record("private runtime cleanup failure", error);
     }
   }
   return cleanupErrors;
@@ -777,6 +825,25 @@ async function runBrowserWorkflow({
   throwBrowserFailures(failures);
   assertProcessesRunning(runningProcesses());
 
+  const task5Processes = () => runningProcesses();
+  const assertTask5Health = () => assertProcessesRunning(task5Processes());
+  const task5Outcome = (promise, label) => waitForProcessAwareOutcome(promise, {
+    label,
+    deadline,
+    processes: task5Processes(),
+  });
+  const task5Visible = (locator, label) => waitForProcessAwareVisible(locator, {
+    label,
+    deadline,
+    processes: task5Processes(),
+  });
+  const task5Action = async (operation, label) => {
+    assertTask5Health();
+    const value = await task5Outcome(operation(), label);
+    assertTask5Health();
+    return value;
+  };
+
   const machineMemos = modelWorkspace.artifacts.filter((artifact) => artifact?.kind === "memo");
   if (machineMemos.length !== 1) throw new Error("model workspace did not expose exactly one machine memo");
   const machineMemo = machineMemos[0];
@@ -790,9 +857,17 @@ async function runBrowserWorkflow({
   const confirmationResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
     response.request().method() === "POST" && new URL(response.url()).pathname === confirmationPath,
   { timeout: remaining(deadline, "judgment confirmation") }));
-  await page.getByLabel("研究备忘录 Markdown").fill(HUMAN_MEMO);
-  await page.getByRole("button", { name: "确认当前判断", exact: true }).click();
-  const confirmation = await responseJson(await confirmationResponsePromise);
+  await task5Action(() => page.getByLabel("研究备忘录 Markdown").fill(HUMAN_MEMO), "judgment memo fill");
+  await task5Action(
+    () => page.getByRole("button", { name: "确认当前判断", exact: true }).click(),
+    "judgment confirmation click",
+  );
+  const confirmationResponse = await task5Outcome(
+    confirmationResponsePromise, "judgment confirmation response",
+  );
+  const confirmation = await task5Outcome(
+    responseJson(confirmationResponse), "judgment confirmation JSON",
+  );
   if (confirmation?.project_id !== projectId
     || confirmation?.preparation?.id !== modelWorkspace.preparation.id
     || confirmation.preparation.status !== "ready_to_freeze"
@@ -809,9 +884,10 @@ async function runBrowserWorkflow({
     || !SHA256_PATTERN.test(confirmation?.confirmed_memo?.content_hash ?? "")) {
     throw new Error("judgment confirmation successor mismatch");
   }
-  await page.getByText("判断已确认，可以冻结版本。", { exact: true }).waitFor({
-    timeout: remaining(deadline, "visible judgment confirmation"),
-  });
+  await task5Visible(
+    page.getByText("判断已确认，可以冻结版本。", { exact: true }),
+    "visible judgment confirmation",
+  );
   const readyWorkspace = await waitForBrowserWorkspace({
     collector: workspaceResponses,
     after: readyWorkspaceCursor,
@@ -856,8 +932,16 @@ async function runBrowserWorkflow({
   const publicationPreviewResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
     response.request().method() === "POST" && new URL(response.url()).pathname === publicationPreviewPath,
   { timeout: remaining(deadline, "publication preview") }));
-  await page.getByRole("button", { name: "预览冻结版本", exact: true }).click();
-  const publicationPreview = await responseJson(await publicationPreviewResponsePromise);
+  await task5Action(
+    () => page.getByRole("button", { name: "预览冻结版本", exact: true }).click(),
+    "publication preview click",
+  );
+  const publicationPreviewResponse = await task5Outcome(
+    publicationPreviewResponsePromise, "publication preview response",
+  );
+  const publicationPreview = await task5Outcome(
+    responseJson(publicationPreviewResponse), "publication preview JSON",
+  );
   const expectedSecurityByKey = new Map(preview.securities.map((security) => [security.external_key, security]));
   const previewSecuritiesAreExact = Array.isArray(publicationPreview?.securities)
     && publicationPreview.securities.length === expectedSecurityByKey.size
@@ -892,7 +976,7 @@ async function runBrowserWorkflow({
   }
   assertExactFrozenDescriptors(publicationPreview.artifacts, prepublicationDescriptors, "preview");
   const previewDialog = page.getByRole("dialog", { name: "确认冻结版本" });
-  await previewDialog.waitFor({ timeout: remaining(deadline, "publication preview dialog") });
+  await task5Visible(previewDialog, "publication preview dialog");
   for (const value of [
     projectId,
     publicationPreview.company.object_id,
@@ -902,16 +986,20 @@ async function runBrowserWorkflow({
     publicationPreview.assessment.answerability,
     publicationPreview.assessment.content_hash,
     publicationPreview.manifest_hash,
-  ]) await previewDialog.getByText(value, { exact: false }).first().waitFor();
-  await previewDialog.getByText("未建立价值范围", { exact: true }).waitFor();
-  await previewDialog.getByText("未建立回报范围", { exact: true }).waitFor();
+  ]) await task5Visible(
+    previewDialog.getByText(value, { exact: false }).first(), `visible publication value ${value}`,
+  );
+  await task5Visible(previewDialog.getByText("未建立方向", { exact: true }), "visible closed direction");
+  await task5Visible(previewDialog.getByText("未建立置信度", { exact: true }), "visible closed confidence");
+  await task5Visible(previewDialog.getByText("未建立价值范围", { exact: true }), "visible closed value range");
+  await task5Visible(previewDialog.getByText("未建立回报范围", { exact: true }), "visible closed return range");
   for (const security of publicationPreview.securities) {
     const visible = `${security.schema_version} · ${security.canonical_name} · ${security.external_key} · ${security.symbol} · ${security.exchange} · ${security.share_class} · ${security.trading_currency} · ${security.company_id} · ${security.object_id}`;
-    await previewDialog.getByText(visible, { exact: true }).waitFor();
+    await task5Visible(previewDialog.getByText(visible, { exact: true }), `visible frozen security ${security.external_key}`);
   }
   for (const artifact of publicationPreview.artifacts) {
     const visible = `${artifact.schema_version} ${artifact.kind} ${artifact.id} v${artifact.version} input ${artifact.input_hash} content ${artifact.content_hash}`;
-    await previewDialog.getByText(visible, { exact: true }).waitFor();
+    await task5Visible(previewDialog.getByText(visible, { exact: true }), `visible frozen artifact ${artifact.kind}`);
   }
 
   const publishPath = `/api/underwriting/v1/product/company-research/projects/${encodeURIComponent(projectId)}/publish`;
@@ -925,8 +1013,12 @@ async function runBrowserWorkflow({
       && pathname.includes(`/projects/${encodeURIComponent(projectId)}/revisions/`)
       && !pathname.endsWith("/export");
   }, { timeout: remaining(deadline, "automatic frozen revision replay") }));
-  await page.getByRole("button", { name: "冻结并发布", exact: true }).click();
-  const frozen = await responseJson(await publishResponsePromise);
+  await task5Action(
+    () => page.getByRole("button", { name: "冻结并发布", exact: true }).click(),
+    "publication click",
+  );
+  const publishResponse = await task5Outcome(publishResponsePromise, "publication response");
+  const frozen = await task5Outcome(responseJson(publishResponse), "publication JSON");
   if (frozen?.project_id !== projectId || frozen.sequence !== 1
     || frozen.preparation_status !== "completed" || frozen.current_step !== null
     || frozen.progress !== 100 || frozen.manifest_hash === publicationPreview.manifest_hash
@@ -936,7 +1028,12 @@ async function runBrowserWorkflow({
     throw new Error("published revision contract mismatch");
   }
   assertExactPublicationProjection(frozen, publicationPreview, "published revision");
-  const automaticReplay = await responseJson(await automaticReplayResponsePromise);
+  const automaticReplayResponse = await task5Outcome(
+    automaticReplayResponsePromise, "automatic frozen revision replay response",
+  );
+  const automaticReplay = await task5Outcome(
+    responseJson(automaticReplayResponse), "automatic frozen revision replay JSON",
+  );
   if (!jsonValuesEqual(automaticReplay, frozen)) throw new Error("automatic frozen revision replay mismatch");
   const publishedWorkspace = await waitForBrowserWorkspace({
     collector: workspaceResponses,
@@ -963,22 +1060,32 @@ async function runBrowserWorkflow({
   }
   assertSavedEvidenceDecisions(publishedWorkspace, prepublicationDecisions, "published workspace");
   assertExactFrozenDescriptors(exactArtifactDescriptors(publishedWorkspace), prepublicationDescriptors, "published workspace");
-  await page.getByText(`冻结版本 ${frozen.id}`, { exact: true }).first().waitFor({
-    timeout: remaining(deadline, "visible automatic frozen revision replay"),
-  });
+  await task5Visible(
+    page.getByText(`冻结版本 ${frozen.id}`, { exact: true }).first(),
+    "visible automatic frozen revision replay",
+  );
 
   const revisionPath = `/api/underwriting/v1/product/company-research/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(frozen.id)}`;
   const explicitReplayResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
     response.request().method() === "GET" && new URL(response.url()).pathname === revisionPath,
   { timeout: remaining(deadline, "explicit frozen revision replay") }));
-  await page.getByRole("button", { name: "查看冻结版本", exact: true }).click();
-  const explicitReplay = await responseJson(await explicitReplayResponsePromise);
+  await task5Action(
+    () => page.getByRole("button", { name: "查看冻结版本", exact: true }).click(),
+    "explicit frozen revision replay click",
+  );
+  const explicitReplayResponse = await task5Outcome(
+    explicitReplayResponsePromise, "explicit frozen revision replay response",
+  );
+  const explicitReplay = await task5Outcome(
+    responseJson(explicitReplayResponse), "explicit frozen revision replay JSON",
+  );
   if (!jsonValuesEqual(explicitReplay, frozen)) throw new Error("explicit frozen revision replay mismatch");
   assertExactFrozenDescriptors(explicitReplay.artifacts, prepublicationDescriptors, "explicit replay");
   assertSavedEvidenceDecisions(publishedWorkspace, prepublicationDecisions, "explicit replay workspace");
-  await page.getByText("冻结版本已载入。", { exact: true }).waitFor({
-    timeout: remaining(deadline, "visible explicit frozen revision replay"),
-  });
+  await task5Visible(
+    page.getByText("冻结版本已载入。", { exact: true }),
+    "visible explicit frozen revision replay",
+  );
 
   const exportPath = `${revisionPath}/export`;
   let downloadCount = 0;
@@ -989,24 +1096,32 @@ async function runBrowserWorkflow({
   const downloadPromise = retainPrimaryFailure(page.waitForEvent("download", {
     timeout: remaining(deadline, "Markdown download"),
   }));
-  await page.getByRole("button", { name: "导出 Markdown", exact: true }).click();
-  const [download, exportHttpResponse] = await Promise.all([downloadPromise, exportResponsePromise]);
-  const envelope = await responseJson(exportHttpResponse);
-  const downloadFailure = await download.failure();
+  await task5Action(
+    () => page.getByRole("button", { name: "导出 Markdown", exact: true }).click(),
+    "Markdown export click",
+  );
+  const [download, exportHttpResponse] = await task5Outcome(
+    Promise.all([downloadPromise, exportResponsePromise]), "Markdown download and export response",
+  );
+  const envelope = await task5Outcome(responseJson(exportHttpResponse), "Markdown export JSON");
+  const downloadFailure = await task5Outcome(download.failure(), "Markdown download completion");
   if (downloadFailure !== null) throw new Error("Markdown download did not produce a file");
   const downloadPath = path.join(browserRuntimeDirectory, "downloads", `verified-${frozen.id}.md`);
-  await download.saveAs(downloadPath);
+  await task5Outcome(download.saveAs(downloadPath), "Markdown download save");
+  assertTask5Health();
   const [canonicalBrowserRuntime, canonicalDownload, downloadStat] = await Promise.all([
     realpath(browserRuntimeDirectory),
     realpath(downloadPath),
     lstat(downloadPath),
   ]);
+  assertTask5Health();
   if (!(canonicalDownload.startsWith(`${canonicalBrowserRuntime}${path.sep}`))
     || !downloadStat.isFile() || downloadStat.isSymbolicLink()
     || (typeof process.getuid === "function" && downloadStat.uid !== process.getuid())) {
     throw new Error("Markdown download escaped the authenticated browser runtime");
   }
   const bytes = await readFile(canonicalDownload);
+  assertTask5Health();
   const contentHash = createHash("sha256").update(bytes).digest("hex");
   if (download.suggestedFilename() !== envelope.filename
     || envelope.filename !== `alphabet-company-research-${frozen.id}.md`
@@ -1016,19 +1131,20 @@ async function runBrowserWorkflow({
     || bytes.toString("utf8") !== envelope.content) {
     throw new Error("Markdown download contract mismatch");
   }
-  await page.getByText("Markdown 已验证并下载。", { exact: true }).waitFor({
-    timeout: remaining(deadline, "visible Markdown download"),
-  });
+  await task5Visible(
+    page.getByText("Markdown 已验证并下载。", { exact: true }),
+    "visible Markdown download",
+  );
   if (downloadCount !== 1) throw new Error(`expected one Markdown download; saw ${downloadCount}`);
 
   const reloadWorkspaceCursor = workspaceResponses.cursor();
   const reloadReplayResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
     response.request().method() === "GET" && new URL(response.url()).pathname === revisionPath,
   { timeout: remaining(deadline, "reloaded frozen revision replay") }));
-  await page.reload({
+  await task5Outcome(page.reload({
     waitUntil: "networkidle",
     timeout: remaining(deadline, "completed project reload"),
-  });
+  }), "completed project reload");
   const finalWorkspace = await waitForBrowserWorkspace({
     collector: workspaceResponses,
     after: reloadWorkspaceCursor,
@@ -1040,7 +1156,12 @@ async function runBrowserWorkflow({
     deadline,
     processes: runningProcesses(),
   });
-  const reloadedRevision = await responseJson(await reloadReplayResponsePromise);
+  const reloadReplayResponse = await task5Outcome(
+    reloadReplayResponsePromise, "reloaded frozen revision response",
+  );
+  const reloadedRevision = await task5Outcome(
+    responseJson(reloadReplayResponse), "reloaded frozen revision JSON",
+  );
   assertWorkspace(finalWorkspace, {
     projectId,
     companyId: alphabet.object_id,
@@ -1057,9 +1178,10 @@ async function runBrowserWorkflow({
   assertSavedEvidenceDecisions(finalWorkspace, prepublicationDecisions, "reloaded workspace");
   assertExactFrozenDescriptors(exactArtifactDescriptors(finalWorkspace), prepublicationDescriptors, "reloaded workspace");
   assertExactFrozenDescriptors(reloadedRevision.artifacts, prepublicationDescriptors, "reloaded replay");
-  await page.getByText(`冻结版本 ${frozen.id}`, { exact: true }).first().waitFor({
-    timeout: remaining(deadline, "visible reloaded frozen revision"),
-  });
+  await task5Visible(
+    page.getByText(`冻结版本 ${frozen.id}`, { exact: true }).first(),
+    "visible reloaded frozen revision",
+  );
   if (downloadCount !== 1 || contentHash !== envelope.content_hash) {
     throw new Error("final completed workspace or download hash changed");
   }
@@ -1086,11 +1208,12 @@ async function runBrowserWorkflow({
     if (unexpectedWrites.length > 0) throw new Error("unexpected Company Research browser write");
     if (downloadCount !== 1) throw new Error(`expected one Markdown download; saw ${downloadCount}`);
   };
-  await pendingObservers.drain({
+  await task5Outcome(pendingObservers.drain({
     timeoutMs: Math.min(CLEANUP_TIMEOUT_MS, remaining(deadline, "browser observer drain")),
-  });
+  }), "browser observer drain");
   throwBrowserFailures(failures);
   assertTraffic();
+  assertTask5Health();
   return { assertTraffic, finalWorkspace, frozen, contentHash };
 }
 
@@ -1275,7 +1398,15 @@ async function main() {
 
   const runError = chooseRunError(primaryError, cleanupErrors);
   if (runError) {
-    throw new Error(`${runError.message}${[api, worker, vite].map(componentTail).join("")}`);
+    const cleanupSummaries = primaryError === null ? "" : cleanupErrors
+      .map((error) => `\ncleanup failure: ${error.message}`)
+      .join("");
+    const diagnostic = new Error(
+      `${runError.message}${cleanupSummaries}${[api, worker, vite].map(componentTail).join("")}`,
+      { cause: runError },
+    );
+    if (isRecord(runError) && Object.hasOwn(runError, "code")) diagnostic.code = runError.code;
+    throw diagnostic;
   }
   if (finalProof?.finalWorkspace?.preparation?.status !== "completed"
     || finalProof.finalWorkspace.preparation.current_step !== null
