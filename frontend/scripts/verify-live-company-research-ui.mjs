@@ -31,6 +31,7 @@ import {
   parseVerifierArgs,
   repositoryPythonVenvRoots,
   removePrivateRuntime,
+  retainPrimaryFailure,
   startOwnedBrowser,
   startOwnedProcess,
   stopOwnedProcess,
@@ -53,6 +54,7 @@ const initializationPath = "/api/underwriting/v1/product/company-research/initia
 const previewPath = "/api/underwriting/v1/product/company-research/preview";
 const searchPath = "/api/underwriting/v1/product/objects";
 const CLEANUP_TIMEOUT_MS = 10_000;
+const COOPERATIVE_SHUTDOWN_TIMEOUT_MS = 60_000;
 const CLOSED_ANSWERABILITY_MESSAGE = "当前正式证据不足，不形成投资方向、置信度、目标价或预期回报。";
 const HUMAN_MEMO = "Current formal evidence is insufficient.";
 const PASS_LINE = "PASS: default frontend completed live Alphabet company research through reviewed evidence, frozen revision replay, and verified Markdown export";
@@ -244,11 +246,6 @@ function assertExactPublicationProjection(actual, preview, label) {
     throw new Error(`${label} publication projection mismatch`);
   }
   return actual;
-}
-
-function retainPrimaryFailure(promise) {
-  void promise.catch(() => {});
-  return promise;
 }
 
 async function waitForProcessAwareOutcome(promise, { label, deadline, processes }) {
@@ -642,9 +639,9 @@ async function runBrowserWorkflow({
   throwBrowserFailures(failures);
 
   await page.getByLabel("搜索公司、证券或行业").fill("Alphabet");
-  const searchResponsePromise = page.waitForResponse((response) =>
+  const searchResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
     response.request().method() === "GET" && new URL(response.url()).pathname === searchPath,
-  { timeout: remaining(deadline, "Alphabet search") });
+  { timeout: remaining(deadline, "Alphabet search") }));
   await page.getByRole("button", { name: "搜索对象" }).click();
   const search = await responseJson(await searchResponsePromise);
   throwBrowserFailures(failures);
@@ -657,9 +654,9 @@ async function runBrowserWorkflow({
     throw new Error("Alphabet company identity mismatch");
   }
 
-  const previewResponsePromise = page.waitForResponse((response) =>
+  const previewResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
     response.request().method() === "POST" && new URL(response.url()).pathname === previewPath,
-  { timeout: remaining(deadline, "Alphabet preview") });
+  { timeout: remaining(deadline, "Alphabet preview") }));
   await page.getByRole("button", { name: "研究 Alphabet" }).click();
   const preview = await responseJson(await previewResponsePromise);
   const boundAlphabet = assertAlphabetIdentityBinding({ foundation, search, preview });
@@ -668,9 +665,9 @@ async function runBrowserWorkflow({
   await page.getByText("关联证券：GOOG Class C；GOOGL Class A", { exact: false }).waitFor();
   throwBrowserFailures(failures);
 
-  const initializeResponsePromise = page.waitForResponse((response) =>
+  const initializeResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
     response.request().method() === "POST" && new URL(response.url()).pathname === initializationPath,
-  { timeout: remaining(deadline, "company research initialization") });
+  { timeout: remaining(deadline, "company research initialization") }));
   const evidenceWorkspaceCursor = workspaceResponses.cursor();
   await page.getByRole("button", { name: "开始研究" }).click();
   const initialized = await responseJson(await initializeResponsePromise);
@@ -750,9 +747,9 @@ async function runBrowserWorkflow({
   let finalReviewWorkspace = null;
   for (const [index, factKey] of factKeys.entries()) {
     const previousEvidence = evidence;
-    const reviewResponsePromise = page.waitForResponse((response) =>
+    const reviewResponsePromise = retainPrimaryFailure(page.waitForResponse((response) =>
       response.request().method() === "POST" && new URL(response.url()).pathname === reviewPath,
-    { timeout: remaining(deadline, `evidence review ${factKey}`) });
+    { timeout: remaining(deadline, `evidence review ${factKey}`) }));
     const reviewWorkspaceCursor = workspaceResponses.cursor();
     await page.getByRole("button", { name: `确认事实 ${factKey}`, exact: true }).click();
     const reviewed = await responseJson(await reviewResponsePromise);
@@ -1235,6 +1232,29 @@ async function main() {
   let finalProof;
   let primaryError = null;
   let cleanupErrors = [];
+  let signalFinalizationPromise = null;
+  let shutdownSignal = null;
+  let shutdownWatchdog = null;
+  const assertNotShuttingDown = () => {
+    if (shutdownSignal) throw new Error(`live verifier received ${shutdownSignal}`);
+  };
+  const requestCooperativeShutdown = (signalName) => {
+    if (shutdownSignal) return;
+    shutdownSignal = signalName;
+    primaryError ??= new Error(`live verifier received ${signalName}`);
+    shutdownWatchdog = setTimeout(() => process.exit(1), COOPERATIVE_SHUTDOWN_TIMEOUT_MS);
+    signalFinalizationPromise = finalizeOwnedRuntime({
+      browser, browserFailures, pendingObservers, assertTraffic, worker, vite, api, runtime,
+    });
+    void signalFinalizationPromise.then((errors) => {
+      cleanupErrors = errors;
+    }, () => process.exit(1));
+  };
+  const signalHandlers = new Map(["SIGINT", "SIGHUP", "SIGTERM"].map((signalName) => {
+    const handler = () => requestCooperativeShutdown(signalName);
+    process.once(signalName, handler);
+    return [signalName, handler];
+  }));
 
   try {
     runtime = await createPrivateRuntime({
@@ -1243,6 +1263,7 @@ async function main() {
         helperPath: canonicalCleanupHelper,
       },
     });
+    assertNotShuttingDown();
     const [apiPort, uiPort] = await Promise.all([freePort(), freePort()]);
     const apiOrigin = `http://127.0.0.1:${apiPort}`;
     const uiBase = `http://127.0.0.1:${uiPort}`;
@@ -1265,13 +1286,16 @@ async function main() {
       ["-c", "from app.models.ledger import Base; from app.db import engine; Base.metadata.create_all(engine)"],
       { env, deadline, label: "database schema creation" },
     );
+    assertNotShuttingDown();
     await runBootstrap(
       python,
       ["-m", "app.scripts.load_product_foundation_fixture"],
       { env, deadline, label: "product foundation load" },
     );
+    assertNotShuttingDown();
 
     await assertPythonIdentity(python);
+    assertNotShuttingDown();
     api = startOwnedProcess(
       python.launcher,
       ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(apiPort)],
@@ -1286,6 +1310,7 @@ async function main() {
       );
     };
     worker = await launchWorker();
+    assertNotShuttingDown();
     const backendProcesses = [api, worker];
     await waitUntil(async ({ signal }) => {
       const response = await fetch(`${apiOrigin}${searchPath}?query=Alphabet&limit=20`, {
@@ -1298,6 +1323,7 @@ async function main() {
       timeoutMs: remaining(deadline, "authenticated live API"),
       processes: backendProcesses,
     });
+    assertNotShuttingDown();
 
     vite = startOwnedProcess(
       process.execPath,
@@ -1314,12 +1340,14 @@ async function main() {
       timeoutMs: remaining(deadline, "non-mock frontend"),
       processes,
     });
+    assertNotShuttingDown();
 
     browser = await startOwnedBrowser(chromium, runtime, {
       channel: env.PW_BROWSER_CHANNEL || undefined,
       env,
       timeoutMs: remaining(deadline, "browser launch"),
     });
+    assertNotShuttingDown();
     const audit = createTrafficAudit(uiBase);
     browserFailures = createBrowserFailureCollector();
     pendingObservers = createPendingObserverTracker();
@@ -1389,11 +1417,17 @@ async function main() {
     assertTraffic = workflow.assertTraffic;
     finalProof = workflow;
   } catch (error) {
-    primaryError = error instanceof Error ? error : new Error("live company research verifier failed");
+    primaryError ??= error instanceof Error ? error : new Error("live company research verifier failed");
   } finally {
-    cleanupErrors = await finalizeOwnedRuntime({
+    if (signalFinalizationPromise) cleanupErrors = await signalFinalizationPromise;
+    const finalCleanupErrors = await finalizeOwnedRuntime({
       browser, browserFailures, pendingObservers, assertTraffic, worker, vite, api, runtime,
     });
+    for (const error of finalCleanupErrors) {
+      if (!cleanupErrors.some((existing) => existing.message === error.message)) cleanupErrors.push(error);
+    }
+    for (const [signalName, handler] of signalHandlers) process.off(signalName, handler);
+    clearTimeout(shutdownWatchdog);
   }
 
   const runError = chooseRunError(primaryError, cleanupErrors);

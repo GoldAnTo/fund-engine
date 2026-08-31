@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { EventEmitter } from "node:events";
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import test from "node:test";
@@ -1166,6 +1165,9 @@ test("owned browser launch confines paths and leaves no sibling temporary direct
       assert.equal(launchOptions.env[key].startsWith(runtime.directory), true);
     }
     assert.equal(launchTmpdir, launchOptions.env.TMPDIR);
+    assert.equal(launchOptions.handleSIGINT, false);
+    assert.equal(launchOptions.handleSIGTERM, false);
+    assert.equal(launchOptions.handleSIGHUP, false);
     assert.equal(os.tmpdir(), hostTmpdir);
   } finally {
     await removePrivateRuntime(runtime);
@@ -1175,55 +1177,109 @@ test("owned browser launch confines paths and leaves no sibling temporary direct
   assert.deepEqual(siblingsAfter, []);
 });
 
-test("owned browser close timeout kills the exact retained browser server capability", async () => {
-  assert.equal(typeof supportModule.startOwnedBrowser, "function");
-  assert.equal(typeof supportModule.closeOwnedBrowser, "function");
+test("every Playwright workflow wait retains rejection before its triggering action", async () => {
+  const verifier = await readFile(
+    path.resolve(process.cwd(), "scripts/verify-live-company-research-ui.mjs"),
+    "utf8",
+  );
+  const waits = verifier.split("\n").filter((line) =>
+    line.includes("page.waitForResponse(") || line.includes("page.waitForEvent("));
+  assert.ok(waits.length >= 10);
+  for (const wait of waits) assert.match(wait, /retainPrimaryFailure\(page\.waitFor/u);
+});
+
+test("owned browser close removes an exact TERM-ignoring POSIX browser process group", {
+  skip: !["darwin", "linux"].includes(process.platform),
+}, async () => {
   const runtime = await createTestRuntime();
-  let killed = 0;
+  const rendererPidPath = path.join(runtime.directory, "renderer.pid");
+  const rendererProgram = [
+    "const { writeFileSync } = require('node:fs');",
+    "process.on('SIGTERM', () => {});",
+    `writeFileSync(${JSON.stringify(rendererPidPath)}, String(process.pid));`,
+    "setInterval(() => {}, 1000);",
+  ].join("");
+  const browserProgram = [
+    "const { spawn } = require('node:child_process');",
+    "process.on('SIGTERM', () => {});",
+    `spawn(process.execPath, ['-e', ${JSON.stringify(rendererProgram)}], { stdio: 'ignore' });`,
+    "setInterval(() => {}, 1000);",
+  ].join("");
+  const browserProcess = (await import("node:child_process")).spawn(
+    process.execPath,
+    ["-e", browserProgram],
+    { detached: true, stdio: "ignore" },
+  );
   const browserServer = {
     close: () => new Promise(() => {}),
-    async kill() { killed += 1; },
-    wsEndpoint() { return "ws://127.0.0.1:41000/owned"; },
+    process: () => browserProcess,
+    wsEndpoint: () => "ws://127.0.0.1:41000/owned",
   };
   const browserType = {
     async launchServer() { return browserServer; },
-    async connect() { return { newContext(options) { return options; } }; },
+    async connect() { return { newContext() {} }; },
   };
+  const sentSignals = [];
+  const originalKill = process.kill;
+  process.kill = (pid, signalName) => {
+    if (pid === -browserProcess.pid && ["SIGTERM", "SIGKILL"].includes(signalName)) {
+      sentSignals.push([pid, signalName]);
+    }
+    return originalKill(pid, signalName);
+  };
+  let rendererPid;
   try {
     const owned = await supportModule.startOwnedBrowser(
-      browserType, runtime, { env: { PATH: "/tools" }, timeoutMs: 50 },
+      browserType, runtime, { env: { PATH: process.env.PATH ?? "" }, timeoutMs: 1_000 },
     );
-    const contextOptions = await supportModule.newOwnedBrowserContext(
-      owned, { serviceWorkers: "allow" },
-    );
-    assert.equal(contextOptions.serviceWorkers, "block");
+    const deadline = Date.now() + 1_000;
+    while (!rendererPid && Date.now() < deadline) {
+      try {
+        rendererPid = Number(await readFile(rendererPidPath, "utf8"));
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    }
+    assert.ok(Number.isSafeInteger(rendererPid));
     await assert.rejects(
-      supportModule.closeOwnedBrowser(owned, { timeoutMs: 20 }),
+      supportModule.closeOwnedBrowser(owned, { timeoutMs: 50 }),
       /graceful close timed out/u,
     );
-    assert.equal(killed, 1);
+    assert.deepEqual(sentSignals, [
+      [-browserProcess.pid, "SIGTERM"],
+      [-browserProcess.pid, "SIGKILL"],
+    ]);
+    for (const pid of [browserProcess.pid, rendererPid]) {
+      assert.throws(() => originalKill(pid, 0), { code: "ESRCH" });
+    }
+    assert.throws(() => originalKill(-browserProcess.pid, 0), { code: "ESRCH" });
   } finally {
+    process.kill = originalKill;
+    try { originalKill(-browserProcess.pid, "SIGKILL"); } catch {}
     await removePrivateRuntime(runtime);
   }
 });
 
-test("owned browser close falls back to the exact retained child when server kill rejects", async () => {
+test("owned browser graceful-close rejection still removes its exact POSIX group", {
+  skip: !["darwin", "linux"].includes(process.platform),
+}, async () => {
   const runtime = await createTestRuntime();
-  const child = new EventEmitter();
-  let signal = null;
-  child.exitCode = null;
-  child.signalCode = null;
-  child.kill = (nextSignal) => {
-    signal = nextSignal;
-    child.signalCode = nextSignal;
-    queueMicrotask(() => child.emit("exit", null, nextSignal));
-    return true;
-  };
+  const readyPath = path.join(runtime.directory, "browser-ready");
+  const browserProcess = (await import("node:child_process")).spawn(
+    process.execPath,
+    ["-e", [
+      "const { writeFileSync } = require('node:fs');",
+      "process.on('SIGTERM', () => {});",
+      `writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+      "setInterval(() => {}, 1000);",
+    ].join("")],
+    { detached: true, stdio: "ignore" },
+  );
   const browserServer = {
-    close: () => new Promise(() => {}),
-    async kill() { throw new Error("injected kill rejection"); },
-    process() { return child; },
-    wsEndpoint() { return "ws://127.0.0.1:41000/owned"; },
+    close() { throw new Error("injected graceful rejection"); },
+    process: () => browserProcess,
+    wsEndpoint: () => "ws://127.0.0.1:41000/owned",
   };
   const browserType = {
     async launchServer() { return browserServer; },
@@ -1231,13 +1287,51 @@ test("owned browser close falls back to the exact retained child when server kil
   };
   try {
     const owned = await supportModule.startOwnedBrowser(
-      browserType, runtime, { env: { PATH: "/tools" }, timeoutMs: 50 },
+      browserType, runtime, { env: { PATH: process.env.PATH ?? "" }, timeoutMs: 1_000 },
     );
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      try {
+        await lstat(readyPath);
+        break;
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    }
+    await lstat(readyPath);
     await assert.rejects(
-      supportModule.closeOwnedBrowser(owned, { timeoutMs: 20 }),
-      /direct SIGKILL/u,
+      supportModule.closeOwnedBrowser(owned, { timeoutMs: 50 }),
+      /graceful close failed/u,
     );
-    assert.equal(signal, "SIGKILL");
+    assert.throws(() => process.kill(-browserProcess.pid, 0), { code: "ESRCH" });
+  } finally {
+    try { process.kill(-browserProcess.pid, "SIGKILL"); } catch {}
+    await removePrivateRuntime(runtime);
+  }
+});
+
+test("owned browser launch fails closed without an authenticated POSIX group leader", {
+  skip: !["darwin", "linux"].includes(process.platform),
+}, async () => {
+  const runtime = await createTestRuntime();
+  let killed = 0;
+  const browserServer = {
+    async kill() { killed += 1; },
+    wsEndpoint: () => "ws://127.0.0.1:41000/owned",
+  };
+  const browserType = {
+    async launchServer() { return browserServer; },
+    async connect() { throw new Error("must not connect"); },
+  };
+  try {
+    await assert.rejects(
+      supportModule.startOwnedBrowser(
+        browserType, runtime, { env: { PATH: process.env.PATH ?? "" }, timeoutMs: 100 },
+      ),
+      /process group/u,
+    );
+    assert.equal(killed, 1);
   } finally {
     await removePrivateRuntime(runtime);
   }
@@ -1444,24 +1538,70 @@ test("helper self-test rejects invalid source and stalled preflight before alloc
 });
 
 test("stalled fd-relative cleanup helper is terminated without deleting a replacement", async () => {
-  const helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-stalled-cleanup-"));
+  let helperDirectory;
+  try {
+    helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-stalled-cleanup-"));
+    const helperPath = path.join(helperDirectory, "cleanup.py");
+    await writeFile(helperPath, "import sys\nif sys.argv[1:] == ['--self-test']: raise SystemExit(0)\nwhile True: pass\n");
+    for (let iteration = 0; iteration < 30; iteration += 1) {
+      let runtime;
+      let quarantine;
+      try {
+        runtime = await createPrivateRuntime({
+          cleanupHelper: {
+            pythonExecutable: TEST_PYTHON,
+            helperPath,
+            preflightTimeoutMs: 2_000,
+            timeoutMs: 100,
+          },
+        });
+        const sentinel = `${runtime.directory}/sentinel`;
+        await writeFile(sentinel, "preserve");
+        await assert.rejects(removePrivateRuntime(runtime), /cleanup helper timed out/);
+        quarantine = (await readdir(runtime.parent)).find((entry) =>
+          entry.startsWith(`.${path.basename(runtime.directory)}.cleanup-`));
+        assert.ok(quarantine);
+        assert.equal(await readFile(path.join(runtime.parent, quarantine, "sentinel"), "utf8"), "preserve");
+      } finally {
+        if (runtime) await rm(runtime.directory, { recursive: true, force: true });
+        if (runtime && quarantine) {
+          await rm(path.join(runtime.parent, quarantine), { recursive: true, force: true });
+        }
+      }
+    }
+  } finally {
+    if (helperDirectory) await rm(helperDirectory, { recursive: true, force: true });
+  }
+});
+
+test("cleanup uses a realistic preflight bound independent of a deterministic cleanup stall", async () => {
+  const helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-split-timeouts-"));
   const helperPath = path.join(helperDirectory, "cleanup.py");
-  await writeFile(helperPath, "import sys\nif sys.argv[1:] == ['--self-test']: raise SystemExit(0)\nwhile True: pass\n");
-  const runtime = await createPrivateRuntime({
-    cleanupHelper: { pythonExecutable: TEST_PYTHON, helperPath, timeoutMs: 100 },
-  });
-  const sentinel = `${runtime.directory}/sentinel`;
-  await writeFile(sentinel, "preserve");
+  await writeFile(helperPath, [
+    "import sys,time",
+    "if sys.argv[1:] == ['--self-test']:",
+    "    time.sleep(0.15)",
+    "    raise SystemExit(0)",
+    "while True: pass",
+    "",
+  ].join("\n"));
+  let runtime;
   let quarantine;
   try {
-    await assert.rejects(removePrivateRuntime(runtime), /cleanup helper timed out/);
+    runtime = await createPrivateRuntime({ cleanupHelper: {
+      pythonExecutable: TEST_PYTHON,
+      helperPath,
+      preflightTimeoutMs: 1_000,
+      timeoutMs: 50,
+    } });
+    await writeFile(path.join(runtime.directory, "sentinel"), "preserve");
+    await assert.rejects(removePrivateRuntime(runtime), /cleanup helper timed out/u);
     quarantine = (await readdir(runtime.parent)).find((entry) =>
       entry.startsWith(`.${path.basename(runtime.directory)}.cleanup-`));
     assert.ok(quarantine);
-    assert.equal(await readFile(path.join(runtime.parent, quarantine, "sentinel"), "utf8"), "preserve");
   } finally {
-    await rm(runtime.directory, { recursive: true, force: true });
-    if (quarantine) await rm(path.join(runtime.parent, quarantine), { recursive: true, force: true });
+    if (runtime) await rm(runtime.directory, { recursive: true, force: true });
+    if (runtime && quarantine) await rm(path.join(runtime.parent, quarantine), { recursive: true, force: true });
     await rm(helperDirectory, { recursive: true, force: true });
   }
 });
@@ -1613,6 +1753,39 @@ test("chooseRunError preserves a workflow failure over cleanup failures", () => 
   assert.strictEqual(chooseRunError(workflowError, [cleanupError]), workflowError);
   assert.strictEqual(chooseRunError(null, [cleanupError]), cleanupError);
   assert.strictEqual(chooseRunError(null, []), null);
+});
+
+test("retained abandoned response waits cannot overtake an action failure during cleanup", async () => {
+  const runtime = await createTestRuntime();
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  let rejectResponse;
+  const abandonedResponse = new Promise((resolve, reject) => {
+    rejectResponse = reject;
+  });
+  let primary = null;
+  const cleanupErrors = [];
+  try {
+    supportModule.retainPrimaryFailure(abandonedResponse);
+    try {
+      throw new Error("click failed first");
+    } catch (error) {
+      primary = error;
+    }
+    rejectResponse(new Error("browser close rejected abandoned response wait"));
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    try {
+      await removePrivateRuntime(runtime);
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    process.off("unhandledRejection", onUnhandled);
+  }
+  assert.equal(chooseRunError(primary, cleanupErrors)?.message, "click failed first");
+  assert.deepEqual(unhandled, []);
+  await assert.rejects(lstat(runtime.directory), { code: "ENOENT" });
 });
 
 test("removePrivateRuntime rejects forged handles without touching their targets", async () => {
@@ -1814,6 +1987,64 @@ test("removePrivateRuntime preserves a nonempty victim substituted at its quaran
       rm(path.join(runtime.parent, entry), { recursive: true, force: true })));
     await rm(runtime.directory, { recursive: true, force: true });
     await rm(ownedMoved, { recursive: true, force: true });
+  }
+});
+
+test("removePrivateRuntime revalidates the quarantine path immediately before final rmdir", async () => {
+  const helperDirectory = await mkdtemp(path.join(os.tmpdir(), "live-company-research-rmdir-revalidate-"));
+  const marker = path.join(helperDirectory, "emptied");
+  const release = path.join(helperDirectory, "release");
+  const helperPath = path.join(helperDirectory, "cleanup.py");
+  await writeFile(helperPath, [
+    "import os,sys,time",
+    "if sys.argv[1:] == ['--self-test']: raise SystemExit(0)",
+    "fd = int(sys.argv[1])",
+    "for name in os.listdir(fd): os.unlink(name, dir_fd=fd)",
+    `open(${JSON.stringify(marker)}, 'w').close()`,
+    `while not os.path.exists(${JSON.stringify(release)}): time.sleep(0.005)`,
+    "",
+  ].join("\n"));
+  let runtime;
+  let quarantine;
+  let ownedMoved;
+  try {
+    runtime = await createPrivateRuntime({ cleanupHelper: {
+      pythonExecutable: TEST_PYTHON,
+      helperPath,
+      preflightTimeoutMs: 1_000,
+      timeoutMs: 1_000,
+    } });
+    await writeFile(path.join(runtime.directory, "owned"), "owned");
+    const cleanup = removePrivateRuntime(runtime);
+    cleanup.catch(() => {});
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      try {
+        await lstat(marker);
+        break;
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    }
+    await lstat(marker);
+    quarantine = (await readdir(runtime.parent)).find((entry) =>
+      entry.startsWith(`.${path.basename(runtime.directory)}.cleanup-`));
+    assert.ok(quarantine);
+    const claimed = path.join(runtime.parent, quarantine);
+    ownedMoved = `${claimed}.owned-moved`;
+    await rename(claimed, ownedMoved);
+    await mkdir(claimed, { mode: 0o700 });
+    await writeFile(release, "go");
+    await assert.rejects(cleanup, /private runtime identity changed/u);
+    assert.equal((await lstat(claimed)).isDirectory(), true);
+  } finally {
+    if (runtime && quarantine) {
+      await rm(path.join(runtime.parent, quarantine), { recursive: true, force: true });
+    }
+    if (ownedMoved) await rm(ownedMoved, { recursive: true, force: true });
+    if (runtime) await rm(runtime.directory, { recursive: true, force: true });
+    await rm(helperDirectory, { recursive: true, force: true });
   }
 });
 

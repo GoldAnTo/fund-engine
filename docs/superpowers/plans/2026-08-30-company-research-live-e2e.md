@@ -923,8 +923,12 @@ Invoke the public `npm run --silent verify:live-company-research` contract in a
 minimal environment with `PYTHON=sys.executable`. Own npm as a new POSIX session
 leader. The verifier has a 180-second internal bound; allow a 300-second outer
 bound so its sequential browser/process/private-runtime cleanup retains a
-120-second margin. On outer timeout, signal only the exact owned process group
-with TERM, wait boundedly, then KILL and verify that no descendant remains.
+120-second margin. On outer timeout, signal only the exact owned npm process
+group with TERM and give the verifier's bounded signal handler time to remove
+its separately detached, authenticated browser process group. If the npm group
+does not exit, retain its unreaped leader as the exact capability, then send
+KILL. Verify both the npm group and every recorded detached browser descendant
+or group are absent.
 Success is return code zero, exactly one PASS line on stdout, and empty stderr.
 Failure output must be checked for sensitive names and values before returning
 only a bounded prerequisite classification or generic safe diagnostic.
@@ -1038,6 +1042,30 @@ Inspect the final diff and confirm all of these statements are true:
 - the original failure remains primary when cleanup also fails;
 - project, company, artifact, memo, manifest, revision, and export hashes are checked;
 - every human write originates from a Playwright click or fill-plus-click path.
+
+### Task 7: Final lifecycle safety closure
+
+- [x] Attach a rejection observer to every `waitForResponse` and `waitForEvent`
+  promise before its triggering browser action; prove an action failure remains
+  primary when browser close rejects an abandoned wait and no
+  `unhandledRejection` or private-runtime residue remains.
+- [x] Authenticate Playwright's browser PID as its POSIX process-group leader at
+  launch, retain that authority only in private support state, and fail closed
+  before browser workflow if the capability cannot be established.
+- [x] On graceful browser-close timeout or rejection, signal the exact retained
+  PGID with bounded TERM/KILL and verify group absence. Cover a real group whose
+  renderer descendant ignores TERM.
+- [x] Give the verifier cooperative signal ownership and cover the Python outer
+  timeout with a real detached browser tree, exact recorded signals, and absence
+  checks for every recorded PID and PGID.
+- [x] Separate realistic cleanup-helper preflight time from the deterministic
+  cleanup-stall bound, allocate test resources inside `try/finally`, and stress
+  the case at least 30 times without helper or runtime residue.
+- [x] Revalidate the quarantined path's complete identity immediately before
+  nonrecursive `rmdir`. Preserve the approved same-UID-concurrent-mutation
+  exclusion: Darwin offers no portable inode-conditional directory unlink, so
+  only an empty same-UID replacement after the final check remains outside the
+  threat model; nonempty replacements are never recursively removed.
 
 - [ ] **Step 5: Commit only if verification required a correction**
 

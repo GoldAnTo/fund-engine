@@ -205,11 +205,29 @@ by the current user, and must use restrictive permissions. The same conditions
 are revalidated immediately before removal. If revalidation fails, the verifier
 must not remove the target.
 
+Content deletion is fd-relative and does not follow symlinks. The quarantined
+root path is revalidated against its original owner, mode, device, and inode
+immediately before the final nonrecursive `rmdir`. Darwin has no portable
+inode-conditional directory unlink: a same-UID actor can still replace the
+now-empty path in the interval after that last check and before `rmdir`, and an
+empty replacement could then be removed. The verifier therefore retains the
+approved exclusion of concurrent same-UID mutation for that interval. This is
+the only remaining replacement race in the cleanup threat model; a nonempty
+replacement is preserved because nonrecursive `rmdir` fails closed.
+
 Shutdown is idempotent and bounded. It first asks owned child processes to exit,
-then escalates only against the exact processes it started. Cleanup preserves
-the original business failure code. A cleanup failure is reported without
-masking an earlier failure; if cleanup is the only failure, the run exits
-nonzero.
+then escalates only against the exact processes it started. On macOS and Linux,
+browser launch must authenticate and retain privately that Playwright's browser
+process is its POSIX process-group leader; otherwise launch fails before the
+workflow. Browser cleanup signals that exact group with bounded TERM/KILL and
+verifies its absence, including renderer descendants. The verifier handles
+outer TERM/HUP/INT cooperatively so the Python npm-session owner cannot strand
+the browser's separate process group. Cleanup preserves the original business
+failure code. A cleanup failure is reported without masking an earlier failure;
+if cleanup is the only failure, the run exits nonzero. Every Playwright response
+or event wait has a rejection handler attached before the click that triggers it,
+so a primary action failure cannot be overtaken by an abandoned wait during
+browser shutdown.
 
 ## Implementation Shape
 

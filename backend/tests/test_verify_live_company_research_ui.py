@@ -56,7 +56,9 @@ OUTER_CLEANUP_MARGIN_SECONDS = 120
 OUTER_TIMEOUT_SECONDS = (
     VERIFIER_INTERNAL_TIMEOUT_SECONDS + OUTER_CLEANUP_MARGIN_SECONDS
 )
-TERM_GRACE_SECONDS = 10
+# The verifier's SIGTERM handler owns exact detached-browser-group cleanup. Keep
+# the npm session leader unreaped while that bounded cooperative cleanup runs.
+TERM_GRACE_SECONDS = 70
 KILL_GRACE_SECONDS = 10
 
 
@@ -96,10 +98,15 @@ def run_owned_process_group(
         kill_group(process_group_id, signal.SIGTERM)
     except ProcessLookupError:
         pass
-    # Do not poll or communicate here: either can reap the session leader and
-    # release its numeric PGID for reuse before escalation. Keeping the leader
-    # unreaped anchors the exact group throughout the bounded TERM grace.
-    time.sleep(term_grace_seconds)
+    # A cooperative verifier handles SIGTERM by cleaning its separately detached
+    # browser PGID before exiting. Reap only when that bounded cleanup completes;
+    # otherwise retain the live session leader as the exact outer-group anchor.
+    try:
+        process.communicate(timeout=term_grace_seconds)
+    except subprocess.TimeoutExpired:
+        pass
+    else:
+        raise OwnedProcessGroupTimeout(process_group_id)
     try:
         kill_group(process_group_id, signal.SIGKILL)
     except ProcessLookupError:
@@ -261,6 +268,85 @@ def test_owned_process_group_timeout_stops_term_ignoring_descendant(
         if time.monotonic() >= deadline:
             raise AssertionError(f"owned descendant {child_pid} remained running")
         time.sleep(0.05)
+
+
+def test_outer_timeout_allows_cooperative_cleanup_of_detached_browser_tree(
+    tmp_path: Path,
+) -> None:
+    browser_pid_path = tmp_path / "browser.pid"
+    renderer_pid_path = tmp_path / "renderer.pid"
+    signal_path = tmp_path / "signals"
+    program_path = tmp_path / "cooperative_verifier.py"
+    renderer_program = (
+        "import os,pathlib,signal,time; "
+        f"pathlib.Path({str(renderer_pid_path)!r}).write_text(str(os.getpid())); "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+    )
+    browser_program = (
+        "import os,pathlib,signal,subprocess,sys,time; "
+        f"pathlib.Path({str(browser_pid_path)!r}).write_text(str(os.getpid())); "
+        f"subprocess.Popen([sys.executable, '-c', {renderer_program!r}]); "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+    )
+    program_path.write_text(
+        "\n".join(
+            (
+                "import os, pathlib, signal, subprocess, sys, time",
+                f"browser_pid_path = pathlib.Path({str(browser_pid_path)!r})",
+                f"renderer_pid_path = pathlib.Path({str(renderer_pid_path)!r})",
+                f"signal_path = pathlib.Path({str(signal_path)!r})",
+                f"browser_program = {browser_program!r}",
+                "browser = subprocess.Popen([sys.executable, '-c', browser_program], start_new_session=True)",
+                "browser_pgid = browser.pid",
+                "def stop(_signal, _frame):",
+                "    with signal_path.open('a') as stream: stream.write(f'{browser_pgid}:SIGTERM\\n')",
+                "    os.killpg(browser_pgid, signal.SIGTERM)",
+                "    time.sleep(0.1)",
+                "    with signal_path.open('a') as stream: stream.write(f'{browser_pgid}:SIGKILL\\n')",
+                "    os.killpg(browser_pgid, signal.SIGKILL)",
+                "    browser.wait(timeout=2)",
+                "    os._exit(143)",
+                "signal.signal(signal.SIGTERM, stop)",
+                "while not browser_pid_path.exists() or not renderer_pid_path.exists(): time.sleep(0.01)",
+                "time.sleep(60)",
+            )
+        ),
+        encoding="utf-8",
+    )
+    outer_signals: list[tuple[int, signal.Signals]] = []
+
+    def kill_group(process_group_id: int, sent_signal: signal.Signals) -> None:
+        outer_signals.append((process_group_id, sent_signal))
+        os.killpg(process_group_id, sent_signal)
+
+    with pytest.raises(OwnedProcessGroupTimeout) as captured:
+        run_owned_process_group(
+            [sys.executable, str(program_path)],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=0.5,
+            term_grace_seconds=0.5,
+            kill_grace_seconds=1.0,
+            kill_group=kill_group,
+        )
+
+    browser_pid = int(browser_pid_path.read_text(encoding="utf-8"))
+    renderer_pid = int(renderer_pid_path.read_text(encoding="utf-8"))
+    assert outer_signals == [(captured.value.process_group_id, signal.SIGTERM)]
+    assert signal_path.read_text(encoding="utf-8").splitlines() == [
+        f"{browser_pid}:SIGTERM",
+        f"{browser_pid}:SIGKILL",
+    ]
+    with pytest.raises(ProcessLookupError):
+        os.killpg(browser_pid, 0)
+    for pid in (browser_pid, renderer_pid):
+        state = subprocess.run(
+            ["/bin/ps", "-o", "stat=", "-p", str(pid)],
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        assert not state or state.startswith("Z")
 
 
 @pytest.mark.parametrize(

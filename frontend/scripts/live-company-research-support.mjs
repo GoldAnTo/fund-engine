@@ -197,7 +197,7 @@ async function preflightCleanupHelper(authority) {
   await assertCleanupHelperIdentity(authority);
   await runBoundedExactProcess(authority.cleanupHelper.pythonExecutable, ["-I", authority.cleanupHelper.helperPath, "--self-test"], {
     env: {}, stdio: "ignore",
-  }, "private runtime cleanup helper preflight", authority.cleanupHelper.timeoutMs);
+  }, "private runtime cleanup helper preflight", authority.cleanupHelper.preflightTimeoutMs);
 }
 
 async function runCleanupHelper(authority, directory) {
@@ -237,6 +237,14 @@ async function removeAnchoredRuntimeDirectory(claimed, authority) {
   } finally {
     await directory.close();
   }
+  let finalPathStat;
+  try {
+    finalPathStat = await lstat(claimed);
+  } catch (error) {
+    if (isRuntimeIdentityOpenError(error)) privateRuntimeIdentityChanged();
+    throw error;
+  }
+  if (!hasPrivateRuntimeIdentity(finalPathStat, authority)) privateRuntimeIdentityChanged();
   // Darwin exposes no inode-conditional rmdir. The caller must exclude concurrent
   // same-UID replacement after fd-authenticated cleanup; rmdir can only remove an
   // empty replacement, while any nonempty victim is preserved by ENOTEMPTY.
@@ -357,6 +365,11 @@ async function validateCleanupHelper(cleanupHelper) {
     helper: Object.freeze({ dev: helperStat.dev, ino: helperStat.ino, uid: helperStat.uid, mode: helperStat.mode & 0o777 }),
     timeoutMs: Number.isSafeInteger(cleanupHelper.timeoutMs) && cleanupHelper.timeoutMs > 0
       ? cleanupHelper.timeoutMs : HELPER_PHASE_TIMEOUT_MS,
+    preflightTimeoutMs: Number.isSafeInteger(cleanupHelper.preflightTimeoutMs)
+      && cleanupHelper.preflightTimeoutMs > 0
+      ? cleanupHelper.preflightTimeoutMs
+      : Number.isSafeInteger(cleanupHelper.timeoutMs) && cleanupHelper.timeoutMs > 0
+        ? cleanupHelper.timeoutMs : HELPER_PHASE_TIMEOUT_MS,
   });
 }
 
@@ -468,21 +481,79 @@ function settleWithin(promise, timeoutMs) {
   ]).finally(() => timer.cancel());
 }
 
-async function killExactBrowserServer(server, timeoutMs) {
-  const killed = await settleWithin(server.kill(), timeoutMs);
-  if (killed.kind === "fulfilled") return;
-  const child = typeof server.process === "function" ? server.process() : null;
-  if (!child || typeof child.kill !== "function" || child.kill("SIGKILL") !== true) {
-    throw new Error("exact browser server kill failed");
+async function readExactProcessGroupId(pid, timeoutMs) {
+  if (!["darwin", "linux"].includes(process.platform) || !Number.isSafeInteger(pid) || pid < 1) {
+    throw new Error("authenticated POSIX browser process group is unavailable");
   }
-  const exited = child.exitCode !== null || child.signalCode !== null
-    ? { kind: "fulfilled" }
-    : await settleWithin(new Promise((resolve) => {
-      child.once("exit", resolve);
-      child.once("error", resolve);
-    }), timeoutMs);
-  if (exited.kind !== "fulfilled") throw new Error("exact browser direct SIGKILL timed out");
-  throw new Error("exact browser server kill required direct SIGKILL");
+  const result = await runBoundedExactProcess(
+    "/bin/ps",
+    ["-o", "pid=,pgid=", "-p", String(pid)],
+    { env: {}, stdio: ["ignore", "pipe", "pipe"] },
+    "browser process group authentication",
+    timeoutMs,
+  );
+  const fields = decodeBoundedUtf8(result.stdout).trim().split(/\s+/u);
+  const [reportedPid, processGroupId] = fields.map((value) => Number(value));
+  if (fields.length !== 2 || reportedPid !== pid || processGroupId !== pid) {
+    throw new Error("Playwright browser process is not its authenticated POSIX group leader");
+  }
+  try {
+    process.kill(pid, 0);
+  } catch {
+    throw new Error("authenticated POSIX browser process group exited during launch");
+  }
+  return Object.freeze({ childPid: pid, processGroupId });
+}
+
+async function cleanupUnauthenticatedBrowserServer(server, timeoutMs) {
+  if (typeof server?.kill !== "function") {
+    throw new Error("browser process group authentication failed and launch cleanup is unavailable");
+  }
+  const outcome = await settleWithin(Promise.resolve().then(() => server.kill()), timeoutMs);
+  if (outcome.kind !== "fulfilled") {
+    throw new Error("browser process group authentication failed and launch cleanup did not finish");
+  }
+}
+
+function browserProcessGroupExists(capability) {
+  try {
+    process.kill(-capability.processGroupId, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    if (error?.code === "EPERM") return true;
+    throw error;
+  }
+}
+
+async function waitForBrowserProcessGroupAbsence(capability, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (browserProcessGroupExists(capability)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(10, deadline - Date.now())));
+  }
+  return true;
+}
+
+async function terminateExactBrowserProcessGroup(capability, timeoutMs) {
+  if (!browserProcessGroupExists(capability)) return { signaled: false, escalated: false };
+  try {
+    process.kill(-capability.processGroupId, "SIGTERM");
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw new Error("exact browser process group SIGTERM failed");
+  }
+  if (await waitForBrowserProcessGroupAbsence(capability, timeoutMs)) {
+    return { signaled: true, escalated: false };
+  }
+  try {
+    process.kill(-capability.processGroupId, "SIGKILL");
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw new Error("exact browser process group SIGKILL failed");
+  }
+  if (!await waitForBrowserProcessGroupAbsence(capability, timeoutMs)) {
+    throw new Error("exact browser process group remained after SIGKILL");
+  }
+  return { signaled: true, escalated: true };
 }
 
 async function withOwnedProcessTemp(directory, operation) {
@@ -530,6 +601,9 @@ export async function startOwnedBrowser(browserType, runtime, {
       host: LOOPBACK_HOST,
       port: 0,
       timeout: timeoutMs,
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
       env: browserEnv,
       artifactsDir: directories.artifacts,
       downloadsPath: directories.downloads,
@@ -542,6 +616,18 @@ export async function startOwnedBrowser(browserType, runtime, {
   } catch {
     throw new Error("owned browser launch failed");
   }
+  const browserProcess = typeof server.process === "function" ? server.process() : null;
+  let processGroup;
+  try {
+    if (!browserProcess || !Number.isSafeInteger(browserProcess.pid)
+      || browserProcess.exitCode !== null || browserProcess.signalCode !== null) {
+      throw new Error("Playwright browser process group capability is unavailable");
+    }
+    processGroup = await readExactProcessGroupId(browserProcess.pid, timeoutMs);
+  } catch (error) {
+    await cleanupUnauthenticatedBrowserServer(server, timeoutMs);
+    throw new Error(`owned browser process group authentication failed: ${error?.message ?? "unavailable"}`);
+  }
   let browser;
   try {
     browser = await browserType.connect(server.wsEndpoint(), {
@@ -549,7 +635,7 @@ export async function startOwnedBrowser(browserType, runtime, {
       timeout: timeoutMs,
     });
   } catch {
-    await killExactBrowserServer(server, timeoutMs);
+    await terminateExactBrowserProcessGroup(processGroup, timeoutMs);
     throw new Error("owned browser connection failed");
   }
   const owned = Object.freeze({
@@ -557,7 +643,7 @@ export async function startOwnedBrowser(browserType, runtime, {
     get connected() { return browser.isConnected?.() ?? true; },
   });
   BROWSER_AUTHORITIES.set(owned, {
-    server, browser, directories, closePromise: null, closed: false,
+    server, browser, directories, processGroup, closePromise: null, closed: false,
   });
   return owned;
 }
@@ -574,17 +660,29 @@ export async function closeOwnedBrowser(owned, { timeoutMs = STOP_TIMEOUT_MS } =
   if (authority.closePromise) return authority.closePromise;
   authority.closePromise = (async () => {
     if (authority.closed) return;
-    const graceful = await settleWithin(authority.server.close(), timeoutMs);
-    if (graceful.kind === "fulfilled") {
+    const graceful = await settleWithin(
+      Promise.resolve().then(() => authority.server.close()),
+      timeoutMs,
+    );
+    const groupRemained = browserProcessGroupExists(authority.processGroup);
+    if (graceful.kind === "fulfilled" && !groupRemained) {
       authority.closed = true;
       return;
     }
-    await killExactBrowserServer(authority.server, timeoutMs);
+    await terminateExactBrowserProcessGroup(authority.processGroup, timeoutMs);
     authority.closed = true;
+    if (graceful.kind === "fulfilled") {
+      throw new Error("browser graceful close left its exact process group; browser tree was killed");
+    }
     if (graceful.kind === "rejected") throw new Error("browser graceful close failed; exact browser server was killed");
     throw new Error("browser graceful close timed out; exact browser server was killed");
   })();
   return authority.closePromise;
+}
+
+export function retainPrimaryFailure(promise) {
+  void Promise.resolve(promise).catch(() => {});
+  return promise;
 }
 
 export function startOwnedProcess(command, args, { cwd, env, name }) {
