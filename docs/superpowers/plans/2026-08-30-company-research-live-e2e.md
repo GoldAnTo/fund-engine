@@ -956,7 +956,10 @@ before the first TERM or KILL and pass it through cooperative grace, exact
 fallback, reap, output drain, and closure. Drain binary nonblocking
 status/stdout/stderr pipes in the owner thread
 with `select`/`os.read`; do not use output threads or synchronously close a stream
-owned by a live reader. Mask restoration, status-pipe, stream, and workflow
+owned by a live reader. Limit each read to 64 KiB and each retained stdout/stderr
+buffer to 16 KiB. Continue draining and discard bytes after overflow; once cleanup
+finishes, fail closed with a fixed output-free diagnostic without copying or
+decoding an overflowing buffer. Mask restoration, status-pipe, stream, and workflow
 failures all use this same owner cleanup path, so none can signal a reused group.
 Verify every recorded detached browser descendant is absent.
 Success is return code zero, exactly one PASS line on stdout, and empty stderr.
@@ -1101,8 +1104,10 @@ Inspect the final diff and confirm all of these statements are true:
   Startup, normal, error, and timeout paths all remove the exact group while its
   anchor is live, then retire numeric authority before bounded handle-based reap
   and closure. Numeric FDs retire before ambiguous close, output capture uses
-  owner-thread nonblocking reads, and one absolute deadline governs the entire
-  cleanup. The anchored phase has a static and dynamic prohibition on wait,
+  owner-thread nonblocking reads with a 16 KiB cap per stdout/stderr stream, and
+  one absolute deadline governs the entire cleanup. Overflow keeps draining but
+  discards later bytes, then fails closed after cleanup without decoding raw
+  output. The anchored phase has a static and dynamic prohibition on wait,
   waitpid, or poll.
 - [x] Separate realistic cleanup-helper preflight time from the deterministic
   cleanup-stall bound, allocate test resources inside `try/finally`, and stress

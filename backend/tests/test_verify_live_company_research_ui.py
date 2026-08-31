@@ -62,6 +62,8 @@ OUTER_TIMEOUT_SECONDS = VERIFIER_INTERNAL_TIMEOUT_SECONDS + OUTER_CLEANUP_MARGIN
 # a dedicated npm-group supervisor alive and unreaped through that bounded work.
 TERM_GRACE_SECONDS = 70
 KILL_GRACE_SECONDS = 10
+OWNED_OUTPUT_CAPTURE_LIMIT_BYTES = 16_384
+OWNED_OUTPUT_READ_CHUNK_BYTES = 65_536
 OWNED_PROCESS_GROUP_SUPERVISOR = Path(__file__).with_name(
     "owned_process_group_supervisor.py"
 )
@@ -79,6 +81,13 @@ class OwnedProcessGroupTimeout(TimeoutError):
         self.process_group_id = process_group_id
 
 
+class OwnedProcessGroupOutputOverflow(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__(
+            "live verifier output exceeded its fixed per-stream capture limit"
+        )
+
+
 def _close_owned_status_writer(descriptor: int) -> None:
     os.close(descriptor)
 
@@ -92,8 +101,10 @@ class _OwnedProcessGroupOwner:
         "status_write_fd",
         "stderr_buffer",
         "stderr_eof",
+        "stderr_overflow",
         "stdout_buffer",
         "stdout_eof",
+        "stdout_overflow",
     )
 
     def __init__(self) -> None:
@@ -111,6 +122,8 @@ class _OwnedProcessGroupOwner:
         self.stderr_buffer = bytearray()
         self.stdout_eof = False
         self.stderr_eof = False
+        self.stdout_overflow = False
+        self.stderr_overflow = False
 
     @property
     def process_group_id(self) -> int:
@@ -185,7 +198,7 @@ class _OwnedProcessGroupOwner:
         readable, _, _ = select.select(list(descriptors), [], [], max(0, timeout))
         for descriptor in readable:
             try:
-                chunk = os.read(descriptor, 65536)
+                chunk = os.read(descriptor, OWNED_OUTPUT_READ_CHUNK_BYTES)
             except BlockingIOError:
                 continue
             stream_name = descriptors[descriptor]
@@ -193,9 +206,13 @@ class _OwnedProcessGroupOwner:
                 if stream_name == "status":
                     self.status_buffer.extend(chunk)
                 elif stream_name == "stdout":
-                    self.stdout_buffer.extend(chunk)
+                    self.stdout_overflow = self._append_bounded_output(
+                        self.stdout_buffer, chunk, self.stdout_overflow
+                    )
                 else:
-                    self.stderr_buffer.extend(chunk)
+                    self.stderr_overflow = self._append_bounded_output(
+                        self.stderr_buffer, chunk, self.stderr_overflow
+                    )
                 continue
             if stream_name == "status":
                 retired_descriptor = self.status_read_fd
@@ -205,6 +222,15 @@ class _OwnedProcessGroupOwner:
                 self.stdout_eof = True
             else:
                 self.stderr_eof = True
+
+    @staticmethod
+    def _append_bounded_output(
+        buffer: bytearray, chunk: bytes, overflowed: bool
+    ) -> bool:
+        remaining = OWNED_OUTPUT_CAPTURE_LIMIT_BYTES - len(buffer)
+        if remaining > 0:
+            buffer.extend(memoryview(chunk)[:remaining])
+        return overflowed or len(chunk) > remaining
 
     def read_child_status(self, timeout_seconds: float) -> int | None:
         deadline = time.monotonic() + timeout_seconds
@@ -312,6 +338,15 @@ class _OwnedProcessGroupOwner:
             raise AssertionError(
                 "exact live verifier process group remained unreaped after SIGKILL"
             ) from first_error
+        if self.stdout_overflow or self.stderr_overflow:
+            overflow_error = OwnedProcessGroupOutputOverflow()
+            if not self.stdout_eof or not self.stderr_eof:
+                raise overflow_error from AssertionError(
+                    "live verifier output pipes remained open after SIGKILL"
+                )
+            if first_error is not None:
+                raise overflow_error from first_error
+            raise overflow_error
         if not self.stdout_eof or not self.stderr_eof:
             pipe_error = AssertionError(
                 "live verifier output pipes remained open after SIGKILL"
@@ -366,6 +401,8 @@ class _OwnedProcessGroupOwner:
     def completed_process(
         self, command: Sequence[str], returncode: int
     ) -> subprocess.CompletedProcess[str]:
+        if self.stdout_overflow or self.stderr_overflow:
+            raise OwnedProcessGroupOutputOverflow
         return subprocess.CompletedProcess(
             command,
             returncode,
@@ -1140,6 +1177,131 @@ def test_owned_status_writer_retires_before_ambiguous_close(
                 pass
 
 
+def _record_owned_group_owners(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[_OwnedProcessGroupOwner]:
+    owner_type = _OwnedProcessGroupOwner
+    owners: list[_OwnedProcessGroupOwner] = []
+
+    def recording_owner() -> _OwnedProcessGroupOwner:
+        owner = owner_type()
+        owners.append(owner)
+        return owner
+
+    monkeypatch.setitem(
+        run_owned_process_group.__globals__, "_OwnedProcessGroupOwner", recording_owner
+    )
+    return owners
+
+
+@pytest.mark.parametrize(
+    ("descriptor", "payload_expression", "sensitive_fragment"),
+    [
+        (1, "b'x' * (16_384 + 1)", ""),
+        (2, "b'y' * (16_384 + 1)", ""),
+        (1, "b'a' * 16_383 + '密'.encode('utf-8')", "密"),
+        (
+            2,
+            (
+                "b'OPENAI_API_KEY=super-secret "
+                "/private/secret-runtime/path\\n' + b'z' * 16_384"
+            ),
+            "OPENAI_API_KEY=super-secret",
+        ),
+    ],
+)
+def test_owned_output_overflow_is_capped_and_fails_with_fixed_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    descriptor: int,
+    payload_expression: str,
+    sensitive_fragment: str,
+) -> None:
+    completed_process_calls = 0
+    original_completed_process = _OwnedProcessGroupOwner.completed_process
+
+    def recording_completed_process(
+        self: _OwnedProcessGroupOwner,
+        command: Sequence[str],
+        returncode: int,
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal completed_process_calls
+        completed_process_calls += 1
+        return original_completed_process(self, command, returncode)
+
+    monkeypatch.setattr(
+        _OwnedProcessGroupOwner, "completed_process", recording_completed_process
+    )
+    owners = _record_owned_group_owners(monkeypatch)
+
+    with pytest.raises(
+        RuntimeError,
+        match="live verifier output exceeded its fixed per-stream capture limit",
+    ) as captured:
+        run_owned_process_group(
+            [
+                sys.executable,
+                "-c",
+                f"import os; os.write({descriptor}, {payload_expression})",
+            ],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=1,
+            term_grace_seconds=0.05,
+            kill_grace_seconds=1,
+        )
+
+    assert str(captured.value) == (
+        "live verifier output exceeded its fixed per-stream capture limit"
+    )
+    if sensitive_fragment:
+        assert sensitive_fragment not in repr(captured.value)
+    assert "/private/secret-runtime/path" not in repr(captured.value)
+    assert completed_process_calls == 0
+    assert len(owners) == 1
+    assert len(owners[0].stdout_buffer) <= 16_384
+    assert len(owners[0].stderr_buffer) <= 16_384
+    assert owners[0].stdout_overflow is (descriptor == 1)
+    assert owners[0].stderr_overflow is (descriptor == 2)
+    assert owners[0].process is not None
+    with pytest.raises(ChildProcessError):
+        os.waitpid(owners[0].process.pid, os.WNOHANG)
+
+
+def test_owned_continuous_output_timeout_retains_timeout_and_reports_overflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owners = _record_owned_group_owners(monkeypatch)
+    program = (
+        "import os,signal,time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "os.write(1, b'x'*65_536); chunk=b'y'*4_096; "
+        "exec('while True:\\n os.write(1, chunk)\\n time.sleep(0.001)')"
+    )
+
+    with pytest.raises(OwnedProcessGroupTimeout) as captured:
+        run_owned_process_group(
+            [sys.executable, "-c", program],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=1,
+            term_grace_seconds=0.05,
+            kill_grace_seconds=1,
+        )
+
+    assert str(captured.value) == "live verifier exceeded its outer timeout"
+    assert isinstance(captured.value.__cause__, OwnedProcessGroupOutputOverflow)
+    assert str(captured.value.__cause__) == (
+        "live verifier output exceeded its fixed per-stream capture limit"
+    )
+    assert len(owners) == 1
+    assert len(owners[0].stdout_buffer) <= 16_384
+    assert len(owners[0].stderr_buffer) <= 16_384
+    assert owners[0].process is not None
+    with pytest.raises(ChildProcessError):
+        os.waitpid(owners[0].process.pid, os.WNOHANG)
+
+
 def test_owned_output_capture_is_bounded_when_detached_descendant_holds_pipes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1720,6 +1882,32 @@ def test_owned_process_group_normal_exit_preserves_child_status_and_output(
     assert result.returncode == 7
     assert result.stdout == "owned stdout\nabsent\n"
     assert result.stderr == "owned stderr\n"
+
+
+def test_owned_process_group_preserves_small_utf8_output_and_child_status(
+    tmp_path: Path,
+) -> None:
+    result = run_owned_process_group(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os; "
+                "os.write(1, '标准输出🙂\\n'.encode()); "
+                "os.write(2, '标准错误€\\n'.encode()); "
+                "raise SystemExit(23)"
+            ),
+        ],
+        cwd=tmp_path,
+        env={"PATH": os.environ["PATH"]},
+        timeout_seconds=2,
+        term_grace_seconds=0.1,
+        kill_grace_seconds=1,
+    )
+
+    assert result.returncode == 23
+    assert result.stdout == "标准输出🙂\n"
+    assert result.stderr == "标准错误€\n"
 
 
 def test_owned_process_group_timeout_diagnostic_contains_no_child_output(

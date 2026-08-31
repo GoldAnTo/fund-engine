@@ -245,7 +245,11 @@ descriptor authority is retired before every potentially ambiguous close and is
 never retried after an unknown side effect. Output pipes are binary and
 nonblocking; the owner drains status, stdout, and stderr itself with
 `select`/`os.read`, so no reader thread or cross-thread stream close can make
-cleanup unbounded. Startup
+cleanup unbounded. Reads remain at most 64 KiB, while stdout and stderr each
+retain at most 16 KiB. Once either stream exceeds that cap, later bytes are
+drained and discarded without further buffer growth. After complete ownership
+cleanup, overflow fails closed with one fixed diagnostic that contains no raw
+output, path, or secret; no overflowing buffer is copied or decoded. Startup
 mask restoration, status-pipe closure, output capture, normal status, spawn
 failure, and outer timeout all share that owner's cleanup path. One absolute
 cleanup deadline is created before the first TERM or KILL attempt and governs
