@@ -921,16 +921,21 @@ frontend dependencies, or browser must fail rather than skip.
 
 Invoke the public `npm run --silent verify:live-company-research` contract in a
 minimal environment with `PYTHON=sys.executable`. Launch a dedicated POSIX
-session-leader supervisor that starts npm in the same process group and remains
-alive after npm exits during cooperative shutdown. The verifier has a 180-second
-internal bound; allow a 300-second outer bound so its sequential
-browser/process/private-runtime cleanup retains a 120-second margin. On outer
-timeout, signal only the exact anchored group with TERM and give the verifier's
+session-leader supervisor that starts npm in the same process group, reports
+npm's exit status over a private pipe, and remains alive until the outer owner
+removes the group. Block TERM/HUP/INT across `Popen` so the new leader is
+protected before its Python startup code runs, immediately restore the owner's
+mask, and explicitly reset the command child's dispositions and mask. The
+verifier has a 180-second internal bound; allow a 300-second outer bound so its
+sequential browser/process/private-runtime cleanup retains a 120-second margin.
+On outer timeout, signal only the exact anchored group with TERM and give the
+verifier's
 bounded signal handler time to remove its separately detached, authenticated
 browser process group. Without polling or reaping the anchor, then send KILL to
-that same exact group and only afterward communicate and reap. Never signal or
-probe its bare PGID after reaping. Verify every recorded detached browser
-descendant is absent.
+that same exact group and only afterward reap. On normal child status or spawn
+failure, likewise remove the entire anchored group before reap, returning the
+status received through the private pipe. Never signal or probe its bare PGID
+after reaping. Verify every recorded detached browser descendant is absent.
 Success is return code zero, exactly one PASS line on stdout, and empty stderr.
 Failure output must be checked for sensitive names and values before returning
 only a bounded prerequisite classification or generic safe diagnostic.
@@ -1064,9 +1069,10 @@ Inspect the final diff and confirm all of these statements are true:
   during launch or connection, finish the bounded ownership transition, remove
   the exact authenticated browser group, observe all late promises, and only
   then remove the private runtime.
-- [x] Anchor the npm group with a dedicated non-reaped session leader. After the
-  outer TERM grace, KILL the exact group while its anchor is still live, and only
-  then communicate/reap; never signal or probe a bare PGID after leader reap.
+- [x] Anchor the npm group with a dedicated non-reaped session leader and report
+  the child status through a private pipe. On normal status, spawn failure,
+  exception, or timeout, remove the exact group while the anchor is still live
+  and only then reap; never signal or probe a bare PGID after leader reap.
 - [x] Separate realistic cleanup-helper preflight time from the deterministic
   cleanup-stall bound, allocate test resources inside `try/finally`, and stress
   the case at least 30 times without helper or runtime residue.

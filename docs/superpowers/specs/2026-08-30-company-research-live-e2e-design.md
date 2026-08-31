@@ -228,13 +228,18 @@ cleanup signals that exact group with bounded TERM/KILL and verifies its
 absence, including renderer descendants. The verifier handles outer
 TERM/HUP/INT cooperatively so the Python npm-session owner cannot strand the
 browser's separate process group. A dedicated session-leader supervisor anchors
-the npm group and remains alive after npm exits during cooperative shutdown. The
-Python owner sends TERM, waits the fixed grace without polling or reaping the
-anchor, sends KILL while that exact capability is still live, and only then
-communicates with and reaps it. It never signals or probes a bare PGID after
-reaping its leader. Cleanup preserves the original business failure code. A
-cleanup failure is reported without masking an earlier failure; if cleanup is
-the only failure, the run exits nonzero. Every Playwright response or event wait
+the npm group. The owner blocks cooperative signals across `Popen` so the new
+leader inherits protection before its Python startup code can run; the
+supervisor keeps those signals blocked, explicitly resets them for npm, and
+reports npm's child status over a private pipe without exiting. On normal child
+status, spawn failure, or outer timeout, the Python owner removes the exact
+group while that anchor is still live, then boundedly reaps it; child status,
+not the killed supervisor's status, preserves normal command semantics. On
+timeout it first sends TERM and waits the fixed grace without polling or reaping
+the anchor. It never signals or probes a bare PGID after reaping its leader.
+Cleanup preserves the original business failure code. A cleanup failure is
+reported without masking an earlier
+failure; if cleanup is the only failure, the run exits nonzero. Every Playwright
 has a rejection handler attached before the click that triggers it, so a primary
 action failure cannot be overtaken by an abandoned wait during browser shutdown.
 

@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import TextIO
 
 import pytest
 import tomllib
@@ -53,9 +56,7 @@ VERIFIER_INTERNAL_TIMEOUT_SECONDS = 180
 # another 120 seconds for sequential browser, API, worker, Vite, and authenticated
 # private-runtime cleanup before it escalates against only the npm session group.
 OUTER_CLEANUP_MARGIN_SECONDS = 120
-OUTER_TIMEOUT_SECONDS = (
-    VERIFIER_INTERNAL_TIMEOUT_SECONDS + OUTER_CLEANUP_MARGIN_SECONDS
-)
+OUTER_TIMEOUT_SECONDS = VERIFIER_INTERNAL_TIMEOUT_SECONDS + OUTER_CLEANUP_MARGIN_SECONDS
 # The verifier's SIGTERM handler owns exact detached-browser-group cleanup. Keep
 # a dedicated npm-group supervisor alive and unreaped through that bounded work.
 TERM_GRACE_SECONDS = 70
@@ -63,12 +64,21 @@ KILL_GRACE_SECONDS = 10
 OWNED_PROCESS_GROUP_SUPERVISOR = Path(__file__).with_name(
     "owned_process_group_supervisor.py"
 )
+OWNED_PROCESS_GROUP_SHUTDOWN_SIGNALS = (
+    signal.SIGTERM,
+    signal.SIGHUP,
+    signal.SIGINT,
+)
 
 
 class OwnedProcessGroupTimeout(TimeoutError):
     def __init__(self, process_group_id: int) -> None:
         super().__init__("live verifier exceeded its outer timeout")
         self.process_group_id = process_group_id
+
+
+def _close_owned_status_writer(descriptor: int) -> None:
+    os.close(descriptor)
 
 
 def run_owned_process_group(
@@ -81,45 +91,175 @@ def run_owned_process_group(
     kill_grace_seconds: float,
     kill_group: Callable[[int, signal.Signals], None] = os.killpg,
 ) -> subprocess.CompletedProcess[str]:
+    status_read, status_write = os.pipe()
     supervisor_command = [
         sys.executable,
         str(OWNED_PROCESS_GROUP_SUPERVISOR),
+        "--status-fd",
+        str(status_write),
+        "--",
         *command,
     ]
-    process = subprocess.Popen(
-        supervisor_command,
-        cwd=cwd,
-        env=dict(env),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
-    process_group_id = process.pid
+    process: subprocess.Popen[str] | None = None
+    status_write_closed = False
     try:
-        stdout, stderr = process.communicate(timeout=timeout_seconds)
-        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
-    except subprocess.TimeoutExpired:
-        pass
+        previous_signal_mask = signal.pthread_sigmask(
+            signal.SIG_BLOCK, OWNED_PROCESS_GROUP_SHUTDOWN_SIGNALS
+        )
+        try:
+            process = subprocess.Popen(
+                supervisor_command,
+                cwd=cwd,
+                env=dict(env),
+                pass_fds=(status_write,),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
+        _close_owned_status_writer(status_write)
+        status_write_closed = True
+    except BaseException as startup_error:
+        for descriptor in (status_read, status_write):
+            if descriptor == status_write and status_write_closed:
+                continue
+            try:
+                if descriptor == status_write:
+                    _close_owned_status_writer(descriptor)
+                else:
+                    os.close(descriptor)
+            except OSError as close_error:
+                startup_error.add_note(f"startup pipe close failed: {close_error!r}")
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError as group_error:
+                startup_error.add_note(
+                    f"startup exact-group SIGKILL failed: {group_error!r}"
+                )
+                try:
+                    process.kill()
+                except OSError as anchor_error:
+                    startup_error.add_note(
+                        f"startup anchor SIGKILL failed: {anchor_error!r}"
+                    )
+            try:
+                process.wait(timeout=kill_grace_seconds)
+            except BaseException as cleanup_error:
+                raise cleanup_error from startup_error
+            finally:
+                for stream in (process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+        raise
+    assert process is not None
+    process_group_id = process.pid
+    anchor_reaped = False
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+
+    def drain(stream: TextIO, parts: list[str]) -> None:
+        try:
+            output = stream.read()
+            if output:
+                parts.append(output)
+        finally:
+            stream.close()
+
+    assert process.stdout is not None
+    assert process.stderr is not None
+    stdout_thread = threading.Thread(
+        target=drain, args=(process.stdout, stdout_parts), daemon=True
+    )
+    stderr_thread = threading.Thread(
+        target=drain, args=(process.stderr, stderr_parts), daemon=True
+    )
+    output_threads: list[threading.Thread] = []
+
+    def reap_after_kill() -> None:
+        nonlocal anchor_reaped
+        deadline = time.monotonic() + kill_grace_seconds
+        try:
+            process.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired as error:
+            raise AssertionError(
+                "exact live verifier process group did not exit after SIGKILL"
+            ) from error
+        anchor_reaped = True
+        for thread in output_threads:
+            thread.join(timeout=max(0, deadline - time.monotonic()))
+        if any(thread.is_alive() for thread in output_threads):
+            raise AssertionError(
+                "live verifier output pipes remained open after SIGKILL"
+            )
+
+    def kill_and_reap() -> None:
+        try:
+            kill_group(process_group_id, signal.SIGKILL)
+        except BaseException as signal_error:
+            try:
+                os.killpg(process_group_id, signal.SIGKILL)
+            except OSError as fallback_error:
+                signal_error.add_note(
+                    f"fallback exact-group SIGKILL failed: {fallback_error!r}"
+                )
+            reap_after_kill()
+            raise
+        reap_after_kill()
 
     try:
+        for thread in (stdout_thread, stderr_thread):
+            thread.start()
+            output_threads.append(thread)
+        readable, _, _ = select.select([status_read], [], [], timeout_seconds)
+        if readable:
+            raw_status = os.read(status_read, 32)
+            try:
+                child_returncode = int(raw_status.decode("ascii").strip())
+            except (UnicodeDecodeError, ValueError) as error:
+                raise AssertionError(
+                    "owned process group supervisor status is invalid"
+                ) from error
+            kill_and_reap()
+            return subprocess.CompletedProcess(
+                command, child_returncode, "".join(stdout_parts), "".join(stderr_parts)
+            )
+
         kill_group(process_group_id, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    # Do not communicate, poll, or otherwise reap the supervisor during this
-    # grace period: its live session-leader PID is the exact group capability.
-    time.sleep(term_grace_seconds)
-    try:
-        kill_group(process_group_id, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    try:
-        process.communicate(timeout=kill_grace_seconds)
-    except subprocess.TimeoutExpired as error:
-        raise AssertionError(
-            "exact live verifier process group did not exit after SIGKILL"
-        ) from error
-    raise OwnedProcessGroupTimeout(process_group_id)
+        # Do not communicate, poll, or otherwise reap the supervisor
+        # during this grace period: the live leader remains the exact capability.
+        time.sleep(term_grace_seconds)
+        kill_and_reap()
+        raise OwnedProcessGroupTimeout(process_group_id)
+    except BaseException as primary_error:
+        if not anchor_reaped:
+            try:
+                os.killpg(process_group_id, signal.SIGKILL)
+            except OSError as group_error:
+                primary_error.add_note(
+                    f"emergency exact-group SIGKILL failed: {group_error!r}"
+                )
+                try:
+                    process.kill()
+                except OSError as anchor_error:
+                    primary_error.add_note(
+                        f"emergency anchor SIGKILL failed: {anchor_error!r}"
+                    )
+            try:
+                reap_after_kill()
+            except BaseException as cleanup_error:
+                raise cleanup_error from primary_error
+        raise
+    finally:
+        os.close(status_read)
+        for stream, thread in (
+            (process.stdout, stdout_thread),
+            (process.stderr, stderr_thread),
+        ):
+            if thread not in output_threads:
+                stream.close()
 
 
 def _assert_no_sensitive_output(
@@ -281,8 +421,364 @@ def _process_state(process_id: int) -> str:
     ).stdout.strip()
 
 
+def test_process_group_supervisor_stays_anchored_after_child_status(
+    tmp_path: Path,
+) -> None:
+    status_read, status_write = os.pipe()
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(OWNED_PROCESS_GROUP_SUPERVISOR),
+            "--status-fd",
+            str(status_write),
+            "--",
+            sys.executable,
+            "-c",
+            "print('released output')",
+        ],
+        cwd=tmp_path,
+        env={"PATH": os.environ["PATH"]},
+        pass_fds=(status_write,),
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    os.close(status_write)
+    try:
+        readable, _, _ = select.select([status_read], [], [], 2)
+        assert readable == [status_read]
+        assert os.read(status_read, 32) == b"0\n"
+        anchor_state = _process_state(process.pid)
+        assert anchor_state and not anchor_state.startswith("Z")
+        os.killpg(process.pid, signal.SIGKILL)
+        stdout, stderr = process.communicate(timeout=2)
+        assert process.returncode == -signal.SIGKILL
+        assert stdout == "released output\n"
+        assert stderr == ""
+    finally:
+        if process.returncode is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        try:
+            process.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        os.close(status_read)
+
+
+def test_owned_process_group_is_signal_safe_before_supervisor_python_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    delayed_supervisor = tmp_path / "delayed_supervisor.py"
+    delayed_supervisor.write_text(
+        "import time\ntime.sleep(60)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(
+        run_owned_process_group.__globals__,
+        "OWNED_PROCESS_GROUP_SUPERVISOR",
+        delayed_supervisor,
+    )
+    states_before_signal: list[str] = []
+    sent_signals: list[signal.Signals] = []
+
+    def kill_group(process_group_id: int, sent_signal: signal.Signals) -> None:
+        states_before_signal.append(_process_state(process_group_id))
+        sent_signals.append(sent_signal)
+        os.killpg(process_group_id, sent_signal)
+
+    with pytest.raises(OwnedProcessGroupTimeout):
+        run_owned_process_group(
+            [sys.executable, "-c", "raise SystemExit(0)"],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=0.03,
+            term_grace_seconds=0.02,
+            kill_grace_seconds=1,
+            kill_group=kill_group,
+        )
+
+    assert sent_signals == [signal.SIGTERM, signal.SIGKILL]
+    assert len(states_before_signal) == 2
+    assert all(state and not state.startswith("Z") for state in states_before_signal)
+
+
+def test_owned_process_group_normal_exit_removes_same_group_descendant(
+    tmp_path: Path,
+) -> None:
+    descendant_pid_path = tmp_path / "normal-exit-descendant.pid"
+    descendant_program = (
+        "import os,pathlib,signal,time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"pathlib.Path({str(descendant_pid_path)!r}).write_text(str(os.getpid())); "
+        "time.sleep(60)"
+    )
+    command_program = "\n".join(
+        (
+            "import pathlib, subprocess, sys, time",
+            f"subprocess.Popen([sys.executable, '-c', {descendant_program!r}])",
+            f"path = pathlib.Path({str(descendant_pid_path)!r})",
+            "deadline = time.monotonic() + 2",
+            "while not path.exists() and time.monotonic() < deadline: time.sleep(0.01)",
+            "print('normal child output')",
+            "raise SystemExit(3)",
+        )
+    )
+    descendant_pid: int | None = None
+    try:
+        result = run_owned_process_group(
+            [sys.executable, "-c", command_program],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=3,
+            term_grace_seconds=0.05,
+            kill_grace_seconds=1,
+        )
+        descendant_pid = int(descendant_pid_path.read_text(encoding="utf-8"))
+        assert result.returncode == 3
+        assert result.stdout == "normal child output\n"
+        assert result.stderr == ""
+        state = _process_state(descendant_pid)
+        assert not state or state.startswith("Z")
+    finally:
+        if descendant_pid is None and descendant_pid_path.exists():
+            descendant_pid = int(descendant_pid_path.read_text(encoding="utf-8"))
+        if descendant_pid is not None and _process_state(descendant_pid):
+            try:
+                os.kill(descendant_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_owned_process_group_spawn_failure_keeps_anchor_until_cleanup(
+    tmp_path: Path,
+) -> None:
+    states_before_signal: list[str] = []
+    sent_signals: list[tuple[int, signal.Signals]] = []
+
+    def kill_group(process_group_id: int, sent_signal: signal.Signals) -> None:
+        states_before_signal.append(_process_state(process_group_id))
+        sent_signals.append((process_group_id, sent_signal))
+        os.killpg(process_group_id, sent_signal)
+
+    result = run_owned_process_group(
+        ["/definitely/missing/owned-command"],
+        cwd=tmp_path,
+        env={"PATH": os.environ["PATH"]},
+        timeout_seconds=1,
+        term_grace_seconds=0.05,
+        kill_grace_seconds=1,
+        kill_group=kill_group,
+    )
+
+    assert result.returncode == 127
+    assert result.stdout == ""
+    assert result.stderr == ""
+    assert len(sent_signals) == 1
+    assert sent_signals[0][1] == signal.SIGKILL
+    assert states_before_signal[0] and not states_before_signal[0].startswith("Z")
+
+
+def test_owned_process_group_invalid_status_still_reaps_supervisor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor_pid_path = tmp_path / "invalid-status-supervisor.pid"
+    invalid_supervisor = tmp_path / "invalid_status_supervisor.py"
+    invalid_supervisor.write_text(
+        "\n".join(
+            (
+                "import os, pathlib",
+                f"pathlib.Path({str(supervisor_pid_path)!r}).write_text(str(os.getpid()))",
+                "raise SystemExit(91)",
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(
+        run_owned_process_group.__globals__,
+        "OWNED_PROCESS_GROUP_SUPERVISOR",
+        invalid_supervisor,
+    )
+
+    with pytest.raises(AssertionError, match="supervisor status is invalid"):
+        run_owned_process_group(
+            [sys.executable, "-c", "raise SystemExit(0)"],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=1,
+            term_grace_seconds=0.05,
+            kill_grace_seconds=1,
+        )
+
+    supervisor_pid = int(supervisor_pid_path.read_text(encoding="utf-8"))
+    with pytest.raises(ChildProcessError):
+        os.waitpid(supervisor_pid, os.WNOHANG)
+
+
+def test_owned_process_group_normal_status_kill_error_still_reaps_anchor(
+    tmp_path: Path,
+) -> None:
+    anchor_pid: int | None = None
+
+    def kill_group(process_group_id: int, sent_signal: signal.Signals) -> None:
+        nonlocal anchor_pid
+        anchor_pid = process_group_id
+        raise PermissionError("injected normal cleanup signal failure")
+
+    with pytest.raises(PermissionError, match="injected normal cleanup signal failure"):
+        run_owned_process_group(
+            [sys.executable, "-c", "print('completed before cleanup error')"],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=1,
+            term_grace_seconds=0.05,
+            kill_grace_seconds=1,
+            kill_group=kill_group,
+        )
+
+    assert anchor_pid is not None
+    with pytest.raises(ChildProcessError):
+        os.waitpid(anchor_pid, os.WNOHANG)
+
+
+def test_owned_process_group_thread_start_error_still_reaps_anchor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started_processes: list[subprocess.Popen[str]] = []
+    original_popen = subprocess.Popen
+
+    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+        process = original_popen(*args, **kwargs)
+        started_processes.append(process)
+        return process
+
+    def fail_thread_start(_thread: threading.Thread) -> None:
+        raise RuntimeError("injected output thread start failure")
+
+    monkeypatch.setattr(subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(threading.Thread, "start", fail_thread_start)
+
+    try:
+        with pytest.raises(RuntimeError, match="injected output thread start failure"):
+            run_owned_process_group(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                cwd=tmp_path,
+                env={"PATH": os.environ["PATH"]},
+                timeout_seconds=1,
+                term_grace_seconds=0.05,
+                kill_grace_seconds=1,
+            )
+
+        assert len(started_processes) == 1
+        assert started_processes[0].stdout is not None
+        assert started_processes[0].stdout.closed
+        assert started_processes[0].stderr is not None
+        assert started_processes[0].stderr.closed
+        with pytest.raises(ChildProcessError):
+            os.waitpid(started_processes[0].pid, os.WNOHANG)
+    finally:
+        for process in started_processes:
+            if process.returncode is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=1)
+
+
+def test_owned_process_group_status_pipe_close_error_still_reaps_anchor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started_processes: list[subprocess.Popen[str]] = []
+    original_popen = subprocess.Popen
+    original_close_status_writer = _close_owned_status_writer
+    close_failure_injected = False
+
+    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+        process = original_popen(*args, **kwargs)
+        started_processes.append(process)
+        return process
+
+    def fail_first_status_write_close(descriptor: int) -> None:
+        nonlocal close_failure_injected
+        if not close_failure_injected:
+            close_failure_injected = True
+            raise OSError("injected status pipe close failure")
+        original_close_status_writer(descriptor)
+
+    monkeypatch.setattr(subprocess, "Popen", recording_popen)
+    monkeypatch.setitem(
+        run_owned_process_group.__globals__,
+        "_close_owned_status_writer",
+        fail_first_status_write_close,
+    )
+
+    with pytest.raises(OSError, match="injected status pipe close failure"):
+        run_owned_process_group(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=1,
+            term_grace_seconds=0.05,
+            kill_grace_seconds=1,
+        )
+
+    assert close_failure_injected
+    assert len(started_processes) == 1
+    assert started_processes[0].stdout is not None
+    assert started_processes[0].stdout.closed
+    assert started_processes[0].stderr is not None
+    assert started_processes[0].stderr.closed
+    with pytest.raises(ChildProcessError):
+        os.waitpid(started_processes[0].pid, os.WNOHANG)
+
+
+@pytest.mark.parametrize("raise_before_signal", [False, True])
+def test_owned_process_group_reaps_anchor_when_kill_group_raises(
+    tmp_path: Path,
+    raise_before_signal: bool,
+) -> None:
+    anchor_pid: int | None = None
+
+    def kill_group(process_group_id: int, sent_signal: signal.Signals) -> None:
+        nonlocal anchor_pid
+        anchor_pid = process_group_id
+        if sent_signal == signal.SIGKILL and raise_before_signal:
+            raise PermissionError("injected pre-signal failure")
+        os.killpg(process_group_id, sent_signal)
+        if sent_signal == signal.SIGKILL:
+            raise PermissionError("injected post-signal failure")
+
+    with pytest.raises(PermissionError, match="injected .* failure"):
+        run_owned_process_group(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=0.05,
+            term_grace_seconds=0.01,
+            kill_grace_seconds=1,
+            kill_group=kill_group,
+        )
+
+    assert anchor_pid is not None
+    try:
+        reaped_pid, _ = os.waitpid(anchor_pid, os.WNOHANG)
+    except ChildProcessError:
+        reaped_pid = 0
+    if reaped_pid == 0 and _process_state(anchor_pid):
+        os.killpg(anchor_pid, signal.SIGKILL)
+        os.waitpid(anchor_pid, 0)
+        reaped_pid = anchor_pid
+    assert reaped_pid == 0, "run_owned_process_group leaked an unreaped anchor"
+
+
 def test_owned_process_group_normal_exit_preserves_child_status_and_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OWNED_HOST_ONLY", "must-not-leak")
     result = run_owned_process_group(
@@ -332,7 +828,7 @@ def test_owned_process_group_timeout_diagnostic_contains_no_child_output(
 def test_owned_process_group_anchor_remains_live_until_every_timeout_signal(
     tmp_path: Path,
 ) -> None:
-    for iteration in range(30):
+    for iteration in range(100):
         states_before_signal: list[str] = []
         sent_signals: list[tuple[int, signal.Signals]] = []
 
@@ -362,7 +858,9 @@ def test_owned_process_group_anchor_remains_live_until_every_timeout_signal(
             (captured.value.process_group_id, signal.SIGKILL),
         ]
         assert len(states_before_signal) == 2
-        assert all(state and not state.startswith("Z") for state in states_before_signal)
+        assert all(
+            state and not state.startswith("Z") for state in states_before_signal
+        )
 
 
 def test_outer_timeout_kills_same_group_survivor_after_leader_exits(
@@ -638,9 +1136,7 @@ def test_live_company_research_browser_closes_the_full_public_workflow() -> None
             ) from error
         assert_pinned_node_major(
             node_major,
-            expected_major=int(
-                (ROOT / ".nvmrc").read_text(encoding="utf-8").strip()
-            ),
+            expected_major=int((ROOT / ".nvmrc").read_text(encoding="utf-8").strip()),
         )
         try:
             result = run_owned_process_group(
@@ -658,13 +1154,13 @@ def test_live_company_research_browser_closes_the_full_public_workflow() -> None
             ) from error
 
     sensitive_values = tuple(
-        value
-        for key in SENSITIVE_HOST_ENV_KEYS
-        if (value := os.environ.get(key))
+        value for key in SENSITIVE_HOST_ENV_KEYS if (value := os.environ.get(key))
     )
     _assert_no_sensitive_output(result, sensitive_values)
     if result.returncode != 0:
-        raise AssertionError(safe_failure_message(result, sensitive_values=sensitive_values))
+        raise AssertionError(
+            safe_failure_message(result, sensitive_values=sensitive_values)
+        )
     if result.stdout != f"{PASS_LINE}\n":
         raise AssertionError(
             "live verifier stdout did not contain exactly one PASS line; output redacted"
