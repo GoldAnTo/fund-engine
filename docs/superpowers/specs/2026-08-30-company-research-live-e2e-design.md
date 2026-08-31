@@ -249,15 +249,17 @@ cleanup unbounded. Startup
 mask restoration, status-pipe closure, output capture, normal status, spawn
 failure, and outer timeout all share that owner's cleanup path. One absolute
 cleanup deadline is created before the first TERM or KILL attempt and governs
-cooperative grace, KILL fallback, the absolute `/bin/ps` zombie probe, reap,
-output drain, and closure. The probe uses a closed, minimal environment, null
-stdin/stderr, and only the deadline's remaining timeout. With asynchronous
+cooperative grace, KILL transition, reap, output drain, and closure. With asynchronous
 signals blocked, a successful exact-group KILL irreversibly retires the numeric
 PGID capability before any wait can reap the leader. The anchored phase contains
 no wait, waitpid, poll, or other reaping operation. If an injected callback
 raises, a real exact-group fallback is safe because the unreaped anchor prevents
-PGID reuse; a fallback group-gone error retires authority only after the bounded
-exact PID status check confirms that anchor is a zombie. Later wait, pipe,
+PGID reuse. A successful fallback retires authority; `EPERM` or `ESRCH` also
+retires it because the still-unreaped anchor reserves the exact PID/PGID while
+the kernel reports that group absent or unsignalable. No external status probe
+or pre-retirement reap is needed. A synthetic live-group `EPERM` can therefore
+only produce a bounded fail-closed reap error, with no later numeric PGID signal.
+Later wait, pipe,
 stream, or signal-mask restoration failures may retry only bounded handle-based
 reap and closure. Cleanup preserves the original business failure code. A
 cleanup failure is retained as its cause without masking it;

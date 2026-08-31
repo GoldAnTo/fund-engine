@@ -947,11 +947,14 @@ status received through the private pipe. Block asynchronous signals around the
 KILL transition and irreversibly retire the numeric PGID capability before
 wait/reap. Never call wait, waitpid, or poll while authority is live. A callback
 failure may retry a real exact-group KILL because the anchor remains unreaped;
-retire after a group-gone error only when the exact anchor PID is confirmed as a
-zombie. Establish one absolute cleanup deadline before the first TERM or KILL and
-pass it through cooperative grace, exact fallback, a timeout-bounded absolute
-`/bin/ps` probe with closed/minimal subprocess state, reap, output drain, and
-closure. Drain binary nonblocking status/stdout/stderr pipes in the owner thread
+retire after a successful fallback or an `EPERM`/`ESRCH` group-gone result because
+the still-unreaped anchor reserves the exact PID/PGID. Perform no external status
+probe and no wait, waitpid, poll, or reap before that irreversible retirement. A
+synthetic live-group `EPERM` must fail closed within the deadline and must not
+permit another numeric PGID signal. Establish one absolute cleanup deadline
+before the first TERM or KILL and pass it through cooperative grace, exact
+fallback, reap, output drain, and closure. Drain binary nonblocking
+status/stdout/stderr pipes in the owner thread
 with `select`/`os.read`; do not use output threads or synchronously close a stream
 owned by a live reader. Mask restoration, status-pipe, stream, and workflow
 failures all use this same owner cleanup path, so none can signal a reused group.

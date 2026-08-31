@@ -222,32 +222,9 @@ class _OwnedProcessGroupOwner:
                 return None
             self._read_ready(self._capture_descriptors(), remaining)
 
-    def _anchor_is_zombie(self, deadline: float) -> bool:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return False
-        try:
-            result = subprocess.run(
-                ["/bin/ps", "-o", "stat=", "-p", str(self.process_group_id)],
-                check=False,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                encoding="ascii",
-                errors="replace",
-                env={"LC_ALL": "C"},
-                close_fds=True,
-                timeout=remaining,
-            )
-        except subprocess.TimeoutExpired:
-            return False
-        return result.returncode == 0 and result.stdout.strip().startswith("Z")
-
     def _enter_kill_sent_phase(
         self,
         send_kill: Callable[[int, signal.Signals], None],
-        deadline: float,
     ) -> None:
         if self.phase != "anchored":
             raise AssertionError("numeric process-group capability is no longer live")
@@ -261,11 +238,12 @@ class _OwnedProcessGroupOwner:
                 try:
                     _EXACT_GROUP_KILL(self.process_group_id, signal.SIGKILL)
                 except OSError as fallback_error:
-                    group_is_gone = fallback_error.errno in (
-                        errno.EPERM,
-                        errno.ESRCH,
-                    ) and self._anchor_is_zombie(deadline)
-                    if group_is_gone:
+                    if fallback_error.errno in (errno.EPERM, errno.ESRCH):
+                        # The anchor is deliberately still unreaped, so its PID
+                        # (and therefore this numeric PGID) cannot have been
+                        # reused. A kernel answer that the exact group is absent
+                        # or unsignalable retires authority without a probe; only
+                        # handle-based bounded reap is permitted after this write.
                         self.phase = "kill_sent"
                     else:
                         signal_error.add_note(
@@ -357,13 +335,13 @@ class _OwnedProcessGroupOwner:
         first_error: BaseException | None = None
         if self.phase == "anchored":
             try:
-                self._enter_kill_sent_phase(send_kill or _EXACT_GROUP_KILL, deadline)
+                self._enter_kill_sent_phase(send_kill or _EXACT_GROUP_KILL)
             except BaseException as error:  # noqa: BLE001
                 first_error = error
 
         while self.phase == "anchored" and time.monotonic() < deadline:
             try:
-                self._enter_kill_sent_phase(_EXACT_GROUP_KILL, deadline)
+                self._enter_kill_sent_phase(_EXACT_GROUP_KILL)
             except BaseException as error:  # noqa: BLE001
                 first_error = self._retain_first_error(first_error, error)
 
@@ -1223,12 +1201,13 @@ def test_owned_output_capture_is_bounded_when_detached_descendant_holds_pipes(
                 pass
 
 
-def test_owned_cleanup_deadline_bounds_stalled_zombie_probe(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("group_gone_errno", [errno.EPERM, errno.ESRCH])
+def test_owned_group_gone_reaps_post_signal_anchor_without_test_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    group_gone_errno: int,
 ) -> None:
     original_killpg = os.killpg
-    original_run = subprocess.run
-    observed_probe_timeouts: list[float] = []
     anchor_pid: int | None = None
 
     def kill_then_raise(process_group_id: int, sent_signal: signal.Signals) -> None:
@@ -1236,39 +1215,73 @@ def test_owned_cleanup_deadline_bounds_stalled_zombie_probe(
         anchor_pid = process_group_id
         original_killpg(process_group_id, sent_signal)
         deadline = time.monotonic() + 1
-        while time.monotonic() < deadline:
-            state = original_run(
-                ["/bin/ps", "-o", "stat=", "-p", str(process_group_id)],
-                check=False,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
+        while True:
+            state = _process_state(process_group_id)
             if not state or state.startswith("Z"):
                 break
+            if time.monotonic() >= deadline:
+                raise AssertionError("anchor did not exit after injected SIGKILL")
             time.sleep(0.001)
-        time.sleep(0.03)
-        raise RuntimeError("injected post-signal failure before zombie probe")
+        raise RuntimeError("injected post-signal callback failure")
 
     def group_gone(*args: object, **kwargs: object) -> None:
-        raise PermissionError(errno.EPERM, "injected group-gone fallback")
-
-    def stalled_probe(
-        *args: object, timeout: float, **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        observed_probe_timeouts.append(timeout)
-        time.sleep(timeout)
-        raise subprocess.TimeoutExpired(args[0], timeout)
+        raise OSError(group_gone_errno, "injected group-gone fallback")
 
     monkeypatch.setitem(
         run_owned_process_group.__globals__, "_EXACT_GROUP_KILL", group_gone
     )
-    monkeypatch.setattr(subprocess, "run", stalled_probe)
-    started_at = time.monotonic()
+
+    with pytest.raises(RuntimeError, match="post-signal callback failure"):
+        run_owned_process_group(
+            [sys.executable, "-c", "raise SystemExit(0)"],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=1,
+            term_grace_seconds=0.05,
+            kill_grace_seconds=1,
+            kill_group=kill_then_raise,
+        )
+
+    assert anchor_pid is not None
+    with pytest.raises(ChildProcessError):
+        os.waitpid(anchor_pid, os.WNOHANG)
+
+
+def test_owned_pre_signal_group_gone_error_retires_authority_without_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_killpg = os.killpg
+    original_popen = subprocess.Popen
+    started_processes: list[subprocess.Popen[bytes]] = []
+    callback_calls = 0
+    fallback_calls = 0
+
+    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        process = original_popen(*args, **kwargs)
+        command = args[0] if args else kwargs.get("args")
+        if isinstance(command, list) and str(OWNED_PROCESS_GROUP_SUPERVISOR) in command:
+            started_processes.append(process)
+        return process
+
+    def fail_before_signal(process_group_id: int, sent_signal: signal.Signals) -> None:
+        nonlocal callback_calls
+        callback_calls += 1
+        raise RuntimeError("injected pre-signal callback failure")
+
+    def artificial_group_gone(*args: object, **kwargs: object) -> None:
+        nonlocal fallback_calls
+        fallback_calls += 1
+        raise PermissionError(errno.EPERM, "injected pre-signal EPERM")
+
+    monkeypatch.setattr(subprocess, "Popen", recording_popen)
+    monkeypatch.setitem(
+        run_owned_process_group.__globals__,
+        "_EXACT_GROUP_KILL",
+        artificial_group_gone,
+    )
+
     try:
-        with pytest.raises(
-            AssertionError,
-            match="exact live verifier process group could not be killed",
-        ) as captured:
+        with pytest.raises(RuntimeError, match="pre-signal callback failure"):
             run_owned_process_group(
                 [sys.executable, "-c", "raise SystemExit(0)"],
                 cwd=tmp_path,
@@ -1276,20 +1289,24 @@ def test_owned_cleanup_deadline_bounds_stalled_zombie_probe(
                 timeout_seconds=1,
                 term_grace_seconds=0.05,
                 kill_grace_seconds=0.05,
-                kill_group=kill_then_raise,
+                kill_group=fail_before_signal,
             )
 
-        assert isinstance(captured.value.__cause__, RuntimeError)
-        assert "post-signal failure" in str(captured.value.__cause__)
-        assert observed_probe_timeouts
-        assert max(observed_probe_timeouts) <= 0.03
-        assert time.monotonic() - started_at < 0.25
+        assert callback_calls == 1
+        assert fallback_calls == 1
+        assert len(started_processes) == 1
+        process = started_processes[0]
+        assert process.returncode is None
+        state = _process_state(process.pid)
+        assert state and not state.startswith("Z")
     finally:
-        if anchor_pid is not None:
-            try:
-                os.waitpid(anchor_pid, 0)
-            except ChildProcessError:
-                pass
+        for process in started_processes:
+            if process.returncode is None:
+                original_killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=1)
+            for stream in (process.stdout, process.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
 
 
 @pytest.mark.parametrize("raise_before_signal", [False, True])
@@ -1431,13 +1448,16 @@ def test_owned_process_group_never_signals_group_after_wait_reaps_then_raises(
     assert sent_signals[0][1] == signal.SIGKILL
 
 
-def test_owned_process_group_never_waits_while_numeric_authority_is_live() -> None:
+def test_owned_process_group_never_probes_or_reaps_live_numeric_authority() -> None:
     owner_source = inspect.getsource(_OwnedProcessGroupOwner)
     anchored_phase_source = owner_source.split(
         "    def _bounded_reap_and_close", maxsplit=1
     )[0]
 
-    for forbidden in ("wait(", "waitpid(", ".poll("):
+    assert '"/bin/ps"' not in owner_source
+    assert "subprocess.run(" not in owner_source
+    assert "waitid(" not in anchored_phase_source
+    for forbidden in ("process.wait(", "waitpid(", ".poll("):
         assert forbidden not in anchored_phase_source
 
 
