@@ -79,7 +79,59 @@ cd .. && python backend/scripts/verify_live_event_api.py
 cd frontend && PYTHON=../backend/.venv/bin/python PW_BROWSER_CHANNEL=chrome node scripts/with-project-node.mjs scripts/verify-live-event-ui.mjs
 ```
 
-本仓库要求 Node.js 20+（`.nvmrc` 固定为 24）。真实人工闭环需要同时运行 API
+Company Research 真实验收要求仓库自有的 backend venv、`.nvmrc` 精确指定的 Node 24、
+前端依赖和已安装的 Playwright 浏览器。在普通 checkout 根目录执行：
+
+```bash
+python3.11 -m venv backend/.venv
+backend/.venv/bin/python -m pip install -e "./backend[dev]"
+nvm install
+nvm use
+test "$(node -p 'process.versions.node.split(".")[0]')" = "$(tr -d 'v[:space:]' < .nvmrc)"
+cd frontend
+npm ci
+npx playwright install chromium
+
+# 真实 Company Research 浏览器闭环：隔离 SQLite + 真实 API/worker + 非 mock 前端
+PYTHON=../backend/.venv/bin/python npm run verify:live-company-research
+```
+
+Linux CI 使用 `npx playwright install --with-deps chromium`。使用已单独安装的本地
+Chrome 时，把最后一条命令改为
+`PYTHON=../backend/.venv/bin/python PW_BROWSER_CHANNEL=chrome npm run verify:live-company-research`；
+channel 未设置时使用已安装的 Playwright Chromium。当前命令只声明仓库现有
+macOS/Linux 验证路径，不声明其他平台支持。
+
+在 `.worktrees/<name>` checkout 中没有本地 `backend/.venv` 时，不设置 `PYTHON`；从该
+worktree 的 `frontend` 目录运行 `npm run verify:live-company-research`，命令会按仓库受信
+策略查找主 checkout 的 `backend/.venv/bin/python`，不会退回宿主 Python。
+
+pytest 默认只运行快速契约、超时和安全检查，并明确跳过外部浏览器验收。完成上述依赖安装
+后，从普通 checkout 根目录显式选择真实验收；缺少 Node、npm、backend venv 或浏览器时
+该 opt-in 测试会失败而不会跳过：
+
+```bash
+RUN_LIVE_COMPANY_RESEARCH=1 backend/.venv/bin/python -m pytest backend/tests/test_verify_live_company_research_ui.py -q
+PW_BROWSER_CHANNEL=chrome RUN_LIVE_COMPANY_RESEARCH=1 backend/.venv/bin/python -m pytest backend/tests/test_verify_live_company_research_ui.py -q
+```
+
+从 `.worktrees/<name>` 根目录运行同一测试时，将解释器改为
+`../../backend/.venv/bin/python`。
+
+该命令为每次运行创建独立 SQLite，并启动真实 FastAPI、Company Research worker、
+Bearer 代理和非 mock Vite 前端。它只加载受治理的 Alphabet 身份底座，研究内容来自
+仓库内冻结且已认证的 Alphabet fixture；不会访问外部资料提供商或 LLM。初始化、逐条
+证据确认、判断确认和发布等所有人工写入都由浏览器控件触发。验收必须生成冻结 revision，
+通过浏览器回放该 revision，并校验下载的 Markdown 文件名、正文和内容哈希。
+
+无论成功还是失败，命令都会有界停止自己启动的进程并删除本次隔离数据库和私有临时目录。
+若进程停止或临时目录身份复核失败，命令会非零退出；它不会删除未通过父目录、所有者、权限
+和文件身份检查的路径，也不会用清理错误覆盖原始业务失败。失败诊断有界且脱敏，不输出令牌、
+请求正文、数据库内容或宿主环境。Python 外层进程所有者始终排空 stdout/stderr 以避免管道
+死锁，但每个流最多保留 16 KiB；任一流超限时，后续字节会被丢弃，并在完整清理后以固定、
+不含原始输出或路径的错误非零退出。
+
+本仓库要求使用 `.nvmrc` 固定的 Node.js 24。真实人工闭环需要同时运行 API
 与后台 worker：`cd backend && python -m app.scripts.run_research_worker --loop`。
 
 ## 一键本地运行（Docker）

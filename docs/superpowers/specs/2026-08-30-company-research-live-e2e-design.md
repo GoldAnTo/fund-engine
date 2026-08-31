@@ -205,11 +205,72 @@ by the current user, and must use restrictive permissions. The same conditions
 are revalidated immediately before removal. If revalidation fails, the verifier
 must not remove the target.
 
+Content deletion is fd-relative and does not follow symlinks. The quarantined
+root path is revalidated against its original owner, mode, device, and inode
+immediately before the final nonrecursive `rmdir`. Darwin has no portable
+inode-conditional directory unlink: a same-UID actor can still replace the
+now-empty path in the interval after that last check and before `rmdir`, and an
+empty replacement could then be removed. The verifier therefore retains the
+approved exclusion of concurrent same-UID mutation for that interval. This is
+the only remaining replacement race in the cleanup threat model; a nonempty
+replacement is preserved because nonrecursive `rmdir` fails closed.
+
 Shutdown is idempotent and bounded. It first asks owned child processes to exit,
-then escalates only against the exact processes it started. Cleanup preserves
-the original business failure code. A cleanup failure is reported without
-masking an earlier failure; if cleanup is the only failure, the run exits
-nonzero.
+then escalates only against the exact processes it started. On macOS and Linux,
+browser launch must authenticate and retain privately that Playwright's browser
+process is its POSIX process-group leader; otherwise launch fails before the
+workflow. Browser startup is a retained, abortable ownership transition: a
+signal during launch waits for the bounded launch to expose its process, then
+authenticates and removes that exact group, while a signal during connection
+removes the already-authenticated group immediately and observes the late
+connection result. Runtime removal waits for that transition to settle. Browser
+cleanup signals that exact group with bounded TERM/KILL and verifies its
+absence, including renderer descendants. The verifier handles outer
+TERM/HUP/INT cooperatively so the Python npm-session owner cannot strand the
+browser's separate process group. A dedicated session-leader supervisor anchors
+the npm group. The owner blocks cooperative signals across `Popen` so the new
+leader inherits protection before its Python startup code can run; the
+supervisor keeps those signals blocked, explicitly resets them for npm, and
+reports npm's child status over a private pipe without exiting. The owner object
+and its output buffers are allocated before acquiring resources. A no-side-effect
+mask query records the baseline before entering a restore `try/finally`; the
+actual block, pipe acquisition, and `Popen` occur inside that protected region.
+Thus a signal before the block aborts while no OS resource exists, and an
+exception after the block's side effect restores the exact baseline. The new
+descriptors are captured in owner slots and the `Popen` handle is captured by
+one pre-existing slot assignment before the mask is restored. That owner takes
+exclusive custody of the process-group capability,
+Popen handle, pipe descriptors, and irreversible lifecycle phase. Numeric
+descriptor authority is retired before every potentially ambiguous close and is
+never retried after an unknown side effect. Output pipes are binary and
+nonblocking; the owner drains status, stdout, and stderr itself with
+`select`/`os.read`, so no reader thread or cross-thread stream close can make
+cleanup unbounded. Reads remain at most 64 KiB, while stdout and stderr each
+retain at most 16 KiB. Once either stream exceeds that cap, later bytes are
+drained and discarded without further buffer growth. After complete ownership
+cleanup, overflow fails closed with one fixed diagnostic that contains no raw
+output, path, or secret; no overflowing buffer is copied or decoded. Startup
+mask restoration, status-pipe closure, output capture, normal status, spawn
+failure, and outer timeout all share that owner's cleanup path. One absolute
+cleanup deadline is created before the first TERM or KILL attempt and governs
+cooperative grace, KILL transition, reap, output drain, and closure. With asynchronous
+signals blocked, a successful exact-group KILL irreversibly retires the numeric
+PGID capability before any wait can reap the leader. The anchored phase contains
+no wait, waitpid, poll, or other reaping operation. If an injected callback
+raises, a real exact-group fallback is safe because the unreaped anchor prevents
+PGID reuse. A successful fallback retires authority; `EPERM` or `ESRCH` also
+retires it because the still-unreaped anchor reserves the exact PID/PGID while
+the kernel reports that group absent or unsignalable. No external status probe
+or pre-retirement reap is needed. A synthetic live-group `EPERM` can therefore
+only produce a bounded fail-closed reap error, with no later numeric PGID signal.
+Later wait, pipe,
+stream, or signal-mask restoration failures may retry only bounded handle-based
+reap and closure. Cleanup preserves the original business failure code. A
+cleanup failure is retained as its cause without masking it;
+if cleanup is the only failure, the run exits nonzero. Every Playwright response
+or event wait has a rejection handler attached before the click that triggers
+it, so a primary action failure cannot be overtaken by an abandoned wait during
+browser shutdown.
 
 ## Implementation Shape
 
@@ -217,6 +278,8 @@ Expected production-facing files:
 
 - `frontend/scripts/verify-live-company-research-ui.mjs` for lifecycle and
   browser orchestration;
+- `backend/app/scripts/remove_private_runtime_contents.py` for fd-relative,
+  fail-closed deletion of the verifier's authenticated private runtime;
 - `frontend/package.json` for the stable command;
 - `README.md` for prerequisites, invocation, coverage, and isolation semantics.
 

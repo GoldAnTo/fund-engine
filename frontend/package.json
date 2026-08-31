@@ -14,6 +14,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e": "node scripts/with-project-node.mjs ./node_modules/@playwright/test/cli.js test",
+    "verify:live-company-research": "node scripts/with-project-node.mjs scripts/verify-live-company-research-ui.mjs",
+    "test:live-company-research-support": "node scripts/with-project-node.mjs --test scripts/live-company-research-support.test.mjs",
     "gen:contract": "openapi-typescript openapi.json -o src/contracts/v1.ts"
   },
   "dependencies": {
