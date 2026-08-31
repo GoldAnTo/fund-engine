@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import errno
+import inspect
 import json
 import os
 import select
@@ -69,6 +71,7 @@ OWNED_PROCESS_GROUP_SHUTDOWN_SIGNALS = (
     signal.SIGHUP,
     signal.SIGINT,
 )
+_EXACT_GROUP_KILL = os.killpg
 
 
 class OwnedProcessGroupTimeout(TimeoutError):
@@ -124,26 +127,14 @@ class _OwnedProcessGroupOwner:
                 if thread.ident is not None:
                     self.output_threads.append(thread)
 
-    def _reap_anchor_if_exited(self) -> bool:
-        try:
-            waited_pid, wait_status = os.waitpid(self.process.pid, os.WNOHANG)
-        except ChildProcessError:
-            self.phase = "reaped"
-            return True
-        if waited_pid == 0:
-            return False
-        self.phase = "reaped"
-        self.process.returncode = os.waitstatus_to_exitcode(wait_status)
-        return True
-
-    def _reap_anchor_if_exited_soon(self) -> bool:
-        deadline = time.monotonic() + min(0.05, self.kill_grace_seconds)
-        while True:
-            if self._reap_anchor_if_exited():
-                return True
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(0.001)
+    def _anchor_is_zombie(self) -> bool:
+        result = subprocess.run(
+            ["/bin/ps", "-o", "stat=", "-p", str(self.process.pid)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0 and result.stdout.strip().startswith("Z")
 
     def _enter_kill_sent_phase(
         self, send_kill: Callable[[int, signal.Signals], None]
@@ -157,12 +148,20 @@ class _OwnedProcessGroupOwner:
             try:
                 send_kill(self.process_group_id, signal.SIGKILL)
             except BaseException as signal_error:
-                if self._reap_anchor_if_exited_soon():
-                    raise
                 try:
-                    os.killpg(self.process_group_id, signal.SIGKILL)
-                except BaseException as fallback_error:  # noqa: BLE001
-                    if not self._reap_anchor_if_exited():
+                    _EXACT_GROUP_KILL(self.process_group_id, signal.SIGKILL)
+                except OSError as fallback_error:
+                    group_is_gone = (
+                        fallback_error.errno
+                        in (
+                            errno.EPERM,
+                            errno.ESRCH,
+                        )
+                        and self._anchor_is_zombie()
+                    )
+                    if group_is_gone:
+                        self.phase = "kill_sent"
+                    else:
                         signal_error.add_note(
                             f"fallback exact-group SIGKILL failed: {fallback_error!r}"
                         )
@@ -241,14 +240,14 @@ class _OwnedProcessGroupOwner:
         first_error: BaseException | None = None
         if self.phase == "anchored":
             try:
-                self._enter_kill_sent_phase(send_kill or os.killpg)
+                self._enter_kill_sent_phase(send_kill or _EXACT_GROUP_KILL)
             except BaseException as error:  # noqa: BLE001
                 first_error = error
 
         deadline = time.monotonic() + self.kill_grace_seconds
         while self.phase == "anchored" and time.monotonic() < deadline:
             try:
-                self._enter_kill_sent_phase(os.killpg)
+                self._enter_kill_sent_phase(_EXACT_GROUP_KILL)
             except BaseException as error:  # noqa: BLE001
                 first_error = self._retain_first_error(first_error, error)
 
@@ -346,7 +345,7 @@ def run_owned_process_group(
     except BaseException as primary_error:
         if owner is not None:
             try:
-                owner.ensure_cleanup()
+                owner.ensure_cleanup(kill_group)
             except BaseException as cleanup_error:
                 raise primary_error from cleanup_error
         raise
@@ -896,6 +895,7 @@ def test_owned_process_group_startup_failure_uses_shared_baseexception_cleanup(
                 timeout_seconds=1,
                 term_grace_seconds=0.05,
                 kill_grace_seconds=1,
+                kill_group=interrupt_first_group_kill,
             )
 
         assert isinstance(captured.value.__cause__, KeyboardInterrupt)
@@ -971,6 +971,75 @@ def test_owned_process_group_never_signals_group_after_wait_reaps_then_raises(
     assert wait_failure_injected
     assert len(sent_signals) == 1
     assert sent_signals[0][1] == signal.SIGKILL
+
+
+def test_owned_process_group_never_waits_while_numeric_authority_is_live() -> None:
+    owner_source = inspect.getsource(_OwnedProcessGroupOwner)
+    anchored_phase_source = owner_source.split(
+        "    def _bounded_reap_and_close", maxsplit=1
+    )[0]
+
+    for forbidden in ("wait(", "waitpid(", ".poll("):
+        assert forbidden not in anchored_phase_source
+
+
+def test_owned_process_group_never_signals_after_wnohang_reaps_then_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_killpg = os.killpg
+    original_waitpid = os.waitpid
+    sent_signals: list[tuple[int, signal.Signals]] = []
+    anchor_pid: int | None = None
+    wait_failure_injected = False
+
+    def kill_then_raise(process_group_id: int, sent_signal: signal.Signals) -> None:
+        nonlocal anchor_pid
+        anchor_pid = process_group_id
+        sent_signals.append((process_group_id, sent_signal))
+        original_killpg(process_group_id, sent_signal)
+        deadline = time.monotonic() + 1
+        while True:
+            state = _process_state(process_group_id)
+            if not state or state.startswith("Z"):
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError("anchor did not exit after injected SIGKILL")
+            time.sleep(0.01)
+        raise RuntimeError("injected post-signal callback failure")
+
+    def waitpid_then_raise(process_id: int, options: int) -> tuple[int, int]:
+        nonlocal wait_failure_injected
+        result = original_waitpid(process_id, options)
+        if (
+            process_id == anchor_pid
+            and options == os.WNOHANG
+            and result[0] == process_id
+            and not wait_failure_injected
+        ):
+            wait_failure_injected = True
+            raise KeyboardInterrupt
+        return result
+
+    monkeypatch.setattr(os, "killpg", kill_then_raise)
+    monkeypatch.setattr(os, "waitpid", waitpid_then_raise)
+
+    with pytest.raises(RuntimeError, match="injected post-signal callback failure"):
+        run_owned_process_group(
+            [sys.executable, "-c", "raise SystemExit(0)"],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=1,
+            term_grace_seconds=0.05,
+            kill_grace_seconds=1,
+            kill_group=kill_then_raise,
+        )
+
+    assert wait_failure_injected
+    assert len(sent_signals) == 1
+    assert sent_signals[0][1] == signal.SIGKILL
+    assert anchor_pid is not None
+    with pytest.raises(ChildProcessError):
+        original_waitpid(anchor_pid, os.WNOHANG)
 
 
 def test_owned_process_group_distinguishes_post_signal_keyboard_interrupt(
@@ -1081,6 +1150,9 @@ def test_owned_process_group_restores_mask_if_blocking_raises_after_apply(
 
     monkeypatch.setattr(os, "killpg", recording_killpg)
     monkeypatch.setattr(signal, "pthread_sigmask", interrupt_second_mask_block)
+    monkeypatch.setitem(
+        run_owned_process_group.__globals__, "_EXACT_GROUP_KILL", recording_killpg
+    )
 
     try:
         with pytest.raises(KeyboardInterrupt):

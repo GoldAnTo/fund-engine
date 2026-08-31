@@ -237,10 +237,14 @@ capability, Popen handle, output streams, and irreversible lifecycle phase.
 Startup mask restoration, status-pipe closure, output capture, normal status,
 spawn failure, and outer timeout all share that owner's cleanup path. With
 asynchronous signals blocked, a successful exact-group KILL irreversibly retires
-the numeric PGID capability before any wait can reap the leader. Later wait,
-pipe, stream, or signal-mask restoration failures may retry only bounded
-handle-based reap and closure. Cleanup preserves the original business failure
-code. A cleanup failure is retained as its cause without masking it;
+the numeric PGID capability before any wait can reap the leader. The anchored
+phase contains no wait, waitpid, poll, or other reaping operation. If an injected
+callback raises, a real exact-group fallback is safe because the unreaped anchor
+prevents PGID reuse; a fallback group-gone error retires authority only after an
+exact PID status check confirms that anchor is a zombie. Later wait, pipe,
+stream, or signal-mask restoration failures may retry only bounded handle-based
+reap and closure. Cleanup preserves the original business failure code. A
+cleanup failure is retained as its cause without masking it;
 if cleanup is the only failure, the run exits nonzero. Every Playwright response
 or event wait has a rejection handler attached before the click that triggers
 it, so a primary action failure cannot be overtaken by an abandoned wait during

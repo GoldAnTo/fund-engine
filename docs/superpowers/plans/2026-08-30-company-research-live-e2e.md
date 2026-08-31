@@ -938,9 +938,12 @@ that same exact group and only afterward reap. On normal child status or spawn
 failure, likewise remove the entire anchored group before reap, returning the
 status received through the private pipe. Block asynchronous signals around the
 KILL transition and irreversibly retire the numeric PGID capability before
-wait/reap. Mask restoration, status-pipe, stream, thread, and workflow failures
-all use this same owner cleanup path, so none can signal a reused group. Verify
-every recorded detached browser descendant is absent.
+wait/reap. Never call wait, waitpid, or poll while authority is live. A callback
+failure may retry a real exact-group KILL because the anchor remains unreaped;
+retire after a group-gone error only when the exact anchor PID is confirmed as a
+zombie. Mask restoration, status-pipe, stream, thread, and workflow failures all
+use this same owner cleanup path, so none can signal a reused group. Verify every
+recorded detached browser descendant is absent.
 Success is return code zero, exactly one PASS line on stdout, and empty stderr.
 Failure output must be checked for sensitive names and values before returning
 only a bounded prerequisite classification or generic safe diagnostic.
@@ -1078,7 +1081,8 @@ Inspect the final diff and confirm all of these statements are true:
   the child status through a private pipe. Immediately give one owner primitive
   the returned Popen handle, PGID, streams, and phase. Startup, normal, error,
   and timeout paths all remove the exact group while its anchor is live, then
-  retire numeric authority before bounded handle-based reap and closure.
+  retire numeric authority before bounded handle-based reap and closure. The
+  anchored phase has a static and dynamic prohibition on wait, waitpid, or poll.
 - [x] Separate realistic cleanup-helper preflight time from the deterministic
   cleanup-stall bound, allocate test resources inside `try/finally`, and stress
   the case at least 30 times without helper or runtime residue.
