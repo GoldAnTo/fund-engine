@@ -10,11 +10,10 @@ import signal
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TextIO
+from typing import BinaryIO
 
 import pytest
 import tomllib
@@ -85,59 +84,170 @@ def _close_owned_status_writer(descriptor: int) -> None:
 
 
 class _OwnedProcessGroupOwner:
-    def __init__(
-        self, process: subprocess.Popen[str], *, kill_grace_seconds: float
-    ) -> None:
-        self.process = process
-        self.process_group_id = process.pid
-        self.kill_grace_seconds = kill_grace_seconds
+    __slots__ = (
+        "phase",
+        "process",
+        "status_buffer",
+        "status_read_fd",
+        "status_write_fd",
+        "stderr_buffer",
+        "stderr_eof",
+        "stdout_buffer",
+        "stdout_eof",
+    )
+
+    def __init__(self) -> None:
+        # Allocate every Python-owned container before Popen. Once Popen returns,
+        # the single slot assignment in run_owned_process_group is the ownership
+        # transfer; no allocating wrapper can fail in between.
+        self.process: subprocess.Popen[bytes] | None = None
+        # The phase is valid before attachment; process=None distinguishes the
+        # harmless pre-spawn state. No second state write is needed after Popen.
         self.phase = "anchored"
-        self.stdout_parts: list[str] = []
-        self.stderr_parts: list[str] = []
-        self.output_threads: list[threading.Thread] = []
+        self.status_read_fd = -1
+        self.status_write_fd = -1
+        self.status_buffer = bytearray()
+        self.stdout_buffer = bytearray()
+        self.stderr_buffer = bytearray()
+        self.stdout_eof = False
+        self.stderr_eof = False
+
+    @property
+    def process_group_id(self) -> int:
+        if self.process is None:
+            raise AssertionError("owned process group is not attached")
+        return self.process.pid
+
+    def close_status_writer(self) -> None:
+        descriptor = self.status_write_fd
+        if descriptor < 0:
+            return
+        # Retire numeric authority before an ambiguous close. If close performs
+        # its side effect and then raises, this descriptor can already be reused.
+        self.status_write_fd = -1
+        _close_owned_status_writer(descriptor)
 
     @staticmethod
-    def _drain(stream: TextIO, parts: list[str]) -> None:
-        try:
-            output = stream.read()
-            if output:
-                parts.append(output)
-        finally:
-            stream.close()
+    def _close_stream(stream: BinaryIO) -> None:
+        stream.close()
 
-    def start_output_capture(self) -> None:
+    def _close_parent_descriptors(self) -> BaseException | None:
+        first_error: BaseException | None = None
+        if self.status_read_fd >= 0:
+            descriptor = self.status_read_fd
+            self.status_read_fd = -1
+            try:
+                os.close(descriptor)
+            except BaseException as error:  # noqa: BLE001
+                first_error = self._retain_first_error(first_error, error)
+        if self.status_write_fd >= 0:
+            try:
+                self.close_status_writer()
+            except BaseException as error:  # noqa: BLE001
+                first_error = self._retain_first_error(first_error, error)
+        if self.process is not None:
+            for stream in (self.process.stdout, self.process.stderr):
+                if stream is None or stream.closed:
+                    continue
+                try:
+                    self._close_stream(stream)
+                except BaseException as error:  # noqa: BLE001
+                    first_error = self._retain_first_error(first_error, error)
+        return first_error
+
+    def prepare_nonblocking_capture(self) -> None:
+        if self.process is None:
+            raise AssertionError("owned process group is not attached")
         if self.process.stdout is None or self.process.stderr is None:
             raise AssertionError("owned process output pipes are unavailable")
-        threads = (
-            threading.Thread(
-                target=self._drain,
-                args=(self.process.stdout, self.stdout_parts),
-                daemon=True,
-            ),
-            threading.Thread(
-                target=self._drain,
-                args=(self.process.stderr, self.stderr_parts),
-                daemon=True,
-            ),
-        )
-        for thread in threads:
-            try:
-                thread.start()
-            finally:
-                if thread.ident is not None:
-                    self.output_threads.append(thread)
+        for descriptor in (
+            self.status_read_fd,
+            self.process.stdout.fileno(),
+            self.process.stderr.fileno(),
+        ):
+            os.set_blocking(descriptor, False)
 
-    def _anchor_is_zombie(self) -> bool:
-        result = subprocess.run(
-            ["/bin/ps", "-o", "stat=", "-p", str(self.process.pid)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+    def _capture_descriptors(self) -> dict[int, str]:
+        if self.process is None:
+            return {}
+        descriptors: dict[int, str] = {}
+        if self.status_read_fd >= 0:
+            descriptors[self.status_read_fd] = "status"
+        if self.process.stdout is not None and not self.stdout_eof:
+            descriptors[self.process.stdout.fileno()] = "stdout"
+        if self.process.stderr is not None and not self.stderr_eof:
+            descriptors[self.process.stderr.fileno()] = "stderr"
+        return descriptors
+
+    def _read_ready(self, descriptors: dict[int, str], timeout: float) -> None:
+        if not descriptors:
+            return
+        readable, _, _ = select.select(list(descriptors), [], [], max(0, timeout))
+        for descriptor in readable:
+            try:
+                chunk = os.read(descriptor, 65536)
+            except BlockingIOError:
+                continue
+            stream_name = descriptors[descriptor]
+            if chunk:
+                if stream_name == "status":
+                    self.status_buffer.extend(chunk)
+                elif stream_name == "stdout":
+                    self.stdout_buffer.extend(chunk)
+                else:
+                    self.stderr_buffer.extend(chunk)
+                continue
+            if stream_name == "status":
+                retired_descriptor = self.status_read_fd
+                self.status_read_fd = -1
+                os.close(retired_descriptor)
+            elif stream_name == "stdout":
+                self.stdout_eof = True
+            else:
+                self.stderr_eof = True
+
+    def read_child_status(self, timeout_seconds: float) -> int | None:
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if b"\n" in self.status_buffer or self.status_read_fd < 0:
+                raw_status = bytes(self.status_buffer).strip()
+                try:
+                    return int(raw_status.decode("ascii"))
+                except (UnicodeDecodeError, ValueError) as error:
+                    raise AssertionError(
+                        "owned process group supervisor status is invalid"
+                    ) from error
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            self._read_ready(self._capture_descriptors(), remaining)
+
+    def _anchor_is_zombie(self, deadline: float) -> bool:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            result = subprocess.run(
+                ["/bin/ps", "-o", "stat=", "-p", str(self.process_group_id)],
+                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="ascii",
+                errors="replace",
+                env={"LC_ALL": "C"},
+                close_fds=True,
+                timeout=remaining,
+            )
+        except subprocess.TimeoutExpired:
+            return False
         return result.returncode == 0 and result.stdout.strip().startswith("Z")
 
     def _enter_kill_sent_phase(
-        self, send_kill: Callable[[int, signal.Signals], None]
+        self,
+        send_kill: Callable[[int, signal.Signals], None],
+        deadline: float,
     ) -> None:
         if self.phase != "anchored":
             raise AssertionError("numeric process-group capability is no longer live")
@@ -151,14 +261,10 @@ class _OwnedProcessGroupOwner:
                 try:
                     _EXACT_GROUP_KILL(self.process_group_id, signal.SIGKILL)
                 except OSError as fallback_error:
-                    group_is_gone = (
-                        fallback_error.errno
-                        in (
-                            errno.EPERM,
-                            errno.ESRCH,
-                        )
-                        and self._anchor_is_zombie()
-                    )
+                    group_is_gone = fallback_error.errno in (
+                        errno.EPERM,
+                        errno.ESRCH,
+                    ) and self._anchor_is_zombie(deadline)
                     if group_is_gone:
                         self.phase = "kill_sent"
                     else:
@@ -181,10 +287,11 @@ class _OwnedProcessGroupOwner:
         first_error.add_note(f"additional owned-group cleanup failure: {error!r}")
         return first_error
 
-    def _bounded_reap_and_close(self) -> None:
+    def _bounded_reap_and_close(self, deadline: float) -> None:
         if self.phase == "anchored":
             raise AssertionError("cannot reap before exact-group SIGKILL")
-        deadline = time.monotonic() + self.kill_grace_seconds
+        if self.process is None:
+            raise AssertionError("owned process group is not attached")
         first_error: BaseException | None = None
         while self.phase != "reaped":
             try:
@@ -207,47 +314,56 @@ class _OwnedProcessGroupOwner:
             else:
                 self.phase = "reaped"
 
-        for thread in self.output_threads:
-            while thread.is_alive() and time.monotonic() < deadline:
-                try:
-                    thread.join(timeout=max(0, deadline - time.monotonic()))
-                except BaseException as error:  # noqa: BLE001
-                    first_error = self._retain_first_error(first_error, error)
-
-        for stream in (self.process.stdout, self.process.stderr):
-            if stream is None or stream.closed:
-                continue
+        while (
+            not self.stdout_eof or not self.stderr_eof
+        ) and time.monotonic() < deadline:
             try:
-                stream.close()
+                self._read_ready(
+                    self._capture_descriptors(),
+                    max(0, deadline - time.monotonic()),
+                )
             except BaseException as error:  # noqa: BLE001
                 first_error = self._retain_first_error(first_error, error)
+                break
+
+        close_error = self._close_parent_descriptors()
+        if close_error is not None:
+            first_error = self._retain_first_error(first_error, close_error)
 
         if self.phase != "reaped":
             raise AssertionError(
                 "exact live verifier process group remained unreaped after SIGKILL"
             ) from first_error
-        if any(thread.is_alive() for thread in self.output_threads):
-            raise AssertionError(
+        if not self.stdout_eof or not self.stderr_eof:
+            pipe_error = AssertionError(
                 "live verifier output pipes remained open after SIGKILL"
-            ) from first_error
+            )
+            if first_error is not None:
+                raise pipe_error from first_error
+            raise pipe_error
         if first_error is not None:
             raise first_error
 
     def ensure_cleanup(
         self,
+        deadline: float,
         send_kill: Callable[[int, signal.Signals], None] | None = None,
     ) -> None:
+        if self.process is None:
+            close_error = self._close_parent_descriptors()
+            if close_error is not None:
+                raise close_error
+            return
         first_error: BaseException | None = None
         if self.phase == "anchored":
             try:
-                self._enter_kill_sent_phase(send_kill or _EXACT_GROUP_KILL)
+                self._enter_kill_sent_phase(send_kill or _EXACT_GROUP_KILL, deadline)
             except BaseException as error:  # noqa: BLE001
                 first_error = error
 
-        deadline = time.monotonic() + self.kill_grace_seconds
         while self.phase == "anchored" and time.monotonic() < deadline:
             try:
-                self._enter_kill_sent_phase(_EXACT_GROUP_KILL)
+                self._enter_kill_sent_phase(_EXACT_GROUP_KILL, deadline)
             except BaseException as error:  # noqa: BLE001
                 first_error = self._retain_first_error(first_error, error)
 
@@ -255,12 +371,15 @@ class _OwnedProcessGroupOwner:
             cleanup_error = AssertionError(
                 "exact live verifier process group could not be killed"
             )
+            close_error = self._close_parent_descriptors()
+            if close_error is not None:
+                first_error = self._retain_first_error(first_error, close_error)
             if first_error is not None:
                 raise cleanup_error from first_error
             raise cleanup_error
 
         try:
-            self._bounded_reap_and_close()
+            self._bounded_reap_and_close(deadline)
         except BaseException as error:  # noqa: BLE001
             first_error = self._retain_first_error(first_error, error)
         if first_error is not None:
@@ -272,8 +391,8 @@ class _OwnedProcessGroupOwner:
         return subprocess.CompletedProcess(
             command,
             returncode,
-            "".join(self.stdout_parts),
-            "".join(self.stderr_parts),
+            bytes(self.stdout_buffer).decode("utf-8", errors="replace"),
+            bytes(self.stderr_buffer).decode("utf-8", errors="replace"),
         )
 
 
@@ -287,75 +406,73 @@ def run_owned_process_group(
     kill_grace_seconds: float,
     kill_group: Callable[[int, signal.Signals], None] = os.killpg,
 ) -> subprocess.CompletedProcess[str]:
-    status_read, status_write = os.pipe()
-    status_read_closed = False
-    status_write_closed = False
-    supervisor_command = [
-        sys.executable,
-        str(OWNED_PROCESS_GROUP_SUPERVISOR),
-        "--status-fd",
-        str(status_write),
-        "--",
-        *command,
-    ]
-    owner: _OwnedProcessGroupOwner | None = None
+    owner = _OwnedProcessGroupOwner()
+    primary_error: BaseException | None = None
+    cleanup_error: BaseException | None = None
+    child_returncode: int | None = None
+    cleanup_deadline: float | None = None
     try:
-        previous_signal_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+        previous_signal_mask = signal.pthread_sigmask(
+            signal.SIG_BLOCK, OWNED_PROCESS_GROUP_SHUTDOWN_SIGNALS
+        )
         try:
-            signal.pthread_sigmask(
-                signal.SIG_BLOCK, OWNED_PROCESS_GROUP_SHUTDOWN_SIGNALS
-            )
-            process = subprocess.Popen(
+            owner.status_read_fd, owner.status_write_fd = os.pipe()
+            supervisor_command = [
+                sys.executable,
+                str(OWNED_PROCESS_GROUP_SUPERVISOR),
+                "--status-fd",
+                str(owner.status_write_fd),
+                "--",
+                *command,
+            ]
+            owner.process = subprocess.Popen(
                 supervisor_command,
                 cwd=cwd,
                 env=dict(env),
-                pass_fds=(status_write,),
-                text=True,
+                pass_fds=(owner.status_write_fd,),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 start_new_session=True,
             )
-            owner = _OwnedProcessGroupOwner(
-                process, kill_grace_seconds=kill_grace_seconds
-            )
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
 
-        _close_owned_status_writer(status_write)
-        status_write_closed = True
-        owner.start_output_capture()
-        readable, _, _ = select.select([status_read], [], [], timeout_seconds)
-        if readable:
-            raw_status = os.read(status_read, 32)
-            try:
-                child_returncode = int(raw_status.decode("ascii").strip())
-            except (UnicodeDecodeError, ValueError) as error:
-                raise AssertionError(
-                    "owned process group supervisor status is invalid"
-                ) from error
-            owner.ensure_cleanup(kill_group)
-            return owner.completed_process(command, child_returncode)
-
-        kill_group(owner.process_group_id, signal.SIGTERM)
-        # Do not communicate, poll, or otherwise reap the supervisor
-        # during this grace period: the live leader remains the exact capability.
-        time.sleep(term_grace_seconds)
-        owner.ensure_cleanup(kill_group)
-        raise OwnedProcessGroupTimeout(owner.process_group_id)
-    except BaseException as primary_error:
-        if owner is not None:
-            try:
-                owner.ensure_cleanup(kill_group)
-            except BaseException as cleanup_error:
-                raise primary_error from cleanup_error
-        raise
+        owner.close_status_writer()
+        owner.prepare_nonblocking_capture()
+        child_returncode = owner.read_child_status(timeout_seconds)
+        if child_returncode is None:
+            cleanup_deadline = (
+                time.monotonic() + term_grace_seconds + kill_grace_seconds
+            )
+            kill_group(owner.process_group_id, signal.SIGTERM)
+            # Do not communicate, poll, or otherwise reap the supervisor during
+            # this grace: its unreaped leader is still the exact capability.
+            time.sleep(
+                min(
+                    term_grace_seconds,
+                    max(0, cleanup_deadline - time.monotonic()),
+                )
+            )
+            primary_error = OwnedProcessGroupTimeout(owner.process_group_id)
+    except BaseException as error:  # noqa: BLE001
+        primary_error = error
     finally:
-        if not status_read_closed:
-            os.close(status_read)
-            status_read_closed = True
-        if not status_write_closed:
-            _close_owned_status_writer(status_write)
-            status_write_closed = True
+        if cleanup_deadline is None:
+            cleanup_deadline = time.monotonic() + kill_grace_seconds
+        try:
+            owner.ensure_cleanup(cleanup_deadline, kill_group)
+        except BaseException as error:  # noqa: BLE001
+            cleanup_error = error
+
+    if primary_error is not None:
+        if cleanup_error is not None:
+            raise primary_error from cleanup_error
+        raise primary_error
+    if cleanup_error is not None:
+        raise cleanup_error
+    if child_returncode is None:
+        raise AssertionError("owned process group did not report a child status")
+    return owner.completed_process(command, child_returncode)
 
 
 def _assert_no_sensitive_output(
@@ -741,11 +858,13 @@ def test_owned_process_group_normal_status_kill_error_still_reaps_anchor(
         os.waitpid(anchor_pid, os.WNOHANG)
 
 
-def test_owned_process_group_thread_start_error_still_reaps_anchor(
+def test_owned_process_group_nonblocking_setup_error_still_reaps_anchor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     started_processes: list[subprocess.Popen[str]] = []
     original_popen = subprocess.Popen
+    original_set_blocking = os.set_blocking
+    failure_injected = False
 
     def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[str]:
         process = original_popen(*args, **kwargs)
@@ -754,14 +873,20 @@ def test_owned_process_group_thread_start_error_still_reaps_anchor(
             started_processes.append(process)
         return process
 
-    def fail_thread_start(_thread: threading.Thread) -> None:
-        raise RuntimeError("injected output thread start failure")
+    def fail_first_set_blocking(descriptor: int, blocking: bool) -> None:
+        nonlocal failure_injected
+        if not failure_injected:
+            failure_injected = True
+            raise RuntimeError("injected nonblocking capture setup failure")
+        original_set_blocking(descriptor, blocking)
 
     monkeypatch.setattr(subprocess, "Popen", recording_popen)
-    monkeypatch.setattr(threading.Thread, "start", fail_thread_start)
+    monkeypatch.setattr(os, "set_blocking", fail_first_set_blocking)
 
     try:
-        with pytest.raises(RuntimeError, match="injected output thread start failure"):
+        with pytest.raises(
+            RuntimeError, match="injected nonblocking capture setup failure"
+        ):
             run_owned_process_group(
                 [sys.executable, "-c", "import time; time.sleep(60)"],
                 cwd=tmp_path,
@@ -772,6 +897,7 @@ def test_owned_process_group_thread_start_error_still_reaps_anchor(
             )
 
         assert len(started_processes) == 1
+        assert failure_injected
         assert started_processes[0].stdout is not None
         assert started_processes[0].stdout.closed
         assert started_processes[0].stderr is not None
@@ -805,6 +931,7 @@ def test_owned_process_group_status_pipe_close_error_still_reaps_anchor(
         nonlocal close_failure_injected
         if not close_failure_injected:
             close_failure_injected = True
+            original_close_status_writer(descriptor)
             raise OSError("injected status pipe close failure")
         original_close_status_writer(descriptor)
 
@@ -835,6 +962,275 @@ def test_owned_process_group_status_pipe_close_error_still_reaps_anchor(
         os.waitpid(started_processes[0].pid, os.WNOHANG)
 
 
+def test_owned_process_group_owner_is_allocated_before_supervisor_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started_processes: list[subprocess.Popen[str]] = []
+    original_owner = _OwnedProcessGroupOwner
+    original_popen = subprocess.Popen
+
+    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+        process = original_popen(*args, **kwargs)
+        command = args[0] if args else kwargs.get("args")
+        if isinstance(command, list) and str(OWNED_PROCESS_GROUP_SUPERVISOR) in command:
+            started_processes.append(process)
+        return process
+
+    def fail_owner_allocation(*args: object, **kwargs: object) -> None:
+        raise MemoryError("injected owner allocation failure")
+
+    monkeypatch.setattr(subprocess, "Popen", recording_popen)
+    monkeypatch.setitem(
+        run_owned_process_group.__globals__,
+        "_OwnedProcessGroupOwner",
+        fail_owner_allocation,
+    )
+
+    try:
+        with pytest.raises(MemoryError, match="injected owner allocation failure"):
+            run_owned_process_group(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                cwd=tmp_path,
+                env={"PATH": os.environ["PATH"]},
+                timeout_seconds=1,
+                term_grace_seconds=0.05,
+                kill_grace_seconds=1,
+            )
+
+        assert started_processes == []
+    finally:
+        monkeypatch.setitem(
+            run_owned_process_group.__globals__,
+            "_OwnedProcessGroupOwner",
+            original_owner,
+        )
+        for process in started_processes:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            process.wait(timeout=1)
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+
+
+def test_owned_pipe_acquisition_is_signal_blocked_until_owner_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_pipe = os.pipe
+    acquired_descriptors: list[int] = []
+
+    def pipe_with_async_interrupt_window() -> tuple[int, int]:
+        descriptors = original_pipe()
+        if acquired_descriptors:
+            return descriptors
+        acquired_descriptors.extend(descriptors)
+        current_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+        if signal.SIGINT not in current_mask:
+            raise KeyboardInterrupt
+        return descriptors
+
+    monkeypatch.setattr(os, "pipe", pipe_with_async_interrupt_window)
+
+    try:
+        result = run_owned_process_group(
+            [sys.executable, "-c", "print('captured after blocked pipe')"],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"]},
+            timeout_seconds=1,
+            term_grace_seconds=0.05,
+            kill_grace_seconds=1,
+        )
+
+        assert result.returncode == 0
+        assert result.stdout == "captured after blocked pipe\n"
+        assert len(acquired_descriptors) == 2
+        for descriptor in acquired_descriptors:
+            with pytest.raises(OSError, match="Bad file descriptor"):
+                os.fstat(descriptor)
+    finally:
+        for descriptor in acquired_descriptors:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def test_owned_status_writer_retires_before_ambiguous_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_close_status_writer = _close_owned_status_writer
+    close_injected = False
+    reused_descriptor: int | None = None
+
+    def close_reuse_then_interrupt(descriptor: int) -> None:
+        nonlocal close_injected, reused_descriptor
+        if not close_injected:
+            close_injected = True
+            original_close_status_writer(descriptor)
+            reused_descriptor = os.open(os.devnull, os.O_RDONLY)
+            assert reused_descriptor == descriptor
+            raise KeyboardInterrupt
+        original_close_status_writer(descriptor)
+
+    monkeypatch.setitem(
+        run_owned_process_group.__globals__,
+        "_close_owned_status_writer",
+        close_reuse_then_interrupt,
+    )
+
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            run_owned_process_group(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                cwd=tmp_path,
+                env={"PATH": os.environ["PATH"]},
+                timeout_seconds=1,
+                term_grace_seconds=0.05,
+                kill_grace_seconds=1,
+            )
+
+        assert reused_descriptor is not None
+        os.fstat(reused_descriptor)
+    finally:
+        if reused_descriptor is not None:
+            try:
+                os.close(reused_descriptor)
+            except OSError:
+                pass
+
+
+def test_owned_output_capture_is_bounded_when_detached_descendant_holds_pipes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descendant_pid_path = tmp_path / "detached-pipe-holder.pid"
+    descendant_program = "import time; time.sleep(2)"
+    command_program = "\n".join(
+        (
+            "import pathlib, subprocess, sys, time",
+            (
+                "child = subprocess.Popen([sys.executable, '-c', "
+                f"{descendant_program!r}], start_new_session=True)"
+            ),
+            f"pathlib.Path({str(descendant_pid_path)!r}).write_text(str(child.pid))",
+            "print('output before detached holder', flush=True)",
+        )
+    )
+    started_at = time.monotonic()
+    descendant_pid: int | None = None
+    started_processes: list[subprocess.Popen[bytes]] = []
+    original_popen = subprocess.Popen
+
+    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        process = original_popen(*args, **kwargs)
+        command = args[0] if args else kwargs.get("args")
+        if isinstance(command, list) and str(OWNED_PROCESS_GROUP_SUPERVISOR) in command:
+            started_processes.append(process)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", recording_popen)
+
+    try:
+        try:
+            result = run_owned_process_group(
+                [sys.executable, "-c", command_program],
+                cwd=tmp_path,
+                env={"PATH": os.environ["PATH"]},
+                timeout_seconds=1,
+                term_grace_seconds=0.05,
+                kill_grace_seconds=0.1,
+            )
+        except AssertionError as error:
+            assert "output pipes remained open" in str(error)
+        else:
+            assert result.stdout == "output before detached holder\n"
+
+        assert time.monotonic() - started_at < 0.75
+        assert len(started_processes) == 1
+        assert started_processes[0].stdout is not None
+        assert started_processes[0].stdout.closed
+        assert started_processes[0].stderr is not None
+        assert started_processes[0].stderr.closed
+    finally:
+        if descendant_pid_path.exists():
+            descendant_pid = int(descendant_pid_path.read_text(encoding="utf-8"))
+        if descendant_pid is not None and _process_state(descendant_pid):
+            try:
+                os.kill(descendant_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_owned_cleanup_deadline_bounds_stalled_zombie_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_killpg = os.killpg
+    original_run = subprocess.run
+    observed_probe_timeouts: list[float] = []
+    anchor_pid: int | None = None
+
+    def kill_then_raise(process_group_id: int, sent_signal: signal.Signals) -> None:
+        nonlocal anchor_pid
+        anchor_pid = process_group_id
+        original_killpg(process_group_id, sent_signal)
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            state = original_run(
+                ["/bin/ps", "-o", "stat=", "-p", str(process_group_id)],
+                check=False,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            if not state or state.startswith("Z"):
+                break
+            time.sleep(0.001)
+        time.sleep(0.03)
+        raise RuntimeError("injected post-signal failure before zombie probe")
+
+    def group_gone(*args: object, **kwargs: object) -> None:
+        raise PermissionError(errno.EPERM, "injected group-gone fallback")
+
+    def stalled_probe(
+        *args: object, timeout: float, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        observed_probe_timeouts.append(timeout)
+        time.sleep(timeout)
+        raise subprocess.TimeoutExpired(args[0], timeout)
+
+    monkeypatch.setitem(
+        run_owned_process_group.__globals__, "_EXACT_GROUP_KILL", group_gone
+    )
+    monkeypatch.setattr(subprocess, "run", stalled_probe)
+    started_at = time.monotonic()
+    try:
+        with pytest.raises(
+            AssertionError,
+            match="exact live verifier process group could not be killed",
+        ) as captured:
+            run_owned_process_group(
+                [sys.executable, "-c", "raise SystemExit(0)"],
+                cwd=tmp_path,
+                env={"PATH": os.environ["PATH"]},
+                timeout_seconds=1,
+                term_grace_seconds=0.05,
+                kill_grace_seconds=0.05,
+                kill_group=kill_then_raise,
+            )
+
+        assert isinstance(captured.value.__cause__, RuntimeError)
+        assert "post-signal failure" in str(captured.value.__cause__)
+        assert observed_probe_timeouts
+        assert max(observed_probe_timeouts) <= 0.03
+        assert time.monotonic() - started_at < 0.25
+    finally:
+        if anchor_pid is not None:
+            try:
+                os.waitpid(anchor_pid, 0)
+            except ChildProcessError:
+                pass
+
+
 @pytest.mark.parametrize("raise_before_signal", [False, True])
 def test_owned_process_group_startup_failure_uses_shared_baseexception_cleanup(
     tmp_path: Path,
@@ -860,6 +1256,7 @@ def test_owned_process_group_startup_failure_uses_shared_baseexception_cleanup(
         nonlocal close_failure_injected
         if not close_failure_injected:
             close_failure_injected = True
+            original_close_status_writer(descriptor)
             raise OSError("injected startup status close failure")
         original_close_status_writer(descriptor)
 
@@ -1192,7 +1589,7 @@ def test_owned_process_group_reaps_anchor_when_kill_group_raises(
         if sent_signal == signal.SIGKILL:
             raise PermissionError("injected post-signal failure")
 
-    with pytest.raises(PermissionError, match="injected .* failure"):
+    with pytest.raises(OwnedProcessGroupTimeout) as captured:
         run_owned_process_group(
             [sys.executable, "-c", "import time; time.sleep(60)"],
             cwd=tmp_path,
@@ -1203,6 +1600,8 @@ def test_owned_process_group_reaps_anchor_when_kill_group_raises(
             kill_group=kill_group,
         )
 
+    assert isinstance(captured.value.__cause__, PermissionError)
+    assert "injected" in str(captured.value.__cause__)
     assert anchor_pid is not None
     try:
         reaped_pid, _ = os.waitpid(anchor_pid, os.WNOHANG)

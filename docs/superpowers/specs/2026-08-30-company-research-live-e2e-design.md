@@ -231,16 +231,29 @@ browser's separate process group. A dedicated session-leader supervisor anchors
 the npm group. The owner blocks cooperative signals across `Popen` so the new
 leader inherits protection before its Python startup code can run; the
 supervisor keeps those signals blocked, explicitly resets them for npm, and
-reports npm's child status over a private pipe without exiting. As soon as
-`Popen` returns, one owner object takes exclusive custody of the process-group
-capability, Popen handle, output streams, and irreversible lifecycle phase.
-Startup mask restoration, status-pipe closure, output capture, normal status,
-spawn failure, and outer timeout all share that owner's cleanup path. With
-asynchronous signals blocked, a successful exact-group KILL irreversibly retires
-the numeric PGID capability before any wait can reap the leader. The anchored
-phase contains no wait, waitpid, poll, or other reaping operation. If an injected
-callback raises, a real exact-group fallback is safe because the unreaped anchor
-prevents PGID reuse; a fallback group-gone error retires authority only after an
+reports npm's child status over a private pipe without exiting. The owner object
+and its output buffers are allocated before acquiring resources. One atomic
+signal-mask call blocks TERM/HUP/INT and returns the old mask before pipe
+acquisition; the new descriptors are captured in owner slots and the `Popen`
+handle is captured by one pre-existing slot assignment before the mask is
+restored. That owner takes exclusive custody of the process-group capability,
+Popen handle, pipe descriptors, and irreversible lifecycle phase. Numeric
+descriptor authority is retired before every potentially ambiguous close and is
+never retried after an unknown side effect. Output pipes are binary and
+nonblocking; the owner drains status, stdout, and stderr itself with
+`select`/`os.read`, so no reader thread or cross-thread stream close can make
+cleanup unbounded. Startup
+mask restoration, status-pipe closure, output capture, normal status, spawn
+failure, and outer timeout all share that owner's cleanup path. One absolute
+cleanup deadline is created before the first TERM or KILL attempt and governs
+cooperative grace, KILL fallback, the absolute `/bin/ps` zombie probe, reap,
+output drain, and closure. The probe uses a closed, minimal environment, null
+stdin/stderr, and only the deadline's remaining timeout. With asynchronous
+signals blocked, a successful exact-group KILL irreversibly retires the numeric
+PGID capability before any wait can reap the leader. The anchored phase contains
+no wait, waitpid, poll, or other reaping operation. If an injected callback
+raises, a real exact-group fallback is safe because the unreaped anchor prevents
+PGID reuse; a fallback group-gone error retires authority only after the bounded
 exact PID status check confirms that anchor is a zombie. Later wait, pipe,
 stream, or signal-mask restoration failures may retry only bounded handle-based
 reap and closure. Cleanup preserves the original business failure code. A

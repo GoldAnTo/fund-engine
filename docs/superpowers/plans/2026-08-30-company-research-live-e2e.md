@@ -924,10 +924,15 @@ minimal environment with `PYTHON=sys.executable`. Launch a dedicated POSIX
 session-leader supervisor that starts npm in the same process group, reports
 npm's exit status over a private pipe, and remains alive until the outer owner
 removes the group. Block TERM/HUP/INT across `Popen` so the new leader is
-protected before its Python startup code runs, immediately restore the owner's
-mask, and immediately transfer the returned handle, PGID, streams, and lifecycle
-phase to one owner primitive before any later startup operation. Explicitly
-reset the command child's dispositions and mask. The verifier has a 180-second
+protected before its Python startup code runs. Allocate the owner and its output
+buffers before resource acquisition, then atomically block TERM/HUP/INT while
+obtaining the old mask before `os.pipe`. Capture the new descriptors in owner
+slots, transfer the returned Popen handle through one no-throw slot assignment,
+and only then restore the mask. That primitive exclusively owns the handle,
+PGID, and descriptors;
+it retires numeric FD authority before an ambiguous close and never retries a
+side-effect-unknown close. Explicitly reset the command child's dispositions and
+mask. The verifier has a 180-second
 internal bound; allow a 300-second outer bound so its sequential
 browser/process/private-runtime cleanup retains a 120-second margin.
 On outer timeout, signal only the exact anchored group with TERM and give the
@@ -941,9 +946,14 @@ KILL transition and irreversibly retire the numeric PGID capability before
 wait/reap. Never call wait, waitpid, or poll while authority is live. A callback
 failure may retry a real exact-group KILL because the anchor remains unreaped;
 retire after a group-gone error only when the exact anchor PID is confirmed as a
-zombie. Mask restoration, status-pipe, stream, thread, and workflow failures all
-use this same owner cleanup path, so none can signal a reused group. Verify every
-recorded detached browser descendant is absent.
+zombie. Establish one absolute cleanup deadline before the first TERM or KILL and
+pass it through cooperative grace, exact fallback, a timeout-bounded absolute
+`/bin/ps` probe with closed/minimal subprocess state, reap, output drain, and
+closure. Drain binary nonblocking status/stdout/stderr pipes in the owner thread
+with `select`/`os.read`; do not use output threads or synchronously close a stream
+owned by a live reader. Mask restoration, status-pipe, stream, and workflow
+failures all use this same owner cleanup path, so none can signal a reused group.
+Verify every recorded detached browser descendant is absent.
 Success is return code zero, exactly one PASS line on stdout, and empty stderr.
 Failure output must be checked for sensitive names and values before returning
 only a bounded prerequisite classification or generic safe diagnostic.
@@ -1078,11 +1088,16 @@ Inspect the final diff and confirm all of these statements are true:
   the exact authenticated browser group, observe all late promises, and only
   then remove the private runtime.
 - [x] Anchor the npm group with a dedicated non-reaped session leader and report
-  the child status through a private pipe. Immediately give one owner primitive
-  the returned Popen handle, PGID, streams, and phase. Startup, normal, error,
-  and timeout paths all remove the exact group while its anchor is live, then
-  retire numeric authority before bounded handle-based reap and closure. The
-  anchored phase has a static and dynamic prohibition on wait, waitpid, or poll.
+  the child status through a private pipe. Allocate one owner primitive before
+  resource acquisition, block cooperative signals before `os.pipe`, and capture
+  the descriptors and returned Popen handle in pre-existing slots before mask
+  restoration.
+  Startup, normal, error, and timeout paths all remove the exact group while its
+  anchor is live, then retire numeric authority before bounded handle-based reap
+  and closure. Numeric FDs retire before ambiguous close, output capture uses
+  owner-thread nonblocking reads, and one absolute deadline governs the entire
+  cleanup. The anchored phase has a static and dynamic prohibition on wait,
+  waitpid, or poll.
 - [x] Separate realistic cleanup-helper preflight time from the deterministic
   cleanup-stall bound, allocate test resources inside `try/finally`, and stress
   the case at least 30 times without helper or runtime residue.
