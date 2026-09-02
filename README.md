@@ -79,6 +79,88 @@ cd .. && python backend/scripts/verify_live_event_api.py
 cd frontend && PYTHON=../backend/.venv/bin/python PW_BROWSER_CHANNEL=chrome node scripts/with-project-node.mjs scripts/verify-live-event-ui.mjs
 ```
 
+### 灌入示例业务数据
+
+一键运行起来的 Postgres 默认是空账本。`/api/v1/research-cases` 走 tenant
+admission 过滤，所以跑完 seed 还必须显式 admit 这个 case 才能在列表接口看到。
+下面以一键运行 (`fund-engine-one-click-*` Compose project) 为例，租户
+`local-one-click` 已在 `.env.one-click.local` 的 `RESEARCH_TENANT_TOKENS` 里
+预置：
+
+```bash
+# 1) 在 backend 容器镜像里跑三个 seed 脚本（fixture 来自宿主 backend 目录）
+docker run --rm --network fund-engine-one-click_default \
+  -e DATABASE_URL='postgresql+psycopg://one_click:$(grep ^ONE_CLICK_POSTGRES_PASSWORD .env.one-click.local | cut -d= -f2)@postgres:5432/fund_engine_one_click' \
+  -v "$(pwd)/backend":/app -w /app \
+  fund-engine-one-click-backend:local \
+  python -m app.scripts.seed_semiconductor_complete_theme_case
+
+docker run --rm --network fund-engine-one-click_default \
+  -e DATABASE_URL='postgresql+psycopg://one_click:$(grep ^ONE_CLICK_POSTGRES_PASSWORD .env.one-click.local | cut -d= -f2)@postgres:5432/fund_engine_one_click' \
+  -v "$(pwd)/backend":/app -w /app \
+  fund-engine-one-click-backend:local \
+  python -m app.scripts.seed_storage_chain_case
+
+docker run --rm --network fund-engine-one-click_default \
+  -e DATABASE_URL='postgresql+psycopg://one_click:$(grep ^ONE_CLICK_POSTGRES_PASSWORD .env.one-click.local | cut -d= -f2)@postgres:5432/fund_engine_one_click' \
+  -v "$(pwd)/backend":/app -w /app \
+  fund-engine-one-click-backend:local \
+  python -m app.scripts.seed_ai_compute_case
+```
+
+`seed_*` 脚本只 freeze 文档、建 case/theses/evidence，并把 frozen document 写进
+`case_document_versions`。**它不会建 `case_tenant_admissions`**，因此
+`/api/v1/research-cases` 默认看不到这些 case——还差一步：
+
+```bash
+# 2) 为每个 seed 出来的 case 建 tenant admission，让本地租户能看到
+docker run --rm --network fund-engine-one-click_default \
+  -e DATABASE_URL='postgresql+psycopg://one_click:$(grep ^ONE_CLICK_POSTGRES_PASSWORD .env.one-click.local | cut -d= -f2)@postgres:5432/fund_engine_one_click' \
+  -v "$(pwd)/backend":/app \
+  -w /app \
+  fund-engine-one-click-backend:local \
+  python - <<'PY'
+import os, uuid
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+from app.services.case_tenant_access import CaseTenantAccess
+from app.models.ledger import CaseDocumentVersion, ResearchCase
+
+engine = create_engine(os.environ["DATABASE_URL"], future=True)
+with Session(engine) as session:
+    cases = session.scalars(select(ResearchCase)).all()
+    for case in cases:
+        attached = session.scalar(
+            select(CaseDocumentVersion.document_version_id)
+            .where(CaseDocumentVersion.research_case_id == case.id)
+            .limit(1)
+        )
+        if attached is None:
+            print(f"SKIP (no doc attached): {case.id} {case.title}")
+            continue
+        try:
+            CaseTenantAccess(session).admit_legacy_case(
+                case_id=case.id,
+                tenant_id="local-one-click",
+                initial_document_version_id=attached,
+                admitted_by="seed-script",
+                admission_reason="auto-admit seeded fixtures",
+            )
+            print(f"ADMIT: {case.id} {case.title}")
+        except Exception as exc:
+            print(f"FAIL {case.id}: {exc}")
+    session.commit()
+PY
+```
+
+完成后用前端投资研究入口 (http://127.0.0.1:8080/research) 或直接调 API 验证：
+
+```bash
+TOKEN=$(grep ^RESEARCH_BEARER_TOKEN .env.one-click.local | cut -d= -f2)
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  'http://127.0.0.1:8000/api/v1/research-cases?limit=10'
+```
+
 Company Research 真实验收要求仓库自有的 backend venv、`.nvmrc` 精确指定的 Node 24、
 前端依赖和已安装的 Playwright 浏览器。在普通 checkout 根目录执行：
 

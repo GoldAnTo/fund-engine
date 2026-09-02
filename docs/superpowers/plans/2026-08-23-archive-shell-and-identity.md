@@ -19,10 +19,38 @@
 - Test: `backend/tests/underwriting/test_research_revision_diff.py`
 - Test: `backend/tests/underwriting/test_research_revision_diff_api.py`
 
-- [ ] **Step 1: Write RED tests:** assert `revision_history` and its API response include `object_kind`, `canonical_name`, and `external_key` for the immutable object addressed by the revision family.
-- [ ] **Step 2: Confirm RED:** run `cd backend && pytest -q tests/underwriting/test_research_revision_diff.py tests/underwriting/test_research_revision_diff_api.py -k history_identity`; it must fail before the fields exist.
-- [ ] **Step 3: Implement persisted-only identity:** add the three fields to frozen `RevisionHistory`; resolve exactly the addressed `UnderwritingResearchObject` under `Session.no_autoflush`, raising `ValidationError` for a missing/mismatched row. Add strict `ResearchObjectKind`, `canonical_name`, and `external_key` to `ResearchRevisionHistoryResponse` and map only this read-service result. Do not query a current security, event, pricing, or fixture record.
-- [ ] **Step 4: Confirm GREEN and commit:** run `cd backend && pytest -q tests/underwriting/test_research_revision_diff.py tests/underwriting/test_research_revision_diff_api.py -k 'history or archive'`, then commit only Task 1 files as `feat: identify immutable research revision histories`.
+- [ ] **Step 1: Write RED tests.**
+
+```python
+def test_revision_history_includes_immutable_object_identity(session, revision_chain) -> None:
+    history = ResearchRevisionDiffService(session).revision_history(
+        revision_chain.object_id, revision_chain.version_kind,
+    )
+    assert (history.object_kind, history.canonical_name, history.external_key) == (
+        "company", "宁德时代", "300750.SZ",
+    )
+```
+
+Add an API assertion that `object_kind`, `canonical_name`, and `external_key` are returned with a history response.
+
+- [ ] **Step 2: Confirm RED.**
+
+Run: `cd backend && pytest -q tests/underwriting/test_research_revision_diff.py tests/underwriting/test_research_revision_diff_api.py -k history_identity`
+
+Expected: FAIL because history does not expose object identity.
+
+- [ ] **Step 3: Implement persisted-only identity.**
+
+Add these fields to the frozen `RevisionHistory` type and resolve exactly the addressed `UnderwritingResearchObject` under `Session.no_autoflush`; a missing/mismatched row raises `ValidationError`. Add strict `ResearchObjectKind`, `canonical_name`, and `external_key` fields to `ResearchRevisionHistoryResponse`, and map only the read-service result in the router. Do not query a current security, event, pricing, or fixture record.
+
+- [ ] **Step 4: Confirm GREEN and commit.**
+
+Run: `cd backend && pytest -q tests/underwriting/test_research_revision_diff.py tests/underwriting/test_research_revision_diff_api.py -k 'history or archive'`
+
+```bash
+git add backend/app/underwriting/services/research_revision_diff.py backend/app/underwriting/api/schemas.py backend/app/underwriting/api/router.py backend/tests/underwriting/test_research_revision_diff.py backend/tests/underwriting/test_research_revision_diff_api.py
+git commit -m "feat: identify immutable research revision histories"
+```
 
 ### Task 2: Isolate archive routes and render returned identity
 
@@ -33,10 +61,52 @@
 - Test: `frontend/src/app/routes.test.tsx`
 - Test: `frontend/src/features/underwriting/ResearchArchivePage.test.tsx`
 
-- [ ] **Step 1: Write RED tests:** deep-link archive rendering finds `aria-label="不可变研究档案导航"` and does not mount `aria-label="研究工作台导航"`; a checked history response renders its returned canonical name, external key, and object kind.
-- [ ] **Step 2: Confirm RED:** run `cd frontend && npm test -- ResearchArchivePage.test.tsx routes.test.tsx`; it must fail while archive routes are inside `AppShell` and do not render identity.
-- [ ] **Step 3: Implement the isolated shell:** create `UnderwritingArchiveShell` containing only archive title/directory navigation and `<Outlet />`; put the two underwriting archive routes under it, outside the `AppShell` route. The shell imports no event, worker, fund-disclosure, mock, or research client. Render only `history.canonical_name`, `history.external_key`, and a controlled kind label; never derive identity from URL, current records, or fixtures.
-- [ ] **Step 4: Confirm GREEN and commit:** run `cd frontend && npm test -- ResearchArchivePage.test.tsx routes.test.tsx underwritingResearchApi.test.ts && npm run typecheck`, then commit only Task 2 files as `feat: isolate immutable research archive routes`.
+- [ ] **Step 1: Write RED tests.**
+
+```tsx
+it("renders the archive outside the event AppShell", async () => {
+  renderAt("/underwriting/research/company-id/catl");
+  expect(await screen.findByLabelText("不可变研究档案导航")).toBeVisible();
+  expect(screen.queryByLabelText("研究工作台导航")).not.toBeInTheDocument();
+});
+
+it("shows only identity returned by frozen revision history", async () => {
+  renderAt("/underwriting/research/company-id/catl");
+  expect(await screen.findByRole("heading", { name: "宁德时代" })).toBeVisible();
+  expect(screen.getByText("300750.SZ")).toBeVisible();
+});
+```
+
+- [ ] **Step 2: Confirm RED.**
+
+Run: `cd frontend && npm test -- ResearchArchivePage.test.tsx routes.test.tsx`
+
+Expected: FAIL because the archive is inside `AppShell` and no returned identity is rendered.
+
+- [ ] **Step 3: Implement the isolated shell.**
+
+```tsx
+export function UnderwritingArchiveShell() {
+  return <main className="ura-shell" aria-label="不可变研究档案导航"><Outlet /></main>;
+}
+
+<Route element={<UnderwritingArchiveShell />}>
+  <Route path="underwriting/research" element={<ResearchArchiveRoute />} />
+  <Route path="underwriting/research/:objectId/:versionKind" element={<ResearchArchiveRoute />} />
+</Route>
+<Route element={<AppShell />}>…event and case routes only…</Route>
+```
+
+The shell imports no event, worker, fund-disclosure, mock, or research client. It has only an archive title and directory link. Display the checked history response’s `canonical_name`, `external_key`, and controlled object-kind label; never derive identity from URL, current records, or fixtures.
+
+- [ ] **Step 4: Confirm GREEN and commit.**
+
+Run: `cd frontend && npm test -- ResearchArchivePage.test.tsx routes.test.tsx underwritingResearchApi.test.ts && npm run typecheck`
+
+```bash
+git add frontend/src/app/UnderwritingArchiveShell.tsx frontend/src/app/routes.tsx frontend/src/features/underwriting/ResearchArchivePage.tsx frontend/src/app/routes.test.tsx frontend/src/features/underwriting/ResearchArchivePage.test.tsx
+git commit -m "feat: isolate immutable research archive routes"
+```
 
 ### Task 3: Safely generate the contract and release-gate it
 
@@ -46,14 +116,52 @@
 - Modify: `docs/architecture/underwriting-research.md`
 - Test: `backend/tests/underwriting/test_openapi_dump.py`
 
-- [ ] **Step 1: Write RED OpenAPI test:** assert `ResearchRevisionHistoryResponse` contains `object_kind`, `canonical_name`, and `external_key`.
-- [ ] **Step 2: Confirm RED:** run `cd backend && pytest -q tests/underwriting/test_openapi_dump.py -k revision_history_identity`.
-- [ ] **Step 3: Safely regenerate:** save `git diff -- frontend/openapi.json` to a mktemp patch and assert its numstat is exactly `8 8 frontend/openapi.json`; run backend dump plus frontend contract generation/typecheck/build; stage only generated `frontend/openapi.json` and `frontend/src/contracts/v1.ts`, verify staged OpenAPI has no `Unprocessable Content`, then apply the saved user patch and reassert exact `8/8` unstaged diff. Stop without staging if restoration fails. Replace temporary client history types with generated aliases only after generation.
-- [ ] **Step 4: Document and verify:** document that identity comes from immutable research-object history and that the archive shell never loads event/current data. Run full underwriting pytest, Python compileall, focused frontend tests, `git diff --check`, and status. Commit feature files plus staged generated files only; leave the eight-hunk user patch unstaged.
+- [ ] **Step 1: Add RED OpenAPI identity assertion.**
+
+```python
+def test_revision_history_contract_includes_research_object_identity(openapi) -> None:
+    schema = openapi["components"]["schemas"]["ResearchRevisionHistoryResponse"]
+    assert {"object_kind", "canonical_name", "external_key"} <= set(schema["properties"])
+```
+
+- [ ] **Step 2: Confirm RED.**
+
+Run: `cd backend && pytest -q tests/underwriting/test_openapi_dump.py -k revision_history_identity`
+
+- [ ] **Step 3: Safely regenerate, stage only generated changes, restore the user patch.**
+
+```bash
+user_patch="$(mktemp /tmp/underwriting-openapi-user.XXXXXX.patch)"
+git diff -- frontend/openapi.json > "$user_patch"
+test "$(git diff --numstat -- frontend/openapi.json)" = $'8\t8\tfrontend/openapi.json'
+(cd backend && python scripts/dump_openapi.py)
+(cd frontend && npm run gen:contract && npm run typecheck && npm run build)
+git add frontend/openapi.json frontend/src/contracts/v1.ts
+git diff --cached -- frontend/openapi.json | (! grep -q 'Unprocessable Content')
+git apply --whitespace=nowarn "$user_patch"
+test "$(git diff --numstat -- frontend/openapi.json)" = $'8\t8\tfrontend/openapi.json'
+```
+
+Stop without staging if restoration fails. Replace temporary client history types with generated aliases only after generation.
+
+- [ ] **Step 4: Document and verify.**
+
+Document that archive identity comes from the immutable research object selected by the historical family, and the archive shell never loads event/current data. Run:
+
+```bash
+cd backend && pytest -q tests/underwriting
+python -m compileall -q app
+cd ../frontend && npm test -- ResearchArchivePage.test.tsx routes.test.tsx underwritingResearchApi.test.tsx
+git diff --check
+git status --short
+```
+
+Commit feature files and staged generated files only. The eight-hunk user patch stays unstaged.
 
 ## Acceptance checklist
 
-- [ ] A deep-linked archive identifies its immutable company/industry object without a current event or market lookup.
+- [ ] A deep-linked archive identifies its immutable company/industry object without looking up current event or market data.
 - [ ] Archive routes never mount `AppShell`, event polling, run strips, search, or automatic-research controls.
-- [ ] Object identity, history, revision, and adjacent diff remain checked, persisted-only, and fail closed.
-- [ ] Generated contract matches history identity and the user OpenAPI patch stays outside every feature commit.
+- [ ] Object identity, history, revision and adjacent diff remain checked, persisted-only, and fail closed.
+- [ ] Generated contract matches history identity; the user OpenAPI patch remains outside every feature commit.
+
