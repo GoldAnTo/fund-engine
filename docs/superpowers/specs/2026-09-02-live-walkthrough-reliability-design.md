@@ -13,15 +13,22 @@ within an explicit bound, and report historical Case non-existence honestly.
    records it as `case_not_created_at_cutoff`, rather than an operational
    failure.
 2. The extraction command maps only `LLMProviderError` and
-   `LLMMalformedResponseError` to `503 upstream_unavailable`. Programming and
-   persistence errors remain `500` so they cannot be hidden as provider
-   incidents.
+   `LLMMalformedResponseError` to `503 upstream_unavailable`. A model candidate
+   that fails the ledger's quote-continuity validation is discarded like other
+   malformed candidate fields; programming and persistence errors remain 500.
 3. `LLMClient` performs a small, configurable number of retries for its
    provider exception boundary. Every attempt has the existing finite timeout;
    a final failure still raises the stable safe error and creates one failed
    `AIRun` through the existing extractor transaction.
 4. The Gildata client uses the same bounded retry policy for transport errors
    only. Protocol and application-level response errors are not retried.
+5. The walkthrough preserves both ledger review gates: it confirms atomic
+   claim candidates before they publish `SourceStatement`s, and confirms
+   `evidence_link` proposals before it reviews the published `EvidenceLink`s.
+   A proposal identifier is never treated as an evidence-link identifier.
+6. Assessment review is constrained to its frozen evidence snapshot. A later
+   factual cross-check remains an audit observation and never upgrades a
+   zero-evidence assessment to a directional conclusion.
 
 ## Verification
 
@@ -30,6 +37,8 @@ within an explicit bound, and report historical Case non-existence honestly.
 - API tests prove historical pre-creation reads are represented as an expected
   walkthrough observation and that genuine programming errors still return
   500.
+- Walkthrough support tests fix the payload contracts for both explicit human
+  review stages.
 - The live Cambricon walkthrough runs from P0 through P12 with configured
   credentials. Its summary reports provider outcomes separately from
   application defects and never prints credentials or licensed request URLs.

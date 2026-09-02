@@ -26,7 +26,12 @@ from app.ai.error_safety import AI_OPERATION_ERROR_MESSAGE
 from app.ai.prompts import EXTRACT_PROMPT_VERSION, EXTRACT_SYSTEM
 from app.ai.runs import record_run
 from app.domain.atomic_claims import AtomicClaimDraft
-from app.models.ledger import AtomicClaimCandidate, DocumentVersion, SourceSpan
+from app.models.ledger import (
+    AtomicClaimCandidate,
+    DocumentVersion,
+    SourceSpan,
+    ValidationError,
+)
 from app.services.atomic_claims import AtomicClaimService
 from app.services.table_extraction import FinancialTableExtractor
 
@@ -206,7 +211,7 @@ class StatementExtractor:
                         authority_level=authority_level,
                         run_ref=run_ref,
                     )
-                except (KeyError, TypeError, ValueError):
+                except (KeyError, TypeError, ValueError, ValidationError):
                     continue
                 created.append(candidate)
 

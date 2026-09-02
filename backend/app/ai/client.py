@@ -11,6 +11,7 @@ mock mode) and is persisted on every ``AIRun`` audit record.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from typing import Any
@@ -26,6 +27,10 @@ DEFAULT_MODEL = "gpt-4o-mini"
 # (versions/regions may still drift), but combined with temperature=0 it
 # closes the bulk of the variance.  See walkthrough defect 7.
 DEFAULT_TEMPERATURE = 0.0
+# A provider call is part of a synchronous worker/API request.  Keep a finite
+# ceiling so one unavailable upstream cannot indefinitely occupy that worker.
+DEFAULT_TIMEOUT_SECONDS = 90.0
+DEFAULT_MAX_ATTEMPTS = 2
 LLM_PROVIDER_ERROR_MESSAGE = "LLM provider request failed"
 LLM_MALFORMED_RESPONSE_MESSAGE = "LLM provider returned an invalid response"
 
@@ -60,12 +65,20 @@ class LLMClient:
         mock: bool = False,
         temperature: float = DEFAULT_TEMPERATURE,
         seed: int | None = None,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     ) -> None:
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be a finite positive number")
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be a positive integer")
         self.model_version = model_version
         self._client = client
         self._mock = mock
         self._temperature = temperature
         self._seed = seed
+        self._timeout_seconds = timeout_seconds
+        self._max_attempts = max_attempts
 
     # ------------------------------------------------------------------ factory
 
@@ -78,6 +91,11 @@ class LLMClient:
           call.  Zero freezes sampling so reruns land on the same token.
         - ``LLM_SEED`` (default unset): forwarded to ``chat.completions.create``
           as ``seed``. Empty means "do not pin"; zero is a real seed.
+        - ``LLM_TIMEOUT_SECONDS`` (default 90): hard per-request limit for
+          live provider calls. The SDK's implicit retries are disabled so this
+          remains an actual bound rather than several stacked timeout windows.
+        - ``LLM_MAX_ATTEMPTS`` (default 2): bounded application-level retries
+          for transient provider transport errors.
 
         Without ``LLM_API_KEY``, only ``APP_ENV=test`` may build a deterministic
         mock client. Every other environment is a live runtime and fails
@@ -97,6 +115,10 @@ class LLMClient:
         temperature = float(os.getenv("LLM_TEMPERATURE", str(DEFAULT_TEMPERATURE)))
         raw_seed = os.getenv("LLM_SEED", "").strip()
         seed: int | None = int(raw_seed) if raw_seed else None
+        timeout_seconds = float(
+            os.getenv("LLM_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
+        )
+        max_attempts = int(os.getenv("LLM_MAX_ATTEMPTS", str(DEFAULT_MAX_ATTEMPTS)))
 
         if not api_key:
             return cls(
@@ -104,17 +126,26 @@ class LLMClient:
                 mock=True,
                 temperature=temperature,
                 seed=seed,
+                timeout_seconds=timeout_seconds,
+                max_attempts=max_attempts,
             )
 
         from openai import OpenAI
 
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout_seconds,
+            max_retries=0,
+        )
         return cls(
             model_version=model,
             client=client,
             mock=False,
             temperature=temperature,
             seed=seed,
+            timeout_seconds=timeout_seconds,
+            max_attempts=max_attempts,
         )
 
     # ------------------------------------------------------------------ core
@@ -134,13 +165,17 @@ class LLMClient:
             "messages": messages,
             "response_format": {"type": "json_object"},
             "temperature": self._temperature,
+            "timeout": self._timeout_seconds,
         }
         if self._seed is not None:
             create_kwargs["seed"] = self._seed
-        try:
-            response = self._client.chat.completions.create(**create_kwargs)
-        except (OpenAIError, httpx.HTTPError, TimeoutError, ConnectionError) as exc:
-            raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE) from exc
+        for attempt in range(self._max_attempts):
+            try:
+                response = self._client.chat.completions.create(**create_kwargs)
+                break
+            except (OpenAIError, httpx.HTTPError, TimeoutError, ConnectionError) as exc:
+                if attempt + 1 == self._max_attempts:
+                    raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE) from exc
 
         try:
             content = response.choices[0].message.content

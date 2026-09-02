@@ -201,6 +201,28 @@ def test_transport_error_does_not_echo_token_bearing_url():
     client.close()
 
 
+def test_transport_error_retries_once_before_succeeding():
+    attempts = 0
+    inner_text = json.dumps({"code": "0", "results": []})
+
+    def handler(request):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectError("transient disconnect", request=request)
+        return httpx.Response(200, json=_envelope(inner_text))
+
+    client = GildataMCPClient(
+        token="tok",
+        max_attempts=2,
+        transport=_mock_transport(handler),
+    )
+
+    assert client.call_tool("FinQuery", {"query": "x"}) == inner_text
+    assert attempts == 2
+    client.close()
+
+
 def test_list_tools(monkeypatch):
     tools = [{"name": "FinQuery"}, {"name": "FinancialResearchReport"}]
 

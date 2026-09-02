@@ -58,6 +58,9 @@ LLM_BASE_URL=<OpenAI-compatible endpoint>
 LLM_MODEL=<provider model identifier>
 LLM_TEMPERATURE=0
 LLM_SEED=<optional integer>
+LLM_TIMEOUT_SECONDS=90
+LLM_MAX_ATTEMPTS=2
+GILDATA_MAX_ATTEMPTS=2
 GILDATA_TOKEN=<secret>
 ```
 

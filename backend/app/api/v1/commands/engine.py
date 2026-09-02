@@ -18,13 +18,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.assessment_gen import AssessmentGenerator
-from app.ai.client import LLMClient
+from app.ai.client import LLMClient, LLMProviderError
 from app.ai.extraction import StatementExtractor
 from app.ai.runs import record_run
 from app.ai.proposal import EvidenceProposer
 from app.api.v1.commands.common import commit_or_rollback
 from app.db import get_db
-from app.errors import NotFoundError, ValidationFailedError
+from app.errors import NotFoundError, UpstreamUnavailableError, ValidationFailedError
 from app.models.ledger import (
     CaseDocumentVersion,
     DocumentVersion,
@@ -366,6 +366,12 @@ def extract_statements(
     client = LLMClient.from_env()
     try:
         candidates = StatementExtractor(client).extract(document_version_id, db)
+    except LLMProviderError as exc:
+        # A timeout / connection error is a retryable dependency failure, not
+        # an application defect. StatementExtractor has already persisted the
+        # failed AIRun in its clean post-provider transaction.
+        commit_or_rollback(db)
+        raise UpstreamUnavailableError("LLM provider is temporarily unavailable") from exc
     except Exception:
         # StatementExtractor appends the failed AIRun in the post-provider
         # transaction; preserve it before the request unwinds to a generic 500.

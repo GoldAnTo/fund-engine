@@ -14,6 +14,9 @@ for provider_env_name in (
     "LLM_MODEL",
     "LLM_TEMPERATURE",
     "LLM_SEED",
+    "LLM_TIMEOUT_SECONDS",
+    "LLM_MAX_ATTEMPTS",
+    "GILDATA_MAX_ATTEMPTS",
     "GILDATA_TOKEN",
 ):
     os.environ.pop(provider_env_name, None)

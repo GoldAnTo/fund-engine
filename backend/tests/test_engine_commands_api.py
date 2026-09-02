@@ -131,6 +131,41 @@ def test_extract_unknown_version_returns_404(cmd_client, cmd_seeded):
     assert resp.status_code == 404
 
 
+def test_extract_discards_noncontinuous_llm_quote(cmd_client, cmd_seeded, monkeypatch):
+    """An invalid model candidate must not fail the whole document run."""
+    from app.ai.client import LLMClient
+    from app.models.ledger import AIRun, SourceSpan
+
+    version = _new_pending_version(cmd_seeded)
+    span = cmd_seeded.scalar(
+        select(SourceSpan).where(SourceSpan.document_version_id == version.id)
+    )
+    assert span is not None
+
+    def malformed_candidate(*_args, **_kwargs):
+        return {
+            "statements": [
+                {
+                    "span_id": str(span.id),
+                    "quote": "invented quote",
+                    "quote_start": 0,
+                    "quote_end": 14,
+                    "normalized_text": "revenue increased",
+                    "kind": "reported_claim",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(LLMClient, "chat_json", malformed_candidate)
+
+    response = cmd_client.post(f"/api/v1/documents/{version.id}/extract")
+
+    assert response.status_code == 201, response.text
+    assert response.json()["candidate_count"] == 0
+    run = cmd_seeded.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert run is not None and run.status == "success"
+
+
 def test_extract_provider_failure_keeps_failed_airun_after_request_rollback(
     cmd_client, cmd_seeded, monkeypatch
 ):
@@ -164,6 +199,43 @@ def test_extract_provider_failure_keeps_failed_airun_after_request_rollback(
         assert failed_run is not None
         assert failed_run.error == "AI operation failed"
         assert "secret-token" not in failed_run.error
+
+
+def test_extract_llm_timeout_is_reported_as_retryable_upstream_failure(
+    cmd_client, cmd_seeded, monkeypatch
+):
+    """A finite LLM timeout is an expected dependency failure, not a 500."""
+    from sqlalchemy.orm import Session
+
+    from app.ai.client import LLMClient, LLMProviderError
+    from app.models.ledger import AIRun
+
+    version = _new_pending_version(cmd_seeded)
+    version_id = version.id
+
+    def timeout_provider(*_args, **_kwargs):
+        raise LLMProviderError("LLM provider request failed")
+
+    monkeypatch.setattr(LLMClient, "chat_json", timeout_provider)
+
+    response = cmd_client.post(f"/api/v1/documents/{version_id}/extract")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "upstream_unavailable"
+    assert "provider" in response.json()["error"]["message"].lower()
+    cmd_seeded.rollback()
+
+    with Session(cmd_seeded.get_bind()) as check:
+        failed_run = check.scalar(
+            select(AIRun)
+            .where(AIRun.kind == "extract", AIRun.status == "failed")
+            .where(
+                AIRun.input_ref["document_version_id"].as_string()
+                == str(version_id)
+            )
+        )
+        assert failed_run is not None
+        assert failed_run.error == "AI operation failed"
 
 
 def test_extract_provider_failure_rolls_back_rule_based_candidates(
