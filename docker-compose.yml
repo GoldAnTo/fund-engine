@@ -1,3 +1,4 @@
+# Local development only. Keep default development credentials off the LAN.
 services:
   postgres:
     image: postgres:16
@@ -6,7 +7,7 @@ services:
       POSTGRES_USER: evidence
       POSTGRES_PASSWORD: evidence
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -20,8 +21,8 @@ services:
     environment:
       NEO4J_AUTH: neo4j/evidence-graph
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
     volumes:
       - neo4j-data:/data
 

@@ -11,6 +11,14 @@
 系统的成功标准不是"生成一份看起来完整的研究报告"，而是让研究员持续回答：
 当前命题得到什么支持、受到什么反驳、仍缺什么证据、判断如何随时间变化。
 
+## 当前 checkout 状态（2026-09-06）
+
+前端默认使用 **FundClaw 真实事件研究工作台**，已接入研究列表、创建与详情；`/?client=mock` 显式打开演示。API 失败不会回退示例。完整研究审核、冻结回放与导出仍在恢复中，详见实施跟踪；下述架构包含目标能力。
+
+旧 `POST /api/v1/research-cases` 无来源创建入口现已退役：未认证返回 401，认证后返回 409，并指引使用 `POST /api/v1/event-research` 建立有原始资料和租户归属的 Case；旧 workbench 与新增 thesis 均检查归属。
+
+完整检查、已实施修复和后续优先级见 [项目检测报告](docs/evaluation/2026-09-06-project-audit.md)。旧 Company Research 浏览器验收脚本随旧前端退役而缺失，相关验收目前不能通过，不能用演示 E2E 替代。
+
 ## 三条不可妥协的原则
 
 1. **证据始终可追溯** — 每个判断可下钻到带确切位置的原文片段（门禁强制）
@@ -52,32 +60,28 @@
 ## 快速开始
 
 ```bash
-# 后端：安装与测试（sqlite 默认，pg/neo4j 测试自动跳过）
-pip install -e "./backend[dev]"
-cd backend && python -m pytest -q                    # 218 passed
+# 仓库根目录：后端隔离测试环境
+python3.11 -m venv backend/.venv
+backend/.venv/bin/python -m pip install -e "./backend[dev]"
+(cd backend && .venv/bin/python -m pytest -q)
 
-# 发布门禁：10 项金标检查（fail-closed）
-docs/evaluation/reproduce.sh                         # 9 PASS + 1 SKIP
+# 冻结账本发布门禁，使用临时 SQLite；非在线 LLM 质量测试
+APP_ENV=test bash docs/evaluation/reproduce.sh
 
-# 召回 A/B 评估（混合召回 vs BM25 基线）
-cd backend && python scripts/eval_recall_ab.py       # recall@20: 0.7333 → 1.0000
-
-# 前端：开发与测试
-cd frontend && npm ci
-# 真实本地 API：先复制 frontend/.env.local.example 为 frontend/.env.local，
-# 填写后端地址与 RESEARCH_TENANT_TOKENS 中已配置的 Bearer token。令牌由
-# Vite 本地代理注入，浏览器不会读取该值，再启动。
-npm run dev:live                                     # 默认真实 API，不会回退到 mock
-npm run dev:mock                                     # 显式内存 mock，用于 UI 演示和隔离测试
-npm test                                             # 62 vitest
-npm run e2e                                          # 32 条 Playwright（macOS 12 用 PW_BROWSER_CHANNEL=chrome）
-
-# 真实 HTTP 闭环：临时 SQLite + Uvicorn + Bearer tenant，创建并读取事件 Case
-cd .. && python backend/scripts/verify_live_event_api.py
-
-# 默认前端真实闭环：临时 API + Vite + Chrome，浏览器创建事件后在事件台读回
-cd frontend && PYTHON=../backend/.venv/bin/python PW_BROWSER_CHANNEL=chrome node scripts/with-project-node.mjs scripts/verify-live-event-ui.mjs
+# 前端需要 .nvmrc 指定的 Node 24
+nvm install
+nvm use
+cd frontend
+npm ci
+npm run dev                         # 配置 frontend/.env.local 后连接真实 API
+npm test
+npm run build
+npx playwright install chromium
+npm run e2e                         # 桌面/移动演示交互回归
+npm run e2e:live                    # 隔离后端真实 HTTP 创建/刷新
 ```
+
+后端全量测试仍保留旧前端联调契约，缺失脚本相关失败见检测报告。当前不提供 `dev:live`、`dev:mock` 或 `verify:live-company-research` 命令。后端真实 HTTP 事件检查可独立运行 `backend/.venv/bin/python backend/scripts/verify_live_event_api.py`。
 
 ### 灌入示例业务数据
 
@@ -161,60 +165,11 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
   'http://127.0.0.1:8000/api/v1/research-cases?limit=10'
 ```
 
-Company Research 真实验收要求仓库自有的 backend venv、`.nvmrc` 精确指定的 Node 24、
-前端依赖和已安装的 Playwright 浏览器。在普通 checkout 根目录执行：
+### 旧 Company Research 浏览器验收待恢复
 
-```bash
-python3.11 -m venv backend/.venv
-backend/.venv/bin/python -m pip install -e "./backend[dev]"
-nvm install
-nvm use
-test "$(node -p 'process.versions.node.split(".")[0]')" = "$(tr -d 'v[:space:]' < .nvmrc)"
-cd frontend
-npm ci
-npx playwright install chromium
+旧验收覆盖临时 SQLite、真实 API/worker、Bearer 代理、人工复核、冻结版本回放和 Markdown 导出。新前端尚未接入这些流程，相应 `frontend/scripts` 已不存在。`.github/workflows/backend.yml` 中的真实浏览器门禁仍会失败，保留这个缺口有助于避免把演示发布误认为产品验收。
 
-# 真实 Company Research 浏览器闭环：隔离 SQLite + 真实 API/worker + 非 mock 前端
-PYTHON=../backend/.venv/bin/python npm run verify:live-company-research
-```
-
-Linux CI 使用 `npx playwright install --with-deps chromium`。使用已单独安装的本地
-Chrome 时，把最后一条命令改为
-`PYTHON=../backend/.venv/bin/python PW_BROWSER_CHANNEL=chrome npm run verify:live-company-research`；
-channel 未设置时使用已安装的 Playwright Chromium。当前命令只声明仓库现有
-macOS/Linux 验证路径，不声明其他平台支持。
-
-在 `.worktrees/<name>` checkout 中没有本地 `backend/.venv` 时，不设置 `PYTHON`；从该
-worktree 的 `frontend` 目录运行 `npm run verify:live-company-research`，命令会按仓库受信
-策略查找主 checkout 的 `backend/.venv/bin/python`，不会退回宿主 Python。
-
-pytest 默认只运行快速契约、超时和安全检查，并明确跳过外部浏览器验收。完成上述依赖安装
-后，从普通 checkout 根目录显式选择真实验收；缺少 Node、npm、backend venv 或浏览器时
-该 opt-in 测试会失败而不会跳过：
-
-```bash
-RUN_LIVE_COMPANY_RESEARCH=1 backend/.venv/bin/python -m pytest backend/tests/test_verify_live_company_research_ui.py -q
-PW_BROWSER_CHANNEL=chrome RUN_LIVE_COMPANY_RESEARCH=1 backend/.venv/bin/python -m pytest backend/tests/test_verify_live_company_research_ui.py -q
-```
-
-从 `.worktrees/<name>` 根目录运行同一测试时，将解释器改为
-`../../backend/.venv/bin/python`。
-
-该命令为每次运行创建独立 SQLite，并启动真实 FastAPI、Company Research worker、
-Bearer 代理和非 mock Vite 前端。它只加载受治理的 Alphabet 身份底座，研究内容来自
-仓库内冻结且已认证的 Alphabet fixture；不会访问外部资料提供商或 LLM。初始化、逐条
-证据确认、判断确认和发布等所有人工写入都由浏览器控件触发。验收必须生成冻结 revision，
-通过浏览器回放该 revision，并校验下载的 Markdown 文件名、正文和内容哈希。
-
-无论成功还是失败，命令都会有界停止自己启动的进程并删除本次隔离数据库和私有临时目录。
-若进程停止或临时目录身份复核失败，命令会非零退出；它不会删除未通过父目录、所有者、权限
-和文件身份检查的路径，也不会用清理错误覆盖原始业务失败。失败诊断有界且脱敏，不输出令牌、
-请求正文、数据库内容或宿主环境。Python 外层进程所有者始终排空 stdout/stderr 以避免管道
-死锁，但每个流最多保留 16 KiB；任一流超限时，后续字节会被丢弃，并在完整清理后以固定、
-不含原始输出或路径的错误非零退出。
-
-本仓库要求使用 `.nvmrc` 固定的 Node.js 24。真实人工闭环需要同时运行 API
-与后台 worker：`cd backend && python -m app.scripts.run_research_worker --loop`。
+研究列表、创建与详情已接入，`npm run e2e:live` 验证隔离后端上的创建/刷新。下一步继续恢复任务进度、证据复核、版本回放和导出；`npm run e2e` 仍只验证演示交互。
 
 ## 一键本地运行（Docker）
 
@@ -299,6 +254,39 @@ PAX/GNU 扩展头、链接或特殊文件。checksum manifest 上限为 64 KiB�
 LLM 与 Gildata 凭证是可选的：未配置时产品壳、CATL/Alphabet 身份底座和 worker
 心跳仍可运行，但任何实际 AI 操作会失败关闭，不会回退为 mock 研究结果。
 
+LLM 客户端默认限制序列化消息为 1 MiB、响应正文为 2 MiB，可通过
+`LLM_MAX_INPUT_BYTES` 和 `LLM_MAX_RESPONSE_BYTES` 设置为 1 字节至 16 MiB 范围内的整数
+字节数。按 UTF-8 字节计量；超大输入在调用前拒绝，超大响应在 JSON 解析或修复前拒绝。
+响应检查发生在 SDK 接收正文之后，因此不限制网络下载量或已产生的模型费用。
+这两项也不代替模型 token 上限和研究任务总费用预算。
+
+每次模型请求（包含重试）还会发送 `max_completion_tokens`，默认 16,384；
+`LLM_MAX_COMPLETION_TOKENS` 可配置为 1 至 131,072 的整数。该值限制单次生成，
+支持该协议的推理模型通常把推理 token 计入上限；模型自身可能要求更小的上限。
+达到上限而截断的输出仍按无效响应拒绝，不会放宽后自动重试。兼容服务必须支持此参数；
+参数被拒绝时调用失败，不会自动移除限制。多次调用、输入 token 和费用仍需计入任务预算，
+此设置不代表整个研究任务的花费已受控。当前未进行付费 provider 验证。
+
+迁移 `0071` 为只追加的 `ai_runs` 增加可空 `usage` 字段。抽取、证据提议和评估
+会在各自操作上下文中记录每次供应商请求的用量，评估中的合规改写也归入同一操作。
+供应商返回的 prompt/completion/total token 数必须是非负整数且总和一致；缺失、
+不一致或网络失败记为 `unavailable` 和空值，不能作为零费用计算。旧记录的 `usage`
+为空，新操作没有外部调用时 attempts 为空；mock 不会虚构供应商用量。
+输出被拒绝但已收到有效用量时，失败操作仍保留这些数字。记录不包含提示词或供应商错误正文。
+这些数据随原有操作事务保存；取消而不落审计行、事务回滚、进程终止以及尚未接入的调用路径
+仍可能遗漏消耗。因此它是操作审计信息，尚不能用作完整账单或任务总费用门禁。
+
+准备 worker 的 claims/protocol/evidence-plan 调用另以 `kind=prepare` 保存用量，关联
+Case、准备版本、输入指纹及 Job。此记录在供应商阶段结束后独立提交，后续研究产物被
+丢弃或事务失败不会抹掉已记录用量。这里的 success/failed 只描述供应商及草案验证阶段，
+准备流程的最终状态仍以 Job 和 preparation 为准。进程在收到响应与审计提交之间退出
+仍可能遗漏；没有外部请求时不新增该记录。
+
+创建前的 `/event-research/extract` 以 `kind=event_extract` 记录供应商用量，
+关联已认证租户和独立抽取 ID；此时尚无 Case，不会虚构 Case 归属或为了审计创建研究。
+审计不存储材料原文或来源链接，失败响应前也提交已报告用量。抽取 ID 尚未与之后用户
+确认创建的 Case 串联，仍不能据此给出完整的每 Case 成本。
+
 ### 一键自动研究运行条件
 
 真实环境要让一键研究从排队持续推进到结论，需要由 supervisor 把 API、研究
@@ -330,7 +318,7 @@ cd backend
 自动采集、校验证据并恢复研究任务。`research_preparation` worker 仅供旧版
 `reviewed` Case 使用；一键自动研究不依赖它。
 
-启动后可用 `curl http://127.0.0.1:8000/health` 检查 API，并用已配置的 Bearer
+启动后用 `curl -f http://127.0.0.1:8000/ready` 检查数据库与迁移版本是否就绪；`curl http://127.0.0.1:8000/health` 仅检查进程存活，并用已配置的 Bearer
 token 读取 `/api/v1/research-runs/worker-status` 检查研究 worker 心跳；资料采集
 worker 目前没有独立健康端点，应由 supervisor 检查进程存活并观察采集任务日志。
 停止时向两个 worker 发送 `SIGINT`（前台运行可按 Ctrl-C）；资料采集 worker 也会
@@ -341,8 +329,8 @@ worker 目前没有独立健康端点，应由 supervisor 检查进程存活并�
 
 | 路径 | 内容 |
 |---|---|
-| `backend/` | FastAPI 账本服务、召回/合规/KPI 引擎、218 个测试 |
-| `frontend/` | React 研究外壳、mock/HTTP 双适配器、62 vitest + 32 e2e |
+| `backend/` | FastAPI 账本服务、召回/合规/KPI 引擎与后端测试 |
+| `frontend/` | FundClaw 真实事件入口与显式演示、单元和浏览器回归 |
 | `docs/evaluation/` | 证据包：数据集清单、金标数据集、门禁报告、一键复现 |
 | `docs/evidence-driven-research-report.md` | 技术报告（[PDF 版](docs/evidence-driven-research-report.pdf)） |
 | `CONTEXT.md` | 研究上下文：核心词汇表、实现状态、验证体系 |
@@ -352,9 +340,8 @@ worker 目前没有独立健康端点，应由 supervisor 检查进程存活并�
 
 - **CI**：`backend-ci`（pytest + 发布门禁）与 `frontend-ci`（tsc + vitest + e2e）
   双流水线，按目录变更触发
-- **分支保护**：main 要求 4 项检查全部通过方可合并（strict 模式），
-  禁止 force push 与删除
-- **e2e 三层覆盖**：结构锚点 → 只读断言（mock 测试显式 `?client=mock`；产品默认始终连接真实 API）
+- **远端分支保护**：需在托管平台独立核实，本地配置不能证明远端保护状态。
+- **浏览器覆盖**：桌面/移动演示交互、隔离后端真实事件入口；旧 Company Research 完整闭环尚待恢复。
 
 ## 文档导航
 
@@ -362,3 +349,9 @@ worker 目前没有独立健康端点，应由 supervisor 检查进程存活并�
 - 想改代码 → [CONTEXT.md](CONTEXT.md)（词汇表 + 实现状态）
 - 想做产品/设计 → [PRODUCT.md](PRODUCT.md)
 - 想验证质量声明 → [docs/evaluation/](docs/evaluation/)（所有数字可复现）
+
+上传原件的 20 MiB 上限在 HTTP 有界读取和底层解析入口共同检查。Pypdf 文本解析
+默认最多 1,000 页、累计 2,000,000 个文本字符和 20,000 个段落；超过上限会失败，
+不会把截断文本当作完整解析结果。上传流程保留失败原件，供后续人工处理。
+这些上限在读取页树、单页文本提取之后检查相应规模，尚不是对解压内存或 CPU 时间
+的硬限制；不应将其解释为解析进程隔离已经完成。

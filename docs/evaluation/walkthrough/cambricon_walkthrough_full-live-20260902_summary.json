@@ -1,0 +1,544 @@
+{
+  "run_id": "full-live-20260902",
+  "phases": {
+    "P0_preflight": {
+      "tools": [
+        "SmartStockSelection",
+        "SmartFundSelection",
+        "SmartFundManagerSelection",
+        "FinQuery",
+        "MacroIndustryData",
+        "AnnouncementData",
+        "FinancialResearchReport",
+        "NewsDataQuery",
+        "FinDataFallbackQuery",
+        "IcEnterpriseDataQuery"
+      ],
+      "quote": {
+        "stock_name": "寒武纪",
+        "聚源代码": "688256.SH",
+        "交易时间": "2026-09-02 15:00",
+        "交易状态": "交易结束",
+        "latest_price": "1108.0",
+        "开盘价(元)": "1087.81",
+        "涨跌(元)": "-1.0",
+        "涨跌幅(%)": "-0.09",
+        "振幅(%)": "4.07",
+        "最高价(元)": "1130.0",
+        "最低价(元)": "1084.9",
+        "均价(元)": "1105.123",
+        "昨收(元)": "1109.0",
+        "总成交量(万手)": "7.71",
+        "现手(手)": "568.1",
+        "成交额": "85.24亿元",
+        "换手率(%)": "1.23",
+        "量比": "0.75",
+        "外盘(万手)": "3.81",
+        "内盘(万手)": "3.9",
+        "委比(%)": "29.94",
+        "委差(手)": "61",
+        "委买档位": "买一价:1108.0CNY,买一挂单量:115.79手;买二价:1107.99CNY,买二挂单量:2.13手;买三价:1107.88CNY,买三挂单量:4.10手;买四价:1107.8CNY,买四挂单量:2手;买五价:1107.78CNY,买五挂单量:7.97手",
+        "委卖档位": "卖一价:1108.01CNY,卖一挂单量:2.34手;卖二价:1108.1CNY,卖二挂单量:48.58手;卖三价:1108.26CNY,卖三挂单量:2.07手;卖四价:1108.93CNY,卖四挂单量:8.17手;卖五价:1108.99CNY,卖五挂单量:10手",
+        "涨停价(元)": "1330.8",
+        "跌停价(元)": "887.2",
+        "总股本(亿股)": "6.29",
+        "流通股(亿股)": "6.29",
+        "total_mv": "6967.7",
+        "negotiable_mv": "6967.7",
+        "pb": "51.3",
+        "pe_lyr": "338.365",
+        "pe_ttm": "209.111",
+        "滚动股息率": "0.09",
+        "市净率PB(LF)": "51.3",
+        "市现率PCF(静)": "-1398.02",
+        "市现率PCF(TTM)": "-634.45",
+        "市销率PS(静)": "107.24",
+        "市销率PS(TTM)": "72.49",
+        "股息率": "0.0"
+      },
+      "annual_2025_rows": 12,
+      "fund_holders_rows": 0
+    },
+    "P1_create_case": {
+      "case_id": "b7951878-585d-4814-8982-585a0a06c828",
+      "theses": {
+        "T1": {
+          "id": "07f17c51-3759-41ca-be97-82598b629c2e",
+          "statement": "2024-2025年国产AI算力芯片需求爆发将驱动寒武纪云端芯片收入持续高增长",
+          "created_by": "walkthrough-reviewer",
+          "created_at": "2026-09-02T08:48:41.194244",
+          "title": null,
+          "observation_start": null,
+          "observation_end": null,
+          "support_condition": null,
+          "falsification_condition": null,
+          "next_verification_event": null,
+          "creator_type": "human",
+          "review_state": "confirmed"
+        },
+        "T2": {
+          "id": "e8afb601-954d-41f8-951f-1318c0e12003",
+          "statement": "寒武纪将在2024Q4-2025年实现连续季度盈利并走向年度扭亏为盈",
+          "created_by": "walkthrough-reviewer",
+          "created_at": "2026-09-02T08:48:41.199773",
+          "title": null,
+          "observation_start": null,
+          "observation_end": null,
+          "support_condition": null,
+          "falsification_condition": null,
+          "next_verification_event": null,
+          "creator_type": "human",
+          "review_state": "confirmed"
+        },
+        "T3": {
+          "id": "0604ddd9-bfd0-447a-a0c6-c9921b5eee3a",
+          "statement": "寒武纪当前估值水平已显著透支基本面兑现节奏，估值溢价难以仅由收入高增长维持",
+          "created_by": "walkthrough-reviewer",
+          "created_at": "2026-09-02T08:48:41.200407",
+          "title": null,
+          "observation_start": null,
+          "observation_end": null,
+          "support_condition": null,
+          "falsification_condition": null,
+          "next_verification_event": null,
+          "creator_type": "human",
+          "review_state": "confirmed"
+        }
+      }
+    },
+    "P2_ingest": [
+      {
+        "research_reports": 6,
+        "announcements": 3,
+        "news": 3,
+        "macro_series": 0,
+        "spans": 12,
+        "valuations_written": 3,
+        "valuations_skipped": 0,
+        "stock_id": "90186e2b-9ebf-4143-9360-7b531fe39fab",
+        "case_id": "b7951878-585d-4814-8982-585a0a06c828"
+      },
+      {
+        "research_reports": 4,
+        "announcements": 1,
+        "news": 0,
+        "macro_series": 0,
+        "spans": 5,
+        "valuations_written": 3,
+        "valuations_skipped": 0,
+        "stock_id": "61e947b6-13bf-40c0-84ff-f80cae30f355",
+        "case_id": "b7951878-585d-4814-8982-585a0a06c828"
+      }
+    ],
+    "P3_extract": {
+      "documents_total": 18,
+      "pending_before": 14,
+      "extracted_this_run": 1,
+      "statements": 0,
+      "per_document": [
+        {
+          "version_id": "b208198f-08e0-4cd9-90ac-b5c18a057e05",
+          "mode": "MiniMax-M3",
+          "title": "工业富联(601138)：H1增长由算力推动 RUBIN量产将带动业绩持续释放",
+          "doc_kind": "research_report",
+          "statement_count": null,
+          "kinds": {}
+        }
+      ],
+      "pending_after": 13
+    },
+    "P4_propose": {
+      "T1": {
+        "mode": "MiniMax-M3",
+        "link_count": 0,
+        "roles": {}
+      },
+      "T2": {
+        "mode": "MiniMax-M3",
+        "link_count": 0,
+        "roles": {}
+      },
+      "T3": {
+        "mode": "MiniMax-M3",
+        "link_count": 0,
+        "roles": {}
+      }
+    },
+    "P5_pre_review_assessment_T1": {
+      "conclusion": "insufficient_evidence",
+      "rationale": "本评估的 links 数组为空，未提供任何可供分析的支持证据或反驳证据。命题包含两个关键子判断：(1) 2024-2025 年国产 AI 算力芯片需求爆发；(2) 寒武纪云端芯片收入将因此持续高增长。两个子判断均需要财务数据（如寒武纪云端产品线收入及增速）、行业数据（如国产 AI 芯片市场规模、国产化率变化）、公司公告或调研纪要、产品竞争力信息（对比海光、昇腾等竞品）以及客户结构与订单信息等证据支撑。在完全缺乏证据快照的情况下，无法判断命题的真伪，也无法衡量证据强度，因此只能给出证据不足的临时判断。需注意：本判断为 provisional，未经人工复核。",
+      "gaps": [
+        "缺乏寒武纪 2024 年及 2025 年的云端芯片（思元系列）收入、订单及增速数据",
+        "缺乏国产 AI 算力芯片整体市场规模、国产化率及 2024-2025 年需求趋势的行业数据",
+        "缺乏寒武纪与主要竞争对手（如华为昇腾、海光信息、壁仞、燧原）在产品性能、客户覆盖、价格等维度的对比证据",
+        "缺乏寒武纪云端芯片核心客户（如互联网厂商、运营商、政府智算中心）的采购意向或框架协议信息",
+        "缺乏寒武纪供应链情况（先进制程代工、产能保障、HBM/先进封装获取能力）的证据",
+        "缺乏关于美国出口管制对国产替代节奏及寒武纪影响程度的最新政策与产业证据"
+      ],
+      "snapshot_id": "756f6918-ac61-441b-a827-8339e0729aa7",
+      "assessment_id": "feb4faec-254f-4015-90f0-4b717f193735",
+      "mode": "MiniMax-M3"
+    },
+    "P6_review": {
+      "queued": 0,
+      "confirmed": 0,
+      "rejected": 0,
+      "needs_more_evidence": 0,
+      "by_thesis": {},
+      "remaining_after_review": 0
+    },
+    "P7_assessments": {
+      "T1": {
+        "conclusion": "insufficient_evidence",
+        "rationale": "当前评估请求未提供任何证据链接（links 数组为空），因此无法对命题进行任何实质性判断。命题本身包含两个关键子论点：（1）2024-2025年国产AI算力芯片需求将爆发性增长；（2）该需求将驱动寒武纪云端芯片收入持续高增长。两个子论点均需要来自行业研究、公司财报、公司公告、第三方调研等独立来源的证据交叉验证。在无任何证据输入的情况下，既无法识别支持证据，也无法识别反驳证据，更无法评估来源等级、原文定位完整性或时间适用性等证据强度维度。根据严格规则，不允许依靠 LLM 自报 confidence 或模型内部知识直接得出 supported 或 contradicted 结论，因此只能判定为证据不足。",
+        "gaps": [
+          "缺少国产AI算力芯片市场总规模与增长率的第三方数据来源（如IDC、Gartner、赛迪等机构报告）",
+          "缺少寒武纪2023年及2024年云端芯片业务收入的历史数据与同比增速",
+          "缺少寒武纪在国产AI算力芯片市场中的具体份额、客户结构与在手订单信息",
+          "缺少寒武纪云端芯片产品（如思元590等）在算力性能、生态兼容性、量产能力的独立评测或客户反馈",
+          "缺少2024-2025年下游需求端（互联网厂商、智算中心、政府项目）的采购计划与预算信息",
+          "缺少竞争对手（如昇腾、海光DCU、燧原、摩尔线程等）的市场份额与价格对比信息",
+          "缺少寒武纪供应链（台积电/中芯国际代工、产能保障）的最新进展与风险评估"
+        ],
+        "snapshot_id": "87d728f4-93c4-41f8-9318-6f62a0bc2755",
+        "assessment_id": "f4797865-da34-4715-b8b3-144bd31aa92c",
+        "mode": "MiniMax-M3"
+      },
+      "T2": {
+        "conclusion": "insufficient_evidence",
+        "rationale": "本次评估的证据快照中未提供任何 links，即关于'寒武纪将在2024Q4-2025年实现连续季度盈利并走向年度扭亏为盈'这一命题，证据池完全为空。在没有任何来源、原文、抽取片段或审核记录可供参考的情况下，无法判断支持命题的证据是否一致，也无法识别是否存在与命题矛盾的证据（例如反向的财务披露、行业研报、监管文件等）。因此严格依据规则，既不满足 supported 的'证据一致支持'条件，也不满足 contradicted 的'存在矛盾证据'条件，只能归类为 insufficient_evidence。需要补充的证据至少应包括：寒武纪 2024Q3 及之前季度的官方财报/业绩预告、2024Q4 业绩快报、2025 年各季度财报或管理层指引、独立券商盈利预测、行业需求与出货量数据、以及任何关于政府订单、客户结构、研发投入变化的披露。此外，命题本身包含'连续季度盈利'与'年度扭亏'两个递进断言，所需证据角色不同（前者需要季度颗粒度，后者需要年度颗粒度），当前证据缺口同时覆盖两个层级。此判断为临时判断（provisional），未经人工复核。",
+        "gaps": [
+          "完全缺失证据：links 数组为空，没有任何可评估的来源",
+          "缺失寒武纪 2024Q3、2024Q4 官方财报或业绩预告原文",
+          "缺失 2025 年各季度财报、半年报或业绩快报",
+          "缺失独立券商或研究机构对寒武纪 2024-2025 年盈利路径的预测",
+          "缺失关于寒武纪营收结构（政府订单、AI 芯片出货量、主要客户）变化的披露",
+          "缺失关于研发投入、销售费用、管理费用趋势的数据（盈利转正的关键变量）",
+          "缺失行业层面证据：AI 芯片国产替代节奏、竞争对手（华为昇腾等）份额变化",
+          "缺失关于'连续季度盈利'定义的口径澄清（GAAP vs Non-GAAP、扣非 vs 归母）",
+          "命题包含两个不同颗粒度断言（季度 vs 年度），需要分别匹配的证据组合，缺口需分项填补"
+        ],
+        "snapshot_id": "670dba1d-b720-45ee-91ce-084155d51e24",
+        "assessment_id": "d9caf973-46e2-4946-a490-0763d1ee7459",
+        "mode": "MiniMax-M3"
+      },
+      "T3": {
+        "conclusion": "insufficient_evidence",
+        "rationale": "本次评估未提供任何证据链接（links 数组为空），因此无法获取与命题相关的任何来源信息。在完全缺乏证据的前提下，既无法验证命题中关于'估值已显著透支基本面兑现节奏'的判断，也无法验证'估值溢价难以仅由收入高增长维持'的判断。命题涉及三个需要独立验证的关键子命题：(1) 寒武纪当前估值水平处于何种分位（市盈率、市净率、PS 等口径需明确）；(2) 基本面兑现节奏相对估值预期的滞后程度（需结合订单、产能、毛利率、客户结构等指标）；(3) 收入高增长对当前估值的支撑力度（需对比可比公司及行业增速）。在零证据状态下，任何结论（包括 supported 或 contradicted）都缺乏依据，均不成立，故只能给出 insufficient_evidence 的临时判断。该判断为 provisional，未经人工复核，仅作为后续证据补全前的占位结论。",
+        "gaps": [
+          "缺少寒武纪当前估值数据（PE、PS、PB、分位历史区间、行业对标）",
+          "缺少基本面兑现节奏的证据（在手订单/合同负债、客户导入进度、产能利用率、毛利率与净利率走势）",
+          "缺少寒武纪历史与未来预期的收入增速数据（实际值 vs 一致预期）",
+          "缺少可比 AI 芯片/算力公司估值对比资料",
+          "缺少券商研报或卖方/独立第三方对估值合理性的明确判断",
+          "缺少时间戳信息，无法判断证据对'当前'的适用性",
+          "证据抽取与审核状态未知，无法评估可靠性等级"
+        ],
+        "snapshot_id": "4c15420b-1551-4e50-a6d7-c389cf3a618e",
+        "assessment_id": "78b5b02d-5d6d-4f51-9017-5c5beb23ac5d",
+        "mode": "MiniMax-M3"
+      }
+    },
+    "P8_assessment_reviews": {
+      "T1": {
+        "outcome": "modified",
+        "human_conclusion": "supported",
+        "ai_conclusion": "insufficient_evidence"
+      },
+      "T2": {
+        "outcome": "modified",
+        "human_conclusion": "supported",
+        "ai_conclusion": "insufficient_evidence"
+      },
+      "T3": {
+        "outcome": "modified",
+        "human_conclusion": "supported",
+        "ai_conclusion": "insufficient_evidence"
+      }
+    },
+    "P9_enrichment": {
+      "theme_roles": 2,
+      "causal_steps": 5,
+      "causal_edges": 4,
+      "funds": 0,
+      "holding_disclosures": 0,
+      "notes": [
+        "Gildata 未返回带权重的基金持仓数据；穿透链路只能以空持仓演示，记为数据可得性缺口"
+      ]
+    },
+    "P10_reads": {
+      "overview": {
+        "http_status": 200,
+        "keys": [
+          "activity",
+          "assessment",
+          "basis",
+          "case",
+          "evidence_changes",
+          "framework",
+          "key_changes",
+          "schema_version",
+          "task_queue",
+          "thesis",
+          "totals"
+        ]
+      },
+      "dossier": {
+        "http_status": 200,
+        "keys": [
+          "assess_failure",
+          "assessment",
+          "basis",
+          "case",
+          "causal_chain",
+          "changes",
+          "competitive_explanations",
+          "counter_research",
+          "evidence",
+          "focus_thesis_id",
+          "gaps",
+          "judgement_card",
+          "schema_version",
+          "theses"
+        ]
+      },
+      "graph": {
+        "http_status": 200,
+        "nodes": 12,
+        "edges": 11,
+        "paths": 11
+      },
+      "gaps": {
+        "http_status": 200,
+        "keys": [
+          "case_id",
+          "cutoff",
+          "gaps"
+        ]
+      },
+      "knowledge": {
+        "http_status": 200,
+        "keys": [
+          "case_id",
+          "items"
+        ]
+      },
+      "search": {
+        "http_status": 200,
+        "groups": {
+          "case": 1,
+          "thesis": 3,
+          "evidence": 0,
+          "company": 1,
+          "stock": 1,
+          "fund": 0
+        }
+      },
+      "kpis": {
+        "http_status": 200,
+        "body": {
+          "as_of": "2026-09-02T09:04:44.070937+00:00",
+          "case_id": "b7951878-585d-4814-8982-585a0a06c828",
+          "throughput": {
+            "link_reviews_total": 0,
+            "link_reviews_last_7d": 0,
+            "assessment_reviews_total": 3,
+            "assessment_reviews_last_7d": 3,
+            "reviews_by_reviewer": {
+              "walkthrough-reviewer": 3
+            },
+            "pending_link_reviews": 0,
+            "pending_assessment_reviews": 1
+          },
+          "agreement": {
+            "assessment_outcomes": {
+              "modified": 3
+            },
+            "assessment_agreement_rate": 0.0,
+            "conclusion_changed": 3,
+            "link_outcomes": {},
+            "link_agreement_rate": null,
+            "link_modified": 0
+          },
+          "latency": {
+            "evidence_to_assessment_avg_days": null,
+            "evidence_to_assessment_max_days": null,
+            "assessment_to_review_avg_days": 0.0,
+            "assessment_to_review_max_days": 0.0
+          }
+        }
+      },
+      "snapshots": {
+        "http_status": 200,
+        "count": 4
+      },
+      "fund_exposure": {
+        "http_status": 200,
+        "body_keys": [
+          "as_of",
+          "case_id",
+          "funds"
+        ],
+        "funds": 0
+      },
+      "metric_catalog": {
+        "http_status": 200,
+        "keys": [
+          "entries"
+        ]
+      }
+    },
+    "P11_time_travel": {
+      "cutoff_2024_12_31": {
+        "http_status": 404,
+        "error": {
+          "schema_version": "v1",
+          "error": {
+            "code": "not_found",
+            "message": "research case not found",
+            "request_id": "bd1cd39b-cbe2-49c8-ade6-8fa881f4db84",
+            "details": {}
+          }
+        }
+      },
+      "cutoff_2025_04_01": {
+        "http_status": 404,
+        "error": {
+          "schema_version": "v1",
+          "error": {
+            "code": "not_found",
+            "message": "research case not found",
+            "request_id": "d26ff9a2-d824-441b-a8e5-7e33e741e0e0",
+            "details": {}
+          }
+        }
+      },
+      "cutoff_now": {
+        "http_status": 200,
+        "supports": 0,
+        "contradicts": 0,
+        "contextualizes": 0,
+        "basis": {
+          "cutoff": "2026-09-02T09:04:44.104445Z",
+          "is_historical": false,
+          "ledger_high_watermark": null,
+          "projection_built_at": null,
+          "projection_schema_version": null
+        }
+      },
+      "docs_2024_12_31": {
+        "http_status": 200,
+        "count": 0,
+        "titles": []
+      },
+      "docs_2025_04_01": {
+        "http_status": 200,
+        "count": 0,
+        "titles": []
+      },
+      "docs_2025_05_01": {
+        "http_status": 200,
+        "count": 0,
+        "titles": []
+      },
+      "compare": {
+        "http_status": 200,
+        "body_keys": [
+          "base_cutoff",
+          "case_id",
+          "compare_cutoff",
+          "documents_added",
+          "theses"
+        ]
+      }
+    },
+    "P12_fact_check": [
+      {
+        "check": "2025年度扭亏（隐含）",
+        "ledger_fact": "PE(LYR)=338.365, 总市值=6967.7亿 → 隐含2025年度净利润≈20.6亿>0",
+        "verified": true,
+        "source": "gildata FinQuery 2026-07-31"
+      },
+      {
+        "check": "T3 估值水平证据",
+        "ledger_fact": "PE(TTM)=209.111, PB=51.3（2026-07-31）",
+        "verified": true,
+        "source": "gildata FinQuery 2026-07-31"
+      },
+      {
+        "check": "2025年报营业收入（Gildata 探针）",
+        "ledger_fact": "2025年报营业收入 64.97亿，同比 +453.21%",
+        "verified": true,
+        "source": "gildata FinQuery probe (2025年报)"
+      }
+    ]
+  },
+  "issues": [
+    {
+      "code": "extract_failed",
+      "detail": "2e6763aa-6537-4e70-991c-ec8d6cd23aa5: HTTP 500 {'schema_version': 'v1', 'error': {'code': 'internal_error', 'message': 'internal error', 'request_id': '01abca8e-2071-4b95-8ced-35f3d3e52206', 'details': {}}}"
+    },
+    {
+      "code": "extract_failed",
+      "detail": "5d59593b-aafa-4e74-a7ad-55efeb904253: HTTP 503 {'schema_version': 'v1', 'error': {'code': 'upstream_unavailable', 'message': 'LLM provider is temporarily unavailable', 'request_id': '82862d5c-0154-4ea1-8842-7d838bae3f09', 'details': {}}}"
+    },
+    {
+      "code": "extract_failed",
+      "detail": "a5145164-e25d-4eaa-8073-18a0ba07801c: HTTP 500 {'schema_version': 'v1', 'error': {'code': 'internal_error', 'message': 'internal error', 'request_id': 'a59971dc-83aa-4920-b673-2ce0e202e71d', 'details': {}}}"
+    },
+    {
+      "code": "extract_failed",
+      "detail": "17b28a00-19ae-43bd-b3b4-b31bf4a8397d: HTTP 503 {'schema_version': 'v1', 'error': {'code': 'upstream_unavailable', 'message': 'LLM provider is temporarily unavailable', 'request_id': '6f709723-4a72-4c42-8c9b-5cb23b863fc9', 'details': {}}}"
+    },
+    {
+      "code": "extract_failed",
+      "detail": "17e357ca-c5b9-498f-97c6-3c4f828f6cb5: HTTP 503 {'schema_version': 'v1', 'error': {'code': 'upstream_unavailable', 'message': 'LLM provider is temporarily unavailable', 'request_id': '5cce2372-4b7f-46d9-8493-83769a6c4924', 'details': {}}}"
+    },
+    {
+      "code": "extract_failed",
+      "detail": "27731899-bb83-4413-bc51-3317b073124e: HTTP 503 {'schema_version': 'v1', 'error': {'code': 'upstream_unavailable', 'message': 'LLM provider is temporarily unavailable', 'request_id': '9c94782d-1856-4f48-980e-8e272204c1cd', 'details': {}}}"
+    },
+    {
+      "code": "extract_failed",
+      "detail": "a478a67a-a94a-4f2d-8282-f044334b4343: HTTP 503 {'schema_version': 'v1', 'error': {'code': 'upstream_unavailable', 'message': 'LLM provider is temporarily unavailable', 'request_id': '19399730-50d9-44bd-8c24-9cd9c3260ec5', 'details': {}}}"
+    },
+    {
+      "code": "time_travel_failed",
+      "detail": "cutoff_2024_12_31: HTTP 404 {'schema_version': 'v1', 'error': {'code': 'not_found', 'message': 'research case not found', 'request_id': 'bd1cd39b-cbe2-49c8-ade6-8fa881f4db84', 'details': {}}}"
+    },
+    {
+      "code": "time_travel_failed",
+      "detail": "cutoff_2025_04_01: HTTP 404 {'schema_version': 'v1', 'error': {'code': 'not_found', 'message': 'research case not found', 'request_id': 'd26ff9a2-d824-441b-a8e5-7e33e741e0e0', 'details': {}}}"
+    }
+  ],
+  "facts": {
+    "checks": [
+      {
+        "check": "2025年度扭亏（隐含）",
+        "ledger_fact": "PE(LYR)=338.365, 总市值=6967.7亿 → 隐含2025年度净利润≈20.6亿>0",
+        "verified": true,
+        "source": "gildata FinQuery 2026-07-31"
+      },
+      {
+        "check": "T3 估值水平证据",
+        "ledger_fact": "PE(TTM)=209.111, PB=51.3（2026-07-31）",
+        "verified": true,
+        "source": "gildata FinQuery 2026-07-31"
+      },
+      {
+        "check": "2025年报营业收入（Gildata 探针）",
+        "ledger_fact": "2025年报营业收入 64.97亿，同比 +453.21%",
+        "verified": true,
+        "source": "gildata FinQuery probe (2025年报)"
+      }
+    ],
+    "quote_2026_07_31": {
+      "latest_price": "1108.0",
+      "total_mv": "6967.7",
+      "pe_ttm": "209.111",
+      "pe_lyr": "338.365",
+      "pb": "51.3"
+    }
+  },
+  "elapsed_seconds": 0.268539
+}

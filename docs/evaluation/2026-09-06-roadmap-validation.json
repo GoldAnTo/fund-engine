@@ -1,0 +1,1002 @@
+{
+  "date": "2026-09-06",
+  "full_suite": {
+    "passed": 4264,
+    "failed": 6,
+    "skipped": 41,
+    "duration_seconds": 700.52,
+    "note": "Full run began before final worker/fixture/schema fixes; no claim that full suite is now green.",
+    "failures": [
+      {
+        "test": "tests.test_recall::test_proposer_derives_scope_from_case_when_llm_omits_it",
+        "status_after_followup": "resolved_targeted_regression"
+      },
+      {
+        "test": "tests.test_research_preparation_integration::test_live_compatible_fake_provider_prepares_then_explicit_authorization_starts_one_run",
+        "status_after_followup": "resolved_targeted_regression"
+      },
+      {
+        "test": "tests.test_research_preparation_integration::test_crashed_preparation_job_is_reclaimed_without_duplicate_current_artifact",
+        "status_after_followup": "resolved_targeted_regression"
+      },
+      {
+        "test": "tests.test_verify_live_company_research_ui::test_package_exposes_the_closed_live_company_research_command",
+        "status_after_followup": "remaining_full_workflow_gap"
+      },
+      {
+        "test": "tests.test_verify_live_event_ui::test_live_event_ui_verifier_keeps_reviewed_case_pages_working_through_default_http_client",
+        "status_after_followup": "remaining_full_workflow_gap"
+      },
+      {
+        "test": "tests.underwriting.test_openapi_dump::test_archive_contract_and_ui_sources_do_not_introduce_investment_fields",
+        "status_after_followup": "remaining_full_workflow_gap"
+      }
+    ]
+  },
+  "followup_regression": {
+    "recall_schema_and_preparation_integration": {
+      "passed": 72
+    },
+    "worker_integration_independent_review": {
+      "passed": 29
+    },
+    "frontend_unit": {
+      "passed": 51
+    },
+    "frontend_live_browser_with_real_worker": {
+      "passed": 4
+    },
+    "build": "passed"
+  },
+  "goal": "active",
+  "document_library_batch": {
+    "targeted_passed": 185,
+    "targeted_skipped": 1,
+    "independent_review_passed": 24,
+    "postgres_passed": 24,
+    "readiness_health_passed": 7,
+    "postgres_readiness_transitions": "passed",
+    "scope": "Document reads only; remaining write policy and full product workflows remain active"
+  },
+  "document_write_batch": {
+    "targeted_passed": 88,
+    "targeted_skipped": 1,
+    "new_boundary_tests": 8,
+    "independent_review": "no_blocking_findings",
+    "openapi": "regenerated",
+    "scope": "extract and supplements attachment authorization; no full-suite or PostgreSQL rerun in this batch"
+  },
+  "llm_resource_limits_batch": {
+    "new_tests_passed": 16,
+    "targeted_passed": 183,
+    "independent_review": "spec and quality passed after Unicode correction",
+    "limitations": [
+      "SDK has already buffered response",
+      "No token cap or monetary task budget",
+      "No live provider calls"
+    ]
+  },
+  "operational_access_batch": {
+    "targeted_passed": 142,
+    "postgres_passed": 32,
+    "postgres_scope": "task/activity boundaries and document writes",
+    "independent_review": "spec and quality approved after shared proposal target consistency fix",
+    "openapi": "regenerated",
+    "full_suite_rerun": false
+  },
+  "run_controls_batch": {
+    "frontend_unit_passed": 62,
+    "frontend_live_browser_passed": 5,
+    "backend_targeted_passed": 37,
+    "backend_targeted_skipped": 2,
+    "build": "passed",
+    "independent_review": "frontend spec and quality approved; backend approved",
+    "mobile_width": 390,
+    "horizontal_overflow": false,
+    "full_backend_rerun": false,
+    "postgres_rerun": false
+  },
+  "evidence_review_batch": {
+    "backend_targeted_passed": 66,
+    "frontend_unit_passed": 69,
+    "live_browser_passed": 6,
+    "build": "passed",
+    "mobile_width": 390,
+    "review": "frontend implemented by subagent and reviewed by root; additional independent backend review unavailable due runtime agent thread limit",
+    "remaining": "legacy read-path source display audit and full protocol/freeze/export workflows"
+  },
+  "legacy_review_read_batch": {
+    "targeted_passed": 87,
+    "postgres_passed": 15,
+    "openapi": "regenerated",
+    "scope": "legacy review read contract restrictions and source attachment",
+    "remaining": "legacy direct link decision source gates and full roadmap"
+  },
+  "legacy_review_write_batch": {
+    "targeted_passed": 71,
+    "postgres_passed": 15,
+    "scope": "ReviewService source attachment and contract gate before confirmed review; rejection retained"
+  },
+  "followup_full_suite": {
+    "status": "completed_with_failures",
+    "exec_session_id": 46647,
+    "log": "/tmp/fund-engine-audit-full-followup-20260906.log",
+    "junit": "/tmp/fund-engine-audit-full-followup-20260906.xml",
+    "passed": 4334,
+    "failed": 3,
+    "skipped": 41,
+    "duration_seconds": 667.67
+  },
+  "company_research_restoration": {
+    "frontend_unit_passed": 278,
+    "live_browser_passed": 7,
+    "company_closed_workflow": "passed twice, final with router 7 and lazy route",
+    "support_tests_passed": 71,
+    "backend_contract_passed": 49,
+    "backend_contract_skipped": 1,
+    "build": "passed",
+    "npm_audit_vulnerabilities": 0,
+    "mobile_width": 390,
+    "horizontal_overflow": false,
+    "current_full_suite_rerun": false,
+    "remaining_known_source_gaps": [
+      "event verifier",
+      "archive UI"
+    ]
+  },
+  "archive_restoration": {
+    "frontend_unit_passed": 338,
+    "backend_contract_passed": 11,
+    "browser_navigation_passed": 1,
+    "build": "passed",
+    "mobile_width": 390,
+    "horizontal_overflow": false,
+    "browser_scope": "directory empty state and navigation; populated history browser acceptance remains",
+    "full_backend_rerun": false
+  },
+  "company_ci": {
+    "workflow_structure": "passed",
+    "support_tests_passed": 71,
+    "company_workflow": "passed sequentially after support tests",
+    "github_hosted_run": "not run; local worktree only",
+    "backend_changes_trigger": true,
+    "location": "backend.yml company-research-live, removed duplicate frontend job steps"
+  },
+  "llm_completion_budget": {
+    "red_tests_failed": 8,
+    "targeted_passed": 131,
+    "default_max_completion_tokens": 16384,
+    "attempts_carry_same_limit": true,
+    "paid_provider_test": false,
+    "task_cost_accounting": "not implemented"
+  },
+  "ai_usage_audit": {
+    "migration": "0071",
+    "targeted_regression_passed": 189,
+    "usage_specific_passed": 9,
+    "postgres_passed": 7,
+    "postgres_container_removed": true,
+    "scope": [
+      "extract",
+      "propose",
+      "assess including rewrite"
+    ],
+    "durability": "same transaction as AIRun, not an independent billing ledger",
+    "full_suite_rerun": false
+  },
+  "preparation_usage": {
+    "targeted_passed": 40,
+    "scope": [
+      "parse_claims",
+      "draft_protocol",
+      "draft_evidence_plan"
+    ],
+    "persists_before_artifact_transaction": true,
+    "correlation": [
+      "case",
+      "preparation",
+      "version",
+      "input_fingerprint",
+      "job"
+    ],
+    "paid_provider_test": false
+  },
+  "event_extraction_usage": {
+    "targeted_passed": 119,
+    "records_success_and_invalid_response": true,
+    "correlation": [
+      "authenticated tenant",
+      "extraction id"
+    ],
+    "creates_case": false,
+    "full_suite_rerun": false
+  },
+  "post_usage_full_suite": {
+    "status": "completed_with_failure",
+    "exec_session_id": 82662,
+    "log": "/tmp/fund-engine-full-usage-20260906.log",
+    "junit": "/tmp/fund-engine-full-usage-20260906.xml",
+    "last_observed_progress_percent": 58,
+    "passed": 4357,
+    "failed": 1,
+    "skipped": 41,
+    "duration_seconds": 738.24,
+    "remaining_failure": "missing full live event verifier"
+  },
+  "post_usage_frontend": {
+    "unit_passed": 338,
+    "build": "passed",
+    "live_browser_passed": 7
+  },
+  "company_archive_keyboard": {
+    "browser_passed": 6,
+    "widths": [
+      1280,
+      390
+    ],
+    "build": "passed",
+    "covers": [
+      "focus-only skip visibility",
+      "Enter focuses content",
+      "Tab enters first field"
+    ],
+    "full_browser_suite_rerun": false
+  },
+  "page_load_recovery": {
+    "unit_passed": 340,
+    "build": "passed",
+    "browser_fault_injection_passed": 4,
+    "preserves_deep_link_on_reload": true,
+    "widths": [
+      1280,
+      390
+    ],
+    "covers_modules": [
+      "CompanyResearchApp",
+      "ResearchArchiveApp"
+    ]
+  },
+  "postgres_full_marker_suite": {
+    "initial_passed": 27,
+    "initial_failed": 8,
+    "final_passed": 35,
+    "final_failed": 0,
+    "duration_seconds": 77.47,
+    "sqlite_preparation_passed": 54,
+    "sqlite_preparation_skipped": 4,
+    "readiness_verified": true,
+    "container_removed": true,
+    "ci_configured": true,
+    "hosted_ci_run": false,
+    "production_fix": "refresh preparation state after concurrent idempotency replay"
+  },
+  "pdf_resource_limits": {
+    "red_failed": 4,
+    "targeted_passed": 47,
+    "max_upload_bytes": 20971520,
+    "max_pages": 1000,
+    "max_text_chars": 2000000,
+    "max_spans": 20000,
+    "process_resource_isolation": false
+  },
+  "upload_spool_cleanup": {
+    "targeted_passed": 14,
+    "new_scenarios": 4,
+    "disk_backed_spool": true,
+    "closed_after_response": true,
+    "rejected_uploads_do_not_persist": true,
+    "covers_process_termination": false
+  },
+  "upload_proxy": {
+    "real_nginx_verified": true,
+    "max_total_request_mib": 21,
+    "valid_request_sizes": [
+      2097152,
+      21037056
+    ],
+    "rejects_oversized_content_length_before_body": true,
+    "rejects_oversized_chunked": true,
+    "oversized_reaches_upstream": false,
+    "runtime_asset_passed": 5,
+    "ci_configured": true,
+    "container_removed": true
+  },
+  "monitor_controls": {
+    "status": "implemented_and_verified",
+    "frontend_unit_passed": 347,
+    "frontend_build": "passed",
+    "backend_monitor_tests_passed": 26,
+    "live_browser_passed": 16,
+    "live_browser_duration_seconds": 19.1,
+    "frequency_red_cases": 3,
+    "logs": [
+      "/tmp/monitor-frontend-final.log",
+      "/tmp/monitor-build-final.log",
+      "/tmp/monitor-backend-final.log",
+      "/tmp/monitor-live-full.log"
+    ],
+    "remaining": [
+      "new/edit monitor configuration",
+      "full legacy event verifier",
+      "existing invalid frequency records",
+      "concurrent monitor version writes and scheduler timing"
+    ],
+    "full_backend_rerun": false
+  },
+  "monitor_daily_deduplication": {
+    "status": "implemented_and_verified",
+    "red_regressions": 3,
+    "sqlite_passed": 29,
+    "postgres_passed": 29,
+    "postgres_seconds": 8.6,
+    "logs": [
+      "/tmp/scheduler-slot-red.log",
+      "/tmp/scheduler-slot-green.log",
+      "/tmp/scheduler-slot-pg.log"
+    ],
+    "semantics": "Case plus Shanghai local day plus schedule scope event; manual runs separate; status versions do not reset daily slot",
+    "remaining": "concurrent dispatcher exclusion is not yet implemented"
+  },
+  "monitor_postgres_concurrency": {
+    "status": "implemented_and_verified",
+    "postgres_passed": 32,
+    "postgres_seconds": 16.16,
+    "sqlite_passed": 29,
+    "sqlite_pg_skipped": 3,
+    "tests": [
+      "competing dispatchers create one run",
+      "dispatch waits for pending pause and does not start",
+      "resume waits for pause and appends next version"
+    ],
+    "logs": [
+      "/tmp/monitor-race-red.log",
+      "/tmp/monitor-lock-pg-final.log",
+      "/tmp/monitor-lock-sqlite.log"
+    ],
+    "limitations": [
+      "SQLite FOR UPDATE is a no-op",
+      "batch retains Case locks until outer commit",
+      "full backend suite not rerun"
+    ]
+  },
+  "monitor_frozen_schedule_date": {
+    "status": "implemented_and_verified",
+    "sqlite_passed": 30,
+    "sqlite_pg_skipped": 3,
+    "postgres_passed": 33,
+    "postgres_seconds": 18.79,
+    "extra_midnight_boundary_passed": 1,
+    "logs": [
+      "/tmp/monitor-slot-clock-red.log",
+      "/tmp/monitor-clock-sqlite.log",
+      "/tmp/monitor-clock-pg.log",
+      "/tmp/monitor-clock-boundary-final.log"
+    ],
+    "semantics": "freeze Shanghai schedule date in scope; created_at fallback only for legacy records without slot date"
+  },
+  "legacy_monitor_frequency_guard": {
+    "status": "implemented_and_verified",
+    "backend_passed": 31,
+    "backend_pg_skipped": 3,
+    "frontend_passed": 349,
+    "build": "passed",
+    "new_red_to_green_cases": 3,
+    "logs": [
+      "/tmp/legacy-monitor-red.log",
+      "/tmp/legacy-monitor-ui-red.log",
+      "/tmp/legacy-monitor-backend-final.log",
+      "/tmp/legacy-monitor-frontend-final.log",
+      "/tmp/legacy-monitor-build.log"
+    ],
+    "remaining": "configuration editing UI; historical immutable records are preserved"
+  },
+  "monitor_configuration_ui": {
+    "status": "implemented_and_verified",
+    "frontend_unit_passed": 352,
+    "build": "passed",
+    "live_browser_passed": 16,
+    "live_browser_seconds": 25.0,
+    "logs": [
+      "/tmp/monitor-config-red.log",
+      "/tmp/monitor-config-full-unit.log",
+      "/tmp/monitor-config-build-final.log",
+      "/tmp/monitor-config-live-final.log"
+    ],
+    "coverage": [
+      "PUT creation via component",
+      "explicit enable consent",
+      "no confirmed factors blocks save",
+      "failure preserves draft and blocks repeats",
+      "real browser edit plus reload and version history"
+    ],
+    "remaining": [
+      "real browser first configuration creation",
+      "optimistic version conflict protection",
+      "full legacy event workflow"
+    ]
+  },
+  "monitor_configuration_version_check": {
+    "status": "implemented_and_verified",
+    "sqlite_passed": 32,
+    "sqlite_pg_skipped": 3,
+    "postgres_passed": 35,
+    "postgres_seconds": 15.75,
+    "component_passed": 3,
+    "live_browser_passed": 1,
+    "build": "passed",
+    "openapi_regenerated": true,
+    "logs": [
+      "/tmp/monitor-version-red.log",
+      "/tmp/monitor-version-backend.log",
+      "/tmp/monitor-version-pg.log",
+      "/tmp/monitor-version-ui.log",
+      "/tmp/monitor-version-browser.log",
+      "/tmp/monitor-version-build.log"
+    ],
+    "limitations": [
+      "legacy callers may omit expected_version",
+      "status operations do not yet check expected_version"
+    ]
+  },
+  "monitor_status_version_check": {
+    "status": "implemented_and_verified",
+    "sqlite_passed": 33,
+    "sqlite_pg_skipped": 3,
+    "postgres_passed": 36,
+    "postgres_seconds": 16.6,
+    "component_passed": 9,
+    "browser_passed": 1,
+    "build": "passed",
+    "openapi_regenerated": true,
+    "logs": [
+      "/tmp/monitor-status-version-red.log",
+      "/tmp/monitor-status-version-backend.log",
+      "/tmp/monitor-status-version-pg.log",
+      "/tmp/monitor-status-version-ui.log",
+      "/tmp/monitor-status-version-browser.log",
+      "/tmp/monitor-status-version-build.log"
+    ],
+    "limitation": "legacy callers can omit expected_version"
+  },
+  "monitor_first_creation_browser": {
+    "status": "verified_and_layout_fixed",
+    "live_passed": 17,
+    "live_seconds": 25.4,
+    "build": "passed",
+    "visual_inspection": "390px before and after checkbox alignment and select sizing",
+    "logs": [
+      "/tmp/monitor-first-browser.log",
+      "/tmp/monitor-first-live-final.log",
+      "/tmp/monitor-first-build.log"
+    ],
+    "coverage": [
+      "initial monitor null",
+      "explicit scope and enable consent",
+      "budget edit clears consent",
+      "PUT expected_version zero",
+      "version one and one history entry",
+      "reload persistence"
+    ]
+  },
+  "full_backend_after_monitor": {
+    "status": "completed_with_failure",
+    "session_id": 52193,
+    "log": "/tmp/fund-engine-full-monitor-20260906.log",
+    "junit": "/tmp/fund-engine-full-monitor-20260906.xml",
+    "note": "Only failure: missing full legacy event verifier. Manual monitor command tests were added after collection and are validated separately.",
+    "passed": 4375,
+    "failed": 1,
+    "skipped": 44,
+    "duration_seconds": 677.79
+  },
+  "monitor_readiness_snapshot": {
+    "status": "implemented_and_verified",
+    "frontend_passed": 354,
+    "browser_passed": 2,
+    "browser_seconds": 20.0,
+    "build": "passed",
+    "logs": [
+      "/tmp/monitor-readiness-red.log",
+      "/tmp/monitor-readiness-unit.log",
+      "/tmp/monitor-readiness-browser.log",
+      "/tmp/monitor-readiness-build.log"
+    ],
+    "limitation": "read-only preflight snapshot; manual start is not yet exposed"
+  },
+  "manual_monitor_command": {
+    "status": "implemented_and_verified_targeted",
+    "failed": 0,
+    "log": "/tmp/manual-monitor-red.log",
+    "coverage": [
+      "repeat command must return same run",
+      "stale monitor must not create run",
+      "actor and reason audit",
+      "same key different content conflict"
+    ],
+    "note": "New test file was added after full suite collection; not part of ongoing full baseline.",
+    "sqlite_related_passed": 25,
+    "sqlite_pg_skipped": 3,
+    "final_command_tests_passed": 3,
+    "postgres_related_passed": 29,
+    "postgres_seconds": 12.17,
+    "build": "passed",
+    "logs": [
+      "/tmp/manual-monitor-red.log",
+      "/tmp/manual-monitor-green.log",
+      "/tmp/manual-monitor-final.log",
+      "/tmp/manual-monitor-pg.log",
+      "/tmp/manual-monitor-contract-build.log"
+    ],
+    "remaining": []
+  },
+  "manual_monitor_command_concurrency": {
+    "status": "verified",
+    "postgres_related_passed": 31,
+    "postgres_seconds": 15.27,
+    "sqlite_passed": 3,
+    "sqlite_pg_skipped": 2,
+    "logs": [
+      "/tmp/manual-monitor-concurrent-pg.log",
+      "/tmp/manual-monitor-concurrent-pg-final.log",
+      "/tmp/manual-monitor-concurrent-sqlite.log"
+    ],
+    "assertions": [
+      "second request waits for slot",
+      "same content same run",
+      "different content conflict",
+      "one run four tasks one job one scope"
+    ],
+    "note": "Initial failures were a test return-type mistake, corrected; no new production change."
+  },
+  "manual_monitor_ui": {
+    "status": "implemented_and_verified",
+    "frontend_passed": 356,
+    "live_passed": 17,
+    "live_seconds": 26.7,
+    "build": "passed",
+    "logs": [
+      "/tmp/manual-start-ui-red.log",
+      "/tmp/manual-start-ui-green.log",
+      "/tmp/manual-start-unit-final.log",
+      "/tmp/manual-start-browser.log",
+      "/tmp/manual-start-build-final.log",
+      "/tmp/manual-start-live-final.log"
+    ],
+    "coverage": [
+      "protocol gate",
+      "actor reason explicit budget consent",
+      "response lost after server creation",
+      "same identity retry returns same run",
+      "one persisted run and actor scope audit"
+    ],
+    "limitations": [
+      "unavailable sessionStorage limits cross-reload retry identity",
+      "complete legacy event workflow still missing"
+    ]
+  },
+  "manual_monitor_reload_and_gate": {
+    "status": "verified",
+    "browser_passed": 3,
+    "seconds": 17.3,
+    "log": "/tmp/manual-start-reload-gate.log",
+    "coverage": [
+      "response lost then page reload and same command",
+      "same run id and one persisted run",
+      "blocked protocol reason displayed",
+      "UI cannot start blocked protocol",
+      "direct API also rejects with no run"
+    ],
+    "limitations": [
+      "storage must be available for cross-reload identity",
+      "full protocol authoring-to-ready browser workflow still pending"
+    ]
+  },
+  "manual_uncertain_content_freeze": {
+    "status": "implemented_and_verified",
+    "component_passed": 4,
+    "browser_passed": 3,
+    "browser_seconds": 15.8,
+    "build": "passed",
+    "logs": [
+      "/tmp/manual-frozen-red.log",
+      "/tmp/manual-frozen-final.log",
+      "/tmp/manual-frozen-browser.log",
+      "/tmp/manual-frozen-build.log"
+    ],
+    "coverage": [
+      "uncertain retry keeps original actor and reason",
+      "reason cannot change during uncertain outcome",
+      "explicit validation rejection allows correction"
+    ]
+  },
+  "event_document_pagination": {
+    "status": "implemented_and_verified",
+    "backend_related_passed": 63,
+    "seconds": 7.6,
+    "build": "passed",
+    "openapi_regenerated": true,
+    "logs": [
+      "/tmp/document-page-red.log",
+      "/tmp/document-page-final.log",
+      "/tmp/document-page-build.log"
+    ],
+    "coverage": [
+      "all attachments through cursor pages",
+      "invalid limit and cursor reject",
+      "foreign Case cursor reject"
+    ],
+    "remaining": []
+  },
+  "event_document_ui": {
+    "status": "implemented_and_verified",
+    "frontend_passed": 360,
+    "browser_passed": 1,
+    "browser_seconds": 11.7,
+    "build": "passed",
+    "visual_inspected": "390px frozen text and locator",
+    "logs": [
+      "/tmp/document-ui-red.log",
+      "/tmp/document-ui-unit-final.log",
+      "/tmp/document-ui-browser.log",
+      "/tmp/document-ui-build.log"
+    ],
+    "remaining": [
+      "extract candidates from frozen documents",
+      "upload and original file download UI",
+      "full legacy event verifier"
+    ]
+  },
+  "document_list_batching": {
+    "status": "implemented_and_verified",
+    "sqlite_passed": 52,
+    "postgres_passed": 52,
+    "postgres_seconds": 13.05,
+    "select_counts": {
+      "before_one": 9,
+      "before_ten": 26,
+      "after_one": 9,
+      "after_ten": 8
+    },
+    "fixture_note": "no stock entity metadata; counts reflect test order and session cache",
+    "logs": [
+      "/tmp/document-batch-red.log",
+      "/tmp/document-batch-final.log",
+      "/tmp/document-batch-pg.log"
+    ],
+    "remaining": [
+      "stock entity resolution queries",
+      "large per-document span memory"
+    ]
+  },
+  "document_entity_memoization": {
+    "status": "implemented_and_verified",
+    "backend_passed": 54,
+    "seconds": 5.22,
+    "repeated_entity_ten_selects_before": 18,
+    "repeated_entity_ten_selects_after": 9,
+    "logs": [
+      "/tmp/document-entity-red.log",
+      "/tmp/document-entity-final.log",
+      "/tmp/document-entity-final2.log"
+    ],
+    "cache_scope": "one list request, includes misses",
+    "remaining": [
+      "distinct-entity query batching",
+      "large span memory"
+    ]
+  },
+  "document_extraction_configuration_failure": {
+    "status": "implemented_and_verified",
+    "document_tests_passed": 31,
+    "engine_tests_passed": 21,
+    "engine_skipped": 1,
+    "logs": [
+      "/tmp/extract-config-red.log",
+      "/tmp/extract-config-final.log",
+      "/tmp/extract-config-engine.log"
+    ],
+    "coverage": [
+      "ValueError and RuntimeError become safe 503",
+      "failed not_run audit",
+      "no candidates written",
+      "authorization still precedes provider construction"
+    ],
+    "remaining": [
+      "extraction UI and atomic review workflow"
+    ]
+  },
+  "document_extraction_ui": {
+    "status": "implemented_with_remaining_review_work",
+    "frontend_unit": "364 passed (23 files)",
+    "production_build": "passed",
+    "live_browser": "19 passed (36.5s); isolated backend and mock model; no external provider",
+    "checks": [
+      "source permission and extraction watermark gate",
+      "explicit model consent",
+      "candidate remains awaiting_review; statement count unchanged",
+      "reload blocks successful re-extraction",
+      "uncertain failure blocks immediate retry",
+      "wrong document response rejected"
+    ],
+    "limitations": [
+      "candidate review/publishing UI not implemented here",
+      "UI guard is not durable server idempotency",
+      "latest full backend suite predates these changes and still had one missing legacy event verifier failure"
+    ]
+  },
+  "atomic_claim_display_boundary": {
+    "status": "implemented",
+    "sqlite": "26 passed (6.41s)",
+    "postgresql_16": "26 passed (5.71s), disposable database migrated to head, container removed",
+    "red_tests": "list leaked restricted quote; direct review returned 201 for forbidden, expired, future contracts",
+    "checks": [
+      "SQL display permission and active-date filtering before LIMIT",
+      "direct review returns 404 before publication for restricted sources",
+      "no review or source statement created on rejected access",
+      "active and legacy no-contract sources retain behavior",
+      "cross-tenant regressions included"
+    ],
+    "remaining": "full review UI and queue pagination/state-filter completeness remain open",
+    "postgres_validation_correction": "Historical batch included fixed-SQLite cmd_session API tests; total is not proof of PostgreSQL API coverage. See postgres_fixture_correction."
+  },
+  "atomic_claim_state_filter": {
+    "status": "implemented",
+    "sqlite": "28 passed (4.02s)",
+    "postgresql_16": "28 passed (4.53s), disposable database removed",
+    "red": "limit=1 newest reviewed claim hid older pending claim",
+    "checks": [
+      "latest review outcome filtered in SQL before limit",
+      "no reviews maps to awaiting_review",
+      "subsequent confirmed review replaces rejected state in filter",
+      "DTO history and filter share created_at/id ordering"
+    ],
+    "remaining": "full pagination and review UI still pending",
+    "postgres_validation_correction": "Historical batch included fixed-SQLite cmd_session API tests; total is not proof of PostgreSQL API coverage. See postgres_fixture_correction."
+  },
+  "atomic_claim_queue_pagination": {
+    "status": "backend_implemented_ui_pending",
+    "sqlite": "30 passed (5.21s)",
+    "postgresql_16": "30 passed (5.15s), isolated container removed",
+    "frontend_build": "passed after OpenAPI/types regeneration",
+    "checks": [
+      "three pages complete without duplicates",
+      "foreign Case cursor returns 404",
+      "malformed cursor returns 422",
+      "latest review state filter remains before page limit",
+      "cursor remains usable after its candidate is reviewed",
+      "newer insert does not displace subsequent page"
+    ],
+    "limitations": [
+      "not a snapshot across concurrent state changes",
+      "cursor source becoming non-displayable returns 404; restart required",
+      "review UI not yet wired"
+    ],
+    "postgres_validation_correction": "Historical batch included fixed-SQLite cmd_session API tests; total is not proof of PostgreSQL API coverage. See postgres_fixture_correction."
+  },
+  "atomic_claim_review_ui": {
+    "status": "implemented",
+    "frontend_unit": "367 passed, 24 files (11.33s)",
+    "live_browser": "19 passed (40.1s), isolated backend with mock model",
+    "production_build": "passed",
+    "visual": "390px screenshot inspected; no horizontal overflow",
+    "checks": [
+      "lazy paginated queue with load more",
+      "source quote offsets locator history and published statement visible",
+      "reason and actor required",
+      "confirm unchanged text unit; reject unit; modify real browser",
+      "modified publication increases formal statement count exactly one and survives reload",
+      "uncertain response locks editing and retries same actor/body/idempotency key"
+    ],
+    "limitations": [
+      "in-flight retry identity lives in page memory; not restored across reload",
+      "cross-tenant shared candidate may be visible but backend rejects global review",
+      "full historical event verifier and overall roadmap remain incomplete"
+    ]
+  },
+  "atomic_review_idempotency_content": {
+    "status": "implemented",
+    "red": "6 failing cases: changed semantic decision silently replayed and padded key failed replay",
+    "sqlite": "36 passed (5.07s)",
+    "postgresql_16": "36 passed (6.08s), disposable container removed",
+    "preparation_regression": "56 passed, 4 skipped (10.01s)",
+    "checks": [
+      "key stripped before lookup and insertion",
+      "outcome/reviewer/reason/published text/period compared before replay",
+      "changed decision returns 409",
+      "unchanged decision returns original review without duplicate history"
+    ],
+    "limitations": [
+      "semantic equality uses normalized stored values, not raw request byte identity",
+      "no new concurrent stress test in this batch",
+      "browser pending request identity across reload remains open"
+    ],
+    "postgres_validation_correction": "Historical batch included fixed-SQLite cmd_session API tests; total is not proof of PostgreSQL API coverage. See postgres_fixture_correction."
+  },
+  "reviewed_run_ai_attribution": {
+    "status": "implemented_for_reviewed_execution",
+    "validation": "92 passed, 2 skipped (7.21s): usage audit, auto research API, AI engine",
+    "checks": [
+      "execution context supplies research_case_id/research_run_id",
+      "propose and assess add research_task_id",
+      "extraction supplies run attribution without inventing a task",
+      "nested context restores on exception and standalone operation does not inherit ownership",
+      "actual reviewed service execution audit maps to exact run task"
+    ],
+    "remaining": [
+      "automatic pipeline attribution",
+      "run/Case usage aggregation",
+      "durable audit survival after rollback/crash",
+      "monetary pricing and budget enforcement"
+    ]
+  },
+  "automatic_ai_attribution": {
+    "status": "implemented",
+    "pipeline_runner_usage": "101 passed, 1 skipped (21.41s)",
+    "context_reviewed_regression": "48 passed, 2 skipped (11.46s)",
+    "checks": [
+      "real governed material extraction carries run/case ownership",
+      "acquisition extraction includes acquisition_job_id",
+      "automatic assessment generator executes under exact task/run/case context",
+      "standalone acquisition omits run and clears inherited unrelated context"
+    ],
+    "limitations": [
+      "no new PostgreSQL run this batch",
+      "usage aggregation not implemented",
+      "audit rollback/crash durability remains incomplete",
+      "initial preparation and standalone commands require separate coverage"
+    ]
+  },
+  "run_ai_usage_summary": {
+    "status": "backend_implemented",
+    "sqlite": "57 passed, 2 skipped (7.11s)",
+    "postgresql_16": "20 passed (4.30s), container removed",
+    "frontend_build": "passed after OpenAPI and TS regeneration",
+    "scope": "recorded_attributed_operations_only",
+    "checks": [
+      "owner authorization before usage query",
+      "exact run and Case attribution only",
+      "reported attempt token subtotals",
+      "unknown attempts and uninstrumented operations counted separately",
+      "recorded_total_tokens null when unknown or no operations",
+      "zero only for validated recorded no-attempt operation",
+      "malformed and inconsistent counters treated as unavailable"
+    ],
+    "remaining": [
+      "UI and Case/task breakdown",
+      "historical attribution and missing audit coverage",
+      "monetary pricing and budget enforcement"
+    ],
+    "postgres_validation_correction": "Historical batch included fixed-SQLite cmd_session API tests; total is not proof of PostgreSQL API coverage. See postgres_fixture_correction."
+  },
+  "run_ai_usage_ui": {
+    "status": "implemented",
+    "frontend_unit": "370 passed (25 files, 10.04s)",
+    "live_browser": "19 passed (28.5s)",
+    "production_build": "passed",
+    "checks": [
+      "lazy run-specific read",
+      "unknown and no records do not display a complete zero bill",
+      "reported input/output/total subtotals with unavailable counts",
+      "wrong-run response rejected",
+      "real API no-record path and mobile overflow assertion"
+    ],
+    "remaining": [
+      "currency costs",
+      "Case/task breakdown",
+      "full audit coverage"
+    ]
+  },
+  "case_ai_usage": {
+    "status": "backend_and_ui_implemented",
+    "backend": "57 passed, 2 skipped (5.31s)",
+    "postgresql_16": "20 passed (26.00s), container removed",
+    "frontend_unit": "371 passed (10.21s)",
+    "live_browser": "19 passed (35.1s)",
+    "build": "passed after fixing optional mock-call access in test",
+    "checks": [
+      "Case cumulative records vs individual run totals",
+      "Case tenant authorization",
+      "shared unknown-use semantics",
+      "separate lazy Case/run panels",
+      "OpenAPI and TS synchronized"
+    ],
+    "remaining": [
+      "task/model breakdown",
+      "pricing/budget enforcement",
+      "full audit coverage and final full regression"
+    ],
+    "postgres_validation_correction": "Historical batch included fixed-SQLite cmd_session API tests; total is not proof of PostgreSQL API coverage. See postgres_fixture_correction."
+  },
+  "postgres_fixture_correction": {
+    "supersedes_prior_claims": true,
+    "finding": "cmd_session in tests/conftest.py is always SQLite. Setting TEST_DATABASE_URL does not convert cmd_client API tests to PostgreSQL. Earlier mixed-batch totals must not be presented as all PostgreSQL API coverage.",
+    "affected_examples": [
+      "atomic_claim_display_boundary",
+      "atomic_claim_state_filter",
+      "atomic_claim_queue_pagination",
+      "atomic_review_idempotency_content",
+      "run_ai_usage_summary",
+      "case_ai_usage"
+    ],
+    "current_fix": "test_run_ai_usage now uses api_client/session, which follows TEST_DATABASE_URL; PostgreSQL plan test uses session too. Earlier atomic API tests still need explicit PG revalidation."
+  },
+  "usage_scope_index": {
+    "status": "implemented",
+    "migration": "0072, SQLite existing-index adoption and downgrade tested; real PostgreSQL upgrade verified",
+    "baseline": "SQLite SCAN ai_runs",
+    "after": "SQLite index used for Case/run; real PostgreSQL natural plan uses index with 5000 seeded audit records",
+    "real_pg_batch": "23 passed (5.59s), usage API switched to actual PG session; migration and readiness verified; temporary container removed",
+    "full_backend_run": {
+      "status": "still_running",
+      "session_id": 62521,
+      "log": "/tmp/fund-engine-full-20260907.log",
+      "xml": "/tmp/fund-engine-full-20260907.xml",
+      "caveat": "started before index changes, not a frozen final-tree verification"
+    }
+  },
+  "atomic_api_real_postgres_recheck": {
+    "status": "verified",
+    "fixture_change": "test_atomic_claims_api.cmd_session now delegates to engine-selected session and asserts dialect from TEST_DATABASE_URL",
+    "actual_pg_api_test_count": 22,
+    "batch_total": "36 passed (14.70s); includes other files, do not equate full batch with PG API count",
+    "sqlite_api": "22 passed (3.34s)",
+    "covers": [
+      "source display contract boundaries",
+      "latest review state filter and pagination",
+      "cross-Case cursor rejection",
+      "same-key content conflict and normalized retry",
+      "publication and automatic resume integration"
+    ],
+    "database": "disposable PG16 migrated to 0072, container removed"
+  },
+  "full_backend_20260907": {
+    "status": "finished_with_failures",
+    "session_id": 62521,
+    "log": "/tmp/fund-engine-full-20260907.log",
+    "junit": "/tmp/fund-engine-full-20260907.xml",
+    "result": "4403 passed, 11 failed, 46 skipped (668.11s)",
+    "failures": "10 migration head assertions expected 0071 vs actual 0072; 1 missing legacy event UI verifier",
+    "followup": "migration assertions and unmanaged-index adoption fixed, migration/query 72 passed 1 skipped; legacy verifier remains open",
+    "caveat": "batch started before index changes; follow-up tests do not constitute a new full-suite pass"
+  },
+  "migration_head_and_scope_adoption": {
+    "status": "implemented",
+    "tests": "72 passed, 1 skipped (79.18s)",
+    "pg": "23 passed (7.12s), actual usage API/plan, migrated to head, container removed",
+    "changes": [
+      "head assertions read actual Alembic head",
+      "0072 index expressions frozen without app imports",
+      "unmanaged complete ORM database installs audit scope index before stamping head"
+    ],
+    "red": "unmanaged database without index was stamped head but index remained absent"
+  },
+  "event_market_restore": {
+    "status": "entry_and_claim_flow_restored_full_verifier_pending",
+    "source": "reused market components from 24a38c24^, isolated under eventMarket",
+    "routes": [
+      "/events/:caseId/market",
+      "/events/:caseId/stocks/:instrumentId",
+      "/events/:caseId/funds/:instrumentId"
+    ],
+    "changes": [
+      "lazy entry linked from workbench",
+      "scoped CSS",
+      "same-origin proxy; no browser bearer or arbitrary API URL",
+      "explicit market actor replaces hardcoded human:researcher",
+      "visible reviewed claim list including claims without factors",
+      "unused legacy API methods removed"
+    ],
+    "validation": {
+      "unit": "371 passed before final client cleanup",
+      "browser_full": "20 passed (28.3s) before final client simplification",
+      "browser_final": "market registration 1 passed (13.3s) after client simplification",
+      "build": "passed final client",
+      "visual": "390px screenshot inspected; no horizontal overflow"
+    },
+    "remaining": [
+      "full forecast/company-stock-fund/run/failure verifier restoration",
+      "source permission and API response boundary re-audit of restored module",
+      "populated stock and fund profile browser validation"
+    ]
+  }
+}
