@@ -15,6 +15,7 @@ temperature=0 plus a fixed seed closes the bulk of the variance.
 from __future__ import annotations
 
 from typing import Any
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import httpx
@@ -38,6 +39,7 @@ def _isolate_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "LLM_SEED",
         "LLM_TIMEOUT_SECONDS",
         "LLM_MAX_ATTEMPTS",
+        "LLM_RETRY_BUDGET_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LLM_BASE_URL", "https://llm.example.invalid/v1")
@@ -58,6 +60,8 @@ class _FakeCompletions:
         response = MagicMock()
         response.choices = [MagicMock()]
         response.choices[0].message.content = '{"conclusion": "supported"}'
+        response.choices[0].finish_reason = "stop"
+        response.choices[0].message.refusal = None
         return response
 
 
@@ -143,6 +147,8 @@ class TestLLMClientDeterminism:
                 response = MagicMock()
                 response.choices = [MagicMock()]
                 response.choices[0].message.content = '{"conclusion": "supported"}'
+                response.choices[0].finish_reason = "stop"
+                response.choices[0].message.refusal = None
                 return response
 
         completions = FailsOnceCompletions()
@@ -231,6 +237,41 @@ class TestLLMClientDeterminism:
 
         assert str(exc_info.value) == "LLM provider returned an invalid response"
         assert isinstance(exc_info.value.__cause__, IndexError)
+
+
+@pytest.mark.parametrize("finish_reason", ["length", "content_filter", "tool_calls", "function_call", None, "unknown"])
+def test_nonstop_response_is_rejected_before_json_repair(finish_reason):
+    completions = MagicMock()
+    completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(
+        finish_reason=finish_reason,
+        message=SimpleNamespace(content='{"conclusion":"supported","rationale":"partial', refusal=None),
+    )])
+    client = LLMClient(model_version="test", client=_ClientWithCompletions(completions))
+    with pytest.raises(LLMMalformedResponseError, match="^LLM provider returned an invalid response$"):
+        client.chat_json([])
+    assert completions.create.call_count == 1
+
+
+def test_refusal_is_rejected_even_with_valid_json_content():
+    completions = MagicMock()
+    completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(
+        finish_reason="stop",
+        message=SimpleNamespace(content='{"conclusion":"supported"}', refusal="sentinel-refusal"),
+    )])
+    client = LLMClient(model_version="test", client=_ClientWithCompletions(completions))
+    with pytest.raises(LLMMalformedResponseError) as error:
+        client.chat_json([])
+    assert str(error.value) == "LLM provider returned an invalid response"
+    assert "sentinel-refusal" not in str(error.value)
+
+
+def test_stop_response_keeps_markdown_json_compatibility_without_optional_refusal():
+    completions = MagicMock()
+    completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(
+        finish_reason="stop", message=SimpleNamespace(content='```json\n{"statements": []}\n```'),
+    )])
+    client = LLMClient(model_version="test", client=_ClientWithCompletions(completions))
+    assert client.chat_json([]) == {"statements": []}
 
 
 class TestFromEnvReadsReproducibilityKnobs:

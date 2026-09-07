@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan
+from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, DocumentVersion, SourceSpan
 
 
 class DocumentRepository:
@@ -128,12 +128,27 @@ class DocumentRepository:
 
     # ------------------------------------------------------------------ readers
 
+    @staticmethod
+    def owned_attachment(tenant_id: str, case_id: uuid.UUID | None = None):
+        """EXISTS keeps shared versions unique and scopes before pagination."""
+        attachment = select(CaseDocumentVersion.id).join(
+            CaseTenantAdmission,
+            CaseTenantAdmission.research_case_id == CaseDocumentVersion.research_case_id,
+        ).where(
+            CaseDocumentVersion.document_version_id == DocumentVersion.id,
+            CaseTenantAdmission.tenant_id == tenant_id,
+        )
+        if case_id is not None:
+            attachment = attachment.where(CaseDocumentVersion.research_case_id == case_id)
+        return attachment.exists()
+
     def visible_versions(
         self,
         *,
         cutoff: datetime,
         limit: int,
         query: str | None = None,
+        tenant_id: str | None = None,
         case_id: uuid.UUID | None = None,
         cursor_at: datetime | None = None,
         cursor_id: uuid.UUID | None = None,
@@ -147,7 +162,9 @@ class DocumentRepository:
         )
         if query:
             stmt = stmt.where(DocumentVersion.source_url.ilike(f"%{query}%"))
-        if case_id is not None:
+        if tenant_id is not None:
+            stmt = stmt.where(self.owned_attachment(tenant_id, case_id))
+        elif case_id is not None:
             stmt = stmt.join(
                 CaseDocumentVersion,
                 CaseDocumentVersion.document_version_id == DocumentVersion.id,

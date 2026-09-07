@@ -246,6 +246,8 @@ class AtomicClaimCandidateDTO(V1Model):
 
 class AtomicClaimQueueResponse(V1Model):
     items: list[AtomicClaimCandidateDTO]
+    has_more: bool = False
+    next_cursor: str | None = None
 
 
 class AtomicClaimReviewRequest(V1Model):

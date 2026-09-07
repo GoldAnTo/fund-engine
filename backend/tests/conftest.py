@@ -16,6 +16,10 @@ for provider_env_name in (
     "LLM_SEED",
     "LLM_TIMEOUT_SECONDS",
     "LLM_MAX_ATTEMPTS",
+    "LLM_RETRY_BUDGET_SECONDS",
+    "LLM_MAX_INPUT_BYTES",
+    "LLM_MAX_RESPONSE_BYTES",
+    "LLM_MAX_COMPLETION_TOKENS",
     "GILDATA_MAX_ATTEMPTS",
     "GILDATA_TOKEN",
 ):
@@ -760,3 +764,18 @@ def cmd_seeded(cmd_session):
     ))
     cmd_session.commit()
     return cmd_session
+
+
+@pytest.fixture(autouse=True)
+def isolate_postgres_concurrency_test(request):
+    """Independent-connection tests commit outside the ordinary session fixture."""
+    if not USE_PG or request.node.get_closest_marker('pg_only') is None:
+        yield
+        return
+    from app.models.ledger import Base
+    test_engine = request.getfixturevalue('engine')
+    _truncate_postgresql_tables(test_engine, Base)
+    try:
+        yield
+    finally:
+        _truncate_postgresql_tables(test_engine, Base)

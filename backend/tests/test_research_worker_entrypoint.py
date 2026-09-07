@@ -27,6 +27,8 @@ def _seed_terminal_race(session_local):
         )
         setup.add(case)
         setup.flush()
+        from tests.tenant_admission import admit_case
+        admit_case(setup, case.id)
         run = AutoResearchRepository(setup).create_run(
             research_case_id=case.id,
             max_rounds=1,
@@ -536,7 +538,7 @@ def test_worker_terminalization_honors_a_committed_job_cancellation(
 
     def cancel_before_completion(self, job, **kwargs):
         with session_local() as cancelling:
-            response = cancel_job(job.id, db=cancelling)
+            response = cancel_job(job.id, db=cancelling, tenant_id="test-team")
             assert response.cancel_requested is True
         original_completion(self, job, **kwargs)
 
@@ -660,6 +662,7 @@ def test_worker_discards_outputs_when_another_worker_already_terminalized_job(
 )
 def test_postgres_worker_terminalization_serializes_public_job_cancel(
     engine,
+    session,  # Own fixture teardown for rows committed by independent workers.
     monkeypatch,
     winner,
     terminal_status,

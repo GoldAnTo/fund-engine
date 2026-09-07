@@ -9,11 +9,14 @@ and will later hand execution to a worker without changing these routes.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
+from app.models.operational import Job
 
+from app.api.v1.tenant_context import require_research_tenant
+from app.services.case_tenant_access import CaseTenantAccess
 from app.db import get_db
 from app.errors import NotFoundError
 from app.repositories.operational import JobRepository
@@ -28,7 +31,17 @@ from app.schemas.v1.operational import (
 from app.services.jobs import JobService
 
 # NOTE: no prefix here — the parent v1 router already mounts under /api/v1.
-router = APIRouter(tags=["jobs-v1"])
+router = APIRouter(tags=["jobs-v1"], dependencies=[Depends(require_research_tenant)])
+
+
+def _owned_job(db: Session, job_id: uuid.UUID, tenant_id: str):
+    job = db.scalar(select(Job).where(
+        Job.id == job_id,
+        Job.research_case_id.in_(CaseTenantAccess(db).case_ids(tenant_id)),
+    ))
+    if job is None:
+        raise NotFoundError("job not found")
+    return job
 
 
 def _job_dto(job) -> JobDTO:
@@ -51,10 +64,8 @@ def _job_dto(job) -> JobDTO:
 
 
 @router.get("/jobs/{job_id}", response_model=JobDTO)
-def get_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
-    job = JobRepository(db).get_job(job_id)
-    if job is None:
-        raise NotFoundError(f"job {job_id} not found")
+def get_job(job_id: uuid.UUID, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
+    job = _owned_job(db, job_id, tenant_id)
     return _job_dto(job)
 
 
@@ -64,11 +75,11 @@ def get_job_events(
     after_seq: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ):
     repo = JobRepository(db)
-    if repo.get_job(job_id) is None:
-        raise NotFoundError(f"job {job_id} not found")
-    events = repo.events_after(job_id, after_seq)
+    _owned_job(db, job_id, tenant_id)
+    events = repo.events_after(job_id, after_seq, limit=limit + 1)
     page = events[:limit]
     events_dto = [
         JobEventDTO(
@@ -92,22 +103,18 @@ def get_job_events(
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobDTO, status_code=status.HTTP_200_OK)
-def cancel_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
+def cancel_job(job_id: uuid.UUID, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
     repo = JobRepository(db)
-    job = repo.get_job(job_id)
-    if job is None:
-        raise NotFoundError(f"job {job_id} not found")
+    job = _owned_job(db, job_id, tenant_id)
     JobService(db).request_cancel(job)
     db.commit()
     return _job_dto(job)
 
 
 @router.post("/jobs/{job_id}/retries", response_model=JobDTO, status_code=status.HTTP_200_OK)
-def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
+def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
     repo = JobRepository(db)
-    job = repo.get_job(job_id)
-    if job is None:
-        raise NotFoundError(f"job {job_id} not found")
+    job = _owned_job(db, job_id, tenant_id)
     if job.status not in {"failed", "cancelled"}:
         raise NotFoundError(f"job {job_id} is not retryable (status={job.status})")
     job.status = "queued"

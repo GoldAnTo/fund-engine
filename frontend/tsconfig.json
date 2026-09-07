@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
@@ -14,18 +18,24 @@
     "skipLibCheck": true,
     "allowSyntheticDefaultImports": true,
     "verbatimModuleSyntax": true,
-    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"],
+    "types": [
+      "vite/client",
+      "vitest/globals",
+      "@testing-library/jest-dom"
+    ],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": [
+        "src/*"
+      ]
     }
   },
   "include": [
-    "src/main.tsx",
-    "src/vite-env.d.ts",
-    "src/workbench",
-    "src/styles",
-    "src/tests/ResearchWorkbench.test.tsx",
-    "vite.config.ts"
+    "src",
+    "vite.config.ts",
+    "playwright.config.ts",
+    "e2e",
+    "playwright.live.config.ts",
+    "e2e-live"
   ]
 }

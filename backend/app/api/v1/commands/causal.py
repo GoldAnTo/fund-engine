@@ -8,9 +8,11 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.v1.commands.common import commit_or_rollback, translate_validation
+from app.api.v1.tenant_context import require_research_tenant
+from app.services.review_tenant_access import ReviewTenantAccess
 from app.db import get_db
 from app.errors import NotFoundError
-from app.models.ledger import CausalEdge, CausalStep, Thesis
+from app.models.ledger import CausalEdge, CausalStep
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.causal_commands import (
     CreateCausalEdgeRequest,
@@ -27,13 +29,6 @@ def _service(db: Session) -> ResearchService:
     return ResearchService(ResearchRepository(db))
 
 
-def _get_thesis(db: Session, thesis_id: uuid.UUID) -> Thesis:
-    thesis = db.get(Thesis, thesis_id)
-    if thesis is None:
-        raise NotFoundError("Thesis", str(thesis_id))
-    return thesis
-
-
 @router.post(
     "/theses/{thesis_id}/causal-steps",
     response_model=CreatedCausalStepDTO,
@@ -42,9 +37,10 @@ def _get_thesis(db: Session, thesis_id: uuid.UUID) -> Thesis:
 def create_causal_step(
     thesis_id: uuid.UUID,
     payload: CreateCausalStepRequest,
+    tenant_id: str = Depends(require_research_tenant),
     db: Session = Depends(get_db),
 ) -> CausalStep:
-    thesis = _get_thesis(db, thesis_id)
+    thesis = ReviewTenantAccess(db).require_thesis(thesis_id, tenant_id)
     step = translate_validation(
         _service(db).add_causal_step,
         thesis,
@@ -63,14 +59,15 @@ def create_causal_step(
 def create_causal_edge(
     thesis_id: uuid.UUID,
     payload: CreateCausalEdgeRequest,
+    tenant_id: str = Depends(require_research_tenant),
     db: Session = Depends(get_db),
 ) -> CausalEdge:
-    thesis = _get_thesis(db, thesis_id)
+    thesis = ReviewTenantAccess(db).require_thesis(thesis_id, tenant_id)
     source_step = db.get(CausalStep, payload.source_step_id)
-    if source_step is None:
+    if source_step is None or source_step.thesis_id != thesis.id:
         raise NotFoundError("CausalStep", str(payload.source_step_id))
     target_step = db.get(CausalStep, payload.target_step_id)
-    if target_step is None:
+    if target_step is None or target_step.thesis_id != thesis.id:
         raise NotFoundError("CausalStep", str(payload.target_step_id))
 
     edge = translate_validation(

@@ -73,7 +73,9 @@ def run_once(*, recover_after_minutes: int = 30) -> bool:
         try:
             service.execute(run)
             if run.status == "waiting_for_sources":
-                service.repo.wait_for_sources(run, job)
+                service.repo.wait_for_sources(
+                    run, job, expected_claim_token=claim_token
+                )
             else:
                 service.repo.record_job_completion(
                     job,

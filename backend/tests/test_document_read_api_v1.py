@@ -2,9 +2,63 @@
 
 from datetime import UTC, datetime
 
+import pytest
+from tests.tenant_admission import admit_case
+
+
+@pytest.fixture
+def owned_document(document, session, research_service):
+    case = research_service.add_case(title="library owner", industry_topic="test", created_by="u")
+    admit_case(session, case.id, document_version_id=document.id)
+    return document
+
+
 from app.models.ledger import DocumentVersion, EvidenceLink
 
 
+def test_event_document_citations_are_scoped_to_case(
+    api_client, document, span, research_service, session, monkeypatch
+):
+    from tests.tenant_admission import admit_case
+
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS",
+        '{"test-tenant-token":"test-team","foreign-token":"foreign-team"}',
+    )
+    statement = research_service.add_statement(
+        span.id, "shared source text", kind="disclosed_fact"
+    )
+    cases = []
+    links = []
+    for tenant in ("test-team", "foreign-team"):
+        case = research_service.add_case(
+            title=tenant, industry_topic="test", created_by="tester"
+        )
+        admit_case(session, case.id, tenant_id=tenant, document_version_id=document.id)
+        thesis = research_service.add_thesis(case.id, statement=tenant, created_by="tester")
+        links.append(research_service.link_evidence(
+            thesis.id, statement.id, role="supports", reason=tenant, scope={"tenant": tenant}
+        ))
+        cases.append(case)
+
+    for index, token in enumerate(("test-tenant-token", "foreign-token")):
+        path = f"/api/v1/event-research/{cases[index].id}/documents/{document.id}"
+        response = api_client.get(
+            path, params={"research_mode": "true"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200, response.text
+        citations = response.json()["spans"][0]["citations"]
+        assert [citation["link_id"] for citation in citations] == [str(links[index].id)]
+        assert str(links[1 - index].thesis_id) not in response.text
+        assert api_client.get(path, headers={"Authorization": ""}).status_code == 401
+        foreign_token = ("foreign-token", "test-tenant-token")[index]
+        assert api_client.get(
+            path, headers={"Authorization": f"Bearer {foreign_token}"}
+        ).status_code == 404
+
+
+@pytest.mark.usefixtures("owned_document")
 def test_documents_list_frozen_versions(api_client, document, span):
     response = api_client.get("/api/v1/documents")
     assert response.status_code == 200
@@ -18,7 +72,7 @@ def test_documents_list_frozen_versions(api_client, document, span):
 
 
 def test_documents_list_can_be_scoped_to_one_case_without_leaking_other_case_material(
-    api_client, document_service, research_service, document
+    api_client, document_service, research_service, document, session
 ):
     first_case = research_service.add_case(
         title="first case", industry_topic="test", created_by="tester"
@@ -37,6 +91,8 @@ def test_documents_list_can_be_scoped_to_one_case_without_leaking_other_case_mat
         research_case_id=second_case.id, document_version_id=other_document.id
     )
 
+    admit_case(session, first_case.id, document_version_id=document.id)
+    admit_case(session, second_case.id, tenant_id="foreign-team", document_version_id=other_document.id)
     response = api_client.get(
         "/api/v1/documents", params={"case_id": str(first_case.id)}
     )
@@ -45,6 +101,7 @@ def test_documents_list_can_be_scoped_to_one_case_without_leaking_other_case_mat
     assert [item["id"] for item in response.json()["items"]] == [str(document.id)]
 
 
+@pytest.mark.usefixtures("owned_document")
 def test_document_detail_returns_spans_and_citations(api_client, document, span):
     response = api_client.get(f"/api/v1/documents/{document.id}")
     assert response.status_code == 200
@@ -55,6 +112,7 @@ def test_document_detail_returns_spans_and_citations(api_client, document, span)
     assert payload["spans"][0]["locator"] == span.locator
 
 
+@pytest.mark.usefixtures("owned_document")
 def test_documents_cutoff_excludes_future_available_version(api_client, document):
     response = api_client.get(
         "/api/v1/documents", params={"cutoff": "2000-01-01T00:00:00Z"}
@@ -63,7 +121,7 @@ def test_documents_cutoff_excludes_future_available_version(api_client, document
     assert response.json()["items"] == []
 
 
-def test_documents_excludes_version_acquired_after_cutoff(api_client, session):
+def test_documents_excludes_version_acquired_after_cutoff(api_client, session, research_service):
     # available_at in the past but acquired_at in the future: a version not
     # yet acquired at the cutoff must not appear (no hindsight leakage).
     past = datetime(2025, 1, 1, tzinfo=UTC)
@@ -80,6 +138,8 @@ def test_documents_excludes_version_acquired_after_cutoff(api_client, session):
     )
     session.add(version)
     session.flush()
+    case = research_service.add_case(title="historical", industry_topic="test", created_by="u")
+    admit_case(session, case.id, document_version_id=version.id)
     response = api_client.get(
         "/api/v1/documents", params={"cutoff": cutoff.isoformat()}
     )
@@ -96,7 +156,7 @@ def test_document_detail_returns_404_for_missing_version(api_client):
 
 
 def test_document_detail_counts_citations(
-    api_client, document, span, research_service
+    api_client, document, span, research_service, session
 ):
     statement = research_service.add_statement(
         span.id, "cited text", kind="disclosed_fact"
@@ -104,6 +164,7 @@ def test_document_detail_counts_citations(
     case = research_service.add_case(
         title="c", industry_topic="t", created_by="u"
     )
+    admit_case(session, case.id, document_version_id=document.id)
     thesis = research_service.add_thesis(case.id, statement="th", created_by="u")
     research_service.link_evidence(
         thesis.id, statement.id, role="supports", reason="r", scope={"s": "d"}
@@ -118,7 +179,7 @@ def test_document_detail_counts_citations(
 
 
 def test_document_detail_citations_hidden_by_default(
-    api_client, document, span, research_service
+    api_client, document, span, research_service, session
 ):
     statement = research_service.add_statement(
         span.id, "cited text", kind="disclosed_fact"
@@ -126,6 +187,7 @@ def test_document_detail_citations_hidden_by_default(
     case = research_service.add_case(
         title="c", industry_topic="t", created_by="u"
     )
+    admit_case(session, case.id, document_version_id=document.id)
     thesis = research_service.add_thesis(case.id, statement="th", created_by="u")
     research_service.link_evidence(
         thesis.id, statement.id, role="supports", reason="r", scope={"s": "d"}
@@ -144,6 +206,7 @@ def test_document_detail_citations_never_return_rejected(
     case = research_service.add_case(
         title="c", industry_topic="t", created_by="u"
     )
+    admit_case(session, case.id, document_version_id=document.id)
     thesis = research_service.add_thesis(case.id, statement="th", created_by="u")
     now = datetime.now(UTC)
     session.add(
@@ -167,14 +230,18 @@ def test_document_detail_citations_never_return_rejected(
     assert response.json()["spans"][0]["citations"] == []
 
 
-def test_documents_q_and_limit_do_not_miss_results(api_client, document_service):
+def test_documents_q_and_limit_do_not_miss_results(api_client, document_service, session, research_service):
     # q must filter in SQL before limit+1, otherwise an older matching doc is
     # missed when newer non-matching docs fill the window.
     old = document_service.freeze(
         raw=b"old", source_url="https://example.test/old"
     )
-    document_service.freeze(raw=b"mid", source_url="https://example.test/mid")
-    document_service.freeze(raw=b"new", source_url="https://example.test/new")
+    mid = document_service.freeze(raw=b"mid", source_url="https://example.test/mid")
+    new = document_service.freeze(raw=b"new", source_url="https://example.test/new")
+    case = research_service.add_case(title="search", industry_topic="test", created_by="u")
+    admit_case(session, case.id, document_version_id=old.id)
+    for version in (mid, new):
+        document_service.attach_to_case(research_case_id=case.id, document_version_id=version.id)
     response = api_client.get(
         "/api/v1/documents", params={"q": "old", "limit": 1}
     )
@@ -184,13 +251,17 @@ def test_documents_q_and_limit_do_not_miss_results(api_client, document_service)
     assert items[0]["id"] == str(old.id)
 
 
-def test_documents_cursor_reads_second_page(api_client, document_service):
+def test_documents_cursor_reads_second_page(api_client, document_service, session, research_service):
     d1 = document_service.freeze(
         raw=b"p1", source_url="https://example.test/p1"
     )
-    document_service.freeze(raw=b"p2", source_url="https://example.test/p2")
-    document_service.freeze(raw=b"p3", source_url="https://example.test/p3")
+    d2 = document_service.freeze(raw=b"p2", source_url="https://example.test/p2")
+    d3 = document_service.freeze(raw=b"p3", source_url="https://example.test/p3")
 
+    case = research_service.add_case(title="pages", industry_topic="test", created_by="u")
+    admit_case(session, case.id, document_version_id=d1.id)
+    for version in (d2, d3):
+        document_service.attach_to_case(research_case_id=case.id, document_version_id=version.id)
     first = api_client.get("/api/v1/documents", params={"limit": 2})
     assert first.status_code == 200
     first_payload = first.json()
@@ -255,12 +326,14 @@ def _list_state(api_client, document) -> dict:
     return item
 
 
+@pytest.mark.usefixtures("owned_document")
 def test_extraction_state_not_attempted_without_runs(api_client, document, span):
     item = _list_state(api_client, document)
     assert item["extraction_state"] == "not_attempted"
     assert item["last_extracted_at"] is None
 
 
+@pytest.mark.usefixtures("owned_document")
 def test_extraction_state_extracted_empty_after_zero_output_run(
     api_client, session, document, span
 ):
@@ -272,6 +345,7 @@ def test_extraction_state_extracted_empty_after_zero_output_run(
     assert item["last_extracted_at"] == run.finished_at.isoformat()
 
 
+@pytest.mark.usefixtures("owned_document")
 def test_extraction_state_failed_after_failed_run(
     api_client, session, document, span
 ):
@@ -285,6 +359,7 @@ def test_extraction_state_failed_after_failed_run(
     assert item["extraction_state"] == "failed"
 
 
+@pytest.mark.usefixtures("owned_document")
 def test_extraction_state_latest_run_wins(
     api_client, session, document, span
 ):
@@ -301,6 +376,7 @@ def test_extraction_state_latest_run_wins(
     assert item["extraction_state"] == "failed"
 
 
+@pytest.mark.usefixtures("owned_document")
 def test_extraction_state_extracted_when_statements_exist(
     api_client, session, document, statement
 ):
@@ -311,6 +387,7 @@ def test_extraction_state_extracted_when_statements_exist(
     assert item["extraction_state"] == "extracted"
 
 
+@pytest.mark.usefixtures("owned_document")
 def test_document_detail_carries_extraction_state(
     api_client, session, document, span
 ):

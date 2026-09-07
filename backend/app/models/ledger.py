@@ -1255,6 +1255,9 @@ class AIRun(Base):
 
     __tablename__ = "ai_runs"
 
+    # Null means historical/uninstrumented, not zero provider consumption.
+    usage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     model_version: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -1269,6 +1272,11 @@ class AIRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+# Use the exact fixed-path expressions used by usage queries on both dialects.
+from app.ai.scope_columns import AuditCaseRef, AuditRunRef
+Index("ix_ai_runs_research_scope", AuditCaseRef(AIRun.input_ref), AuditRunRef(AIRun.input_ref))
 
 
 class AuditLog(Base):

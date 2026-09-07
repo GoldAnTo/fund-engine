@@ -25,31 +25,23 @@ def test_full_research_flow_walkthrough(cmd_client, cmd_seeded):
     # 0. 金标切片已由 cmd_seeded 落库（离线、可重放）。
     seeded_case = cmd_seeded.scalar(select(ResearchCase))
 
-    # 1. 新建研究：研究问题 + 可反证初始命题（AI 草案待人工复核）。
+    # 1. 通过用户粘贴原文建立归属，再添加可反证 AI 草案命题。
+    from tests.event_case_factory import create_event_case
+
+    new_case_id = create_event_case(cmd_client, title="AI 算力产业链：订单到收入传导验证")
     created = cmd_client.post(
-        "/api/v1/research-cases",
+        f"/api/v1/research-cases/{new_case_id}/theses",
         json={
-            "title": "AI 算力产业链：订单到收入传导验证",
-            "industry_topic": "ai_compute",
             "created_by": "flow-test",
-            "core_question": "截至 2026-06-30 算力资本开支能否通过已披露订单验证？",
-            "period_start": "2026-01-01",
-            "period_end": "2027-12-31",
-            "evidence_cutoff": "2026-06-30",
-            "initial_theses": [
-                {
-                    "statement": "云厂商资本开支形成持续算力需求",
-                    "support_condition": "至少两家主要云厂商给出扩张指引",
-                    "falsification_condition": "主要云厂商下调资本开支",
-                    "next_verification_event": "核对 2026Q2 云厂商财报",
-                    "creator_type": "ai",
-                }
-            ],
+            "statement": "云厂商资本开支形成持续算力需求",
+            "support_condition": "至少两家主要云厂商给出扩张指引",
+            "falsification_condition": "主要云厂商下调资本开支",
+            "next_verification_event": "核对 2026Q2 云厂商财报",
+            "creator_type": "ai",
         },
     )
     assert created.status_code == 201, created.text
-    new_case_id = created.json()["case_id"]
-    assert created.json()["theses"][0]["review_state"] == "draft"
+    assert created.json()["thesis"]["review_state"] == "draft"
 
     # 2. 审核队列：金标切片的 15 条机器提议待审；新案无链接不进队。
     queue = cmd_client.get("/api/v1/review-queue").json()["items"]

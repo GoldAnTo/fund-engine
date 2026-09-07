@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai.runs import research_audit_context
 from app.ai.assessment_gen import AssessmentGenerator
 from app.ai.client import LLMClient
 from app.ai.error_safety import (
@@ -481,11 +482,12 @@ class AutoResearchService:
                 if used >= run.budget:
                     break
                 try:
-                    extracted = StatementExtractor(self.client).extract(
-                        version.id,
-                        self.session,
-                        before_persist=lambda: self._claim_extraction_output_slot(run),
-                    )
+                    with research_audit_context(case_id=run.research_case_id, run_id=run.id):
+                        extracted = StatementExtractor(self.client).extract(
+                            version.id,
+                            self.session,
+                            before_persist=lambda: self._claim_extraction_output_slot(run),
+                        )
                 except ComplianceRefusedError:
                     used += 1
                     if not self._claim_extraction_output_slot(run):
@@ -544,20 +546,21 @@ class AutoResearchService:
                 self.session.commit()
                 cancelled_during_task = False
                 try:
-                    if task.task_type in {"support", "contradict", "alternative"}:
-                        proposed_ids = self._propose_for_task(
-                            proposer,
-                            task,
-                            run,
-                            allowed_source_types=allowed_source_types,
-                        )
-                    else:
-                        assessment = generator.generate(
-                            task.thesis_id,
-                            datetime.now(timezone.utc),
-                            self.session,
-                            before_persist=lambda: self._claim_task_output_slot(run, task),
-                        )
+                    with research_audit_context(case_id=run.research_case_id, run_id=run.id, task_id=task.id):
+                        if task.task_type in {"support", "contradict", "alternative"}:
+                            proposed_ids = self._propose_for_task(
+                                proposer,
+                                task,
+                                run,
+                                allowed_source_types=allowed_source_types,
+                            )
+                        else:
+                            assessment = generator.generate(
+                                task.thesis_id,
+                                datetime.now(timezone.utc),
+                                self.session,
+                                before_persist=lambda: self._claim_task_output_slot(run, task),
+                            )
                     # Providers may return after their run was superseded.
                     # Do not flush their proposals/assessments or overwrite a
                     # task that the scope update has already cancelled.

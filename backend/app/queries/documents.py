@@ -9,7 +9,7 @@ import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError, ValidationFailedError
@@ -19,12 +19,16 @@ from app.models.ledger import (
     DocumentUploadArtifact,
     DocumentVersion,
     Stock,
+    SourceSpan,
+    SourceStatement,
+    Thesis,
 )
 from app.models.source_governance import ProviderRecord, SourceContract
 from app.services.source_admission import source_contract_is_active
 from app.queries.basis import HistoricalBasis
 from app.queries.extraction_runs import extraction_state, latest_extract_runs
 from app.services.content_quality import assess_span_texts
+from app.services.case_tenant_access import CaseTenantAccess
 from app.repositories.documents import DocumentRepository
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.common import CursorPage
@@ -87,14 +91,26 @@ class DocumentReadQueries:
         basis: HistoricalBasis,
         limit: int,
         cursor: str | None,
+        tenant_id: str | None = None,
     ) -> DocumentListResponse:
         cursor_at, cursor_id = (None, None)
         if cursor is not None:
             cursor_at, cursor_id = _decode_cursor(cursor)
+            if tenant_id is not None:
+                owned_cursor = self._session.scalar(
+                    select(DocumentVersion.id).where(
+                        DocumentVersion.id == cursor_id,
+                        DocumentVersion.available_at == cursor_at,
+                        self._docs.owned_attachment(tenant_id, case_id),
+                    )
+                )
+                if owned_cursor is None:
+                    raise NotFoundError("document version not found")
         versions = self._docs.visible_versions(
             cutoff=basis.cutoff,
             limit=limit,
             query=query,
+            tenant_id=tenant_id,
             case_id=case_id,
             cursor_at=cursor_at,
             cursor_id=cursor_id,
@@ -131,22 +147,34 @@ class DocumentReadQueries:
                 )
             )
         } if page_items else {}
+        visible_ids = [version.id for version in page_items
+                       if self._content_is_displayable(contracts.get(version.id))]
+        spans_by_document = defaultdict(list)
+        if visible_ids:
+            for span in self._session.scalars(
+                select(SourceSpan).where(SourceSpan.document_version_id.in_(visible_ids))
+                .order_by(SourceSpan.id)
+            ):
+                spans_by_document[span.document_version_id].append(span)
+        # The summary needs counts, not full statement objects or their text.
+        statement_counts = dict(self._session.execute(
+            select(SourceSpan.document_version_id, func.count(SourceStatement.id))
+            .join(SourceStatement, SourceStatement.source_span_id == SourceSpan.id)
+            .where(SourceSpan.document_version_id.in_(visible_ids))
+            .group_by(SourceSpan.document_version_id)
+        ).all()) if visible_ids else {}
+        stock_cache: dict[tuple[str, str], Stock | None] = {}
         items: list[DocumentSummaryDTO] = []
         for version in page_items:
-            spans = self._docs.spans_for_version(version.id)
             source_contract = contracts.get(version.id)
-            visible_spans = (
-                spans if self._content_is_displayable(source_contract) else []
-            )
-            statements = self._research.statements_for_span_ids(
-                [s.id for s in visible_spans]
-            )
+            visible_spans = spans_by_document.get(version.id, [])
             items.append(
                 self._summary(
                     version,
                     len(visible_spans),
-                    len(statements),
+                    statement_counts.get(version.id, 0),
                     spans=visible_spans,
+                    stock_cache=stock_cache,
                     latest_run=run_map.get(version.id),
                     source_contract=source_contract,
                     provider_record=provider_records.get(version.id),
@@ -160,9 +188,14 @@ class DocumentReadQueries:
         )
 
     def detail(
-        self, *, version_id: uuid.UUID, research_mode: bool = False
+        self, *, version_id: uuid.UUID, research_mode: bool = False,
+        case_id: uuid.UUID | None = None,
+        tenant_id: str | None = None,
     ) -> DocumentDetailResponse:
-        version = self._session.get(DocumentVersion, version_id)
+        version_query = select(DocumentVersion).where(DocumentVersion.id == version_id)
+        if tenant_id is not None:
+            version_query = version_query.where(self._docs.owned_attachment(tenant_id, case_id))
+        version = self._session.scalar(version_query)
         if version is None:
             raise NotFoundError("document version not found")
 
@@ -202,6 +235,18 @@ class DocumentReadQueries:
             )
             if link.review_state in allowed_states
         ]
+        if case_id is not None or tenant_id is not None:
+            thesis_query = select(Thesis.id)
+            if case_id is not None:
+                thesis_query = thesis_query.where(Thesis.research_case_id == case_id)
+            if tenant_id is not None:
+                thesis_query = thesis_query.where(
+                    Thesis.research_case_id.in_(CaseTenantAccess(self._session).case_ids(tenant_id))
+                )
+            case_thesis_ids = set(self._session.scalars(thesis_query))
+            # Frozen source content can be shared, but its other Cases' research
+            # relations must not escape through the shared document response.
+            links = [link for link in links if link.thesis_id in case_thesis_ids]
         stmt_to_links: dict[uuid.UUID, list] = defaultdict(list)
         for link in links:
             stmt_to_links[link.source_statement_id].append(link)
@@ -270,7 +315,9 @@ class DocumentReadQueries:
             # A caller that can read the Case still learns nothing about an
             # unrelated global content-addressed document version.
             raise NotFoundError("document version not found")
-        return self.detail(version_id=version_id, research_mode=research_mode)
+        return self.detail(
+            version_id=version_id, research_mode=research_mode, case_id=case_id
+        )
 
     @staticmethod
     def _locator_metadata(spans: list) -> dict:
@@ -311,6 +358,7 @@ class DocumentReadQueries:
         sec_code: str | None,
         title: str | None = None,
         sec_name: str | None = None,
+        stock_cache: dict[tuple[str, str], Stock | None] | None = None,
     ) -> str | None:
         """Resolve the document's subject entity to ``name (code)`` via Stock.
 
@@ -321,14 +369,19 @@ class DocumentReadQueries:
         "工业富联(601138)…" → "寒武纪" / "工业富联").  Falls back to the raw
         code when no Stock row matches; ``None`` when nothing resolves.
         """
+        # Request-local memoization includes misses; no cross-request stale cache.
+        cache = stock_cache if stock_cache is not None else {}
         base = (sec_code or "").split(".")[0].strip()
         if base:
             candidates = {
                 sec_code, base, f"{base}.SH", f"{base}.SZ", f"{base}.BJ"
             }
-            stock = self._session.scalar(
-                select(Stock).where(Stock.code.in_(candidates)).limit(1)
-            )
+            key = ("code", sec_code or "")
+            if key not in cache:
+                cache[key] = self._session.scalar(
+                    select(Stock).where(Stock.code.in_(candidates)).limit(1)
+                )
+            stock = cache[key]
             if stock is not None:
                 return f"{stock.name} ({stock.code})"
             return sec_code
@@ -338,9 +391,12 @@ class DocumentReadQueries:
         ):
             if not name:
                 continue
-            stock = self._session.scalar(
-                select(Stock).where(Stock.name == name).limit(1)
-            )
+            key = ("name", name)
+            if key not in cache:
+                cache[key] = self._session.scalar(
+                    select(Stock).where(Stock.name == name).limit(1)
+                )
+            stock = cache[key]
             if stock is not None:
                 return f"{stock.name} ({stock.code})"
         return None
@@ -352,6 +408,7 @@ class DocumentReadQueries:
         statement_count: int,
         *,
         spans: list | None = None,
+        stock_cache: dict[tuple[str, str], Stock | None] | None = None,
         latest_run: AIRun | None = None,
         source_contract: SourceContract | None = None,
         provider_record: ProviderRecord | None = None,
@@ -404,7 +461,7 @@ class DocumentReadQueries:
             org=meta["org"] if content_is_displayable else None,
             doc_kind=meta["doc_kind"] if content_is_displayable else None,
             entity=(
-                self._resolve_entity(meta["sec_code"], meta["title"], meta["sec_name"])
+                self._resolve_entity(meta["sec_code"], meta["title"], meta["sec_name"], stock_cache)
                 if content_is_displayable
                 else None
             ),

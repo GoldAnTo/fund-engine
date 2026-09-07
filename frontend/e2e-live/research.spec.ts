@@ -1,0 +1,44 @@
+import { expect, test } from "@playwright/test";
+
+test("create and reload a real research through the server-authenticated proxy", async ({ page, request }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (request) => {
+    if (request.url().includes("/api/")) expect(request.headers().authorization).toBeUndefined();
+  });
+  await page.goto("/");
+  await expect(page.getByText("真实研究空间", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "新建研究", exact: true }).click();
+  const title = `浏览器真实研究 ${Date.now()}`;
+  await page.getByLabel("事件标题", { exact: true }).fill(title);
+  await page.getByLabel("原始材料", { exact: true }).fill("某半导体企业公告新建产线，预计新增产能并投入研发。此材料仅用于隔离测试，不代表真实事件。");
+  await page.getByLabel("研究问题", { exact: true }).fill("扩产是否改善经营质量？");
+  await page.getByLabel("候选因素", { exact: false }).fill("产能利用率\n订单可持续性\n研发投入效率");
+  await page.getByLabel("创建人", { exact: true }).fill("浏览器验收");
+  const created = page.waitForResponse((response) => response.url().endsWith("/api/v1/event-research") && response.request().method() === "POST");
+  await page.getByRole("button", { name: "创建研究", exact: true }).click();
+  const response = await created;
+  expect(response.status()).toBe(201);
+  const body = await response.json();
+  await expect(page).toHaveURL(new RegExp(`caseId=${body.case_id}`));
+  await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+  await expect(page.getByText("准备状态：", { exact: false })).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.getByLabel("操作人", { exact: true }).fill("浏览器验收");
+  await page.getByLabel("补充材料原文", { exact: true }).fill("隔离测试补充材料：扩产资金将分阶段投入，需要核对现金流覆盖。");
+  await page.getByRole("button", { name: "保存补充材料", exact: true }).click();
+  await expect(page.getByText("材料已保存到研究收件箱，尚未自动启动研究。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.screenshot({ path: "test-results/live-desktop.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+  await page.screenshot({ path: "test-results/live-mobile.png", fullPage: true });
+  expect(errors).toEqual([]);
+  const persisted = await request.get(`/api/v1/event-research/${body.case_id}/workbench`);
+  expect(persisted.ok()).toBeTruthy();
+  expect((await persisted.json()).event.event_title).toBe(title);
+  const anonymous = await request.get(`http://127.0.0.1:5187/api/v1/event-research/${body.case_id}/workbench`);
+  expect(anonymous.status()).toBe(401);
+});

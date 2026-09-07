@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
+from app.api.readiness import router as readiness_router
 from app.api.legacy import router as cases_router
 from app.api.v1.router import router as v1_router
 from app.underwriting.api import router as underwriting_router
@@ -48,6 +49,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(readiness_router)
 app.include_router(cases_router)
 app.include_router(v1_router)
 app.include_router(underwriting_router)

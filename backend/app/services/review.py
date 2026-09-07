@@ -18,6 +18,7 @@ import uuid
 from app.errors import NotFoundError
 from app.models.ledger import EvidenceLink, EvidenceReview, ValidationError
 from app.repositories.research import ResearchRepository
+from app.services.source_admission import SourceAdmission, SourceStatus, apply_source_contract
 
 _LINK_REVIEW_OUTCOMES = frozenset({"confirmed", "rejected", "needs_more_evidence"})
 _LINK_REVIEW_RELATIONS = frozenset(
@@ -68,6 +69,19 @@ class ReviewService:
                 raise ValidationError(f"{field} must not be empty")
         if not reviewer.strip():
             raise ValidationError("reviewer must not be empty")
+        if outcome == "confirmed":
+            document = self._repo.get_document_version_for_statement(link.source_statement_id)
+            thesis = self._repo.get_thesis(link.thesis_id)
+            if document is None or thesis is None or not self._repo.document_attached_to_case(document.id, thesis.research_case_id):
+                raise ValidationError("evidence source must be attached to the target research case")
+            # Preserve pre-contract historical sources, but never bypass a
+            # frozen contract's processing/display/effective-date restrictions.
+            admission = apply_source_contract(
+                SourceAdmission(SourceStatus.ACCESSIBLE, "legacy evidence source", True),
+                self._repo.source_contract_for_document(document.id),
+            )
+            if not admission.can_accept:
+                raise ValidationError("evidence source contract does not permit confirmation")
         return self._repo.insert_evidence_review(
             evidence_link_id=link.id,
             outcome=outcome,

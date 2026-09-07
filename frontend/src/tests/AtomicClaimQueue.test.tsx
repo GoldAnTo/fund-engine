@@ -1,0 +1,61 @@
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, expect, it, vi } from 'vitest';
+import { AtomicClaimQueue } from '@/workbench/AtomicClaimQueue';
+const claim = (id: string) => ({ id, document_version_id: 'd', source_span_id: 's', document_source_url: 'https://example.com', locator: { paragraph: 1 }, quote: '原文订单增长', quote_start: 0, quote_end: 6, normalized_text: `候选${id}`, claim_type: 'reported_claim', authority_level: 'unknown', review_state: 'awaiting_review', review_history: [], published_source_statement: null });
+afterEach(() => vi.unstubAllGlobals());
+it('loads all pages lazily and requires a reason before review', async () => {
+  const fetcher = vi.fn((url: string, options?: RequestInit) => Promise.resolve(new Response(JSON.stringify(options?.method === 'POST' ? { id: 'review', outcome: 'rejected', reviewer: 'human', reason: '缺少期间', published_source_statement: null } : url.includes('cursor=') ? { items: [claim('b')], has_more: false, next_cursor: null } : { items: [claim('a')], has_more: true, next_cursor: 'a' }))));
+  vi.stubGlobal('fetch', fetcher);
+  render(<AtomicClaimQueue caseId="case" actor="human" onRefresh={vi.fn()} />);
+  expect(fetcher).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole('button', { name: '查看原子候选审核' }));
+  await screen.findByText('候选a');
+  await userEvent.click(screen.getByRole('button', { name: '加载更多候选' }));
+  const row = within(await screen.findByRole('article', { name: '候选b' }));
+  await userEvent.selectOptions(row.getByLabelText('候选审核决定'), 'rejected');
+  expect(row.getByRole('button', { name: '保存候选审核' })).toBeDisabled();
+  await userEvent.type(row.getByLabelText('候选审核理由'), '缺少期间');
+  await userEvent.click(row.getByRole('button', { name: '保存候选审核' }));
+  await row.findByText('审核已保存：已驳回');
+  expect(fetcher.mock.calls.some(([url]) => url.includes('cursor=a'))).toBe(true);
+});
+it('retries an uncertain submission with exactly the original decision', async () => {
+  const bodies: Record<string, unknown>[] = [];
+  vi.stubGlobal('fetch', vi.fn((_url: string, options?: RequestInit) => {
+    if (options?.method !== 'POST') return Promise.resolve(new Response(JSON.stringify({ items: [claim('a')], has_more: false, next_cursor: null })));
+    const body = JSON.parse(String(options.body)); bodies.push(body);
+    if (bodies.length === 1) return Promise.reject(new TypeError('connection lost'));
+    return Promise.resolve(new Response(JSON.stringify({ id: 'r', outcome: body.outcome, reviewer: body.reviewer, reason: body.reason, published_source_statement: null })));
+  }));
+  const { rerender } = render(<AtomicClaimQueue caseId="case" actor="human" onRefresh={vi.fn()} />);
+  await userEvent.click(screen.getByRole('button', { name: '查看原子候选审核' }));
+  await screen.findByText('候选a');
+  await userEvent.selectOptions(screen.getByLabelText('候选审核决定'), 'rejected');
+  await userEvent.type(screen.getByLabelText('候选审核理由'), '缺少期间');
+  await userEvent.click(screen.getByRole('button', { name: '保存候选审核' }));
+  await screen.findByRole('alert');
+  expect(screen.getByLabelText('候选审核理由')).toBeDisabled();
+  expect(screen.getByRole('button', { name: '刷新原子候选审核' })).toBeDisabled();
+  rerender(<AtomicClaimQueue caseId="case" actor="different" onRefresh={vi.fn()} />);
+  await userEvent.click(screen.getByRole('button', { name: '重试原候选审核' }));
+  await screen.findByText('审核已保存：已驳回');
+  expect(bodies).toHaveLength(2);
+  expect(bodies[1]).toEqual(bodies[0]);
+});
+it('confirms the original claim without replacing its wording', async () => {
+  const writes: Record<string, unknown>[] = [];
+  vi.stubGlobal('fetch', vi.fn((_url: string, options?: RequestInit) => {
+    if (options?.method !== 'POST') return Promise.resolve(new Response(JSON.stringify({ items: [claim('a')], has_more: false, next_cursor: null })));
+    const body = JSON.parse(String(options.body)); writes.push(body);
+    return Promise.resolve(new Response(JSON.stringify({ id: 'r', outcome: body.outcome, reviewer: body.reviewer, reason: body.reason, published_source_statement: { id: 's', normalized_text: '候选a' } })));
+  }));
+  render(<AtomicClaimQueue caseId="case" actor="human" onRefresh={vi.fn()} />);
+  await userEvent.click(screen.getByRole('button', { name: '查看原子候选审核' }));
+  await screen.findByText('候选a');
+  await userEvent.selectOptions(screen.getByLabelText('候选审核决定'), 'confirmed');
+  await userEvent.type(screen.getByLabelText('候选审核理由'), '原文一致');
+  await userEvent.click(screen.getByRole('button', { name: '保存候选审核' }));
+  await screen.findByText('正式陈述：候选a');
+  expect(writes[0]).not.toHaveProperty('normalized_text');
+});

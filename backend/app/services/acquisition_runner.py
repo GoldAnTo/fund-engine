@@ -34,6 +34,7 @@ from app.acquisition.sources import (
 )
 from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
+from app.ai.runs import research_audit_context
 from app.documents.locators import (
     SourceLocatorV1,
     TextPosition,
@@ -42,6 +43,7 @@ from app.documents.locators import (
 )
 from app.domain.acquisition import AcquisitionRequest, EvidenceObjective
 from app.models.acquisition import (
+    AcquisitionJob,
     AcquisitionAttempt,
     AcquisitionException,
     AutomaticAdmissionDecision,
@@ -1138,17 +1140,21 @@ class AcquisitionRunner:
             session = self._session_factory()
             try:
                 try:
-                    self._extractor.extract(
-                        document_id,
-                        session,
-                        pre_commit_guard=lambda guarded_session: lease_write_fence(
-                            guarded_session,
-                            job_id=claim.job_id,
-                            lease_token=claim.lease_token,
-                            now=self._now(),
-                            allowed_stages=frozenset({"extracting"}),
-                        ),
-                    )
+                    job = session.get(AcquisitionJob, claim.job_id)
+                    if job is None:
+                        raise StaleLeaseError("acquisition job no longer exists")
+                    with research_audit_context(case_id=job.research_case_id, run_id=job.research_run_id, acquisition_job_id=job.id):
+                        self._extractor.extract(
+                            document_id,
+                            session,
+                            pre_commit_guard=lambda guarded_session: lease_write_fence(
+                                guarded_session,
+                                job_id=claim.job_id,
+                                lease_token=claim.lease_token,
+                                now=self._now(),
+                                allowed_stages=frozenset({"extracting"}),
+                            ),
+                        )
                 except Exception as exc:
                     # A rotated lease surfaces here as StaleLeaseError; let
                     # it propagate so run_once / run_claim can decide whether

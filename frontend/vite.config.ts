@@ -6,6 +6,7 @@ import path from "node:path";
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const apiBase = env.VITE_API_BASE ?? "http://localhost:8000";
+  const bearerToken = env.RESEARCH_BEARER_TOKEN?.trim();
   return {
     plugins: [react()],
     resolve: {
@@ -20,6 +21,8 @@ export default defineConfig(({ mode }) => {
         "/api": {
           target: apiBase,
           changeOrigin: true,
+          // Hosting credentials stay in the local proxy, never VITE_* client env.
+          ...(bearerToken ? { headers: { Authorization: `Bearer ${bearerToken}` } } : {}),
           rewrite: (p: string) => p.replace(/^\/api/, "/api"),
         },
       },
@@ -30,7 +33,7 @@ export default defineConfig(({ mode }) => {
       setupFiles: ["./src/tests/setup.ts"],
       css: true,
       exclude: ["**/node_modules/**", "**/e2e/**", "**/dist/**"],
-      include: ["src/tests/ResearchWorkbench.test.tsx"],
+      include: ["src/**/*.test.{ts,tsx}"],
     },
   };
 });

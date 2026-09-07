@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.v1.commands.common import commit_or_rollback, translate_validation
@@ -72,6 +73,16 @@ def _require_candidate_tenant(db: Session, candidate_id: uuid.UUID, tenant_id: s
         from app.errors import NotFoundError
         raise NotFoundError("atomic claim candidate not found")
 
+    contract = db.scalar(
+        select(SourceContract)
+        .join(SourceSpan, SourceSpan.document_version_id == SourceContract.document_version_id)
+        .join(AtomicClaimCandidate, AtomicClaimCandidate.source_span_id == SourceSpan.id)
+        .where(AtomicClaimCandidate.id == candidate_id)
+    )
+    if contract is not None and (not contract.allow_display or not source_contract_is_active(contract)):
+        from app.errors import NotFoundError
+        raise NotFoundError("atomic claim candidate not found")
+
 
 def _statement_dto(value: SourceStatement | None) -> PublishedSourceStatementDTO | None:
     if value is None:
@@ -110,7 +121,7 @@ def _candidate_dto(
         db.scalars(
             select(AtomicClaimReview)
             .where(AtomicClaimReview.atomic_claim_candidate_id == candidate.id)
-            .order_by(AtomicClaimReview.created_at.asc())
+            .order_by(AtomicClaimReview.created_at.asc(), AtomicClaimReview.id.asc())
         )
     )
     latest = reviews[-1] if reviews else None
@@ -150,26 +161,54 @@ def list_atomic_claims(
     case_id: uuid.UUID,
     review_state: str | None = Query(default=None, pattern="^(awaiting_review|confirmed|modified|rejected)$"),
     limit: int = Query(default=100, ge=1, le=200),
+    cursor: uuid.UUID | None = Query(default=None),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(require_research_tenant),
 ):
     _require_case(db, case_id, tenant_id)
-    rows = db.execute(
+    now = datetime.now(timezone.utc)
+    latest_outcome = (
+        select(AtomicClaimReview.outcome)
+        .where(AtomicClaimReview.atomic_claim_candidate_id == AtomicClaimCandidate.id)
+        .order_by(AtomicClaimReview.created_at.desc(), AtomicClaimReview.id.desc())
+        .limit(1)
+        .correlate(AtomicClaimCandidate)
+        .scalar_subquery()
+    )
+    query = (
         select(AtomicClaimCandidate, SourceSpan, DocumentVersion)
         .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
         .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
         .join(CaseDocumentVersion, CaseDocumentVersion.document_version_id == DocumentVersion.id)
+        .outerjoin(SourceContract, SourceContract.document_version_id == DocumentVersion.id)
         .where(CaseDocumentVersion.research_case_id == case_id)
-        .order_by(AtomicClaimCandidate.created_at.desc())
-        .limit(limit)
-    ).all()
-    items: list[AtomicClaimCandidateDTO] = []
-    for candidate, span, document in rows:
-        item = _candidate_dto(db, candidate, span, document)
-        if review_state and item.review_state != review_state:
-            continue
-        items.append(item)
-    return AtomicClaimQueueResponse(items=items)
+        .where(or_(SourceContract.id.is_(None), and_(
+            SourceContract.allow_display.is_(True),
+            or_(SourceContract.effective_from.is_(None), SourceContract.effective_from <= now),
+            or_(SourceContract.effective_until.is_(None), SourceContract.effective_until >= now),
+        )))
+        .order_by(AtomicClaimCandidate.created_at.desc(), AtomicClaimCandidate.id.desc())
+    )
+    if cursor is not None:
+        # Resolve the anchor only inside this Case and its currently visible sources.
+        # A review decision can change between pages; do not require the anchor
+        # itself to retain the requested review state.
+        anchor = db.execute(query.where(AtomicClaimCandidate.id == cursor)).first()
+        if anchor is None:
+            from app.errors import NotFoundError
+            raise NotFoundError("atomic claim cursor not found")
+        candidate = anchor[0]
+        query = query.where(or_(
+            AtomicClaimCandidate.created_at < candidate.created_at,
+            and_(AtomicClaimCandidate.created_at == candidate.created_at,
+                 AtomicClaimCandidate.id < candidate.id),
+        ))
+    if review_state:
+        query = query.where(func.coalesce(latest_outcome, "awaiting_review") == review_state)
+    rows = db.execute(query.limit(limit + 1)).all()
+    has_more = len(rows) > limit
+    items = [_candidate_dto(db, candidate, span, document) for candidate, span, document in rows[:limit]]
+    return AtomicClaimQueueResponse(items=items, has_more=has_more, next_cursor=items[-1].id if has_more else None)
 
 
 @router.post(

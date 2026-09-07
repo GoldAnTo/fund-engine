@@ -20,6 +20,7 @@ from app.services.source_governance import SourceGovernanceService
 _SUPPORTED_MIME_TYPES = frozenset(
     {"application/pdf", "text/plain", "text/markdown", "text/csv"}
 )
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -214,6 +215,8 @@ class DocumentUploadService:
 
     @staticmethod
     def _parse(*, raw: bytes, mime_type: str, file_name: str) -> _ParsedUpload:
+        if len(raw) > MAX_UPLOAD_BYTES:
+            raise ValidationFailedError("uploaded original must not exceed 20 MiB")
         if mime_type == "application/pdf":
             digest = hashlib.sha256(raw).hexdigest()
             try:

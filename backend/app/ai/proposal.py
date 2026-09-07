@@ -17,6 +17,8 @@ Every proposal operation writes exactly one ``AIRun`` audit record
 """
 from __future__ import annotations
 
+from app.ai.usage import capture_usage
+
 import json
 import uuid
 from collections.abc import Callable
@@ -24,7 +26,8 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.ai.client import LLMClient
+from app.ai.client import LLMClient, operation_budget
+from app.ai.output_schema import ProposalOutput, validate_output
 from app.ai.error_safety import AI_OPERATION_ERROR_MESSAGE
 from app.ai.prompts import PROPOSE_PROMPT_VERSION, PROPOSE_SYSTEM
 from app.ai.runs import record_run
@@ -42,6 +45,7 @@ class EvidenceProposer:
     def __init__(self, client: LLMClient) -> None:
         self._client = client
 
+    @capture_usage()
     def propose(
         self,
         thesis_id: uuid.UUID,
@@ -110,8 +114,9 @@ class EvidenceProposer:
             # transaction before waiting on the external provider so this
             # connection cannot keep an idle transaction or row locks open.
             session.commit()
-            result = self._client.chat_json(messages, schema_hint="propose")
-            links_data = result.get("links", [])
+            with operation_budget(self._client):
+                result = self._client.chat_json(messages, schema_hint="propose")
+                links_data = validate_output(result, ProposalOutput)["links"]
 
             # The automatic run may have been superseded while the provider
             # call was in flight. Check before creating any Proposal, outbox

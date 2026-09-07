@@ -311,6 +311,9 @@ def test_postgres_protocol_mutation_wins_before_final_assessment_write(engine) -
         case_id = case.id
         thesis_id = thesis.id
         blocked_template_id = blocked_template.id
+        from tests.tenant_admission import admit_case
+
+        admit_case(setup, case.id)
 
     # Hold the shared Case lock with an uncommitted mutation. The assessment
     # initial read sees the prior monitoring protocol, calls the provider, and
@@ -365,7 +368,7 @@ def test_postgres_protocol_mutation_wins_before_final_assessment_write(engine) -
                 "app.api.v1.commands.engine.LLMClient.from_env",
                 return_value=client,
             ):
-                rerun_assessment(thesis_id, db=assessing)
+                rerun_assessment(thesis_id, tenant_id="test-team", db=assessing)
         except BaseException as exc:
             errors.append(exc)
             assert isinstance(exc, ValidationFailedError)

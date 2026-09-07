@@ -613,6 +613,8 @@ def test_task_output_slot_refreshes_cached_job_cancellation(tmp_path):
         )
         setup.add(case)
         setup.flush()
+        from tests.tenant_admission import admit_case
+        admit_case(setup, case.id)
         thesis = Thesis(
             research_case_id=case.id,
             statement="empty recall must still observe cancellation",
@@ -648,7 +650,7 @@ def test_task_output_slot_refreshes_cached_job_cancellation(tmp_path):
         assert cached_job.cancel_requested is False
 
         with session_local() as cancelling:
-            response = cancel_job(job_id, db=cancelling)
+            response = cancel_job(job_id, db=cancelling, tenant_id="test-team")
             assert response.cancel_requested is True
 
         service = AutoResearchService(worker)
@@ -707,6 +709,7 @@ def test_postgres_extraction_failure_waits_for_cancellation_transition(
         run = AutoResearchService(setup).start(case.id, max_rounds=1, budget=10)
         run_id = run.id
 
+    provider_entered = Event()
     cancellation_locked = Event()
     provider_failed = Event()
     worker_marked_failed = Event()
@@ -717,6 +720,7 @@ def test_postgres_extraction_failure_waits_for_cancellation_transition(
     client = LLMClient(model_version="provider-test", mock=True)
 
     def fail_after_cancellation_locks(*_args, **_kwargs):
+        provider_entered.set()
         assert cancellation_locked.wait(timeout=5)
         provider_failed.set()
         raise RuntimeError("provider failed during cancellation")
@@ -747,6 +751,7 @@ def test_postgres_extraction_failure_waits_for_cancellation_transition(
                 worker.rollback()
 
     def cancel_run_while_provider_is_inflight():
+        assert provider_entered.wait(timeout=5)
         with session_local() as cancelling:
             try:
                 service = AutoResearchService(cancelling)
@@ -1685,3 +1690,23 @@ def test_real_api_human_loop_from_queued_run_to_published_proposal(cmd_client, c
     )
     assert decision.status_code == 201, decision.text
     assert decision.json()["published_entity_id"]
+
+
+def test_reviewed_run_ai_audit_has_exact_run_and_task_ownership(session):
+    case = ResearchCase(title="audit ownership", industry_topic="i", created_by="u", created_at=datetime.now(timezone.utc))
+    session.add(case)
+    session.flush()
+    thesis = Thesis(research_case_id=case.id, statement="s", created_by="u", created_at=datetime.now(timezone.utc))
+    session.add(thesis)
+    session.commit()
+    service = AutoResearchService(session)
+    run = service.start(case.id, max_rounds=1, budget=1)
+    service.execute(run)
+    records = list(session.scalars(select(AIRun)))
+    assert records
+    tasks = {str(task.id): task for task in AutoResearchRepository(session).tasks_for_run(run.id)}
+    for audit in records:
+        assert audit.input_ref['research_run_id'] == str(run.id)
+        assert audit.input_ref['research_case_id'] == str(case.id)
+        assert audit.input_ref['research_task_id'] in tasks
+        assert str(tasks[audit.input_ref['research_task_id']].thesis_id) == audit.input_ref['thesis_id']

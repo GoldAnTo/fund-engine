@@ -541,6 +541,8 @@ def test_initialize_replays_an_idempotency_key_for_later_supported_cutoff(
     )
     later = NOW + timedelta(days=1)
     later_preview = initializer.preview(company_id=alphabet.id, cutoff_at=later)
+    assert later_preview.cutoff_at == preview.cutoff_at == GOVERNED_CUTOFF
+    assert later_preview.input_hash == preview.input_hash
 
     replay = initializer.initialize(
         preview_hash=later_preview.input_hash,

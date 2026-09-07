@@ -27,6 +27,7 @@ class ProposalItemDTO(V1Model):
     basis_cutoff: str | None = None
     status: str
     version: int
+    display_withheld: bool = False
 
 
 class ReviewDecisionRequest(V1Model):

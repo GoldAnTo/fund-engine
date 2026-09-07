@@ -71,6 +71,7 @@ class EventResearchService:
         self, payload: CreateEventResearchRequest, *, tenant_id: str,
         initial_uploaded_original: InitialUploadedOriginal | None = None,
         workflow_mode: str = "reviewed",
+        commit: bool = True,
     ) -> CreatedEventResearch:
         if workflow_mode not in {"reviewed", "automatic"}:
             raise ValueError("workflow_mode must be 'reviewed' or 'automatic'")
@@ -309,7 +310,10 @@ class EventResearchService:
                 lifecycle.current_gap = None
                 lifecycle.next_human_action = None
                 lifecycle.updated_at = _utcnow()
-            self._session.commit()
+            if commit:
+                self._session.commit()
+            else:
+                self._session.flush()
         except Exception:
             # Preparation is part of event intake's one unit of work.  In
             # particular, a failed job enqueue must not leave a half-created

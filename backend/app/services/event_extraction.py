@@ -16,6 +16,7 @@ from app.ai.client import LLMClient, LLMProviderError
 EVENT_EXTRACTION_PROVIDER_ERROR_MESSAGE = (
     "event extraction LLM is unavailable or returned an invalid response"
 )
+EVENT_EXTRACTION_PROMPT_VERSION = "event-extraction-v1"
 
 
 class EventExtractionProviderError(Exception):
@@ -47,6 +48,10 @@ class EventExtractionService:
 
     def __init__(self, client: Any | None = None) -> None:
         self._client = client if client is not None else self._provider_client()
+
+    @property
+    def model_version(self) -> str:
+        return getattr(self._client, "model_version", "unknown")
 
     @staticmethod
     def _provider_client() -> Any:

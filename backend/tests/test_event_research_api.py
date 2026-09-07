@@ -1099,7 +1099,9 @@ def test_event_evidence_cannot_target_thesis_from_another_case(
         },
     )
 
-    assert response.status_code == 422
+    # The persisted target disagrees with proposal ownership: fail closed
+    # before admitting the proposal to the review mutation boundary.
+    assert response.status_code == 404
     assert cmd_session.get(Proposal, proposal.id).status == "pending"
     assert cmd_session.scalar(
         select(EvidenceLink.id).where(
@@ -1801,3 +1803,27 @@ def test_event_conclusion_publish_appends_a_human_confirmed_result(cmd_client, c
     assert view["lifecycle"]["status"] == "published"
     assert view["conclusion"]["state"] == "published"
     assert view["conclusion"]["text"] == "人工确认：当前材料不足以断定唯一原因。"
+
+
+@pytest.mark.parametrize('valid', [True, False])
+def test_event_extraction_usage_is_saved_without_creating_a_case(cmd_client, cmd_session, monkeypatch, valid):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from app.ai.client import LLMClient
+    from app.models.ledger import AIRun
+    output = {'research_question':'Does demand change?', 'candidate_factors':['Orders','Capacity','Inventory']} if valid else {}
+    sdk = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=MagicMock(return_value=SimpleNamespace(
+        usage=SimpleNamespace(prompt_tokens=7, completion_tokens=3, total_tokens=10),
+        choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(content=json.dumps(output), refusal=None))])))))
+    monkeypatch.setattr('app.services.event_extraction.LLMClient.from_env', lambda: LLMClient(model_version='test-model', client=sdk))
+    before = list(cmd_session.scalars(select(ResearchCase.id)))
+    response = cmd_client.post('/api/v1/event-research/extract', json={'raw_input':'private source material', 'source_url':None})
+    assert response.status_code == (200 if valid else 503)
+    audit = cmd_session.scalar(select(AIRun).where(AIRun.kind == 'event_extract'))
+    assert audit is not None
+    assert audit.status == ('success' if valid else 'failed')
+    assert audit.usage['attempts'][0]['total_tokens'] == 10
+    assert audit.input_ref['tenant_id'] == 'test-team'
+    assert uuid.UUID(audit.input_ref['extraction_id'])
+    assert 'private source material' not in str(audit.input_ref)
+    assert list(cmd_session.scalars(select(ResearchCase.id))) == before

@@ -381,3 +381,29 @@ def test_published_material_rejects_deduplicated_original_with_restrictive_new_d
     assert restricted.status_code == 422
     assert "deduplicated original has a different source contract" in restricted.json()["error"]["message"]
     assert len(cmd_session.scalars(select(DocumentUploadArtifact)).all()) == 1
+
+
+@pytest.mark.parametrize('mode', ['success', 'parse_failure', 'oversize', 'unsupported'])
+def test_upload_closes_spooled_file_on_success_and_failure(cmd_client, cmd_session, monkeypatch, mode):
+    from starlette.datastructures import UploadFile
+    case_id = _create_event(cmd_client)
+    opened = []
+    original_init = UploadFile.__init__
+
+    def observe_upload(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        opened.append(self.file)
+
+    monkeypatch.setattr(UploadFile, '__init__', observe_upload)
+    raw = b'x' * ((20 * 1024 * 1024 + 1) if mode == 'oversize' else (1024 * 1024 + 1))
+    mime = {'parse_failure':'application/pdf', 'unsupported':'application/octet-stream'}.get(mode, 'text/plain')
+    before = len(list(cmd_session.scalars(select(DocumentUploadArtifact))))
+    response = _upload(cmd_client, case_id, name='cleanup-test.pdf' if mode == 'parse_failure' else 'cleanup-test.txt', raw=raw, mime=mime)
+    assert response.status_code == (422 if mode in {'oversize', 'unsupported'} else 201), response.text
+    assert len(opened) == 1
+    assert opened[0]._rolled is True  # Exercise a real disk-backed spool, not just BytesIO.
+    assert opened[0].closed is True
+    after = len(list(cmd_session.scalars(select(DocumentUploadArtifact))))
+    assert after == before + (mode in {'success', 'parse_failure'})
+    if mode == 'parse_failure':
+        assert response.json()['parse_state'] == 'failed'

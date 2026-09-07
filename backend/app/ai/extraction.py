@@ -13,6 +13,8 @@ statement count (split into rule-based and LLM), and success/failure status.
 """
 from __future__ import annotations
 
+from app.ai.usage import capture_usage
+
 import json
 import uuid
 from collections.abc import Callable
@@ -21,7 +23,11 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai.client import LLMClient
+from app.ai.client import (
+    LLMClient,
+    LLMMalformedResponseError,
+    LLM_MALFORMED_RESPONSE_MESSAGE,
+)
 from app.ai.error_safety import AI_OPERATION_ERROR_MESSAGE
 from app.ai.prompts import EXTRACT_PROMPT_VERSION, EXTRACT_SYSTEM
 from app.ai.runs import record_run
@@ -43,6 +49,7 @@ class StatementExtractor:
         self._client = client
         self._table_extractor = FinancialTableExtractor()
 
+    @capture_usage()
     def extract(
         self,
         document_version_id: uuid.UUID,
@@ -152,7 +159,12 @@ class StatementExtractor:
                     pre_commit_guard(session)
                 session.commit()
                 result = self._client.chat_json(messages, schema_hint="extract")
-                statements_data = result.get("statements", [])
+                # Only an explicit array can establish an empty extraction.
+                # Treating a missing/wrong-shaped field as [] would create a
+                # success watermark and permanently suppress automatic retry.
+                if not isinstance(result.get("statements"), list):
+                    raise LLMMalformedResponseError(LLM_MALFORMED_RESPONSE_MESSAGE)
+                statements_data = result["statements"]
 
             # Every output path, including deterministic table-only
             # extraction, must claim the caller's current output slot before

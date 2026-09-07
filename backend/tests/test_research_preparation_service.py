@@ -1080,7 +1080,7 @@ def test_postgres_candidate_review_waits_for_protocol_confirmation_context_lock(
     service.complete_system_step(
         case.id,
         "draft_protocol",
-        {"rationale": "serialized protocol draft"},
+        _materializable_protocol(session, case, candidate),
         expected_version=preparation.version,
         expected_fingerprint=preparation.input_fingerprint,
         expected_context_fingerprint=original_context,

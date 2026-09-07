@@ -205,9 +205,15 @@ class ResearchPreparationRepository:
         self, research_case_id: uuid.UUID, preparation_id: uuid.UUID
     ) -> ResearchPreparation:
         """Take the stable Case lock before mutating its preparation row."""
-        case = lock_event_scope_case(self._session, research_case_id)
+        with self._session.no_autoflush:
+            case = lock_event_scope_case(self._session, research_case_id)
         if case is None:
             raise ConflictError(f"research case {research_case_id} not found")
+        # These write helpers can follow a service mutation of the already
+        # locked projection. Persist it before populate_existing refreshes it,
+        # including when the production Session disables autoflush. Keep the
+        # Case lock first and leave commit/rollback to the caller.
+        self._session.flush()
         return self._lock_preparation_after_case_lock(
             research_case_id, preparation_id
         )

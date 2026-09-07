@@ -7,6 +7,9 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.commands.common import commit_or_rollback, translate_validation
+from app.api.v1.tenant_context import require_research_tenant
+from app.services.case_tenant_access import CaseTenantAccess
+from app.services.review_tenant_access import ReviewTenantAccess
 from app.db import get_db
 from app.errors import NotFoundError
 from app.queries.review_queue import ReviewQueueQueries
@@ -32,8 +35,11 @@ def review_queue(
     case_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ):
-    return ReviewQueueQueries(db).list_items(case_id=case_id, limit=limit)
+    if case_id is not None:
+        CaseTenantAccess(db).require_case(case_id, tenant_id)
+    return ReviewQueueQueries(db).list_items(case_id=case_id, limit=limit, tenant_id=tenant_id)
 
 
 @router.post(
@@ -45,7 +51,9 @@ def review_link(
     link_id: uuid.UUID,
     payload: LinkReviewRequest,
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ):
+    ReviewTenantAccess(db).require_link(link_id, tenant_id)
     review = translate_validation(
         ReviewService(ResearchRepository(db)).review_link,
         link_id,
@@ -81,7 +89,9 @@ def review_assessment(
     assessment_id: uuid.UUID,
     payload: AssessmentReviewRequest,
     db: Session = Depends(get_db),
+    tenant_id: str = Depends(require_research_tenant),
 ):
+    case_id = ReviewTenantAccess(db).require_assessment(assessment_id, tenant_id)
     repo = ResearchRepository(db)
     if repo.get_ai_assessment(assessment_id) is None:
         raise NotFoundError(f"assessment {assessment_id} not found")
@@ -97,6 +107,7 @@ def review_assessment(
         task_type="review_assessment",
         ref_type="ai_assessment",
         ref_id=assessment_id,
+        research_case_id=case_id,
     )
     AutoResearchService(db).reconcile_runs_for_output(
         key="assessment_id",
