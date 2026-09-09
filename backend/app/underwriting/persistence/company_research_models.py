@@ -263,3 +263,22 @@ class CompanyResearchEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+
+
+class CompanyResearchDraft(Base):
+    """One immutable, cited research draft per initialized preparation."""
+
+    __tablename__ = "uw_company_research_drafts"
+    __table_args__ = (
+        UniqueConstraint("preparation_id", name="uq_uw_company_research_draft_preparation"),
+        UniqueConstraint("project_id", name="uq_uw_company_research_draft_project"),
+        CheckConstraint("length(content_hash) = 64", name="ck_uw_company_research_draft_hash"),
+        *_json_shape_constraints("payload", "object", "ck_uw_company_research_draft_payload"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    project_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("uw_research_projects.id"), nullable=False)
+    preparation_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("uw_company_research_preparations.id"), nullable=False)
+    ai_run_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("ai_runs.id"), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON(none_as_null=True), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

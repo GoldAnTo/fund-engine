@@ -621,6 +621,7 @@ def _workspace_response(
     )
     return CompanyResearchWorkspaceResponse(
         project_id=value.project_id,
+        research_draft=getattr(value, "research_draft", None),
         product_progress=(
             CompanyResearchProductProgressResponse(**asdict(value.product_progress))
             if getattr(value, "product_progress", None) is not None else None

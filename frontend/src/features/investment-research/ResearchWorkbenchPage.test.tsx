@@ -14,6 +14,7 @@ import {
 } from "../../data/investmentResearchApi";
 import ResearchWorkbenchPage from "./ResearchWorkbenchPage";
 import { CompanyResearchRoutes } from "../../app/CompanyResearchRoutes";
+import { liveResearchDraftFixture } from "../../data/companyResearchDraft.test-fixtures";
 
 const hash = "a".repeat(64);
 const uid = (value: number) => `20000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
@@ -424,6 +425,21 @@ describe("Alphabet company research workbench", () => {
     await user.click(screen.getByRole("button", { name: "浏览器后退" }));
     expect(within(navigation).getByRole("link", { name: /证据中心/ })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: "确认事实 revenue_2025" })).toBeEnabled();
+  });
+
+  it("lets the user read a cited live draft while all evidence is still pending", async () => {
+    const candidate = workspace();
+    candidate.research_draft = liveResearchDraftFixture(ids.project, ids.preparation, candidate.product_progress!.cutoff_at, candidate.product_progress!.user_focus);
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(candidate);
+    render(<MemoryRouter initialEntries={[`/research/projects/${ids.project}/business`]}><CompanyResearchRoutes /></MemoryRouter>);
+    const draft = await screen.findByRole("region", { name: "模型研究初稿" });
+    expect(within(draft).getByText("模型生成，待确认")).toBeVisible();
+    expect(within(draft).getByText(/客户使用量带动云业务收入/)).toBeVisible();
+    await userEvent.click(within(draft).getByText("查看依据"));
+    expect(within(draft).getByText(/Cloud customers pay/)).toBeVisible();
+    expect(candidate.change_summary.reviewed_fact_count).toBe(0);
+    expect(screen.queryByRole("button", { name: "确认研究判断" })).not.toBeInTheDocument();
   });
 
   it("shows readable grouped blockers in overview and retains all exact codes in closed audit details", async () => {

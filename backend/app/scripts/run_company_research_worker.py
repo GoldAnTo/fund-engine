@@ -52,7 +52,11 @@ def run_once(*, recover_after_minutes: int = 30, session_factory=SessionLocal) -
     if claim is None:
         return bool(recovered or cancelled)
     with session_factory() as session:
-        worker = CompanyResearchPreparationWorker(session, now=_utcnow)
+        live_runtime = None
+        if claim.step == "evidence_index" and os.getenv("COMPANY_RESEARCH_LIVE") == "1":
+            from app.underwriting.services.company_research_live_runtime import CompanyResearchLiveRuntime
+            live_runtime = CompanyResearchLiveRuntime.from_env(now=_utcnow)
+        worker = CompanyResearchPreparationWorker(session, now=_utcnow, live_runtime=live_runtime)
         worker.run_claim(claim)
         session.commit()
     return True

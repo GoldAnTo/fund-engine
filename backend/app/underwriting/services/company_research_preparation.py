@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
@@ -130,6 +130,7 @@ class CompanyResearchPreparationWorker:
             [CompanyResearchBuildInput], CompanyResearchBuildResult
         ]
         | None = None,
+        live_runtime=None,
     ) -> None:
         self._session = session
         self._now = now
@@ -137,6 +138,7 @@ class CompanyResearchPreparationWorker:
         self._jobs = JobRepository(session)
         self._provider = provider
         self._model_provider = model_provider
+        self._live_runtime = live_runtime
 
     def _utcnow(self) -> datetime:
         value = self._now()
@@ -912,6 +914,10 @@ class CompanyResearchPreparationWorker:
                 raise
             try:
                 result = self._compile_model(boundary.build_input)
+                from app.underwriting.services.company_research_live_runtime import read_live_draft, live_draft_reference
+                research_draft = read_live_draft(self._session, project_id=boundary.build_input.project_id)
+                if research_draft is not None:
+                    result = replace(result, memo=replace(result.memo, research_draft_ref=live_draft_reference(research_draft)))
             except RETRYABLE_PROVIDER_ERRORS:
                 self._session.rollback()
                 self._recoverable_failure(claim)
@@ -966,6 +972,10 @@ class CompanyResearchPreparationWorker:
             self._discard(claim)
             return "discarded"
         provider_input = self._provider_input(preparation)
+        live_context = None
+        if self._live_runtime is not None:
+            from app.underwriting.services.company_research_live_runtime import live_research_context
+            live_context = live_research_context(self._session, preparation)
         # Publish the fenced claim before file/provider work.  The completion
         # path below takes fresh locks and checks the same token again.
         self._session.commit()
@@ -985,10 +995,23 @@ class CompanyResearchPreparationWorker:
             self._session.rollback()
             raise
 
+        execution = None
+        audit_id = None
+        if self._live_runtime is not None:
+            from app.underwriting.services.company_research_live_runtime import record_live_execution
+            execution = self._live_runtime.execute(live_context, compiled)
+            # Provider usage survives cancellation, an expired claim, and any
+            # subsequent atomic artifact-commit rollback.
+            audit_id = record_live_execution(self._session, execution)
+            self._session.commit()
+            if execution.error_code is not None:
+                self._recoverable_failure(claim)
+                return "recoverable_failure"
+
         # The provider/result boundary is explicit: publish no database write
         # until the output has been assembled, then reacquire the claim fence.
         try:
-            self._repository.complete_evidence_preparation(
+            completion = self._repository.complete_evidence_preparation(
                 claim.preparation_id,
                 input_hash=compiled.input_hash,
                 evidence_index_payload=compiled.evidence_index_payload,
@@ -999,6 +1022,9 @@ class CompanyResearchPreparationWorker:
                 expected_request_hash=claim.request_hash,
                 expected_strategy_version=claim.strategy_version,
             )
+            if execution is not None:
+                from app.underwriting.services.company_research_live_runtime import persist_live_draft
+                persist_live_draft(self._session, execution, ai_run_id=audit_id, evidence_artifact_id=completion[1].id)
             self._session.commit()
         except (StaleParentError, ValidationError):
             self._session.rollback()

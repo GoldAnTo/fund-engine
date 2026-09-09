@@ -164,6 +164,7 @@ IMMUTABLE_TABLES = frozenset(
         "uw_revision_manifests",
         "uw_company_research_artifact_versions",
         "uw_company_research_events",
+        "uw_company_research_drafts",
     }
 )
 

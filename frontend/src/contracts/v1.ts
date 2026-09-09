@@ -5106,6 +5106,7 @@ export interface components {
             /** Next Verification Events */
             next_verification_events: string[];
             _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
+            research_draft_ref?: components["schemas"]["CompanyResearchDraftReferenceResponse"] | null;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -5118,6 +5119,101 @@ export interface components {
             reviewer: "human:local-user";
             /** Markdown */
             markdown: string;
+        };
+        /** CompanyResearchDraftCitationResponse */
+        CompanyResearchDraftCitationResponse: {
+            /** Excerpt Id */
+            excerpt_id: string;
+            /** Quote */
+            quote: string;
+            /** Source Id */
+            source_id: string;
+            /** Raw Hash */
+            raw_hash: string;
+            /** Source Url */
+            source_url: string;
+            /** Locator */
+            locator: string;
+        };
+        /** CompanyResearchDraftItemResponse */
+        CompanyResearchDraftItemResponse: {
+            /** Title */
+            title: string;
+            /** Text */
+            text: string;
+            /** Citations */
+            citations: components["schemas"]["CompanyResearchDraftCitationResponse"][];
+            /** Fact Keys */
+            fact_keys: string[];
+        };
+        /** CompanyResearchDraftReferenceResponse */
+        CompanyResearchDraftReferenceResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Source Bundle Hash */
+            source_bundle_hash: string;
+        };
+        /** CompanyResearchDraftSectionResponse */
+        CompanyResearchDraftSectionResponse: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "business_analysis" | "operating_drivers" | "candidate_assumptions" | "counterevidence" | "verification_questions" | "report_sections";
+            /** Label */
+            label: string;
+            /** Items */
+            items: components["schemas"]["CompanyResearchDraftItemResponse"][];
+        };
+        /** CompanyResearchDraftSourceResponse */
+        CompanyResearchDraftSourceResponse: {
+            /** Source Id */
+            source_id: string;
+            /** Source Url */
+            source_url: string;
+            /** Raw Hash */
+            raw_hash: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /**
+             * Retrieved At
+             * Format: date-time
+             */
+            retrieved_at: string;
+        };
+        /** CompanyResearchDraftUsageAttemptResponse */
+        CompanyResearchDraftUsageAttemptResponse: {
+            /** Outcome */
+            outcome: string;
+            /**
+             * Usage State
+             * @enum {string}
+             */
+            usage_state: "reported" | "unavailable";
+            /** Prompt Tokens */
+            prompt_tokens: number | null;
+            /** Completion Tokens */
+            completion_tokens: number | null;
+            /** Total Tokens */
+            total_tokens: number | null;
+        };
+        /** CompanyResearchDraftUsageResponse */
+        CompanyResearchDraftUsageResponse: {
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: "llm_usage.v1";
+            /** Attempts */
+            attempts: components["schemas"]["CompanyResearchDraftUsageAttemptResponse"][];
         };
         /** CompanyResearchDriverMapArtifactResponse */
         CompanyResearchDriverMapArtifactResponse: {
@@ -5688,6 +5784,62 @@ export interface components {
             /** Fact Key */
             fact_key: string;
         };
+        /** CompanyResearchLiveDraftResponse */
+        CompanyResearchLiveDraftResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Source Bundle Hash */
+            source_bundle_hash: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Preparation Id
+             * Format: uuid
+             */
+            preparation_id: string;
+            /** Request Hash */
+            request_hash: string;
+            /** Input Hash */
+            input_hash: string;
+            /** Output Hash */
+            output_hash: string;
+            /**
+             * Candidate Status
+             * @constant
+             */
+            candidate_status: "machine_draft";
+            /** User Focus */
+            user_focus: string | null;
+            /**
+             * Cutoff At
+             * Format: date-time
+             */
+            cutoff_at: string;
+            /** Model Version */
+            model_version: string;
+            /** Prompt Version */
+            prompt_version: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Markdown */
+            markdown: string;
+            /** Sections */
+            sections: components["schemas"]["CompanyResearchDraftSectionResponse"][];
+            /** Sources */
+            sources: components["schemas"]["CompanyResearchDraftSourceResponse"][];
+            usage: components["schemas"]["CompanyResearchDraftUsageResponse"] | null;
+        };
         /** CompanyResearchMachineMemoPayloadResponse */
         CompanyResearchMachineMemoPayloadResponse: {
             /**
@@ -5707,6 +5859,7 @@ export interface components {
             /** Next Verification Events */
             next_verification_events: string[];
             _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
+            research_draft_ref?: components["schemas"]["CompanyResearchDraftReferenceResponse"] | null;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -6551,6 +6704,7 @@ export interface components {
             selected_revision: string | null;
             change_summary: components["schemas"]["CompanyResearchChangeSummaryResponse"];
             product_progress?: components["schemas"]["CompanyResearchProductProgressResponse"] | null;
+            research_draft?: components["schemas"]["CompanyResearchLiveDraftResponse"] | null;
         };
         /** CompareLinkDTO */
         CompareLinkDTO: {

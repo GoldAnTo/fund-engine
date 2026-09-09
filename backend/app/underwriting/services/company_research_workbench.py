@@ -144,6 +144,7 @@ class CompanyResearchWorkspace:
     selected_revision: UUID | None
     change_summary: dict
     product_progress: CompanyResearchProductProgress | None = None
+    research_draft: dict | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -608,6 +609,8 @@ class CompanyResearchWorkbench:
             )
         )
         assert type(memo) is CompanyResearchMemoArtifact
+        from app.underwriting.services.company_research_live_runtime import validate_memo_research_draft
+        validate_memo_research_draft(self._session, project_id=project_id, reference=memo.research_draft_ref)
         assert type(judgment) is JudgmentContextArtifact
         assert type(business_map) is BusinessMapArtifact
         assert isinstance(derived_gaps, tuple) and all(
@@ -959,7 +962,12 @@ class CompanyResearchWorkbench:
                 scope=scope,
                 basis=basis,
             ),
+            self._live_draft_projection(project_id, preparation),
         )
+
+    def _live_draft_projection(self, project_id, preparation):
+        from app.underwriting.services.company_research_live_runtime import read_live_draft, live_draft_projection
+        return live_draft_projection(self._session, read_live_draft(self._session, project_id=project_id, preparation=preparation))
 
     def review_evidence(
         self,

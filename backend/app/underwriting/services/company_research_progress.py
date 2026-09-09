@@ -55,7 +55,12 @@ def company_research_product_progress(
         project_id=preparation.project_id, payload=scope.payload,
     ):
         raise ValidationError("company research run scope is invalid")
-    boundary = resolve_alphabet_company_research_boundary(cutoff)
+    # Recovery may retain the authenticated evidence-only manifest. Resolve
+    # that exact governed version rather than comparing it with today's root.
+    # The boundary allowlist and full basis authentication below still apply.
+    boundary = resolve_alphabet_company_research_boundary(
+        cutoff, source_manifest_hash=basis.source_manifest_hash,
+    )
     CompanyResearchRepository(session).authenticate_governed_historical_basis(
         basis, expected_input=boundary.basis_input, expected_content_hash=boundary.basis_content_hash,
     )

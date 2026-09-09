@@ -1955,6 +1955,22 @@ class CompanyResearchArtifactReference:
 
 
 @dataclass(frozen=True, slots=True)
+class CompanyResearchDraftReference:
+    """The exact immutable language-model draft used by this memo version."""
+
+    id: UUID
+    content_hash: str
+    source_bundle_hash: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, UUID) or any(
+            not isinstance(value, str) or _INPUT_HASH.fullmatch(value) is None
+            for value in (self.content_hash, self.source_bundle_hash)
+        ):
+            raise CompanyResearchValidationError("research draft reference is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class CompanyResearchMemoArtifact:
     """A structured research candidate, optionally closed by local human review."""
 
@@ -1971,8 +1987,11 @@ class CompanyResearchMemoArtifact:
     candidate_status: str = "machine_draft"
     reviewer: str | None = None
     markdown: str | None = None
+    research_draft_ref: CompanyResearchDraftReference | None = None
 
     def __post_init__(self) -> None:
+        if self.research_draft_ref is not None and type(self.research_draft_ref) is not CompanyResearchDraftReference:
+            raise CompanyResearchValidationError("memo research draft reference is invalid")
         if self.candidate_status == "machine_draft":
             if self.reviewer is not None or self.markdown is not None:
                 raise CompanyResearchValidationError(

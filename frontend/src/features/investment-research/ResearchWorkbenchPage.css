@@ -80,3 +80,17 @@
   .ir-research-context { gap: 15px; }
   .ir-workbench .ir-preparation { grid-template-columns: minmax(0, 1fr); }
 }
+.ir-live-draft { margin-block: 1.5rem 2rem; padding-block: 1.5rem; border-block: 1px solid var(--ir-border, #dedbd2); }
+.ir-live-draft > header { margin-bottom: 1.8rem; }
+.ir-live-draft h3 { font-size: 1.1rem; margin-block: 1.5rem 1rem; }
+.ir-live-finding { margin-block: 1.2rem 1.8rem; max-width: 76ch; }
+.ir-live-finding h4 { font-size: 1rem; margin-bottom: .5rem; }
+.ir-live-finding p, .ir-live-draft header p { line-height: 1.85; }
+.ir-live-finding details { font-size: .88rem; }
+.ir-live-finding summary, .ir-live-receipt summary { cursor: pointer; padding-block: .45rem; }
+.ir-live-finding figure { margin: 1rem 0; }
+.ir-live-finding blockquote { margin: 0 0 .6rem; padding-left: 1rem; border-left: 2px solid #a2aaa0; line-height: 1.7; }
+.ir-live-receipt { font-size: .8rem; margin-top: 1.5rem; }
+.ir-live-receipt dl > div { display: grid; grid-template-columns: minmax(7rem, 1fr) 3fr; gap: 1rem; margin-block: .7rem; }
+.ir-live-receipt dd { margin: 0; overflow-wrap: anywhere; }
+.ir-live-hashes { font-family: ui-monospace, monospace; font-size: .72rem; }

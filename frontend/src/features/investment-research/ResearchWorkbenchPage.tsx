@@ -26,6 +26,7 @@ import {
 } from "./companyResearchView";
 
 import { COMPANY_RESEARCH_STATUS_LABELS } from "./companyResearchProgress";
+import { CompanyResearchDraftPanel } from "./CompanyResearchDraftPanel";
 
 type WorkspaceArtifact = CompanyResearchWorkspace["artifacts"][number];
 type EvidenceArtifact = Extract<WorkspaceArtifact, { kind: "evidence_index" }>;
@@ -91,6 +92,7 @@ function machineMemoMarkdown(workspace: CompanyResearchWorkspace): string {
   const memo = artifactByKind(workspace, "memo");
   if (memo === null) return "";
   if (memo.payload.candidate_status === "human_confirmed") return memo.payload.markdown;
+  if (workspace.research_draft) return workspace.research_draft.markdown;
   const conclusion = memo.payload.assessment_status === "not_answerable"
     ? "当前正式证据不足，不能形成投资方向、置信度、目标价或预期回报。"
     : memo.payload.assessment_status === "partially_answerable"
@@ -861,6 +863,7 @@ export default function ResearchWorkbenchPage() {
       workspace={workspace}
     /> : null}
 
+      {frozenWorkspaceIsBound && workspace.research_draft ? <CompanyResearchDraftPanel draft={workspace.research_draft} page={activePage.key} saved={workspace.selected_revision !== null} /> : null}
       {frozenWorkspaceIsBound ? activePage.modules.map((moduleKey) => {
         const module = workspace.modules.find((item) => item.key === moduleKey);
         const label = COMPANY_RESEARCH_MODULES.find((item) => item.key === moduleKey)?.label;

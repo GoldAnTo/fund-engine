@@ -1080,6 +1080,7 @@ function isJudgmentContextPayload(value: unknown): boolean {
 
 function isMemoPayload(value: unknown): boolean {
   const commonKeys = ["assessment_status", "business_map_ref", "driver_map_ref", "financial_bridge_ref", "scenario_set_ref", "valuation_set_ref", "gap_keys", "strongest_counterevidence", "next_verification_events", "candidate_status", "_lineage"];
+  if (isRecord(value) && Object.prototype.hasOwnProperty.call(value, "research_draft_ref")) commonKeys.push("research_draft_ref");
   if (!isRecord(value)
     || !(value.candidate_status === "machine_draft" && hasExactKeys(value, commonKeys)
       || value.candidate_status === "human_confirmed" && hasExactKeys(value, [...commonKeys, "reviewer", "markdown"]))
@@ -1089,6 +1090,7 @@ function isMemoPayload(value: unknown): boolean {
     || !value.strongest_counterevidence.every((ref) => isCompanyResearchSourceRef(ref, true))
     || !isStringArray(value.next_verification_events)
     || !isCompanyResearchLineage(value._lineage, ["judgment_context"])) return false;
+  if (value.research_draft_ref !== undefined && value.research_draft_ref !== null && !isLiveDraftRef(value.research_draft_ref)) return false;
   if (value.candidate_status === "human_confirmed"
     && (value.reviewer !== "human:local-user"
       || !isNonEmptyString(value.markdown) || value.markdown.length > 100_000
@@ -1213,8 +1215,61 @@ function isCompanyProductProgress(
     && value.error_code === errorCode;
 }
 
+function isLiveDraftRef(value: unknown): boolean {
+  return isRecord(value) && hasExactKeys(value, ["id", "content_hash", "source_bundle_hash"])
+    && isUuid(value.id) && isHash(value.content_hash) && isHash(value.source_bundle_hash);
+}
+
+function isHttpsSource(value: unknown): value is string {
+  if (!isNonEmptyString(value)) return false;
+  try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password; } catch { return false; }
+}
+
+function isLiveResearchDraft(value: unknown, workspace: Record<string, unknown>): boolean {
+  if (value === undefined || value === null) return true;
+  const progress = workspace.product_progress;
+  if (!isRecord(value) || !isRecord(progress) || !isRecord(workspace.preparation)
+    || !hasExactKeys(value, ["id", "project_id", "preparation_id", "request_hash", "content_hash", "source_bundle_hash", "input_hash", "output_hash", "candidate_status", "user_focus", "cutoff_at", "model_version", "prompt_version", "generated_at", "markdown", "sections", "sources", "usage"])
+    || !isUuid(value.id) || value.project_id !== workspace.project_id || value.preparation_id !== workspace.preparation.id
+    || ![value.request_hash, value.content_hash, value.source_bundle_hash, value.input_hash, value.output_hash].every(isHash)
+    || value.candidate_status !== "machine_draft" || value.user_focus !== progress.user_focus
+    || !isDateTime(value.cutoff_at) || !isDateTime(value.generated_at) || Date.parse(value.cutoff_at) !== Date.parse(String(progress.cutoff_at))
+    || !isNonEmptyString(value.model_version) || value.model_version.startsWith("mock-") || !isNonEmptyString(value.prompt_version)
+    || !isNonEmptyString(value.markdown) || value.markdown.length > 100000
+    || !Array.isArray(value.sources) || value.sources.length === 0 || !Array.isArray(value.sections)) return false;
+  const sources = new Map<string, Record<string, unknown>>();
+  for (const source of value.sources) {
+    if (!isRecord(source) || !hasExactKeys(source, ["source_id", "source_url", "raw_hash", "available_at", "retrieved_at"])
+      || !isNonEmptyString(source.source_id) || sources.has(source.source_id) || !isHttpsSource(source.source_url) || !isHash(source.raw_hash)
+      || !isDateTime(source.available_at) || !isDateTime(source.retrieved_at) || Date.parse(source.available_at) > Date.parse(value.cutoff_at)) return false;
+    sources.set(source.source_id, source);
+  }
+  const groups = ["business_analysis", "operating_drivers", "candidate_assumptions", "counterevidence", "verification_questions", "report_sections"];
+  if (value.sections.length !== groups.length || !value.sections.every((section, index) => {
+    if (!isRecord(section) || !hasExactKeys(section, ["key", "label", "items"]) || section.key !== groups[index]
+      || !isNonEmptyString(section.label) || !Array.isArray(section.items) || section.items.length === 0) return false;
+    return section.items.every((item) => isRecord(item) && hasExactKeys(item, ["title", "text", "citations", "fact_keys"])
+      && isNonEmptyString(item.title) && isNonEmptyString(item.text) && isStringArray(item.fact_keys)
+      && Array.isArray(item.citations) && item.citations.length > 0 && item.citations.every((cite) => {
+        if (!isRecord(cite) || !hasExactKeys(cite, ["excerpt_id", "quote", "source_id", "raw_hash", "source_url", "locator"])
+          || !isNonEmptyString(cite.excerpt_id) || !isNonEmptyString(cite.quote) || !isNonEmptyString(cite.locator) || !isNonEmptyString(cite.source_id)) return false;
+        const source = sources.get(cite.source_id);
+        return source !== undefined && cite.raw_hash === source.raw_hash && cite.source_url === source.source_url;
+      }));
+  })) return false;
+  if (value.usage !== null) {
+    if (!isRecord(value.usage) || !hasExactKeys(value.usage, ["schema_version", "attempts"]) || value.usage.schema_version !== "llm_usage.v1"
+      || !Array.isArray(value.usage.attempts) || !value.usage.attempts.every((attempt) => isRecord(attempt)
+        && hasExactKeys(attempt, ["outcome", "usage_state", "prompt_tokens", "completion_tokens", "total_tokens"])
+        && isNonEmptyString(attempt.outcome) && (attempt.usage_state === "reported"
+          ? [attempt.prompt_tokens, attempt.completion_tokens, attempt.total_tokens].every(isNonNegativeInteger) && Number(attempt.prompt_tokens) + Number(attempt.completion_tokens) === attempt.total_tokens
+          : attempt.usage_state === "unavailable" && attempt.prompt_tokens === null && attempt.completion_tokens === null && attempt.total_tokens === null))) return false;
+  }
+  return true;
+}
+
 function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWorkspace {
-  if (!isProductDto(value) || !hasKeysWithOptional(value, ["schema_version", "project_id", "company", "preparation", "artifacts", "modules", "source_count", "gap_count", "draft", "selected_revision", "change_summary"], ["product_progress"])
+  if (!isProductDto(value) || !hasKeysWithOptional(value, ["schema_version", "project_id", "company", "preparation", "artifacts", "modules", "source_count", "gap_count", "draft", "selected_revision", "change_summary"], ["product_progress", "research_draft"])
     || !isUuid(value.project_id) || !isProductDto(value.company)
     || !hasExactKeys(value.company, ["schema_version", "object_id", "external_key", "canonical_name", "id"])
     || !isUuid(value.company.id) || value.company.object_id !== value.company.id || !isNonEmptyString(value.company.external_key) || !isNonEmptyString(value.company.canonical_name)
@@ -1229,6 +1284,7 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
     || !isUuid(value.draft.id) || !isPositiveInteger(value.draft.lock_version) || !isNullableUuid(value.draft.base_revision_id)
     || !isNullableUuid(value.selected_revision) || value.selected_revision !== value.draft.base_revision_id || !isRecord(value.change_summary)) return false;
   if (!isCompanyProductProgress(value.product_progress, value.project_id, value.company.id, value.preparation)) return false;
+  if (!isLiveResearchDraft(value.research_draft, value)) return false;
   const moduleKeys = value.modules.map((item) => isProductDto(item) ? item.key : null);
   if (!sameOrderedStrings(moduleKeys.filter(isNonEmptyString), [...COMPANY_RESEARCH_AGENDA_KEYS])) return false;
   const expectedEvidenceReview = value.preparation.status === "awaiting_evidence_review";
@@ -1292,6 +1348,11 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
   const gaps = gapPayload && Array.isArray(gapPayload.gaps) ? gapPayload.gaps : [];
   const memoArtifact = artifacts.find((artifact) => artifact.kind === "memo");
   const memoPayload = memoArtifact && isRecord(memoArtifact.payload) ? memoArtifact.payload : null;
+  if (memoPayload) {
+    const ref = memoPayload.research_draft_ref;
+    const research = value.research_draft;
+    if (isRecord(research) ? !isRecord(ref) || ref.id !== research.id || ref.content_hash !== research.content_hash || ref.source_bundle_hash !== research.source_bundle_hash : ref !== undefined && ref !== null) return false;
+  }
   const expectedGapCount = memoPayload && Array.isArray(memoPayload.gap_keys)
     ? memoPayload.gap_keys.length : gaps.length;
   if (value.gap_count !== expectedGapCount) return false;

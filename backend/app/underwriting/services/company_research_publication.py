@@ -1695,6 +1695,9 @@ class CompanyResearchPublicationService:
                         )
                     durable_memo = decoded
             artifact_tuple = tuple(artifacts)
+            if durable_memo is not None:
+                from app.underwriting.services.company_research_live_runtime import validate_memo_research_draft
+                validate_memo_research_draft(self._session, project_id=project_id, reference=durable_memo.research_draft_ref, verify_raw=True, frozen_scope_id=boundary.scope_id, frozen_basis_id=boundary.historical_basis_id)
             expected_kinds = tuple(
                 kind
                 for kind in _FROZEN_ARTIFACT_KINDS

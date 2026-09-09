@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { liveResearchDraftFixture } from "./companyResearchDraft.test-fixtures";
 
 import {
   InvestmentResearchApi,
@@ -561,6 +562,25 @@ const operationCases: OperationCase[] = [
 ];
 
 describe("InvestmentResearchApi", () => {
+  it("reads a cited live draft before evidence review and rejects substituted sources or focus", async () => {
+    const body = companyResearchWorkspaceBody();
+    body.product_progress = { schema_version: "underwriting.v1", run_id: ids.draft, project_id: ids.project, company_id: ids.company,
+      status: "needs_input", current_step: "research_gaps", progress_percent: 25, user_focus: "云业务", cutoff_at: now, retryable: false, error_code: null };
+    body.research_draft = liveResearchDraftFixture(ids.project, ids.draft, now, "云业务");
+    const api = new InvestmentResearchApi("https://api.test");
+    const fetchMock = vi.fn().mockResolvedValue(response(body));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(api.companyResearchWorkspace(ids.project)).resolves.toMatchObject({ research_draft: { markdown: body.research_draft.markdown } });
+    for (const change of [
+      (value: any) => { value.research_draft.user_focus = "替换的问题"; },
+      (value: any) => { value.research_draft.sections[0].items[0].citations[0].raw_hash = hash; },
+      (value: any) => { value.research_draft.usage.attempts[0].total_tokens = 1; },
+    ]) {
+      const invalid = structuredClone(body); change(invalid);
+      fetchMock.mockResolvedValue(response(invalid));
+      await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    }
+  });
   afterEach(() => vi.unstubAllGlobals());
 
   it.each(operationCases)("enforces the $name wire contract", async (operation) => {

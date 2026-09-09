@@ -646,6 +646,12 @@ class CompanyResearchMemoArtifactReferenceResponse(_ClosedCompanyResearchPayload
     content_hash: str = Field(pattern=SHA256_PATTERN)
 
 
+class CompanyResearchDraftReferenceResponse(_ClosedCompanyResearchPayloadModel):
+    id: UUID
+    content_hash: str = Field(pattern=SHA256_PATTERN)
+    source_bundle_hash: str = Field(pattern=SHA256_PATTERN)
+
+
 class _CompanyResearchMemoPayloadBaseResponse(_ClosedCompanyResearchPayloadModel):
     assessment_status: Literal["not_answerable", "partially_answerable", "answerable"]
     business_map_ref: CompanyResearchMemoArtifactReferenceResponse
@@ -657,6 +663,7 @@ class _CompanyResearchMemoPayloadBaseResponse(_ClosedCompanyResearchPayloadModel
     strongest_counterevidence: tuple[CompanyResearchLineageSourceReferenceResponse, ...]
     next_verification_events: tuple[StrictStr, ...]
     lineage: CompanyResearchArtifactLineageResponse = Field(alias="_lineage")
+    research_draft_ref: CompanyResearchDraftReferenceResponse | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class CompanyResearchMachineMemoPayloadResponse(
@@ -1082,6 +1089,67 @@ class CompanyResearchProductProgressResponse(UnderwritingModel):
         return value
 
 
+class CompanyResearchDraftCitationResponse(_ClosedCompanyResearchPayloadModel):
+    excerpt_id: StrictStr
+    quote: StrictStr = Field(min_length=1, max_length=2000)
+    source_id: StrictStr
+    raw_hash: str = Field(pattern=SHA256_PATTERN)
+    source_url: StrictStr
+    locator: StrictStr
+
+
+class CompanyResearchDraftItemResponse(_ClosedCompanyResearchPayloadModel):
+    title: StrictStr = Field(min_length=1)
+    text: StrictStr = Field(min_length=1)
+    citations: tuple[CompanyResearchDraftCitationResponse, ...] = Field(min_length=1)
+    fact_keys: tuple[StrictStr, ...]
+
+
+class CompanyResearchDraftSectionResponse(_ClosedCompanyResearchPayloadModel):
+    key: Literal["business_analysis", "operating_drivers", "candidate_assumptions", "counterevidence", "verification_questions", "report_sections"]
+    label: StrictStr
+    items: tuple[CompanyResearchDraftItemResponse, ...] = Field(min_length=1)
+
+
+class CompanyResearchDraftSourceResponse(_ClosedCompanyResearchPayloadModel):
+    source_id: StrictStr
+    source_url: StrictStr
+    raw_hash: str = Field(pattern=SHA256_PATTERN)
+    available_at: datetime
+    retrieved_at: datetime
+
+
+class CompanyResearchDraftUsageAttemptResponse(_ClosedCompanyResearchPayloadModel):
+    outcome: StrictStr
+    usage_state: Literal["reported", "unavailable"]
+    prompt_tokens: StrictInt | None
+    completion_tokens: StrictInt | None
+    total_tokens: StrictInt | None
+
+
+class CompanyResearchDraftUsageResponse(_ClosedCompanyResearchPayloadModel):
+    schema_version: Literal["llm_usage.v1"]
+    attempts: tuple[CompanyResearchDraftUsageAttemptResponse, ...]
+
+
+class CompanyResearchLiveDraftResponse(CompanyResearchDraftReferenceResponse):
+    project_id: UUID
+    preparation_id: UUID
+    request_hash: str = Field(pattern=SHA256_PATTERN)
+    input_hash: str = Field(pattern=SHA256_PATTERN)
+    output_hash: str = Field(pattern=SHA256_PATTERN)
+    candidate_status: Literal["machine_draft"]
+    user_focus: StrictStr | None
+    cutoff_at: datetime
+    model_version: StrictStr
+    prompt_version: StrictStr
+    generated_at: datetime
+    markdown: StrictStr = Field(min_length=1, max_length=100000)
+    sections: tuple[CompanyResearchDraftSectionResponse, ...] = Field(min_length=6, max_length=6)
+    sources: tuple[CompanyResearchDraftSourceResponse, ...] = Field(min_length=1)
+    usage: CompanyResearchDraftUsageResponse | None
+
+
 class CompanyResearchWorkspaceResponse(UnderwritingModel):
     project_id: UUID
     company: CompanyResearchWorkspaceCompanyResponse
@@ -1096,10 +1164,15 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
     selected_revision: UUID | None
     change_summary: CompanyResearchChangeSummaryResponse
     product_progress: CompanyResearchProductProgressResponse | None = None
+    research_draft: CompanyResearchLiveDraftResponse | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def closed_workspace_contract(self):
         progress = self.product_progress
+        research = self.research_draft
+        if research is not None and (research.project_id != self.project_id or research.preparation_id != self.preparation.id
+                                     or progress is None or research.user_focus != progress.user_focus or research.cutoff_at != progress.cutoff_at):
+            raise ValueError("research draft must match the initialized research run")
         if progress is not None:
             error = self.preparation.error
             if (
