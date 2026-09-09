@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -6,11 +6,12 @@ import {
   type ProductObjectSearchItem,
   type ProductProject,
 } from "../../data/investmentResearchApi";
+import { COMPANY_RESEARCH_STATUS_LABELS, type CompanyResearchProgress } from "./companyResearchProgress";
 
 const kindLabels: Record<ProductObjectSearchItem["kind"], string> = {
-  company: "Company",
-  security: "Security",
-  industry: "Industry",
+  company: "公司",
+  security: "证券",
+  industry: "行业",
 };
 
 function identityLine(item: ProductObjectSearchItem): string {
@@ -28,6 +29,7 @@ function companyActionName(item: ProductObjectSearchItem): string {
 
 export default function ResearchHomePage() {
   const [projects, setProjects] = useState<ProductProject[]>([]);
+  const [progressByProject, setProgressByProject] = useState<Record<string, CompanyResearchProgress | null>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -36,6 +38,9 @@ export default function ResearchHomePage() {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchCompleted, setSearchCompleted] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const searchEpochRef = useRef(0);
+
+  useEffect(() => () => { searchEpochRef.current += 1; }, []);
 
   useEffect(() => {
     let active = true;
@@ -54,26 +59,45 @@ export default function ResearchHomePage() {
     };
   }, [loadAttempt]);
 
+  useEffect(() => {
+    let active = true;
+    setProgressByProject({});
+    // Load compact status responses independently; an unavailable run must not hide its project.
+    for (const project of projects) {
+      void investmentResearchApi.companyResearchProject(project.id).then((result) => {
+        if (!active) return;
+        const progress = result.company_id === project.primary_company_id ? result.product_progress ?? null : null;
+        setProgressByProject((current) => ({ ...current, [project.id]: progress }));
+      }).catch(() => {
+        if (active) setProgressByProject((current) => ({ ...current, [project.id]: null }));
+      });
+    }
+    return () => { active = false; };
+  }, [projects]);
+
   const recentProjects = projects
     .slice()
     .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
 
   async function runSearch() {
     const normalized = query.trim();
-    if (!normalized) return;
+    if (!normalized || searching) return;
+    const epoch = ++searchEpochRef.current;
     setSearching(true);
     setSearchCompleted(false);
     setSearchError(null);
     try {
       const response = await investmentResearchApi.searchObjects(normalized);
+      if (searchEpochRef.current !== epoch) return;
       setResults(response.items);
       setSearchCompleted(true);
     } catch (error) {
+      if (searchEpochRef.current !== epoch) return;
       setResults([]);
       setSearchCompleted(true);
       setSearchError(error instanceof Error ? error.message : "对象搜索失败");
     } finally {
-      setSearching(false);
+      if (searchEpochRef.current === epoch) setSearching(false);
     }
   }
 
@@ -86,11 +110,11 @@ export default function ResearchHomePage() {
     <main className="ir-page ir-home">
       <header className="ir-page-head">
         <div>
-          <p className="ir-eyebrow">Research register</p>
-          <h1>独立投资研究</h1>
-          <p>从明确的 Company 与 Security 身份出发，维护可冻结、可复核的长期研究版本。</p>
+          <p className="ir-eyebrow">Company research</p>
+          <h1>研究库</h1>
+          <p>从一家公司开始，理解它如何赚钱、什么决定经营结果，以及还有哪些问题需要验证。</p>
         </div>
-        <Link className="ir-button ir-button--primary" to="/research/new">建立研究项目</Link>
+        <Link className="ir-button ir-button--primary" to="/research/new">开始公司研究</Link>
       </header>
 
       <section className="ir-search-section" aria-busy={searching} aria-labelledby="ir-object-search-title" aria-live="polite">
@@ -100,11 +124,18 @@ export default function ResearchHomePage() {
         </div>
         <form className="ir-search-form" onSubmit={search}>
           <label>
-            <span>搜索 Company、Security 或 Industry</span>
-            <input autoComplete="off" name="research_object_query" value={query} onChange={(event) => setQuery(event.target.value)} />
+            <span>公司名称或证券代码</span>
+            <input autoComplete="off" name="research_object_query" placeholder="输入公司名称或证券代码" value={query} onChange={(event) => {
+              searchEpochRef.current += 1;
+              setQuery(event.target.value);
+              setResults([]);
+              setSearchCompleted(false);
+              setSearchError(null);
+              setSearching(false);
+            }} />
           </label>
           <button className="ir-button" disabled={searching || !query.trim()} type="submit">
-            {searching ? "搜索中" : "搜索对象"}
+            {searching ? "搜索中" : "搜索公司"}
           </button>
         </form>
         {searchError ? <div className="ir-alert" role="alert"><p>{searchError}</p><button className="ir-button" disabled={searching} onClick={() => void runSearch()} type="button">重试对象搜索</button></div> : null}
@@ -127,7 +158,7 @@ export default function ResearchHomePage() {
           </ul>
         ) : null}
         {searchCompleted && !searching && !searchError && results.length === 0 ? (
-          <p className="ir-empty" role="status">没有找到匹配的 Company、Security 或 Industry。请检查名称、代码或身份标识。</p>
+          <p className="ir-empty" role="status">没有找到匹配的公司或证券。请检查名称、代码，或换一个名称搜索。</p>
         ) : null}
       </section>
 
@@ -135,7 +166,7 @@ export default function ResearchHomePage() {
         <div className="ir-section-head">
           <div>
             <p className="ir-eyebrow">Recent projects</p>
-            <h2 id="ir-recent-title">最近项目</h2>
+            <h2 id="ir-recent-title">最近研究</h2>
           </div>
           <span>最近建立优先</span>
         </div>
@@ -144,28 +175,35 @@ export default function ResearchHomePage() {
             <span /><span /><span />
           </div>
         ) : null}
-        {loadError ? <div className="ir-alert" role="alert"><p>{loadError}</p><button className="ir-button" onClick={() => { setLoading(true); setLoadError(null); setLoadAttempt((value) => value + 1); }} type="button">重试读取项目目录</button></div> : null}
+        {loadError ? <div className="ir-alert" role="alert"><p>{loadError}</p><button className="ir-button" onClick={() => { setLoading(true); setLoadError(null); setLoadAttempt((value) => value + 1); }} type="button">重新加载研究库</button></div> : null}
         {!loading && !loadError && recentProjects.length === 0 ? (
           <div className="ir-empty">
-            <strong>尚无独立研究项目</strong>
-            <p>先确认一家公司与至少一只相关证券，再建立第一份研究边界。</p>
-            <Link to="/research/new">建立研究项目</Link>
+            <strong>开始第一份公司研究</strong>
+            <p>选择公司和关联证券，可选填写关注问题。已有研究会保存在这里，方便随时继续。</p>
+            <Link to="/research/new">选择研究公司</Link>
           </div>
         ) : null}
         {recentProjects.length > 0 ? (
-          <ol className="ir-project-list">
-            {recentProjects.map((project) => (
+          <ol className="ir-project-list" aria-label="已有公司研究">
+            {recentProjects.map((project) => {
+              const progress = progressByProject[project.id];
+              return (
               <li key={project.id}>
                 <Link to={`/research/projects/${encodeURIComponent(project.id)}`}>
                   <div>
                     <strong>{project.company_identity.canonical_name}</strong>
-                    <small>{project.security_identities.map((security) => `${security.symbol} · ${security.share_class}`).join("；")} · 项目 {project.id}</small>
+                    <small>{project.security_identities.map((security) => `${security.symbol} · ${security.share_class}`).join("；")}</small>
+                    {progress?.user_focus ? <small>关注问题：{progress.user_focus}</small> : null}
                   </div>
-                  <span>{project.target_security_ids.length} 只 Security</span>
+                  <span><span aria-label={`${project.company_identity.canonical_name}的研究状态`}>
+                    {progress === undefined ? "读取状态中" : progress === null ? "状态暂不可用" : COMPANY_RESEARCH_STATUS_LABELS[progress.status]}
+                    {progress?.status === "needs_input" ? " · 待处理" : ""}
+                  </span><small>继续研究 →</small></span>
                   <time dateTime={project.created_at}>{new Date(project.created_at).toLocaleString("zh-CN")}</time>
                 </Link>
               </li>
-            ))}
+              );
+            })}
           </ol>
         ) : null}
       </section>

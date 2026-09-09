@@ -4,7 +4,9 @@ import type { CompanyResearchWorkspace } from "../../data/investmentResearchApi"
 import * as companyResearchView from "./companyResearchView";
 import {
   COMPANY_RESEARCH_MODULES,
+  COMPANY_RESEARCH_PAGES,
   answerabilityView,
+  researchBlockerGroups,
   artifactByKind,
   numericObservationView,
   publicationAction,
@@ -13,6 +15,17 @@ import {
 } from "./companyResearchView";
 
 describe("company research view model", () => {
+  it("maps the six company pages to their real domain modules beside the research library", () => {
+    expect(COMPANY_RESEARCH_PAGES.map(({ key, label, modules }) => [key, label, modules])).toEqual([
+      ["overview", "研究概览", ["overview"]],
+      ["business", "商业模式", ["business_map", "industry_competition_regulation", "counterevidence_risks_next_checks"]],
+      ["forecast", "预测与情景", ["operating_drivers", "financials_cash_flow_capital_allocation", "scenarios_valuation_implied_expectations"]],
+      ["valuation", "价值判断", ["scenarios_valuation_implied_expectations"]],
+      ["evidence", "证据中心", ["evidence_and_gaps"]],
+      ["versions", "备忘录与版本", ["versions_changes_memo"]],
+    ]);
+  });
+
   it("exposes a publication action helper", () => {
     expect((companyResearchView as Record<string, unknown>).publicationAction).toBeTypeOf("function");
   });
@@ -79,10 +92,10 @@ describe("company research view model", () => {
     expect(workspaceSnapshotIsMonotonic(completed, ready)).toBe(false);
   });
 
-  it("keeps the approved nine modules in product order", () => {
+  it("retains the nine internal module definitions with generic company naming", () => {
     expect(COMPANY_RESEARCH_MODULES.map(({ key, label }) => [key, label])).toEqual([
       ["overview", "概览与当前判断"],
-      ["business_map", "Google 如何赚钱"],
+      ["business_map", "公司如何赚钱"],
       ["operating_drivers", "关键经营变量"],
       ["evidence_and_gaps", "来源、事实与缺口"],
       ["industry_competition_regulation", "行业、竞争与监管"],
@@ -131,6 +144,24 @@ describe("company research view model", () => {
       source_ref: null, gap_key: null, assumption_key: "search_growth",
     })).toMatchObject({ provenanceKind: "assumption", provenanceKey: "search_growth" });
     expect(numericObservationView(null)).toBeNull();
+  });
+
+  it("groups baseline and driver gaps by known metric while preserving every original blocker", () => {
+    const codes = [
+      "builder_generated_operating_baseline_missing_cloud_operating_margin",
+      "builder_generated_operating_driver_missing_cloud_operating_margin",
+      "builder_generated_operating_driver_missing_search_query_intensity",
+      "unknown_new_gap", "builder_generated_operating_driver_missing_unrecognized_metric",
+    ];
+    const original = [...codes];
+    expect(researchBlockerGroups).toBeTypeOf("function");
+    expect(researchBlockerGroups(codes)).toEqual([
+      { label: "云业务营业利润率的经营基线或驱动依据尚不完整。", codes: codes.slice(0, 2) },
+      { label: "搜索查询强度的经营基线或驱动依据尚不完整。", codes: [codes[2]] },
+      { label: "其他研究缺口仍需核对，具体记录见审计详情。", codes: codes.slice(3) },
+    ]);
+    expect(codes).toEqual(original);
+    expect(researchBlockerGroups([])).toEqual([]);
   });
 
   it("derives answerability without manufacturing direction, confidence, target, or return", () => {

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -13,6 +13,7 @@ import {
   type ProductProject,
 } from "../../data/investmentResearchApi";
 import ResearchWorkbenchPage from "./ResearchWorkbenchPage";
+import { CompanyResearchRoutes } from "../../app/CompanyResearchRoutes";
 
 const hash = "a".repeat(64);
 const uid = (value: number) => `20000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
@@ -26,7 +27,7 @@ function deferred<T>() {
 }
 
 function forProject(base: CompanyResearchWorkspace, projectId: string): CompanyResearchWorkspace {
-  return { ...base, project_id: projectId, artifacts: base.artifacts.map((item) => ({ ...item, project_id: projectId })) };
+  return withProductProgress({ ...base, project_id: projectId, artifacts: base.artifacts.map((item) => ({ ...item, project_id: projectId })) });
 }
 
 function project(): ProductProject {
@@ -102,6 +103,23 @@ function evidenceFact(reviewDecision?: "confirmed" | "rejected") {
 
 type PreparationStep = NonNullable<CompanyResearchWorkspace["preparation"]["error"]>["failed_step"];
 
+function withProductProgress(candidate: CompanyResearchWorkspace) {
+  const status = {
+    queued: "queued", preparing_sources: "collecting_sources", awaiting_evidence_review: "needs_input",
+    building_model: "building_forecast", awaiting_judgment_review: "needs_input", ready_to_freeze: "completed",
+    recoverable_failure: "failed", blocked: "failed", completed: "completed",
+  } as const;
+  return Object.assign(candidate, { product_progress: {
+    schema_version: "underwriting.v1" as const, run_id: candidate.preparation.id, project_id: candidate.project_id,
+    company_id: candidate.company.id, status: candidate.preparation.status === "building_model"
+      ? candidate.preparation.current_step === "judgment_context" || candidate.preparation.current_step === "memo" ? "generating_report" as const
+        : candidate.preparation.current_step === "financial_bridge" || candidate.preparation.current_step === "scenario_set" || candidate.preparation.current_step === "valuation_set" ? "building_forecast" as const : "analyzing_company" as const
+      : status[candidate.preparation.status], current_step: candidate.preparation.current_step,
+    progress_percent: candidate.preparation.progress, user_focus: "核对资本开支与现金流", cutoff_at: "2026-02-05T00:00:00Z",
+    retryable: candidate.preparation.error?.retryable ?? false, error_code: candidate.preparation.error?.code ?? null,
+  } });
+}
+
 function workspace(options: {
   status?: CompanyResearchWorkspace["preparation"]["status"];
   rich?: boolean;
@@ -171,7 +189,7 @@ function workspace(options: {
   const currentStep = options.currentStep ?? (status === "completed" ? null : status === "recoverable_failure" || status === "building_model" || status === "blocked" ? "model_bundle" : status === "queued" || status === "preparing_sources" ? "evidence_index" : status === "awaiting_judgment_review" ? "judgment_context" : status === "ready_to_freeze" ? "memo" : "research_gaps");
   const progress = options.rich || status === "completed" ? 100 : status === "queued" ? 0 : status === "preparing_sources" ? 10 : status === "awaiting_judgment_review" ? 85 : status === "ready_to_freeze" ? 95 : 25;
   const defaultModuleState = status === "recoverable_failure" || status === "blocked" ? "blocked" : status === "queued" ? "not_started" : "preparing";
-  return {
+  return withProductProgress({
     schema_version: "underwriting.v1", project_id: ids.project,
     company: { schema_version: "underwriting.v1", object_id: ids.company, id: ids.company, external_key: "ALPHABET:COMPANY", canonical_name: "Alphabet Inc." },
     preparation: {
@@ -196,7 +214,7 @@ function workspace(options: {
     source_count: 1, gap_count: 1,
     draft: { schema_version: "underwriting.v1", id: ids.draft, lock_version: impliedDecision ? 2 : 1, base_revision_id: status === "completed" ? ids.revision : null }, selected_revision: status === "completed" ? ids.revision : null,
     change_summary: { artifact_versions: Object.fromEntries(artifacts.map((item) => [item.kind, item.version])), reviewed_fact_count: options.rich ? 2 : impliedDecision ? 1 : 0 },
-  };
+  });
 }
 
 function publicationWorkspace(stage: 85 | 95 | 100): CompanyResearchWorkspace {
@@ -229,7 +247,7 @@ function publicationWorkspace(stage: 85 | 95 | 100): CompanyResearchWorkspace {
     };
     candidate.change_summary.artifact_versions.memo = 2;
   }
-  return candidate;
+  return withProductProgress(candidate);
 }
 
 function publicationPreview(): CompanyResearchPublicationPreview {
@@ -302,8 +320,14 @@ function markdownExport(): CompanyResearchMarkdownExport {
   };
 }
 
-function renderPage() {
-  return render(<MemoryRouter initialEntries={[`/research/projects/${ids.project}`]}><Routes><Route path="/research/projects/:projectId" element={<ResearchWorkbenchPage />} /></Routes></MemoryRouter>);
+function RouteHistoryProbe() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return <><span aria-label="当前路由">{location.pathname}</span><button onClick={() => navigate(-1)}>浏览器后退</button></>;
+}
+
+function renderPage(page = "overview") {
+  return render(<MemoryRouter initialEntries={[`/research/projects/${ids.project}${page ? `/${page}` : ""}`]}><Routes><Route path="/research/projects/:projectId/:page?" element={<ResearchWorkbenchPage />} /></Routes><RouteHistoryProbe /></MemoryRouter>);
 }
 
 function mockFrozenRevision(candidate: CompanyResearchWorkspace) {
@@ -378,6 +402,164 @@ describe("Alphabet company research workbench", () => {
     vi.unstubAllGlobals();
   });
 
+  it("uses exactly seven page destinations and restores a bookmarked page through browser history", async () => {
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(workspace());
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={[`/research/projects/${ids.project}/evidence`]}><CompanyResearchRoutes /><RouteHistoryProbe /></MemoryRouter>);
+    const navigation = await screen.findByRole("navigation", { name: "公司研究页面" });
+    const links = within(navigation).getAllByRole("link");
+    expect(links).toHaveLength(7);
+    const destinations = [
+      ["研究库", "/research"], ["研究概览", `/research/projects/${ids.project}/overview`],
+      ["商业模式", `/research/projects/${ids.project}/business`], ["预测与情景", `/research/projects/${ids.project}/forecast`],
+      ["价值判断", `/research/projects/${ids.project}/valuation`], ["证据中心", `/research/projects/${ids.project}/evidence`],
+      ["备忘录与版本", `/research/projects/${ids.project}/versions`],
+    ];
+    for (const [label, href] of destinations) expect(within(navigation).getByRole("link", { name: new RegExp(label!) })).toHaveAttribute("href", href);
+    expect(within(navigation).getByRole("link", { name: /证据中心/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "确认事实 revenue_2025" })).toBeEnabled();
+    await user.click(within(navigation).getByRole("link", { name: /商业模式/ }));
+    expect(screen.getByLabelText("当前路由")).toHaveTextContent(`/research/projects/${ids.project}/business`);
+    await user.click(screen.getByRole("button", { name: "浏览器后退" }));
+    expect(within(navigation).getByRole("link", { name: /证据中心/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "确认事实 revenue_2025" })).toBeEnabled();
+  });
+
+  it("shows readable grouped blockers in overview and retains all exact codes in closed audit details", async () => {
+    const candidate = publicationWorkspace(85);
+    const codes = ["builder_generated_operating_baseline_missing_cloud_operating_margin", "builder_generated_operating_driver_missing_cloud_operating_margin", "future_unrecognized_gap"];
+    const memo = candidate.artifacts.find((item) => item.kind === "memo")! as Extract<CompanyResearchWorkspace["artifacts"][number], { kind: "memo" }>;
+    memo.payload.gap_keys = codes;
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(candidate);
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByText("当前不可回答")).toBeVisible();
+    const readable = screen.getByRole("list", { name: "研究阻塞项" });
+    expect(within(readable).getAllByRole("listitem")).toHaveLength(2);
+    expect(readable).toHaveTextContent("云业务营业利润率的经营基线或驱动依据尚不完整。");
+    expect(readable).toHaveTextContent("其他研究缺口仍需核对");
+    for (const code of codes) expect(screen.getByText(code, { exact: true })).not.toBeVisible();
+    await user.click(screen.getByText("阻塞项审计详情"));
+    for (const code of codes) expect(screen.getByText(code, { exact: true })).toBeVisible();
+    expect(memo.payload.gap_keys).toEqual(codes);
+    expect(screen.queryByRole("heading", { name: "价值与回报范围" })).not.toBeInTheDocument();
+  });
+
+  it("shows server product progress and persisted focus without exposing worker details", async () => {
+    const candidate = publicationWorkspace(95);
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(candidate);
+    renderPage();
+    expect(await screen.findByText("研究已完成")).toBeVisible();
+    expect(screen.getByText("草稿尚未保存为冻结版本")).toBeVisible();
+    expect(screen.getByText("核对资本开支与现金流")).toBeVisible();
+    expect(screen.getByRole("progressbar", { name: "研究准备进度" })).toHaveAttribute("aria-valuenow", "95");
+    expect(screen.getByLabelText("资料截止日")).toHaveAttribute("dateTime", "2026-02-05T00:00:00Z");
+    const audit = screen.getByText("审计详情").closest("details")!;
+    expect(audit).not.toHaveAttribute("open");
+    expect(audit).toHaveTextContent("memo");
+  });
+
+  it("shows an honest unavailable state when the server omits product progress", async () => {
+    const candidate = workspace();
+    delete (candidate as CompanyResearchWorkspace & { product_progress?: unknown }).product_progress;
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(candidate);
+    renderPage();
+    expect(await screen.findByText("研究状态暂不可用")).toBeVisible();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("preserves a server-authorized retry when product progress is unavailable", async () => {
+    const failed = workspace({ status: "recoverable_failure" });
+    delete (failed as CompanyResearchWorkspace & { product_progress?: unknown }).product_progress;
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(failed).mockResolvedValue(workspace({ status: "building_model" }));
+    const retry = vi.spyOn(investmentResearchApi, "retryCompanyResearchProject").mockResolvedValue({ project_id: ids.project } as never);
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByText("研究状态暂不可用")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "重试研究" }));
+    expect(retry).toHaveBeenCalledWith(ids.project);
+  });
+
+  it("groups real business and forecast modules while keeping valuation on its own page", async () => {
+    const candidate = workspace({ rich: true, status: "completed" });
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(candidate);
+    mockFrozenRevision(candidate);
+    const user = userEvent.setup();
+    renderPage("forecast");
+    await bindFrozenWorkspace(user);
+    expect(screen.getByText("revenue × growth")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "FY2025" })).toBeVisible();
+    expect(screen.getByText("base_search_ai")).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "反向 DCF" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "导出 Markdown" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: /商业模式/ }));
+    expect(screen.getByText("Search；YouTube")).toBeVisible();
+    expect(screen.getByText(/接口未提供行业、竞争与监管专属语义/)).toBeVisible();
+    expect(screen.getByText("Q3 Cloud backlog 与 AI capex 回报验证")).toBeVisible();
+    await user.click(screen.getByRole("link", { name: /价值判断/ }));
+    expect(screen.getByRole("heading", { name: "反向 DCF" })).toBeVisible();
+    expect(screen.queryByText("revenue × growth")).not.toBeInTheDocument();
+    expect(screen.queryByText("base_search_ai")).not.toBeInTheDocument();
+  });
+
+  it("shows required return comparisons and the bound market input sources on valuation", async () => {
+    const candidate = workspace({ rich: true, status: "completed" });
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(candidate);
+    mockFrozenRevision(candidate);
+    renderPage("valuation");
+    await screen.findByText("冻结版本已自动验证并载入。");
+    expect(screen.getByRole("heading", { name: "要求回报比较" })).toBeVisible();
+    expect(screen.getByRole("article", { name: "NASDAQ:GOOGL 要求回报 0.12" })).toHaveTextContent("FY2025 / cutoff 2026-02-05");
+    const market = screen.getByRole("region", { name: "市场输入来源" });
+    expect(market).toHaveTextContent("价格");
+    expect(market).toHaveTextContent("汇率");
+    expect(market).toHaveTextContent("资本结构");
+    expect(market).toHaveTextContent("证券权利");
+    expect(within(market).getAllByRole("link")).toHaveLength(4);
+    expect(market).toHaveTextContent("具体数值与各项 as-of 未随工作区提供");
+  });
+
+  it("keeps publication audit identifiers collapsed while showing the decision and memo", async () => {
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(publicationWorkspace(95));
+    vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockResolvedValue(publicationPreview());
+    const user = userEvent.setup();
+    renderPage("versions");
+    await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
+    const dialog = await screen.findByRole("dialog", { name: "确认冻结版本" });
+    expect(within(dialog).getByText("manifest hash")).not.toBeVisible();
+    expect(within(dialog).getByText("冻结审计详情").closest("details")).not.toHaveAttribute("open");
+    expect(within(dialog).getByText("未建立方向")).toBeVisible();
+    expect(within(dialog).getByLabelText("冻结预览备忘录")).toBeVisible();
+    await user.click(within(dialog).getByText("冻结审计详情"));
+    expect(within(dialog).getByText("manifest hash")).toBeVisible();
+  });
+
+  it("defaults to overview, keeps company naming generic, and places confirmation only on versions", async () => {
+    const candidate = publicationWorkspace(85);
+    candidate.company.canonical_name = "Example Industrial Ltd.";
+    const identity = project();
+    identity.company_identity.canonical_name = candidate.company.canonical_name;
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(identity);
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(candidate);
+    const user = userEvent.setup();
+    renderPage("");
+    expect(await screen.findByRole("heading", { name: "Example Industrial Ltd." })).toBeVisible();
+    expect(screen.getByRole("link", { name: /研究概览/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByText("Google 如何赚钱")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "确认当前判断" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "前往确认当前判断" }));
+    expect(screen.getByLabelText("当前路由")).toHaveTextContent("/versions");
+    expect(screen.getByRole("button", { name: "确认当前判断" })).toBeEnabled();
+  });
+
   it.each([
     ["awaiting evidence review", () => workspace()],
     ["rich answerable", () => workspace({ status: "completed", rich: true })],
@@ -403,13 +585,10 @@ describe("Alphabet company research workbench", () => {
     const at100 = publicationWorkspace(100);
     const confirmation = deferred<never>();
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
-    vi.spyOn(investmentResearchApi, "companyResearchWorkspace")
-      .mockResolvedValueOnce(at85)
-      .mockResolvedValueOnce(at95)
-      .mockResolvedValueOnce(at100);
+    const refresh = vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(at85);
     const confirm = vi.spyOn(investmentResearchApi, "confirmCompanyResearchJudgment").mockImplementation(() => confirmation.promise);
     const preview = vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockResolvedValue(publicationPreview());
-    const publish = vi.spyOn(investmentResearchApi, "publishCompanyResearch").mockResolvedValue(frozenRevision());
+    const publish = vi.spyOn(investmentResearchApi, "publishCompanyResearch").mockImplementation(async () => { refresh.mockResolvedValue(at100); return frozenRevision(); });
     const replay = vi.spyOn(investmentResearchApi, "companyResearchRevision").mockResolvedValue(frozenRevision());
     const exported = vi.spyOn(investmentResearchApi, "exportCompanyResearchRevision").mockResolvedValue(markdownExport());
     const createObjectURL = vi.fn((_blob: Blob) => "blob:alphabet-export");
@@ -418,7 +597,7 @@ describe("Alphabet company research workbench", () => {
     vi.stubGlobal("URL", TestURL);
     const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     await screen.findByRole("heading", { name: "Alphabet Inc." });
     const editor = screen.getByRole("textbox", { name: "研究备忘录 Markdown" });
@@ -436,7 +615,7 @@ describe("Alphabet company research workbench", () => {
       expected_memo_content_hash: hash,
       markdown: "当前正式证据不足。\n\n保留全部明确缺口。",
     });
-    await act(async () => { confirmation.resolve({} as never); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { refresh.mockResolvedValue(at95); confirmation.resolve({} as never); await Promise.resolve(); await Promise.resolve(); });
     expect(await screen.findByRole("status")).toHaveTextContent("判断已确认，可以冻结版本。");
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "95");
 
@@ -456,10 +635,11 @@ describe("Alphabet company research workbench", () => {
     const frozenBlockers = within(dialog).getByRole("list", { name: "冻结阻塞项" });
     expect(frozenBlockers.children).toHaveLength(31);
     expect(frozenBlockers).toHaveClass("ir-publication-blockers");
+    expect(within(dialog).getByRole("button", { name: "返回检查" })).toHaveFocus();
+    await user.click(within(dialog).getByText("冻结审计详情"));
     const frozenArtifacts = within(dialog).getByRole("list", { name: "冻结制品清单" });
     expect(frozenArtifacts).toHaveTextContent(`evidence_index ${publicationWorkspace(95).artifacts[0]!.id} v1 input ${hash} content ${hash}`);
     expect(dialog).toHaveAttribute("open");
-    expect(within(dialog).getByRole("button", { name: "返回检查" })).toHaveFocus();
     fireEvent(dialog, new Event("cancel", { bubbles: false, cancelable: true }));
     expect(screen.queryByRole("dialog", { name: "确认冻结版本" })).not.toBeInTheDocument();
     await waitFor(() => expect(previewButton).toHaveFocus());
@@ -478,11 +658,13 @@ describe("Alphabet company research workbench", () => {
     expect(publish.mock.calls[0]![2]!).toMatch(/^[0-9a-f-]{36}$/);
     expect(await screen.findByRole("status")).toHaveTextContent("冻结版本已发布");
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+    await waitFor(() => expect(screen.getByRole("button", { name: "查看冻结版本" })).toHaveFocus());
+    await user.click(screen.getByText("冻结版本标识"));
     expect(screen.getByText(ids.revision, { selector: ".ir-publication-revision-id" })).toBeVisible();
     expect(screen.getByText("2026-08-30T02:03:04Z")).toBeVisible();
+    await user.click(screen.getByText("回放审计详情"));
     expect(within(screen.getByLabelText("冻结版本回放")).getByText("evidence_index v1")).toBeVisible();
     expect(screen.getByLabelText("冻结研究备忘录")).toHaveTextContent("当前正式证据不足，不能形成投资方向、置信度、目标价或预期回报。");
-    await waitFor(() => expect(screen.getByRole("button", { name: "查看冻结版本" })).toHaveFocus());
     expect(replay).toHaveBeenCalledWith(ids.project, ids.revision);
 
     await user.click(screen.getByRole("button", { name: "导出 Markdown" }));
@@ -501,7 +683,8 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(completed);
     const replay = vi.spyOn(investmentResearchApi, "companyResearchRevision").mockImplementation(() => revisionRequest.promise);
-    renderPage();
+    const user = userEvent.setup();
+    renderPage("versions");
 
     await screen.findByRole("heading", { name: "Alphabet Inc." });
     const moduleContent = document.querySelector(".ir-module-content")!;
@@ -510,7 +693,9 @@ describe("Alphabet company research workbench", () => {
     expect(screen.getByRole("button", { name: "正在载入冻结版本…" })).toBeDisabled();
     expect(replay).toHaveBeenCalledWith(ids.project, ids.revision);
     await act(async () => { revisionRequest.resolve(revision); await Promise.resolve(); });
+    await user.click(await screen.findByText("回放审计详情"));
     expect(await within(moduleContent as HTMLElement).findByText(`冻结版本 ${ids.revision}`)).toBeVisible();
+    await user.click(screen.getByRole("link", { name: /研究概览/ }));
     expect(within(moduleContent as HTMLElement).getByText("当前不可回答")).toBeVisible();
   });
 
@@ -527,7 +712,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(completed);
     vi.spyOn(investmentResearchApi, "companyResearchRevision").mockResolvedValue(mismatched);
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     expect(await screen.findByRole("alert")).toHaveTextContent("冻结版本与工作区制品不一致");
     const replayButton = screen.getByRole("button", { name: "查看冻结版本" });
@@ -549,7 +734,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(ready);
     vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockResolvedValue(answerable);
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
     const dialog = await screen.findByRole("dialog", { name: "确认冻结版本" });
@@ -569,7 +754,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockImplementation(() => previewRequest.promise);
     const publish = vi.spyOn(investmentResearchApi, "publishCompanyResearch").mockImplementation(() => publishRequest.promise);
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     const previewButton = await screen.findByRole("button", { name: "预览冻结版本" });
     await user.click(previewButton);
@@ -600,7 +785,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "companyResearchRevision").mockImplementation(() => replayRequest.promise);
     vi.spyOn(investmentResearchApi, "exportCompanyResearchRevision").mockImplementation(() => exportRequest.promise);
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     const replayButton = await screen.findByRole("button", { name: "查看冻结版本" });
     await user.click(replayButton);
@@ -627,7 +812,7 @@ describe("Alphabet company research workbench", () => {
       .mockResolvedValueOnce(frozenRevision());
     vi.spyOn(investmentResearchApi, "companyResearchRevision").mockResolvedValue(frozenRevision());
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
     const publishButton = await screen.findByRole("button", { name: "冻结并发布" });
@@ -646,7 +831,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(publicationWorkspace(85));
     vi.spyOn(investmentResearchApi, "confirmCompanyResearchJudgment").mockRejectedValue(new Error("判断确认失败"));
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     const confirmButton = await screen.findByRole("button", { name: "确认当前判断" });
     await user.click(confirmButton);
@@ -666,7 +851,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockResolvedValue(publicationPreview());
     vi.spyOn(investmentResearchApi, "publishCompanyResearch").mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
     await user.click(await screen.findByRole("button", { name: "冻结并发布" }));
@@ -682,7 +867,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(at95).mockResolvedValueOnce(at95);
     vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("请重新生成冻结预览");
@@ -697,7 +882,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
     const replay = vi.spyOn(investmentResearchApi, "companyResearchRevision").mockResolvedValue(frozenRevisionFor(at100));
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
     expect(await screen.findByRole("status")).toHaveTextContent("冻结版本已由并发请求发布");
@@ -716,7 +901,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
     vi.spyOn(investmentResearchApi, "companyResearchRevision").mockResolvedValue(mismatched);
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("冻结版本与工作区制品不一致");
@@ -730,7 +915,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(at85).mockResolvedValueOnce(at85);
     vi.spyOn(investmentResearchApi, "confirmCompanyResearchJudgment").mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     await user.click(await screen.findByRole("button", { name: "确认当前判断" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("请审核最新判断后再确认");
@@ -744,7 +929,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(at85).mockResolvedValueOnce(at95);
     vi.spyOn(investmentResearchApi, "confirmCompanyResearchJudgment").mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     await user.click(await screen.findByRole("button", { name: "确认当前判断" }));
     expect(await screen.findByRole("status")).toHaveTextContent("判断已由并发请求确认");
@@ -763,14 +948,14 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "publishCompanyResearch").mockRejectedValue(Object.assign(new Error("stale"), { status: 409 }));
     const replay = vi.spyOn(investmentResearchApi, "companyResearchRevision").mockResolvedValue(revision);
     const user = userEvent.setup();
-    renderPage();
+    renderPage("versions");
 
     await user.click(await screen.findByRole("button", { name: "预览冻结版本" }));
     await user.click(await screen.findByRole("button", { name: "冻结并发布" }));
     expect(await screen.findByRole("status")).toHaveTextContent("冻结版本已由并发请求发布");
     expect(replay).toHaveBeenCalledWith(ids.project, ids.revision);
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
-    expect(screen.getAllByText(`冻结版本 ${ids.revision}`)).toHaveLength(2);
+    expect(within(screen.getByLabelText("冻结版本回放")).getByText(`冻结版本 ${ids.revision}`)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "查看冻结版本" })).toHaveFocus());
   });
 
@@ -785,7 +970,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(ready).mockResolvedValueOnce(changed);
     vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockResolvedValue(publicationPreview());
-    renderPage();
+    renderPage("versions");
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     fireEvent.click(screen.getByRole("button", { name: "预览冻结版本" }));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
@@ -805,7 +990,7 @@ describe("Alphabet company research workbench", () => {
       .mockImplementationOnce(() => poll.promise)
       .mockResolvedValueOnce(at95);
     vi.spyOn(investmentResearchApi, "confirmCompanyResearchJudgment").mockResolvedValue({} as never);
-    renderPage();
+    renderPage("versions");
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     fireEvent.click(screen.getByRole("button", { name: "确认当前判断" }));
@@ -822,7 +1007,7 @@ describe("Alphabet company research workbench", () => {
     const workspaceRead = vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(at95).mockResolvedValueOnce(at95);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
     vi.spyOn(investmentResearchApi, "previewCompanyResearchPublication").mockImplementation(() => previewRequest.promise);
-    renderPage();
+    renderPage("versions");
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
     fireEvent.click(screen.getByRole("button", { name: "预览冻结版本" }));
@@ -833,7 +1018,7 @@ describe("Alphabet company research workbench", () => {
     expect(workspaceRead).toHaveBeenCalledTimes(2);
   });
 
-  it("renders all nine modules, live progress, gaps, source trace, and candidate review controls without publication preview", async () => {
+  it("renders all seven page links, live progress, gaps, source trace, and candidate review controls without publication preview", async () => {
     const awaitingReview = workspace();
     await decodeWorkspaceFixture(awaitingReview);
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
@@ -846,15 +1031,15 @@ describe("Alphabet company research workbench", () => {
     expect(screen.getByText(/GOOGL · Class A/)).toBeVisible();
     expect(screen.getByText(/GOOG · Class C/)).toBeVisible();
     expect(screen.getByRole("progressbar", { name: "研究准备进度" })).toHaveAttribute("aria-valuenow", "25");
-    for (const label of ["概览与当前判断", "Google 如何赚钱", "关键经营变量", "来源、事实与缺口", "行业、竞争与监管", "财务、现金流与资本配置", "情景、估值与当前价格隐含", "反证、风险与下一验证", "版本、变化与研究备忘录"]) {
-      expect(screen.getByRole("button", { name: new RegExp(label) })).toBeEnabled();
+    for (const label of ["研究库", "研究概览", "商业模式", "预测与情景", "价值判断", "证据中心", "备忘录与版本"]) {
+      expect(screen.getByRole("link", { name: new RegExp(label) })).toHaveAttribute("href");
     }
-    expect(screen.getByRole("button", { name: /概览与当前判断/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: /研究概览/ })).toHaveAttribute("aria-current", "page");
     expect(screen.queryByText(/^方向$/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^置信度$/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^目标价$/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^预期回报$/)).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    await user.click(screen.getByRole("link", { name: /证据中心/ }));
     const fact = screen.getByRole("article", { name: "事实 revenue_2025" });
     expect(fact).toHaveTextContent("候选事实");
     expect(fact).toHaveTextContent("2025 10-K, p. 32");
@@ -867,7 +1052,7 @@ describe("Alphabet company research workbench", () => {
     expect(within(fact).getByRole("button", { name: "确认事实 revenue_2025" })).toBeEnabled();
     expect(within(fact).getByRole("button", { name: "驳回事实 revenue_2025" })).toBeEnabled();
     expect(screen.getByText(/YouTube 分部利润率未单独披露/)).toBeVisible();
-    await user.click(screen.getByRole("button", { name: /概览与当前判断/ }));
+    await user.click(screen.getByRole("link", { name: /研究概览/ }));
     expect(screen.getByText("判断尚在准备")).toBeVisible();
     expect(screen.queryByText(/当前正式证据不足/)).not.toBeInTheDocument();
     expect(preview).not.toHaveBeenCalled();
@@ -913,7 +1098,7 @@ describe("Alphabet company research workbench", () => {
     expect(screen.getByText("可回答")).toBeVisible();
     expect(screen.getByRole("heading", { name: "价值与回报范围" })).toBeVisible();
     expect(screen.getByText(/Q3 Cloud backlog 与 AI capex 回报验证/)).toBeVisible();
-    await user.click(screen.getByRole("button", { name: /情景、估值与当前价格隐含/ }));
+    await user.click(screen.getByRole("link", { name: /价值判断/ }));
 
     expect(screen.getByRole("heading", { name: "DCF 情景值" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "反向 DCF" })).toBeVisible();
@@ -922,19 +1107,21 @@ describe("Alphabet company research workbench", () => {
     expect(provenanceHref).toMatch(/^#provenance-/);
     expect(document.querySelector(provenanceHref!)).toHaveTextContent("dcf.v1");
     expect(document.querySelector(provenanceHref!)).toHaveTextContent("valuation_set");
-    expect(screen.getByText("base_search_ai")).toBeVisible();
-    expect(screen.getByText("base case mechanism")).toBeVisible();
     expect(screen.getByText("NASDAQ:GOOGL")).toBeVisible();
     expect(screen.getByText("NASDAQ:GOOG")).toBeVisible();
     expect(screen.getByText("165")).toBeVisible();
     expect(screen.getByText("227")).toBeVisible();
     expect(screen.getByText(/ai_capex_risk/)).toBeVisible();
     expect(screen.queryByText("财务效果与价值")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: /预测与情景/ }));
+    expect(screen.getByText("base_search_ai")).toBeVisible();
+    expect(screen.getByText("base case mechanism")).toBeVisible();
     expect(screen.getAllByText("逐情景财务效果：接口未提供（不可推断）")).toHaveLength(3);
-    expect(screen.getAllByText("DCF 估值")).toHaveLength(3);
+    expect(screen.queryByRole("heading", { name: "DCF 情景值" })).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/概率|加权目标价|probability/i);
 
-    await user.click(screen.getByRole("button", { name: /版本、变化与研究备忘录/ }));
+    await user.click(screen.getByRole("link", { name: /备忘录与版本/ }));
+    await user.click(screen.getByText("版本审计详情"));
     const changes = screen.getByRole("heading", { name: "制品版本变化" }).closest("div");
     expect(changes).not.toBeNull();
     expect(changes).toHaveTextContent("valuation_set");
@@ -953,13 +1140,13 @@ describe("Alphabet company research workbench", () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
-    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    await user.click(screen.getByRole("link", { name: /证据中心/ }));
     await user.click(screen.getByRole("button", { name: `${decision === "confirmed" ? "确认" : "驳回"}事实 revenue_2025` }));
 
     expect(await screen.findByRole("status")).toHaveTextContent(`证据版本 2`);
     expect(review).toHaveBeenCalledWith(ids.project, { schema_version: "underwriting.v1", evidence_artifact_id: initial.artifacts[0]!.id, fact_key: "revenue_2025", decision, expected_head_id: initial.artifacts[0]!.id });
     expect(screen.getByRole("article", { name: "事实 revenue_2025" })).toHaveTextContent(decision === "confirmed" ? "已确认" : "已驳回");
-    expect(screen.getByRole("button", { name: /Google 如何赚钱/ })).toHaveTextContent("准备中");
+    expect(screen.getByRole("link", { name: /商业模式/ })).toHaveTextContent("准备中");
   });
 
   it("retains review focus and candidate state when review fails", async () => {
@@ -969,7 +1156,7 @@ describe("Alphabet company research workbench", () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
-    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    await user.click(screen.getByRole("link", { name: /证据中心/ }));
     const confirm = screen.getByRole("button", { name: "确认事实 revenue_2025" });
     await user.click(confirm);
 
@@ -989,7 +1176,7 @@ describe("Alphabet company research workbench", () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
-    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    await user.click(screen.getByRole("link", { name: /证据中心/ }));
     const confirm = screen.getByRole("button", { name: "确认事实 revenue_2025" });
     await user.click(confirm);
 
@@ -1017,7 +1204,7 @@ describe("Alphabet company research workbench", () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
-    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    await user.click(screen.getByRole("link", { name: /证据中心/ }));
     const confirm = screen.getByRole("button", { name: "确认事实 revenue_2025" });
     await user.click(confirm);
 
@@ -1027,7 +1214,7 @@ describe("Alphabet company research workbench", () => {
     expect(confirm).toBeDisabled();
     expect(screen.getByRole("button", { name: "重试同步已提交审核" })).toBeEnabled();
     expect(screen.getByRole("article", { name: "事实 revenue_2025" })).toHaveTextContent("候选事实");
-    expect(screen.getByRole("button", { name: /Google 如何赚钱/ })).toHaveTextContent("准备中");
+    expect(screen.getByRole("link", { name: /商业模式/ })).toHaveTextContent("准备中");
   });
 
   it("retries only the server-declared recoverable preparation stage", async () => {
@@ -1041,7 +1228,7 @@ describe("Alphabet company research workbench", () => {
     const user = userEvent.setup();
     renderPage();
 
-    const button = await screen.findByRole("button", { name: "重试 model_bundle" });
+    const button = await screen.findByRole("button", { name: "重试研究" });
     await user.click(button);
     await waitFor(() => expect(retry).toHaveBeenCalledWith(ids.project));
     expect(await screen.findByRole("progressbar", { name: "研究准备进度" })).toHaveAttribute("aria-valuenow", "25");
@@ -1057,7 +1244,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "retryCompanyResearchProject").mockResolvedValue({ project_id: ids.project } as never);
     const user = userEvent.setup();
     renderPage();
-    await user.click(await screen.findByRole("button", { name: "重试 model_bundle" }));
+    await user.click(await screen.findByRole("button", { name: "重试研究" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("重试已提交，但工作区同步响应无效");
     expect(screen.getByText("草稿版本 4")).toBeVisible();
   });
@@ -1070,7 +1257,7 @@ describe("Alphabet company research workbench", () => {
     vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValueOnce(failed).mockResolvedValueOnce(mixed);
     vi.spyOn(investmentResearchApi, "retryCompanyResearchProject").mockResolvedValue({ project_id: ids.project } as never);
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "重试 model_bundle" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重试研究" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("工作区公司身份不一致");
     expect(screen.getByRole("heading", { name: "Alphabet Inc." })).toBeVisible();
@@ -1151,7 +1338,7 @@ describe("Alphabet company research workbench", () => {
     renderPage();
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
-    fireEvent.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    fireEvent.click(screen.getByRole("link", { name: /证据中心/ }));
     fireEvent.click(screen.getByRole("button", { name: "确认事实 revenue_2025" }));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
     expect(screen.getByRole("status")).toHaveTextContent("证据版本 2");
@@ -1190,7 +1377,7 @@ describe("Alphabet company research workbench", () => {
       .mockImplementationOnce(() => poll.promise)
       .mockResolvedValueOnce(forProject(workspace({ status: "completed", rich: true }), nextProjectId));
     let navigate!: ReturnType<typeof useNavigate>;
-    function NavigationHarness() { navigate = useNavigate(); return <Routes><Route path="/research/projects/:projectId" element={<ResearchWorkbenchPage />} /></Routes>; }
+    function NavigationHarness() { navigate = useNavigate(); return <Routes><Route path="/research/projects/:projectId/:page?" element={<ResearchWorkbenchPage />} /></Routes>; }
     render(<MemoryRouter initialEntries={[`/research/projects/${ids.project}`]}><NavigationHarness /></MemoryRouter>);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
@@ -1217,7 +1404,7 @@ describe("Alphabet company research workbench", () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
-    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    await user.click(screen.getByRole("link", { name: /证据中心/ }));
     const confirm = screen.getByRole("button", { name: "确认事实 revenue_2025" });
     await user.click(confirm);
     expect(await screen.findByRole("alert")).toHaveTextContent("审核已提交");
@@ -1238,7 +1425,7 @@ describe("Alphabet company research workbench", () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
-    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    await user.click(screen.getByRole("link", { name: /证据中心/ }));
     await user.click(screen.getByRole("button", { name: "确认事实 revenue_2025" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("审核已提交");
     expect(screen.getByRole("button", { name: "确认事实 revenue_2025" })).toBeDisabled();
@@ -1255,7 +1442,7 @@ describe("Alphabet company research workbench", () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
-    await user.click(screen.getByRole("button", { name: /来源、事实与缺口/ }));
+    await user.click(screen.getByRole("link", { name: /证据中心/ }));
     await user.click(screen.getByRole("button", { name: "确认事实 revenue_2025" }));
     for (const button of screen.getAllByRole("button", { name: /^(确认|驳回)事实/ })) expect(button).toBeDisabled();
     await act(async () => { review.reject(new Error("stop")); await Promise.resolve(); });
@@ -1276,18 +1463,18 @@ describe("Alphabet company research workbench", () => {
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
     const assertions = [
-      [/概览与当前判断/, "概览与当前判断正在准备"],
-      [/Google 如何赚钱/, "Google 如何赚钱已阻塞"],
-      [/关键经营变量/, "关键经营变量尚未开始"],
-      [/来源、事实与缺口/, "候选事实"],
-      [/行业、竞争与监管/, "接口未提供行业、竞争与监管专属语义（不可推断）"],
-      [/财务、现金流与资本配置/, "财务、现金流与资本配置正在准备"],
-      [/情景、估值与当前价格隐含/, "情景、估值与当前价格隐含尚未开始"],
-      [/反证、风险与下一验证/, "反证、风险与下一验证已阻塞"],
-      [/版本、变化与研究备忘录/, "版本、变化与研究备忘录尚未开始"],
+      [/研究概览/, "概览与当前判断正在准备"],
+      [/商业模式/, "公司如何赚钱已阻塞"],
+      [/预测与情景/, "关键经营变量尚未开始"],
+      [/证据中心/, "候选事实"],
+      [/商业模式/, "接口未提供行业、竞争与监管专属语义（不可推断）"],
+      [/预测与情景/, "财务、现金流与资本配置正在准备"],
+      [/价值判断/, "情景、估值与当前价格隐含尚未开始"],
+      [/商业模式/, "反证、风险与下一验证已阻塞"],
+      [/备忘录与版本/, "版本、变化与研究备忘录尚未开始"],
     ] as const;
     for (const [buttonName, copy] of assertions) {
-      await user.click(screen.getByRole("button", { name: buttonName }));
+      await user.click(screen.getByRole("link", { name: buttonName }));
       expect(screen.getByText(new RegExp(copy))).toBeVisible();
     }
   });
@@ -1302,10 +1489,10 @@ describe("Alphabet company research workbench", () => {
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
     await bindFrozenWorkspace(user);
-    await user.click(screen.getByRole("button", { name: /Google 如何赚钱/ }));
-    expect(screen.getByText(/Google 如何赚钱已阻塞/)).toBeVisible();
+    await user.click(screen.getByRole("link", { name: /商业模式/ }));
+    expect(screen.getByText(/公司如何赚钱已阻塞/)).toBeVisible();
     expect(screen.queryByText("Search")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /版本、变化与研究备忘录/ }));
+    await user.click(screen.getByRole("link", { name: /备忘录与版本/ }));
     expect(screen.getByText(/版本、变化与研究备忘录正在准备/)).toBeVisible();
     expect(screen.queryByText(/当前草稿版本/)).not.toBeInTheDocument();
   });
@@ -1322,7 +1509,7 @@ describe("Alphabet company research workbench", () => {
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
     if (rich.preparation.status === "completed") await bindFrozenWorkspace(user);
-    await user.click(screen.getByRole("button", { name: /情景、估值与当前价格隐含/ }));
+    await user.click(screen.getByRole("link", { name: /价值判断/ }));
     expect(screen.getByText(copy, { exact: false })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "DCF 情景值" })).not.toBeInTheDocument();
     expect(screen.queryByText(/数据缺口阻塞/)).not.toBeInTheDocument();
@@ -1338,16 +1525,18 @@ describe("Alphabet company research workbench", () => {
     await screen.findByRole("heading", { name: "Alphabet Inc." });
     await bindFrozenWorkspace(user);
     const assertions = [
-      [/概览与当前判断/, "可回答"], [/Google 如何赚钱/, "Search；YouTube"], [/关键经营变量/, "revenue × growth"],
-      [/来源、事实与缺口/, "2025 10-K, p. 32"], [/行业、竞争与监管/, "接口未提供行业、竞争与监管专属语义（不可推断）"],
-      [/财务、现金流与资本配置/, "FY2025"], [/情景、估值与当前价格隐含/, "base_search_ai"],
-      [/反证、风险与下一验证/, "Q3 Cloud backlog 与 AI capex 回报验证"], [/版本、变化与研究备忘录/, "machine_draft · answerable"],
+      [/研究概览/, ["可回答"]],
+      [/商业模式/, ["Search；YouTube", "接口未提供行业、竞争与监管专属语义（不可推断）", "Q3 Cloud backlog 与 AI capex 回报验证"]],
+      [/预测与情景/, ["revenue × growth", "FY2025", "base_search_ai"]],
+      [/价值判断/, ["DCF 情景值", "反向 DCF"]],
+      [/证据中心/, ["2025 10-K, p. 32"]],
+      [/备忘录与版本/, ["待人工确认 · 可回答"]],
     ] as const;
-    for (const [buttonName, copy] of assertions) {
-      await user.click(screen.getByRole("button", { name: buttonName }));
-      expect(screen.getAllByText(copy, { exact: false })[0]!).toBeVisible();
+    for (const [pageName, expectedContent] of assertions) {
+      await user.click(screen.getByRole("link", { name: pageName }));
+      for (const copy of expectedContent) expect(screen.getAllByText(copy, { exact: false })[0]!).toBeVisible();
     }
-  });
+  }, 10_000);
 
   it("resolves every non-external numeric link to concrete equation, assumption, or gap provenance", async () => {
     const rich = workspace({ status: "completed", rich: true });
@@ -1360,13 +1549,17 @@ describe("Alphabet company research workbench", () => {
     renderPage();
     await screen.findByRole("heading", { name: "Alphabet Inc." });
     await bindFrozenWorkspace(user);
-    await user.click(screen.getByRole("button", { name: /关键经营变量/ }));
+    await user.click(screen.getByRole("link", { name: /预测与情景/ }));
 
     for (const [cardName, key] of [["search_growth 0.11", "assumption_search_growth"], ["missing_metric not available", "missing_metric_gap"]] as const) {
       const href = within(screen.getByRole("article", { name: cardName })).getByRole("link").getAttribute("href");
       expect(href).toMatch(/^#provenance-/);
       expect(document.querySelector(href!)).toHaveTextContent(key);
       expect(document.querySelector(href!)).toHaveTextContent("driver_map");
+      const context = within(screen.getByRole("article", { name: cardName })).getByText("driver_map v1");
+      expect(context).not.toBeVisible();
+      await user.click(within(screen.getByRole("article", { name: cardName })).getByText("数据版本"));
+      expect(context).toBeVisible();
     }
   });
 

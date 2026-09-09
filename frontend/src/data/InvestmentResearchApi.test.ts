@@ -649,6 +649,81 @@ describe("InvestmentResearchApi", () => {
     await expect(new InvestmentResearchApi().industryCompanies(ids.company)).rejects.toMatchObject({ code: "invalid_response" });
   });
 
+  it("accepts canonical focus echoed by the company preview", async () => {
+    const body = { ...companyResearchPreviewBody(), user_focus: "Café 现金流" };
+    vi.stubGlobal("fetch", vi.fn(async () => response(body)));
+    await expect(new InvestmentResearchApi().previewCompanyResearch({
+      schema_version: "underwriting.v1", company_id: ids.company, cutoff_at: now,
+      user_focus: "  Cafe\u0301 现金流  ",
+    })).resolves.toMatchObject({ user_focus: "Café 现金流" });
+  });
+
+  it("rejects a legacy preview that silently drops a submitted focus", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => response(companyResearchPreviewBody())));
+    await expect(new InvestmentResearchApi().previewCompanyResearch({
+      schema_version: "underwriting.v1", company_id: ids.company, cutoff_at: now,
+      user_focus: "AI 资本开支",
+    })).rejects.toMatchObject({ code: "identity_mismatch" });
+  });
+
+  it("accepts only a request-bound effective cutoff in company previews", async () => {
+    const requested = "2026-09-09T00:00:00Z";
+    const preview = { ...companyResearchPreviewBody(), requested_cutoff_at: requested };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response(preview))
+      .mockResolvedValueOnce(response({ ...preview, requested_cutoff_at: now }))
+      .mockResolvedValueOnce(response({ ...preview, cutoff_at: "2027-01-01T00:00:00Z" })));
+    const request = { schema_version: "underwriting.v1" as const, company_id: ids.company, cutoff_at: requested };
+    const api = new InvestmentResearchApi();
+    await expect(api.previewCompanyResearch(request)).resolves.toMatchObject({ cutoff_at: now });
+    await expect(api.previewCompanyResearch(request)).rejects.toMatchObject({ code: "identity_mismatch" });
+    await expect(api.previewCompanyResearch(request)).rejects.toMatchObject({ code: "identity_mismatch" });
+  });
+
+  it("validates the same product progress on small company status responses", async () => {
+    const status = companyResearchProjectBody();
+    const progress = {
+      schema_version: "underwriting.v1", run_id: status.preparation.id, project_id: ids.project,
+      company_id: ids.company, status: "queued", current_step: "evidence_index", progress_percent: 0,
+      user_focus: null, cutoff_at: now, retryable: false, error_code: null,
+    };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response({ ...status, product_progress: progress }))
+      .mockResolvedValueOnce(response({ ...status, product_progress: { ...progress, run_id: ids.revision } })));
+    const api = new InvestmentResearchApi();
+    await expect(api.companyResearchProject(ids.project)).resolves.toMatchObject({ product_progress: { status: "queued" } });
+    await expect(api.companyResearchProject(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("accepts server product progress and rejects identity, lifecycle and error substitutions", async () => {
+    const workspace = companyResearchWorkspaceBody();
+    workspace.product_progress = {
+      schema_version: "underwriting.v1", run_id: ids.draft, project_id: ids.project,
+      company_id: ids.company, status: "needs_input", current_step: "research_gaps",
+      progress_percent: 25, user_focus: "AI 资本开支", cutoff_at: now,
+      retryable: false, error_code: null,
+    };
+    const mutations = [
+      { run_id: ids.revision }, { project_id: ids.revision }, { company_id: ids.revision },
+      { status: "completed" }, { status: "invented" }, { current_step: "memo" },
+      { progress_percent: 26 }, { progress_percent: -1 }, { progress_percent: "25" },
+      { retryable: true }, { error_code: "invented_failure" }, { cutoff_at: "invalid" },
+      { user_focus: "  not canonical " }, { user_focus: "x".repeat(2001) }, { extra: true },
+    ];
+    const fetchSpy = vi.fn().mockResolvedValueOnce(response(workspace));
+    for (const mutation of mutations) {
+      fetchSpy.mockResolvedValueOnce(response({ ...workspace, product_progress: { ...workspace.product_progress, ...mutation } }));
+    }
+    vi.stubGlobal("fetch", fetchSpy);
+    const api = new InvestmentResearchApi();
+    await expect(api.companyResearchWorkspace(ids.project)).resolves.toMatchObject({
+      product_progress: { status: "needs_input", user_focus: "AI 资本开支" },
+    });
+    for (const _mutation of mutations) {
+      await expect(api.companyResearchWorkspace(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    }
+  });
+
   it("uses only high-level company-research routes and binds initialization to its preview", async () => {
     const api = new InvestmentResearchApi();
     const previewRequest = { schema_version: "underwriting.v1" as const, company_id: ids.company, cutoff_at: now };

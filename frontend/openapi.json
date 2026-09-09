@@ -19763,6 +19763,18 @@
             "type": "string",
             "format": "date-time",
             "title": "Cutoff At"
+          },
+          "user_focus": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Focus"
           }
         },
         "additionalProperties": false,
@@ -19834,6 +19846,30 @@
             "type": "string",
             "pattern": "^[0-9a-f]{64}$",
             "title": "Preview Hash"
+          },
+          "user_focus": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Focus"
+          },
+          "requested_cutoff_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Cutoff At"
           }
         },
         "additionalProperties": false,
@@ -19851,6 +19887,109 @@
           "preview_hash"
         ],
         "title": "CompanyResearchPreviewResponse"
+      },
+      "CompanyResearchProductProgressResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Company Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "collecting_sources",
+              "analyzing_company",
+              "building_forecast",
+              "generating_report",
+              "completed",
+              "needs_input",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "current_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Step"
+          },
+          "progress_percent": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Progress Percent"
+          },
+          "user_focus": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Focus"
+          },
+          "cutoff_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff At"
+          },
+          "retryable": {
+            "type": "boolean",
+            "title": "Retryable"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "run_id",
+          "project_id",
+          "company_id",
+          "status",
+          "current_step",
+          "progress_percent",
+          "user_focus",
+          "cutoff_at",
+          "retryable",
+          "error_code"
+        ],
+        "title": "CompanyResearchProductProgressResponse"
       },
       "CompanyResearchProjectResponse": {
         "properties": {
@@ -19872,6 +20011,16 @@
           },
           "preparation": {
             "$ref": "#/components/schemas/CompanyResearchPreparationResponse"
+          },
+          "product_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchProductProgressResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -21125,6 +21274,16 @@
           },
           "change_summary": {
             "$ref": "#/components/schemas/CompanyResearchChangeSummaryResponse"
+          },
+          "product_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchProductProgressResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -28883,6 +29042,18 @@
             "type": "string",
             "format": "date-time",
             "title": "Cutoff At"
+          },
+          "user_focus": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Focus"
           },
           "preview_hash": {
             "type": "string",

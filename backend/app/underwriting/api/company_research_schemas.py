@@ -21,6 +21,9 @@ from pydantic import (
 
 from app.underwriting.api.product_schemas import SHA256_PATTERN, _require_aware
 from app.underwriting.api.schemas import UnderwritingModel
+from app.underwriting.domain.company_research import (
+    normalize_company_research_focus, company_research_product_status,
+)
 
 PreparationStatus = Literal[
     "queued",
@@ -50,6 +53,12 @@ CompanyResearchFailureStep = Literal[
 class CompanyResearchPreviewRequest(UnderwritingModel):
     company_id: UUID
     cutoff_at: datetime
+    user_focus: StrictStr | None = Field(default=None, max_length=2000)
+
+    @field_validator("user_focus", mode="before")
+    @classmethod
+    def normalized_focus(cls, value):
+        return normalize_company_research_focus(value)
 
     @field_validator("cutoff_at")
     @classmethod
@@ -92,6 +101,8 @@ class CompanyResearchPreviewResponse(UnderwritingModel):
         min_length=9, max_length=9
     )
     preview_hash: str = Field(pattern=SHA256_PATTERN)
+    user_focus: StrictStr | None = Field(default=None, max_length=2000)
+    requested_cutoff_at: datetime | None = None
 
 
 class CompanyResearchPreparationResponse(UnderwritingModel):
@@ -135,6 +146,23 @@ class CompanyResearchProjectResponse(UnderwritingModel):
     project_id: UUID
     company_id: UUID
     preparation: CompanyResearchPreparationResponse
+    product_progress: "CompanyResearchProductProgressResponse | None" = None
+
+    @model_validator(mode="after")
+    def coherent_product_progress(self):
+        progress = self.product_progress
+        if progress is not None and (
+            progress.run_id != self.preparation.id
+            or progress.project_id != self.project_id
+            or progress.company_id != self.company_id
+            or progress.current_step != self.preparation.current_step
+            or progress.progress_percent != self.preparation.progress
+            or progress.status != company_research_product_status(self.preparation.status, self.preparation.current_step)
+            or progress.retryable != (self.preparation.status == "recoverable_failure")
+            or progress.error_code != self.preparation.last_error_code
+        ):
+            raise ValueError("product progress must match its durable preparation")
+        return self
 
 
 CompanyResearchArtifactKind = Literal[
@@ -1026,6 +1054,34 @@ class CompanyResearchChangeSummaryResponse(_ClosedCompanyResearchPayloadModel):
         return value
 
 
+class CompanyResearchProductProgressResponse(UnderwritingModel):
+    run_id: UUID
+    project_id: UUID
+    company_id: UUID
+    status: Literal[
+        "queued", "collecting_sources", "analyzing_company", "building_forecast",
+        "generating_report", "completed", "needs_input", "failed",
+    ]
+    current_step: str | None
+    progress_percent: StrictInt = Field(ge=0, le=100)
+    user_focus: StrictStr | None = Field(max_length=2000)
+    cutoff_at: datetime
+    retryable: StrictBool
+    error_code: StrictStr | None
+
+    @field_validator("cutoff_at")
+    @classmethod
+    def aware_cutoff(cls, value):
+        return _require_aware(value, "cutoff_at")
+
+    @field_validator("user_focus")
+    @classmethod
+    def canonical_focus(cls, value):
+        if value != normalize_company_research_focus(value):
+            raise ValueError("product research focus must be canonical")
+        return value
+
+
 class CompanyResearchWorkspaceResponse(UnderwritingModel):
     project_id: UUID
     company: CompanyResearchWorkspaceCompanyResponse
@@ -1039,9 +1095,26 @@ class CompanyResearchWorkspaceResponse(UnderwritingModel):
     draft: CompanyResearchWorkspaceDraftResponse
     selected_revision: UUID | None
     change_summary: CompanyResearchChangeSummaryResponse
+    product_progress: CompanyResearchProductProgressResponse | None = None
 
     @model_validator(mode="after")
     def closed_workspace_contract(self):
+        progress = self.product_progress
+        if progress is not None:
+            error = self.preparation.error
+            if (
+                progress.run_id != self.preparation.id
+                or progress.project_id != self.project_id
+                or progress.company_id != self.company.id
+                or progress.current_step != self.preparation.current_step
+                or progress.progress_percent != self.preparation.progress
+                or progress.status != company_research_product_status(
+                    self.preparation.status, self.preparation.current_step
+                )
+                or progress.retryable != (error.retryable if error else False)
+                or progress.error_code != (error.code if error else None)
+            ):
+                raise ValueError("product progress must match its durable preparation")
         if tuple(item.key for item in self.modules) != COMPANY_RESEARCH_MODULE_KEYS:
             raise ValueError("company research modules must use the exact order")
         evidence_review = self.preparation.status == "awaiting_evidence_review"

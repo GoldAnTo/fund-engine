@@ -531,10 +531,10 @@ def _alphabet_id(session):
     return loaded.objects["US:ALPHABET:COMPANY"].id
 
 
-def _preview(api_client, company_id, *, cutoff_at: datetime = NOW):
+def _preview(api_client, company_id, *, cutoff_at: datetime = NOW, user_focus: str | None = None):
     response = api_client.post(
         f"{BASE}/preview",
-        json={"company_id": str(company_id), "cutoff_at": cutoff_at.isoformat()},
+        json={"company_id": str(company_id), "cutoff_at": cutoff_at.isoformat(), "user_focus": user_focus},
     )
     assert response.status_code == 200, response.text
     return response.json()
@@ -546,6 +546,7 @@ def _initialize(
     preview_hash: str,
     *,
     cutoff_at: datetime = NOW,
+    user_focus: str | None = None,
 ):
     return api_client.post(
         f"{BASE}/initializations",
@@ -554,6 +555,7 @@ def _initialize(
             "company_id": str(company_id),
             "cutoff_at": cutoff_at.isoformat(),
             "preview_hash": preview_hash,
+            "user_focus": user_focus,
         },
     )
 
@@ -564,15 +566,18 @@ def _run_public_company_research_pipeline(
     *,
     fixed_model_clock: bool = False,
     rejected_fact_key: str | None = None,
+    user_focus: str | None = None,
 ) -> dict:
     cutoff = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
     company_id = _alphabet_id(session)
-    preview = _preview(api_client, company_id, cutoff_at=cutoff)
-    initialized = _initialize(
-        api_client,
-        company_id,
-        preview["preview_hash"],
-        cutoff_at=cutoff,
+    request = {"company_id": str(company_id), "cutoff_at": cutoff.isoformat(), "user_focus": user_focus}
+    response = api_client.post(f"{BASE}/preview", json=request)
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    initialized = api_client.post(
+        f"{BASE}/initializations",
+        headers={"Idempotency-Key": "alphabet-api-initialization"},
+        json={**request, "preview_hash": preview["preview_hash"]},
     )
     assert initialized.status_code == 201, initialized.text
     project_id = initialized.json()["project_id"]
@@ -634,15 +639,18 @@ def _publication_invariants(workspace: dict) -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize("user_focus", [None, "AI 资本开支的长期现金回报"])
 def test_company_research_publication_closes_the_entire_public_http_workflow(
-    api_client, session
+    api_client, session, user_focus
 ) -> None:
     workspace = _run_public_company_research_pipeline(
         api_client,
         session,
         fixed_model_clock=True,
         rejected_fact_key=REJECTED_PUBLICATION_FACT_KEY,
+        user_focus=user_focus,
     )
+    assert workspace["product_progress"]["user_focus"] == user_focus
     project_id = workspace["project_id"]
     memo = next(item for item in workspace["artifacts"] if item["kind"] == "memo")
     assert memo["payload"]["candidate_status"] == "machine_draft"
@@ -1914,6 +1922,8 @@ def test_preview_initialization_and_status_expose_only_the_high_level_company_fl
         "cutoff_at",
         "agenda",
         "preview_hash",
+        "user_focus",
+        "requested_cutoff_at",
     }
     assert preview["company"]["external_key"] == "US:ALPHABET:COMPANY"
     assert [item["symbol"] for item in preview["securities"]] == ["GOOG", "GOOGL"]
@@ -2021,17 +2031,19 @@ def test_retry_requeues_only_a_recoverable_preparation(api_client, session) -> N
     assert body["preparation"]["request_hash"] == preview["preview_hash"]
 
 
+@pytest.mark.parametrize("user_focus", [None, "资本配置与长期回报"])
 def test_retry_recovers_legacy_basis_and_preserves_seven_review_decisions(
-    api_client, session
+    api_client, session, user_focus
 ) -> None:
     cutoff = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
     company_id = _alphabet_id(session)
-    preview = _preview(api_client, company_id, cutoff_at=cutoff)
+    preview = _preview(api_client, company_id, cutoff_at=cutoff, user_focus=user_focus)
     initialized = _initialize(
         api_client,
         company_id,
         preview["preview_hash"],
         cutoff_at=cutoff,
+        user_focus=user_focus,
     )
     assert initialized.status_code == 201, initialized.text
     project_id = initialized.json()["project_id"]
@@ -2443,6 +2455,7 @@ def test_workspace_and_evidence_review_routes_are_closed(api_client, session) ->
         "draft",
         "selected_revision",
         "change_summary",
+        "product_progress",
     }
     assert body["preparation"]["status"] == "awaiting_evidence_review"
     assert body["preparation"]["current_step"] == "research_gaps"

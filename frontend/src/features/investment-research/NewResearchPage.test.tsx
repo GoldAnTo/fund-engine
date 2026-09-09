@@ -78,8 +78,8 @@ function server({ loseFirstInitialization = false, searchItems = objects, indust
       return json({ ...dto, industry_id: ids.industry, items: industryItems });
     }
     if (url.endsWith("/company-research/preview")) {
-      const body = typeof init?.body === "string" ? JSON.parse(init.body) as { cutoff_at: string } : null;
-      return json(preview(body?.cutoff_at));
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as { cutoff_at: string; user_focus?: string } : null;
+      return json({ ...preview(body?.cutoff_at), ...(body?.user_focus ? { user_focus: body.user_focus } : {}) });
     }
     if (url.endsWith("/company-research/initializations")) {
       initializationAttempts += 1;
@@ -119,6 +119,43 @@ async function selectAlphabet(user: ReturnType<typeof userEvent.setup>) {
 
 describe("company research entry", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("binds the normalized optional focus to the preview and the retried initialization", async () => {
+    const user = userEvent.setup();
+    const product = server({ loseFirstInitialization: true });
+    vi.stubGlobal("fetch", product.fetch);
+    renderPage();
+    await user.type(screen.getByLabelText("关注问题（可选）"), "  云业务增长能否改善现金流？  ");
+    await selectAlphabet(user);
+    expect(await screen.findByText("云业务增长能否改善现金流？")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "开始研究" }));
+    await screen.findByRole("alert");
+    await user.click(screen.getByRole("button", { name: "重试开始研究" }));
+    await waitFor(() => expect(screen.getByLabelText("当前路径")).toHaveTextContent(`/research/projects/${ids.project}`));
+    const writes = product.requests.filter(({ url }) => url.endsWith("/company-research/preview") || url.endsWith("/company-research/initializations"));
+    expect(writes).toHaveLength(3);
+    for (const request of writes) expect(JSON.parse(String(request.init?.body)).user_focus).toBe("云业务增长能否改善现金流？");
+    expect(writes[1]!.init?.body).toBe(writes[2]!.init?.body);
+  });
+
+  it("requires a new preview after returning to change the focus", async () => {
+    const user = userEvent.setup();
+    const product = server();
+    vi.stubGlobal("fetch", product.fetch);
+    renderPage();
+    await user.type(screen.getByLabelText("关注问题（可选）"), "收入增长");
+    await selectAlphabet(user);
+    await screen.findByRole("heading", { name: "确认默认研究方案" });
+    await user.click(screen.getByRole("button", { name: "返回选择公司" }));
+    const focus = screen.getByLabelText("关注问题（可选）");
+    expect(focus).toHaveValue("收入增长");
+    await user.clear(focus);
+    await user.type(focus, "资本开支");
+    await user.click(screen.getByRole("button", { name: "研究 Alphabet" }));
+    expect(await screen.findByText("资本开支")).toBeVisible();
+    const previews = product.requests.filter(({ url }) => url.endsWith("/company-research/preview"));
+    expect(previews.map(({ init }) => JSON.parse(String(init?.body)).user_focus)).toEqual(["收入增长", "资本开支"]);
+  });
 
   it("takes Google through one default plan into the new project route without internal setup fields", async () => {
     const user = userEvent.setup();
@@ -177,7 +214,7 @@ describe("company research entry", () => {
     expect(screen.getByRole("button", { name: "查看相关公司" })).toBeVisible();
   });
 
-  it("invalidates an in-flight default-plan preview when a new search begins", async () => {
+  it.each([false, true])("invalidates an in-flight preview when changing query (submit again: %s)", async (submitAgain) => {
     const user = userEvent.setup();
     const delayedPreview = deferred<Response>();
     const requests: Request[] = [];
@@ -199,16 +236,19 @@ describe("company research entry", () => {
     const input = screen.getByLabelText("搜索公司、证券或行业");
     await user.clear(input);
     await user.type(input, "GOOGL");
-    await user.click(screen.getByRole("button", { name: "搜索对象" }));
-    await screen.findByRole("region", { name: "对象搜索结果" });
+    if (submitAgain) {
+      await user.click(screen.getByRole("button", { name: "搜索对象" }));
+      await screen.findByRole("region", { name: "对象搜索结果" });
+    }
     await act(async () => {
-      delayedPreview.resolve(json(preview()));
+      const request = requests.find(({ url }) => url.endsWith("/company-research/preview"));
+      delayedPreview.resolve(json(preview(JSON.parse(String(request?.init?.body)).cutoff_at)));
       await Promise.resolve();
     });
 
     expect(screen.getByRole("heading", { name: "选择研究公司" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "确认默认研究方案" })).not.toBeInTheDocument();
-    expect(requests.filter((request) => request.url.includes("/product/objects?"))).toHaveLength(2);
+    expect(requests.filter((request) => request.url.includes("/product/objects?"))).toHaveLength(submitAgain ? 2 : 1);
   });
 
   it("reloads a home-seeded company as its complete company group before research can start", async () => {

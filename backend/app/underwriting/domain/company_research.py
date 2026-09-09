@@ -72,6 +72,39 @@ class CompanyResearchValidationError(ValueError):
     """Raised when a company-research value is not canonical or complete."""
 
 
+def normalize_company_research_focus(value: object) -> str | None:
+    """Canonical optional focus shared by the request, preview hash and scope."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise CompanyResearchValidationError("user_focus must be a string")
+    result = normalize("NFC", value).strip()
+    if len(result) > 2000:
+        raise CompanyResearchValidationError("user_focus must not exceed 2000 characters")
+    return result or None
+
+
+def company_research_product_status(status: str, current_step: str | None) -> str:
+    """Project actual worker checkpoints; atomic bundles can skip display stages."""
+    if status == "building_model":
+        if current_step in {"financial_bridge", "scenario_set", "valuation_set"}:
+            return "building_forecast"
+        if current_step in {"judgment_context", "memo"}:
+            return "generating_report"
+        if current_step in {"business_map", "driver_map", "model_bundle"}:
+            return "analyzing_company"
+        raise CompanyResearchValidationError("unknown company research model step")
+    statuses = {
+        "queued": "queued", "preparing_sources": "collecting_sources",
+        "awaiting_evidence_review": "needs_input", "awaiting_judgment_review": "needs_input",
+        "ready_to_freeze": "completed", "completed": "completed",
+        "recoverable_failure": "failed", "blocked": "failed",
+    }
+    if status not in statuses:
+        raise CompanyResearchValidationError("unknown company research preparation status")
+    return statuses[status]
+
+
 def _require_uuid(value: object, field_name: str) -> UUID:
     if type(value) is not UUID:
         raise CompanyResearchValidationError(f"{field_name} must be a UUID")
@@ -473,6 +506,7 @@ class CompanyResearchPreview:
     business_modules: tuple[CompanyResearchModule, ...]
     research_gaps: tuple[ResearchGap, ...] = ()
     input_hash: str = field(default="")
+    user_focus: str | None = None
 
     def __post_init__(self) -> None:
         identities = CompanyResearchIdentitySet(
@@ -492,6 +526,7 @@ class CompanyResearchPreview:
         object.__setattr__(self, "required_return", policy.required_return)
         object.__setattr__(self, "permanent_loss_limit", policy.permanent_loss_limit)
         self.validate_research_gaps(self.research_gaps)
+        object.__setattr__(self, "user_focus", normalize_company_research_focus(self.user_focus))
         calculated_hash = _canonical_hash(self.canonical_payload())
         if type(self.input_hash) is not str:
             raise CompanyResearchValidationError("input_hash must be a string")
@@ -520,7 +555,8 @@ class CompanyResearchPreview:
 
     def canonical_payload(self) -> dict[str, object]:
         return {
-            "schema_version": "company-research-preview.v1",
+            "schema_version": "company-research-preview.v2" if self.user_focus is not None else "company-research-preview.v1",
+            **({"user_focus": self.user_focus} if self.user_focus is not None else {}),
             "strategy": {
                 "strategy_version": self.strategy_version,
                 "horizon_years": self.horizon_years,
@@ -550,6 +586,7 @@ def build_company_research_preview(
     adapter: CompanyResearchAdapter,
     identities: CompanyResearchIdentitySet,
     cutoff_at: datetime,
+    user_focus: str | None = None,
 ) -> CompanyResearchPreview:
     """Build the deterministic default policy preview for one supported company."""
     if type(identities) is not CompanyResearchIdentitySet:
@@ -582,6 +619,7 @@ def build_company_research_preview(
         permanent_loss_limit=policy.permanent_loss_limit,
         generic_modules=policy.generic_modules,
         business_modules=modules,
+        user_focus=user_focus,
     )
 
 

@@ -70,6 +70,20 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   return Object.keys(value).length === keys.length && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
 }
 
+function hasKeysWithOptional(value: Record<string, unknown>, required: readonly string[], optional: readonly string[]): boolean {
+  return required.every((key) => Object.prototype.hasOwnProperty.call(value, key))
+    && Object.keys(value).every((key) => required.includes(key) || optional.includes(key));
+}
+
+function normalizedResearchFocus(value: string | null | undefined): string | null {
+  return value?.normalize("NFC").trim() || null;
+}
+
+function isCanonicalResearchFocus(value: unknown): value is string | null {
+  return value === null || (typeof value === "string" && [...value].length <= 2000
+    && value === normalizedResearchFocus(value));
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
@@ -705,7 +719,9 @@ function isCompanyResearchSecurity(value: unknown): boolean {
 
 function isCompanyResearchPreview(value: unknown): value is CompanyResearchPreview {
   if (!isProductDto(value)
-    || !hasExactKeys(value, ["schema_version", "company", "securities", "strategy_version", "horizon_years", "base_currency", "required_return", "permanent_loss_limit", "cutoff_at", "agenda", "preview_hash"])
+    || !hasKeysWithOptional(value, ["schema_version", "company", "securities", "strategy_version", "horizon_years", "base_currency", "required_return", "permanent_loss_limit", "cutoff_at", "agenda", "preview_hash"], ["user_focus", "requested_cutoff_at"])
+    || (value.user_focus !== undefined && !isCanonicalResearchFocus(value.user_focus))
+    || (value.requested_cutoff_at !== undefined && value.requested_cutoff_at !== null && !isDateTime(value.requested_cutoff_at))
     || !isCompanyResearchIdentity(value.company)
     || !Array.isArray(value.securities) || value.securities.length === 0
     || !value.securities.every(isCompanyResearchSecurity)
@@ -755,7 +771,7 @@ function isPreparationStateAndStep(value: Record<string, unknown>): boolean {
 
 function isCompanyResearchProject(value: unknown): value is CompanyResearchProject {
   if (!isProductDto(value)
-    || !hasExactKeys(value, ["schema_version", "project_id", "company_id", "preparation"])
+    || !hasKeysWithOptional(value, ["schema_version", "project_id", "company_id", "preparation"], ["product_progress"])
     || !isUuid(value.project_id) || !isUuid(value.company_id)
     || !isProductDto(value.preparation)
     || !hasExactKeys(value.preparation, ["schema_version", "id", "project_id", "request_hash", "strategy_version", "status", "current_step", "progress", "attempt", "next_attempt_at", "last_error_code"])
@@ -766,7 +782,8 @@ function isCompanyResearchProject(value: unknown): value is CompanyResearchProje
     || value.preparation.progress > 100 || !isPositiveInteger(value.preparation.attempt)
     || !isNullableDateTime(value.preparation.next_attempt_at)
     || !isNullableString(value.preparation.last_error_code)) return false;
-  return isPreparationStateAndStep(value.preparation);
+  return isPreparationStateAndStep(value.preparation)
+    && isCompanyProductProgress(value.product_progress, value.project_id, value.company_id, value.preparation);
 }
 
 const COMPANY_RESEARCH_ARTIFACT_KINDS = new Set(COMPANY_RESEARCH_STEPS);
@@ -1165,8 +1182,39 @@ function collectNumericObservations(value: unknown, observations: Record<string,
   return observations;
 }
 
+function isCompanyProductProgress(
+  value: unknown, projectId: unknown, companyId: unknown, preparation: Record<string, unknown>,
+): boolean {
+  if (value === undefined || value === null) return true;
+  if (!isProductDto(value)
+    || !hasExactKeys(value, ["schema_version", "run_id", "project_id", "company_id", "status", "current_step", "progress_percent", "user_focus", "cutoff_at", "retryable", "error_code"])
+    || !sameUuid(value.run_id, preparation.id) || !sameUuid(value.project_id, projectId) || !sameUuid(value.company_id, companyId)
+    || value.current_step !== preparation.current_step
+    || !isNonNegativeInteger(value.progress_percent) || value.progress_percent > 100 || value.progress_percent !== preparation.progress
+    || !isDateTime(value.cutoff_at) || !isCanonicalResearchFocus(value.user_focus)) return false;
+  const expectedStatuses: Record<string, string> = {
+    queued: "queued", preparing_sources: "collecting_sources", awaiting_evidence_review: "needs_input",
+    awaiting_judgment_review: "needs_input", ready_to_freeze: "completed", completed: "completed",
+    recoverable_failure: "failed", blocked: "failed",
+  };
+  let expectedStatus = expectedStatuses[String(preparation.status)];
+  if (preparation.status === "building_model") {
+    const stages: Record<string, string> = {
+      business_map: "analyzing_company", driver_map: "analyzing_company", model_bundle: "analyzing_company",
+      financial_bridge: "building_forecast", scenario_set: "building_forecast", valuation_set: "building_forecast",
+      judgment_context: "generating_report", memo: "generating_report",
+    };
+    expectedStatus = stages[String(preparation.current_step)];
+  }
+  const error = isRecord(preparation.error) ? preparation.error : null;
+  const errorCode = Object.prototype.hasOwnProperty.call(preparation, "error") ? error?.code ?? null : preparation.last_error_code;
+  return expectedStatus !== undefined && value.status === expectedStatus
+    && value.retryable === (preparation.status === "recoverable_failure")
+    && value.error_code === errorCode;
+}
+
 function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWorkspace {
-  if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "project_id", "company", "preparation", "artifacts", "modules", "source_count", "gap_count", "draft", "selected_revision", "change_summary"])
+  if (!isProductDto(value) || !hasKeysWithOptional(value, ["schema_version", "project_id", "company", "preparation", "artifacts", "modules", "source_count", "gap_count", "draft", "selected_revision", "change_summary"], ["product_progress"])
     || !isUuid(value.project_id) || !isProductDto(value.company)
     || !hasExactKeys(value.company, ["schema_version", "object_id", "external_key", "canonical_name", "id"])
     || !isUuid(value.company.id) || value.company.object_id !== value.company.id || !isNonEmptyString(value.company.external_key) || !isNonEmptyString(value.company.canonical_name)
@@ -1180,6 +1228,7 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
     || !isProductDto(value.draft) || !hasExactKeys(value.draft, ["schema_version", "id", "lock_version", "base_revision_id"])
     || !isUuid(value.draft.id) || !isPositiveInteger(value.draft.lock_version) || !isNullableUuid(value.draft.base_revision_id)
     || !isNullableUuid(value.selected_revision) || value.selected_revision !== value.draft.base_revision_id || !isRecord(value.change_summary)) return false;
+  if (!isCompanyProductProgress(value.product_progress, value.project_id, value.company.id, value.preparation)) return false;
   const moduleKeys = value.modules.map((item) => isProductDto(item) ? item.key : null);
   if (!sameOrderedStrings(moduleKeys.filter(isNonEmptyString), [...COMPANY_RESEARCH_AGENDA_KEYS])) return false;
   const expectedEvidenceReview = value.preparation.status === "awaiting_evidence_review";
@@ -1798,7 +1847,10 @@ export class InvestmentResearchApi {
       jsonInit("POST", body),
     );
     if (value.company.object_id !== body.company_id
-      || !sameInstant(value.cutoff_at, body.cutoff_at)) {
+      || normalizedResearchFocus(value.user_focus) !== normalizedResearchFocus(body.user_focus)
+      || (value.requested_cutoff_at !== undefined && value.requested_cutoff_at !== null
+        ? !sameInstant(value.requested_cutoff_at, body.cutoff_at) || !isAtOrBefore(value.cutoff_at, body.cutoff_at)
+        : !sameInstant(value.cutoff_at, body.cutoff_at))) {
       mismatch("company-research preview binding mismatch");
     }
     return value;

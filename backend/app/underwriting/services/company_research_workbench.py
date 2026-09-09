@@ -23,7 +23,7 @@ from app.underwriting.fixtures.alphabet_golden_case import (
     LEGACY_EVIDENCE_MANIFEST_CONTENT_SHA256,
 )
 from app.underwriting.domain.company_research_provenance import canonical_source_refs
-from app.underwriting.persistence.models import UnderwritingResearchVersion
+from app.underwriting.persistence.models import UnderwritingResearchVersion, UnderwritingHistoricalBasis
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
     CompanyResearchPreparation,
@@ -38,6 +38,9 @@ from app.underwriting.domain.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
 )
 from app.underwriting.services.workspace_draft import WorkspaceDraftService
+from app.underwriting.services.company_research_progress import (
+    CompanyResearchProductProgress, company_research_product_progress,
+)
 from app.underwriting.services.company_research_model_builder import (
     validate_company_research_evidence_payload_for_read,
 )
@@ -140,6 +143,7 @@ class CompanyResearchWorkspace:
     draft: WorkbenchDraft
     selected_revision: UUID | None
     change_summary: dict
+    product_progress: CompanyResearchProductProgress | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -912,6 +916,9 @@ class CompanyResearchWorkbench:
             raise ValidationError(
                 "non-failed company research preparation cannot expose an error"
             )
+        scope = self._product_repository.scope(project_id, draft.content.scope_id)
+        basis = (self._session.get(UnderwritingHistoricalBasis, draft.content.historical_basis_id)
+                 if draft.content.historical_basis_id is not None else None)
         return CompanyResearchWorkspace(
             project_id,
             WorkbenchCompany(
@@ -945,6 +952,13 @@ class CompanyResearchWorkbench:
                 },
                 "reviewed_fact_count": reviewed_fact_count,
             },
+            company_research_product_progress(
+                session=self._session,
+                preparation=preparation,
+                company_id=project.primary_company_id,
+                scope=scope,
+                basis=basis,
+            ),
         )
 
     def review_evidence(

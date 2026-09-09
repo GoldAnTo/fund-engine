@@ -105,6 +105,7 @@ export default function NewResearchPage() {
   const alertRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<PageState>("selecting_company");
   const [query, setQuery] = useState(() => initialSearchQuery(location.state));
+  const [userFocus, setUserFocus] = useState("");
   const [results, setResults] = useState<ProductObjectSearchItem[]>([]);
   const [searched, setSearched] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -242,6 +243,7 @@ export default function NewResearchPage() {
         schema_version: "underwriting.v1",
         company_id: company.object_id,
         cutoff_at: new Date().toISOString(),
+        ...(userFocus.normalize("NFC").trim() ? { user_focus: userFocus.normalize("NFC").trim() } : {}),
       });
       if (!mountedRef.current || previewEpochRef.current !== epoch) return;
       setPreview(response);
@@ -268,6 +270,7 @@ export default function NewResearchPage() {
         company_id: preview.company.object_id,
         cutoff_at: preview.cutoff_at,
         preview_hash: preview.preview_hash,
+        ...(preview.user_focus ? { user_focus: preview.user_focus } : {}),
       }, key);
       if (!mountedRef.current || initializationEpochRef.current !== epoch) return;
       navigate(`/research/projects/${encodeURIComponent(project.project_id)}`, { replace: true });
@@ -301,6 +304,7 @@ export default function NewResearchPage() {
           <dl>
             <div><dt>研究对象</dt><dd>研究对象：{preview.company.canonical_name}</dd></div>
             <div><dt>关联证券</dt><dd>关联证券：{securitiesText}</dd></div>
+            <div><dt>关注问题</dt><dd>{preview.user_focus ?? "全面了解公司"}</dd></div>
             <div><dt>研究期限</dt><dd>研究期限：{preview.horizon_years} 年</dd></div>
             <div><dt>基准币种</dt><dd>基准币种：{preview.base_currency}</dd></div>
             <div><dt>最低要求回报</dt><dd>最低要求回报：{percent(preview.required_return)}</dd></div>
@@ -324,7 +328,7 @@ export default function NewResearchPage() {
         <div>
           <p className="ir-eyebrow">Company research</p>
           <h1>选择研究公司</h1>
-          <p>搜索公司、证券或行业。公司是研究入口；证券用于保留不同类别的市场与每股价值差异。</p>
+          <p>输入公司名称或证券代码，确认研究对象后开始。也可以先写下你最关注的问题。</p>
         </div>
       </header>
       <section aria-busy={searching} aria-labelledby="company-search-title" className="ir-search-section" aria-live="polite">
@@ -332,10 +336,35 @@ export default function NewResearchPage() {
         <form className="ir-search-form" onSubmit={(event) => void runSearch(event)}>
           <label>
             <span>搜索公司、证券或行业</span>
-            <input autoComplete="off" name="research_object_query" onChange={(event) => setQuery(event.target.value)} value={query} />
+            <input autoComplete="off" name="research_object_query" onChange={(event) => {
+              setQuery(event.target.value);
+              searchEpochRef.current += 1;
+              setSearching(false);
+              setSearched(false);
+              setSearchError(null);
+              setResults([]);
+              invalidateDefaultPlan();
+              invalidateIndustryBrowse();
+            }} value={query} />
           </label>
           <button className="ir-button" disabled={searching || !query.trim()} type="submit">{searching ? "搜索中" : "搜索对象"}</button>
         </form>
+        <div className="ir-field ir-focus-field">
+          <label htmlFor="research-user-focus">关注问题（可选）</label>
+          <textarea
+            aria-describedby="research-user-focus-help"
+            id="research-user-focus"
+            maxLength={2000}
+            placeholder="例如：云业务增长能否改善公司的长期现金流？"
+            rows={3}
+            value={userFocus}
+            onChange={(event) => {
+              setUserFocus(event.target.value);
+              invalidateDefaultPlan();
+            }}
+          />
+          <p className="ir-field-help" id="research-user-focus-help">问题将随本次研究范围保存；留空则使用默认公司研究议程。</p>
+        </div>
         {searchError ? <div className="ir-alert" ref={alertRef} role="alert" tabIndex={-1}><p>{searchError}</p><button className="ir-button" disabled={searching} onClick={retrySearch} type="button">重试对象搜索</button></div> : null}
         {previewError ? <div className="ir-alert" ref={alertRef} role="alert" tabIndex={-1}><p>{previewError}</p><button className="ir-button" disabled={previewingCompanyId !== null} onClick={() => { if (selectedCompany) void reviewDefault(selectedCompany, selectedSecurities); }} type="button">重试默认方案</button></div> : null}
         {industryBrowseError && industryBrowseIndustry ? <div className="ir-alert" ref={alertRef} role="alert" tabIndex={-1}><p>{industryBrowseError}</p><button className="ir-button" disabled={browsingIndustryId !== null} onClick={() => void browseIndustry(industryBrowseIndustry)} type="button">重试相关公司</button></div> : null}

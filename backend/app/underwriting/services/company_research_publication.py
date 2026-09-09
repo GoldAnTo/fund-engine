@@ -47,6 +47,7 @@ from app.underwriting.services.company_research_foundation import (
     alphabet_company_research_foundation_contract,
     authenticate_company_research_foundation,
     build_alphabet_company_research_preview_at_cutoff,
+    company_research_scope_focus,
 )
 from app.underwriting.services.company_research_sources import (
     CompanyResearchEvidenceCompilation,
@@ -446,6 +447,7 @@ class CompanyResearchPublicationService:
             self._session,
             company_id=state.company.id,
             cutoff_at=cutoff,
+            user_focus=company_research_scope_focus(state.scope),
         )
         expected_security_ids = tuple(sorted(security_ids, key=str))
 
@@ -467,6 +469,7 @@ class CompanyResearchPublicationService:
                 self._session,
                 company_id=state.company.id,
                 cutoff_at=mandate_effective_at,
+                user_focus=company_research_scope_focus(state.scope),
             )
             authenticated_legacy_request_cutoff = mandate_effective_at
         if not preview_matches_request():
@@ -489,6 +492,7 @@ class CompanyResearchPublicationService:
             security_ids=security_ids,
             request_hash=state.preparation.request_hash,
             strategy_version=state.preparation.strategy_version,
+            user_focus=company_research_scope_focus(state.scope),
         )
         try:
             authenticate_company_research_foundation(

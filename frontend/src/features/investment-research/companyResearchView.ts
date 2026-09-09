@@ -28,7 +28,7 @@ const RETRYABLE_ARTIFACT_STEPS = new Set([
 
 export const COMPANY_RESEARCH_MODULES = [
   { key: "overview", label: "概览与当前判断" },
-  { key: "business_map", label: "Google 如何赚钱" },
+  { key: "business_map", label: "公司如何赚钱" },
   { key: "operating_drivers", label: "关键经营变量" },
   { key: "evidence_and_gaps", label: "来源、事实与缺口" },
   { key: "industry_competition_regulation", label: "行业、竞争与监管" },
@@ -37,6 +37,17 @@ export const COMPANY_RESEARCH_MODULES = [
   { key: "counterevidence_risks_next_checks", label: "反证、风险与下一验证" },
   { key: "versions_changes_memo", label: "版本、变化与研究备忘录" },
 ] as const;
+
+export const COMPANY_RESEARCH_PAGES = [
+  { key: "overview", label: "研究概览", description: "先看研究结论、证据边界与下一步。", modules: ["overview"] },
+  { key: "business", label: "商业模式", description: "理解收入来源、成本与资本需求，核对竞争环境和反证。", modules: ["business_map", "industry_competition_regulation", "counterevidence_risks_next_checks"] },
+  { key: "forecast", label: "预测与情景", description: "从经营驱动到财务预测，查看不同情景的变化机制。", modules: ["operating_drivers", "financials_cash_flow_capital_allocation", "scenarios_valuation_implied_expectations"] },
+  { key: "valuation", label: "价值判断", description: "结合情景价值与当前价格隐含预期，保留证据和估值边界。", modules: ["scenarios_valuation_implied_expectations"] },
+  { key: "evidence", label: "证据中心", description: "核对来源、审核事实，并追踪尚未关闭的研究缺口。", modules: ["evidence_and_gaps"] },
+  { key: "versions", label: "备忘录与版本", description: "确认研究判断，保存可回放的冻结版本。", modules: ["versions_changes_memo"] },
+] as const;
+
+export type CompanyResearchPageKey = typeof COMPANY_RESEARCH_PAGES[number]["key"];
 
 export type CompanyResearchModuleKey = typeof COMPANY_RESEARCH_MODULES[number]["key"];
 
@@ -90,6 +101,44 @@ export function numericObservationView(observation: NumericObservation | null) {
     provenanceKind,
     provenanceKey,
   };
+}
+
+// Labels cover the existing operating metric vocabulary. Unrecognized codes stay opaque.
+const OPERATING_GAP_LABELS: Readonly<Record<string, string>> = {
+  search_query_intensity: "搜索查询强度",
+  search_ad_monetization: "搜索广告变现",
+  traffic_acquisition_cost: "流量获取成本",
+  youtube_usage: "YouTube 使用量",
+  youtube_ad_monetization: "YouTube 广告变现",
+  youtube_subscription_growth: "YouTube 订阅增长",
+  cloud_workload: "云业务工作负载",
+  cloud_revenue_growth: "云业务收入增长",
+  cloud_operating_margin: "云业务营业利润率",
+  ai_data_center_capex: "AI 数据中心资本开支",
+  infrastructure_depreciation: "基础设施折旧",
+  infrastructure_opex: "基础设施运营支出",
+  free_cash_flow: "自由现金流",
+  stock_based_compensation: "股份薪酬",
+  share_repurchases: "股份回购",
+  dilution: "股份摊薄",
+  consolidated_revenue: "合并收入",
+};
+
+export function researchBlockerGroups(codes: readonly string[]): { label: string; codes: string[] }[] {
+  const groups = new Map<string, { label: string; codes: string[] }>();
+  for (const code of codes) {
+    const metric = /^builder_generated_operating_(?:baseline|driver)_missing_(.+)$/.exec(code)?.[1];
+    const metricLabel = metric !== undefined && Object.prototype.hasOwnProperty.call(OPERATING_GAP_LABELS, metric)
+      ? OPERATING_GAP_LABELS[metric] : undefined;
+    const key = metricLabel === undefined ? "unknown" : metric!;
+    const label = metricLabel === undefined
+      ? "其他研究缺口仍需核对，具体记录见审计详情。"
+      : `${metricLabel}的经营基线或驱动依据尚不完整。`;
+    const group = groups.get(key);
+    if (group) group.codes.push(code);
+    else groups.set(key, { label, codes: [code] });
+  }
+  return [...groups.values()];
 }
 
 export function answerabilityView(workspace: CompanyResearchWorkspace) {

@@ -9,7 +9,7 @@ export function CompanyResearchRoutes() {
     <Route element={<InvestmentResearchShell />}>
       <Route path="/research" element={<ResearchHomePage />} />
       <Route path="/research/new" element={<NewResearchPage />} />
-      <Route path="/research/projects/:projectId" element={<ResearchWorkbenchPage />} />
+      <Route path="/research/projects/:projectId/:page?" element={<ResearchWorkbenchPage />} />
       <Route path="*" element={<p role="alert">未找到公司研究页面。<a href="/research">返回研究目录</a></p>} />
     </Route>
   </Routes>;

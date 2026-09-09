@@ -59,6 +59,9 @@ from app.underwriting.services.company_research_boundary import (
 from app.underwriting.services.company_research_basis_recovery import (
     CompanyResearchHistoricalBasisRecovery,
 )
+from app.underwriting.services.company_research_progress import (
+    CompanyResearchProductProgress, company_research_product_progress,
+)
 from app.underwriting.services.company_research_foundation import (
     alphabet_company_research_foundation_contract,
 )
@@ -101,6 +104,7 @@ class CompanyResearchProjectStatus:
 
     project: ResearchProjectView
     preparation: CompanyResearchPreparation
+    product_progress: CompanyResearchProductProgress | None = None
 
 
 class CompanyResearchInitializer:
@@ -147,7 +151,7 @@ class CompanyResearchInitializer:
         raise ValidationError("Company is not supported for company research")
 
     def _preview(
-        self, *, company_id: UUID, cutoff_at: datetime
+        self, *, company_id: UUID, cutoff_at: datetime, user_focus: str | None = None
     ) -> CompanyResearchPreview:
         company_id = self._uuid(company_id, "company_id")
         requested_cutoff = self._utc(cutoff_at, "cutoff_at")
@@ -197,6 +201,7 @@ class CompanyResearchInitializer:
                 adapter=adapter,
                 identities=identities,
                 cutoff_at=boundary.cutoff_at,
+                user_focus=user_focus,
             )
 
     def preview(
@@ -204,8 +209,9 @@ class CompanyResearchInitializer:
         *,
         company_id: UUID,
         cutoff_at: datetime,
+        user_focus: str | None = None,
     ) -> CompanyResearchPreview:
-        return self._preview(company_id=company_id, cutoff_at=cutoff_at)
+        return self._preview(company_id=company_id, cutoff_at=cutoff_at, user_focus=user_focus)
 
     def _reserve_initialization(self, company_id: UUID) -> None:
         """Serialize same-company initialization without owning the transaction."""
@@ -286,9 +292,10 @@ class CompanyResearchInitializer:
         company_id: UUID,
         cutoff_at: datetime,
         idempotency_key: str,
+        user_focus: str | None = None,
     ) -> CompanyResearchInitialization:
         idempotency_key = self._text(idempotency_key, "idempotency_key")
-        preview = self._preview(company_id=company_id, cutoff_at=cutoff_at)
+        preview = self._preview(company_id=company_id, cutoff_at=cutoff_at, user_focus=user_focus)
         if preview_hash != preview.input_hash:
             raise ValidationError("preview_hash does not match the current preview")
         self._reserve_initialization(company_id)
@@ -340,6 +347,7 @@ class CompanyResearchInitializer:
             security_ids=tuple(security.object_id for security in preview.securities),
             request_hash=preview.input_hash,
             strategy_version=preview.strategy_version,
+            user_focus=preview.user_focus,
         )
         basis = self._products.create_historical_basis(boundary.basis_input)
         mandate = self._products.append_product_mandate(
@@ -424,12 +432,14 @@ class CompanyResearchInitializer:
         company_id: UUID,
         cutoff_at: datetime,
         idempotency_key: str,
+        user_focus: str | None = None,
     ) -> CompanyResearchInitialization:
         return self._initialize(
             preview_hash=preview_hash,
             company_id=company_id,
             cutoff_at=cutoff_at,
             idempotency_key=idempotency_key,
+            user_focus=user_focus,
         )
 
     def governed_inputs(
@@ -496,6 +506,21 @@ class CompanyResearchPreparationService:
         """SQLite returns timezone columns as naive values; they are stored UTC."""
         return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
+    def _project_status(self, project, preparation) -> CompanyResearchProjectStatus:
+        draft = WorkspaceDraftService(self._session, now=self._now).read(project.id)
+        scope = (self._products.scope(project.id, draft.content.scope_id)
+                 if draft is not None and draft.content.scope_id is not None else None)
+        basis = (self._products.historical_basis(draft.content.historical_basis_id)
+                 if draft is not None and draft.content.historical_basis_id is not None else None)
+        return CompanyResearchProjectStatus(
+            project=project, preparation=preparation,
+            product_progress=company_research_product_progress(
+                session=self._session,
+                preparation=preparation, company_id=project.primary_company_id,
+                scope=scope, basis=basis,
+            ),
+        )
+
     def status(self, *, project_id: UUID) -> CompanyResearchProjectStatus:
         project_id = CompanyResearchInitializer._uuid(project_id, "project_id")
         project = self._products.project(project_id)
@@ -504,7 +529,7 @@ class CompanyResearchPreparationService:
         preparation = self._company_repository.preparation_for_project(project_id)
         if preparation is None:
             raise ValidationError("company research preparation not found")
-        return CompanyResearchProjectStatus(project=project, preparation=preparation)
+        return self._project_status(project, preparation)
 
     def retry(self, *, project_id: UUID) -> CompanyResearchProjectStatus:
         retry_at = self._now_utc()
@@ -536,6 +561,4 @@ class CompanyResearchPreparationService:
                 payload={"attempt": preparation.attempt},
                 created_at=retry_at,
             )
-        return CompanyResearchProjectStatus(
-            project=project, preparation=preparation
-        )
+        return self._project_status(project, preparation)

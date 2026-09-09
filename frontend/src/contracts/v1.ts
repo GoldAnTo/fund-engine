@@ -5917,6 +5917,8 @@ export interface components {
              * Format: date-time
              */
             cutoff_at: string;
+            /** User Focus */
+            user_focus?: string | null;
         };
         /** CompanyResearchPreviewResponse */
         CompanyResearchPreviewResponse: {
@@ -5951,6 +5953,54 @@ export interface components {
             agenda: components["schemas"]["CompanyResearchAgendaModuleResponse"][];
             /** Preview Hash */
             preview_hash: string;
+            /** User Focus */
+            user_focus?: string | null;
+            /** Requested Cutoff At */
+            requested_cutoff_at?: string | null;
+        };
+        /** CompanyResearchProductProgressResponse */
+        CompanyResearchProductProgressResponse: {
+            /**
+             * Schema Version
+             * @default underwriting.v1
+             * @constant
+             */
+            schema_version: "underwriting.v1";
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Company Id
+             * Format: uuid
+             */
+            company_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "collecting_sources" | "analyzing_company" | "building_forecast" | "generating_report" | "completed" | "needs_input" | "failed";
+            /** Current Step */
+            current_step: string | null;
+            /** Progress Percent */
+            progress_percent: number;
+            /** User Focus */
+            user_focus: string | null;
+            /**
+             * Cutoff At
+             * Format: date-time
+             */
+            cutoff_at: string;
+            /** Retryable */
+            retryable: boolean;
+            /** Error Code */
+            error_code: string | null;
         };
         /** CompanyResearchProjectResponse */
         CompanyResearchProjectResponse: {
@@ -5971,6 +6021,7 @@ export interface components {
              */
             company_id: string;
             preparation: components["schemas"]["CompanyResearchPreparationResponse"];
+            product_progress?: components["schemas"]["CompanyResearchProductProgressResponse"] | null;
         };
         /** CompanyResearchPublicationDraftResponse */
         CompanyResearchPublicationDraftResponse: {
@@ -6499,6 +6550,7 @@ export interface components {
             /** Selected Revision */
             selected_revision: string | null;
             change_summary: components["schemas"]["CompanyResearchChangeSummaryResponse"];
+            product_progress?: components["schemas"]["CompanyResearchProductProgressResponse"] | null;
         };
         /** CompareLinkDTO */
         CompareLinkDTO: {
@@ -9331,6 +9383,8 @@ export interface components {
              * Format: date-time
              */
             cutoff_at: string;
+            /** User Focus */
+            user_focus?: string | null;
             /** Preview Hash */
             preview_hash: string;
         };
