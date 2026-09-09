@@ -1280,6 +1280,51 @@ describe("Alphabet company research workbench", () => {
     expect(screen.queryByRole("heading", { name: "Other Company" })).not.toBeInTheDocument();
   });
 
+  it("automatically polls a scheduled failure through source recovery to a readable pending draft", async () => {
+    vi.useFakeTimers();
+    const failed = workspace({ status: "recoverable_failure", currentStep: "evidence_index" });
+    failed.preparation.progress = 0;
+    failed.artifacts = [];
+    failed.change_summary.artifact_versions = {};
+    failed.source_count = 0; failed.gap_count = 0;
+    const running = structuredClone(failed);
+    Object.assign(running.preparation, { status: "preparing_sources", progress: 5, error: null });
+    running.modules.forEach((module) => { module.state = "preparing"; });
+    const ready = workspace();
+    ready.modules.forEach((module) => { if (module.key !== "evidence_and_gaps") module.state = "not_started"; });
+    ready.research_draft = liveResearchDraftFixture(ids.project, ids.preparation, ready.product_progress!.cutoff_at, ready.product_progress!.user_focus);
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    const read = vi.spyOn(investmentResearchApi, "companyResearchWorkspace")
+      .mockResolvedValueOnce(withProductProgress(failed))
+      .mockResolvedValueOnce(withProductProgress(running))
+      .mockResolvedValue(ready);
+    const retry = vi.spyOn(investmentResearchApi, "retryCompanyResearchProject");
+    render(<MemoryRouter initialEntries={[`/research/projects/${ids.project}/business`]}><CompanyResearchRoutes /></MemoryRouter>);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(document.visibilityState).toBe("visible");
+    expect(screen.queryByRole("region", { name: "模型研究初稿" })).not.toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("progressbar", { name: "研究准备进度" })).toHaveAttribute("aria-valuenow", "5");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole("region", { name: "模型研究初稿" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "重试研究" })).not.toBeInTheDocument();
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it.each(["manual", "blocked", "completed"] as const)("does not poll a %s terminal or unscheduled failure", async (kind) => {
+    vi.useFakeTimers();
+    const candidate = workspace({ status: kind === "manual" ? "recoverable_failure" : kind, rich: kind === "completed" });
+    if (kind === "manual") candidate.preparation.error!.next_attempt_at = null;
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    const read = vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(candidate);
+    renderPage();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(16000); });
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it("polls active preparation with bounded backoff and stops after completion", async () => {
     vi.useFakeTimers();
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());

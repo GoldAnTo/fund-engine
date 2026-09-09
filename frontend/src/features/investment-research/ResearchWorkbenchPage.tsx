@@ -494,7 +494,7 @@ export default function ResearchWorkbenchPage() {
     return () => { active = false; if (lifecycleRef.current === lifecycle) lifecycleRef.current += 1; pollGenerationRef.current += 1; mutationGenerationRef.current += 1; mutationActiveRef.current = false; };
   }, [projectId, reloadAttempt]);
   useEffect(() => {
-    if (!workspace || !browserVisible || reviewingFact !== null || committedReview !== null || retrying || mutationActiveRef.current || !preparationIsActive(workspace.preparation.status)) return;
+    if (!workspace || !browserVisible || reviewingFact !== null || committedReview !== null || retrying || mutationActiveRef.current || !preparationIsActive(workspace.preparation)) return;
     const lifecycle = lifecycleRef.current; const delay = Math.min(1000 * 2 ** pollAttemptRef.current, 8000); let active = true;
     const timer = window.setTimeout(() => {
       if (!active || document.visibilityState === "hidden" || mutationActiveRef.current) return;
@@ -505,7 +505,7 @@ export default function ResearchWorkbenchPage() {
         if (workspaceRef.current !== null && nextWorkspace.company.id !== workspaceRef.current.company.id) {
           setActionError("工作区同步失败：公司身份不一致；已保留当前工作区。");
           setPollTick((value) => value + 1);
-        } else if (workspaceRef.current === null || workspaceSnapshotIsMonotonic(workspaceRef.current, nextWorkspace)) commitWorkspace(nextWorkspace); else setPollTick((value) => value + 1);
+        } else if (workspaceRef.current === null || workspaceSnapshotIsMonotonic(workspaceRef.current, nextWorkspace, { allowAutomaticRecovery: true })) commitWorkspace(nextWorkspace); else setPollTick((value) => value + 1);
       }).catch(() => {
         if (active && lifecycleRef.current === lifecycle && pollGenerationRef.current === pollGeneration && document.visibilityState !== "hidden" && !mutationActiveRef.current) { pollAttemptRef.current += 1; setPollTick((value) => value + 1); }
       });
@@ -872,7 +872,7 @@ export default function ResearchWorkbenchPage() {
           <ModulePanel page={activePage.key} activeModule={moduleKey} moduleState={module?.state ?? "not_started"} valuationState={module?.valuation_state ?? "not_applicable"} workspace={workspace} reviewLocked={mutationBusy} onReview={reviewFact} lastSuccess={lastSuccess} />
         </section>;
       }) : <EmptyModule message="冻结版本尚未验证；当前工作区模块内容已隐藏。" />}</section>
-      <aside className="ir-boundary" aria-label="研究状态摘要"><p className="ir-eyebrow">Research state</p><h2>准备状态</h2><dl><div><dt>来源</dt><dd>{workspace.source_count}</dd></div><div><dt>缺口</dt><dd>{workspace.gap_count}</dd></div><div><dt>已审核事实</dt><dd>{workspace.change_summary.reviewed_fact_count}</dd></div></dl><details id="audit-details"><summary>审计详情</summary><dl><div><dt>Project</dt><dd>{workspace.project_id}</dd></div><div><dt>Preparation</dt><dd>{workspace.preparation.id}</dd></div><div><dt>内部阶段</dt><dd>{workspace.preparation.status} · {workspace.preparation.current_step ?? "全部阶段"} · {workspace.preparation.progress}%</dd></div>{preparationError ? <div><dt>内部错误</dt><dd>{preparationError.code} · {preparationError.failed_step}</dd></div> : null}<div><dt>Draft</dt><dd>{workspace.draft.id}</dd></div><div><dt>Selected revision</dt><dd>{workspace.selected_revision ?? "尚未选择冻结版本"}</dd></div></dl>{Object.entries(workspace.change_summary.artifact_versions).map(([kind, version]) => <span id={`audit-${encodeURIComponent(kind)}`} key={kind}>{kind} v{version}</span>)}</details></aside>
+      <aside className="ir-boundary" aria-label="研究状态摘要"><p className="ir-eyebrow">Research state</p><h2>准备状态</h2><dl><div><dt>{workspace.research_draft ? "本次原文" : "来源"}</dt><dd>{workspace.research_draft?.sources.length ?? workspace.source_count}</dd></div><div><dt>缺口</dt><dd>{workspace.gap_count}</dd></div><div><dt>已审核事实</dt><dd>{workspace.change_summary.reviewed_fact_count}</dd></div></dl><details id="audit-details"><summary>审计详情</summary><dl><div><dt>Project</dt><dd>{workspace.project_id}</dd></div><div><dt>Preparation</dt><dd>{workspace.preparation.id}</dd></div><div><dt>内部阶段</dt><dd>{workspace.preparation.status} · {workspace.preparation.current_step ?? "全部阶段"} · {workspace.preparation.progress}%</dd></div>{preparationError ? <div><dt>内部错误</dt><dd>{preparationError.code} · {preparationError.failed_step}</dd></div> : null}<div><dt>Draft</dt><dd>{workspace.draft.id}</dd></div><div><dt>Selected revision</dt><dd>{workspace.selected_revision ?? "尚未选择冻结版本"}</dd></div></dl>{Object.entries(workspace.change_summary.artifact_versions).map(([kind, version]) => <span id={`audit-${encodeURIComponent(kind)}`} key={kind}>{kind} v{version}</span>)}</details></aside>
     </div>
     </div>
   </main>;

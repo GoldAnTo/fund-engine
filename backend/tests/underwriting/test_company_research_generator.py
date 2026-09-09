@@ -165,6 +165,379 @@ def _rehash_bundle(bundle):
     )
 
 
+def _catalog_input(inputs=None):
+    inputs = inputs or _input()
+    module = _module()
+    client = ExplicitTestClient()
+    prepared = module.CompanyResearchDraftGenerator(client)._prepare_input(**inputs)
+    return inputs, client, prepared, json.loads(prepared.messages[1]["content"])
+
+
+def test_prompt_v3_exposes_closed_quote_ids_and_explicit_qualitative_rules():
+    module = _module()
+    assert module.PROMPT_VERSION == "company-research-grounded-draft.v3"
+    inputs, client, prepared, prompt = _catalog_input()
+    assert client.calls == []
+    assert prompt["quote_catalog"]
+    assert all("text" not in excerpt for excerpt in prompt["excerpts"])
+    assert all("allowed_fact_keys" not in entry for entry in prompt["quote_catalog"])
+    assert prompt["source_fact_keys"] == {"annual": ["cloud_revenue"]}
+    schema = prompt["output_schema"]
+    definitions = schema["$defs"]
+    finding = next(
+        value
+        for value in definitions.values()
+        if "fact_keys" in value.get("properties", {})
+    )
+    for field in ("title", "text"):
+        assert "pattern" in finding["properties"][field]
+        assert "年份" in finding["properties"][field]["description"]
+    assert finding["properties"]["fact_keys"]["items"]["enum"] == ["cloud_revenue"]
+    citation = next(
+        value
+        for value in definitions.values()
+        if "quote_id" in value.get("properties", {})
+    )
+    assert set(citation["properties"]) == {"quote_id"}
+    assert citation["properties"]["quote_id"]["enum"] == [
+        row["quote_id"] for row in prompt["quote_catalog"]
+    ]
+    for message in prepared.messages:
+        assert "合格" in message["content"] and "不合格" in message["content"]
+        assert "年份" in message["content"] and "季度" in message["content"]
+    assert "自检" in prepared.messages[-1]["content"]
+    assert "12–240" in prepared.messages[0]["content"]
+    assert "600" in prepared.messages[0]["content"]
+    assert (
+        inputs["source_bundle"]["excerpts"][0]["text"]
+        in prompt["quote_catalog"][0]["quote"]
+    )
+
+
+def test_quote_catalog_preserves_all_nonwhitespace_source_text_and_offsets():
+    inputs = _input()
+    text = (
+        "\n  "
+        + (
+            (
+                "An exact sentence with original  spaces and punctuation.\nAnother unchanged sentence.\n\n"
+            )
+            * 40
+        )
+        + "Final statement remains exact.  \n"
+    )
+    inputs["source_bundle"]["excerpts"][0]["text"] = text
+    _rehash_bundle(inputs["source_bundle"])
+    _, _, prepared, prompt = _catalog_input(inputs)
+    entries = prompt["quote_catalog"]
+    cursor = 0
+    for entry in entries:
+        assert entry["quote"] == text[entry["start"] : entry["end"]]
+        assert 12 <= len(entry["quote"]) <= 450
+        assert entry["quote"] == entry["quote"].strip()
+        assert not text[cursor : entry["start"]].strip()
+        assert prompt["source_fact_keys"][entry["source_id"]] == ["cloud_revenue"]
+        cursor = entry["end"]
+    assert not text[cursor:].strip()
+    assert len(entries) > 1
+    assert [
+        {key: value for key, value in entry.items() if key != "allowed_fact_keys"}
+        for entry in prepared.quote_catalog.values()
+    ] == entries
+    assert all(
+        entry["allowed_fact_keys"] == ["cloud_revenue"]
+        for entry in prepared.quote_catalog.values()
+    )
+    assert _catalog_input(inputs)[2].quote_catalog == prepared.quote_catalog
+
+
+def test_quote_id_output_is_resolved_to_exact_local_source_and_fact_binding():
+    inputs, _, prepared, prompt = _catalog_input(_v2_input())
+    entry = prompt["quote_catalog"][0]
+    response = _response()
+    for items in response.values():
+        for item in items:
+            item["citations"] = [{"quote_id": entry["quote_id"]}]
+    module, client, generated = _generate(inputs=inputs, response=response)
+    citation = generated.payload["business_analysis"][0]["citations"][0]
+    assert citation["quote"] == entry["quote"]
+    assert citation["excerpt_id"] == entry["excerpt_id"]
+    assert citation["source_url"] == "https://official.test/annual-2025.pdf"
+    assert "quote_id" not in citation
+    assert generated.input_hash == prepared.input_hash
+    assert len(client.calls) == 1
+    assert (
+        module.validate_saved_generation(
+            generated.payload,
+            generated.markdown,
+            source_bundle=inputs["source_bundle"],
+            evidence_payload=inputs["evidence_payload"],
+            model_version=generated.model_version,
+        )
+        == generated.output_hash
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"quote_id": "q9999"},
+        {"quote_id": "q0001", "quote": QUOTE},
+        {"quote_id": "q0001", "excerpt_id": "annual-cloud"},
+    ],
+)
+def test_unknown_quote_ids_and_mixed_citation_fields_are_rejected(invalid):
+    response = _response()
+    for items in response.values():
+        for item in items:
+            item["citations"] = [{"quote_id": "q0001"}]
+    response["business_analysis"][0]["citations"] = [invalid]
+    with pytest.raises(_module().CompanyResearchDraftProviderError):
+        _generate(response=response)
+
+
+def test_one_response_cannot_mix_legacy_quotes_and_quote_ids():
+    response = _response()
+    response["business_analysis"][0]["citations"] = [{"quote_id": "q0001"}]
+    with pytest.raises(_module().CompanyResearchDraftProviderError):
+        _generate(response=response)
+
+
+def test_duplicate_quote_ids_are_rejected_by_existing_resolved_citation_rules():
+    response = _response()
+    for items in response.values():
+        for item in items:
+            item["citations"] = [{"quote_id": "q0001"}]
+    response["business_analysis"][0]["citations"].append({"quote_id": "q0001"})
+    with pytest.raises(_module().CompanyResearchDraftProviderError):
+        _generate(response=response)
+
+
+def test_saved_legacy_citations_do_not_depend_on_prompt_version_or_quote_catalog(
+    monkeypatch,
+):
+    module, _, generated = _generate()
+    inputs = _input()
+    monkeypatch.setattr(module, "PROMPT_VERSION", "future-prompt-version")
+    monkeypatch.setattr(
+        module,
+        "_build_quote_catalog",
+        lambda *args: pytest.fail("saved replay must not rebuild provider catalog"),
+    )
+    assert (
+        module.validate_saved_generation(
+            generated.payload,
+            generated.markdown,
+            source_bundle=inputs["source_bundle"],
+            evidence_payload=inputs["evidence_payload"],
+            model_version=generated.model_version,
+        )
+        == generated.output_hash
+    )
+
+
+@pytest.mark.parametrize("phrase", ["2025年", "Q4季度", "七成", "两倍", "五百亿美元"])
+def test_prompt_v3_still_rejects_repeated_quantitative_prose_after_one_correction(
+    phrase,
+):
+    module = _module()
+    response = _response()
+    response["business_analysis"][0]["text"] = (
+        "披露资料显示"
+        + phrase
+        + "，但是这种解释仍须核对需求兑现与资本投入的时间关系，不能自动进入正式模型。"
+    )
+    client = ExplicitTestClient(response)
+    with pytest.raises(module.CompanyResearchDraftProviderError):
+        module.CompanyResearchDraftGenerator(client).generate(**_input())
+    assert len(client.calls) == 2
+
+
+def _v2_input():
+    inputs = _input()
+    bundle = inputs["source_bundle"]
+    bundle["schema_version"] = "company-research.live-source-bundle.v2"
+    document = bundle["documents"][0]
+    governed = {key: document[key] for key in ("source_url", "raw_hash")}
+    proof_quote = "Google Cloud revenue, USD million, year ended 2025: 58700."
+    document.update(
+        source_url="https://official.test/annual-2025.pdf",
+        raw_hash="d" * 64,
+        final_url="https://official.test/annual-2025.pdf",
+        http_status=200,
+        media_type="application/pdf",
+        published_at="2026-02-04T12:00:00+00:00",
+        available_at="2026-02-04T12:00:00+00:00",
+        retrieved_at=bundle["captured_at"],
+        raw_size=100,
+        raw_path="raw/annual.pdf",
+        text_hash="e" * 64,
+        text_size=200,
+        text_path="text/annual.txt",
+        extractor_version="offline-pdf-test.v1",
+        governed_source=governed,
+        fact_verifications=[
+            {
+                "fact_key": "cloud_revenue",
+                "quote": proof_quote,
+                "locator": "PDF page 10",
+            }
+        ],
+    )
+    bundle["excerpts"][0].update(
+        raw_hash=document["raw_hash"], source_url=document["source_url"]
+    )
+    bundle["excerpts"][0]["text"] += "\n" + proof_quote
+    _rehash_bundle(bundle)
+    return inputs
+
+
+def test_v2_governed_fact_identity_resolves_to_actual_pdf_and_replays():
+    inputs = _v2_input()
+    original = deepcopy(inputs)
+    module, client, generated = _generate(inputs=inputs)
+    citation = generated.payload["business_analysis"][0]["citations"][0]
+    assert citation["source_url"] == "https://official.test/annual-2025.pdf"
+    assert citation["raw_hash"] == "d" * 64
+    prompt = json.loads(client.calls[0][0][1]["content"])
+    assert prompt["facts"][0]["source_url"] == "https://issuer.test/annual.pdf"
+    assert (
+        prompt["fact_verifications"]["cloud_revenue"]["source_url"]
+        == citation["source_url"]
+    )
+    assert "本次核验原文" in generated.markdown
+    assert "https://official.test/annual-2025.pdf" in generated.markdown
+    assert "USD million, year ended 2025: 58700" in generated.markdown
+    assert inputs == original
+    assert (
+        module.CompanyResearchDraftGenerator(client).input_hash_for(**inputs)
+        == generated.input_hash
+    )
+    assert (
+        module.validate_saved_generation(
+            generated.payload,
+            generated.markdown,
+            source_bundle=inputs["source_bundle"],
+            evidence_payload=inputs["evidence_payload"],
+            model_version=generated.model_version,
+        )
+        == generated.output_hash
+    )
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda doc: doc.update(unrecognized="field"),
+        lambda doc: doc.pop("governed_source"),
+        lambda doc: doc["governed_source"].update(confirmed=True),
+        lambda doc: doc["governed_source"].update(raw_hash="f" * 64),
+        lambda doc: doc["governed_source"].update(
+            source_url="https://foreign.test/source"
+        ),
+        lambda doc: doc.update(fact_verifications=[]),
+        lambda doc: doc["fact_verifications"].append(
+            deepcopy(doc["fact_verifications"][0])
+        ),
+        lambda doc: doc["fact_verifications"][0].update(fact_key="foreign_fact"),
+        lambda doc: doc["fact_verifications"][0].update(value="9999"),
+        lambda doc: doc["fact_verifications"][0].update(
+            quote="A substituted and unsupported numeric quote."
+        ),
+        lambda doc: doc["fact_verifications"][0].update(quote=""),
+        lambda doc: doc["fact_verifications"][0].update(locator=""),
+        lambda doc: doc.update(fact_keys=[]),
+        lambda doc: doc.update(fact_keys=["cloud_revenue", "cloud_revenue"]),
+        lambda doc: doc.update(fact_keys=["cloud_revenue", "foreign_fact"]),
+    ],
+)
+def test_v2_rehashed_invalid_fact_verification_is_rejected_before_provider(mutation):
+    module = _module()
+    inputs = _v2_input()
+    mutation(inputs["source_bundle"]["documents"][0])
+    _rehash_bundle(inputs["source_bundle"])
+    client = ExplicitTestClient()
+    with pytest.raises(module.CompanyResearchDraftInputError) as caught:
+        module.CompanyResearchDraftGenerator(client).generate(**inputs)
+    assert str(caught.value) == module.DRAFT_INPUT_ERROR
+    assert client.calls == []
+
+
+def test_v2_proof_cannot_borrow_quote_from_another_document():
+    module = _module()
+    inputs = _v2_input()
+    bundle = inputs["source_bundle"]
+    proof = bundle["documents"][0]["fact_verifications"][0]
+    bundle["excerpts"][0]["text"] = QUOTE + "\n" + RISK_QUOTE
+    foreign_document = deepcopy(bundle["documents"][0])
+    foreign_document.update(
+        source_id="foreign",
+        source_url="https://foreign.test/annual.pdf",
+        raw_hash="f" * 64,
+    )
+    bundle["documents"].append(foreign_document)
+    bundle["excerpts"].append(
+        {
+            "excerpt_id": "foreign-numbers",
+            "source_id": "foreign",
+            "source_url": foreign_document["source_url"],
+            "raw_hash": foreign_document["raw_hash"],
+            "locator": "Other page",
+            "text": proof["quote"],
+        }
+    )
+    _rehash_bundle(bundle)
+    with pytest.raises(module.CompanyResearchDraftInputError):
+        _generate(inputs=inputs)
+
+
+def test_v2_cannot_downgrade_to_v1_while_retaining_governed_mapping():
+    inputs = _v2_input()
+    inputs["source_bundle"]["schema_version"] = "company-research.live-source-bundle.v1"
+    _rehash_bundle(inputs["source_bundle"])
+    with pytest.raises(_module().CompanyResearchDraftInputError):
+        _generate(inputs=inputs)
+
+
+def test_v2_same_governed_fact_cannot_be_claimed_by_two_actual_documents():
+    inputs = _v2_input()
+    bundle = inputs["source_bundle"]
+    document = deepcopy(bundle["documents"][0])
+    document.update(
+        source_id="other-pdf",
+        source_url="https://official.test/other.pdf",
+        raw_hash="f" * 64,
+    )
+    bundle["documents"].append(document)
+    excerpt = deepcopy(bundle["excerpts"][0])
+    excerpt.update(
+        excerpt_id="other-numbers",
+        **{key: document[key] for key in ("source_id", "source_url", "raw_hash")},
+    )
+    bundle["excerpts"].append(excerpt)
+    _rehash_bundle(bundle)
+    with pytest.raises(_module().CompanyResearchDraftInputError):
+        _generate(inputs=inputs)
+
+
+def test_v2_saved_citation_cannot_substitute_the_original_governed_source():
+    inputs = _v2_input()
+    module, _, generated = _generate(inputs=inputs)
+    payload = deepcopy(generated.payload)
+    payload["business_analysis"][0]["citations"][0].update(
+        inputs["source_bundle"]["documents"][0]["governed_source"]
+    )
+    with pytest.raises(module.CompanyResearchDraftInputError):
+        module.validate_saved_generation(
+            payload,
+            generated.markdown,
+            source_bundle=inputs["source_bundle"],
+            evidence_payload=inputs["evidence_payload"],
+            model_version=generated.model_version,
+        )
+
+
 def test_grounded_draft_contains_real_excerpt_focus_and_resolved_citations():
     module, client, generated = _generate()
     messages, hint = client.calls[0]
@@ -172,7 +545,7 @@ def test_grounded_draft_contains_real_excerpt_focus_and_resolved_citations():
     assert hint == "company_research_draft"
     assert prompt["user_focus"] == _input()["user_focus"]
     assert (
-        prompt["excerpts"][0]["text"]
+        prompt["quote_catalog"][0]["quote"]
         == _input()["source_bundle"]["excerpts"][0]["text"]
     )
     assert prompt["facts"][0]["value"] == "58700"
@@ -371,14 +744,17 @@ def test_numeric_values_are_allowed_in_exact_source_quotes():
     )
 
 
-def test_frozen_excerpt_boundary_whitespace_is_preserved_in_the_prompt():
+def test_frozen_excerpt_whitespace_is_preserved_inside_exact_catalog_spans():
     inputs = _input()
     text = "\n " + inputs["source_bundle"]["excerpts"][0]["text"] + " \n"
     inputs["source_bundle"]["excerpts"][0]["text"] = text
     _rehash_bundle(inputs["source_bundle"])
     _, client, generated = _generate(inputs=inputs)
     prompt = json.loads(client.calls[0][0][1]["content"])
-    assert prompt["excerpts"][0]["text"] == text
+    entry = prompt["quote_catalog"][0]
+    assert entry["quote"] == text[entry["start"] : entry["end"]]
+    assert entry["quote"] == text.strip()
+    assert entry["start"] == 2
     assert (
         generated.payload["source_bundle_hash"]
         == inputs["source_bundle"]["bundle_hash"]
@@ -539,3 +915,271 @@ def test_input_receipt_rejects_invalid_frozen_inputs_without_provider_use():
     with pytest.raises(module.CompanyResearchDraftInputError):
         generator.input_hash_for(**inputs)
     assert client.calls == []
+
+
+class SequenceTestClient(ExplicitTestClient):
+    def __init__(self, *responses):
+        super().__init__()
+        self.responses = list(responses)
+
+    def chat_json(self, messages, schema_hint=""):
+        self.response = self.responses.pop(0)
+        return super().chat_json(messages, schema_hint)
+
+
+def _correction_case():
+    inputs = _input()
+    second = deepcopy(inputs["source_bundle"]["excerpts"][0])
+    second.update(
+        excerpt_id="quarter-cloud",
+        source_id="quarter",
+        raw_hash="e" * 64,
+        source_url="https://issuer.test/quarter.pdf",
+    )
+    inputs["source_bundle"]["excerpts"].append(second)
+    inputs["source_bundle"]["documents"].append(
+        {
+            "source_id": "quarter",
+            "source_url": second["source_url"],
+            "raw_hash": second["raw_hash"],
+            "fact_keys": [],
+        }
+    )
+    _rehash_bundle(inputs["source_bundle"])
+    invalid = _response()
+    invalid["verification_questions"][0]["text"] += "需要核验2026年。"
+    invalid["report_sections"][2]["citations"] *= 5
+    invalid["business_analysis"][0]["citations"][0]["excerpt_id"] = "quarter-cloud"
+    return inputs, invalid
+
+
+def test_v3_corrects_once_with_original_json_and_all_safe_issues_and_receipts():
+    module = _module()
+    inputs, invalid = _correction_case()
+    client = SequenceTestClient(invalid, _response())
+    generator = module.CompanyResearchDraftGenerator(client)
+    initial = generator.input_hash_for(**inputs)
+    result = generator.generate(**inputs)
+    assert len(client.calls) == 2
+    assert json.loads(client.calls[1][0][-2]["content"]) == invalid
+    feedback = json.loads(client.calls[1][0][-1]["content"])
+    codes = {issue["code"] for issue in feedback["validation_issues"]}
+    assert {"numeric_narrative", "citation_cardinality", "wrong_fact_source"} <= codes
+    assert "2026" not in json.dumps(feedback, ensure_ascii=False)
+    assert result.initial_input_hash == initial
+    assert result.input_hash != initial
+    assert result.prompt_version == "company-research-grounded-draft.v3"
+    receipts = result.call_receipts
+    assert [r["outcome"] for r in receipts] == ["validation_failed", "accepted"]
+    assert receipts[0]["response_hash"] == canonical_hash(invalid)
+    assert receipts[1]["response_hash"] == canonical_hash(_response())
+    assert receipts[0]["request_hash"] == initial
+    assert result.input_hash == canonical_hash(
+        {
+            "schema_version": "company-research.call-chain.v1",
+            "initial_input_hash": initial,
+            "call_receipts": list(receipts),
+        }
+    )
+    module.validate_generation_call_receipts(
+        initial,
+        result.input_hash,
+        receipts,
+        resolved_content={key: result.payload[key] for key, _ in module._GROUPS},
+    )
+
+
+def test_v3_second_invalid_response_is_rejected_with_safe_complete_receipts():
+    module = _module()
+    inputs, invalid = _correction_case()
+    client = SequenceTestClient(invalid, invalid, _response())
+    generator = module.CompanyResearchDraftGenerator(client)
+    with pytest.raises(module.CompanyResearchDraftProviderError) as caught:
+        generator.generate(**inputs)
+    assert len(client.calls) == 2
+    assert str(caught.value) == module.DRAFT_PROVIDER_ERROR
+    assert len(caught.value.call_receipts) == 2
+    assert [r["outcome"] for r in caught.value.call_receipts] == [
+        "validation_failed"
+    ] * 2
+    module.validate_generation_call_receipts(
+        caught.value.initial_input_hash,
+        caught.value.input_hash,
+        caught.value.call_receipts,
+    )
+
+
+@pytest.mark.parametrize(
+    "responses, calls",
+    [
+        ([LLMProviderError("secret provider configuration")], 1),
+        ([_correction_case()[1], LLMProviderError("secret transport")], 2),
+    ],
+)
+def test_v3_provider_errors_never_trigger_an_additional_semantic_call(responses, calls):
+    module = _module()
+    inputs, _ = _correction_case()
+    client = SequenceTestClient(*responses)
+    with pytest.raises(module.CompanyResearchDraftProviderError) as caught:
+        module.CompanyResearchDraftGenerator(client).generate(**inputs)
+    assert len(client.calls) == calls
+    assert len(caught.value.call_receipts) == calls
+    assert caught.value.call_receipts[-1]["outcome"] == "provider_error"
+    assert caught.value.call_receipts[-1]["response_hash"] is None
+    assert "secret" not in json.dumps(caught.value.call_receipts)
+
+
+def test_v3_single_valid_call_keeps_initial_hash_and_binds_accepted_content():
+    module, client, result = _generate()
+    assert len(client.calls) == 1
+    assert result.input_hash == result.initial_input_hash
+    assert result.call_receipts[0]["resolved_content_hash"] == canonical_hash(
+        {key: result.payload[key] for key, _ in module._GROUPS}
+    )
+    module.validate_generation_call_receipts(
+        result.initial_input_hash,
+        result.input_hash,
+        result.call_receipts,
+        resolved_content={key: result.payload[key] for key, _ in module._GROUPS},
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["request_hash", "response_hash", "validation_issues", "resolved_content_hash"],
+)
+def test_v3_receipt_tampering_is_rejected(field):
+    module = _module()
+    inputs, invalid = _correction_case()
+    result = module.CompanyResearchDraftGenerator(
+        SequenceTestClient(invalid, _response())
+    ).generate(**inputs)
+    receipts = deepcopy(list(result.call_receipts))
+    receipts[0][field] = [] if field == "validation_issues" else "f" * 64
+    with pytest.raises(module.CompanyResearchDraftInputError):
+        module.validate_generation_call_receipts(
+            result.initial_input_hash, result.input_hash, receipts
+        )
+
+
+def test_v3_hash_changes_with_first_response_even_when_final_result_is_identical():
+    module = _module()
+    inputs, invalid = _correction_case()
+    changed = deepcopy(invalid)
+    changed["verification_questions"][0]["text"] += "还需进一步核验。"
+    a = module.CompanyResearchDraftGenerator(
+        SequenceTestClient(invalid, _response())
+    ).generate(**inputs)
+    b = module.CompanyResearchDraftGenerator(
+        SequenceTestClient(changed, _response())
+    ).generate(**inputs)
+    assert a.output_hash == b.output_hash
+    assert a.initial_input_hash == b.initial_input_hash
+    assert a.input_hash != b.input_hash
+    assert a.call_receipts[1]["request_hash"] != b.call_receipts[1]["request_hash"]
+
+
+def test_v3_replay_initial_hash_helper_is_stable_after_current_version_changes(
+    monkeypatch,
+):
+    module = _module()
+    _, _, result = _generate()
+    monkeypatch.setattr(module, "PROMPT_VERSION", "company-research-grounded-draft.v4")
+    assert (
+        module.company_research_initial_input_hash_v3(
+            model_version=result.model_version, **_input()
+        )
+        == result.initial_input_hash
+    )
+
+
+def test_v3_prompt_requires_scope_and_inference_discipline():
+    _, _, prepared, _ = _catalog_input()
+    system = prepared.messages[0]["content"]
+    for phrase in ("标题", "集团", "分部现金流", "付费需求", "风险已发生", "自研"):
+        assert phrase in system
+
+
+def test_v3_equivalent_response_key_order_produces_identical_correction_messages():
+    module = _module()
+    inputs, invalid = _correction_case()
+    reordered = dict(reversed(list(invalid.items())))
+    a_client, b_client = (
+        SequenceTestClient(invalid, _response()),
+        SequenceTestClient(reordered, _response()),
+    )
+    a = module.CompanyResearchDraftGenerator(a_client).generate(**inputs)
+    b = module.CompanyResearchDraftGenerator(b_client).generate(**inputs)
+    assert a.input_hash == b.input_hash
+    assert a_client.calls[1][0] == b_client.calls[1][0]
+
+
+def test_v3_both_real_client_calls_share_one_operation_budget(monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from app.ai.usage import capture_usage, current_usage
+
+    module = _module()
+    inputs, invalid = _correction_case()
+    responses = [invalid, _response()]
+    active = []
+    budget_events = []
+
+    def create(**kwargs):
+        assert active == [True]
+        payload = responses.pop(0)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=json.dumps(payload)),
+                    finish_reason="stop",
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=20, completion_tokens=10, total_tokens=30
+            ),
+        )
+
+    client = LLMClient(
+        model_version="real-client-offline-transport",
+        mock=False,
+        max_attempts=1,
+        client=SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        ),
+    )
+
+    @contextmanager
+    def budget():
+        budget_events.append("enter")
+        active.append(True)
+        try:
+            yield
+        finally:
+            active.pop()
+            budget_events.append("exit")
+
+    monkeypatch.setattr(client, "operation_budget", budget)
+    with capture_usage():
+        result = module.CompanyResearchDraftGenerator(client).generate(**inputs)
+        assert len(current_usage()["attempts"]) == 2
+    assert budget_events == ["enter", "exit"]
+    assert len(result.call_receipts) == 2
+
+
+def test_v3_replay_recipe_ignores_current_prompt_and_schema_aliases(monkeypatch):
+    module = _module()
+    _, _, result = _generate()
+    monkeypatch.setattr(module, "PROMPT_VERSION", "future-version")
+    monkeypatch.setattr(module, "_SYSTEM", "future-system")
+    monkeypatch.setattr(module, "_OUTPUT_CHECKLIST", "future-checklist")
+    monkeypatch.setattr(
+        module, "_catalog_output_schema", lambda *args: {"future": "schema"}
+    )
+    assert (
+        module.company_research_initial_input_hash_v3(
+            model_version=result.model_version, **_input()
+        )
+        == result.initial_input_hash
+    )

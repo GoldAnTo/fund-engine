@@ -245,6 +245,7 @@ class CompanyResearchPreparationWorker:
                     continue
                 token = secrets.token_hex(16)
                 job.status = "running"
+                job.error = None
                 job.started_at = now
                 job.claim_token = token
                 stage = job.step
@@ -254,6 +255,8 @@ class CompanyResearchPreparationWorker:
                     else "building_model"
                 )
                 preparation.progress = 5 if stage == "evidence_index" else 30
+                preparation.last_error_code = None
+                preparation.next_attempt_at = None
                 preparation.updated_at = now
                 self._jobs.append_event(
                     job_id=job.id,

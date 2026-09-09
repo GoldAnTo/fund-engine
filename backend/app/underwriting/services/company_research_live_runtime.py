@@ -94,6 +94,8 @@ class CompanyResearchLiveExecution:
     finished_at: datetime
     error_code: str | None = None
     input_hash: str | None = None
+    initial_input_hash: str | None = None
+    call_receipts: tuple[dict, ...] = ()
 
 
 class CompanyResearchLiveRuntime:
@@ -113,14 +115,28 @@ class CompanyResearchLiveRuntime:
         client = LLMClient.from_env()
         if client._mock:
             raise ValidationError("live company research requires a real provider")
+        source_profile = os.getenv("COMPANY_RESEARCH_SOURCE_PROFILE", "sec")
+        capture = None
+        if source_profile == "official_ir":
+            from app.underwriting.services.company_research_ir_sources import (
+                capture_governed_alphabet_ir_sources,
+            )
+
+            capture = capture_governed_alphabet_ir_sources
+        elif source_profile != "sec":
+            raise ValidationError("company research source profile is invalid")
         return cls(
             generator=CompanyResearchDraftGenerator(client),
             storage_root=source_storage_root(),
             now=now,
+            capture=capture,
         )
 
     def execute(self, context: dict, compiled) -> CompanyResearchLiveExecution:
-        from app.ai.company_research import PROMPT_VERSION
+        from app.ai.company_research import (
+            PROMPT_VERSION,
+            CompanyResearchDraftProviderError,
+        )
         from app.underwriting.services.company_research_live_sources import (
             capture_governed_alphabet_sources,
         )
@@ -130,6 +146,8 @@ class CompanyResearchLiveRuntime:
         generation = None
         error_code = None
         input_hash = None
+        initial_input_hash = None
+        call_receipts = ()
         model = "not-invoked"
         with capture_usage():
             try:
@@ -145,6 +163,7 @@ class CompanyResearchLiveRuntime:
                     source_bundle=bundle,
                     evidence_payload=compiled.evidence_index_payload,
                 )
+                initial_input_hash = input_hash
                 # The generator is the only component allowed to call a language model.
                 generation = self.generator.generate(
                     **context,
@@ -152,7 +171,13 @@ class CompanyResearchLiveRuntime:
                     evidence_payload=compiled.evidence_index_payload,
                 )
                 model = generation.model_version
-            except Exception:  # noqa: BLE001 -- every failed external attempt needs a safe audit receipt
+                input_hash = generation.input_hash
+                call_receipts = generation.call_receipts
+            except Exception as exc:  # noqa: BLE001 -- every failed external attempt needs a safe audit receipt
+                if isinstance(exc, CompanyResearchDraftProviderError):
+                    initial_input_hash = exc.initial_input_hash
+                    input_hash = exc.input_hash
+                    call_receipts = exc.call_receipts
                 # Never include upstream errors, prompts or credentials in logs or API errors.
                 error_code = (
                     "company_research_live_generation_failed"
@@ -176,6 +201,8 @@ class CompanyResearchLiveRuntime:
             self.now(),
             error_code,
             input_hash,
+            initial_input_hash,
+            call_receipts,
         )
 
 
@@ -196,6 +223,8 @@ def record_live_execution(session, execution: CompanyResearchLiveExecution) -> U
             "request_hash": context["request_hash"],
             "source_bundle_hash": source_hash,
             "input_hash": generation.input_hash if generation else execution.input_hash,
+            "initial_input_hash": execution.initial_input_hash,
+            "call_receipts": deepcopy(list(execution.call_receipts)),
             "source_bundle": deepcopy(execution.source_bundle),
             "focus_hash": canonical_hash(context["user_focus"]),
         },
@@ -203,6 +232,7 @@ def record_live_execution(session, execution: CompanyResearchLiveExecution) -> U
             {
                 "output_hash": generation.output_hash if generation else None,
                 "source_bundle_hash": source_hash,
+                "call_receipts_hash": canonical_hash(list(execution.call_receipts)),
             },
             sort_keys=True,
         ),
@@ -363,6 +393,16 @@ def read_live_draft(
             {
                 "output_hash": value.get("output_hash"),
                 "source_bundle_hash": bundle.get("bundle_hash"),
+                **(
+                    {
+                        "call_receipts_hash": canonical_hash(
+                            audit.input_ref.get("call_receipts")
+                        )
+                    }
+                    if value.get("prompt_version")
+                    == "company-research-grounded-draft.v3"
+                    else {}
+                ),
             },
             sort_keys=True,
         )
@@ -376,12 +416,23 @@ def read_live_draft(
         for key in ("user_focus", "cutoff_at", "company_name")
     ) or generation.get("evidence_payload_hash") != bundle.get("evidence_payload_hash"):
         raise ValidationError("company research draft generation context is invalid")
-    validate_frozen_company_sources(
-        bundle, storage_root=source_storage_root(), verify_raw=verify_raw
-    )
+    if bundle.get("schema_version") == "company-research.live-source-bundle.v2":
+        from app.underwriting.services.company_research_ir_sources import (
+            validate_frozen_company_ir_sources,
+        )
+
+        validate_frozen_company_ir_sources(
+            bundle, storage_root=source_storage_root(), verify_raw=verify_raw
+        )
+    else:
+        validate_frozen_company_sources(
+            bundle, storage_root=source_storage_root(), verify_raw=verify_raw
+        )
     try:
         evidence = session.get(
-            CompanyResearchArtifactVersion, UUID(value["evidence_artifact_id"]), populate_existing=True
+            CompanyResearchArtifactVersion,
+            UUID(value["evidence_artifact_id"]),
+            populate_existing=True,
         )
     except (TypeError, ValueError):
         raise ValidationError(
@@ -403,10 +454,37 @@ def read_live_draft(
     CompanyResearchRepository._validate_artifact_row(evidence)
     from app.ai.company_research import (
         CompanyResearchDraftInputError,
+        company_research_initial_input_hash_v3,
+        validate_generation_call_receipts,
         validate_saved_generation,
     )
 
     try:
+        if value["prompt_version"] == "company-research-grounded-draft.v3":
+            initial_hash = company_research_initial_input_hash_v3(
+                **{**context, "company_name": value["company_name"]},
+                model_version=value["model_version"],
+                source_bundle=bundle,
+                evidence_payload=evidence.payload,
+            )
+            if initial_hash != audit.input_ref.get("initial_input_hash"):
+                raise CompanyResearchDraftInputError("invalid initial call receipt")
+            validate_generation_call_receipts(
+                initial_hash,
+                value["input_hash"],
+                audit.input_ref.get("call_receipts"),
+                resolved_content={
+                    key: generation.get(key)
+                    for key in (
+                        "business_analysis",
+                        "operating_drivers",
+                        "candidate_assumptions",
+                        "counterevidence",
+                        "verification_questions",
+                        "report_sections",
+                    )
+                },
+            )
         computed_output_hash = validate_saved_generation(
             generation,
             value["markdown"],

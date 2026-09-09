@@ -3,8 +3,9 @@ import type { CompanyResearchWorkspace } from "../../data/investmentResearchApi"
 type WorkspaceArtifact = CompanyResearchWorkspace["artifacts"][number];
 type ArtifactKind = WorkspaceArtifact["kind"];
 type PreparationStatus = CompanyResearchWorkspace["preparation"]["status"];
+type WorkspacePreparation = CompanyResearchWorkspace["preparation"];
 type NumericObservation = Extract<WorkspaceArtifact, { kind: "evidence_index" }>["payload"]["facts"][number]["observation"];
-type WorkspaceMonotonicOptions = { allowRecovery?: boolean };
+type WorkspaceMonotonicOptions = { allowRecovery?: boolean; allowAutomaticRecovery?: boolean };
 
 const PREPARATION_RANK: Record<PreparationStatus, number> = {
   queued: 0, preparing_sources: 1, awaiting_evidence_review: 2, building_model: 3, awaiting_judgment_review: 4,
@@ -163,7 +164,17 @@ export function artifactByKind<K extends ArtifactKind>(workspace: CompanyResearc
   return (workspace.artifacts.find((artifact) => artifact.kind === kind) as Extract<WorkspaceArtifact, { kind: K }> | undefined) ?? null;
 }
 
-export function preparationIsActive(status: PreparationStatus): boolean {
+function preparationHasScheduledRetry(preparation: WorkspacePreparation): boolean {
+  const error = preparation.error;
+  return preparation.status === "recoverable_failure" && error?.retryable === true
+    && error.failed_step === preparation.current_step && preparation.current_step !== null
+    && (RETRYABLE_ARTIFACT_STEPS.has(preparation.current_step) || preparation.current_step === "model_bundle")
+    && typeof error.next_attempt_at === "string" && Number.isFinite(Date.parse(error.next_attempt_at));
+}
+
+export function preparationIsActive(preparation: PreparationStatus | WorkspacePreparation): boolean {
+  const status = typeof preparation === "string" ? preparation : preparation.status;
+  if (typeof preparation !== "string" && preparationHasScheduledRetry(preparation)) return true;
   return status !== "recoverable_failure" && status !== "blocked" && status !== "completed";
 }
 
@@ -176,6 +187,25 @@ function isDocumentedRecovery(current: CompanyResearchWorkspace, next: CompanyRe
   return (current.preparation.current_step !== null && RETRYABLE_ARTIFACT_STEPS.has(current.preparation.current_step)
       && next.preparation.status === "queued" && next.preparation.progress === 0)
     || (current.preparation.current_step === "model_bundle" && next.preparation.status === "building_model" && next.preparation.progress === 25);
+}
+
+function sourceStepCompleted(current: CompanyResearchWorkspace, next: CompanyResearchWorkspace): boolean {
+  return current.preparation.current_step === "evidence_index"
+    && next.preparation.status === "awaiting_evidence_review"
+    && next.preparation.current_step === "research_gaps" && next.preparation.progress === 25;
+}
+
+function isAutomaticRecovery(current: CompanyResearchWorkspace, next: CompanyResearchWorkspace): boolean {
+  if (!preparationHasScheduledRetry(current.preparation) || next.preparation.error !== null) return false;
+  if (isDocumentedRecovery(current, next)) return true;
+  if (current.preparation.current_step === "evidence_index") {
+    return (next.preparation.status === "preparing_sources"
+        && next.preparation.current_step === "evidence_index" && next.preparation.progress === 5)
+      || (sourceStepCompleted(current, next) && artifactByKind(next, "evidence_index") !== null);
+  }
+  return current.preparation.current_step === "model_bundle"
+    && ((next.preparation.status === "building_model" && next.preparation.current_step === "model_bundle" && next.preparation.progress === 30)
+      || (next.preparation.status === "awaiting_judgment_review" && next.preparation.current_step === "judgment_context" && next.preparation.progress === 85));
 }
 
 function artifactHeadsAreMonotonic(current: CompanyResearchWorkspace, next: CompanyResearchWorkspace): boolean {
@@ -198,8 +228,13 @@ export function workspaceSnapshotIsMonotonic(current: CompanyResearchWorkspace, 
     if (nextEvidence.version === currentEvidence.version && (nextEvidence.id !== currentEvidence.id || nextEvidence.content_hash !== currentEvidence.content_hash)) return false;
   }
 
-  const recovery = options.allowRecovery === true && isDocumentedRecovery(current, next);
+  const automaticRecovery = options.allowAutomaticRecovery === true && isAutomaticRecovery(current, next);
+  const recovery = automaticRecovery || (options.allowRecovery === true && isDocumentedRecovery(current, next));
   if (options.allowRecovery === true && current.preparation.status === "recoverable_failure" && !recovery) return false;
+  if (options.allowAutomaticRecovery === true && preparationHasScheduledRetry(current.preparation)
+    && next.preparation.status === "recoverable_failure"
+    && (!preparationHasScheduledRetry(next.preparation)
+      || Date.parse(next.preparation.error!.next_attempt_at!) < Date.parse(current.preparation.error!.next_attempt_at!))) return false;
   if (!recovery && (next.preparation.progress < current.preparation.progress || PREPARATION_RANK[next.preparation.status] < PREPARATION_RANK[current.preparation.status])) return false;
   if (!recovery && next.preparation.progress === current.preparation.progress && next.preparation.status === current.preparation.status && next.preparation.current_step !== current.preparation.current_step) return false;
   if (next.draft.lock_version < current.draft.lock_version) return false;
@@ -211,11 +246,20 @@ export function workspaceSnapshotIsMonotonic(current: CompanyResearchWorkspace, 
   return current.modules.every((module) => {
     const candidate = next.modules.find((item) => item.key === module.key);
     if (!candidate) return false;
+    if (automaticRecovery && module.state === "blocked") {
+      const expectedState = next.preparation.status === "queued" ? "not_started"
+        : next.preparation.status === "awaiting_evidence_review" ? module.key === "evidence_and_gaps" ? "needs_review" : "not_started"
+          : next.preparation.status === "awaiting_judgment_review" ? "ready" : "preparing";
+      return candidate.state === expectedState && VALUATION_RANK[candidate.valuation_state] >= VALUATION_RANK[module.valuation_state];
+    }
     if (recovery && module.state === "blocked") {
       const expectedState = next.preparation.current_step === "model_bundle" ? "preparing" : "not_started";
       return candidate.state === expectedState;
     }
     if (evidenceAdvanced && EVIDENCE_DOWNSTREAM_MODULES.has(module.key) && candidate.state === "preparing") return true;
+    if (evidenceAdvanced && sourceStepCompleted(current, next) && EVIDENCE_DOWNSTREAM_MODULES.has(module.key) && candidate.state === "not_started") {
+      return VALUATION_RANK[candidate.valuation_state] >= VALUATION_RANK[module.valuation_state];
+    }
     return MODULE_RANK[candidate.state] >= MODULE_RANK[module.state] && VALUATION_RANK[candidate.valuation_state] >= VALUATION_RANK[module.valuation_state];
   });
 }

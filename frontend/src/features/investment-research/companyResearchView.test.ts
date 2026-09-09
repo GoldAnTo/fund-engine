@@ -366,3 +366,72 @@ describe("company research view model", () => {
     }
   });
 });
+
+function scheduledSourceFailure(): CompanyResearchWorkspace {
+  return {
+    project_id: "project-1", company: { id: "company-1" },
+    preparation: { id: "preparation-1", status: "recoverable_failure", current_step: "evidence_index", progress: 0,
+      error: { code: "source_failed", failed_step: "evidence_index", retryable: true, next_attempt_at: "2026-09-09T10:00:00Z" } },
+    artifacts: [], modules: [{ key: "overview", state: "blocked", valuation_state: "not_applicable" }],
+    draft: { id: "draft-1", lock_version: 1, base_revision_id: null }, selected_revision: null,
+    change_summary: { reviewed_fact_count: 0, artifact_versions: {} },
+  } as unknown as CompanyResearchWorkspace;
+}
+
+function automaticallyResumed(current: CompanyResearchWorkspace): CompanyResearchWorkspace {
+  const next = structuredClone(current);
+  Object.assign(next.preparation, { status: "preparing_sources", progress: 5, error: null });
+  next.modules[0]!.state = "preparing";
+  return next;
+}
+
+describe("scheduled company research recovery", () => {
+  it("polls only a valid server-authorized retry schedule", () => {
+    const current = scheduledSourceFailure();
+    expect(preparationIsActive(current.preparation)).toBe(true);
+    for (const mutate of [
+      (next: CompanyResearchWorkspace) => { next.preparation.error!.next_attempt_at = null; },
+      (next: CompanyResearchWorkspace) => { next.preparation.error!.retryable = false; },
+      (next: CompanyResearchWorkspace) => { next.preparation.error!.next_attempt_at = "bad-date"; },
+      (next: CompanyResearchWorkspace) => { next.preparation.error!.failed_step = "model_bundle"; },
+      (next: CompanyResearchWorkspace) => { next.preparation.status = "blocked"; },
+    ]) {
+      const next = structuredClone(current); mutate(next);
+      expect(preparationIsActive(next.preparation)).toBe(false);
+    }
+  });
+
+  it("accepts only the scheduled source recovery while retaining identity and version guards", () => {
+    const current = scheduledSourceFailure();
+    const next = automaticallyResumed(current);
+    expect(workspaceSnapshotIsMonotonic(current,next)).toBe(false);
+    expect(workspaceSnapshotIsMonotonic(current,next,{ allowAutomaticRecovery: true })).toBe(true);
+    for (const mutate of [
+      (value: CompanyResearchWorkspace) => { value.company.id = "company-other"; },
+      (value: CompanyResearchWorkspace) => { value.project_id = "project-other"; },
+      (value: CompanyResearchWorkspace) => { value.preparation.id = "preparation-other"; },
+      (value: CompanyResearchWorkspace) => { value.preparation.current_step = "financial_bridge"; },
+      (value: CompanyResearchWorkspace) => { value.preparation.error = current.preparation.error; },
+      (value: CompanyResearchWorkspace) => { value.draft.lock_version = 0; },
+      (value: CompanyResearchWorkspace) => { value.change_summary.reviewed_fact_count = -1; },
+    ]) {
+      const invalid = structuredClone(next); mutate(invalid);
+      expect(workspaceSnapshotIsMonotonic(current,invalid,{ allowAutomaticRecovery: true })).toBe(false);
+    }
+    current.preparation.error!.next_attempt_at = null;
+    expect(workspaceSnapshotIsMonotonic(current,next,{ allowAutomaticRecovery: true })).toBe(false);
+  });
+
+  it("accepts a completed source step between polls but rejects an older retry schedule", () => {
+    const current = scheduledSourceFailure();
+    const next = automaticallyResumed(current);
+    Object.assign(next.preparation, { status: "awaiting_evidence_review", current_step: "research_gaps", progress: 25 });
+    next.artifacts = [{ kind: "evidence_index", id: "evidence-1", content_hash: "hash", version: 1 }] as CompanyResearchWorkspace["artifacts"];
+    next.change_summary.artifact_versions = { evidence_index: 1 };
+    next.modules[0]!.state = "not_started";
+    expect(workspaceSnapshotIsMonotonic(current,next,{ allowAutomaticRecovery: true })).toBe(true);
+    const stale = structuredClone(current);
+    stale.preparation.error!.next_attempt_at = "2026-09-09T09:00:00Z";
+    expect(workspaceSnapshotIsMonotonic(current,stale,{ allowAutomaticRecovery: true })).toBe(false);
+  });
+});

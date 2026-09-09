@@ -48,11 +48,15 @@ from app.underwriting.services.company_research_workbench import (
     CompanyResearchWorkbench,
 )
 from app.underwriting.services.workspace_draft import WorkspaceDraftService
+from tests.underwriting import (
+    test_company_research_ir_sources as ir_source_test_support,
+)
 from tests.underwriting import test_company_research_live_sources as source_test_support
 from tests.underwriting.test_company_research_generator import _response
 
 LIVE_NOW = source_test_support.NOW
 capture_case = source_test_support.capture_case
+ir_capture_case = ir_source_test_support.case
 
 
 def test_machine_memo_binds_research_draft_without_changing_legacy_bytes():
@@ -141,10 +145,15 @@ class OfflineCompanyProvider:
         if self.failure == "transport":
             raise TimeoutError("provider-secret-request-body")
         prompt = json.loads(kwargs["messages"][1]["content"])
+        selected_quote = next(
+            item
+            for item in prompt["quote_catalog"]
+            if "Google Search and Google Cloud support customers." in item["quote"]
+        )
         excerpt = next(
             item
             for item in prompt["excerpts"]
-            if "Google Search and Google Cloud support customers." in item["text"]
+            if item["excerpt_id"] == selected_quote["excerpt_id"]
         )
         fact = next(
             item for item in prompt["facts"] if item["raw_hash"] == excerpt["raw_hash"]
@@ -386,9 +395,15 @@ def test_failed_live_provider_keeps_input_receipt_and_usage_without_usable_draft
         source_bundle=receipt,
         evidence_payload=compiled.evidence_index_payload,
     )
-    assert audit.input_ref["input_hash"] == expected_input
+    assert audit.input_ref["initial_input_hash"] == expected_input
+    expected_calls = 1 if failure == "transport" else 2
+    if failure == "transport":
+        assert audit.input_ref["input_hash"] == expected_input
+    else:
+        assert audit.input_ref["input_hash"] != expected_input
+    assert len(audit.input_ref["call_receipts"]) == expected_calls
     attempts = audit.usage["attempts"]
-    assert len(attempts) == 1
+    assert len(attempts) == expected_calls
     assert attempts[0]["usage_state"] == (
         "unavailable" if failure == "transport" else "reported"
     )
@@ -401,7 +416,7 @@ def test_failed_live_provider_keeps_input_receipt_and_usage_without_usable_draft
         is None
     )
     assert session.get(Job, run.claim.job_id).status == "queued"
-    assert len(run.provider.calls) == 1
+    assert len(run.provider.calls) == expected_calls
 
 
 def test_cancelled_claim_keeps_provider_usage_but_publishes_no_artifacts(
@@ -575,3 +590,249 @@ def test_output_transaction_rollback_preserves_usage_and_removes_partial_draft(
     assert (
         repository.current_artifact(run.initialized.project.id, "research_gaps") is None
     )
+
+
+def test_official_ir_pdf_runs_through_confirmation_and_frozen_export(
+    session, ir_capture_case, monkeypatch, tmp_path
+):
+    module, _evidence, _refs, fetcher, fetch_calls, _pages = ir_capture_case
+    monkeypatch.setenv("COMPANY_RESEARCH_SOURCE_DIR", str(tmp_path))
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        prompt = json.loads(kwargs["messages"][1]["content"])
+        fact_key, verified = next(iter(prompt["fact_verifications"].items()))
+        selected_quote = next(
+            item
+            for item in prompt["quote_catalog"]
+            if item["source_id"] == verified["source_id"]
+            and fact_key in prompt["source_fact_keys"][item["source_id"]]
+        )
+        response = _response()
+        for items in response.values():
+            for item in items:
+                item["citations"] = [{"quote_id": selected_quote["quote_id"]}]
+                item["fact_keys"] = [fact_key]
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=json.dumps(response)),
+                    finish_reason="stop",
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=100, completion_tokens=40, total_tokens=140
+            ),
+        )
+
+    client = LLMClient(
+        model_version="offline-ir-provider.v1",
+        mock=False,
+        max_attempts=1,
+        client=SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        ),
+    )
+    clock = SimpleNamespace(value=LIVE_NOW)
+    now = lambda: clock.value
+    from tests.underwriting.test_company_research_api import _alphabet_id
+
+    initializer = CompanyResearchInitializer(session, now=now)
+    company_id = _alphabet_id(session)
+    fixture = load_alphabet_golden_case_fixture()
+    focus = "核验云业务现金流与资本需求"
+    preview = initializer.preview(
+        company_id=company_id, cutoff_at=fixture.cutoff, user_focus=focus
+    )
+    initialized = initializer.initialize(
+        company_id=company_id,
+        cutoff_at=fixture.cutoff,
+        user_focus=focus,
+        preview_hash=preview.input_hash,
+        idempotency_key="offline-ir-company",
+    )
+    runtime = CompanyResearchLiveRuntime(
+        generator=CompanyResearchDraftGenerator(client),
+        storage_root=tmp_path,
+        now=now,
+        capture=lambda evidence, refs, **kwargs: (
+            module.capture_governed_alphabet_ir_sources(
+                evidence, refs, fetcher=fetcher, **kwargs
+            )
+        ),
+    )
+    worker = CompanyResearchPreparationWorker(session, now=now, live_runtime=runtime)
+    claim = worker.claim_next()
+    session.commit()
+    run = SimpleNamespace(
+        initialized=initialized,
+        worker=worker,
+        claim=claim,
+        clock=clock,
+        now=now,
+        provider=SimpleNamespace(calls=calls),
+        fetch_calls=fetch_calls,
+    )
+    pending, publisher, revision = _publish_live_research(session, run)
+    assert pending.research_draft["sources"][0]["source_url"].endswith(
+        "GOOG-10-K-2025.pdf"
+    )
+    assert all("sec.gov" not in url for url in fetch_calls)
+    assert "本次核验原文" in revision.memo_markdown
+    session.expire_all()
+    assert publisher.revision(initialized.project.id, revision.id) == revision
+    assert (
+        "GOOG-10-K-2025.pdf"
+        in publisher.export(initialized.project.id, revision.id).content
+    )
+
+
+def _correct_once_provider(monkeypatch, run, *, second_transport=False):
+    original = run.provider.create
+
+    def create(**kwargs):
+        if second_transport and len(run.provider.calls) == 1:
+            run.provider.failure = "transport"
+        response = original(**kwargs)
+        if len(run.provider.calls) == 1:
+            payload = json.loads(response.choices[0].message.content)
+            payload["verification_questions"][0]["text"] += "必须复核2026年。"
+            response.choices[0].message.content = json.dumps(payload)
+        return response
+
+    monkeypatch.setattr(run.provider, "create", create)
+
+
+def test_v3_corrected_live_draft_records_two_calls_and_replays_chain(
+    session, offline_company_run, monkeypatch
+):
+    run = offline_company_run
+    _correct_once_provider(monkeypatch, run)
+    assert run.worker.run_claim(run.claim) == "awaiting_evidence_review"
+    session.commit()
+    row = read_live_draft(session, project_id=run.initialized.project.id)
+    assert row is not None
+    audit = session.get(AIRun, row.ai_run_id)
+    assert len(run.provider.calls) == 2
+    assert len(audit.usage["attempts"]) == 2
+    assert [r["outcome"] for r in audit.input_ref["call_receipts"]] == [
+        "validation_failed",
+        "accepted",
+    ]
+    assert (
+        audit.input_ref["initial_input_hash"]
+        != audit.input_ref["input_hash"]
+        == row.payload["input_hash"]
+    )
+    assert json.loads(audit.output_summary)["call_receipts_hash"] == canonical_hash(
+        audit.input_ref["call_receipts"]
+    )
+
+
+def test_v3_second_transport_failure_preserves_both_usage_and_call_receipts(
+    session, offline_company_run, monkeypatch
+):
+    run = offline_company_run
+    _correct_once_provider(monkeypatch, run, second_transport=True)
+    assert run.worker.run_claim(run.claim) == "recoverable_failure"
+    session.commit()
+    audit = session.scalar(select(AIRun).where(AIRun.kind == "company_research_draft"))
+    assert audit.status == "failed"
+    assert [attempt["outcome"] for attempt in audit.usage["attempts"]] == [
+        "response_received",
+        "transport_error",
+    ]
+    assert [r["outcome"] for r in audit.input_ref["call_receipts"]] == [
+        "validation_failed",
+        "provider_error",
+    ]
+    assert audit.input_ref["input_hash"] != audit.input_ref["initial_input_hash"]
+    assert read_live_draft(session, project_id=run.initialized.project.id) is None
+    assert len(run.provider.calls) == 2
+    assert "provider-secret" not in json.dumps(audit.input_ref)
+
+
+@pytest.mark.parametrize("calls", [1, 2])
+def test_v3_read_rejects_tampered_call_receipts(
+    session, offline_company_run, monkeypatch, calls
+):
+    from tests.underwriting.test_company_research_persistence import _tamper_row
+
+    run = offline_company_run
+    if calls == 2:
+        _correct_once_provider(monkeypatch, run)
+    assert run.worker.run_claim(run.claim) == "awaiting_evidence_review"
+    session.commit()
+    row = read_live_draft(session, project_id=run.initialized.project.id)
+    audit = session.get(AIRun, row.ai_run_id)
+    changed = deepcopy(audit.input_ref)
+    changed["call_receipts"][0]["response_hash"] = "f" * 64
+    _tamper_row(session, AIRun, audit.id, expire=False, input_ref=changed)
+    with pytest.raises(ValidationError):
+        read_live_draft(session, project_id=run.initialized.project.id)
+
+
+@pytest.mark.parametrize(
+    "prompt_version",
+    ["company-research-grounded-draft.v1", "company-research-grounded-draft.v2"],
+)
+def test_legacy_prompt_drafts_replay_without_v3_call_receipts(
+    session, offline_company_run, monkeypatch, prompt_version
+):
+    import app.ai.company_research as generator_module
+    from tests.underwriting.test_company_research_persistence import _tamper_row
+
+    run = offline_company_run
+    _pending_live_workspace(session, run)
+    row = read_live_draft(session, project_id=run.initialized.project.id)
+    audit = session.get(AIRun, row.ai_run_id)
+    payload = deepcopy(row.payload)
+    payload["prompt_version"] = prompt_version
+    input_ref = deepcopy(audit.input_ref)
+    input_ref.pop("initial_input_hash", None)
+    input_ref.pop("call_receipts", None)
+    summary = json.loads(audit.output_summary)
+    summary.pop("call_receipts_hash", None)
+    _tamper_row(
+        session,
+        type(row),
+        row.id,
+        payload=payload,
+        content_hash=canonical_hash(payload),
+    )
+    _tamper_row(
+        session,
+        AIRun,
+        audit.id,
+        prompt_version=prompt_version,
+        input_ref=input_ref,
+        output_summary=json.dumps(summary, sort_keys=True),
+    )
+    monkeypatch.setattr(
+        generator_module,
+        "company_research_initial_input_hash_v3",
+        lambda **kwargs: pytest.fail("legacy replay must not rebuild v3 prompt"),
+    )
+    assert read_live_draft(session, project_id=run.initialized.project.id) is not None
+
+
+def test_v3_replay_rejects_missing_generation_group_with_safe_domain_error(
+    session, offline_company_run
+):
+    from tests.underwriting.test_company_research_persistence import _tamper_row
+
+    run = offline_company_run
+    _pending_live_workspace(session, run)
+    row = read_live_draft(session, project_id=run.initialized.project.id)
+    payload = deepcopy(row.payload)
+    payload["generation"].pop("business_analysis")
+    _tamper_row(
+        session,
+        type(row),
+        row.id,
+        payload=payload,
+        content_hash=canonical_hash(payload),
+    )
+    with pytest.raises(ValidationError):
+        read_live_draft(session, project_id=run.initialized.project.id)

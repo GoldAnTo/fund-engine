@@ -1506,6 +1506,62 @@ def test_post_provider_bundle_validation_diagnostic_remains_actionable(
     }
 
 
+@pytest.mark.parametrize("stage", ["evidence_index", "model_bundle"])
+def test_automatic_retry_clears_current_error_and_keeps_failure_history_readable(
+    session, stage
+) -> None:
+    initialized = _initialized(session) if stage == "evidence_index" else _ready_for_model(session)
+    current_time = NOW
+
+    def unavailable(_provider_input):
+        raise TimeoutError("provider unavailable")
+
+    worker = CompanyResearchPreparationWorker(
+        session,
+        now=lambda: current_time,
+        **({"provider": unavailable} if stage == "evidence_index" else {"model_provider": unavailable}),
+    )
+    claim = worker.claim_next()
+    assert claim is not None and claim.step == stage
+    assert worker.run_claim(claim) == "recoverable_failure"
+    workbench = CompanyResearchWorkbench(session, now=lambda: current_time)
+    failed = workbench.workspace(project_id=initialized.project.id)
+    assert failed.preparation.error is not None
+    assert failed.preparation.error.code == "provider_unavailable"
+    repository = CompanyResearchRepository(session)
+    events_before = tuple(
+        (event.id, event.content_hash) for event in repository.events(claim.preparation_id)
+    )
+    assert worker.claim_next() is None
+
+    current_time = NOW + timedelta(seconds=30)
+    retry_claim = worker.claim_next()
+    assert retry_claim is not None and retry_claim.step == stage
+    session.commit()
+    session.expire_all()
+
+    running = workbench.workspace(project_id=initialized.project.id)
+    assert running.preparation.status == (
+        "preparing_sources" if stage == "evidence_index" else "building_model"
+    )
+    assert running.preparation.error is None
+    assert running.product_progress is not None
+    assert running.product_progress.error_code is None
+    assert running.product_progress.retryable is False
+    preparation = session.get(CompanyResearchPreparation, claim.preparation_id)
+    job = session.get(Job, claim.job_id)
+    assert preparation.last_error_code is None
+    assert preparation.next_attempt_at is None
+    assert job.error is None
+    assert job.status == "running" and job.attempt == preparation.attempt == 2
+    events_after = repository.events(claim.preparation_id)
+    assert tuple((event.id, event.content_hash) for event in events_after[:-1]) == events_before
+    assert events_after[-2].payload == {"code": "provider_unavailable", "recoverable": True}
+    assert events_after[-1].event_type == (
+        "source_stage_claimed" if stage == "evidence_index" else "model_stage_claimed"
+    )
+
+
 def test_manual_retry_keeps_a_model_failure_on_the_model_bundle_step(session) -> None:
     initialized = _ready_for_model(session)
     worker = CompanyResearchPreparationWorker(
