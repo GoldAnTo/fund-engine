@@ -1,22 +1,17 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
 from datetime import date, datetime, timezone
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import (
     AIAssessment,
-    CaseTenantAdmission,
-    CaseDocumentVersion,
-    CaseThemeTagEvent,
     CausalEdge,
     CausalStep,
     DocumentVersion,
     EvidenceLink,
-    EvidenceReview,
     EvidenceSnapshot,
     ResearchCase,
     ReviewDecision,
@@ -45,175 +40,16 @@ class ResearchRepository:
         title: str,
         industry_topic: str,
         created_by: str,
-        research_object: str | None = None,
-        phenomenon: str | None = None,
-        core_question: str | None = None,
-        period_start: date | None = None,
-        period_end: date | None = None,
-        evidence_cutoff: date | None = None,
     ) -> ResearchCase:
         case = ResearchCase(
             title=title,
             industry_topic=industry_topic,
             created_by=created_by,
             created_at=_utcnow(),
-            research_object=research_object,
-            phenomenon=phenomenon,
-            core_question=core_question,
-            period_start=period_start,
-            period_end=period_end,
-            evidence_cutoff=evidence_cutoff,
         )
         self._session.add(case)
         self._session.flush()
         return case
-
-    def add_theme_tag_event(
-        self,
-        *,
-        research_case_id: uuid.UUID,
-        tag: str,
-        op: str,
-        proposed_by: str = "human",
-        status: str = "confirmed",
-        proposal_id: uuid.UUID | None = None,
-    ) -> CaseThemeTagEvent:
-        event = CaseThemeTagEvent(
-            research_case_id=research_case_id,
-            tag=tag,
-            op=op,
-            proposed_by=proposed_by,
-            status=status,
-            proposal_id=proposal_id,
-            created_at=_utcnow(),
-        )
-        self._session.add(event)
-        self._session.flush()
-        return event
-
-    def theme_tag_events(
-        self, research_case_id: uuid.UUID | None = None
-    ) -> list[CaseThemeTagEvent]:
-        """All tag events in creation order (optionally for one case)."""
-        query = select(CaseThemeTagEvent).order_by(CaseThemeTagEvent.created_at)
-        if research_case_id is not None:
-            query = query.where(
-                CaseThemeTagEvent.research_case_id == research_case_id
-            )
-        return list(self._session.scalars(query))
-
-    def pending_proposals_for_case(
-        self, research_case_id: uuid.UUID
-    ) -> list[CaseThemeTagEvent]:
-        """All currently-pending AI proposal events for one case, in creation order.
-
-        Pending events for one proposal share ``proposal_id`` and a single
-        proposal's events are appended contiguously in one AI PATCH call.
-        """
-        return list(
-            self._session.scalars(
-                select(CaseThemeTagEvent)
-                .where(CaseThemeTagEvent.research_case_id == research_case_id)
-                .where(CaseThemeTagEvent.status == "pending")
-                .where(CaseThemeTagEvent.proposed_by == "ai")
-                .order_by(CaseThemeTagEvent.created_at)
-            )
-        )
-
-    def promote_pending_proposal(
-        self, *, research_case_id: uuid.UUID, proposal_id: uuid.UUID
-    ) -> int:
-        """Promote a pending AI proposal to confirmed; return the row count.
-
-        The ``case_theme_tag_events`` table is append-only (see
-        ``IMMUTABLE_TABLES``), so this method *appends* a confirmed twin
-        for every pending event and leaves the originals untouched. The
-        originals stay ``status='pending'`` (visible in the audit trail
-        as the AI's proposal) but never count toward the effective tag
-        set, because :func:`effective_tags` folds only confirmed events.
-        The newly-appended confirmed rows are what change the effective
-        set — same shape, same ``proposal_id``, attributable to the
-        human who confirmed.
-        """
-        pending = list(
-            self._session.scalars(
-                select(CaseThemeTagEvent)
-                .where(CaseThemeTagEvent.research_case_id == research_case_id)
-                .where(CaseThemeTagEvent.proposal_id == proposal_id)
-                .where(CaseThemeTagEvent.status == "pending")
-                .order_by(CaseThemeTagEvent.created_at)
-            )
-        )
-        if not pending:
-            return 0
-        for event in pending:
-            self._session.add(
-                CaseThemeTagEvent(
-                    research_case_id=event.research_case_id,
-                    tag=event.tag,
-                    op=event.op,
-                    proposed_by="human",
-                    status="confirmed",
-                    proposal_id=event.proposal_id,
-                    created_at=_utcnow(),
-                )
-            )
-        self._session.flush()
-        return len(pending)
-
-    def promote_matching_pending_proposal(
-        self, *, research_case_id: uuid.UUID, desired_target: set[str]
-    ) -> uuid.UUID | None:
-        """Promote the first pending AI proposal whose effective set equals *desired_target*.
-
-        "Effective set" is the set that would result if every pending
-        event in the proposal were treated as confirmed, folded on top of
-        the *already-confirmed* events. Returns the promoted proposal_id,
-        or None if no match exists (in which case the caller should
-        append fresh confirmed events directly).
-
-        Only one proposal can match a given target set: two pending
-        proposals on the same case would only coexist if the first was
-        already misaligned with operator intent, so we promote the
-        earliest unmatched one and let later proposals be resolved by
-        later PATCHes.
-        """
-        # Pre-compute the current confirmed effective set once.
-        confirmed_events = list(
-            self._session.scalars(
-                select(CaseThemeTagEvent)
-                .where(CaseThemeTagEvent.research_case_id == research_case_id)
-                .where(CaseThemeTagEvent.status == "confirmed")
-                .order_by(CaseThemeTagEvent.created_at)
-            )
-        )
-        current = set()
-        for event in confirmed_events:
-            if event.op == "add":
-                current.add(event.tag)
-            elif event.op == "remove":
-                current.discard(event.tag)
-
-        # Group pending events by proposal_id, preserving order.
-        pending = self.pending_proposals_for_case(research_case_id)
-        grouped: dict[uuid.UUID, list[CaseThemeTagEvent]] = {}
-        for event in pending:
-            assert event.proposal_id is not None
-            grouped.setdefault(event.proposal_id, []).append(event)
-
-        for proposal_id, events in grouped.items():
-            projected = set(current)
-            for event in events:
-                if event.op == "add":
-                    projected.add(event.tag)
-                elif event.op == "remove":
-                    projected.discard(event.tag)
-            if projected == desired_target:
-                self.promote_pending_proposal(
-                    research_case_id=research_case_id, proposal_id=proposal_id
-                )
-                return proposal_id
-        return None
 
     def add_thesis(
         self,
@@ -221,30 +57,12 @@ class ResearchRepository:
         research_case_id: uuid.UUID,
         statement: str,
         created_by: str,
-        title: str | None = None,
-        observation_start: date | None = None,
-        observation_end: date | None = None,
-        support_condition: str | None = None,
-        falsification_condition: str | None = None,
-        next_verification_event: str | None = None,
-        creator_type: str = "human",
-        review_state: str = "confirmed",
-        research_protocol_required: bool = False,
     ) -> Thesis:
         thesis = Thesis(
             research_case_id=research_case_id,
             statement=statement,
             created_by=created_by,
             created_at=_utcnow(),
-            title=title,
-            observation_start=observation_start,
-            observation_end=observation_end,
-            support_condition=support_condition,
-            falsification_condition=falsification_condition,
-            next_verification_event=next_verification_event,
-            creator_type=creator_type,
-            review_state=review_state,
-            research_protocol_required=research_protocol_required,
         )
         self._session.add(thesis)
         self._session.flush()
@@ -319,8 +137,6 @@ class ResearchRepository:
         creator_type: str = "ai",
         review_state: str = "machine_generated",
         model_version: str | None = None,
-        automatic_admission_decision_id: uuid.UUID | None = None,
-        before_flush: Callable[[], None] | None = None,
     ) -> EvidenceLink:
         link = EvidenceLink(
             thesis_id=thesis_id,
@@ -332,29 +148,11 @@ class ResearchRepository:
             creator_type=creator_type,
             review_state=review_state,
             model_version=model_version,
-            automatic_admission_decision_id=automatic_admission_decision_id,
             created_at=_utcnow(),
         )
         self._session.add(link)
-        if before_flush is not None:
-            with self._session.no_autoflush:
-                before_flush()
         self._session.flush()
         return link
-
-    def get_automatic_evidence_link(
-        self, automatic_admission_decision_id: uuid.UUID
-    ) -> EvidenceLink | None:
-        """Return the link already published for one immutable machine decision."""
-        return self._session.scalar(
-            select(EvidenceLink)
-            .where(
-                EvidenceLink.automatic_admission_decision_id
-                == automatic_admission_decision_id
-            )
-            .order_by(EvidenceLink.created_at, EvidenceLink.id)
-            .limit(1)
-        )
 
     def get_statement(self, statement_id: uuid.UUID) -> SourceStatement | None:
         return self._session.scalar(
@@ -383,71 +181,20 @@ class ResearchRepository:
             )
         )
 
-    def document_attached_to_case(self, document_id: uuid.UUID, case_id: uuid.UUID) -> bool:
-        return self._session.scalar(select(CaseDocumentVersion.id).where(
-            CaseDocumentVersion.document_version_id == document_id,
-            CaseDocumentVersion.research_case_id == case_id,
-        ).limit(1)) is not None
-
-    def get_thesis(self, thesis_id: uuid.UUID) -> Thesis | None:
-        return self._session.get(Thesis, thesis_id)
-
-    def source_contract_for_document(self, document_id: uuid.UUID):
-        from app.models.source_governance import SourceContract
-        return self._session.scalar(select(SourceContract).where(
-            SourceContract.document_version_id == document_id,
-        ))
-
     def visible_links(
         self,
         *,
         thesis_id: uuid.UUID,
         cutoff: datetime,
     ) -> list[EvidenceLink]:
-        # A link is visible at cutoff only if the evidence was available AND
-        # the link had been written to the ledger by then. Filtering only
-        # available_at would allow hindsight leakage via backfilled dates.
         return list(
             self._session.scalars(
                 select(EvidenceLink)
                 .where(EvidenceLink.thesis_id == thesis_id)
                 .where(EvidenceLink.available_at <= cutoff)
-                .where(EvidenceLink.created_at <= cutoff)
                 .order_by(EvidenceLink.available_at)
             )
         )
-
-    def visible_links_by_ids(
-        self,
-        *,
-        thesis_id: uuid.UUID,
-        cutoff: datetime,
-        evidence_link_ids: list[uuid.UUID],
-    ) -> list[EvidenceLink]:
-        """Return the captured prompt links in caller order or fail closed."""
-        if len(evidence_link_ids) != len(set(evidence_link_ids)):
-            raise ValueError("captured evidence link IDs must be unique")
-        if not evidence_link_ids:
-            return []
-        links = {
-            link.id: link
-            for link in self._session.scalars(
-                select(EvidenceLink)
-                .where(EvidenceLink.id.in_(evidence_link_ids))
-                .where(EvidenceLink.thesis_id == thesis_id)
-                .where(EvidenceLink.available_at <= cutoff)
-                .where(EvidenceLink.created_at <= cutoff)
-            )
-        }
-        ordered: list[EvidenceLink] = []
-        for link_id in evidence_link_ids:
-            link = links.get(link_id)
-            if link is None:
-                raise ValueError(
-                    "captured evidence link is not visible for the snapshot thesis and cutoff"
-                )
-            ordered.append(link)
-        return ordered
 
     def insert_snapshot(
         self,
@@ -473,10 +220,6 @@ class ResearchRepository:
         conclusion: str,
         rationale: str,
         gaps: list[str],
-        research_protocol_status: str | None = None,
-        effective_binding_id: uuid.UUID | None = None,
-        mechanism_template_version_id: uuid.UUID | None = None,
-        verification_rule_ids: list[str] | None = None,
         displayed_as_provisional: bool = True,
         creator_type: str = "ai",
         model_version: str | None = None,
@@ -486,10 +229,6 @@ class ResearchRepository:
             conclusion=conclusion,
             rationale=rationale,
             gaps=gaps,
-            research_protocol_status=research_protocol_status,
-            effective_binding_id=effective_binding_id,
-            mechanism_template_version_id=mechanism_template_version_id,
-            verification_rule_ids=verification_rule_ids,
             displayed_as_provisional=displayed_as_provisional,
             creator_type=creator_type,
             model_version=model_version,
@@ -520,143 +259,36 @@ class ResearchRepository:
         self._session.flush()
         return review
 
-    def insert_evidence_review(
-        self,
-        *,
-        evidence_link_id: uuid.UUID,
-        outcome: str,
-        relation: str | None,
-        factor_role: str,
-        scope_boundary: str,
-        reason: str,
-        reviewer: str,
-    ) -> EvidenceReview:
-        review = EvidenceReview(
-            evidence_link_id=evidence_link_id,
-            outcome=outcome,
-            relation=relation,
-            factor_role=factor_role,
-            scope_boundary=scope_boundary,
-            reason=reason,
-            reviewer=reviewer,
-            created_at=_utcnow(),
-        )
-        self._session.add(review)
-        self._session.flush()
-        return review
-
-    def evidence_reviews_for_links(
-        self, link_ids: list[uuid.UUID]
-    ) -> list[EvidenceReview]:
-        if not link_ids:
-            return []
-        return list(
-            self._session.scalars(
-                select(EvidenceReview)
-                .where(EvidenceReview.evidence_link_id.in_(link_ids))
-                .order_by(EvidenceReview.created_at)
-            )
-        )
-
     def get_ai_assessment(self, assessment_id: uuid.UUID) -> AIAssessment | None:
         return self._session.scalar(
             select(AIAssessment).where(AIAssessment.id == assessment_id)
         )
 
-    def assessment_thesis(self, assessment_id: uuid.UUID) -> Thesis | None:
-        return self._session.scalar(
-            select(Thesis)
-            .join(EvidenceSnapshot, EvidenceSnapshot.thesis_id == Thesis.id)
-            .join(AIAssessment, AIAssessment.snapshot_id == EvidenceSnapshot.id)
-            .where(AIAssessment.id == assessment_id)
-        )
-
     # ------------------------------------------------------------------ readers (workbench / projection)
 
-    def get_case(
-        self,
-        case_id: uuid.UUID,
-        *,
-        cutoff: datetime | None = None,
-    ) -> ResearchCase | None:
-        if cutoff is None:
-            return self._session.get(ResearchCase, case_id)
-        # Historical view: a case created after the cutoff did not exist then.
-        return self._session.scalar(
-            select(ResearchCase)
-            .where(ResearchCase.id == case_id)
-            .where(ResearchCase.created_at <= cutoff)
-        )
+    def get_case(self, case_id: uuid.UUID) -> ResearchCase | None:
+        return self._session.get(ResearchCase, case_id)
 
     def latest_thesis_for_case(
-        self,
-        research_case_id: uuid.UUID,
-        *,
-        cutoff: datetime | None = None,
+        self, research_case_id: uuid.UUID
     ) -> Thesis | None:
-        query = (
+        return self._session.scalar(
             select(Thesis)
             .where(Thesis.research_case_id == research_case_id)
             .order_by(Thesis.created_at.desc())
+            .limit(1)
         )
-        if cutoff is not None:
-            query = query.where(Thesis.created_at <= cutoff)
-        return self._session.scalar(query.limit(1))
 
     def theses_for_case(
-        self,
-        research_case_id: uuid.UUID,
-        *,
-        cutoff: datetime | None = None,
+        self, research_case_id: uuid.UUID
     ) -> list[Thesis]:
-        query = (
-            select(Thesis)
-            .where(Thesis.research_case_id == research_case_id)
-            .order_by(Thesis.created_at)
-        )
-        if cutoff is not None:
-            query = query.where(Thesis.created_at <= cutoff)
-        return list(self._session.scalars(query))
-
-    def cases_page(
-        self,
-        *,
-        limit: int,
-        after_created_at: datetime | None = None,
-        after_id: uuid.UUID | None = None,
-        tenant_id: str | None = None,
-    ) -> list[ResearchCase]:
-        """Return up to ``limit + 1`` cases newest-first for cursor pagination."""
-        query = select(ResearchCase).order_by(
-            ResearchCase.created_at.desc(), ResearchCase.id.desc()
-        )
-        if tenant_id is not None:
-            query = query.join(
-                CaseTenantAdmission,
-                CaseTenantAdmission.research_case_id == ResearchCase.id,
-            ).where(CaseTenantAdmission.tenant_id == tenant_id)
-        if after_created_at is not None and after_id is not None:
-            query = query.where(
-                tuple_(ResearchCase.created_at, ResearchCase.id)
-                < tuple_(after_created_at, after_id)
+        return list(
+            self._session.scalars(
+                select(Thesis)
+                .where(Thesis.research_case_id == research_case_id)
+                .order_by(Thesis.created_at)
             )
-        return list(self._session.scalars(query.limit(limit + 1)))
-
-    def thesis_by_id_for_case(
-        self,
-        case_id: uuid.UUID,
-        thesis_id: uuid.UUID,
-        *,
-        cutoff: datetime | None = None,
-    ) -> Thesis | None:
-        query = (
-            select(Thesis)
-            .where(Thesis.id == thesis_id)
-            .where(Thesis.research_case_id == case_id)
         )
-        if cutoff is not None:
-            query = query.where(Thesis.created_at <= cutoff)
-        return self._session.scalar(query)
 
     def latest_assessment_for_thesis(
         self,
@@ -682,70 +314,26 @@ class ResearchRepository:
             .limit(1)
         )
 
-    def latest_snapshot_for_thesis(
-        self,
-        thesis_id: uuid.UUID,
-        *,
-        cutoff: datetime,
-    ) -> EvidenceSnapshot | None:
-        """Latest frozen snapshot for a thesis written on or before *cutoff*."""
-        return self._session.scalar(
-            select(EvidenceSnapshot)
-            .where(EvidenceSnapshot.thesis_id == thesis_id)
-            .where(EvidenceSnapshot.created_at <= cutoff)
-            .order_by(EvidenceSnapshot.created_at.desc())
-            .limit(1)
-        )
-
-    def assessments_for_thesis(
-        self,
-        thesis_id: uuid.UUID,
-        *,
-        cutoff: datetime,
-    ) -> list[AIAssessment]:
-        """All AI assessments for a thesis created on or before *cutoff*."""
-        return list(
-            self._session.scalars(
-                select(AIAssessment)
-                .join(
-                    EvidenceSnapshot,
-                    AIAssessment.snapshot_id == EvidenceSnapshot.id,
-                )
-                .where(EvidenceSnapshot.thesis_id == thesis_id)
-                .where(AIAssessment.created_at <= cutoff)
-                .order_by(AIAssessment.created_at.desc())
-            )
-        )
-
     def latest_review_for_assessment(
-        self,
-        assessment_id: uuid.UUID,
-        *,
-        cutoff: datetime | None = None,
+        self, assessment_id: uuid.UUID
     ) -> ReviewDecision | None:
-        query = (
+        return self._session.scalar(
             select(ReviewDecision)
             .where(ReviewDecision.ai_assessment_id == assessment_id)
             .order_by(ReviewDecision.created_at.desc())
+            .limit(1)
         )
-        if cutoff is not None:
-            query = query.where(ReviewDecision.created_at <= cutoff)
-        return self._session.scalar(query.limit(1))
 
     def causal_steps_for_thesis(
-        self,
-        thesis_id: uuid.UUID,
-        *,
-        cutoff: datetime | None = None,
+        self, thesis_id: uuid.UUID
     ) -> list[CausalStep]:
-        query = (
-            select(CausalStep)
-            .where(CausalStep.thesis_id == thesis_id)
-            .order_by(CausalStep.sequence)
+        return list(
+            self._session.scalars(
+                select(CausalStep)
+                .where(CausalStep.thesis_id == thesis_id)
+                .order_by(CausalStep.sequence)
+            )
         )
-        if cutoff is not None:
-            query = query.where(CausalStep.created_at <= cutoff)
-        return list(self._session.scalars(query))
 
     def causal_edges_for_steps(
         self, step_ids: list[uuid.UUID]
@@ -769,48 +357,6 @@ class ResearchRepository:
             return None
         return self._session.scalar(
             select(SourceSpan).where(SourceSpan.id == statement.source_span_id)
-        )
-
-    def document_for_statement(
-        self, statement_id: uuid.UUID
-    ) -> DocumentVersion | None:
-        """按 statement 追溯所属 DocumentVersion。用于结论页 / 图谱溯源。"""
-        statement = self.get_statement(statement_id)
-        if statement is None:
-            return None
-        span = self._session.scalar(
-            select(SourceSpan).where(SourceSpan.id == statement.source_span_id)
-        )
-        if span is None:
-            return None
-        return self._session.scalar(
-            select(DocumentVersion).where(DocumentVersion.id == span.document_version_id)
-        )
-
-    def statements_for_span_ids(
-        self, span_ids: list[uuid.UUID]
-    ) -> list[SourceStatement]:
-        if not span_ids:
-            return []
-        return list(
-            self._session.scalars(
-                select(SourceStatement).where(
-                    SourceStatement.source_span_id.in_(span_ids)
-                )
-            )
-        )
-
-    def links_for_statement_ids(
-        self, statement_ids: list[uuid.UUID]
-    ) -> list[EvidenceLink]:
-        if not statement_ids:
-            return []
-        return list(
-            self._session.scalars(
-                select(EvidenceLink).where(
-                    EvidenceLink.source_statement_id.in_(statement_ids)
-                )
-            )
         )
 
     def all_evidence_links(self) -> list[EvidenceLink]:

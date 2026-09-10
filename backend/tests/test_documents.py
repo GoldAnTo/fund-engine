@@ -57,21 +57,3 @@ def test_document_version_is_not_deletable(session, document_service):
         session.execute(
             delete(DocumentVersion).where(DocumentVersion.id == version.id)
         )
-
-
-def test_document_read_exposes_available_at_as_a_utc_timestamp(session, document):
-    """The UI may copy this value into a strict outcome binding verbatim."""
-    from app.queries.basis import HistoricalBasis
-    from app.queries.documents import DocumentReadQueries
-
-    session.expire_all()
-    response = DocumentReadQueries(session).list_documents(
-        query=None,
-        case_id=None,
-        basis=HistoricalBasis.from_cutoff(None),
-        limit=10,
-        cursor=None,
-    )
-
-    item = next(value for value in response.items if value.id == str(document.id))
-    assert item.available_at.endswith("+00:00")

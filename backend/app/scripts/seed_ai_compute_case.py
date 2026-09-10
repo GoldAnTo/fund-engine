@@ -262,24 +262,6 @@ ASSESSMENTS: list[dict] = [
     },
 ]
 
-# Human review of every AI assessment (gold-set 人工标签).  Reviews append
-# ReviewDecision records; the original AI conclusion is never overwritten.
-REVIEWER = "seed-human-reviewer"
-REVIEWS: list[dict] = [
-    {
-        "thesis": "T1", "outcome": "confirmed", "conclusion": "supported",
-        "reason": "人工确认：证据链自云厂商CapEx披露至存储营收高增，无直接矛盾，维持 supported",
-    },
-    {
-        "thesis": "T2", "outcome": "confirmed", "conclusion": "insufficient_evidence",
-        "reason": "人工维持：缺少云厂商CapEx→代工端订单的直接传导披露，且研报观点分歧，维持 insufficient_evidence",
-    },
-    {
-        "thesis": "T3", "outcome": "confirmed", "conclusion": "contradicted",
-        "reason": "人工维持：国信估值透支观点与兑现假设直接冲突，且公司尚未盈利，维持 contradicted",
-    },
-]
-
 COMPANIES: list[dict] = [
     {"key": "cambricon", "code": "688256", "name": "寒武纪", "type": "listed"},
     {"key": "fii", "code": "601138", "name": "工业富联", "type": "listed"},
@@ -446,7 +428,7 @@ def seed(session: Session) -> None:
     """
     document_service = DocumentService(DocumentRepository(session))
     research_service = ResearchService(ResearchRepository(session))
-    assessment_service = AssessmentService(ResearchRepository(session), session)
+    assessment_service = AssessmentService(ResearchRepository(session))
     instruments = InstrumentRepository(session)
     research_repo = ResearchRepository(session)
 
@@ -486,10 +468,6 @@ def seed(session: Session) -> None:
         industry_topic="ai_compute",
         created_by=CREATED_BY,
     )
-    for version in versions.values():
-        document_service.attach_to_case(
-            research_case_id=case.id, document_version_id=version.id
-        )
     theses: dict[str, object] = {}
     for key, statement in THESIS_STATEMENTS.items():
         theses[key] = research_service.add_thesis(
@@ -525,7 +503,6 @@ def seed(session: Session) -> None:
         links_by_thesis[spec["thesis"]].append(link)
 
     # 5. EvidenceSnapshot + AIAssessment per thesis.
-    assessments: dict[str, object] = {}
     for spec in ASSESSMENTS:
         snapshot = assessment_service.freeze_snapshot(
             theses[spec["thesis"]].id, cutoff=CUTOFF
@@ -534,21 +511,11 @@ def seed(session: Session) -> None:
             raise RuntimeError(
                 f"snapshot for thesis {spec['thesis']} has no visible links"
             )
-        assessments[spec["thesis"]] = assessment_service.create_ai_assessment(
+        assessment_service.create_ai_assessment(
             snapshot.id,
             conclusion=spec["conclusion"],
             rationale=spec["rationale"],
             gaps=spec["gaps"],
-        )
-
-    # 5b. Human review of every AI assessment (append-only ReviewDecision).
-    for spec in REVIEWS:
-        assessment_service.review(
-            assessments[spec["thesis"]].id,
-            outcome=spec["outcome"],
-            conclusion=spec["conclusion"],
-            reason=spec["reason"],
-            reviewer=REVIEWER,
         )
 
     # 6. Companies + Stocks + ValuationSnapshots.

@@ -27,7 +27,7 @@ import argparse
 import os
 import re
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import create_engine, select
@@ -35,8 +35,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.datasources.gildata import adapters
 from app.datasources.gildata.client import GildataMCPClient
-from app.env import load_local_env
-from app.models.ledger import Base, Stock, ValuationSnapshot
+from app.models.ledger import Base, ResearchCase, Stock, ValuationSnapshot
 from app.repositories.documents import DocumentRepository
 from app.repositories.instruments import InstrumentRepository
 from app.services.ingest import DocumentService
@@ -44,8 +43,6 @@ from app.services.ingest import DocumentService
 SOURCE_GILDATA = "gildata"
 RESEARCH_SOURCE_URL = "gildata://research_report"
 ANNOUNCEMENT_SOURCE_URL = "gildata://announcement"
-NEWS_SOURCE_URL = "gildata://news"
-MACRO_SOURCE_URL = "gildata://macro_industry"
 PARSER_VERSION = "gildata-mcp-1"
 
 # Fixed queries verified against the Gildata MCP tools.
@@ -54,7 +51,6 @@ RESEARCH_QUERIES = [
     "工业富联AI服务器收入研报",
 ]
 ANNOUNCEMENT_QUERY = "寒武纪近期公告"
-NEWS_QUERY = "寒武纪 AI算力芯片 最新消息"
 QUOTE_QUERY = "寒武纪最新股价行情"
 QUOTE_STOCK_CODE = "688256"
 
@@ -71,30 +67,6 @@ _NUM_RE = re.compile(r"^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _previous_business_day(today: date | None = None) -> date:
-    """Return the most recent weekday strictly before ``today``.
-
-    Gildata's ``FinQuery`` 行情探针语义是「最新行情」——返回的行情不带
-    ``trade_date``/``as_of_date`` 字段，caller 必须从调用时刻推断 quote
-    数据反映的交易日。今天是周一 → 上周五（-3）；今天是周日 → 上周五
-    （-2）；今天是周六 → 上周五（-1）；今天是工作日 → 昨日。
-
-    注：仅处理周末。法定节假日（春节/国庆/中秋等）不在本函数范围内，
-    走查脚本的 caller 若逢长假末段应显式覆盖（见 ``quote_as_of`` 入口
-    参数；当前默认走推断，对周一/周末调用最准确）。
-
-    Defect-8 修复（2026-08-02）：原实现 ``as_of = date.today()`` 把
-    ingest 时刻当成行情交易日，会把「周六抓取周五收盘」错记为周六 as_of。
-    """
-    if today is None:
-        today = date.today()
-    one_day = timedelta(days=1)
-    candidate = today - one_day
-    while candidate.weekday() >= 5:  # 5=Sat, 6=Sun
-        candidate -= one_day
-    return candidate
 
 
 def _parse_date(value: str) -> date | None:
@@ -197,14 +169,13 @@ def _valuation_exists(
 
 
 def _resolve_case_id(session: Session, case_id: uuid.UUID | None) -> uuid.UUID | None:
-    """Return only the explicitly selected Case.
-
-    Frozen provider material must never be silently attached to whichever Case
-    happens to be first in a shared ledger.  Callers that want Case-scoped
-    ingestion must supply the ID after their own tenant access check.
-    """
-    del session
-    return case_id
+    """Return the explicit case id, else the first ResearchCase, else None."""
+    if case_id is not None:
+        return case_id
+    first = session.scalar(
+        select(ResearchCase).order_by(ResearchCase.created_at).limit(1)
+    )
+    return first.id if first is not None else None
 
 
 def ingest(
@@ -212,26 +183,12 @@ def ingest(
     client: GildataMCPClient,
     *,
     case_id: uuid.UUID | None = None,
-    research_queries: list[str] | None = None,
-    announcement_query: str | None = None,
-    news_query: str | None = None,
-    quote_query: str | None = None,
-    quote_stock_code: str | None = None,
-    macro_queries: list[str] | None = None,
 ) -> dict:
     """Ingest real Gildata data into *session*.
 
     Returns a summary dict with counts of frozen documents, spans, and
-    valuation snapshots written (or skipped as duplicates).  Query
-    parameters default to the AI-compute constants; the command API passes
-    caller-supplied overrides through here.
+    valuation snapshots written (or skipped as duplicates).
     """
-    research_queries = research_queries or RESEARCH_QUERIES
-    announcement_query = announcement_query or ANNOUNCEMENT_QUERY
-    news_query = news_query or NEWS_QUERY
-    quote_query = quote_query or QUOTE_QUERY
-    quote_stock_code = quote_stock_code or QUOTE_STOCK_CODE
-
     document_service = DocumentService(DocumentRepository(session))
     instruments = InstrumentRepository(session)
     resolved_case_id = _resolve_case_id(session, case_id)
@@ -239,8 +196,6 @@ def ingest(
     summary = {
         "research_reports": 0,
         "announcements": 0,
-        "news": 0,
-        "macro_series": 0,
         "spans": 0,
         "valuations_written": 0,
         "valuations_skipped": 0,
@@ -248,48 +203,24 @@ def ingest(
         "case_id": str(resolved_case_id) if resolved_case_id else None,
     }
 
-    # Spans written through this script come from a structured text
-    # payload (one ``content`` field per result), not a paginated PDF,
-    # so ``page`` / ``paragraph`` are best-effort placeholders.  The
-    # ``parser`` field carries the engine version so a future S4 backfill
-    # can recognise these and synthesise a ``#/legacy-paragraph/1`` v1
-    # ref instead of treating them as missing-page errors.  Without
-    # these keys, the v1 read-path returns ``locator_v1=None`` and the
-    # workbench cannot link a citation to any page — see the S5 read
-    # test in tests/test_s5_v1_read_path.py for the expected shape.
-    span_locator_extra = {
-        "page": 1,
-        "paragraph": 1,
-        "parser": PARSER_VERSION,
-        **(
-            {"case_id": str(resolved_case_id)}
-            if resolved_case_id is not None
-            else {}
-        ),
-    }
+    span_locator_extra = (
+        {"case_id": str(resolved_case_id)} if resolved_case_id is not None else {}
+    )
 
     # 1. Research reports -> DocumentVersion + SourceSpan.
-    for query in research_queries:
+    for query in RESEARCH_QUERIES:
         reports = adapters.fetch_research_report(client, query)
         for report in reports[:3]:
             content = report.get("content", "")
             if not content:
                 continue
             published_at = _parse_datetime(report.get("publish_date", ""))
-            # 传 title 让自然键判重：同来源 + 同标题 + 同发布日期视为同一份
-            # 研报；之前仅靠 SHA256 会被正文/摘要/港股版绕过去重。
-            version, created = document_service._freeze(
+            version = document_service.freeze(
                 raw=content.encode("utf-8"),
                 source_url=RESEARCH_SOURCE_URL,
                 published_at=published_at,
                 parser_version=PARSER_VERSION,
-                title=report.get("title", ""),
-                natural_key=None,
             )
-            if resolved_case_id is not None:
-                document_service.attach_to_case(
-                    research_case_id=resolved_case_id, document_version_id=version.id
-                )
             document_service.add_span(
                 document_version_id=version.id,
                 locator={
@@ -302,164 +233,41 @@ def ingest(
                 },
                 verbatim_text=content,
             )
-            if created:
-                summary["research_reports"] += 1
-                summary["spans"] += 1
+            summary["research_reports"] += 1
+            summary["spans"] += 1
 
     # 2. Announcements -> DocumentVersion + SourceSpan.
-    announcements = adapters.fetch_announcement(client, announcement_query)
+    announcements = adapters.fetch_announcement(client, ANNOUNCEMENT_QUERY)
     for ann in announcements[:3]:
         content = ann.get("content", "") or ann.get("title", "")
         if not content:
             continue
         published_at = _parse_datetime(ann.get("publish_date", ""))
-        version, created = document_service._freeze(
+        version = document_service.freeze(
             raw=content.encode("utf-8"),
             source_url=ANNOUNCEMENT_SOURCE_URL,
             published_at=published_at,
             parser_version=PARSER_VERSION,
-            title=ann.get("title", ""),
-            natural_key=None,
         )
-        if resolved_case_id is not None:
-            document_service.attach_to_case(
-                research_case_id=resolved_case_id, document_version_id=version.id
-            )
         document_service.add_span(
             document_version_id=version.id,
             locator={
                 "kind": "announcement",
                 "title": ann.get("title", ""),
                 "stock_code": ann.get("stock_code", ""),
-                "sec_name": ann.get("sec_name", ""),
                 "publish_date": ann.get("publish_date", ""),
                 **span_locator_extra,
             },
             verbatim_text=content,
         )
-        if created:
-            summary["announcements"] += 1
-            summary["spans"] += 1
-
-    # 2b. News/舆情 -> DocumentVersion + SourceSpan.
-    news_items = adapters.fetch_news(client, news_query)
-    for news in news_items[:3]:
-        content = news.get("content", "") or news.get("title", "")
-        if not content:
-            continue
-        published_at = _parse_datetime(news.get("publish_date", ""))
-        version, created = document_service._freeze(
-            raw=content.encode("utf-8"),
-            source_url=NEWS_SOURCE_URL,
-            published_at=published_at,
-            parser_version=PARSER_VERSION,
-            title=news.get("title", ""),
-            natural_key=None,
-        )
-        if resolved_case_id is not None:
-            document_service.attach_to_case(
-                research_case_id=resolved_case_id, document_version_id=version.id
-            )
-        document_service.add_span(
-            document_version_id=version.id,
-            locator={
-                "kind": "news",
-                "title": news.get("title", ""),
-                "source": news.get("source", ""),
-                "sec_name": news.get("sec_name", ""),
-                "publish_date": news.get("publish_date", ""),
-                **span_locator_extra,
-            },
-            verbatim_text=content,
-        )
-        if created:
-            summary["news"] += 1
-            summary["spans"] += 1
-
-    # 2c. Macro/commodity time series (MacroIndustryData) -> DocumentVersion +
-    # SourceSpan.  Each query's returned slice is frozen as one version so
-    # extract/propose can reference the peak/latest pair as disclosed facts.
-    # Natural-key dedup keeps re-ingest idempotent without hashing the whole
-    # table.
-    for mquery in macro_queries or []:
-        rows = adapters.fetch_macro_series(client, mquery)
-        if not rows:
-            continue
-        # Group by metric so peak/latest can be cited individually; each
-        # group becomes one SourceSpan on the same document version.
-        by_metric: dict[str, list[dict]] = {}
-        for row in rows:
-            name = row.get("metric_name", "")
-            by_metric.setdefault(name, []).append(row)
-
-        # The document "title" includes the user query + metric count so it
-        # stays unique per query while remaining human-readable.
-        title = f"宏观时序 · {mquery[:40]}（{len(by_metric)} 个指标）"
-        body_lines = [f"# 查询: {mquery}", ""]
-        for metric_name, items in by_metric.items():
-            body_lines.append(f"## {metric_name}")
-            items_sorted = sorted(items, key=lambda r: r.get("date", ""))
-            for r in items_sorted[-10:]:
-                body_lines.append(
-                    f"- {r.get('date','')} | {r.get('value','')} {r.get('unit','')} | {r.get('source','')}"
-                )
-            body_lines.append("")
-        body = "\n".join(body_lines).encode("utf-8")
-
-        # Use latest item's date as published_at so the natural key captures
-        # the slice; freeze metadata stays query-driven.
-        latest = max(rows, key=lambda r: r.get("date", ""))
-        published_at = _parse_datetime(latest.get("date", ""))
-        version, created = document_service._freeze(
-            raw=body,
-            source_url=MACRO_SOURCE_URL,
-            published_at=published_at,
-            parser_version=PARSER_VERSION,
-            title=title,
-            natural_key=None,
-        )
-        if resolved_case_id is not None:
-            document_service.attach_to_case(
-                research_case_id=resolved_case_id, document_version_id=version.id
-            )
-        # Each metric group becomes its own span so extract can pin facts
-        # to that metric without ambiguity.
-        for metric_name, items in by_metric.items():
-            items_sorted = sorted(items, key=lambda r: r.get("date", ""))
-            peak = max(items_sorted, key=lambda r: float(r.get("value") or 0))
-            tail = items_sorted[-1]
-            span_text = "\n".join(
-                f"{r.get('date','')}: {r.get('value','')} {r.get('unit','')}"
-                for r in items_sorted[-20:]
-            )
-            document_service.add_span(
-                document_version_id=version.id,
-                locator={
-                    "kind": "macro_series",
-                    "query": mquery,
-                    "metric_name": metric_name,
-                    "metric_code": items_sorted[0].get("metric_code", ""),
-                    "frequency": items_sorted[0].get("frequency", ""),
-                    "unit": items_sorted[0].get("unit", ""),
-                    "source": items_sorted[0].get("source", ""),
-                    "peak_date": peak.get("date", ""),
-                    "peak_value": peak.get("value", ""),
-                    "latest_date": tail.get("date", ""),
-                    "latest_value": tail.get("value", ""),
-                    "n_points": len(items_sorted),
-                    **span_locator_extra,
-                },
-                verbatim_text=span_text,
-            )
-        if created:
-            summary["macro_series"] += 1
-            summary["spans"] += len(by_metric)
+        summary["announcements"] += 1
+        summary["spans"] += 1
 
     # 3. Market quote -> ValuationSnapshot rows for the resolved stock.
-    quotes = adapters.fetch_quote(client, quote_query)
+    quotes = adapters.fetch_quote(client, QUOTE_QUERY)
     if quotes:
         quote = quotes[0]
-        resolved_code = quote.get("stock_code", "") or quote_stock_code
+        resolved_code = quote.get("stock_code", "") or QUOTE_STOCK_CODE
         stock = ensure_stock(
             session,
             instruments,
@@ -468,7 +276,7 @@ def ingest(
         )
         summary["stock_id"] = str(stock.id)
 
-        as_of = _previous_business_day()
+        as_of = date.today()
         for quote_key, (metric_name, definition) in METRIC_DEFINITIONS.items():
             value = _parse_decimal(quote.get(quote_key, ""))
             if value is None:
@@ -495,15 +303,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--case-id",
-        required=True,
-        help="ResearchCase UUID to tag ingested spans against; this must be "
-        "explicit so a shared ledger never adopts a global default Case.",
+        default=None,
+        help="optional ResearchCase UUID to tag ingested spans against "
+        "(defaults to the first existing case)",
     )
     args = parser.parse_args()
 
-    load_local_env()  # backend/.env (gitignored); shell env still wins
-
-    case_id = uuid.UUID(args.case_id)
+    case_id: uuid.UUID | None = None
+    if args.case_id:
+        case_id = uuid.UUID(args.case_id)
 
     url = os.getenv("DATABASE_URL", "sqlite:///./evidence_seed.db")
     engine = create_engine(url, future=True)
@@ -517,8 +325,7 @@ def main() -> None:
     print("gildata ingest summary:", summary)
     print(
         f"  frozen documents: {summary['research_reports']} research + "
-        f"{summary['announcements']} announcements + "
-        f"{summary['news']} news ({summary['spans']} spans)"
+        f"{summary['announcements']} announcements ({summary['spans']} spans)"
     )
     print(
         f"  valuation snapshots: {summary['valuations_written']} written, "

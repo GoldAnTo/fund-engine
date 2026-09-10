@@ -33,9 +33,11 @@ def upgrade() -> None:
             sa.ForeignKey("document_versions.id"),
             nullable=True,
         ),
-        sa.UniqueConstraint(
-            "content_sha256", name="uq_document_versions_content_sha256"
-        ),
+    )
+    op.create_unique_constraint(
+        "uq_document_versions_content_sha256",
+        "document_versions",
+        ["content_sha256"],
     )
 
     op.create_table(
@@ -53,9 +55,6 @@ def upgrade() -> None:
 
     # Defence-in-depth: reject UPDATE/DELETE at the database level too, so a
     # connection that bypasses the application still cannot mutate the ledger.
-    if op.get_bind().dialect.name != "postgresql":
-        return
-
     op.execute(
         """
         CREATE OR REPLACE FUNCTION reject_mutable_ledger()

@@ -1,33 +1,12 @@
-import logging
 import uuid
-from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.encoders import jsonable_encoder
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
-from app.api.readiness import router as readiness_router
-from app.api.legacy import router as cases_router
+from app.api.cases import router as cases_router
+from app.api.errors import NotFoundError
 from app.api.v1.router import router as v1_router
-from app.underwriting.api import router as underwriting_router
-from app.underwriting.api.schemas import UnderwritingErrorEnvelope
-from app.env import load_local_env
-from app.errors import (
-    AuthenticationRequiredError,
-    ConflictError,
-    NotFoundError,
-    PermissionDeniedError,
-    UpstreamUnavailableError,
-    ValidationFailedError,
-)
-from app.schemas.v1.common import ErrorEnvelope
-
-load_local_env()  # backend/.env (gitignored) -> os.environ, env vars win
-
-logger = logging.getLogger("industry_evidence_workspace")
 
 app = FastAPI(title="Industry Evidence Workspace")
 app.add_middleware(
@@ -38,241 +17,48 @@ app.add_middleware(
         "http://localhost:5174",
         "http://127.0.0.1:5174",
     ],
-    # Each isolated frontend worktree may choose a different Vite port.  Keep
-    # local live-read verification usable without granting access to nonlocal
-    # origins or widening the deployed same-origin surface.
-    allow_origin_regex=r"^https?://(?:localhost|127\.0\.0\.1):\d+$",
-    # Both authenticated browser adapters intentionally use credentials:
-    # include.  The local cross-origin Vite workflow therefore needs the
-    # explicit credential response header; origins remain restricted above.
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(readiness_router)
 app.include_router(cases_router)
 app.include_router(v1_router)
-app.include_router(underwriting_router)
-
-
-def _v1_error_response(
-    code: str,
-    message: str,
-    request_id: str,
-    details: dict[str, Any] | None = None,
-    status_code: int = 500,
-) -> JSONResponse:
-    """Build the v1 error envelope by serializing the Pydantic ErrorEnvelope
-    model directly. Using the model as the single source of truth (instead
-    of constructing a raw dict) ensures the runtime response cannot drift
-    from the schema declared in OpenAPI.
-    """
-    envelope = ErrorEnvelope(
-        error={"code": code, "message": message, "request_id": request_id, "details": details or {}}
-    ).model_dump(mode="json")
-    return JSONResponse(
-        status_code=status_code,
-        content=envelope,
-        headers={"x-request-id": request_id},
-    )
-
-
-def _underwriting_error_response(
-    code: str,
-    message: str,
-    request_id: str,
-    details: dict[str, Any] | None = None,
-    status_code: int = 500,
-) -> JSONResponse:
-    """Build the independent underwriting-v1 error envelope."""
-    envelope = UnderwritingErrorEnvelope(
-        error={
-            "code": code,
-            "message": message,
-            "request_id": request_id,
-            "details": details or {},
-        }
-    ).model_dump(mode="json")
-    return JSONResponse(
-        status_code=status_code,
-        content=envelope,
-        headers={"x-request-id": request_id},
-    )
-
-
-def _error_response_for_request(
-    request: Request,
-    code: str,
-    message: str,
-    request_id: str,
-    details: dict[str, Any] | None = None,
-    status_code: int = 500,
-) -> JSONResponse:
-    if request.url.path.startswith("/api/underwriting/v1"):
-        return _underwriting_error_response(
-            code, message, request_id, details, status_code
-        )
-    return _v1_error_response(code, message, request_id, details, status_code)
 
 
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
     request.state.request_id = request_id
-    try:
-        response = await call_next(request)
-    except Exception:
-        # Unified internal-error boundary: any exception that escapes the
-        # inner ExceptionMiddleware is converted here to a stable 500 envelope
-        # carrying the request-id, so no 500 ever lacks the correlation header.
-        # Internal text/stack must not leak to the client (design 7.3).
-        logger.exception("Unhandled exception (request_id=%s)", request_id)
-        response = _error_response_for_request(
-            request,
-            "internal_error",
-            "internal error",
-            request_id,
-            status_code=500,
-        )
+    response = await call_next(request)
     response.headers["x-request-id"] = request_id
     return response
 
 
 @app.exception_handler(NotFoundError)
 async def not_found_error_handler(request: Request, exc: NotFoundError):
-    request_id = getattr(request.state, "request_id", "")
-    return _error_response_for_request(
-        request,
-        "not_found",
-        str(exc) or "not found",
-        request_id,
+    request_id = request.state.request_id
+    return JSONResponse(
         status_code=404,
+        content={
+            "error": {
+                "code": "not_found",
+                "message": str(exc),
+                "request_id": request_id,
+                "details": {},
+            }
+        },
+        headers={"x-request-id": request_id},
     )
 
 
-@app.exception_handler(AuthenticationRequiredError)
-async def authentication_required_error_handler(
-    request: Request, exc: AuthenticationRequiredError
-):
-    request_id = getattr(request.state, "request_id", "")
-    return _error_response_for_request(
-        request,
-        "authentication_required",
-        str(exc) or "authentication required",
-        request_id,
-        status_code=401,
-    )
-
-
-@app.exception_handler(PermissionDeniedError)
-async def permission_denied_error_handler(request: Request, exc: PermissionDeniedError):
-    request_id = getattr(request.state, "request_id", "")
-    return _error_response_for_request(
-        request,
-        "permission_denied",
-        str(exc) or "permission denied",
-        request_id,
-        status_code=403,
-    )
-
-
-@app.exception_handler(ValidationFailedError)
-async def validation_failed_error_handler(request: Request, exc: ValidationFailedError):
-    request_id = getattr(request.state, "request_id", "")
-    return _error_response_for_request(
-        request,
-        "validation_failed",
-        str(exc) or "validation failed",
-        request_id,
-        status_code=422,
-    )
-
-
-@app.exception_handler(ConflictError)
-async def conflict_error_handler(request: Request, exc: ConflictError):
-    request_id = getattr(request.state, "request_id", "")
-    return _error_response_for_request(
-        request,
-        "conflict",
-        str(exc) or "resource already exists",
-        request_id,
-        status_code=409,
-    )
-
-
-@app.exception_handler(UpstreamUnavailableError)
-async def upstream_unavailable_error_handler(
-    request: Request, exc: UpstreamUnavailableError
-):
-    request_id = getattr(request.state, "request_id", "")
-    return _error_response_for_request(
-        request,
-        "upstream_unavailable",
-        str(exc) or "upstream datasource unavailable",
-        request_id,
-        status_code=503,
-    )
-
-
-@app.exception_handler(RequestValidationError)
-async def request_validation_error_handler(
-    request: Request, exc: RequestValidationError
-):
-    request_id = getattr(request.state, "request_id", "")
-    # The versioned API error envelopes apply only to their versioned paths;
-    # legacy routes keep FastAPI's default {"detail": [...]} format.
-    if not (
-        request.url.path.startswith("/api/v1")
-        or request.url.path.startswith("/api/underwriting/v1")
-    ):
-        return JSONResponse(
-            status_code=422,
-            content={"detail": jsonable_encoder(exc.errors())},
-        )
-    return _error_response_for_request(
-        request,
-        "validation_failed",
-        "request validation failed",
-        request_id,
-        details={"errors": jsonable_encoder(exc.errors())},
-        status_code=422,
+@app.exception_handler(Exception)
+async def unhandled_error_handler(request: Request, exc: Exception):
+    return PlainTextResponse(
+        "Internal Server Error",
+        status_code=500,
+        headers={"x-request-id": request.state.request_id},
     )
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"service": "industry-evidence-workspace", "status": "ok"}
-
-
-def _register_error_envelope(openapi_schema: dict[str, Any]) -> None:
-    """Inject the ErrorEnvelope schema into OpenAPI components.
-
-    The error envelope is produced by global exception handlers, so FastAPI
-    does not auto-document it. Declaring it here keeps the frontend contract
-    (openapi-typescript) as the single source of truth, including errors.
-    """
-    components = openapi_schema.setdefault("components", {}).setdefault(
-        "schemas", {}
-    )
-    if "ErrorEnvelope" in components:
-        return
-    schema = ErrorEnvelope.model_json_schema(
-        ref_template="#/components/schemas/{model}"
-    )
-    defs = schema.pop("$defs", {})
-    components["ErrorEnvelope"] = schema
-    components.update(defs)
-
-
-def _custom_openapi() -> dict[str, Any]:
-    if app.openapi_schema:
-        return app.openapi_schema
-    openapi_schema = get_openapi(
-        title=app.title, version=app.version, routes=app.routes
-    )
-    _register_error_envelope(openapi_schema)
-    app.openapi_schema = openapi_schema
-    return openapi_schema
-
-
-app.openapi = _custom_openapi

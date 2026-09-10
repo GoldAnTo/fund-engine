@@ -1,109 +1,33 @@
 """End-to-end AI research engine script.
 
-Runs ``extract -> propose -> assess`` on a seeded case using a live LLM.
-Operational CLI runs require ``LLM_API_KEY``; deterministic mock output is
-restricted to automated tests running with ``APP_ENV=test``.
+Runs ``extract -> propose -> assess`` on a seeded case.  Without
+``LLM_API_KEY`` the engine runs in mock mode, producing deterministic
+machine-generated statements, links, and assessments.
 
 Usage::
 
-    # auto-seed then run with a live provider (SQLite)
-    LLM_API_KEY=your-api-key python -m app.scripts.run_ai_engine --seed
+    # auto-seed then run (mock mode, SQLite)
+    python -m app.scripts.run_ai_engine --seed
 
-    # run on an existing seeded case with live provider settings in the env
-    LLM_API_KEY=your-api-key python -m app.scripts.run_ai_engine --case-id <uuid>
+    # run on an existing seeded case
+    python -m app.scripts.run_ai_engine --case-id <uuid>
 """
 from __future__ import annotations
 
 import argparse
 import os
-import sys
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, exists, select
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.ai.assessment_gen import AssessmentGenerator
-from app.ai.client import LLMClient, LLMProviderError, LLM_PROVIDER_ERROR_MESSAGE
+from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
-from app.env import load_local_env
-from app.models.ledger import (
-    AIRun,
-    Base,
-    CaseDocumentVersion,
-    DocumentVersion,
-    ResearchCase,
-    SourceSpan,
-    SourceStatement,
-    Thesis,
-    ValidationError,
-)
-from app.models.source_governance import SourceContract
-from app.services.compliance import ComplianceRefusedError
-
-
-def _pending_versions(
-    session: Session, research_case_id: uuid.UUID | None = None
-) -> list[DocumentVersion]:
-    """Versions that have source spans but no extracted statements yet AND no
-    successful extract run on record.
-
-    The AIRun-derived watermark (app/queries/extraction_runs.py) is the
-    defect-3 fix: a version whose extraction succeeded with zero statements
-    used to look identical to a never-attempted one, so every batch re-ran
-    the LLM over it.  Failed runs do not mark a version — it stays
-    retryable.  A seeded version that already carries statements is still
-    skipped so repeated runs stay idempotent.
-    """
-    from app.queries.extraction_runs import successful_extract_version_ids
-
-    has_span = exists().where(SourceSpan.document_version_id == DocumentVersion.id)
-    has_statement = (
-        select(SourceStatement.id)
-        .join(SourceSpan, SourceStatement.source_span_id == SourceSpan.id)
-        .where(SourceSpan.document_version_id == DocumentVersion.id)
-        .exists()
-    )
-    stmt = select(DocumentVersion).where(has_span, ~has_statement)
-    if research_case_id is not None:
-        stmt = stmt.join(
-            CaseDocumentVersion,
-            CaseDocumentVersion.document_version_id == DocumentVersion.id,
-        ).where(CaseDocumentVersion.research_case_id == research_case_id)
-    candidates = list(session.scalars(stmt))
-    extracted = successful_extract_version_ids(session)
-    retryable = [v for v in candidates if v.id not in extracted]
-
-    # Defect-4 fix: degenerate payloads (4-char bodies, orphan table
-    # headers) are flagged, never LLM-extracted — they cannot yield
-    # statements and burned calls in the walkthrough.
-    from app.services.content_quality import assess_span_texts
-
-    span_rows = session.scalars(
-        select(SourceSpan).where(
-            SourceSpan.document_version_id.in_([v.id for v in retryable])
-        )
-    ).all() if retryable else []
-    texts_by_version: dict[uuid.UUID, list[str]] = {}
-    for span_row in span_rows:
-        texts_by_version.setdefault(span_row.document_version_id, []).append(
-            span_row.verbatim_text
-        )
-    contracts = {
-        contract.document_version_id: contract
-        for contract in session.scalars(
-            select(SourceContract).where(
-                SourceContract.document_version_id.in_([v.id for v in retryable])
-            )
-        )
-    } if retryable else {}
-    return [
-        v
-        for v in retryable
-        if assess_span_texts(texts_by_version.get(v.id, []))[0] != "degenerate"
-        and (contracts.get(v.id) is None or contracts[v.id].allow_ai_processing)
-    ]
+from app.models.ledger import AIRun, DocumentVersion, ResearchCase, Thesis
+from app.models.ledger import Base
 
 
 def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False) -> None:
@@ -117,25 +41,21 @@ def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False)
     print(f"AI research engine - mode: {mode}")
     print(f"Case: {case.title} ({case.id})\n")
 
-    # 1. Extract statements from every pending document version (has spans,
-    # no statements yet).
+    # 1. Extract statements from every document version.
     if not skip_extract:
-        versions = _pending_versions(session, case.id)
+        versions = list(
+            session.scalars(
+                select(DocumentVersion).where(
+                    DocumentVersion.parser_version == "gildata-mcp-1"
+                )
+            )
+        )
         total_statements = 0
         for version in versions:
-            try:
-                statements = extractor.extract(version.id, session)
-            except Exception:
-                # The extractor owns the failed AIRun in the current
-                # post-provider transaction. Preserve it, then fail closed.
-                session.commit()
-                raise
+            statements = extractor.extract(version.id, session)
             total_statements += len(statements)
         session.commit()
-        print(
-            f"[extract] {total_statements} statements from "
-            f"{len(versions)} pending documents"
-        )
+        print(f"[extract] {total_statements} statements from {len(versions)} documents")
     else:
         print("[extract] skipped (using existing statements)")
 
@@ -147,35 +67,15 @@ def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False)
     )
     total_links = 0
     for thesis in theses:
-        try:
-            links = proposer.propose(thesis.id, session)
-        except Exception:
-            # Do not let process teardown roll back the proposer-owned failed
-            # AIRun, and never continue into assessment after this failure.
-            session.commit()
-            raise
+        links = proposer.propose(thesis.id, session)
         total_links += len(links)
-    session.commit()  # persist proposals before the assess loop
     print(f"[propose] {total_links} evidence links for {len(theses)} theses")
 
-    # 3. Generate an AI assessment for every thesis. A compliance/protocol
-    # refusal on one thesis must not kill the run: roll back that thesis's
-    # half-frozen snapshot, preserve its failed AIRun, and continue.
+    # 3. Generate an AI assessment for every thesis.
     cutoff = datetime.now(timezone.utc)
     for thesis in theses:
+        assessment = generator.generate(thesis.id, cutoff, session)
         label = thesis.statement[:50]
-        try:
-            assessment = generator.generate(thesis.id, cutoff, session)
-        except (ComplianceRefusedError, ValidationError) as exc:
-            # The generator rolled back partial immutable writes; keep its
-            # clean failed AIRun transaction and continue with the next thesis.
-            session.commit()
-            print(f"[assess]  {label}… → ASSESSMENT REFUSED ({exc})")
-            continue
-        except Exception:
-            session.commit()
-            raise
-        session.commit()
         print(
             f"[assess]  {label}… → {assessment.conclusion} "
             f"(gaps: {len(assessment.gaps)})"
@@ -215,8 +115,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    load_local_env()  # backend/.env (gitignored); shell env still wins
-
     url = os.getenv("DATABASE_URL", "sqlite:///./evidence_ai.db")
     engine = create_engine(url, future=True)
     Base.metadata.create_all(engine)
@@ -244,15 +142,5 @@ def main() -> None:
         session.commit()
 
 
-def cli_main() -> int:
-    """Keep known provider exception causes out of terminal/log tracebacks."""
-    try:
-        main()
-    except LLMProviderError:
-        print(LLM_PROVIDER_ERROR_MESSAGE, file=sys.stderr)
-        return 1
-    return 0
-
-
 if __name__ == "__main__":
-    sys.exit(cli_main())
+    main()

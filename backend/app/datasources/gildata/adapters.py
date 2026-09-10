@@ -23,11 +23,6 @@ import json
 import re
 from collections.abc import Sequence
 
-from app.datasources.gildata.client import (
-    GILDATA_RESPONSE_ERROR_MESSAGE,
-    GildataMCPError,
-)
-
 # Match a 6-digit A-share stock code embedded in free text (e.g. a title).
 _SEC_CODE_RE = re.compile(r"(\d{6})")
 
@@ -67,7 +62,6 @@ _ANNOUNCEMENT_ALIASES: dict[str, str] = {
     "公告名称": "title",
     "公告日期": "publish_date",
     "发布日期": "publish_date",
-    "发布时间": "publish_date",
     "公告时间": "publish_date",
     "日期": "publish_date",
     "股票代码": "stock_code",
@@ -78,29 +72,6 @@ _ANNOUNCEMENT_ALIASES: dict[str, str] = {
     "公告内容": "content",
     "正文": "content",
     "内容": "content",
-    "原文": "content",
-    "原文地址": "source_url",
-    "公告地址": "source_url",
-    "链接": "source_url",
-}
-
-# Fund holding tables are returned by ``FinQuery``.  They identify a
-# reporting period but do not reliably carry the fund report's publication
-# date, so the adapter must never manufacture one from the retrieval time.
-_FUND_HOLDING_ALIASES: dict[str, str] = {
-    "基金简称": "fund_name",
-    "基金名称": "fund_name",
-    "基金代码": "fund_code",
-    "报告期": "report_period",
-    "截止日期": "report_period",
-    "股票简称": "stock_name",
-    "证券简称": "stock_name",
-    "股票代码": "stock_code",
-    "证券代码": "stock_code",
-    "持仓市值占资产净值比(%)": "weight",
-    "持仓市值占基金净资产比例(%)": "weight",
-    "占基金净值比例(%)": "weight",
-    "持仓权重(%)": "weight",
 }
 
 # Research-report key/value field names -> canonical keys.
@@ -116,37 +87,6 @@ _REPORT_FIELD_ALIASES: dict[str, str] = {
     "证券代码": "sec_code",
     "行业": "industry",
     "原文": "content",
-}
-
-# News/舆情 key/value field names -> canonical keys.  The live NewsDataQuery
-# payload is a ``字段：值`` block (报告标题/撰写时间/新闻舆情来源/原文).
-_NEWS_FIELD_ALIASES: dict[str, str] = {
-    "报告标题": "title",
-    "标题": "title",
-    "新闻标题": "title",
-    "撰写时间": "publish_date",
-    "发布时间": "publish_date",
-    "发布日期": "publish_date",
-    "新闻舆情来源": "source",
-    "来源": "source",
-    "媒体": "source",
-    "证券简称": "sec_name",
-    "证券代码": "sec_code",
-    "原文": "content",
-    "内容": "content",
-    "正文": "content",
-}
-
-# MacroIndustryData table columns -> canonical keys (时序数值).  The table
-# always carries 指标代码 / 指标名称 / 频率 / 单位 / 值 / 日期 / 数据来源.
-_MACRO_ALIASES: dict[str, str] = {
-    "指标代码": "metric_code",
-    "指标名称": "metric_name",
-    "频率": "frequency",
-    "单位": "unit",
-    "值": "value",
-    "日期": "date",
-    "数据来源": "source",
 }
 
 
@@ -282,36 +222,6 @@ def parse_content(text: str) -> list[dict]:
     return [r for r in results if isinstance(r, dict)]
 
 
-def parse_content_strict(text: str) -> list[dict]:
-    """Decode one live provider payload or raise a stable protocol error."""
-    if not isinstance(text, str) or not text.strip():
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    try:
-        inner = json.loads(text)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE) from exc
-    if (
-        not isinstance(inner, dict)
-        or str(inner.get("code")) != "0"
-        or not isinstance(inner.get("results"), list)
-    ):
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    results = inner["results"]
-    if any(not isinstance(item, dict) for item in results):
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    return results
-
-
-def _strict_table_rows(item: dict) -> list[dict[str, str]]:
-    table_markdown = item.get("table_markdown")
-    if not isinstance(table_markdown, str) or not table_markdown.strip():
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    rows = parse_table_markdown_payload(table_markdown)
-    if not rows:
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    return rows
-
-
 # ---------------------------------------------------------------------------
 # fetch_* adapters
 # ---------------------------------------------------------------------------
@@ -345,53 +255,25 @@ def fetch_research_report(client, query: str) -> list[dict]:
 
 
 def fetch_announcement(client, query: str) -> list[dict]:
-    """Pull announcements and return ``[{title, publish_date, stock_code, sec_name, content}]``.
+    """Pull announcements and return ``[{title, publish_date, stock_code, content}]``.
 
     Calls ``AnnouncementData``; ``table_markdown`` is parsed as a table first,
-    falling back to a ``字段：值`` block.  The live payload is a key/value
-    block using 公告标题/发布时间/证券简称/原文, all covered by the aliases.
+    falling back to a ``字段：值`` block.
     """
     text = client.call_tool("AnnouncementData", {"query": query})
     announcements: list[dict] = []
-    for item in parse_content_strict(text):
-        for row in _strict_table_rows(item):
+    for item in parse_content(text):
+        for row in parse_table_markdown_payload(item.get("table_markdown", "")):
             normalized = _normalize(row, _ANNOUNCEMENT_ALIASES)
             announcements.append(
                 {
                     "title": normalized.get("title", ""),
                     "publish_date": normalized.get("publish_date", ""),
                     "stock_code": normalized.get("stock_code", ""),
-                    "sec_name": normalized.get("sec_name", ""),
                     "content": normalized.get("content", ""),
-                    "source_url": normalized.get("source_url", ""),
                 }
             )
     return announcements
-
-
-def fetch_news(client, query: str) -> list[dict]:
-    """Pull news/舆情 items and return ``[{title, publish_date, source, sec_name, content}]``.
-
-    Calls ``NewsDataQuery``; each result's ``table_markdown`` is a ``字段：值``
-    block (报告标题/撰写时间/新闻舆情来源/原文).  Note the 原文 may simply
-    repeat the title for short items — the caller stores what is returned,
-    verbatim, without padding.
-    """
-    text = client.call_tool("NewsDataQuery", {"query": query})
-    news: list[dict] = []
-    for item in parse_content(text):
-        for row in parse_table_markdown_payload(item.get("table_markdown", "")):
-            normalized = _normalize(row, _NEWS_FIELD_ALIASES)
-            news.append(
-                {
-                    "title": normalized.get("title", ""),
-                    "publish_date": normalized.get("publish_date", ""),
-                    "source": normalized.get("source", ""),
-                    "sec_name": normalized.get("sec_name", ""),
-                    "content": normalized.get("content", ""),
-                }
-            )
-    return news
 
 
 def fetch_quote(client, query: str) -> list[dict]:
@@ -409,57 +291,3 @@ def fetch_quote(client, query: str) -> list[dict]:
         for row in parse_table_markdown_payload(item.get("table_markdown", "")):
             quotes.append(_normalize(row, _QUOTE_ALIASES))
     return quotes
-
-
-def fetch_fund_stock_holdings(client, query: str) -> list[dict]:
-    """Pull fund stock holding rows without asserting a disclosure date.
-
-    ``FinQuery`` reports a fund's holding table with an economic report period
-    and position weight, but its response lacks a reliable disclosure-time
-    field.  A caller must separately match an official fund report from
-    :func:`fetch_announcement` before it can create a formal
-    ``HoldingDisclosure``.
-    """
-    text = client.call_tool("FinQuery", {"query": query})
-    holdings: list[dict] = []
-    for item in parse_content_strict(text):
-        for row in _strict_table_rows(item):
-            normalized = _normalize(row, _FUND_HOLDING_ALIASES)
-            if not all(
-                normalized.get(field, "")
-                for field in ("fund_code", "report_period", "stock_code", "weight")
-            ):
-                continue
-            holdings.append(
-                {
-                    "fund_name": normalized.get("fund_name", ""),
-                    "fund_code": normalized["fund_code"],
-                    "report_period": normalized["report_period"],
-                    "stock_name": normalized.get("stock_name", ""),
-                    "stock_code": normalized["stock_code"],
-                    "weight": normalized["weight"],
-                }
-            )
-    return holdings
-
-
-def fetch_macro_series(client, query: str) -> list[dict]:
-    """Pull a time series (价格水平 / 环比) from ``MacroIndustryData``.
-
-    Returns ``[{metric_code, metric_name, frequency, unit, value, date, source}]``
-    rows.  The metric rows are unbounded across time windows; the caller is
-    expected to slice (peak vs latest) and freeze the slice as a single
-    document so statement extraction can turn it into disclosed facts.
-
-    用途：把"商品价格时序"作为 SourceSpan 接入台账，与研报/公告走相同的
-    extract / propose / rerun 链路，让"碳酸锂价格跌幅 > 80%"这类命题有
-    第三方价格源可校验。
-    """
-    text = client.call_tool("MacroIndustryData", {"query": query})
-    rows: list[dict] = []
-    for item in parse_content(text):
-        for row in parse_table_markdown_payload(item.get("table_markdown", "")):
-            normalized = _normalize(row, _MACRO_ALIASES)
-            if "metric_name" in normalized:
-                rows.append(normalized)
-    return rows

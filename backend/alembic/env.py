@@ -4,22 +4,14 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.db import DATABASE_URL
-from app.models import Base  # imports all model submodules, aggregating metadata
-from app.models.ledger import Base as _LedgerBase  # noqa: F401  (kept for clarity)
-
-# Importing ``app.models`` registers every table (operational / events /
-# versions / proposals) on the same ``Base.metadata`` used below.
-import app.models  # noqa: F401
+from app.models.ledger import Base
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# CLI callers can provide DATABASE_URL, while application bootstrap passes an
-# explicit Config URL. The latter must win so a demo runner never upgrades the
-# process-wide default database by accident.
-config.set_main_option("sqlalchemy.url", config.get_main_option("sqlalchemy.url") or DATABASE_URL)
+config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 target_metadata = Base.metadata
 

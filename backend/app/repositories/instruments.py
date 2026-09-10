@@ -149,12 +149,6 @@ class InstrumentRepository:
         published_at: date | datetime,
         source: str,
         acquired_at: datetime | None = None,
-        source_document_version_id: uuid.UUID | None = None,
-        source_span_id: uuid.UUID | None = None,
-        provider_record_id: uuid.UUID | None = None,
-        coverage_status: str = "not_recorded",
-        filing_kind: str = "other",
-        supersedes_disclosure_id: uuid.UUID | None = None,
     ) -> HoldingDisclosure:
         disclosure = HoldingDisclosure(
             fund_id=fund_id,
@@ -164,12 +158,6 @@ class InstrumentRepository:
             published_at=_to_aware_datetime(published_at),
             acquired_at=_to_aware_datetime(acquired_at) if acquired_at is not None else _utcnow(),
             source=source,
-            source_document_version_id=source_document_version_id,
-            source_span_id=source_span_id,
-            provider_record_id=provider_record_id,
-            coverage_status=coverage_status,
-            filing_kind=filing_kind,
-            supersedes_disclosure_id=supersedes_disclosure_id,
             created_at=_utcnow(),
         )
         self._session.add(disclosure)
