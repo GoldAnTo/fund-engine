@@ -1,4 +1,6 @@
 import type { components } from "../contracts/v1";
+import { isFinancialModelWorkspace, isFinancialModelRecord, isFinancialModelExport, type CompanyFinancialModelWorkspace, type CompanyFinancialModelRecord, type SaveCompanyFinancialModelRequest, type FinancialModelExport } from "./companyFinancialModel";
+export type { CompanyFinancialModelWorkspace, CompanyFinancialModelRecord, SaveCompanyFinancialModelRequest, FinancialModelExport } from "./companyFinancialModel";
 
 type Schemas = components["schemas"];
 
@@ -68,6 +70,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).length === keys.length && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+}
+
+function hasKeysWithOptional(value: Record<string, unknown>, required: readonly string[], optional: readonly string[]): boolean {
+  return required.every((key) => Object.prototype.hasOwnProperty.call(value, key))
+    && Object.keys(value).every((key) => required.includes(key) || optional.includes(key));
+}
+
+function sameJsonData(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) && Array.isArray(right)) return left.length === right.length && left.every((item, i) => sameJsonData(item, right[i]));
+  if (isRecord(left) && isRecord(right)) return Object.keys(left).length === Object.keys(right).length && Object.keys(left).every((key) => key in right && sameJsonData(left[key], right[key]));
+  return left === right;
+}
+
+function normalizedResearchFocus(value: string | null | undefined): string | null {
+  return value?.normalize("NFC").trim() || null;
+}
+
+function isCanonicalResearchFocus(value: unknown): value is string | null {
+  return value === null || (typeof value === "string" && [...value].length <= 2000
+    && value === normalizedResearchFocus(value));
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -705,7 +727,9 @@ function isCompanyResearchSecurity(value: unknown): boolean {
 
 function isCompanyResearchPreview(value: unknown): value is CompanyResearchPreview {
   if (!isProductDto(value)
-    || !hasExactKeys(value, ["schema_version", "company", "securities", "strategy_version", "horizon_years", "base_currency", "required_return", "permanent_loss_limit", "cutoff_at", "agenda", "preview_hash"])
+    || !hasKeysWithOptional(value, ["schema_version", "company", "securities", "strategy_version", "horizon_years", "base_currency", "required_return", "permanent_loss_limit", "cutoff_at", "agenda", "preview_hash"], ["user_focus", "requested_cutoff_at"])
+    || (value.user_focus !== undefined && !isCanonicalResearchFocus(value.user_focus))
+    || (value.requested_cutoff_at !== undefined && value.requested_cutoff_at !== null && !isDateTime(value.requested_cutoff_at))
     || !isCompanyResearchIdentity(value.company)
     || !Array.isArray(value.securities) || value.securities.length === 0
     || !value.securities.every(isCompanyResearchSecurity)
@@ -755,7 +779,7 @@ function isPreparationStateAndStep(value: Record<string, unknown>): boolean {
 
 function isCompanyResearchProject(value: unknown): value is CompanyResearchProject {
   if (!isProductDto(value)
-    || !hasExactKeys(value, ["schema_version", "project_id", "company_id", "preparation"])
+    || !hasKeysWithOptional(value, ["schema_version", "project_id", "company_id", "preparation"], ["product_progress"])
     || !isUuid(value.project_id) || !isUuid(value.company_id)
     || !isProductDto(value.preparation)
     || !hasExactKeys(value.preparation, ["schema_version", "id", "project_id", "request_hash", "strategy_version", "status", "current_step", "progress", "attempt", "next_attempt_at", "last_error_code"])
@@ -766,7 +790,8 @@ function isCompanyResearchProject(value: unknown): value is CompanyResearchProje
     || value.preparation.progress > 100 || !isPositiveInteger(value.preparation.attempt)
     || !isNullableDateTime(value.preparation.next_attempt_at)
     || !isNullableString(value.preparation.last_error_code)) return false;
-  return isPreparationStateAndStep(value.preparation);
+  return isPreparationStateAndStep(value.preparation)
+    && isCompanyProductProgress(value.product_progress, value.project_id, value.company_id, value.preparation);
 }
 
 const COMPANY_RESEARCH_ARTIFACT_KINDS = new Set(COMPANY_RESEARCH_STEPS);
@@ -1063,6 +1088,7 @@ function isJudgmentContextPayload(value: unknown): boolean {
 
 function isMemoPayload(value: unknown): boolean {
   const commonKeys = ["assessment_status", "business_map_ref", "driver_map_ref", "financial_bridge_ref", "scenario_set_ref", "valuation_set_ref", "gap_keys", "strongest_counterevidence", "next_verification_events", "candidate_status", "_lineage"];
+  if (isRecord(value) && Object.prototype.hasOwnProperty.call(value, "research_draft_ref")) commonKeys.push("research_draft_ref");
   if (!isRecord(value)
     || !(value.candidate_status === "machine_draft" && hasExactKeys(value, commonKeys)
       || value.candidate_status === "human_confirmed" && hasExactKeys(value, [...commonKeys, "reviewer", "markdown"]))
@@ -1072,6 +1098,7 @@ function isMemoPayload(value: unknown): boolean {
     || !value.strongest_counterevidence.every((ref) => isCompanyResearchSourceRef(ref, true))
     || !isStringArray(value.next_verification_events)
     || !isCompanyResearchLineage(value._lineage, ["judgment_context"])) return false;
+  if (value.research_draft_ref !== undefined && value.research_draft_ref !== null && !isLiveDraftRef(value.research_draft_ref)) return false;
   if (value.candidate_status === "human_confirmed"
     && (value.reviewer !== "human:local-user"
       || !isNonEmptyString(value.markdown) || value.markdown.length > 100_000
@@ -1165,8 +1192,92 @@ function collectNumericObservations(value: unknown, observations: Record<string,
   return observations;
 }
 
+function isCompanyProductProgress(
+  value: unknown, projectId: unknown, companyId: unknown, preparation: Record<string, unknown>,
+): boolean {
+  if (value === undefined || value === null) return true;
+  if (!isProductDto(value)
+    || !hasExactKeys(value, ["schema_version", "run_id", "project_id", "company_id", "status", "current_step", "progress_percent", "user_focus", "cutoff_at", "retryable", "error_code"])
+    || !sameUuid(value.run_id, preparation.id) || !sameUuid(value.project_id, projectId) || !sameUuid(value.company_id, companyId)
+    || value.current_step !== preparation.current_step
+    || !isNonNegativeInteger(value.progress_percent) || value.progress_percent > 100 || value.progress_percent !== preparation.progress
+    || !isDateTime(value.cutoff_at) || !isCanonicalResearchFocus(value.user_focus)) return false;
+  const expectedStatuses: Record<string, string> = {
+    queued: "queued", preparing_sources: "collecting_sources", awaiting_evidence_review: "needs_input",
+    awaiting_judgment_review: "needs_input", ready_to_freeze: "completed", completed: "completed",
+    recoverable_failure: "failed", blocked: "failed",
+  };
+  let expectedStatus = expectedStatuses[String(preparation.status)];
+  if (preparation.status === "building_model") {
+    const stages: Record<string, string> = {
+      business_map: "analyzing_company", driver_map: "analyzing_company", model_bundle: "analyzing_company",
+      financial_bridge: "building_forecast", scenario_set: "building_forecast", valuation_set: "building_forecast",
+      judgment_context: "generating_report", memo: "generating_report",
+    };
+    expectedStatus = stages[String(preparation.current_step)];
+  }
+  const error = isRecord(preparation.error) ? preparation.error : null;
+  const errorCode = Object.prototype.hasOwnProperty.call(preparation, "error") ? error?.code ?? null : preparation.last_error_code;
+  return expectedStatus !== undefined && value.status === expectedStatus
+    && value.retryable === (preparation.status === "recoverable_failure")
+    && value.error_code === errorCode;
+}
+
+function isLiveDraftRef(value: unknown): boolean {
+  return isRecord(value) && hasExactKeys(value, ["id", "content_hash", "source_bundle_hash"])
+    && isUuid(value.id) && isHash(value.content_hash) && isHash(value.source_bundle_hash);
+}
+
+function isHttpsSource(value: unknown): value is string {
+  if (!isNonEmptyString(value)) return false;
+  try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password; } catch { return false; }
+}
+
+function isLiveResearchDraft(value: unknown, workspace: Record<string, unknown>): boolean {
+  if (value === undefined || value === null) return true;
+  const progress = workspace.product_progress;
+  if (!isRecord(value) || !isRecord(progress) || !isRecord(workspace.preparation)
+    || !hasExactKeys(value, ["id", "project_id", "preparation_id", "request_hash", "content_hash", "source_bundle_hash", "input_hash", "output_hash", "candidate_status", "user_focus", "cutoff_at", "model_version", "prompt_version", "generated_at", "markdown", "sections", "sources", "usage"])
+    || !isUuid(value.id) || value.project_id !== workspace.project_id || value.preparation_id !== workspace.preparation.id
+    || ![value.request_hash, value.content_hash, value.source_bundle_hash, value.input_hash, value.output_hash].every(isHash)
+    || value.candidate_status !== "machine_draft" || value.user_focus !== progress.user_focus
+    || !isDateTime(value.cutoff_at) || !isDateTime(value.generated_at) || Date.parse(value.cutoff_at) !== Date.parse(String(progress.cutoff_at))
+    || !isNonEmptyString(value.model_version) || value.model_version.startsWith("mock-") || !isNonEmptyString(value.prompt_version)
+    || !isNonEmptyString(value.markdown) || value.markdown.length > 100000
+    || !Array.isArray(value.sources) || value.sources.length === 0 || !Array.isArray(value.sections)) return false;
+  const sources = new Map<string, Record<string, unknown>>();
+  for (const source of value.sources) {
+    if (!isRecord(source) || !hasExactKeys(source, ["source_id", "source_url", "raw_hash", "available_at", "retrieved_at"])
+      || !isNonEmptyString(source.source_id) || sources.has(source.source_id) || !isHttpsSource(source.source_url) || !isHash(source.raw_hash)
+      || !isDateTime(source.available_at) || !isDateTime(source.retrieved_at) || Date.parse(source.available_at) > Date.parse(value.cutoff_at)) return false;
+    sources.set(source.source_id, source);
+  }
+  const groups = ["business_analysis", "operating_drivers", "candidate_assumptions", "counterevidence", "verification_questions", "report_sections"];
+  if (value.sections.length !== groups.length || !value.sections.every((section, index) => {
+    if (!isRecord(section) || !hasExactKeys(section, ["key", "label", "items"]) || section.key !== groups[index]
+      || !isNonEmptyString(section.label) || !Array.isArray(section.items) || section.items.length === 0) return false;
+    return section.items.every((item) => isRecord(item) && hasExactKeys(item, ["title", "text", "citations", "fact_keys"])
+      && isNonEmptyString(item.title) && isNonEmptyString(item.text) && isStringArray(item.fact_keys)
+      && Array.isArray(item.citations) && item.citations.length > 0 && item.citations.every((cite) => {
+        if (!isRecord(cite) || !hasExactKeys(cite, ["excerpt_id", "quote", "source_id", "raw_hash", "source_url", "locator"])
+          || !isNonEmptyString(cite.excerpt_id) || !isNonEmptyString(cite.quote) || !isNonEmptyString(cite.locator) || !isNonEmptyString(cite.source_id)) return false;
+        const source = sources.get(cite.source_id);
+        return source !== undefined && cite.raw_hash === source.raw_hash && cite.source_url === source.source_url;
+      }));
+  })) return false;
+  if (value.usage !== null) {
+    if (!isRecord(value.usage) || !hasExactKeys(value.usage, ["schema_version", "attempts"]) || value.usage.schema_version !== "llm_usage.v1"
+      || !Array.isArray(value.usage.attempts) || !value.usage.attempts.every((attempt) => isRecord(attempt)
+        && hasExactKeys(attempt, ["outcome", "usage_state", "prompt_tokens", "completion_tokens", "total_tokens"])
+        && isNonEmptyString(attempt.outcome) && (attempt.usage_state === "reported"
+          ? [attempt.prompt_tokens, attempt.completion_tokens, attempt.total_tokens].every(isNonNegativeInteger) && Number(attempt.prompt_tokens) + Number(attempt.completion_tokens) === attempt.total_tokens
+          : attempt.usage_state === "unavailable" && attempt.prompt_tokens === null && attempt.completion_tokens === null && attempt.total_tokens === null))) return false;
+  }
+  return true;
+}
+
 function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWorkspace {
-  if (!isProductDto(value) || !hasExactKeys(value, ["schema_version", "project_id", "company", "preparation", "artifacts", "modules", "source_count", "gap_count", "draft", "selected_revision", "change_summary"])
+  if (!isProductDto(value) || !hasKeysWithOptional(value, ["schema_version", "project_id", "company", "preparation", "artifacts", "modules", "source_count", "gap_count", "draft", "selected_revision", "change_summary"], ["product_progress", "research_draft"])
     || !isUuid(value.project_id) || !isProductDto(value.company)
     || !hasExactKeys(value.company, ["schema_version", "object_id", "external_key", "canonical_name", "id"])
     || !isUuid(value.company.id) || value.company.object_id !== value.company.id || !isNonEmptyString(value.company.external_key) || !isNonEmptyString(value.company.canonical_name)
@@ -1180,6 +1291,8 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
     || !isProductDto(value.draft) || !hasExactKeys(value.draft, ["schema_version", "id", "lock_version", "base_revision_id"])
     || !isUuid(value.draft.id) || !isPositiveInteger(value.draft.lock_version) || !isNullableUuid(value.draft.base_revision_id)
     || !isNullableUuid(value.selected_revision) || value.selected_revision !== value.draft.base_revision_id || !isRecord(value.change_summary)) return false;
+  if (!isCompanyProductProgress(value.product_progress, value.project_id, value.company.id, value.preparation)) return false;
+  if (!isLiveResearchDraft(value.research_draft, value)) return false;
   const moduleKeys = value.modules.map((item) => isProductDto(item) ? item.key : null);
   if (!sameOrderedStrings(moduleKeys.filter(isNonEmptyString), [...COMPANY_RESEARCH_AGENDA_KEYS])) return false;
   const expectedEvidenceReview = value.preparation.status === "awaiting_evidence_review";
@@ -1243,6 +1356,11 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
   const gaps = gapPayload && Array.isArray(gapPayload.gaps) ? gapPayload.gaps : [];
   const memoArtifact = artifacts.find((artifact) => artifact.kind === "memo");
   const memoPayload = memoArtifact && isRecord(memoArtifact.payload) ? memoArtifact.payload : null;
+  if (memoPayload) {
+    const ref = memoPayload.research_draft_ref;
+    const research = value.research_draft;
+    if (isRecord(research) ? !isRecord(ref) || ref.id !== research.id || ref.content_hash !== research.content_hash || ref.source_bundle_hash !== research.source_bundle_hash : ref !== undefined && ref !== null) return false;
+  }
   const expectedGapCount = memoPayload && Array.isArray(memoPayload.gap_keys)
     ? memoPayload.gap_keys.length : gaps.length;
   if (value.gap_count !== expectedGapCount) return false;
@@ -1798,7 +1916,10 @@ export class InvestmentResearchApi {
       jsonInit("POST", body),
     );
     if (value.company.object_id !== body.company_id
-      || !sameInstant(value.cutoff_at, body.cutoff_at)) {
+      || normalizedResearchFocus(value.user_focus) !== normalizedResearchFocus(body.user_focus)
+      || (value.requested_cutoff_at !== undefined && value.requested_cutoff_at !== null
+        ? !sameInstant(value.requested_cutoff_at, body.cutoff_at) || !isAtOrBefore(value.cutoff_at, body.cutoff_at)
+        : !sameInstant(value.cutoff_at, body.cutoff_at))) {
       mismatch("company-research preview binding mismatch");
     }
     return value;
@@ -1836,6 +1957,36 @@ export class InvestmentResearchApi {
     assertUuid(projectId, "projectId");
     const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/workspace`, isCompanyResearchWorkspace, 200, { method: "GET" });
     if (value.project_id !== projectId) mismatch("company-research workspace project identity mismatch");
+    return value;
+  }
+
+  async companyFinancialModel(projectId: string): Promise<CompanyFinancialModelWorkspace> {
+    assertUuid(projectId, "projectId");
+    const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/financial-model`, isFinancialModelWorkspace, 200, { method: "GET" });
+    if (!sameUuid(value.project_id, projectId)) mismatch("financial model project identity mismatch");
+    return value;
+  }
+
+  async saveCompanyFinancialModel(projectId: string, body: SaveCompanyFinancialModelRequest, idempotencyKey: string): Promise<CompanyFinancialModelRecord> {
+    assertUuid(projectId, "projectId");
+    if (!idempotencyKey.trim()) throw new InvestmentResearchRequestError("idempotencyKey 不能为空", 0, "invalid_request", null);
+    const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/financial-model/drafts`, isFinancialModelRecord, 201, jsonInit("POST", body, { "Idempotency-Key": idempotencyKey }));
+    if (!sameUuid(value.project_id, projectId) || !sameUuid(value.parent_revision_id, body.parent_revision_id)
+      || value.baseline.content_hash !== body.baseline_content_hash || !sameJsonData(value.inputs, body.inputs)) mismatch("financial model saved input binding mismatch");
+    return value;
+  }
+
+  async companyFinancialModelDraft(projectId: string, draftId: string): Promise<CompanyFinancialModelRecord> {
+    assertUuid(projectId, "projectId"); assertUuid(draftId, "draftId");
+    const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/financial-model/drafts/${encodeURIComponent(draftId)}`, isFinancialModelRecord, 200, { method: "GET" });
+    if (!sameUuid(value.project_id, projectId) || !sameUuid(value.id, draftId)) mismatch("financial model draft identity mismatch");
+    return value;
+  }
+
+  async exportCompanyFinancialModelDraft(projectId: string, draftId: string): Promise<FinancialModelExport> {
+    assertUuid(projectId, "projectId"); assertUuid(draftId, "draftId");
+    const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/financial-model/drafts/${encodeURIComponent(draftId)}/export`, isFinancialModelExport, 200, { method: "GET" });
+    if (!value.filename.includes(draftId) || await sha256Utf8(value.content) !== value.content_hash) mismatch("financial model export binding mismatch");
     return value;
   }
 

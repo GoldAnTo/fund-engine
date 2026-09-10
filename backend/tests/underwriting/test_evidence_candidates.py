@@ -918,11 +918,13 @@ def test_postgres_successor_serializes_candidate_review_family(engine, session, 
             review_read.set()
             assert allow_review_lock.wait(timeout=5)
             review_lock_attempted.set()
-        if successor_thread_id and get_ident() == successor_thread_id[0]:
-            successor_locked.set()
-        return original_lock(
+        original_lock(
             repository, object_id=object_id, basis_id=basis_id, dossier_key=dossier_key,
         )
+        if successor_thread_id and get_ident() == successor_thread_id[0]:
+            # Release the reviewer only after PostgreSQL grants the lock.
+            # Signalling before acquisition lets the reviewer win the race.
+            successor_locked.set()
 
     def pause_successor_after_lock(repository, statement):
         row = original_latest(repository, statement)

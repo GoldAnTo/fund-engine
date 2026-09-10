@@ -20,6 +20,7 @@ from app.underwriting.domain.company_research import (
     CompanyResearchPreview,
     CompanyResearchSecurity,
     build_company_research_preview,
+    normalize_company_research_focus,
 )
 from app.underwriting.domain.types import ResearchObjectKind
 from app.underwriting.domain.product_contracts import (
@@ -51,8 +52,22 @@ from app.underwriting.services.product_project import (
 _AGENDA_TEMPLATE_KEY = "company-research-default"
 
 
+def company_research_scope_focus(scope: UnderwritingResearchScopeVersion) -> str | None:
+    """Validate persisted focus before rebuilding an authenticated request."""
+    if not isinstance(scope.payload, Mapping) or "user_focus" not in scope.payload:
+        raise ValidationError("company research foundation focus is invalid")
+    value = scope.payload["user_focus"]
+    try:
+        normalized = normalize_company_research_focus(value)
+    except ValueError as exc:
+        raise ValidationError("company research foundation focus is invalid") from exc
+    if value != normalized:
+        raise ValidationError("company research foundation focus is invalid")
+    return normalized
+
+
 def build_alphabet_company_research_preview_at_cutoff(
-    session: Session, *, company_id: UUID, cutoff_at: datetime
+    session: Session, *, company_id: UUID, cutoff_at: datetime, user_focus: str | None = None
 ) -> CompanyResearchPreview:
     """Rebuild the exact canonical preview at a caller-supplied historical cutoff."""
     repository = ProductRepository(session)
@@ -104,6 +119,7 @@ def build_alphabet_company_research_preview_at_cutoff(
         adapter=adapter,
         identities=identities,
         cutoff_at=cutoff_at,
+        user_focus=user_focus,
     )
 
 
@@ -129,6 +145,7 @@ def alphabet_company_research_foundation_contract(
     security_ids: tuple[UUID, ...],
     request_hash: str,
     strategy_version: str,
+    user_focus: str | None = None,
 ) -> CompanyResearchFoundationContract:
     """Build the source-independent first-version Alphabet foundation."""
     adapter = AlphabetCompanyResearchAdapter()
@@ -153,7 +170,7 @@ def alphabet_company_research_foundation_contract(
             target_security_ids=tuple(sorted(security_ids, key=str)),
             industry_ids=(),
             covered_segments=(),
-            user_focus=None,
+            user_focus=normalize_company_research_focus(user_focus),
             exclusions=(),
         ),
         agenda_items=agenda_items,

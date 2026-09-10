@@ -22,13 +22,13 @@
 
 ## 执行步骤
 
-- [ ] 基线：确认主线和源分支状态；运行现有公司研究 API、市场输入及引擎回归。记录原有 CI 三项失败。
-- [ ] 公司研究增量：用 `git diff --name-only -z main codex/company-research-prototype-delivery -- backend clients/research` 得到白名单；只恢复该白名单在源分支的最终内容。保留 main 的文档、部署、清理门禁及其他后端代码。
-- [ ] 独立补丁：按 `d33b4053` 移植 worker/heartbeat 临时锁恢复，测试锁后继续运行、非锁错误继续抛出；Gildata 按 `477d7fc5`、`212b65de`、`38037d65`/`474748b4`/`80022961` 的行为移植，并使用当前主线 fixture 验证引文边界、占位正文和报价主体。禁止覆盖 main 的 LLM client 预算实现。
-- [ ] CI 根因修复：保持生产归档压缩率保护；修正跨平台测试 fixture；诊断真实 HTTP 启动失败；让运行检查器从当前迁移链取得期望版本，并验证错误版本会失败。
-- [ ] 合并验证：Python 3.11 干净环境执行 `python -m pytest -q`；执行 `npm ci && npm run typecheck && npm test`（`clients/research`）；重新生成并核对 OpenAPI/TypeScript 契约。
-- [ ] 数据库验证：隔离 SQLite 和一次性 PostgreSQL 执行完整升级及 0072 → 0074 → 0072 → 0074；验证单一 head 和追加记录约束，运行 `pytest tests -m pg_only -q`。不连接现有业务数据库。
-- [ ] 边界验证：执行 `backend/scripts/verify_live_event_api.py` 与 `backend/scripts/verify_upload_proxy.py`；检查旧页面目录和客户端页面入口仍不存在。审查合并 diff，确认没有私有运行产物进入新增提交。
+- [x] 基线：确认主线和源分支状态；运行现有公司研究 API、市场输入及引擎回归。记录原有 CI 三项失败。
+- [x] 公司研究增量：用 `git diff --name-only -z main codex/company-research-prototype-delivery -- backend clients/research` 得到白名单；只恢复该白名单在源分支的最终内容。保留 main 的文档、部署、清理门禁及其他后端代码。
+- [x] 独立补丁：按 `d33b4053` 移植 worker/heartbeat 临时锁恢复，测试锁后继续运行、非锁错误继续抛出；Gildata 按 `477d7fc5`、`212b65de`、`38037d65`/`474748b4`/`80022961` 的行为移植，并使用当前主线 fixture 验证引文边界、占位正文和报价主体。禁止覆盖 main 的 LLM client 预算实现。
+- [x] CI 根因修复：保持生产归档压缩率保护；修正跨平台测试 fixture；诊断真实 HTTP 启动失败；让运行检查器从当前迁移链取得期望版本，并验证错误版本会失败。
+- [x] 合并验证：Python 3.11 干净环境执行 `python -m pytest -q`；执行 `npm ci && npm run typecheck && npm test`（`clients/research`）；重新生成并核对 OpenAPI/TypeScript 契约。
+- [x] 数据库验证：隔离 SQLite 和一次性 PostgreSQL 执行完整升级及 0072 → 0074 → 0072 → 0074；验证单一 head 和追加记录约束，运行 `pytest tests -m pg_only -q`。不连接现有业务数据库。
+- [x] 边界验证：执行 `backend/scripts/verify_live_event_api.py` 与 `backend/scripts/verify_upload_proxy.py`；检查旧页面目录和客户端页面入口仍不存在。审查合并 diff，确认没有私有运行产物进入新增提交。
 - [ ] 集成：补全实际检查结果与剩余边界，提交到隔离分支；确认 main 未被其他工作改变后快进合入并正常推送 main。检查该提交的远端 CI；不强制推送，不推送其他历史分支。
 
 ## 完成条件

@@ -380,6 +380,7 @@ class IngestResponse(V1Model):
     """
 
     research_reports: int
+    research_reports_skipped_degenerate: int
     announcements: int
     news: int
     macro_series: int = 0

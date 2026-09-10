@@ -432,6 +432,87 @@ def test_ingest_freezes_documents_and_valuations(session):
     assert stock.name == "寒武纪"
 
 
+def test_ingest_skips_degenerate_provider_report_bodies(session):
+    from sqlalchemy import select
+
+    from app.models.ledger import DocumentVersion, SourceSpan
+    from app.scripts.ingest_real_data import ingest
+
+    reports = [{"table_markdown": (
+        f"报告标题：报告{index}；\n发布时间：2026-08-20；\n原文：{body}"
+    )} for index, body in enumerate(["相关研究", "暂无", "增长仍在持续"])]
+    client = _FakeClient([reports], [], [])
+
+    summary = ingest(session, client, research_queries=["研报"])
+
+    assert summary["research_reports_skipped_degenerate"] == 2
+    assert summary["research_reports"] == 1
+    assert summary["spans"] == 1
+    assert len(list(session.scalars(select(DocumentVersion)))) == 1
+    assert [span.verbatim_text for span in session.scalars(select(SourceSpan))] == [
+        "增长仍在持续"
+    ]
+
+
+@pytest.mark.parametrize("invalid_code", ["", " ", "ABC", "68825", "６８８２５６"])
+def test_ingest_rejects_invalid_quote_request_before_provider_or_writes(
+    session, invalid_code,
+):
+    from sqlalchemy import func, select
+
+    from app.models.ledger import DocumentVersion, Stock, ValuationSnapshot
+    from app.scripts.ingest_real_data import ingest
+
+    client = _make_client()
+    with pytest.raises(ValueError, match="quote_stock_code is invalid"):
+        ingest(session, client, quote_stock_code=invalid_code)
+
+    assert client.calls == []
+    for model in (DocumentVersion, Stock, ValuationSnapshot):
+        assert session.scalar(select(func.count()).select_from(model)) == 0
+
+
+@pytest.mark.parametrize("returned_code", ["601138.SH", "ABC", " ", 688256, False])
+def test_ingest_rejects_invalid_or_mismatched_quote_identity(
+    session, monkeypatch, returned_code,
+):
+    from sqlalchemy import func, select
+
+    from app.models.ledger import Stock, ValuationSnapshot
+    from app.scripts.ingest_real_data import ingest
+
+    monkeypatch.setattr(adapters, "fetch_quote", lambda *_: [{
+        "stock_code": returned_code, "pe_ttm": "20", "stock_name": "异常证券",
+    }])
+    with pytest.raises(GildataMCPError, match="Gildata provider returned an invalid response"):
+        ingest(session, _make_client(), quote_stock_code="688256")
+
+    for model in (Stock, ValuationSnapshot):
+        assert session.scalar(select(func.count()).select_from(model)) == 0
+
+
+@pytest.mark.parametrize("returned_code", ["688256", "688256.SH", " 688256.sh ", "", None])
+def test_ingest_matches_bare_quote_identity_and_allows_missing_provider_code(
+    session, monkeypatch, returned_code,
+):
+    from sqlalchemy import select
+
+    from app.models.ledger import Stock, ValuationSnapshot
+    from app.scripts.ingest_real_data import ingest
+
+    monkeypatch.setattr(adapters, "fetch_quote", lambda *_: [{
+        "stock_code": returned_code, "pe_ttm": "20", "stock_name": "寒武纪",
+    }])
+    summary = ingest(session, _make_client(), quote_stock_code=" 688256.SH ")
+
+    stock = session.scalar(select(Stock))
+    assert stock.code == "688256.SH"
+    assert summary["stock_id"] == str(stock.id)
+    assert summary["valuations_written"] == 1
+    valuation = session.scalar(select(ValuationSnapshot))
+    assert valuation.stock_id == stock.id
+
+
 def test_ingest_without_case_does_not_adopt_the_first_global_case(session):
     from sqlalchemy import select
 

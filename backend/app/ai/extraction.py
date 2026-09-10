@@ -192,8 +192,19 @@ class StatementExtractor:
                 quote = stmt_data.get("quote")
                 quote_start = stmt_data.get("quote_start")
                 quote_end = stmt_data.get("quote_end")
-                if not isinstance(quote, str) or not isinstance(quote_start, int) or not isinstance(quote_end, int):
+                offsets = _verified_quote_offsets(
+                    source_text=next(
+                        span.verbatim_text
+                        for span in llm_spans
+                        if span.id == source_span_id
+                    ),
+                    quote=quote,
+                    quote_start=quote_start,
+                    quote_end=quote_end,
+                )
+                if offsets is None:
                     continue
+                quote_start, quote_end = offsets
                 try:
                     if pre_commit_guard is not None:
                         pre_commit_guard(session)
@@ -284,6 +295,32 @@ class StatementExtractor:
                     session.rollback()
                 raise
             raise
+
+
+def _verified_quote_offsets(
+    *,
+    source_text: str,
+    quote: object,
+    quote_start: object,
+    quote_end: object,
+) -> tuple[int, int] | None:
+    """Keep exact offsets or repair only one unambiguous verbatim match."""
+    if (
+        not isinstance(quote, str)
+        or not quote.strip()
+        or type(quote_start) is not int
+        or type(quote_end) is not int
+    ):
+        return None
+    if (
+        0 <= quote_start < quote_end <= len(source_text)
+        and source_text[quote_start:quote_end] == quote
+    ):
+        return quote_start, quote_end
+    first_match = source_text.find(quote)
+    if first_match < 0 or source_text.find(quote, first_match + 1) >= 0:
+        return None
+    return first_match, first_match + len(quote)
 
 
 def _parse_period(value):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
@@ -43,6 +44,7 @@ from app.underwriting.api.company_research_schemas import (
     CompanyResearchWorkspacePreparationResponse,
     CompanyResearchPreparationErrorResponse,
     CompanyResearchWorkspaceResponse,
+    CompanyResearchProductProgressResponse,
     InitializeCompanyResearchRequest,
     PreviewCompanyResearchPublicationRequest,
     PublishCompanyResearchRequest,
@@ -50,7 +52,9 @@ from app.underwriting.api.company_research_schemas import (
 )
 from app.underwriting.api.schemas import UnderwritingErrorEnvelope
 from app.underwriting.api.transactions import commit_write
+from app.underwriting.api.company_research_financial_router import router as financial_router
 from app.underwriting.domain.company_research import CompanyResearchPreview
+from app.underwriting.services.company_research_progress import company_research_product_progress
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchInitialization,
     CompanyResearchInitializer,
@@ -71,6 +75,7 @@ from app.underwriting.services.company_research_workbench import (
 )
 
 router = APIRouter(prefix="/product/company-research", tags=["company-research-v1"])
+router.include_router(financial_router)
 DbSession = Annotated[Session, Depends(get_db)]
 WRITE_ERROR_RESPONSES = {
     409: {"model": UnderwritingErrorEnvelope},
@@ -91,7 +96,7 @@ def _stored_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
-def _preview_response(value: CompanyResearchPreview) -> CompanyResearchPreviewResponse:
+def _preview_response(value: CompanyResearchPreview, *, requested_cutoff_at: datetime | None = None) -> CompanyResearchPreviewResponse:
     return CompanyResearchPreviewResponse(
         company=CompanyResearchIdentityResponse(**value.company.canonical_payload()),
         securities=tuple(
@@ -112,6 +117,8 @@ def _preview_response(value: CompanyResearchPreview) -> CompanyResearchPreviewRe
         required_return=value.required_return,
         permanent_loss_limit=value.permanent_loss_limit,
         cutoff_at=value.cutoff_at,
+        requested_cutoff_at=requested_cutoff_at or value.cutoff_at,
+        user_focus=value.user_focus,
         agenda=tuple(
             CompanyResearchAgendaModuleResponse(**module.canonical_payload())
             for module in value.generic_modules
@@ -127,6 +134,8 @@ def _project_response(
     return CompanyResearchProjectResponse(
         project_id=value.project.id,
         company_id=value.project.primary_company_id,
+        product_progress=(CompanyResearchProductProgressResponse(**asdict(value.product_progress))
+                          if value.product_progress is not None else None),
         preparation=CompanyResearchPreparationResponse(
             id=preparation.id,
             project_id=preparation.project_id,
@@ -147,11 +156,16 @@ def _project_response(
 
 
 def _initialization_response(
-    value: CompanyResearchInitialization,
+    value: CompanyResearchInitialization, *, db: Session,
 ) -> CompanyResearchProjectResponse:
     return _project_response(
         CompanyResearchProjectStatus(
-            project=value.project, preparation=value.preparation
+            project=value.project, preparation=value.preparation,
+            product_progress=company_research_product_progress(
+                session=db,
+                preparation=value.preparation, company_id=value.project.primary_company_id,
+                scope=value.scope, basis=value.basis,
+            ),
         )
     )
 
@@ -609,6 +623,11 @@ def _workspace_response(
     )
     return CompanyResearchWorkspaceResponse(
         project_id=value.project_id,
+        research_draft=getattr(value, "research_draft", None),
+        product_progress=(
+            CompanyResearchProductProgressResponse(**asdict(value.product_progress))
+            if getattr(value, "product_progress", None) is not None else None
+        ),
         company=CompanyResearchWorkspaceCompanyResponse(
             id=value.company.id,
             object_id=value.company.id,
@@ -883,9 +902,10 @@ def preview_company_research(
     return _preview_response(
         _read(
             lambda: CompanyResearchInitializer(db, now=_now).preview(
-                company_id=payload.company_id, cutoff_at=payload.cutoff_at
+                company_id=payload.company_id, cutoff_at=payload.cutoff_at, user_focus=payload.user_focus
             )
-        )
+        ),
+        requested_cutoff_at=payload.cutoff_at,
     )
 
 
@@ -910,8 +930,10 @@ def initialize_company_research(
                 company_id=payload.company_id,
                 cutoff_at=payload.cutoff_at,
                 idempotency_key=idempotency_key,
+                user_focus=payload.user_focus,
             ),
-        )
+        ),
+        db=db,
     )
 
 

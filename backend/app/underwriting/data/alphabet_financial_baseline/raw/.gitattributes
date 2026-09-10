@@ -1,0 +1,3 @@
+# Preserve exact official-source bytes, including PDF line endings.
+*.pdf binary
+*.gz binary

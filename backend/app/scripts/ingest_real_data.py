@@ -34,7 +34,11 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.datasources.gildata import adapters
-from app.datasources.gildata.client import GildataMCPClient
+from app.datasources.gildata.client import (
+    GILDATA_RESPONSE_ERROR_MESSAGE,
+    GildataMCPClient,
+    GildataMCPError,
+)
 from app.env import load_local_env
 from app.models.ledger import Base, Stock, ValuationSnapshot
 from app.repositories.documents import DocumentRepository
@@ -67,6 +71,15 @@ METRIC_DEFINITIONS = {
 }
 
 _NUM_RE = re.compile(r"^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$")
+_A_SHARE_CODE_RE = re.compile(r"^[0-9]{6}$")
+
+
+class GildataRequestValidationError(ValueError):
+    """Raised when a caller supplies an invalid Gildata ingest parameter."""
+
+
+class _InvalidSecurityCodeError(ValueError):
+    """Internal signal that a security identity cannot be normalized."""
 
 
 def _utcnow() -> datetime:
@@ -145,6 +158,16 @@ def _market_for_code(code: str) -> tuple[str, str]:
     if base.startswith(("43", "83", "87", "88")):
         return f"{base}.BJ", "BSE"
     return f"{base}.SH", "SSE"
+
+
+def _bare_security_code(value: object) -> str:
+    """Return a six-digit identity; the provider suffix is ignored."""
+    if not isinstance(value, str):
+        raise _InvalidSecurityCodeError("security code format is invalid")
+    bare_code = value.strip().upper().split(".", 1)[0]
+    if _A_SHARE_CODE_RE.fullmatch(bare_code) is None:
+        raise _InvalidSecurityCodeError("security code format is invalid")
+    return bare_code
 
 
 def find_stock_by_code(session: Session, code: str) -> Stock | None:
@@ -230,7 +253,12 @@ def ingest(
     announcement_query = announcement_query or ANNOUNCEMENT_QUERY
     news_query = news_query or NEWS_QUERY
     quote_query = quote_query or QUOTE_QUERY
-    quote_stock_code = quote_stock_code or QUOTE_STOCK_CODE
+    if quote_stock_code is None:
+        quote_stock_code = QUOTE_STOCK_CODE
+    try:
+        requested_bare_code = _bare_security_code(quote_stock_code)
+    except _InvalidSecurityCodeError as exc:
+        raise GildataRequestValidationError("quote_stock_code is invalid") from exc
 
     document_service = DocumentService(DocumentRepository(session))
     instruments = InstrumentRepository(session)
@@ -238,6 +266,7 @@ def ingest(
 
     summary = {
         "research_reports": 0,
+        "research_reports_skipped_degenerate": 0,
         "announcements": 0,
         "news": 0,
         "macro_series": 0,
@@ -274,6 +303,11 @@ def ingest(
         for report in reports[:3]:
             content = report.get("content", "")
             if not content:
+                continue
+            # Short provider placeholders cannot support an atomic claim.
+            # Count their omission without freezing duplicate placeholder bodies.
+            if len(content.strip()) <= 4:
+                summary["research_reports_skipped_degenerate"] += 1
                 continue
             published_at = _parse_datetime(report.get("publish_date", ""))
             # 传 title 让自然键判重：同来源 + 同标题 + 同发布日期视为同一份
@@ -459,7 +493,17 @@ def ingest(
     quotes = adapters.fetch_quote(client, quote_query)
     if quotes:
         quote = quotes[0]
-        resolved_code = quote.get("stock_code", "") or quote_stock_code
+        returned_code = quote.get("stock_code")
+        if returned_code is None or returned_code == "":
+            resolved_code = requested_bare_code
+        else:
+            try:
+                returned_bare_code = _bare_security_code(returned_code)
+            except _InvalidSecurityCodeError as exc:
+                raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE) from exc
+            if returned_bare_code != requested_bare_code:
+                raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
+            resolved_code = returned_bare_code
         stock = ensure_stock(
             session,
             instruments,

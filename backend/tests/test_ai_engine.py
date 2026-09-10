@@ -112,6 +112,48 @@ def test_assessment_rewrite_uses_remaining_operation_budget(
     assert len(runs) == 1 and runs[0].status == "failed"
 
 
+@pytest.mark.parametrize(
+    ("source_text", "quote", "quote_start", "quote_end", "expected_offsets"),
+    [
+        ("算力需求增长。", "需求增长", 6, 18, (2, 6)),
+        ("repeated repeated", "repeated", 9, 17, (9, 17)),
+        ("repeated repeated", "repeated", 99, 107, None),
+        ("ababa", "aba", 99, 102, None),
+        ("original span", "absent", 0, 6, None),
+        ("original span", "original", False, 8, None),
+        ("original span", "o", 0, True, None),
+        ("intro   end", "   ", 5, 8, None),
+    ],
+)
+def test_extraction_verifies_quote_offsets_without_guessing(
+    session, document_service, source_text, quote, quote_start, quote_end,
+    expected_offsets,
+):
+    document = document_service.freeze(
+        raw=source_text.encode("utf-8"), source_url="https://example.test/quote"
+    )
+    source_span = document_service.add_span(document.id, {"paragraph": 1}, source_text)
+    client = LLMClient(model_version="mock-test", mock=True)
+    with patch.object(client, "chat_json", return_value={"statements": [{
+        "span_id": str(source_span.id),
+        "kind": "research_opinion",
+        "quote": quote,
+        "quote_start": quote_start,
+        "quote_end": quote_end,
+        "normalized_text": "来源表达了一项研究观点。",
+    }]}):
+        candidates = StatementExtractor(client).extract(document.id, session)
+
+    if expected_offsets is None:
+        assert candidates == []
+    else:
+        assert len(candidates) == 1
+        candidate = candidates[0]
+        assert (candidate.quote_start, candidate.quote_end) == expected_offsets
+        assert source_text[candidate.quote_start:candidate.quote_end] == quote
+    assert list(session.scalars(select(SourceStatement))) == []
+
+
 def test_extraction_creates_review_gated_candidates_and_airun(session, span):
     client = LLMClient(model_version="mock-test", mock=True)
     extractor = StatementExtractor(client)

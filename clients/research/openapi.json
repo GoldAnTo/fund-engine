@@ -11660,6 +11660,303 @@
         }
       }
     },
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/financial-model": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "company-research-v1"
+        ],
+        "summary": "Get Financial Workspace",
+        "operationId": "get_financial_workspace_api_underwriting_v1_product_company_research_projects__project_id__financial_model_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialWorkspaceResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/financial-model/drafts": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "company-research-v1"
+        ],
+        "summary": "Save Financial Draft",
+        "operationId": "save_financial_draft_api_underwriting_v1_product_company_research_projects__project_id__financial_model_drafts_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveFinancialDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialDraftResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/financial-model/drafts/{draft_id}": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "company-research-v1"
+        ],
+        "summary": "Get Financial Draft",
+        "operationId": "get_financial_draft_api_underwriting_v1_product_company_research_projects__project_id__financial_model_drafts__draft_id__get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialDraftResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/financial-model/drafts/{draft_id}/export": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "company-research-v1"
+        ],
+        "summary": "Export Financial Draft",
+        "operationId": "export_financial_draft_api_underwriting_v1_product_company_research_projects__project_id__financial_model_drafts__draft_id__export_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialDraftExportResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
     "/api/underwriting/v1/product/company-research/preview": {
       "post": {
         "tags": [
@@ -17762,6 +18059,16 @@
           "_lineage": {
             "$ref": "#/components/schemas/CompanyResearchArtifactLineageResponse"
           },
+          "research_draft_ref": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchDraftReferenceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "candidate_status": {
             "type": "string",
             "const": "human_confirmed",
@@ -17797,6 +18104,268 @@
           "markdown"
         ],
         "title": "CompanyResearchConfirmedMemoPayloadResponse"
+      },
+      "CompanyResearchDraftCitationResponse": {
+        "properties": {
+          "excerpt_id": {
+            "type": "string",
+            "title": "Excerpt Id"
+          },
+          "quote": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Quote"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "raw_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Hash"
+          },
+          "source_url": {
+            "type": "string",
+            "title": "Source Url"
+          },
+          "locator": {
+            "type": "string",
+            "title": "Locator"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "excerpt_id",
+          "quote",
+          "source_id",
+          "raw_hash",
+          "source_url",
+          "locator"
+        ],
+        "title": "CompanyResearchDraftCitationResponse"
+      },
+      "CompanyResearchDraftItemResponse": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Title"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Text"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchDraftCitationResponse"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Citations"
+          },
+          "fact_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fact Keys"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title",
+          "text",
+          "citations",
+          "fact_keys"
+        ],
+        "title": "CompanyResearchDraftItemResponse"
+      },
+      "CompanyResearchDraftReferenceResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "source_bundle_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Bundle Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "content_hash",
+          "source_bundle_hash"
+        ],
+        "title": "CompanyResearchDraftReferenceResponse"
+      },
+      "CompanyResearchDraftSectionResponse": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "business_analysis",
+              "operating_drivers",
+              "candidate_assumptions",
+              "counterevidence",
+              "verification_questions",
+              "report_sections"
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchDraftItemResponse"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "items"
+        ],
+        "title": "CompanyResearchDraftSectionResponse"
+      },
+      "CompanyResearchDraftSourceResponse": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "source_url": {
+            "type": "string",
+            "title": "Source Url"
+          },
+          "raw_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Hash"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "retrieved_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Retrieved At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_id",
+          "source_url",
+          "raw_hash",
+          "available_at",
+          "retrieved_at"
+        ],
+        "title": "CompanyResearchDraftSourceResponse"
+      },
+      "CompanyResearchDraftUsageAttemptResponse": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "usage_state": {
+            "type": "string",
+            "enum": [
+              "reported",
+              "unavailable"
+            ],
+            "title": "Usage State"
+          },
+          "prompt_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Tokens"
+          },
+          "completion_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completion Tokens"
+          },
+          "total_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Tokens"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "outcome",
+          "usage_state",
+          "prompt_tokens",
+          "completion_tokens",
+          "total_tokens"
+        ],
+        "title": "CompanyResearchDraftUsageAttemptResponse"
+      },
+      "CompanyResearchDraftUsageResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "llm_usage.v1",
+            "title": "Schema Version"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchDraftUsageAttemptResponse"
+            },
+            "type": "array",
+            "title": "Attempts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema_version",
+          "attempts"
+        ],
+        "title": "CompanyResearchDraftUsageResponse"
       },
       "CompanyResearchDriverMapArtifactResponse": {
         "properties": {
@@ -19160,6 +19729,140 @@
         ],
         "title": "CompanyResearchLineageSourceReferenceResponse"
       },
+      "CompanyResearchLiveDraftResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "source_bundle_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Bundle Hash"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "preparation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Preparation Id"
+          },
+          "request_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Request Hash"
+          },
+          "input_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Input Hash"
+          },
+          "output_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Output Hash"
+          },
+          "candidate_status": {
+            "type": "string",
+            "const": "machine_draft",
+            "title": "Candidate Status"
+          },
+          "user_focus": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Focus"
+          },
+          "cutoff_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff At"
+          },
+          "model_version": {
+            "type": "string",
+            "title": "Model Version"
+          },
+          "prompt_version": {
+            "type": "string",
+            "title": "Prompt Version"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "markdown": {
+            "type": "string",
+            "maxLength": 100000,
+            "minLength": 1,
+            "title": "Markdown"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchDraftSectionResponse"
+            },
+            "type": "array",
+            "maxItems": 6,
+            "minItems": 6,
+            "title": "Sections"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchDraftSourceResponse"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Sources"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchDraftUsageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "content_hash",
+          "source_bundle_hash",
+          "project_id",
+          "preparation_id",
+          "request_hash",
+          "input_hash",
+          "output_hash",
+          "candidate_status",
+          "user_focus",
+          "cutoff_at",
+          "model_version",
+          "prompt_version",
+          "generated_at",
+          "markdown",
+          "sections",
+          "sources",
+          "usage"
+        ],
+        "title": "CompanyResearchLiveDraftResponse"
+      },
       "CompanyResearchMachineMemoPayloadResponse": {
         "properties": {
           "assessment_status": {
@@ -19216,6 +19919,16 @@
           },
           "_lineage": {
             "$ref": "#/components/schemas/CompanyResearchArtifactLineageResponse"
+          },
+          "research_draft_ref": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchDraftReferenceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "candidate_status": {
             "type": "string",
@@ -19763,6 +20476,18 @@
             "type": "string",
             "format": "date-time",
             "title": "Cutoff At"
+          },
+          "user_focus": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Focus"
           }
         },
         "additionalProperties": false,
@@ -19834,6 +20559,30 @@
             "type": "string",
             "pattern": "^[0-9a-f]{64}$",
             "title": "Preview Hash"
+          },
+          "user_focus": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Focus"
+          },
+          "requested_cutoff_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Cutoff At"
           }
         },
         "additionalProperties": false,
@@ -19851,6 +20600,109 @@
           "preview_hash"
         ],
         "title": "CompanyResearchPreviewResponse"
+      },
+      "CompanyResearchProductProgressResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Company Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "collecting_sources",
+              "analyzing_company",
+              "building_forecast",
+              "generating_report",
+              "completed",
+              "needs_input",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "current_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Step"
+          },
+          "progress_percent": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Progress Percent"
+          },
+          "user_focus": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Focus"
+          },
+          "cutoff_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff At"
+          },
+          "retryable": {
+            "type": "boolean",
+            "title": "Retryable"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "run_id",
+          "project_id",
+          "company_id",
+          "status",
+          "current_step",
+          "progress_percent",
+          "user_focus",
+          "cutoff_at",
+          "retryable",
+          "error_code"
+        ],
+        "title": "CompanyResearchProductProgressResponse"
       },
       "CompanyResearchProjectResponse": {
         "properties": {
@@ -19872,6 +20724,16 @@
           },
           "preparation": {
             "$ref": "#/components/schemas/CompanyResearchPreparationResponse"
+          },
+          "product_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchProductProgressResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -21125,6 +21987,26 @@
           },
           "change_summary": {
             "$ref": "#/components/schemas/CompanyResearchChangeSummaryResponse"
+          },
+          "product_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchProductProgressResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "research_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchLiveDraftResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -26618,6 +27500,253 @@
         ],
         "title": "FXSnapshotResponse"
       },
+      "FinancialDraftExportResponse": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "media_type": {
+            "type": "string",
+            "const": "text/markdown",
+            "title": "Media Type"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "filename",
+          "media_type",
+          "content",
+          "content_hash"
+        ],
+        "title": "FinancialDraftExportResponse"
+      },
+      "FinancialDraftResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Sequence"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "input_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Input Hash"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "parent_revision_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Parent Revision Id"
+          },
+          "parent_manifest_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Parent Manifest Hash"
+          },
+          "cutoff_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff At"
+          },
+          "status": {
+            "type": "string",
+            "const": "unreviewed",
+            "title": "Status"
+          },
+          "baseline": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Baseline"
+          },
+          "market": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market"
+          },
+          "inputs": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Inputs"
+          },
+          "result": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Result"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "sequence",
+          "created_at",
+          "input_hash",
+          "content_hash",
+          "project_id",
+          "parent_revision_id",
+          "parent_manifest_hash",
+          "cutoff_at",
+          "status",
+          "baseline",
+          "market",
+          "inputs",
+          "result"
+        ],
+        "title": "FinancialDraftResponse"
+      },
+      "FinancialDraftSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Sequence"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "input_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Input Hash"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "sequence",
+          "created_at",
+          "input_hash",
+          "content_hash"
+        ],
+        "title": "FinancialDraftSummary"
+      },
+      "FinancialWorkspaceResponse": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "parent_revision_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Parent Revision Id"
+          },
+          "parent_manifest_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Parent Manifest Hash"
+          },
+          "cutoff_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff At"
+          },
+          "baseline": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Baseline"
+          },
+          "market": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market"
+          },
+          "initial_inputs": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Initial Inputs"
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FinancialDraftResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/FinancialDraftSummary"
+            },
+            "type": "array",
+            "title": "History"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "project_id",
+          "parent_revision_id",
+          "parent_manifest_hash",
+          "cutoff_at",
+          "baseline",
+          "market",
+          "initial_inputs",
+          "latest",
+          "history"
+        ],
+        "title": "FinancialWorkspaceResponse"
+      },
       "ForecastEvaluationCandidateDTO": {
         "properties": {
           "id": {
@@ -28803,6 +29932,10 @@
             "type": "integer",
             "title": "Research Reports"
           },
+          "research_reports_skipped_degenerate": {
+            "type": "integer",
+            "title": "Research Reports Skipped Degenerate"
+          },
           "announcements": {
             "type": "integer",
             "title": "Announcements"
@@ -28855,6 +29988,7 @@
         "type": "object",
         "required": [
           "research_reports",
+          "research_reports_skipped_degenerate",
           "announcements",
           "news",
           "spans",
@@ -28883,6 +30017,18 @@
             "type": "string",
             "format": "date-time",
             "title": "Cutoff At"
+          },
+          "user_focus": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Focus"
           },
           "preview_hash": {
             "type": "string",
@@ -36561,6 +37707,46 @@
           "next_action"
         ],
         "title": "RunSummaryDTO"
+      },
+      "SaveFinancialDraftRequest": {
+        "properties": {
+          "parent_revision_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Parent Revision Id"
+          },
+          "expected_latest_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Latest Id"
+          },
+          "baseline_content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Baseline Content Hash"
+          },
+          "inputs": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Inputs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "parent_revision_id",
+          "expected_latest_id",
+          "baseline_content_hash",
+          "inputs"
+        ],
+        "title": "SaveFinancialDraftRequest"
       },
       "SaveFundDisclosureSyncConfigRequest": {
         "properties": {

@@ -66,6 +66,8 @@ def _canonical_json(value: object) -> object:
 
 def _canonical_memo_payload(payload: dict[str, object]) -> dict[str, object]:
     """Keep legacy machine-draft payloads byte-for-byte unchanged."""
+    if payload.get("research_draft_ref") is None:
+        payload.pop("research_draft_ref", None)
     if payload.get("candidate_status") == "machine_draft":
         payload.pop("reviewer", None)
         payload.pop("markdown", None)

@@ -8,6 +8,8 @@ import socket
 import time
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy.exc import OperationalError
+
 from app.env import load_local_env
 
 load_local_env()
@@ -39,6 +41,10 @@ def _touch(*, mode: str, state: str) -> None:
         session.commit()
 
 
+def _is_transient_sqlite_writer_contention(error: OperationalError) -> bool:
+    return "database is locked" in str(error.orig).lower()
+
+
 def run_once(*, recover_after_minutes: int = 30, session_factory=SessionLocal) -> bool:
     """Claim and execute one source or model-bundle stage when work is due."""
     with session_factory() as session:
@@ -52,7 +58,11 @@ def run_once(*, recover_after_minutes: int = 30, session_factory=SessionLocal) -
     if claim is None:
         return bool(recovered or cancelled)
     with session_factory() as session:
-        worker = CompanyResearchPreparationWorker(session, now=_utcnow)
+        live_runtime = None
+        if claim.step == "evidence_index" and os.getenv("COMPANY_RESEARCH_LIVE") == "1":
+            from app.underwriting.services.company_research_live_runtime import CompanyResearchLiveRuntime
+            live_runtime = CompanyResearchLiveRuntime.from_env(now=_utcnow)
+        worker = CompanyResearchPreparationWorker(session, now=_utcnow, live_runtime=live_runtime)
         worker.run_claim(claim)
         session.commit()
     return True
@@ -79,7 +89,13 @@ def main() -> None:
     publisher.start()
     try:
         while True:
-            if not run_once():
+            try:
+                worked = run_once()
+            except OperationalError as error:
+                if not _is_transient_sqlite_writer_contention(error):
+                    raise
+                worked = False
+            if not worked:
                 time.sleep(max(args.poll_seconds, 0.1))
     finally:
         publisher.stop()

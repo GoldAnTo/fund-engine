@@ -1,0 +1,2619 @@
+{
+  "schema_version": "company-research.financial-baseline.v1",
+  "sources": [
+    {
+      "id": "alphabet-2025-10k-ir",
+      "title": "Alphabet FY2025 Form 10-K — official IR PDF",
+      "url": "https://s206.q4cdn.com/479360582/files/doc_financials/2025/q4/GOOG-10-K-2025.pdf",
+      "raw_content_hash": "9953e8d2e70b18c5bf0af3b2b2a1e96de0555f51cbb39a625497b434e19fb43a",
+      "available_at": "2026-02-05T23:59:59+00:00"
+    },
+    {
+      "id": "alphabet-2025-q4-release",
+      "title": "Alphabet Q4 and FY2025 earnings release",
+      "url": "https://s206.q4cdn.com/479360582/files/doc_news/2026/Feb/04/attachments/2025q4-alphabet-earnings-release.pdf",
+      "raw_content_hash": "8bb2778772fc60c0290cfeac3b24d345a07b8918a7708ec8fcef7239243922f9",
+      "available_at": "2026-02-04T23:59:59+00:00"
+    },
+    {
+      "id": "alphabet-2026-q2-10q",
+      "title": "Alphabet Q2 2026 Form 10-Q",
+      "url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000071/goog-20260630.htm",
+      "raw_content_hash": "fecfbc2683f630380b17937278ce3745eca150eb90e21a945fd6b78fe19728c7",
+      "available_at": "2026-07-23T10:04:02+00:00"
+    },
+    {
+      "id": "alphabet-2026-q2-release",
+      "title": "Alphabet Q2 2026 earnings release, Exhibit 99.1",
+      "url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000066/googexhibit991q22026.htm",
+      "raw_content_hash": "a01f6bd87c7fa0dcb562493dda7348a1a37d017b4a4b5edb39b915b45688237e",
+      "available_at": "2026-07-22T20:02:09+00:00"
+    }
+  ],
+  "facts": [
+    {
+      "fact_key": "fy2024_group_revenue",
+      "label": "FY2024 Alphabet集团 收入",
+      "value": "350018",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_operating_income",
+      "label": "FY2024 Alphabet集团 经营利润",
+      "value": "112390",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 133,332 146,306 162,535 Research and development 45,427 49,326 61,087 Sales and marketing 27,917 27,808 28,693 General and administrative 16,425 14,188 21,482 Total costs and expenses 223,101 237,628 273,797 Income from operations 84,293 112,390 129,039",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_pretax_income",
+      "label": "FY2024 Alphabet集团 税前利润",
+      "value": "119815",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 133,332 146,306 162,535 Research and development 45,427 49,326 61,087 Sales and marketing 27,917 27,808 28,693 General and administrative 16,425 14,188 21,482 Total costs and expenses 223,101 237,628 273,797 Income from operations 84,293 112,390 129,039 Other income (expense), net 1,424 7,425 29,787 Income before income taxes 85,717 119,815 158,826",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_tax_expense",
+      "label": "FY2024 Alphabet集团 所得税费用（利润表口径，非现金实缴税额）",
+      "value": "19697",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 133,332 146,306 162,535 Research and development 45,427 49,326 61,087 Sales and marketing 27,917 27,808 28,693 General and administrative 16,425 14,188 21,482 Total costs and expenses 223,101 237,628 273,797 Income from operations 84,293 112,390 129,039 Other income (expense), net 1,424 7,425 29,787 Income before income taxes 85,717 119,815 158,826 Provision for income taxes 11,922 19,697 26,656",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_net_income",
+      "label": "FY2024 Alphabet集团 净利润",
+      "value": "100118",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 133,332 146,306 162,535 Research and development 45,427 49,326 61,087 Sales and marketing 27,917 27,808 28,693 General and administrative 16,425 14,188 21,482 Total costs and expenses 223,101 237,628 273,797 Income from operations 84,293 112,390 129,039 Other income (expense), net 1,424 7,425 29,787 Income before income taxes 85,717 119,815 158,826 Provision for income taxes 11,922 19,697 26,656 Net income $ 73,795 $ 100,118 $ 132,170",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_cfo",
+      "label": "FY2024 Alphabet集团 经营活动现金流净额",
+      "value": "125299",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899 Deferred revenue 525 1,043 2,420 Net cash provided by operating activities 101,746 125,299 164,713",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_ppe_depreciation",
+      "label": "FY2024 Alphabet集团 集团物业及设备折旧（非独立基础设施折旧）",
+      "value": "15311",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_capex",
+      "label": "FY2024 Alphabet集团 购置物业及设备现金支出（正数规模）",
+      "value": "52535",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899 Deferred revenue 525 1,043 2,420 Net cash provided by operating activities 101,746 125,299 164,713 Investing activities Purchases of property and equipment (32,251) (52,535) (91,447)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_sbc_cashflow_adjustment",
+      "label": "FY2024 Alphabet集团 现金流量表股份薪酬非现金调整额（非总SBC费用）",
+      "value": "22785",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_share_repurchases_cash",
+      "label": "FY2024 Alphabet集团 股份回购现金支出（正数规模）",
+      "value": "62222",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899 Deferred revenue 525 1,043 2,420 Net cash provided by operating activities 101,746 125,299 164,713 Investing activities Purchases of property and equipment (32,251) (52,535) (91,447) Purchases of marketable securities (77,858) (86,679) (103,773) Maturities and sales of marketable securities 86,672 103,428 83,240 Purchases of non-marketable securities (3,027) (5,034) (5,716) Maturities and sales of non-marketable securities 947 882 1,367 Acquisitions, net of cash acquired, and purchases of intangible assets (495) (2,931) (1,592) Other investing activities (1,051) (2,667) (2,370) Net cash used in investing activities (27,063) (45,536) (120,291) Financing activities Net payments related to stock-based award activities (9,837) (12,190) (14,167) Repurchases of stock (61,504) (62,222) (45,709)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_cashflow_receivables_change",
+      "label": "FY2024 Alphabet集团 应收账款变动的现金流影响",
+      "value": "-5891",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_cashflow_income_taxes_change",
+      "label": "FY2024 Alphabet集团 所得税项目变动的现金流影响",
+      "value": "-2418",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_cashflow_other_assets_change",
+      "label": "FY2024 Alphabet集团 其他资产变动的现金流影响",
+      "value": "-1397",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_cashflow_accounts_payable_change",
+      "label": "FY2024 Alphabet集团 应付账款变动的现金流影响",
+      "value": "359",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_cashflow_accrued_expenses_change",
+      "label": "FY2024 Alphabet集团 应计费用及其他负债变动的现金流影响",
+      "value": "-1161",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_cashflow_deferred_revenue_change",
+      "label": "FY2024 Alphabet集团 递延收入变动的现金流影响",
+      "value": "1043",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899 Deferred revenue 525 1,043 2,420",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_cashflow_accrued_revenue_share_change",
+      "label": "FY2024 Alphabet集团 应计收入分成变动的现金流影响",
+      "value": "1059",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_google_cloud_revenue",
+      "label": "FY2024 Google Cloud 收入",
+      "value": "43229",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "google_cloud",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 88 (report page 87), Note 15 segment results, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Year Ended December 31, 2023 2024 2025 Revenues: Google Services $ 272,543 $ 304,930 $ 342,721 Google Cloud 33,088 43,229 58,705",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_google_cloud_operating_income",
+      "label": "FY2024 Google Cloud 经营利润",
+      "value": "6112",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "google_cloud",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 88 (report page 87), Note 15 segment results, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Year Ended December 31, 2023 2024 2025 Revenues: Google Services $ 272,543 $ 304,930 $ 342,721 Google Cloud 33,088 43,229 58,705 Other Bets 1,527 1,648 1,537 Hedging gains (losses) 236 211 (127) Total revenues $ 307,394 $ 350,018 $ 402,836 Operating income (loss): Google Services $ 95,858 $ 121,263 $ 139,404 Google Cloud 1,716 6,112 13,910",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_basic_weighted_average_shares",
+      "label": "FY2024 Alphabet集团 基本每股收益加权平均股数（非期末流通股）",
+      "value": "12319",
+      "unit": "million_shares",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-q4-release"
+      ],
+      "source_locator": "Q4 release PDF page 5, consolidated income statement, Q4 2024/Q4 2025/FY2024/FY2025, column 3, million shares",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (In millions, except per share amounts) Quarter Ended December 31, Year Ended December 31, 2024 2025 2024 2025 (unaudited) (unaudited) Revenues $ 96,469 $ 113,828 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 40,613 45,766 146,306 162,535 Research and development 13,116 18,572 49,326 61,087 Sales and marketing 7,363 8,215 27,808 28,693 General and administrative 4,405 5,341 14,188 21,482 Total costs and expenses 65,497 77,894 237,628 273,797 Income from operations 30,972 35,934 112,390 129,039 Other income (expense), net 1,271 3,183 7,425 29,787 Income before income taxes 32,243 39,117 119,815 158,826 Provision for income taxes 5,707 4,662 19,697 26,656 Net income $ 26,536 $ 34,455 $ 100,118 $ 132,170 Basic net income per share $ 2.17 $ 2.85 $ 8.13 $ 10.91 Diluted net income per share $ 2.15 $ 2.82 $ 8.04 $ 10.81 Number of shares used in basic net income per share calculation 12,228 12,073 12,319 12,116",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_diluted_weighted_average_shares",
+      "label": "FY2024 Alphabet集团 稀释每股收益加权平均股数（非期末流通股）",
+      "value": "12447",
+      "unit": "million_shares",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-q4-release"
+      ],
+      "source_locator": "Q4 release PDF page 5, consolidated income statement, Q4 2024/Q4 2025/FY2024/FY2025, column 3, million shares",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (In millions, except per share amounts) Quarter Ended December 31, Year Ended December 31, 2024 2025 2024 2025 (unaudited) (unaudited) Revenues $ 96,469 $ 113,828 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 40,613 45,766 146,306 162,535 Research and development 13,116 18,572 49,326 61,087 Sales and marketing 7,363 8,215 27,808 28,693 General and administrative 4,405 5,341 14,188 21,482 Total costs and expenses 65,497 77,894 237,628 273,797 Income from operations 30,972 35,934 112,390 129,039 Other income (expense), net 1,271 3,183 7,425 29,787 Income before income taxes 32,243 39,117 119,815 158,826 Provision for income taxes 5,707 4,662 19,697 26,656 Net income $ 26,536 $ 34,455 $ 100,118 $ 132,170 Basic net income per share $ 2.17 $ 2.85 $ 8.13 $ 10.91 Diluted net income per share $ 2.15 $ 2.82 $ 8.04 $ 10.81 Number of shares used in basic net income per share calculation 12,228 12,073 12,319 12,116 Number of shares used in diluted net income per share calculation 12,348 12,228 12,447 12,230",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_revenue",
+      "label": "FY2025 Alphabet集团 收入",
+      "value": "402836",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_operating_income",
+      "label": "FY2025 Alphabet集团 经营利润",
+      "value": "129039",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 133,332 146,306 162,535 Research and development 45,427 49,326 61,087 Sales and marketing 27,917 27,808 28,693 General and administrative 16,425 14,188 21,482 Total costs and expenses 223,101 237,628 273,797 Income from operations 84,293 112,390 129,039",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_pretax_income",
+      "label": "FY2025 Alphabet集团 税前利润",
+      "value": "158826",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 133,332 146,306 162,535 Research and development 45,427 49,326 61,087 Sales and marketing 27,917 27,808 28,693 General and administrative 16,425 14,188 21,482 Total costs and expenses 223,101 237,628 273,797 Income from operations 84,293 112,390 129,039 Other income (expense), net 1,424 7,425 29,787 Income before income taxes 85,717 119,815 158,826",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_tax_expense",
+      "label": "FY2025 Alphabet集团 所得税费用（利润表口径，非现金实缴税额）",
+      "value": "26656",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 133,332 146,306 162,535 Research and development 45,427 49,326 61,087 Sales and marketing 27,917 27,808 28,693 General and administrative 16,425 14,188 21,482 Total costs and expenses 223,101 237,628 273,797 Income from operations 84,293 112,390 129,039 Other income (expense), net 1,424 7,425 29,787 Income before income taxes 85,717 119,815 158,826 Provision for income taxes 11,922 19,697 26,656",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_net_income",
+      "label": "FY2025 Alphabet集团 净利润",
+      "value": "132170",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 133,332 146,306 162,535 Research and development 45,427 49,326 61,087 Sales and marketing 27,917 27,808 28,693 General and administrative 16,425 14,188 21,482 Total costs and expenses 223,101 237,628 273,797 Income from operations 84,293 112,390 129,039 Other income (expense), net 1,424 7,425 29,787 Income before income taxes 85,717 119,815 158,826 Provision for income taxes 11,922 19,697 26,656 Net income $ 73,795 $ 100,118 $ 132,170",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_cfo",
+      "label": "FY2025 Alphabet集团 经营活动现金流净额",
+      "value": "164713",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899 Deferred revenue 525 1,043 2,420 Net cash provided by operating activities 101,746 125,299 164,713",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_ppe_depreciation",
+      "label": "FY2025 Alphabet集团 集团物业及设备折旧（非独立基础设施折旧）",
+      "value": "21136",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_capex",
+      "label": "FY2025 Alphabet集团 购置物业及设备现金支出（正数规模）",
+      "value": "91447",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899 Deferred revenue 525 1,043 2,420 Net cash provided by operating activities 101,746 125,299 164,713 Investing activities Purchases of property and equipment (32,251) (52,535) (91,447)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_sbc_cashflow_adjustment",
+      "label": "FY2025 Alphabet集团 现金流量表股份薪酬非现金调整额（非总SBC费用）",
+      "value": "24953",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_share_repurchases_cash",
+      "label": "FY2025 Alphabet集团 股份回购现金支出（正数规模）",
+      "value": "45709",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899 Deferred revenue 525 1,043 2,420 Net cash provided by operating activities 101,746 125,299 164,713 Investing activities Purchases of property and equipment (32,251) (52,535) (91,447) Purchases of marketable securities (77,858) (86,679) (103,773) Maturities and sales of marketable securities 86,672 103,428 83,240 Purchases of non-marketable securities (3,027) (5,034) (5,716) Maturities and sales of non-marketable securities 947 882 1,367 Acquisitions, net of cash acquired, and purchases of intangible assets (495) (2,931) (1,592) Other investing activities (1,051) (2,667) (2,370) Net cash used in investing activities (27,063) (45,536) (120,291) Financing activities Net payments related to stock-based award activities (9,837) (12,190) (14,167) Repurchases of stock (61,504) (62,222) (45,709)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_cashflow_receivables_change",
+      "label": "FY2025 Alphabet集团 应收账款变动的现金流影响",
+      "value": "-8779",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_cashflow_income_taxes_change",
+      "label": "FY2025 Alphabet集团 所得税项目变动的现金流影响",
+      "value": "-3226",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_cashflow_other_assets_change",
+      "label": "FY2025 Alphabet集团 其他资产变动的现金流影响",
+      "value": "-4542",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_cashflow_accounts_payable_change",
+      "label": "FY2025 Alphabet集团 应付账款变动的现金流影响",
+      "value": "907",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_cashflow_accrued_expenses_change",
+      "label": "FY2025 Alphabet集团 应计费用及其他负债变动的现金流影响",
+      "value": "12939",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_cashflow_deferred_revenue_change",
+      "label": "FY2025 Alphabet集团 递延收入变动的现金流影响",
+      "value": "2420",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899 Deferred revenue 525 1,043 2,420",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_cashflow_accrued_revenue_share_change",
+      "label": "FY2025 Alphabet集团 应计收入分成变动的现金流影响",
+      "value": "899",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_google_cloud_revenue",
+      "label": "FY2025 Google Cloud 收入",
+      "value": "58705",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "google_cloud",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 88 (report page 87), Note 15 segment results, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Year Ended December 31, 2023 2024 2025 Revenues: Google Services $ 272,543 $ 304,930 $ 342,721 Google Cloud 33,088 43,229 58,705",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_google_cloud_operating_income",
+      "label": "FY2025 Google Cloud 经营利润",
+      "value": "13910",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "google_cloud",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 88 (report page 87), Note 15 segment results, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Year Ended December 31, 2023 2024 2025 Revenues: Google Services $ 272,543 $ 304,930 $ 342,721 Google Cloud 33,088 43,229 58,705 Other Bets 1,527 1,648 1,537 Hedging gains (losses) 236 211 (127) Total revenues $ 307,394 $ 350,018 $ 402,836 Operating income (loss): Google Services $ 95,858 $ 121,263 $ 139,404 Google Cloud 1,716 6,112 13,910",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_basic_weighted_average_shares",
+      "label": "FY2025 Alphabet集团 基本每股收益加权平均股数（非期末流通股）",
+      "value": "12116",
+      "unit": "million_shares",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-q4-release"
+      ],
+      "source_locator": "Q4 release PDF page 5, consolidated income statement, Q4 2024/Q4 2025/FY2024/FY2025, column 4, million shares",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (In millions, except per share amounts) Quarter Ended December 31, Year Ended December 31, 2024 2025 2024 2025 (unaudited) (unaudited) Revenues $ 96,469 $ 113,828 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 40,613 45,766 146,306 162,535 Research and development 13,116 18,572 49,326 61,087 Sales and marketing 7,363 8,215 27,808 28,693 General and administrative 4,405 5,341 14,188 21,482 Total costs and expenses 65,497 77,894 237,628 273,797 Income from operations 30,972 35,934 112,390 129,039 Other income (expense), net 1,271 3,183 7,425 29,787 Income before income taxes 32,243 39,117 119,815 158,826 Provision for income taxes 5,707 4,662 19,697 26,656 Net income $ 26,536 $ 34,455 $ 100,118 $ 132,170 Basic net income per share $ 2.17 $ 2.85 $ 8.13 $ 10.91 Diluted net income per share $ 2.15 $ 2.82 $ 8.04 $ 10.81 Number of shares used in basic net income per share calculation 12,228 12,073 12,319 12,116",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2025_group_diluted_weighted_average_shares",
+      "label": "FY2025 Alphabet集团 稀释每股收益加权平均股数（非期末流通股）",
+      "value": "12230",
+      "unit": "million_shares",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2025-q4-release"
+      ],
+      "source_locator": "Q4 release PDF page 5, consolidated income statement, Q4 2024/Q4 2025/FY2024/FY2025, column 4, million shares",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (In millions, except per share amounts) Quarter Ended December 31, Year Ended December 31, 2024 2025 2024 2025 (unaudited) (unaudited) Revenues $ 96,469 $ 113,828 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 40,613 45,766 146,306 162,535 Research and development 13,116 18,572 49,326 61,087 Sales and marketing 7,363 8,215 27,808 28,693 General and administrative 4,405 5,341 14,188 21,482 Total costs and expenses 65,497 77,894 237,628 273,797 Income from operations 30,972 35,934 112,390 129,039 Other income (expense), net 1,271 3,183 7,425 29,787 Income before income taxes 32,243 39,117 119,815 158,826 Provision for income taxes 5,707 4,662 19,697 26,656 Net income $ 26,536 $ 34,455 $ 100,118 $ 132,170 Basic net income per share $ 2.17 $ 2.85 $ 8.13 $ 10.91 Diluted net income per share $ 2.15 $ 2.82 $ 8.04 $ 10.81 Number of shares used in basic net income per share calculation 12,228 12,073 12,319 12,116 Number of shares used in diluted net income per share calculation 12,348 12,228 12,447 12,230",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_revenue",
+      "label": "Q2_2025 Alphabet集团 收入",
+      "value": "96428",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_operating_income",
+      "label": "Q2_2025 Alphabet集团 经营利润",
+      "value": "31271",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_pretax_income",
+      "label": "Q2_2025 Alphabet集团 税前利润",
+      "value": "33933",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_tax_expense",
+      "label": "Q2_2025 Alphabet集团 所得税费用（利润表口径，非现金实缴税额）",
+      "value": "5737",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_net_income",
+      "label": "Q2_2025 Alphabet集团 净利润",
+      "value": "28196",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394 Net income 28,196 112,193 62,736 174,771",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_cfo",
+      "label": "Q2_2025 Alphabet集团 经营活动现金流净额",
+      "value": "27747",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308 Deferred revenue 136 284 636 789 Net cash provided by operating activities 27,747 39,069 63,897 84,859",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_ppe_depreciation",
+      "label": "Q2_2025 Alphabet集团 集团物业及设备折旧（非独立基础设施折旧）",
+      "value": "4998",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_capex",
+      "label": "Q2_2025 Alphabet集团 购置物业及设备现金支出（正数规模）",
+      "value": "22446",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308 Deferred revenue 136 284 636 789 Net cash provided by operating activities 27,747 39,069 63,897 84,859 Investing activities Purchases of property and equipment (22,446) (44,924) (39,643) (80,598)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_sbc_cashflow_adjustment",
+      "label": "Q2_2025 Alphabet集团 现金流量表股份薪酬非现金调整额（非总SBC费用）",
+      "value": "5998",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_share_repurchases_cash",
+      "label": "Q2_2025 Alphabet集团 股份回购现金支出（正数规模）",
+      "value": "13238",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308 Deferred revenue 136 284 636 789 Net cash provided by operating activities 27,747 39,069 63,897 84,859 Investing activities Purchases of property and equipment (22,446) (44,924) (39,643) (80,598) Purchases of marketable securities (21,417) (45,439) (39,870) (76,480) Maturities and sales of marketable securities 20,585 28,695 40,930 66,696 Purchases of non-marketable securities (1,354) (21,145) (2,312) (22,051) Maturities and sales of non-marketable securities 614 819 873 1,667 Acquisitions, net of cash acquired, and purchases of intangible assets (13) (76) (353) (33,697) Other investing activities (513) (363) (363) (1,359) Net cash used in investing activities (24,544) (82,433) (40,738) (145,822) Financing activities Net payments related to stock-based award activities (2,621) (6,573) (5,731) (12,056) Repurchases of stock (13,238) 0 (28,306) 0",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_cashflow_receivables_change",
+      "label": "Q2_2025 Alphabet集团 应收账款变动的现金流影响",
+      "value": "-2839",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_cashflow_income_taxes_change",
+      "label": "Q2_2025 Alphabet集团 所得税项目变动的现金流影响",
+      "value": "-9631",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_cashflow_other_assets_change",
+      "label": "Q2_2025 Alphabet集团 其他资产变动的现金流影响",
+      "value": "-1281",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_cashflow_accounts_payable_change",
+      "label": "Q2_2025 Alphabet集团 应付账款变动的现金流影响",
+      "value": "553",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_cashflow_accrued_expenses_change",
+      "label": "Q2_2025 Alphabet集团 应计费用及其他负债变动的现金流影响",
+      "value": "3150",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_cashflow_deferred_revenue_change",
+      "label": "Q2_2025 Alphabet集团 递延收入变动的现金流影响",
+      "value": "136",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308 Deferred revenue 136 284 636 789",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_cashflow_inventory_change",
+      "label": "Q2_2025 Alphabet集团 存货变动的现金流影响",
+      "value": "-198",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_google_cloud_revenue",
+      "label": "Q2_2025 Google Cloud 收入",
+      "value": "13624",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "google_cloud",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_google_cloud_operating_income",
+      "label": "Q2_2025 Google Cloud 经营利润",
+      "value": "2826",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "google_cloud",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796 Other Bets 373 382 823 793 Hedging gains (losses) ( 112 ) 106 148 ( 74 ) Total revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Operating income (loss): Google Services $ 33,063 $ 39,544 $ 65,745 $ 80,133 Google Cloud 2,826 8,814 5,003 15,412",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_basic_weighted_average_shares",
+      "label": "Q2_2025 Alphabet集团 基本每股收益加权平均股数（非期末流通股）",
+      "value": "12122",
+      "unit": "million_shares",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated income table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, million shares",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (In millions, except per share amounts, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394 Net income 28,196 112,193 62,736 174,771 Preferred stock dividends 0 86 0 86 Net income available to common stockholders $ 28,196 $ 112,107 $ 62,736 $ 174,685 Basic net income per common share $ 2.33 $ 9.23 $ 5.16 $ 14.41 Diluted net income per common share $ 2.31 $ 9.11 $ 5.12 $ 14.24 Number of shares used in basic net income per common share calculation 12,122 12,151 12,153 12,125",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2025_group_diluted_weighted_average_shares",
+      "label": "Q2_2025 Alphabet集团 稀释每股收益加权平均股数（非期末流通股）",
+      "value": "12198",
+      "unit": "million_shares",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated income table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, million shares",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (In millions, except per share amounts, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394 Net income 28,196 112,193 62,736 174,771 Preferred stock dividends 0 86 0 86 Net income available to common stockholders $ 28,196 $ 112,107 $ 62,736 $ 174,685 Basic net income per common share $ 2.33 $ 9.23 $ 5.16 $ 14.41 Diluted net income per common share $ 2.31 $ 9.11 $ 5.12 $ 14.24 Number of shares used in basic net income per common share calculation 12,122 12,151 12,153 12,125 Number of shares used in diluted net income per common share calculation 12,198 12,309 12,245 12,274",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_revenue",
+      "label": "Q2_2026 Alphabet集团 收入",
+      "value": "119796",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_operating_income",
+      "label": "Q2_2026 Alphabet集团 经营利润",
+      "value": "40770",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_pretax_income",
+      "label": "Q2_2026 Alphabet集团 税前利润",
+      "value": "138753",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_tax_expense",
+      "label": "Q2_2026 Alphabet集团 所得税费用（利润表口径，非现金实缴税额）",
+      "value": "26560",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_net_income",
+      "label": "Q2_2026 Alphabet集团 净利润",
+      "value": "112193",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394 Net income 28,196 112,193 62,736 174,771",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_cfo",
+      "label": "Q2_2026 Alphabet集团 经营活动现金流净额",
+      "value": "39069",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308 Deferred revenue 136 284 636 789 Net cash provided by operating activities 27,747 39,069 63,897 84,859",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_ppe_depreciation",
+      "label": "Q2_2026 Alphabet集团 集团物业及设备折旧（非独立基础设施折旧）",
+      "value": "7104",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_capex",
+      "label": "Q2_2026 Alphabet集团 购置物业及设备现金支出（正数规模）",
+      "value": "44924",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308 Deferred revenue 136 284 636 789 Net cash provided by operating activities 27,747 39,069 63,897 84,859 Investing activities Purchases of property and equipment (22,446) (44,924) (39,643) (80,598)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_sbc_cashflow_adjustment",
+      "label": "Q2_2026 Alphabet集团 现金流量表股份薪酬非现金调整额（非总SBC费用）",
+      "value": "7957",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_share_repurchases_cash",
+      "label": "Q2_2026 Alphabet集团 股份回购现金支出（正数规模）",
+      "value": "0",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308 Deferred revenue 136 284 636 789 Net cash provided by operating activities 27,747 39,069 63,897 84,859 Investing activities Purchases of property and equipment (22,446) (44,924) (39,643) (80,598) Purchases of marketable securities (21,417) (45,439) (39,870) (76,480) Maturities and sales of marketable securities 20,585 28,695 40,930 66,696 Purchases of non-marketable securities (1,354) (21,145) (2,312) (22,051) Maturities and sales of non-marketable securities 614 819 873 1,667 Acquisitions, net of cash acquired, and purchases of intangible assets (13) (76) (353) (33,697) Other investing activities (513) (363) (363) (1,359) Net cash used in investing activities (24,544) (82,433) (40,738) (145,822) Financing activities Net payments related to stock-based award activities (2,621) (6,573) (5,731) (12,056) Repurchases of stock (13,238) 0 (28,306) 0",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_cashflow_receivables_change",
+      "label": "Q2_2026 Alphabet集团 应收账款变动的现金流影响",
+      "value": "-6541",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_cashflow_income_taxes_change",
+      "label": "Q2_2026 Alphabet集团 所得税项目变动的现金流影响",
+      "value": "203",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_cashflow_other_assets_change",
+      "label": "Q2_2026 Alphabet集团 其他资产变动的现金流影响",
+      "value": "-7590",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_cashflow_accounts_payable_change",
+      "label": "Q2_2026 Alphabet集团 应付账款变动的现金流影响",
+      "value": "2330",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_cashflow_accrued_expenses_change",
+      "label": "Q2_2026 Alphabet集团 应计费用及其他负债变动的现金流影响",
+      "value": "6310",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_cashflow_deferred_revenue_change",
+      "label": "Q2_2026 Alphabet集团 递延收入变动的现金流影响",
+      "value": "284",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308 Deferred revenue 136 284 636 789",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_cashflow_inventory_change",
+      "label": "Q2_2026 Alphabet集团 存货变动的现金流影响",
+      "value": "-6696",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739)",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_google_cloud_revenue",
+      "label": "Q2_2026 Google Cloud 收入",
+      "value": "24768",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "google_cloud",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_google_cloud_operating_income",
+      "label": "Q2_2026 Google Cloud 经营利润",
+      "value": "8814",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "google_cloud",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796 Other Bets 373 382 823 793 Hedging gains (losses) ( 112 ) 106 148 ( 74 ) Total revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Operating income (loss): Google Services $ 33,063 $ 39,544 $ 65,745 $ 80,133 Google Cloud 2,826 8,814 5,003 15,412",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_basic_weighted_average_shares",
+      "label": "Q2_2026 Alphabet集团 基本每股收益加权平均股数（非期末流通股）",
+      "value": "12151",
+      "unit": "million_shares",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated income table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, million shares",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (In millions, except per share amounts, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394 Net income 28,196 112,193 62,736 174,771 Preferred stock dividends 0 86 0 86 Net income available to common stockholders $ 28,196 $ 112,107 $ 62,736 $ 174,685 Basic net income per common share $ 2.33 $ 9.23 $ 5.16 $ 14.41 Diluted net income per common share $ 2.31 $ 9.11 $ 5.12 $ 14.24 Number of shares used in basic net income per common share calculation 12,122 12,151 12,153 12,125",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "q2_2026_group_diluted_weighted_average_shares",
+      "label": "Q2_2026 Alphabet集团 稀释每股收益加权平均股数（非期末流通股）",
+      "value": "12309",
+      "unit": "million_shares",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated income table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, million shares",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (In millions, except per share amounts, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394 Net income 28,196 112,193 62,736 174,771 Preferred stock dividends 0 86 0 86 Net income available to common stockholders $ 28,196 $ 112,107 $ 62,736 $ 174,685 Basic net income per common share $ 2.33 $ 9.23 $ 5.16 $ 14.41 Diluted net income per common share $ 2.31 $ 9.11 $ 5.12 $ 14.24 Number of shares used in basic net income per common share calculation 12,122 12,151 12,153 12,125 Number of shares used in diluted net income per common share calculation 12,198 12,309 12,245 12,274",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_revenue",
+      "label": "H1_2025 Alphabet集团 收入",
+      "value": "186662",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_operating_income",
+      "label": "H1_2025 Alphabet集团 经营利润",
+      "value": "61877",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_pretax_income",
+      "label": "H1_2025 Alphabet集团 税前利润",
+      "value": "75722",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_tax_expense",
+      "label": "H1_2025 Alphabet集团 所得税费用（利润表口径，非现金实缴税额）",
+      "value": "12986",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_net_income",
+      "label": "H1_2025 Alphabet集团 净利润",
+      "value": "62736",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394 Net income 28,196 112,193 62,736 174,771",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_cfo",
+      "label": "H1_2025 Alphabet集团 经营活动现金流净额",
+      "value": "63897",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308 Deferred revenue 636 789 Net cash provided by operating activities 63,897 84,859",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_ppe_depreciation",
+      "label": "H1_2025 Alphabet集团 集团物业及设备折旧（非独立基础设施折旧）",
+      "value": "9485",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_capex",
+      "label": "H1_2025 Alphabet集团 购置物业及设备现金支出（正数规模）",
+      "value": "39643",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308 Deferred revenue 636 789 Net cash provided by operating activities 63,897 84,859 Investing activities Purchases of property and equipment ( 39,643 ) ( 80,598 )",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_sbc_cashflow_adjustment",
+      "label": "H1_2025 Alphabet集团 现金流量表股份薪酬非现金调整额（非总SBC费用）",
+      "value": "11514",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_share_repurchases_cash",
+      "label": "H1_2025 Alphabet集团 股份回购现金支出（正数规模）",
+      "value": "28306",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308 Deferred revenue 636 789 Net cash provided by operating activities 63,897 84,859 Investing activities Purchases of property and equipment ( 39,643 ) ( 80,598 ) Purchases of marketable securities ( 39,870 ) ( 76,480 ) Maturities and sales of marketable securities 40,930 66,696 Purchases of non-marketable securities ( 2,312 ) ( 22,051 ) Maturities and sales of non-marketable securities 873 1,667 Acquisitions, net of cash acquired, and purchases of intangible assets ( 353 ) ( 33,697 ) Other investing activities ( 363 ) ( 1,359 ) Net cash used in investing activities ( 40,738 ) ( 145,822 ) Financing activities Net payments related to stock-based award activities ( 5,731 ) ( 12,056 ) Repurchases of stock ( 28,306 ) 0",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_cashflow_receivables_change",
+      "label": "H1_2025 Alphabet集团 应收账款变动的现金流影响",
+      "value": "-1201",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 )",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_cashflow_income_taxes_change",
+      "label": "H1_2025 Alphabet集团 所得税项目变动的现金流影响",
+      "value": "-2434",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_cashflow_other_assets_change",
+      "label": "H1_2025 Alphabet集团 其他资产变动的现金流影响",
+      "value": "-2139",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 )",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_cashflow_accounts_payable_change",
+      "label": "H1_2025 Alphabet集团 应付账款变动的现金流影响",
+      "value": "-327",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_cashflow_accrued_expenses_change",
+      "label": "H1_2025 Alphabet集团 应计费用及其他负债变动的现金流影响",
+      "value": "-1779",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_cashflow_deferred_revenue_change",
+      "label": "H1_2025 Alphabet集团 递延收入变动的现金流影响",
+      "value": "636",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308 Deferred revenue 636 789",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_cashflow_inventory_change",
+      "label": "H1_2025 Alphabet集团 存货变动的现金流影响",
+      "value": "-628",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 )",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_google_cloud_revenue",
+      "label": "H1_2025 Google Cloud 收入",
+      "value": "25884",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "google_cloud",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 3, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_google_cloud_operating_income",
+      "label": "H1_2025 Google Cloud 经营利润",
+      "value": "5003",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "google_cloud",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 3, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796 Other Bets 373 382 823 793 Hedging gains (losses) ( 112 ) 106 148 ( 74 ) Total revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Operating income (loss): Google Services $ 33,063 $ 39,544 $ 65,745 $ 80,133 Google Cloud 2,826 8,814 5,003 15,412",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_basic_weighted_average_shares",
+      "label": "H1_2025 Alphabet集团 基本每股收益加权平均股数（非期末流通股）",
+      "value": "12153",
+      "unit": "million_shares",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated income table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 3, million shares",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (In millions, except per share amounts, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394 Net income 28,196 112,193 62,736 174,771 Preferred stock dividends 0 86 0 86 Net income available to common stockholders $ 28,196 $ 112,107 $ 62,736 $ 174,685 Basic net income per common share $ 2.33 $ 9.23 $ 5.16 $ 14.41 Diluted net income per common share $ 2.31 $ 9.11 $ 5.12 $ 14.24 Number of shares used in basic net income per common share calculation 12,122 12,151 12,153 12,125",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2025_group_diluted_weighted_average_shares",
+      "label": "H1_2025 Alphabet集团 稀释每股收益加权平均股数（非期末流通股）",
+      "value": "12245",
+      "unit": "million_shares",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated income table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 3, million shares",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (In millions, except per share amounts, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394 Net income 28,196 112,193 62,736 174,771 Preferred stock dividends 0 86 0 86 Net income available to common stockholders $ 28,196 $ 112,107 $ 62,736 $ 174,685 Basic net income per common share $ 2.33 $ 9.23 $ 5.16 $ 14.41 Diluted net income per common share $ 2.31 $ 9.11 $ 5.12 $ 14.24 Number of shares used in basic net income per common share calculation 12,122 12,151 12,153 12,125 Number of shares used in diluted net income per common share calculation 12,198 12,309 12,245 12,274",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_revenue",
+      "label": "H1_2026 Alphabet集团 收入",
+      "value": "229692",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 4, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_operating_income",
+      "label": "H1_2026 Alphabet集团 经营利润",
+      "value": "80466",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 4, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_pretax_income",
+      "label": "H1_2026 Alphabet集团 税前利润",
+      "value": "216165",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 4, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_tax_expense",
+      "label": "H1_2026 Alphabet集团 所得税费用（利润表口径，非现金实缴税额）",
+      "value": "41394",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 4, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_net_income",
+      "label": "H1_2026 Alphabet集团 净利润",
+      "value": "174771",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 4, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394 Net income 28,196 112,193 62,736 174,771",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_cfo",
+      "label": "H1_2026 Alphabet集团 经营活动现金流净额",
+      "value": "84859",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308 Deferred revenue 636 789 Net cash provided by operating activities 63,897 84,859",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_ppe_depreciation",
+      "label": "H1_2026 Alphabet集团 集团物业及设备折旧（非独立基础设施折旧）",
+      "value": "13586",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_capex",
+      "label": "H1_2026 Alphabet集团 购置物业及设备现金支出（正数规模）",
+      "value": "80598",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308 Deferred revenue 636 789 Net cash provided by operating activities 63,897 84,859 Investing activities Purchases of property and equipment ( 39,643 ) ( 80,598 )",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_sbc_cashflow_adjustment",
+      "label": "H1_2026 Alphabet集团 现金流量表股份薪酬非现金调整额（非总SBC费用）",
+      "value": "14708",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_share_repurchases_cash",
+      "label": "H1_2026 Alphabet集团 股份回购现金支出（正数规模）",
+      "value": "0",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308 Deferred revenue 636 789 Net cash provided by operating activities 63,897 84,859 Investing activities Purchases of property and equipment ( 39,643 ) ( 80,598 ) Purchases of marketable securities ( 39,870 ) ( 76,480 ) Maturities and sales of marketable securities 40,930 66,696 Purchases of non-marketable securities ( 2,312 ) ( 22,051 ) Maturities and sales of non-marketable securities 873 1,667 Acquisitions, net of cash acquired, and purchases of intangible assets ( 353 ) ( 33,697 ) Other investing activities ( 363 ) ( 1,359 ) Net cash used in investing activities ( 40,738 ) ( 145,822 ) Financing activities Net payments related to stock-based award activities ( 5,731 ) ( 12,056 ) Repurchases of stock ( 28,306 ) 0",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_cashflow_receivables_change",
+      "label": "H1_2026 Alphabet集团 应收账款变动的现金流影响",
+      "value": "-6904",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 )",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_cashflow_income_taxes_change",
+      "label": "H1_2026 Alphabet集团 所得税项目变动的现金流影响",
+      "value": "8304",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_cashflow_other_assets_change",
+      "label": "H1_2026 Alphabet集团 其他资产变动的现金流影响",
+      "value": "-9950",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 )",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_cashflow_accounts_payable_change",
+      "label": "H1_2026 Alphabet集团 应付账款变动的现金流影响",
+      "value": "2090",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_cashflow_accrued_expenses_change",
+      "label": "H1_2026 Alphabet集团 应计费用及其他负债变动的现金流影响",
+      "value": "308",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_cashflow_deferred_revenue_change",
+      "label": "H1_2026 Alphabet集团 递延收入变动的现金流影响",
+      "value": "789",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308 Deferred revenue 636 789",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_cashflow_inventory_change",
+      "label": "H1_2026 Alphabet集团 存货变动的现金流影响",
+      "value": "-7739",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 )",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_google_cloud_revenue",
+      "label": "H1_2026 Google Cloud 收入",
+      "value": "44796",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "google_cloud",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 4, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_google_cloud_operating_income",
+      "label": "H1_2026 Google Cloud 经营利润",
+      "value": "15412",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "google_cloud",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 4, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796 Other Bets 373 382 823 793 Hedging gains (losses) ( 112 ) 106 148 ( 74 ) Total revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Operating income (loss): Google Services $ 33,063 $ 39,544 $ 65,745 $ 80,133 Google Cloud 2,826 8,814 5,003 15,412",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_basic_weighted_average_shares",
+      "label": "H1_2026 Alphabet集团 基本每股收益加权平均股数（非期末流通股）",
+      "value": "12125",
+      "unit": "million_shares",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated income table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 4, million shares",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (In millions, except per share amounts, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394 Net income 28,196 112,193 62,736 174,771 Preferred stock dividends 0 86 0 86 Net income available to common stockholders $ 28,196 $ 112,107 $ 62,736 $ 174,685 Basic net income per common share $ 2.33 $ 9.23 $ 5.16 $ 14.41 Diluted net income per common share $ 2.31 $ 9.11 $ 5.12 $ 14.24 Number of shares used in basic net income per common share calculation 12,122 12,151 12,153 12,125",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "h1_2026_group_diluted_weighted_average_shares",
+      "label": "H1_2026 Alphabet集团 稀释每股收益加权平均股数（非期末流通股）",
+      "value": "12274",
+      "unit": "million_shares",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "reported",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated income table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 4, million shares",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (In millions, except per share amounts, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466 Other income (expense), net 2,662 97,983 13,845 135,699 Income before income taxes 33,933 138,753 75,722 216,165 Provision for income taxes 5,737 26,560 12,986 41,394 Net income 28,196 112,193 62,736 174,771 Preferred stock dividends 0 86 0 86 Net income available to common stockholders $ 28,196 $ 112,107 $ 62,736 $ 174,685 Basic net income per common share $ 2.33 $ 9.23 $ 5.16 $ 14.41 Diluted net income per common share $ 2.31 $ 9.11 $ 5.12 $ 14.24 Number of shares used in basic net income per common share calculation 12,122 12,151 12,153 12,125 Number of shares used in diluted net income per common share calculation 12,198 12,309 12,245 12,274",
+      "input_fact_keys": []
+    },
+    {
+      "fact_key": "fy2024_group_operating_margin",
+      "label": "FY2024 Alphabet集团 经营利润率",
+      "value": "0.3210977721145769646132484615",
+      "unit": "ratio",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 133,332 146,306 162,535 Research and development 45,427 49,326 61,087 Sales and marketing 27,917 27,808 28,693 General and administrative 16,425 14,188 21,482 Total costs and expenses 223,101 237,628 273,797 Income from operations 84,293 112,390 129,039\n\nCONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836",
+      "formula": "fy2024_group_operating_income / fy2024_group_revenue",
+      "input_fact_keys": [
+        "fy2024_group_operating_income",
+        "fy2024_group_revenue"
+      ]
+    },
+    {
+      "fact_key": "fy2024_google_cloud_operating_margin",
+      "label": "FY2024 Google Cloud 经营利润率",
+      "value": "0.1413865692012306553471049527",
+      "unit": "ratio",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "google_cloud",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 88 (report page 87), Note 15 segment results, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Year Ended December 31, 2023 2024 2025 Revenues: Google Services $ 272,543 $ 304,930 $ 342,721 Google Cloud 33,088 43,229 58,705 Other Bets 1,527 1,648 1,537 Hedging gains (losses) 236 211 (127) Total revenues $ 307,394 $ 350,018 $ 402,836 Operating income (loss): Google Services $ 95,858 $ 121,263 $ 139,404 Google Cloud 1,716 6,112 13,910\n\nThe following table presents revenue, profitability, and expense information about our segments (in millions): Year Ended December 31, 2023 2024 2025 Revenues: Google Services $ 272,543 $ 304,930 $ 342,721 Google Cloud 33,088 43,229 58,705",
+      "formula": "fy2024_google_cloud_operating_income / fy2024_google_cloud_revenue",
+      "input_fact_keys": [
+        "fy2024_google_cloud_operating_income",
+        "fy2024_google_cloud_revenue"
+      ]
+    },
+    {
+      "fact_key": "fy2024_group_free_cash_flow",
+      "label": "FY2024 Alphabet集团 公司披露定义自由现金流（CFO减现金资本开支，非FCFF）",
+      "value": "72764",
+      "unit": "USD_million",
+      "period_start": "2024-01-01",
+      "period_end": "2024-12-31",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899 Deferred revenue 525 1,043 2,420 Net cash provided by operating activities 101,746 125,299 164,713\n\nCONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899 Deferred revenue 525 1,043 2,420 Net cash provided by operating activities 101,746 125,299 164,713 Investing activities Purchases of property and equipment (32,251) (52,535) (91,447)",
+      "formula": "fy2024_group_cfo - fy2024_group_capex",
+      "input_fact_keys": [
+        "fy2024_group_cfo",
+        "fy2024_group_capex"
+      ]
+    },
+    {
+      "fact_key": "fy2025_group_operating_margin",
+      "label": "FY2025 Alphabet集团 经营利润率",
+      "value": "0.3203263859238002561836578657",
+      "unit": "ratio",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836 Costs and expenses: Cost of revenues 133,332 146,306 162,535 Research and development 45,427 49,326 61,087 Sales and marketing 27,917 27,808 28,693 General and administrative 16,425 14,188 21,482 Total costs and expenses 223,101 237,628 273,797 Income from operations 84,293 112,390 129,039\n\nCONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836",
+      "formula": "fy2025_group_operating_income / fy2025_group_revenue",
+      "input_fact_keys": [
+        "fy2025_group_operating_income",
+        "fy2025_group_revenue"
+      ]
+    },
+    {
+      "fact_key": "fy2025_google_cloud_operating_margin",
+      "label": "FY2025 Google Cloud 经营利润率",
+      "value": "0.2369474491099565624733838685",
+      "unit": "ratio",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "google_cloud",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 88 (report page 87), Note 15 segment results, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Year Ended December 31, 2023 2024 2025 Revenues: Google Services $ 272,543 $ 304,930 $ 342,721 Google Cloud 33,088 43,229 58,705 Other Bets 1,527 1,648 1,537 Hedging gains (losses) 236 211 (127) Total revenues $ 307,394 $ 350,018 $ 402,836 Operating income (loss): Google Services $ 95,858 $ 121,263 $ 139,404 Google Cloud 1,716 6,112 13,910\n\nThe following table presents revenue, profitability, and expense information about our segments (in millions): Year Ended December 31, 2023 2024 2025 Revenues: Google Services $ 272,543 $ 304,930 $ 342,721 Google Cloud 33,088 43,229 58,705",
+      "formula": "fy2025_google_cloud_operating_income / fy2025_google_cloud_revenue",
+      "input_fact_keys": [
+        "fy2025_google_cloud_operating_income",
+        "fy2025_google_cloud_revenue"
+      ]
+    },
+    {
+      "fact_key": "fy2025_group_free_cash_flow",
+      "label": "FY2025 Alphabet集团 公司披露定义自由现金流（CFO减现金资本开支，非FCFF）",
+      "value": "73266",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 53 (report page 52), consolidated cash flows, FY2023/FY2024/FY2025, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899 Deferred revenue 525 1,043 2,420 Net cash provided by operating activities 101,746 125,299 164,713\n\nCONSOLIDATED STATEMENTS OF CASH FLOWS (in millions) Year Ended December 31, 2023 2024 2025 Operating activities Net income $ 73,795 $ 100,118 $ 132,170 Adjustments: Depreciation of property and equipment 11,946 15,311 21,136 Stock-based compensation expense 22,460 22,785 24,953 Deferred income taxes (7,763) (5,257) 8,348 Loss (gain) on debt and equity securities, net 823 (2,671) (24,620) Other 4,330 3,419 2,108 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (7,833) (5,891) (8,779) Income taxes, net 523 (2,418) (3,226) Other assets (2,143) (1,397) (4,542) Accounts payable 664 359 907 Accrued expenses and other liabilities 3,937 (1,161) 12,939 Accrued revenue share 482 1,059 899 Deferred revenue 525 1,043 2,420 Net cash provided by operating activities 101,746 125,299 164,713 Investing activities Purchases of property and equipment (32,251) (52,535) (91,447)",
+      "formula": "fy2025_group_cfo - fy2025_group_capex",
+      "input_fact_keys": [
+        "fy2025_group_cfo",
+        "fy2025_group_capex"
+      ]
+    },
+    {
+      "fact_key": "q2_2025_group_operating_margin",
+      "label": "Q2_2025 Alphabet集团 经营利润率",
+      "value": "0.3242937735927324013771933463",
+      "unit": "ratio",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466\n\nCONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692",
+      "formula": "q2_2025_group_operating_income / q2_2025_group_revenue",
+      "input_fact_keys": [
+        "q2_2025_group_operating_income",
+        "q2_2025_group_revenue"
+      ]
+    },
+    {
+      "fact_key": "q2_2025_google_cloud_operating_margin",
+      "label": "Q2_2025 Google Cloud 经营利润率",
+      "value": "0.207428068115091015854374633",
+      "unit": "ratio",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "google_cloud",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796 Other Bets 373 382 823 793 Hedging gains (losses) ( 112 ) 106 148 ( 74 ) Total revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Operating income (loss): Google Services $ 33,063 $ 39,544 $ 65,745 $ 80,133 Google Cloud 2,826 8,814 5,003 15,412\n\nThe following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796",
+      "formula": "q2_2025_google_cloud_operating_income / q2_2025_google_cloud_revenue",
+      "input_fact_keys": [
+        "q2_2025_google_cloud_operating_income",
+        "q2_2025_google_cloud_revenue"
+      ]
+    },
+    {
+      "fact_key": "q2_2025_group_free_cash_flow",
+      "label": "Q2_2025 Alphabet集团 公司披露定义自由现金流（CFO减现金资本开支，非FCFF）",
+      "value": "5301",
+      "unit": "USD_million",
+      "period_start": "2025-04-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308 Deferred revenue 136 284 636 789 Net cash provided by operating activities 27,747 39,069 63,897 84,859\n\nCONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308 Deferred revenue 136 284 636 789 Net cash provided by operating activities 27,747 39,069 63,897 84,859 Investing activities Purchases of property and equipment (22,446) (44,924) (39,643) (80,598)",
+      "formula": "q2_2025_group_cfo - q2_2025_group_capex",
+      "input_fact_keys": [
+        "q2_2025_group_cfo",
+        "q2_2025_group_capex"
+      ]
+    },
+    {
+      "fact_key": "q2_2026_group_operating_margin",
+      "label": "Q2_2026 Alphabet集团 经营利润率",
+      "value": "0.3403285585495342081538615647",
+      "unit": "ratio",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466\n\nCONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692",
+      "formula": "q2_2026_group_operating_income / q2_2026_group_revenue",
+      "input_fact_keys": [
+        "q2_2026_group_operating_income",
+        "q2_2026_group_revenue"
+      ]
+    },
+    {
+      "fact_key": "q2_2026_google_cloud_operating_margin",
+      "label": "Q2_2026 Google Cloud 经营利润率",
+      "value": "0.3558624031007751937984496124",
+      "unit": "ratio",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "google_cloud",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796 Other Bets 373 382 823 793 Hedging gains (losses) ( 112 ) 106 148 ( 74 ) Total revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Operating income (loss): Google Services $ 33,063 $ 39,544 $ 65,745 $ 80,133 Google Cloud 2,826 8,814 5,003 15,412\n\nThe following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796",
+      "formula": "q2_2026_google_cloud_operating_income / q2_2026_google_cloud_revenue",
+      "input_fact_keys": [
+        "q2_2026_google_cloud_operating_income",
+        "q2_2026_google_cloud_revenue"
+      ]
+    },
+    {
+      "fact_key": "q2_2026_group_free_cash_flow",
+      "label": "Q2_2026 Alphabet集团 公司披露定义自由现金流（CFO减现金资本开支，非FCFF）",
+      "value": "-5855",
+      "unit": "USD_million",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-release"
+      ],
+      "source_locator": "Q2 release consolidated cash flow table, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308 Deferred revenue 136 284 636 789 Net cash provided by operating activities 27,747 39,069 63,897 84,859\n\nCONSOLIDATED STATEMENTS OF CASH FLOWS (In millions, unaudited) Quarter Ended June 30, Year To Date June 30, 2025 2026 2025 2026 Operating activities Net income $ 28,196 $ 112,193 $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 4,998 7,104 9,485 13,586 Stock-based compensation expense 5,998 7,957 11,514 14,708 Deferred income taxes (444) 20,618 (1,596) 27,538 Loss (gain) on debt and equity securities, net (1,451) (98,999) (11,411) (135,803) Other 560 1,896 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net (2,839) (6,541) (1,201) (6,904) Inventory (198) (6,696) (628) (7,739) Income taxes, net (9,631) 203 (2,434) 8,304 Other assets (1,281) (7,590) (2,139) (9,950) Accounts payable 553 2,330 (327) 2,090 Accrued expenses and other liabilities 3,150 6,310 (1,779) 308 Deferred revenue 136 284 636 789 Net cash provided by operating activities 27,747 39,069 63,897 84,859 Investing activities Purchases of property and equipment (22,446) (44,924) (39,643) (80,598)",
+      "formula": "q2_2026_group_cfo - q2_2026_group_capex",
+      "input_fact_keys": [
+        "q2_2026_group_cfo",
+        "q2_2026_group_capex"
+      ]
+    },
+    {
+      "fact_key": "h1_2025_group_operating_margin",
+      "label": "H1_2025 Alphabet集团 经营利润率",
+      "value": "0.3314922158768254920658730754",
+      "unit": "ratio",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466\n\nCONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692",
+      "formula": "h1_2025_group_operating_income / h1_2025_group_revenue",
+      "input_fact_keys": [
+        "h1_2025_group_operating_income",
+        "h1_2025_group_revenue"
+      ]
+    },
+    {
+      "fact_key": "h1_2025_google_cloud_operating_margin",
+      "label": "H1_2025 Google Cloud 经营利润率",
+      "value": "0.1932854272909905733271519085",
+      "unit": "ratio",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "google_cloud",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 3, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796 Other Bets 373 382 823 793 Hedging gains (losses) ( 112 ) 106 148 ( 74 ) Total revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Operating income (loss): Google Services $ 33,063 $ 39,544 $ 65,745 $ 80,133 Google Cloud 2,826 8,814 5,003 15,412\n\nThe following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796",
+      "formula": "h1_2025_google_cloud_operating_income / h1_2025_google_cloud_revenue",
+      "input_fact_keys": [
+        "h1_2025_google_cloud_operating_income",
+        "h1_2025_google_cloud_revenue"
+      ]
+    },
+    {
+      "fact_key": "h1_2025_group_free_cash_flow",
+      "label": "H1_2025 Alphabet集团 公司披露定义自由现金流（CFO减现金资本开支，非FCFF）",
+      "value": "24254",
+      "unit": "USD_million",
+      "period_start": "2025-01-01",
+      "period_end": "2025-06-30",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308 Deferred revenue 636 789 Net cash provided by operating activities 63,897 84,859\n\nCONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308 Deferred revenue 636 789 Net cash provided by operating activities 63,897 84,859 Investing activities Purchases of property and equipment ( 39,643 ) ( 80,598 )",
+      "formula": "h1_2025_group_cfo - h1_2025_group_capex",
+      "input_fact_keys": [
+        "h1_2025_group_cfo",
+        "h1_2025_group_capex"
+      ]
+    },
+    {
+      "fact_key": "h1_2026_group_operating_margin",
+      "label": "H1_2026 Alphabet集团 经营利润率",
+      "value": "0.3503212998275952144611044355",
+      "unit": "ratio",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 4, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Costs and expenses: Cost of revenues 39,039 45,943 75,400 87,214 Research and development 13,808 18,219 27,364 35,251 Sales and marketing 7,101 8,403 13,273 16,009 General and administrative 5,209 6,461 8,748 10,752 Total costs and expenses 65,157 79,026 124,785 149,226 Income from operations 31,271 40,770 61,877 80,466\n\nCONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692",
+      "formula": "h1_2026_group_operating_income / h1_2026_group_revenue",
+      "input_fact_keys": [
+        "h1_2026_group_operating_income",
+        "h1_2026_group_revenue"
+      ]
+    },
+    {
+      "fact_key": "h1_2026_google_cloud_operating_margin",
+      "label": "H1_2026 Google Cloud 经营利润率",
+      "value": "0.3440485757656933654790606304",
+      "unit": "ratio",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "google_cloud",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 4, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796 Other Bets 373 382 823 793 Hedging gains (losses) ( 112 ) 106 148 ( 74 ) Total revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692 Operating income (loss): Google Services $ 33,063 $ 39,544 $ 65,745 $ 80,133 Google Cloud 2,826 8,814 5,003 15,412\n\nThe following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796",
+      "formula": "h1_2026_google_cloud_operating_income / h1_2026_google_cloud_revenue",
+      "input_fact_keys": [
+        "h1_2026_google_cloud_operating_income",
+        "h1_2026_google_cloud_revenue"
+      ]
+    },
+    {
+      "fact_key": "h1_2026_group_free_cash_flow",
+      "label": "H1_2026 Alphabet集团 公司披露定义自由现金流（CFO减现金资本开支，非FCFF）",
+      "value": "4261",
+      "unit": "USD_million",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 9, consolidated cash flows, H1 2025/H1 2026, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308 Deferred revenue 636 789 Net cash provided by operating activities 63,897 84,859\n\nCONSOLIDATED STATEMENTS OF CASH FLOWS (in millions; unaudited) Six Months Ended June 30, 2025 2026 Operating activities Net income $ 62,736 $ 174,771 Adjustments: Depreciation of property and equipment 9,485 13,586 Stock-based compensation expense 11,514 14,708 Deferred income taxes ( 1,596 ) 27,538 Loss (gain) on debt and equity securities, net ( 11,411 ) ( 135,803 ) Other 1,041 3,161 Changes in assets and liabilities, net of effects of acquisitions: Accounts receivable, net ( 1,201 ) ( 6,904 ) Inventory ( 628 ) ( 7,739 ) Income taxes, net ( 2,434 ) 8,304 Other assets ( 2,139 ) ( 9,950 ) Accounts payable ( 327 ) 2,090 Accrued expenses and other liabilities ( 1,779 ) 308 Deferred revenue 636 789 Net cash provided by operating activities 63,897 84,859 Investing activities Purchases of property and equipment ( 39,643 ) ( 80,598 )",
+      "formula": "h1_2026_group_cfo - h1_2026_group_capex",
+      "input_fact_keys": [
+        "h1_2026_group_cfo",
+        "h1_2026_group_capex"
+      ]
+    },
+    {
+      "fact_key": "fy2025_group_revenue_growth_yoy",
+      "label": "FY2025 Alphabet集团 收入同比增长率",
+      "value": "0.150900810815443777177173745",
+      "unit": "ratio",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 3, USD millions; PDF page 50 (report page 49), consolidated income statement, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts) Year Ended December 31, 2023 2024 2025 Revenues $ 307,394 $ 350,018 $ 402,836",
+      "formula": "fy2025_group_revenue / fy2024_group_revenue - 1",
+      "input_fact_keys": [
+        "fy2025_group_revenue",
+        "fy2024_group_revenue"
+      ]
+    },
+    {
+      "fact_key": "fy2025_google_cloud_revenue_growth_yoy",
+      "label": "FY2025 Google Cloud 收入同比增长率",
+      "value": "0.358000416387147516713317449",
+      "unit": "ratio",
+      "period_start": "2025-01-01",
+      "period_end": "2025-12-31",
+      "scope": "google_cloud",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2025-10k-ir"
+      ],
+      "source_locator": "PDF page 88 (report page 87), Note 15 segment results, FY2023/FY2024/FY2025, column 3, USD millions; PDF page 88 (report page 87), Note 15 segment results, FY2023/FY2024/FY2025, column 2, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Year Ended December 31, 2023 2024 2025 Revenues: Google Services $ 272,543 $ 304,930 $ 342,721 Google Cloud 33,088 43,229 58,705",
+      "formula": "fy2025_google_cloud_revenue / fy2024_google_cloud_revenue - 1",
+      "input_fact_keys": [
+        "fy2025_google_cloud_revenue",
+        "fy2024_google_cloud_revenue"
+      ]
+    },
+    {
+      "fact_key": "q2_2026_group_revenue_growth_yoy",
+      "label": "Q2_2026 Alphabet集团 收入同比增长率",
+      "value": "0.242336250881486705106400631",
+      "unit": "ratio",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions; 10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692",
+      "formula": "q2_2026_group_revenue / q2_2025_group_revenue - 1",
+      "input_fact_keys": [
+        "q2_2026_group_revenue",
+        "q2_2025_group_revenue"
+      ]
+    },
+    {
+      "fact_key": "q2_2026_google_cloud_revenue_growth_yoy",
+      "label": "Q2_2026 Google Cloud 收入同比增长率",
+      "value": "0.817968291250733998825601879",
+      "unit": "ratio",
+      "period_start": "2026-04-01",
+      "period_end": "2026-06-30",
+      "scope": "google_cloud",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 2, USD millions; 10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 1, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796",
+      "formula": "q2_2026_google_cloud_revenue / q2_2025_google_cloud_revenue - 1",
+      "input_fact_keys": [
+        "q2_2026_google_cloud_revenue",
+        "q2_2025_google_cloud_revenue"
+      ]
+    },
+    {
+      "fact_key": "h1_2026_group_revenue_growth_yoy",
+      "label": "H1_2026 Alphabet集团 收入同比增长率",
+      "value": "0.230523620233362976931566146",
+      "unit": "ratio",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "group",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 4, USD millions; 10-Q printed page 5, consolidated income statement, Q2 2025/Q2 2026/H1 2025/H1 2026, column 3, USD millions",
+      "quote": "CONSOLIDATED STATEMENTS OF INCOME (in millions, except per share amounts; unaudited) Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues $ 96,428 $ 119,796 $ 186,662 $ 229,692",
+      "formula": "h1_2026_group_revenue / h1_2025_group_revenue - 1",
+      "input_fact_keys": [
+        "h1_2026_group_revenue",
+        "h1_2025_group_revenue"
+      ]
+    },
+    {
+      "fact_key": "h1_2026_google_cloud_revenue_growth_yoy",
+      "label": "H1_2026 Google Cloud 收入同比增长率",
+      "value": "0.73064441353732035234121465",
+      "unit": "ratio",
+      "period_start": "2026-01-01",
+      "period_end": "2026-06-30",
+      "scope": "google_cloud",
+      "state": "derived",
+      "source_ids": [
+        "alphabet-2026-q2-10q"
+      ],
+      "source_locator": "10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 4, USD millions; 10-Q printed page 40, Note 15 segment results, Q2 2025/Q2 2026/H1 2025/H1 2026, column 3, USD millions",
+      "quote": "The following table presents revenue, profitability, and expense information about our segments (in millions): Three Months Ended Six Months Ended June 30, June 30, 2025 2026 2025 2026 Revenues: Google Services $ 82,543 $ 94,540 $ 159,807 $ 184,177 Google Cloud 13,624 24,768 25,884 44,796",
+      "formula": "h1_2026_google_cloud_revenue / h1_2025_google_cloud_revenue - 1",
+      "input_fact_keys": [
+        "h1_2026_google_cloud_revenue",
+        "h1_2025_google_cloud_revenue"
+      ]
+    }
+  ],
+  "research_gaps": [
+    {
+      "key": "cloud_workload",
+      "label": "Cloud工作负载未单独披露",
+      "detail": "Cloud收入包含消费费、订阅及2026Q2开始的TPU系统销售，不能当作工作负载。Cloud RPO是未确认收入的合同承诺，不是已消耗工作负载。"
+    },
+    {
+      "key": "infrastructure_depreciation",
+      "label": "独立基础设施折旧未披露",
+      "detail": "本基线披露集团物业及设备总折旧；该总额包括其他P&E，不能改名为Cloud或纯数据中心折旧。"
+    },
+    {
+      "key": "infrastructure_opex",
+      "label": "基础设施独立运营费用未披露",
+      "detail": "其他营业成本及Cloud其他费用还包含内容、人员、第三方服务等费用，不能全部归为基础设施运营费用。"
+    },
+    {
+      "key": "search_query_intensity",
+      "label": "Search查询强度未披露",
+      "detail": "付费广告点击不是查询总量或每用户查询频次；缺少可比的绝对查询分母。"
+    },
+    {
+      "key": "search_ad_monetization",
+      "label": "Search绝对单位变现未披露",
+      "detail": "CPC同比变化可另作指数；不等于绝对每查询收入。不得将增长率写入货币单价。"
+    },
+    {
+      "key": "youtube_usage",
+      "label": "YouTube可比使用量未披露",
+      "detail": "世界杯特定事件独立观看人数不是平台MAU、观看小时或付费消费量。"
+    },
+    {
+      "key": "youtube_ad_monetization",
+      "label": "YouTube广告单位变现未披露",
+      "detail": "YouTube广告收入可披露，但缺少匹配的曝光或观看时长分母；Google Network CPM不是YouTube CPM。"
+    },
+    {
+      "key": "youtube_subscription_growth",
+      "label": "YouTube独立订阅增长未披露",
+      "detail": "消费者付费订阅合计包含Google One；订阅、平台及设备收入混合多项业务，不能当作YouTube订阅人数或收入。"
+    },
+    {
+      "key": "search_only_tac",
+      "label": "Search独立TAC未披露",
+      "detail": "披露总TAC包含分销伙伴及Google Network伙伴付款，不能全额归属Search。"
+    },
+    {
+      "key": "rpo_definition_change",
+      "label": "2026年RPO统计范围改变",
+      "detail": "2025年报排除原始期限一年或以下合同；2026Q1起纳入。2025年集团242.8bn与2026Q2集团519.5bn不可直接计算同口径增速；后者Cloud部分513.9bn仍是backlog。见10-Q印刷页14。"
+    },
+    {
+      "key": "fcf_not_fcff",
+      "label": "公司披露FCF并非估值FCFF",
+      "detail": "FCF定义为经营活动现金流净额减购置P&E现金支出；它并非未杠杆FCFF，不能直接代替EBIT税后加折旧减资本开支减营运资本投入的预测公式。"
+    },
+    {
+      "key": "sbc_scope",
+      "label": "SBC现金流调整额与总费用不同",
+      "detail": "本数据使用现金流量表非现金股份薪酬调整额；FY2025为24953m，年报总SBC费用为27.1bn，预期以Alphabet股票结算24.1bn，口径不同。不可重复从已含SBC的经营利润再扣同额。"
+    },
+    {
+      "key": "latest_capex_guidance_missing",
+      "label": "最新Q2财报未披露资本开支区间",
+      "detail": "已保存Q2 2026 earnings release及10-Q没有全年资本开支金额区间。175–185bn只出自2026-02-04 Q4 release，不能标成最新Q2指引或已实现历史。"
+    },
+    {
+      "key": "working_capital_definition",
+      "label": "现金流变动不自动等于DCF营运资本投入",
+      "detail": "逐项现金流资产负债变化保留原符号；所得税、其他资产及科目重分类须另定义经营范围，不能自动合并为预测ΔNWC。"
+    },
+    {
+      "key": "cash_tax_rate_missing",
+      "label": "所得税费用不是现金税率",
+      "detail": "本基线tax_expense为利润表所得税费用；现金流所得税项目变动亦非现金税率。现金税假设须另审核。"
+    },
+    {
+      "key": "share_denominator",
+      "label": "加权EPS分母不是期末股本",
+      "detail": "基本与稀释股数是期间EPS分母；不能直接代替期末实际A+B+C股份，也不能把潜在优先股转换与资本桥重复计算。"
+    },
+    {
+      "key": "forecast_inputs_are_assumptions",
+      "label": "历史基线不能认证未来预测",
+      "detail": "全年、半年与单季分别保留。未来收入、利润率、现金税率、折旧、资本开支及营运资本路径均需明确的条件假设。"
+    }
+  ],
+  "content_hash": "bbf540d45bc0b99535f9ece3c948e8a1dc36adafe904e76ca020856fe4ea6295"
+}

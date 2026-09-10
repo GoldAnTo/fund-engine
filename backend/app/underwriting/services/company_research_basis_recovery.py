@@ -31,6 +31,7 @@ from app.underwriting.services.company_research_foundation import (
     alphabet_company_research_foundation_contract,
     authenticate_company_research_foundation,
     build_alphabet_company_research_preview_at_cutoff,
+    company_research_scope_focus,
 )
 from app.underwriting.services.market_snapshots import (
     MarketSnapshotService,
@@ -325,6 +326,7 @@ class CompanyResearchHistoricalBasisRecovery:
                 self._session,
                 company_id=state.company.id,
                 cutoff_at=mandate_effective_at,
+                user_focus=company_research_scope_focus(state.scope),
             )
             authenticated_legacy_cutoff = (
                 mandate_effective_at
@@ -341,12 +343,24 @@ class CompanyResearchHistoricalBasisRecovery:
                 == tuple(sorted((row.id for row in state.securities), key=str))
                 else None
             )
+            if authenticated_legacy_cutoff is None:
+                canonical_preview = build_alphabet_company_research_preview_at_cutoff(
+                    self._session,
+                    company_id=state.company.id,
+                    cutoff_at=cutoff,
+                    user_focus=company_research_scope_focus(state.scope),
+                )
+                if canonical_preview.input_hash != state.preparation.request_hash:
+                    raise ValidationError(
+                        "company research recovery context does not match initialized request"
+                    )
             foundation = alphabet_company_research_foundation_contract(
                 company_external_key=state.company.external_key,
                 company_id=state.company.id,
                 security_ids=tuple(row.id for row in state.securities),
                 request_hash=state.preparation.request_hash,
                 strategy_version=state.preparation.strategy_version,
+                user_focus=company_research_scope_focus(state.scope),
             )
             authenticate_company_research_foundation(
                 project=state.project,

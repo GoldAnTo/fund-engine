@@ -1,11 +1,11 @@
-# Fund Engine · 证据驱动的行业研究系统
+# Fund Engine · 以公司为中心的研究系统
 
 > `frontend/` 和 `prototype/` 已完整移除，不启动任何网页服务器。后端研究能力保留；数据客户端、API 契约及单元测试位于 `clients/research/`。新统一原型待讨论与设计。参见[完整清理记录](docs/2026-09-10-complete-frontend-cleanup.md)。
 
 [![backend-ci](https://github.com/GoldAnTo/fund-engine/actions/workflows/backend.yml/badge.svg)](https://github.com/GoldAnTo/fund-engine/actions/workflows/backend.yml)
 [![research-client-ci](https://github.com/GoldAnTo/fund-engine/actions/workflows/research-client.yml/badge.svg)](https://github.com/GoldAnTo/fund-engine/actions/workflows/research-client.yml)
 
-把原始资料变成**可审计的行业研究判断**：每个结论都能沿
+从公司研究出发，沿业务和产业关系延伸到行业、股票与基金。原始资料支持**可审计的研究判断**：每个结论都能沿
 `评估 → 证据快照 → 证据关系 → 原子陈述 → 原文片段`
 回溯到冻结原文；AI 判断与人类复核以分离记录共存，机器结论永不被覆盖；
 历史时点可回放，后公开的材料绝不泄漏。
@@ -16,6 +16,10 @@
 ## 当前 checkout 状态（2026-09-10）
 
 公司研究、事件研究、归档及演示页面均已退役，旧路由不再提供研究操作。新统一原型尚在讨论；本次清理没有删除后端研究数据、API、worker 或冻结版本。
+
+`main` 是后续开发的公司研究基线，已整合官方资料获取、带引用的 AI 草稿、研究进度，以及条件财务模型的保存、历史回放和导出。纯 API 客户端同步维护这些契约。当前财务模型仅支持已适配的 Alphabet 基线，保存结果始终为 `unreviewed`，不会自动发布正式研究 V2。
+
+其他开发分支按能力逐项吸收：本轮纳入 worker 临时写锁恢复、Gildata 引文和证券身份校验；另一套关键输入确认、团队协作、事件编排和授权证据治理仍需专项整合。原分支用于追溯，不作为新增产品入口。详见[主线整合记录](docs/2026-09-10-company-mainline-integration.md)。
 
 旧 `POST /api/v1/research-cases` 无来源创建入口现已退役：未认证返回 401，认证后返回 409，并指引使用 `POST /api/v1/event-research` 建立有原始资料和租户归属的 Case；旧 workbench 与新增 thesis 均检查归属。
 

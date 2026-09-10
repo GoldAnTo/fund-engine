@@ -44,6 +44,7 @@ def test_ingest_freezes_documents_and_valuations(fake_gildata, cmd_seeded):
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["research_reports"] == 2
+    assert body["research_reports_skipped_degenerate"] == 0
     assert body["announcements"] == 1
     assert body["news"] == 1
     assert body["spans"] == 4
@@ -57,6 +58,81 @@ def test_ingest_freezes_documents_and_valuations(fake_gildata, cmd_seeded):
     vals = cmd_seeded.scalar(select(func.count()).select_from(ValuationSnapshot))
     assert docs >= 2  # seeded docs + newly frozen ones (hash dedupe may vary)
     assert vals == seeded_vals + 3
+
+
+@pytest.mark.parametrize("returned_code", ["601138.SH", "ABC"])
+def test_ingest_quote_identity_failure_returns_503_and_rolls_back(
+    cmd_client, cmd_seeded, returned_code,
+):
+    from app.models.ledger import (
+        CaseDocumentVersion, Company, DocumentVersion, ResearchCase,
+        SourceSpan, Stock, ValuationSnapshot,
+    )
+
+    client = _make_client()
+    client._quote = [{"table_markdown": (
+        "|股票名称|股票代码|最新价|市盈率TTM|市净率|总市值|\n"
+        "|---|---|---|---|---|---|\n"
+        f"|异常上游证券|{returned_code}|50.00|20|3|2.0e11|"
+    )}]
+    models = (DocumentVersion, SourceSpan, CaseDocumentVersion, Company, Stock, ValuationSnapshot)
+    before = {model: cmd_seeded.scalar(select(func.count()).select_from(model)) for model in models}
+    case = cmd_seeded.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
+
+    def override():
+        yield client
+
+    app.dependency_overrides[get_gildata_client] = override
+    try:
+        response = cmd_client.post("/api/v1/documents/ingest", json={
+            "case_id": str(case.id), "quote_stock_code": "688256",
+        })
+    finally:
+        app.dependency_overrides.pop(get_gildata_client, None)
+
+    assert response.status_code == 503
+    error = response.json()["error"]
+    assert error["code"] == "upstream_unavailable"
+    assert error["message"] == "Gildata provider request failed"
+    assert error["details"] == {}
+    assert returned_code not in response.text
+    assert "异常上游证券" not in response.text
+    assert {model: cmd_seeded.scalar(select(func.count()).select_from(model)) for model in models} == before
+
+
+@pytest.mark.parametrize("invalid_code", ["", "ABC", 688256])
+def test_ingest_invalid_quote_request_returns_422_without_calls_or_writes(
+    cmd_client, cmd_seeded, invalid_code,
+):
+    from app.models.ledger import (
+        CaseDocumentVersion, Company, DocumentVersion, ResearchCase,
+        SourceSpan, Stock, ValuationSnapshot,
+    )
+
+    client = _make_client()
+    models = (DocumentVersion, SourceSpan, CaseDocumentVersion, Company, Stock, ValuationSnapshot)
+    before = {model: cmd_seeded.scalar(select(func.count()).select_from(model)) for model in models}
+    case = cmd_seeded.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
+
+    def override():
+        yield client
+
+    app.dependency_overrides[get_gildata_client] = override
+    try:
+        response = cmd_client.post("/api/v1/documents/ingest", json={
+            "case_id": str(case.id), "quote_stock_code": invalid_code,
+        })
+    finally:
+        app.dependency_overrides.pop(get_gildata_client, None)
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_failed"
+    assert response.json()["error"]["message"] == (
+        "quote_stock_code is invalid" if isinstance(invalid_code, str)
+        else "request validation failed"
+    )
+    assert client.calls == []
+    assert {model: cmd_seeded.scalar(select(func.count()).select_from(model)) for model in models} == before
 
 
 def test_ingest_is_idempotent_via_api(fake_gildata, cmd_seeded):

@@ -273,6 +273,8 @@ def test_company_research_openapi_is_closed_and_hides_internal_foundation_ids() 
         "cutoff_at",
         "agenda",
         "preview_hash",
+        "user_focus",
+        "requested_cutoff_at",
     }
     assert not {"mandate_id", "scope_id", "agenda_id", "source_manifest_hash"} & set(
         preview["properties"]

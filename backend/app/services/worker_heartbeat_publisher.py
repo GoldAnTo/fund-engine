@@ -5,13 +5,22 @@ import os
 from collections.abc import Callable
 from threading import Event, Thread, current_thread
 
+from sqlalchemy.exc import OperationalError
+
 from app.services.research_worker_heartbeat import WorkerHeartbeatService
+
+
+def _is_transient_sqlite_writer_contention(error: Exception) -> bool:
+    return isinstance(error, OperationalError) and "database is locked" in str(
+        error.orig
+    ).lower()
 
 
 class WorkerHeartbeatPublisher:
     """Publish liveness without waiting for a potentially slow provider call.
 
-    A failed periodic write terminates the worker process so Docker's
+    Transient SQLite writer contention retries at the next interval. Other
+    periodic write failures terminate the worker process so Docker's
     ``restart: unless-stopped`` policy can recover it. The initial write is
     synchronous: an uninitialized database never appears healthy.
     """
@@ -63,6 +72,8 @@ class WorkerHeartbeatPublisher:
         while not self._stop.wait(self._interval_seconds):
             try:
                 self._touch()
-            except Exception:
+            except Exception as error:
+                if _is_transient_sqlite_writer_contention(error):
+                    continue
                 self._fatal_exit(1)
                 return

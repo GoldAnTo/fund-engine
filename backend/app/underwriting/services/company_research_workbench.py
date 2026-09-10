@@ -23,7 +23,7 @@ from app.underwriting.fixtures.alphabet_golden_case import (
     LEGACY_EVIDENCE_MANIFEST_CONTENT_SHA256,
 )
 from app.underwriting.domain.company_research_provenance import canonical_source_refs
-from app.underwriting.persistence.models import UnderwritingResearchVersion
+from app.underwriting.persistence.models import UnderwritingResearchVersion, UnderwritingHistoricalBasis
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
     CompanyResearchPreparation,
@@ -38,6 +38,9 @@ from app.underwriting.domain.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
 )
 from app.underwriting.services.workspace_draft import WorkspaceDraftService
+from app.underwriting.services.company_research_progress import (
+    CompanyResearchProductProgress, company_research_product_progress,
+)
 from app.underwriting.services.company_research_model_builder import (
     validate_company_research_evidence_payload_for_read,
 )
@@ -140,6 +143,8 @@ class CompanyResearchWorkspace:
     draft: WorkbenchDraft
     selected_revision: UUID | None
     change_summary: dict
+    product_progress: CompanyResearchProductProgress | None = None
+    research_draft: dict | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -604,6 +609,8 @@ class CompanyResearchWorkbench:
             )
         )
         assert type(memo) is CompanyResearchMemoArtifact
+        from app.underwriting.services.company_research_live_runtime import validate_memo_research_draft
+        validate_memo_research_draft(self._session, project_id=project_id, reference=memo.research_draft_ref)
         assert type(judgment) is JudgmentContextArtifact
         assert type(business_map) is BusinessMapArtifact
         assert isinstance(derived_gaps, tuple) and all(
@@ -912,6 +919,9 @@ class CompanyResearchWorkbench:
             raise ValidationError(
                 "non-failed company research preparation cannot expose an error"
             )
+        scope = self._product_repository.scope(project_id, draft.content.scope_id)
+        basis = (self._session.get(UnderwritingHistoricalBasis, draft.content.historical_basis_id)
+                 if draft.content.historical_basis_id is not None else None)
         return CompanyResearchWorkspace(
             project_id,
             WorkbenchCompany(
@@ -945,7 +955,19 @@ class CompanyResearchWorkbench:
                 },
                 "reviewed_fact_count": reviewed_fact_count,
             },
+            company_research_product_progress(
+                session=self._session,
+                preparation=preparation,
+                company_id=project.primary_company_id,
+                scope=scope,
+                basis=basis,
+            ),
+            self._live_draft_projection(project_id, preparation),
         )
+
+    def _live_draft_projection(self, project_id, preparation):
+        from app.underwriting.services.company_research_live_runtime import read_live_draft, live_draft_projection
+        return live_draft_projection(self._session, read_live_draft(self._session, project_id=project_id, preparation=preparation))
 
     def review_evidence(
         self,
