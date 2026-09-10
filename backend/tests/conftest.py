@@ -1,7 +1,10 @@
+import json
 import os
 import uuid
-from datetime import UTC, date, datetime
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from secrets import compare_digest
 
 # Tests must never see a developer's local .env credentials.  Force test mode
 # before importing application modules and discard every ambient setting that
@@ -15,27 +18,202 @@ for provider_env_name in (
     "LLM_TEMPERATURE",
     "LLM_SEED",
     "LLM_TIMEOUT_SECONDS",
-    "LLM_MAX_ATTEMPTS",
-    "LLM_RETRY_BUDGET_SECONDS",
-    "LLM_MAX_INPUT_BYTES",
-    "LLM_MAX_RESPONSE_BYTES",
-    "LLM_MAX_COMPLETION_TOKENS",
-    "GILDATA_MAX_ATTEMPTS",
+    "LLM_MAX_RETRIES",
     "GILDATA_TOKEN",
 ):
     os.environ.pop(provider_env_name, None)
 
 import pytest
+from fastapi import Depends, Header
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
+
+from app.security.principal import ResearchPrincipal
+from app.db import get_db
+from app.models.identity import ResearchUser
 
 PG_URL = os.getenv("TEST_DATABASE_URL")
 USE_PG = bool(PG_URL)
 
 NEO4J_URL = os.getenv("NEO4J_URL")
 USE_NEO4J = bool(NEO4J_URL)
+
+
+@dataclass(frozen=True, slots=True)
+class _LegacyTestResearchPrincipal(ResearchPrincipal):
+    """Principal-shaped test double that preserves old audit assertions."""
+
+    legacy_actor_id: str
+
+    @property
+    def actor(self) -> str:
+        return f"user:{self.legacy_actor_id}"
+
+    @property
+    def server_actor(self) -> str:
+        return self.actor
+
+
+def _legacy_test_research_principal(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Test-only adapter for legacy opaque-token route fixtures.
+
+    Production authentication never imports or calls this helper. It keeps old
+    API tests isolated while they are migrated to generated OIDC credentials.
+    """
+    from app.errors import AuthenticationRequiredError, PermissionDeniedError
+
+    if authorization is None:
+        raise AuthenticationRequiredError("research credentials are required")
+    scheme, separator, token = authorization.partition(" ")
+    token = token.strip()
+    if scheme.casefold() != "bearer" or not separator or not token:
+        raise AuthenticationRequiredError("research bearer credentials are required")
+    try:
+        configured = json.loads(os.getenv("RESEARCH_TENANT_TOKENS", ""))
+    except json.JSONDecodeError:
+        configured = {}
+    if not isinstance(configured, dict):
+        configured = {}
+    for expected_token, value in configured.items():
+        if not isinstance(expected_token, str) or not compare_digest(
+            token, expected_token
+        ):
+            continue
+        tenant_id: str | None = None
+        roles: list[str] = []
+        actor_id: str | None = None
+        if isinstance(value, str):
+            tenant_id = value.strip()
+        elif isinstance(value, dict):
+            raw_tenant_id = value.get("tenant_id")
+            raw_roles = value.get("roles", [])
+            raw_actor_id = value.get("actor_id")
+            if isinstance(raw_tenant_id, str):
+                tenant_id = raw_tenant_id.strip()
+            if isinstance(raw_roles, list) and all(
+                isinstance(role, str) and role.strip() for role in raw_roles
+            ):
+                roles = [role.strip() for role in raw_roles]
+            if isinstance(raw_actor_id, str) and raw_actor_id.strip():
+                actor_id = raw_actor_id.strip()
+        if not tenant_id:
+            break
+        # Opaque-token fixtures predate user-level grants and intentionally
+        # model the one migration identity that may still see admitted legacy
+        # Cases.  Production has no opaque-token path; new authorization tests
+        # override this adapter with explicit principals and grants.
+        if "tenant_administrator" not in roles:
+            roles.append("tenant_administrator")
+        subject = actor_id or f"token:{expected_token}"
+        user_id = uuid.uuid5(
+            uuid.NAMESPACE_URL, f"test-research-principal:{tenant_id}:{subject}"
+        )
+        now = datetime.now(UTC)
+        user = db.get(ResearchUser, user_id)
+        if user is None:
+            user = ResearchUser(
+                id=user_id,
+                issuer="https://test-identity.invalid/realms/research",
+                subject=subject,
+                tenant_id=tenant_id,
+                display_name=actor_id or tenant_id,
+                normalized_email=None,
+                active=True,
+                last_seen_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(user)
+        elif not user.active or user.tenant_id != tenant_id:
+            raise PermissionDeniedError("test research user is not permitted")
+        else:
+            user.last_seen_at = now
+            user.updated_at = now
+        db.flush()
+        # Migrate legacy opaque-token fixtures to the same explicit-grant
+        # model used by production OIDC users.  This compatibility adapter is
+        # test-only: zero-grant Cases admitted to this token's tenant become
+        # owned by the deterministic test user before the route authorizes.
+        # Cases that already have any grant remain private and untouched.
+        from sqlalchemy import exists, select
+
+        from app.models.identity import CaseAccessGrant
+        from app.models.ledger import CaseTenantAdmission
+
+        any_grant = exists(
+            select(CaseAccessGrant.id).where(
+                CaseAccessGrant.research_case_id
+                == CaseTenantAdmission.research_case_id
+            )
+        )
+        legacy_case_ids = list(
+            db.scalars(
+                select(CaseTenantAdmission.research_case_id).where(
+                    CaseTenantAdmission.tenant_id == tenant_id,
+                    ~any_grant,
+                )
+            )
+        )
+        for legacy_case_id in legacy_case_ids:
+            db.add(
+                CaseAccessGrant(
+                    research_case_id=legacy_case_id,
+                    user_id=user_id,
+                    role="owner",
+                    granted_by_principal_id="test:opaque-token-migration",
+                    reason="test fixture migration to explicit Case ownership",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        db.flush()
+        return _LegacyTestResearchPrincipal(
+            user_id=user_id,
+            issuer="https://test-identity.invalid/realms/research",
+            subject=subject,
+            tenant_id=tenant_id,
+            display_name=actor_id or tenant_id,
+            roles=frozenset(roles),
+            expires_at=now + timedelta(hours=1),
+            legacy_actor_id=actor_id or tenant_id,
+        )
+    raise PermissionDeniedError("research tenant is not permitted")
+
+
+@pytest.fixture(autouse=True)
+def _legacy_research_authentication_override():
+    """Keep all opaque-token compatibility inside the test suite."""
+    from app.api.v1.tenant_context import require_research_actor
+    from app.main import app
+
+    app.dependency_overrides[require_research_actor] = _legacy_test_research_principal
+    try:
+        yield
+    finally:
+        if (
+            app.dependency_overrides.get(require_research_actor)
+            is _legacy_test_research_principal
+        ):
+            app.dependency_overrides.pop(require_research_actor, None)
+
+
+@pytest.fixture
+def production_oidc_authentication():
+    """Bypass the legacy override when a test exercises production OIDC."""
+    from app.api.v1.tenant_context import require_research_actor
+    from app.main import app
+
+    previous = app.dependency_overrides.pop(require_research_actor, None)
+    try:
+        yield
+    finally:
+        if previous is not None:
+            app.dependency_overrides[require_research_actor] = previous
 
 
 def _truncate_postgresql_tables(engine, base) -> None:
@@ -729,7 +907,10 @@ def cmd_client(cmd_session):
 
     app.dependency_overrides[get_db] = _override_get_db
     previous_tokens = os.environ.get("RESEARCH_TENANT_TOKENS")
-    os.environ["RESEARCH_TENANT_TOKENS"] = '{"test-tenant-token":"test-team"}'
+    os.environ["RESEARCH_TENANT_TOKENS"] = (
+        '{"test-tenant-token":{"tenant_id":"test-team",'
+        '"roles":["metric_definition_administrator"]}}'
+    )
     try:
         yield TestClient(app, headers={"Authorization": "Bearer test-tenant-token"})
     finally:
@@ -743,6 +924,7 @@ def cmd_client(cmd_session):
 @pytest.fixture
 def cmd_seeded(cmd_session):
     from app.scripts.seed_ai_compute_case import seed
+    from app.models.identity import CaseAccessGrant, ResearchUser
     from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, ResearchCase
     from sqlalchemy import select
 
@@ -762,20 +944,35 @@ def cmd_seeded(cmd_session):
         admitted_by="test-fixture",
         admitted_at=case.created_at,
     ))
+    user_id = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        "test-research-principal:test-team:token:test-tenant-token",
+    )
+    now = datetime.now(UTC)
+    cmd_session.add(
+        ResearchUser(
+            id=user_id,
+            issuer="https://test-identity.invalid/realms/research",
+            subject="token:test-tenant-token",
+            tenant_id="test-team",
+            display_name="test-team",
+            normalized_email=None,
+            active=True,
+            last_seen_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    cmd_session.add(
+        CaseAccessGrant(
+            research_case_id=case.id,
+            user_id=user_id,
+            role="owner",
+            granted_by_principal_id="test:fixture",
+            reason="legacy seeded Case test migration",
+            created_at=now,
+            updated_at=now,
+        )
+    )
     cmd_session.commit()
     return cmd_session
-
-
-@pytest.fixture(autouse=True)
-def isolate_postgres_concurrency_test(request):
-    """Independent-connection tests commit outside the ordinary session fixture."""
-    if not USE_PG or request.node.get_closest_marker('pg_only') is None:
-        yield
-        return
-    from app.models.ledger import Base
-    test_engine = request.getfixturevalue('engine')
-    _truncate_postgresql_tables(test_engine, Base)
-    try:
-        yield
-    finally:
-        _truncate_postgresql_tables(test_engine, Base)

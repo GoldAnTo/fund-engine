@@ -1,41 +1,48 @@
 {
-  "name": "fund-engine-ai-workbench",
-  "version": "0.1.0",
+  "name": "evidence-workbench",
   "private": true,
+  "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --port 4173",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "dev": "node scripts/with-project-node.mjs ./node_modules/vite/bin/vite.js --config vite.config.ts",
+    "dev:live": "node scripts/with-project-node.mjs ./node_modules/vite/bin/vite.js --config vite.config.ts",
+    "dev:mock": "VITE_RESEARCH_CLIENT=mock node scripts/with-project-node.mjs ./node_modules/vite/bin/vite.js --config vite.config.ts",
+    "build": "tsc -b && vite build --config vite.config.ts",
     "typecheck": "tsc --noEmit",
-    "e2e": "playwright test",
-    "e2e:live": "playwright test --config playwright.live.config.ts",
-    "verify:live-company-research": "node scripts/with-project-node.mjs scripts/verify-live-company-research-ui.mjs",
-    "test:live-company-research-support": "node scripts/with-project-node.mjs --test scripts/live-company-research-support.test.mjs"
+    "test": "vitest run --config vite.config.ts",
+    "e2e": "node scripts/with-project-node.mjs ./node_modules/@playwright/test/cli.js test",
+    "e2e:live": "npm run e2e:live:check && npm run e2e:live:typecheck && node scripts/with-project-node.mjs ./node_modules/@playwright/test/cli.js test --config playwright.live.config.ts",
+    "e2e:live:check": "node scripts/check-live-acceptance.mjs",
+    "e2e:live:typecheck": "node scripts/with-project-node.mjs ./node_modules/typescript/bin/tsc --noEmit --moduleResolution Bundler --module ESNext --target ES2022 --lib ES2022,DOM --types node,@playwright/test --skipLibCheck playwright.live.config.ts e2e-live/fixtures/auth.ts e2e-live/helpers/workflow.ts e2e-live/helpers/restart.ts e2e-live/case-permissions.spec.ts e2e-live/event-mainline.spec.ts e2e-live/restart-recovery.spec.ts",
+    "gen:contract": "openapi-typescript openapi.json -o src/contracts/v1.ts"
   },
   "dependencies": {
+    "@xyflow/react": "^12.11.2",
+    "cytoscape": "^3.30.0",
+    "dagre": "^0.8.5",
+    "oidc-client-ts": "^3.5.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^7.18.3"
+    "react-router-dom": "^6.26.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.47.0",
-    "@testing-library/jest-dom": "^6.4.8",
-    "@testing-library/react": "^16.0.0",
+    "@testing-library/jest-dom": "^6.5.0",
+    "@testing-library/react": "^16.0.1",
     "@testing-library/user-event": "^14.5.2",
-    "@types/node": "^20.14.10",
-    "@types/react": "^18.3.3",
+    "@types/cytoscape": "^3.21.7",
+    "@types/dagre": "^0.7.54",
+    "@types/node": "^22.20.1",
+    "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "jsdom": "^25.0.0",
     "openapi-typescript": "^7.13.0",
-    "typescript": "^5.5.4",
-    "vite": "^6.4.3",
-    "vitest": "^3.2.6"
-  },
-  "engines": {
-    "node": ">=20"
+    "typescript": "^5.5.0",
+    "vite": "^5.4.0",
+    "vitest": "^2.1.0"
   }
 }

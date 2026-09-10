@@ -19,7 +19,6 @@ class MetricDefinitionRequest(V1Model):
     period_semantics: str = Field(min_length=1)
     allowed_source_roles: list[str] = Field(min_length=1)
     role_eligibility: list[Literal["outcome", "driver", "mediator", "context"]] = Field(min_length=1)
-    approved_by: str = Field(min_length=1)
     reason: str = Field(min_length=1)
 
 
@@ -43,12 +42,10 @@ class OutcomeBindingRequest(V1Model):
     baseline: dict[str, str]
     horizon_start: date
     horizon_end: date
-    reviewer: str = Field(min_length=1)
     reason: str = Field(min_length=1)
 
 
 class ApproveOutcomeBindingRequest(V1Model):
-    reviewer: str = Field(min_length=1)
     reason: str = Field(min_length=1)
 
 
@@ -104,7 +101,6 @@ class MechanismTemplateDTO(V1Model):
 
 class SelectMechanismTemplateRequest(V1Model):
     template_version_id: uuid.UUID
-    reviewer: str = Field(min_length=1)
     reason: str = Field(min_length=1)
 
 
@@ -128,7 +124,6 @@ class VerificationRuleRequest(V1Model):
     observed_period_end: date
     available_at_deadline: date
     next_verification_event: str = Field(min_length=1)
-    reviewer: str = Field(min_length=1)
     reason: str = Field(min_length=1)
 
 

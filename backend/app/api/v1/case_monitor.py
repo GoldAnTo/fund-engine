@@ -17,13 +17,16 @@ from app.schemas.v1.case_monitor import (
     UpdateCaseMonitorRequest,
     SetCaseMonitorStatusRequest,
     StartFactorMonitorRunRequest,
-    StartManualMonitorRunRequest,
 )
 from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
 from app.services.auto_research import AutoResearchService
-from app.services.monitor_scheduler import MonitorScheduler
+from app.services.monitor_scheduler import (
+    ACCEPTANCE_FREQUENCY,
+    MonitorScheduler,
+    acceptance_frequency_enabled,
+)
 from app.schemas.v1.auto_research import ResearchRunResponse
-from app.api.v1.tenant_context import require_research_tenant
+from app.api.v1.tenant_context import ResearchActor, require_research_actor, require_research_tenant
 from app.services.case_tenant_access import CaseTenantAccess
 
 
@@ -89,16 +92,21 @@ def save_monitor(
     case_id: uuid.UUID,
     request: UpdateCaseMonitorRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
-    _require_case(db, case_id, tenant_id)
+    _require_case(db, case_id, actor.tenant_id)
     try:
+        normalized_frequency = request.frequency.strip()
+        if (
+            normalized_frequency == ACCEPTANCE_FREQUENCY
+            and not acceptance_frequency_enabled()
+        ):
+            raise ValueError("acceptance-only monitor frequency is disabled")
         monitor = CaseMonitorService(db).save(
             case_id,
-            actor=request.actor,
-            expected_version=request.expected_version,
+            actor=actor.server_actor,
             config=CaseMonitorConfig(
-                frequency=request.frequency,
+                frequency=normalized_frequency,
                 factor_ids=[uuid.UUID(value) for value in request.factor_ids],
                 allowed_source_types=list(request.allowed_source_types),
                 next_verification_event=request.next_verification_event,
@@ -120,18 +128,14 @@ def save_monitor(
 )
 def start_manual_monitor_run(
     case_id: uuid.UUID,
-    request: StartManualMonitorRunRequest | None = None,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
     """Queue an explicit replenishment using the effective monitor version."""
-    _require_case(db, case_id, tenant_id)
+    _require_case(db, case_id, actor.tenant_id)
     try:
-        if request is not None:
-            from app.services.manual_monitor_command import start_manual_monitor_command
-            return start_manual_monitor_command(db, case_id, tenant_id, request)
         service = AutoResearchService(db)
-        run = service.start_from_monitor(case_id)
+        run = service.start_from_monitor(case_id, initiated_by=actor.server_actor)
         return service.detail(run.id)
     except ValueError as exc:
         db.rollback()
@@ -147,12 +151,16 @@ def start_factor_monitor_run(
     case_id: uuid.UUID,
     request: StartFactorMonitorRunRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
-    _require_case(db, case_id, tenant_id)
+    _require_case(db, case_id, actor.tenant_id)
     try:
         service = AutoResearchService(db)
-        run = service.start_from_key_factor(case_id, key_factor_id=uuid.UUID(request.key_factor_id))
+        run = service.start_from_key_factor(
+            case_id,
+            key_factor_id=uuid.UUID(request.key_factor_id),
+            initiated_by=actor.server_actor,
+        )
         return service.detail(run.id)
     except (ValueError, TypeError) as exc:
         db.rollback()
@@ -165,11 +173,11 @@ def set_monitor_status(
     target_status: str,
     request: SetCaseMonitorStatusRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
-    _require_case(db, case_id, tenant_id)
+    _require_case(db, case_id, actor.tenant_id)
     try:
-        monitor = CaseMonitorService(db).set_status(case_id, actor=request.actor, status=target_status, reason=request.change_reason, expected_version=request.expected_version)
+        monitor = CaseMonitorService(db).set_status(case_id, actor=actor.server_actor, status=target_status, reason=request.change_reason)
         db.commit()
     except (ValueError, TypeError) as exc:
         db.rollback()

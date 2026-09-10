@@ -25,31 +25,39 @@ def test_full_research_flow_walkthrough(cmd_client, cmd_seeded):
     # 0. 金标切片已由 cmd_seeded 落库（离线、可重放）。
     seeded_case = cmd_seeded.scalar(select(ResearchCase))
 
-    # 1. 通过用户粘贴原文建立归属，再添加可反证 AI 草案命题。
-    from tests.event_case_factory import create_event_case
-
-    new_case_id = create_event_case(cmd_client, title="AI 算力产业链：订单到收入传导验证")
+    # 1. 新建研究：登录用户提交研究问题 + 可反证初始命题。
     created = cmd_client.post(
-        f"/api/v1/research-cases/{new_case_id}/theses",
+        "/api/v1/research-cases",
         json={
-            "created_by": "flow-test",
-            "statement": "云厂商资本开支形成持续算力需求",
-            "support_condition": "至少两家主要云厂商给出扩张指引",
-            "falsification_condition": "主要云厂商下调资本开支",
-            "next_verification_event": "核对 2026Q2 云厂商财报",
-            "creator_type": "ai",
+            "title": "AI 算力产业链：订单到收入传导验证",
+            "industry_topic": "ai_compute",
+            "core_question": "截至 2026-06-30 算力资本开支能否通过已披露订单验证？",
+            "period_start": "2026-01-01",
+            "period_end": "2027-12-31",
+            "evidence_cutoff": "2026-06-30",
+            "initial_theses": [
+                {
+                    "statement": "云厂商资本开支形成持续算力需求",
+                    "support_condition": "至少两家主要云厂商给出扩张指引",
+                    "falsification_condition": "主要云厂商下调资本开支",
+                    "next_verification_event": "核对 2026Q2 云厂商财报",
+                }
+            ],
         },
     )
     assert created.status_code == 201, created.text
-    assert created.json()["thesis"]["review_state"] == "draft"
+    new_case_id = created.json()["case_id"]
+    assert created.json()["theses"][0]["review_state"] == "confirmed"
 
-    # 2. 审核队列：金标切片的 15 条机器提议待审；新案无链接不进队。
+    # 2. 审核队列：金标切片的 15 条机器提议待审。通用 Case 创建也会
+    #    原子写入租户准入与 owner grant，新 Case 当前没有待审提议。
     queue = cmd_client.get("/api/v1/review-queue").json()["items"]
     assert len(queue) == 15
     new_case_queue = cmd_client.get(
         "/api/v1/review-queue", params={"case_id": new_case_id}
-    ).json()["items"]
-    assert new_case_queue == []
+    )
+    assert new_case_queue.status_code == 200
+    assert new_case_queue.json()["items"] == []
 
     # 3. 关系级审核（四要素）：确认一条，驳回一条。
     confirm = cmd_client.post(
@@ -60,7 +68,6 @@ def test_full_research_flow_walkthrough(cmd_client, cmd_seeded):
             "factor_role": "需求驱动因素",
             "scope_boundary": "仅适用于当前截止日与该分部口径",
             "reason": "原文披露与 AI 提议一致",
-            "reviewer": "flow-reviewer",
         },
     )
     assert confirm.status_code == 201, confirm.text
@@ -71,7 +78,6 @@ def test_full_research_flow_walkthrough(cmd_client, cmd_seeded):
             "factor_role": "不适用",
             "scope_boundary": "公司整体口径，非分部披露",
             "reason": "整体口径误用于业务线命题",
-            "reviewer": "flow-reviewer",
         },
     )
     assert reject.status_code == 201, reject.text
@@ -92,7 +98,6 @@ def test_full_research_flow_walkthrough(cmd_client, cmd_seeded):
             "outcome": "confirmed",
             "conclusion": assessment.conclusion,
             "reason": "人工确认，证据链完整",
-            "reviewer": "flow-reviewer",
         },
     )
     assert reviewed.status_code == 201, reviewed.text

@@ -27,6 +27,7 @@ import argparse
 import os
 import re
 import uuid
+from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -218,6 +219,7 @@ def ingest(
     quote_query: str | None = None,
     quote_stock_code: str | None = None,
     macro_queries: list[str] | None = None,
+    before_persist: Callable[[], bool] | None = None,
 ) -> dict:
     """Ingest real Gildata data into *session*.
 
@@ -248,6 +250,10 @@ def ingest(
         "case_id": str(resolved_case_id) if resolved_case_id else None,
     }
 
+    def authorize_output() -> None:
+        if before_persist is not None and not before_persist():
+            raise RuntimeError("ingest output slot is no longer authorized")
+
     # Spans written through this script come from a structured text
     # payload (one ``content`` field per result), not a paginated PDF,
     # so ``page`` / ``paragraph`` are best-effort placeholders.  The
@@ -271,6 +277,7 @@ def ingest(
     # 1. Research reports -> DocumentVersion + SourceSpan.
     for query in research_queries:
         reports = adapters.fetch_research_report(client, query)
+        authorize_output()
         for report in reports[:3]:
             content = report.get("content", "")
             if not content:
@@ -308,6 +315,7 @@ def ingest(
 
     # 2. Announcements -> DocumentVersion + SourceSpan.
     announcements = adapters.fetch_announcement(client, announcement_query)
+    authorize_output()
     for ann in announcements[:3]:
         content = ann.get("content", "") or ann.get("title", "")
         if not content:
@@ -343,6 +351,7 @@ def ingest(
 
     # 2b. News/舆情 -> DocumentVersion + SourceSpan.
     news_items = adapters.fetch_news(client, news_query)
+    authorize_output()
     for news in news_items[:3]:
         content = news.get("content", "") or news.get("title", "")
         if not content:
@@ -383,6 +392,7 @@ def ingest(
     # table.
     for mquery in macro_queries or []:
         rows = adapters.fetch_macro_series(client, mquery)
+        authorize_output()
         if not rows:
             continue
         # Group by metric so peak/latest can be cited individually; each
@@ -457,6 +467,7 @@ def ingest(
 
     # 3. Market quote -> ValuationSnapshot rows for the resolved stock.
     quotes = adapters.fetch_quote(client, quote_query)
+    authorize_output()
     if quotes:
         quote = quotes[0]
         resolved_code = quote.get("stock_code", "") or quote_stock_code

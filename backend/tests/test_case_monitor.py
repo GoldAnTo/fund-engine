@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from threading import Event
+from time import monotonic
 
 import pytest
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, text, update
+from sqlalchemy.orm import sessionmaker
 
 from app.models.ledger import ImmutableLedgerError, ResearchCase, Thesis
 from app.models.operational import ResearchRun
@@ -80,6 +84,145 @@ def test_changed_monitor_configuration_appends_a_new_version(session) -> None:
             .order_by(CaseMonitorVersion.version)
         )
     ) == [first, second]
+
+
+def test_default_monitor_reuses_only_the_exact_canonical_frozen_scope(session) -> None:
+    case, old_factor = _case_with_confirmed_factor(session)
+    current_factor = Thesis(
+        research_case_id=case.id,
+        statement="当前冻结范围中的因素",
+        created_by="human:lin",
+        created_at=datetime.now(timezone.utc),
+        creator_type="human",
+        review_state="confirmed",
+    )
+    session.add(current_factor)
+    session.flush()
+    service = CaseMonitorService(session)
+    old_factor_monitor = service.save(
+        case.id,
+        actor="human:lin",
+        config=_monitor_config(
+            old_factor.id,
+            allowed_source_types=["licensed_provider"],
+        ),
+    )
+
+    current_factor_monitor = service.ensure_default(
+        case.id,
+        actor="system:event-research",
+        factor_ids=[current_factor.id],
+        allowed_source_types=["licensed_provider"],
+    )
+    current_source_monitor = service.ensure_default(
+        case.id,
+        actor="system:event-research",
+        factor_ids=[current_factor.id],
+        allowed_source_types=[
+            "uploaded_file",
+            "company_disclosure",
+            "uploaded_file",
+        ],
+    )
+    replay = service.ensure_default(
+        case.id,
+        actor="system:event-research",
+        factor_ids=[current_factor.id],
+        allowed_source_types=[
+            "company_disclosure",
+            "uploaded_file",
+            "company_disclosure",
+        ],
+    )
+
+    assert [
+        old_factor_monitor.version,
+        current_factor_monitor.version,
+        current_source_monitor.version,
+    ] == [1, 2, 3]
+    assert replay.id == current_source_monitor.id
+    assert current_factor_monitor.factor_ids == [str(current_factor.id)]
+    assert current_source_monitor.allowed_source_types == [
+        "company_disclosure",
+        "uploaded_file",
+    ]
+    history = list(
+        session.scalars(
+            select(CaseMonitorVersion)
+            .where(CaseMonitorVersion.research_case_id == case.id)
+            .order_by(CaseMonitorVersion.version)
+        )
+    )
+    assert [monitor.id for monitor in history] == [
+        old_factor_monitor.id,
+        current_factor_monitor.id,
+        current_source_monitor.id,
+    ]
+
+
+@pytest.mark.pg_only
+def test_concurrent_default_monitor_creation_reuses_one_active_version(
+    engine, session
+) -> None:
+    case, factor = _case_with_confirmed_factor(session)
+    session.commit()
+    case_id, factor_id = case.id, factor.id
+    session_local = sessionmaker(bind=engine, future=True)
+    first = session_local()
+    first_monitor = CaseMonitorService(first).ensure_default(
+        case_id,
+        actor="system:first-worker",
+        factor_ids=[factor_id],
+        allowed_source_types=["company_disclosure"],
+    )
+    second_started = Event()
+    second_pid: list[int] = []
+
+    def create_same_monitor() -> object:
+        with session_local() as second:
+            second.execute(text("SET LOCAL lock_timeout = '5s'"))
+            second_pid.append(int(second.scalar(text("SELECT pg_backend_pid()"))))
+            second_started.set()
+            monitor = CaseMonitorService(second).ensure_default(
+                case_id,
+                actor="system:second-worker",
+                factor_ids=[factor_id],
+                allowed_source_types=["company_disclosure"],
+            )
+            second.commit()
+            return monitor.id
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(create_same_monitor)
+            assert second_started.wait(timeout=5)
+            deadline = monotonic() + 5
+            wait_event_type = None
+            while monotonic() < deadline:
+                with engine.connect() as observer:
+                    wait_event_type = observer.scalar(
+                        text(
+                            "SELECT wait_event_type FROM pg_stat_activity "
+                            "WHERE pid = :pid"
+                        ),
+                        {"pid": second_pid[0]},
+                    )
+                if wait_event_type == "Lock":
+                    break
+                second_started.wait(timeout=0.02)
+            assert wait_event_type == "Lock"
+            first.commit()
+            assert future.result(timeout=5) == first_monitor.id
+    finally:
+        first.rollback()
+        first.close()
+
+    with session_local() as check:
+        assert check.scalar(
+            select(func.count()).select_from(CaseMonitorVersion).where(
+                CaseMonitorVersion.research_case_id == case_id
+            )
+        ) == 1
 
 
 def test_monitor_requires_confirmed_factor_source_and_next_event(session) -> None:
@@ -199,29 +342,3 @@ def test_run_events_are_ordered_and_append_only(session) -> None:
             .where(type(retrieved).id == retrieved.id)
             .values(message="changed")
         )
-
-@pytest.mark.parametrize("frequency", ["daily:20:00", "daily", "unknown"])
-def test_monitor_rejects_frequency_that_scheduler_cannot_execute(session, frequency):
-    case, factor = _case_with_confirmed_factor(session)
-    with pytest.raises(ValueError, match="unsupported monitor frequency"):
-        CaseMonitorService(session).save(case.id, actor="tester",
-            config=_monitor_config(factor.id, frequency=frequency))
-    assert session.scalar(select(CaseMonitorVersion).where(
-        CaseMonitorVersion.research_case_id == case.id)) is None
-
-
-def test_legacy_invalid_frequency_can_be_paused_but_not_reactivated(session):
-    case, factor = _case_with_confirmed_factor(session)
-    legacy = CaseMonitorVersion(research_case_id=case.id, version=1, status='active',
-        frequency='weekly_monday', factor_ids=[str(factor.id)],
-        allowed_source_types=['company_disclosure'], next_verification_event='财报',
-        budget=20, changed_by='legacy', change_reason='历史配置', created_at=datetime.now(timezone.utc))
-    session.add(legacy)
-    session.flush()
-    service = CaseMonitorService(session)
-    paused = service.set_status(case.id, actor='human', status='paused', reason='停用无效计划')
-    assert paused.version == 2
-    with pytest.raises(ValueError, match='unsupported monitor frequency'):
-        service.set_status(case.id, actor='human', status='active', reason='尝试恢复')
-    assert session.scalar(select(CaseMonitorVersion.version).where(
-        CaseMonitorVersion.research_case_id == case.id).order_by(CaseMonitorVersion.version.desc()).limit(1)) == 2

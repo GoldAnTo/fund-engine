@@ -355,9 +355,7 @@ class RetrievedDocumentFreezer:
             session.close()
 
     @staticmethod
-    def postgresql_publication_locks(
-        *, canonical_url: str, publication_key: str
-    ):
+    def postgresql_publication_locks(*, canonical_url: str, publication_key: str):
         lock_ids = sorted(
             int.from_bytes(
                 hashlib.sha256(domain + identity.encode("utf-8")).digest()[:8],
@@ -424,9 +422,7 @@ class RetrievedDocumentFreezer:
         allowed_stages: frozenset[str],
     ) -> AcquisitionJob:
         job = session.scalar(
-            select(AcquisitionJob)
-            .where(AcquisitionJob.id == job_id)
-            .with_for_update()
+            select(AcquisitionJob).where(AcquisitionJob.id == job_id).with_for_update()
         )
         now = self._now()
         if (
@@ -455,9 +451,13 @@ class RetrievedDocumentFreezer:
         if not isinstance(context, FetchCheckpointContext):
             raise TypeError("context must be a FetchCheckpointContext")
         started = _aware_utc(started_at)
+        # The retrieval checkpoint is the successful fetch completion instant.
+        # Re-reading the clock here can make ``finished_at`` a few microseconds
+        # later than the artifact's already-captured ``retrieved_at``, which
+        # falsely fails the immutable temporal-admission chronology.
         finished = _aware_utc(context.retrieved_at)
         if finished < started:
-            raise ValueError("retrieved_at must not precede started_at")
+            raise ValueError("attempt finished_at must not precede started_at")
         digest = hashlib.sha256(envelope.content).hexdigest()
 
         with self._write_session(sqlite_immediate=True) as session:
@@ -536,7 +536,7 @@ class RetrievedDocumentFreezer:
                 etag=envelope.etag,
                 last_modified=envelope.last_modified,
                 provider_request_id=envelope.provider_request_id,
-                retrieved_at=finished,
+                retrieved_at=context.retrieved_at,
             )
             session.add_all((attempt, artifact))
             session.flush()
@@ -558,9 +558,11 @@ class RetrievedDocumentFreezer:
         if not isinstance(context, FetchCheckpointContext):
             raise TypeError("context must be a FetchCheckpointContext")
         started = _aware_utc(started_at)
-        provider_observed_at = _aware_utc(context.retrieved_at)
-        if provider_observed_at < started:
-            raise ValueError("retrieved_at must not precede started_at")
+        # Keep the inline fetch attempt and its artifact on one completion
+        # instant for the same temporal-lineage reason as ``checkpoint_fetch``.
+        finished = _aware_utc(context.retrieved_at)
+        if finished < started:
+            raise ValueError("attempt finished_at must not precede started_at")
         digest = hashlib.sha256(envelope.content).hexdigest()
         metadata = _thaw_json(reference.metadata)
         metadata["retrieval_locator"] = _thaw_json(reference.fetch_locator)
@@ -578,7 +580,10 @@ class RetrievedDocumentFreezer:
             ):
                 raise ValueError("source reference/job lineage mismatch")
             reference_row = AcquisitionRepository(
-                session, clock=self._clock
+                # Inline content becomes retrievable at the same immutable
+                # completion instant. Using a later wall-clock tick here
+                # would place the reference after its own fetch attempt.
+                session, clock=lambda: finished
             ).create_or_get_reference(
                 context.job_id,
                 lease_token=context.lease_token,
@@ -607,18 +612,10 @@ class RetrievedDocumentFreezer:
                     or attempt.operation != "fetch"
                     or attempt.outcome != "succeeded"
                 ):
-                    raise ValueError("persisted inline fetch checkpoint is inconsistent")
+                    raise ValueError(
+                        "persisted inline fetch checkpoint is inconsistent"
+                    )
                 return reference_row.id, existing.id, attempt.id
-            # Inline providers discover the reference and return its bytes in
-            # one search call.  Preserve that provider-response observation in
-            # metadata, then model a separate persistence sub-operation from
-            # the newly frozen reference to this explicit checkpoint time.
-            attempt_started = _aware_utc(reference_row.created_at)
-            finished = self._now()
-            if finished < attempt_started:
-                raise ValueError("checkpoint time must not precede reference creation")
-            if finished < provider_observed_at:
-                raise ValueError("checkpoint time must not precede provider observation")
             attempt_no = (
                 session.scalar(
                     select(func.max(AcquisitionAttempt.attempt_no)).where(
@@ -635,7 +632,7 @@ class RetrievedDocumentFreezer:
                 adapter_key=reference.adapter_key,
                 operation="fetch",
                 attempt_no=attempt_no,
-                started_at=attempt_started,
+                started_at=max(_aware_utc(reference_row.created_at), started),
                 finished_at=finished,
                 outcome="succeeded",
                 error_code=None,
@@ -644,7 +641,6 @@ class RetrievedDocumentFreezer:
                     "source_reference_id": str(reference_row.id),
                     "claim_attempt": context.claim_attempt,
                     "checkpoint": "inline_search_result",
-                    "provider_response_observed_at": provider_observed_at.isoformat(),
                 },
             )
             artifact = RetrievalArtifact(
@@ -659,7 +655,7 @@ class RetrievedDocumentFreezer:
                 etag=envelope.etag,
                 last_modified=envelope.last_modified,
                 provider_request_id=envelope.provider_request_id,
-                retrieved_at=finished,
+                retrieved_at=context.retrieved_at,
             )
             session.add_all((attempt, artifact))
             session.flush()

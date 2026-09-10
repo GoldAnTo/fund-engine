@@ -3,10 +3,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, exists, or_, select
+from sqlalchemy.sql import Select
 from sqlalchemy.orm import Session
 
-from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, DocumentVersion, SourceSpan
+from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan
 
 
 class DocumentRepository:
@@ -128,28 +129,14 @@ class DocumentRepository:
 
     # ------------------------------------------------------------------ readers
 
-    @staticmethod
-    def owned_attachment(tenant_id: str, case_id: uuid.UUID | None = None):
-        """EXISTS keeps shared versions unique and scopes before pagination."""
-        attachment = select(CaseDocumentVersion.id).join(
-            CaseTenantAdmission,
-            CaseTenantAdmission.research_case_id == CaseDocumentVersion.research_case_id,
-        ).where(
-            CaseDocumentVersion.document_version_id == DocumentVersion.id,
-            CaseTenantAdmission.tenant_id == tenant_id,
-        )
-        if case_id is not None:
-            attachment = attachment.where(CaseDocumentVersion.research_case_id == case_id)
-        return attachment.exists()
-
     def visible_versions(
         self,
         *,
         cutoff: datetime,
         limit: int,
         query: str | None = None,
-        tenant_id: str | None = None,
         case_id: uuid.UUID | None = None,
+        authorized_case_ids: Select[tuple[uuid.UUID]] | None = None,
         cursor_at: datetime | None = None,
         cursor_id: uuid.UUID | None = None,
     ) -> list[DocumentVersion]:
@@ -162,13 +149,28 @@ class DocumentRepository:
         )
         if query:
             stmt = stmt.where(DocumentVersion.source_url.ilike(f"%{query}%"))
-        if tenant_id is not None:
-            stmt = stmt.where(self.owned_attachment(tenant_id, case_id))
-        elif case_id is not None:
+        if case_id is not None:
             stmt = stmt.join(
                 CaseDocumentVersion,
                 CaseDocumentVersion.document_version_id == DocumentVersion.id,
             ).where(CaseDocumentVersion.research_case_id == case_id)
+            if authorized_case_ids is not None:
+                stmt = stmt.where(
+                    CaseDocumentVersion.research_case_id.in_(authorized_case_ids)
+                )
+        elif authorized_case_ids is not None:
+            attached_to_any_case = exists(
+                select(CaseDocumentVersion.id).where(
+                    CaseDocumentVersion.document_version_id == DocumentVersion.id
+                )
+            )
+            attached_to_visible_case = exists(
+                select(CaseDocumentVersion.id).where(
+                    CaseDocumentVersion.document_version_id == DocumentVersion.id,
+                    CaseDocumentVersion.research_case_id.in_(authorized_case_ids),
+                )
+            )
+            stmt = stmt.where(or_(~attached_to_any_case, attached_to_visible_case))
         if cursor_at is not None and cursor_id is not None:
             # Order is (available_at DESC, id DESC); fetch rows strictly before
             # the cursor tuple.

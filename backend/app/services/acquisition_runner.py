@@ -7,7 +7,6 @@ re-read when a lease is reclaimed.
 """
 from __future__ import annotations
 
-import hashlib
 import math
 import re
 import secrets
@@ -21,7 +20,6 @@ from sqlalchemy.orm import Session
 
 from app.acquisition.policy import (
     B_SCOPE_POLICY,
-    AcquisitionQueryPlanner,
     SourcePolicy,
 )
 from app.acquisition.sources import (
@@ -34,40 +32,28 @@ from app.acquisition.sources import (
 )
 from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
-from app.ai.runs import research_audit_context
-from app.documents.locators import (
-    SourceLocatorV1,
-    TextPosition,
-    TextQuote,
-    compute_text_sha256,
+from app.ai.prompts import EXTRACT_PROMPT_VERSION
+from app.domain.acquisition import (
+    ACQUISITION_PLANNER_VERSION,
+    AcquisitionRequest,
+    EvidenceObjective,
+    PlannedQuery,
+    QueryPlanExpansion,
 )
-from app.domain.acquisition import AcquisitionRequest, EvidenceObjective
 from app.models.acquisition import (
-    AcquisitionJob,
     AcquisitionAttempt,
     AcquisitionException,
+    AcquisitionJob,
     AutomaticAdmissionDecision,
     RetrievalArtifact,
     RetrievalArtifactDocument,
     SourceReference,
 )
-from app.models.event_research import EventResearchBrief
-from app.models.ledger import (
-    AIRun,
-    AtomicClaimCandidate,
-    CaseDocumentVersion,
-    DocumentVersion,
-    DocumentUploadArtifact,
-    EvidenceLink,
-    SourceSpan,
-)
-from app.models.source_governance import SourceContract
+from app.models.ledger import AIRun, AtomicClaimCandidate, EvidenceLink, SourceSpan
 from app.repositories.acquisition import (
     AcquisitionClaim,
     AcquisitionRepository,
-    StaleLeaseError,
 )
-from app.repositories.documents import DocumentRepository
 from app.services.atomic_claims import AtomicClaimService
 from app.services.automatic_admission import (
     B_SCOPE_GATE_VERSION,
@@ -75,13 +61,11 @@ from app.services.automatic_admission import (
     AutomaticAdmissionGate,
     lease_write_fence,
 )
-from app.services.ingest import DocumentService
 from app.services.retrieved_documents import (
     FetchCheckpointContext,
     FrozenRequestContext,
     RetrievedDocumentFreezer,
 )
-from app.services.source_admission import source_contract_is_active
 
 
 SessionFactory = Callable[[], Session]
@@ -119,12 +103,24 @@ def _thaw(value: Any) -> Any:
         return {str(key): _thaw(child) for key, child in value.items()}
     if isinstance(value, (tuple, list)):
         return [_thaw(child) for child in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        # SQLite's JSON adapter accepts NaN/Infinity while PostgreSQL JSON
+        # correctly rejects them. Provider diagnostics are advisory only, so
+        # preserve the key but normalize a non-JSON number to null before any
+        # durable attempt/exception write.
+        return None
     return value
 
 
 def _safe_error_code(exc: BaseException) -> str:
     name = type(exc).__name__
     return re.sub(r"[^A-Za-z0-9_.-]", "_", name)[:128] or "ProviderError"
+
+
+class _InvalidQueryPlan(ValueError):
+    def __init__(self, validation_error: str) -> None:
+        super().__init__(validation_error)
+        self.validation_error = validation_error
 
 
 class AcquisitionRunner:
@@ -137,14 +133,12 @@ class AcquisitionRunner:
         adapters: Mapping[str, SourceAdapter],
         llm_client: LLMClient,
         freezer: RetrievedDocumentFreezer | None = None,
-        planner: AcquisitionQueryPlanner | None = None,
         clock: Callable[[], datetime] = _utcnow,
         retry_delay: timedelta = timedelta(minutes=1),
         max_retry_delay: timedelta = timedelta(minutes=15),
         retry_jitter_ratio: float = 0.2,
         jitter_source: JitterSource = _SYSTEM_RANDOM.random,
         max_attempts: int = 3,
-        lease_for: timedelta = timedelta(seconds=1800),
     ) -> None:
         if not callable(session_factory):
             raise TypeError("session_factory must be callable")
@@ -167,8 +161,6 @@ class AcquisitionRunner:
             or max_attempts < 1
         ):
             raise ValueError("max_attempts must be a positive integer")
-        if lease_for <= timedelta(0):
-            raise ValueError("lease_for must be positive")
         normalized: dict[str, SourceAdapter] = {}
         for key, adapter in adapters.items():
             if key in normalized:
@@ -180,14 +172,12 @@ class AcquisitionRunner:
         self._freezer = freezer or RetrievedDocumentFreezer(
             session_factory, clock=clock
         )
-        self._planner = planner or AcquisitionQueryPlanner()
         self._clock = clock
         self._retry_delay = retry_delay
         self._max_retry_delay = max_retry_delay
         self._retry_jitter_ratio = float(retry_jitter_ratio)
         self._jitter_source = jitter_source
         self._max_attempts = max_attempts
-        self._lease_for = lease_for
         self._searched_adapters: set[str] = set()
 
     def _now(self) -> datetime:
@@ -200,41 +190,31 @@ class AcquisitionRunner:
         contract = self._load_contract(claim)
         if contract is None:
             return
-        request, policy, stage = contract
+        request, policy, stage, frozen_queries = contract
         if not self._configured_adapters_are_safe(claim, policy):
             return
         if not self._fetch_checkpoints_are_valid(claim):
             return
         queries = {
             planned.adapter_key: planned
-            for planned in self._planner.plan(request, policy)
+            for planned in frozen_queries
             if planned.adapter_key in self._adapters
         }
-        if request.acquisition_kind == "intake_material":
-            if stage == "searching":
-                if not self._prepare_intake_material(claim, request):
-                    return
-                self._advance(claim, "extracting")
-                stage = "extracting"
-            if stage == "extracting":
-                self._extract(claim)
-                self._advance(claim, "admitting")
-                stage = "admitting"
-            if stage == "admitting":
-                self._admit_and_publish(claim, request)
-                self._finish_terminal(claim)
-            return
         if stage == "searching":
-            self._search(claim, request, queries)
+            self._search(claim, request, queries, policy)
             if not self._has_references(claim.job_id):
-                self._finish_without_artifacts(claim, stage="searching")
+                self._finish_without_artifacts(
+                    claim, request=request, stage="searching"
+                )
                 return
             self._advance(claim, "fetching")
             stage = "fetching"
         if stage == "fetching":
             self._fetch(claim, request)
             if not self._has_artifacts(claim.job_id):
-                self._finish_without_artifacts(claim, stage="fetching")
+                self._finish_without_artifacts(
+                    claim, request=request, stage="fetching"
+                )
                 return
             self._advance(claim, "freezing")
             stage = "freezing"
@@ -243,7 +223,7 @@ class AcquisitionRunner:
             self._advance(claim, "extracting")
             stage = "extracting"
         if stage == "extracting":
-            self._extract(claim)
+            self._extract(claim, policy, request)
             self._advance(claim, "admitting")
             stage = "admitting"
         if stage == "admitting":
@@ -367,7 +347,9 @@ class AcquisitionRunner:
 
     def _load_contract(
         self, claim: AcquisitionClaim
-    ) -> tuple[AcquisitionRequest, SourcePolicy, str] | None:
+    ) -> tuple[
+        AcquisitionRequest, SourcePolicy, str, tuple[PlannedQuery, ...]
+    ] | None:
         with self._session_factory() as session:
             repository = AcquisitionRepository(session, clock=self._clock)
             job = repository.fence(
@@ -375,9 +357,25 @@ class AcquisitionRunner:
                 lease_token=claim.lease_token,
                 allowed_stages=_RUNNING_STAGES,
             )
-            request_snapshot = dict(job.request_snapshot or {})
-            policy_snapshot = dict(job.policy_snapshot or {})
+            plan = repository.query_plan_for_job(job.id)
+            series = repository.series(plan.series_id) if plan is not None else None
             stage = job.stage
+            try:
+                if not isinstance(job.request_snapshot, Mapping):
+                    raise _InvalidQueryPlan("invalid_request_snapshot_root")
+                if not isinstance(job.policy_snapshot, Mapping):
+                    raise _InvalidQueryPlan("invalid_policy_snapshot_root")
+                request_snapshot = dict(job.request_snapshot)
+                policy_snapshot = dict(job.policy_snapshot)
+            except _InvalidQueryPlan as exc:
+                self._fail_invalid_query_plan(
+                    session,
+                    repository,
+                    claim,
+                    validation_error=exc.validation_error,
+                )
+                session.commit()
+                return None
             request_version = request_snapshot.get("source_policy_version")
             policy_version = policy_snapshot.get("version")
             if (
@@ -409,302 +407,245 @@ class AcquisitionRunner:
                 )
                 session.commit()
                 return None
-            session.commit()
-        request = AcquisitionRequest(
-            tenant_id=request_snapshot["tenant_id"],
-            case_id=uuid.UUID(request_snapshot["case_id"]),
-            thesis_id=uuid.UUID(request_snapshot["thesis_id"]),
-            research_run_id=(
-                uuid.UUID(request_snapshot["research_run_id"])
-                if request_snapshot.get("research_run_id")
-                else None
-            ),
-            round=int(request_snapshot["round"]),
-            objective=EvidenceObjective(request_snapshot["objective"]),
-            target_link_role=request_snapshot["target_link_role"],
-            thesis_statement=request_snapshot["thesis_statement"],
-            entity_names=tuple(request_snapshot.get("entity_names") or ()),
-            security_codes=tuple(request_snapshot.get("security_codes") or ()),
-            metric_terms=tuple(request_snapshot.get("metric_terms") or ()),
-            period_start=request_snapshot["period_start"],
-            period_end=request_snapshot["period_end"],
-            cutoff=_parse_datetime(request_snapshot["cutoff"], "cutoff"),
-            allowed_source_roles=frozenset(
-                request_snapshot.get("allowed_source_roles") or ()
-            ),
-            source_policy_version=request_snapshot["source_policy_version"],
-            idempotency_key=request_snapshot["idempotency_key"],
-            acquisition_kind=request_snapshot.get(
-                "acquisition_kind", "external_gap"
-            ),
-            document_version_id=(
-                uuid.UUID(request_snapshot["document_version_id"])
-                if request_snapshot.get("document_version_id")
-                else None
-            ),
-        )
-        policy = SourcePolicy(
-            version=policy_snapshot["version"],
-            enabled_adapter_keys=frozenset(
-                policy_snapshot.get("enabled_adapter_keys") or ()
-            ),
-            allowed_source_roles=frozenset(
-                policy_snapshot.get("allowed_source_roles") or ()
-            ),
-            exact_hosts=frozenset(policy_snapshot.get("exact_hosts") or ()),
-            suffix_hosts=frozenset(policy_snapshot.get("suffix_hosts") or ()),
-            max_response_bytes=int(policy_snapshot["max_response_bytes"]),
-            per_adapter_page_limit=int(policy_snapshot["per_adapter_page_limit"]),
-            permission_declarations=tuple(
-                tuple(item)
-                for item in policy_snapshot.get("permission_declarations") or ()
-            ),
-        )
-        return request, policy, stage
-
-    def _prepare_intake_material(
-        self, claim: AcquisitionClaim, request: AcquisitionRequest
-    ) -> bool:
-        """Bind the frozen intake original to governed acquisition lineage."""
-        document_id = request.document_version_id
-        if document_id is None:
-            return False
-        with self._session_factory() as session:
-            repository = AcquisitionRepository(session, clock=self._clock)
-            repository.fence(
-                claim.job_id,
-                lease_token=claim.lease_token,
-                allowed_stages=frozenset({"searching"}),
-            )
-            document = session.get(DocumentVersion, document_id)
-            attachment = session.scalar(
-                select(CaseDocumentVersion.id).where(
-                    CaseDocumentVersion.research_case_id == request.case_id,
-                    CaseDocumentVersion.document_version_id == document_id,
+            try:
+                if plan is None or series is None:
+                    raise ValueError("missing persisted query plan or series")
+                plan_id = uuid.UUID(str(request_snapshot["query_plan_id"]))
+                run_id = uuid.UUID(str(request_snapshot["research_run_id"]))
+                scope_id = uuid.UUID(str(request_snapshot["scope_version_id"]))
+                thesis_id = uuid.UUID(str(request_snapshot["thesis_id"]))
+                case_id = uuid.UUID(str(request_snapshot["case_id"]))
+                round_value = int(request_snapshot["round"])
+                goal_id = str(request_snapshot["goal_id"])
+                planner_version = str(request_snapshot["planner_version"])
+                previous_plan_id = (
+                    uuid.UUID(str(request_snapshot["previous_query_plan_id"]))
+                    if request_snapshot.get("previous_query_plan_id")
+                    else None
                 )
-            )
-            brief = session.scalar(
-                select(EventResearchBrief)
-                .where(EventResearchBrief.research_case_id == request.case_id)
-                .order_by(EventResearchBrief.created_at.desc())
-                .limit(1)
-            )
-            contract = session.scalar(
-                select(SourceContract).where(
-                    SourceContract.document_version_id == document_id
-                )
-            )
-            upload = session.scalar(
-                select(DocumentUploadArtifact).where(
-                    DocumentUploadArtifact.document_version_id == document_id
-                )
-            )
-            reason: str | None = None
-            raw = (
-                upload.raw_bytes
-                if upload is not None
-                else brief.raw_input.encode("utf-8")
-                if brief is not None
-                else b""
-            )
-            mime_type = (
-                upload.mime_type
-                if upload is not None
-                else "text/plain; charset=utf-8"
-            )
-            if (
-                document is None
-                or attachment is None
-                or brief is None
-                or brief.source_metadata.get("intake_role") != "provided_material"
-            ):
-                reason = "intake_material_scope_mismatch"
-            elif hashlib.sha256(raw).hexdigest() != document.content_sha256:
-                reason = "intake_material_content_mismatch"
-            elif (
-                contract is None
-                or contract.source_type not in {"pasted_snapshot", "uploaded_file"}
-                or contract.research_source_type != contract.source_type
-                or not contract.allow_ai_processing
-                or not contract.allow_display
-                or not source_contract_is_active(contract, at=self._now())
-            ):
-                reason = "intake_material_contract_rejected"
-            if reason is not None:
-                repository.record_exception(
-                    claim.job_id,
-                    lease_token=claim.lease_token,
-                    reason_code=reason,
-                    detail_json={"document_version_id": str(document_id)},
-                )
-                repository.advance(
-                    claim.job_id,
-                    lease_token=claim.lease_token,
-                    stage="failed",
-                    status="failed",
-                    counters={"exception_count": 1},
-                    message="intake material failed governed source checks",
-                    error_code=reason,
-                )
-                session.commit()
-                return False
-
-            assert document is not None and contract is not None
-            reference = repository.create_or_get_reference(
-                claim.job_id,
-                lease_token=claim.lease_token,
-                adapter_key="intake_material",
-                external_record_id=str(document.id),
-                external_version=document.content_sha256,
-                canonical_url=document.source_url,
-                title=document.title or brief.event_title,
-                published_at=document.published_at,
-                source_role="user_provided_material",
-                metadata_json={
-                    "provider_identity": contract.provider_or_tenant,
-                    "document_version_id": str(document.id),
-                },
-            )
-            checkpoint = session.execute(
-                select(AcquisitionAttempt, RetrievalArtifact)
-                .join(
-                    RetrievalArtifact,
-                    RetrievalArtifact.attempt_id == AcquisitionAttempt.id,
-                )
-                .join(
-                    RetrievalArtifactDocument,
-                    RetrievalArtifactDocument.retrieval_artifact_id
-                    == RetrievalArtifact.id,
-                )
-                .where(
-                    AcquisitionAttempt.job_id == claim.job_id,
-                    AcquisitionAttempt.adapter_key == "intake_material",
-                    AcquisitionAttempt.operation == "fetch",
-                    AcquisitionAttempt.outcome == "succeeded",
-                    AcquisitionAttempt.finished_at.is_not(None),
-                    RetrievalArtifact.source_reference_id == reference.id,
-                    RetrievalArtifact.content_sha256 == document.content_sha256,
-                    RetrievalArtifact.final_url == document.source_url,
-                    RetrievalArtifactDocument.document_version_id == document.id,
-                )
-                .order_by(AcquisitionAttempt.started_at, AcquisitionAttempt.id)
-                .limit(1)
-            ).first()
-            if checkpoint is not None:
-                attempt, artifact = checkpoint
-                metadata = (
-                    attempt.safe_metadata
-                    if isinstance(attempt.safe_metadata, dict)
-                    else {}
-                )
+                expected_inputs = {
+                    key: value
+                    for key, value in request_snapshot.items()
+                    if key != "query_plan_id"
+                }
                 if (
-                    metadata.get("source_reference_id") != str(reference.id)
-                    or artifact.raw_bytes != raw
-                    or artifact.mime_type != mime_type
+                    plan.id != plan_id
+                    or plan.acquisition_job_id != job.id
+                    or plan.series_id != series.id
+                    or plan.acquisition_round != round_value
+                    or plan.goal_id != goal_id
+                    or plan.planner_version != planner_version
+                    or planner_version != ACQUISITION_PLANNER_VERSION
+                    or plan.policy_version != request_version
+                    or plan.previous_query_plan_id != previous_plan_id
+                    or plan.frozen_inputs_json != expected_inputs
+                    or series.tenant_id != job.tenant_id
+                    or series.research_case_id != case_id
+                    or series.research_run_id != run_id
+                    or series.scope_version_id != scope_id
+                    or series.thesis_id != thesis_id
+                    or series.goal_id != goal_id
+                    or job.research_case_id != case_id
+                    or job.research_run_id != run_id
+                    or job.thesis_id != thesis_id
                 ):
-                    raise ValueError("intake material checkpoint is inconsistent")
+                    raise ValueError("persisted query plan binding mismatch")
+                expansion_value = request_snapshot.get("expansion")
+                expansion = (
+                    QueryPlanExpansion(
+                        trigger=expansion_value["trigger"],
+                        reason=expansion_value["reason"],
+                    )
+                    if isinstance(expansion_value, dict)
+                    else None
+                )
+                predecessor = (
+                    repository.query_plan(plan.previous_query_plan_id)
+                    if plan.previous_query_plan_id is not None
+                    else None
+                )
+                self._validate_query_plan_lineage(
+                    plan=plan,
+                    predecessor=predecessor,
+                    expansion=expansion,
+                )
+                request = AcquisitionRequest(
+                    tenant_id=request_snapshot["tenant_id"],
+                    case_id=case_id,
+                    thesis_id=thesis_id,
+                    research_run_id=run_id,
+                    scope_version_id=scope_id,
+                    goal_id=goal_id,
+                    round=round_value,
+                    objective=EvidenceObjective(request_snapshot["objective"]),
+                    target_link_role=request_snapshot["target_link_role"],
+                    thesis_statement=request_snapshot["thesis_statement"],
+                    entity_names=tuple(request_snapshot.get("entity_names") or ()),
+                    security_codes=tuple(request_snapshot.get("security_codes") or ()),
+                    metric_terms=tuple(request_snapshot.get("metric_terms") or ()),
+                    metric_periods=tuple(
+                        request_snapshot.get("metric_periods") or ()
+                    ),
+                    metric_units=tuple(request_snapshot.get("metric_units") or ()),
+                    period_start=request_snapshot["period_start"],
+                    period_end=request_snapshot["period_end"],
+                    cutoff=_parse_datetime(request_snapshot["cutoff"], "cutoff"),
+                    allowed_source_roles=frozenset(
+                        request_snapshot.get("allowed_source_roles") or ()
+                    ),
+                    source_policy_version=request_snapshot["source_policy_version"],
+                    planner_version=planner_version,
+                    previous_query_plan_id=previous_plan_id,
+                    expansion=expansion,
+                    idempotency_key=request_snapshot["idempotency_key"],
+                )
+                policy = SourcePolicy(
+                    version=policy_snapshot["version"],
+                    enabled_adapter_keys=frozenset(
+                        policy_snapshot.get("enabled_adapter_keys") or ()
+                    ),
+                    allowed_source_roles=frozenset(
+                        policy_snapshot.get("allowed_source_roles") or ()
+                    ),
+                    exact_hosts=frozenset(policy_snapshot.get("exact_hosts") or ()),
+                    suffix_hosts=frozenset(policy_snapshot.get("suffix_hosts") or ()),
+                    max_response_bytes=int(policy_snapshot["max_response_bytes"]),
+                    per_adapter_page_limit=int(
+                        policy_snapshot["per_adapter_page_limit"]
+                    ),
+                    permission_declarations=tuple(
+                        tuple(item)
+                        for item in policy_snapshot.get("permission_declarations") or ()
+                    ),
+                )
+                ordered_queries = tuple(
+                    PlannedQuery(
+                        adapter_key=item["adapter_key"],
+                        objective=EvidenceObjective(item["objective"]),
+                        query=item["query"],
+                    )
+                    for item in plan.ordered_queries_json
+                )
+                adapter_keys = tuple(query.adapter_key for query in ordered_queries)
+                if (
+                    adapter_keys != tuple(sorted(policy.enabled_adapter_keys))
+                    or len(set(adapter_keys)) != len(adapter_keys)
+                    or any(
+                        query.objective is not request.objective
+                        or not query.query.strip()
+                        for query in ordered_queries
+                    )
+                ):
+                    raise ValueError("persisted query plan exceeds frozen policy")
+            except (KeyError, TypeError, ValueError) as exc:
+                validation_error = (
+                    exc.validation_error
+                    if isinstance(exc, _InvalidQueryPlan)
+                    else "frozen_plan_binding_mismatch"
+                )
+                self._fail_invalid_query_plan(
+                    session,
+                    repository,
+                    claim,
+                    validation_error=validation_error,
+                )
                 session.commit()
-                return True
-            now = self._now()
-            attempt = repository.record_attempt(
-                claim.job_id,
-                lease_token=claim.lease_token,
-                adapter_key="intake_material",
-                operation="fetch",
-                started_at=now,
-                finished_at=now,
-                outcome="succeeded",
-                retryable=False,
-                safe_metadata={
-                    "source_reference_id": str(reference.id),
-                    "claim_attempt": claim.attempt,
-                    "retrieval_mode": "frozen_intake_original",
-                },
-            )
-            artifact = session.scalar(
-                select(RetrievalArtifact).where(
-                    RetrievalArtifact.source_reference_id == reference.id,
-                    RetrievalArtifact.attempt_id == attempt.id,
-                )
-            )
-            if artifact is None:
-                artifact = RetrievalArtifact(
-                    source_reference_id=reference.id,
-                    attempt_id=attempt.id,
-                    content_sha256=document.content_sha256,
-                    raw_bytes=raw,
-                    mime_type=mime_type,
-                    byte_size=len(raw),
-                    final_url=document.source_url,
-                    etag=None,
-                    last_modified=None,
-                    provider_request_id=f"intake:{document.id}",
-                    retrieved_at=now,
-                )
-                session.add(artifact)
-                session.flush()
-            binding = session.scalar(
-                select(RetrievalArtifactDocument).where(
-                    RetrievalArtifactDocument.retrieval_artifact_id == artifact.id
-                )
-            )
-            if binding is None:
-                session.add(
-                    RetrievalArtifactDocument(
-                        retrieval_artifact_id=artifact.id,
-                        document_version_id=document.id,
-                        relation="intake_original",
-                        publication_key=f"intake:{document.content_sha256}"[:64],
-                        created_at=now,
-                    )
-                )
-            if upload is None:
-                locator = SourceLocatorV1(
-                    document_sha256=document.content_sha256,
-                    page=1,
-                    parser_version=document.parser_version,
-                    text_position=TextPosition(start=0, end=len(brief.raw_input)),
-                    text_quote=TextQuote(exact=brief.raw_input),
-                    extra={"kind": "intake_material"},
-                ).to_storage_dict()
-                replay_span = session.scalar(
-                    select(SourceSpan.id).where(
-                        SourceSpan.document_version_id == document.id,
-                        SourceSpan.locator_v1 == locator,
-                    )
-                )
-                if replay_span is None:
-                    DocumentService(DocumentRepository(session)).add_span(
-                        document_version_id=document.id,
-                        locator=locator,
-                        verbatim_text=brief.raw_input,
-                        text_sha256=compute_text_sha256(brief.raw_input),
-                        context_hash=compute_text_sha256(brief.raw_input),
-                        locator_v1=locator,
-                    )
+                return None
             session.commit()
-        return True
+        return request, policy, stage, ordered_queries
+
+    def _fail_invalid_query_plan(
+        self,
+        session: Session,
+        repository: AcquisitionRepository,
+        claim: AcquisitionClaim,
+        *,
+        validation_error: str,
+    ) -> None:
+        repository.record_exception(
+            claim.job_id,
+            lease_token=claim.lease_token,
+            reason_code="invalid_query_plan",
+            detail_json={
+                "active_policy_version": B_SCOPE_POLICY.version,
+                "active_planner_version": ACQUISITION_PLANNER_VERSION,
+                "validation_error": validation_error,
+            },
+        )
+        exception_count = session.scalar(
+            select(func.count()).select_from(AcquisitionException).where(
+                AcquisitionException.job_id == claim.job_id
+            )
+        ) or 0
+        repository.advance(
+            claim.job_id,
+            lease_token=claim.lease_token,
+            stage="failed",
+            status="failed",
+            counters={"exception_count": exception_count},
+            message="acquisition query plan failed closed",
+            payload={
+                "reason_code": "invalid_query_plan",
+                "validation_error": validation_error,
+            },
+            error_code="invalid_query_plan",
+        )
+
+    @staticmethod
+    def _validate_query_plan_lineage(*, plan, predecessor, expansion) -> None:
+        if plan.acquisition_round == 1:
+            if (
+                predecessor is not None
+                or plan.previous_query_plan_id is not None
+                or plan.previous_acquisition_round is not None
+                or plan.expansion_trigger is not None
+                or plan.diff_json is not None
+                or expansion is not None
+            ):
+                raise _InvalidQueryPlan("unexpected_initial_round_lineage")
+            return
+
+        if predecessor is None:
+            raise _InvalidQueryPlan("previous_plan_missing")
+        if predecessor.series_id != plan.series_id:
+            raise _InvalidQueryPlan("previous_plan_series_mismatch")
+        if (
+            predecessor.id != plan.previous_query_plan_id
+            or predecessor.acquisition_round != plan.acquisition_round - 1
+            or plan.previous_acquisition_round != plan.acquisition_round - 1
+        ):
+            raise _InvalidQueryPlan("previous_plan_round_mismatch")
+        if (
+            not isinstance(plan.expansion_trigger, str)
+            or not plan.expansion_trigger.strip()
+        ):
+            raise _InvalidQueryPlan("expansion_trigger_missing")
+        if expansion is None or plan.expansion_trigger != expansion.trigger:
+            raise _InvalidQueryPlan("expansion_trigger_mismatch")
+        if not isinstance(plan.diff_json, dict):
+            raise _InvalidQueryPlan("query_plan_diff_mismatch")
+        persisted_reason = plan.diff_json.get("reason")
+        if not isinstance(persisted_reason, str) or not persisted_reason.strip():
+            raise _InvalidQueryPlan("expansion_reason_missing")
+
+        current_queries = list(plan.ordered_queries_json)
+        previous_queries = list(predecessor.ordered_queries_json)
+        expected_diff = {
+            "added_queries": [
+                item for item in current_queries if item not in previous_queries
+            ],
+            "removed_queries": [
+                item for item in previous_queries if item not in current_queries
+            ],
+            "reason": expansion.reason,
+        }
+        if plan.diff_json != expected_diff:
+            raise _InvalidQueryPlan("query_plan_diff_mismatch")
 
     def _fence(self, claim: AcquisitionClaim) -> None:
         with self._session_factory() as session:
             AcquisitionRepository(session, clock=self._clock).fence(
                 claim.job_id, lease_token=claim.lease_token
-            )
-            session.commit()
-
-    def _renew(self, claim: AcquisitionClaim) -> None:
-        """Give the current claim a fresh lease budget.
-
-        Called before each long unit of work (per-document LLM extraction) so
-        a multi-document job — dozens of documents at minutes per extraction
-        — does not outlive the single lease granted at claim time.  Losing the
-        lease raises ``StaleLeaseError`` for the caller to abandon the claim.
-        """
-        with self._session_factory() as session:
-            AcquisitionRepository(session, clock=self._clock).renew(
-                claim.job_id,
-                lease_token=claim.lease_token,
-                lease_for=self._lease_for,
             )
             session.commit()
 
@@ -761,17 +702,48 @@ class AcquisitionRunner:
             )
             session.commit()
 
-    def _search(self, claim, request, queries) -> None:
-        for adapter_key, planned in queries.items():
+    def _record_event(
+        self,
+        claim: AcquisitionClaim,
+        *,
+        message: str,
+        payload: dict[str, Any],
+    ) -> None:
+        with self._session_factory() as session:
+            AcquisitionRepository(session, clock=self._clock).record_event(
+                claim.job_id,
+                lease_token=claim.lease_token,
+                message=message,
+                payload=payload,
+            )
+            session.commit()
+
+    @staticmethod
+    def _retry_event_payload(
+        request: AcquisitionRequest,
+        *,
+        adapter_key: str,
+        operation: str,
+        reason_code: str,
+        retry_delay_seconds: float,
+        query_index: int | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "adapter_key": adapter_key,
+            "goal_id": request.goal_id,
+            "operation": operation,
+            "policy_version": request.source_policy_version,
+            "reason_code": reason_code,
+            "retry_delay_seconds": retry_delay_seconds,
+        }
+        if query_index is not None:
+            payload["query_index"] = query_index
+        return payload
+
+    def _search(self, claim, request, queries, policy: SourcePolicy) -> None:
+        for query_index, (adapter_key, planned) in enumerate(queries.items()):
             adapter = self._adapters[adapter_key]
-            try:
-                # Renew BEFORE each adapter: a search call can run long when
-                # the upstream is slow, and the queue may carry several
-                # adapters.  The single lease from claim time cannot cover all
-                # of them, and a stale lease here must not crash the worker.
-                self._renew(claim)
-            except StaleLeaseError:
-                return
+            self._fence(claim)
             started_at = self._now()
             try:
                 items = adapter.search(planned.query, request.cutoff)
@@ -783,7 +755,10 @@ class AcquisitionRunner:
                     started_at=started_at,
                     outcome="failed",
                     retryable=exc.retryable,
-                    metadata={"diagnostics": _thaw(exc.diagnostics)},
+                    metadata={
+                        "diagnostics": _thaw(exc.diagnostics),
+                        "query_index": query_index,
+                    },
                     error_code="SourceUnavailable",
                 )
                 self._record_exception(
@@ -792,10 +767,23 @@ class AcquisitionRunner:
                     detail={
                         "adapter_key": adapter_key,
                         "operation": "search",
+                        "query_index": query_index,
                         "retryable": exc.retryable,
                         "claim_attempt": claim.attempt,
                         "diagnostics": _thaw(exc.diagnostics),
                     },
+                )
+                self._record_event(
+                    claim,
+                    message="retry_source_switch",
+                    payload=self._retry_event_payload(
+                        request,
+                        adapter_key=adapter_key,
+                        operation="search",
+                        query_index=query_index,
+                        reason_code="source_unavailable",
+                        retry_delay_seconds=0.0,
+                    ),
                 )
                 continue
             except Exception as exc:
@@ -807,7 +795,7 @@ class AcquisitionRunner:
                     started_at=started_at,
                     outcome="failed",
                     retryable=False,
-                    metadata={},
+                    metadata={"query_index": query_index},
                     error_code=code,
                 )
                 self._record_exception(
@@ -823,9 +811,22 @@ class AcquisitionRunner:
                 started_at=started_at,
                 outcome="succeeded",
                 retryable=False,
-                metadata={"item_count": len(items)},
+                metadata={"item_count": len(items), "query_index": query_index},
+            )
+            self._record_event(
+                claim,
+                message="search_result_page",
+                payload={
+                    "adapter_key": adapter_key,
+                    "goal_id": request.goal_id,
+                    "policy_version": request.source_policy_version,
+                    "query_index": query_index,
+                    "result_count": len(items),
+                },
             )
             self._searched_adapters.add(adapter_key)
+            accepted_count = 0
+            omitted_count = 0
             for item in items:
                 if isinstance(item, RejectedSearchItem):
                     self._record_exception(
@@ -839,6 +840,10 @@ class AcquisitionRunner:
                         },
                     )
                     continue
+                if accepted_count >= policy.per_adapter_page_limit:
+                    omitted_count += 1
+                    continue
+                accepted_count += 1
                 reference_value = (
                     item.reference
                     if isinstance(item, RetrievedSearchResult)
@@ -865,6 +870,7 @@ class AcquisitionRunner:
                 metadata["retrieval_locator"] = _thaw(
                     reference_value.fetch_locator
                 )
+                metadata["acquisition_query_index"] = query_index
                 with self._session_factory() as session:
                     AcquisitionRepository(
                         session, clock=self._clock
@@ -881,6 +887,19 @@ class AcquisitionRunner:
                         metadata_json=metadata,
                     )
                     session.commit()
+            if omitted_count:
+                self._record_event(
+                    claim,
+                    message="search_results_bounded",
+                    payload={
+                        "adapter_key": adapter_key,
+                        "goal_id": request.goal_id,
+                        "policy_version": request.source_policy_version,
+                        "query_index": query_index,
+                        "accepted_count": accepted_count,
+                        "omitted_count": omitted_count,
+                    },
+                )
 
     def _references_without_artifacts(
         self, job_id: uuid.UUID
@@ -909,6 +928,7 @@ class AcquisitionRunner:
     def _reference_value(reference: SourceReference) -> SourceReferenceValue:
         metadata = dict(reference.metadata_json or {})
         locator = metadata.pop("retrieval_locator", {})
+        metadata.pop("acquisition_query_index", None)
         if reference.published_at is None:
             raise ValueError("persisted source reference lacks published_at")
         return SourceReferenceValue(
@@ -925,6 +945,14 @@ class AcquisitionRunner:
 
     def _fetch(self, claim, request) -> None:
         for reference in self._references_without_artifacts(claim.job_id):
+            reference_metadata = dict(reference.metadata_json or {})
+            stored_query_index = reference_metadata.get("acquisition_query_index")
+            query_index = (
+                stored_query_index
+                if isinstance(stored_query_index, int)
+                and not isinstance(stored_query_index, bool)
+                else None
+            )
             adapter = self._adapters.get(reference.adapter_key)
             if adapter is None:
                 self._record_exception(
@@ -934,14 +962,7 @@ class AcquisitionRunner:
                     reference_id=reference.id,
                 )
                 continue
-            try:
-                # Renew BEFORE each reference fetch: a single retrieval can
-                # take minutes (large PDFs, slow mirrors), and a job can carry
-                # dozens of references.  Keep the claim budget fresh and let
-                # stale leases abort the run quietly.
-                self._renew(claim)
-            except StaleLeaseError:
-                return
+            self._fence(claim)
             started_at = self._now()
             try:
                 value = self._reference_value(reference)
@@ -992,6 +1013,11 @@ class AcquisitionRunner:
                     detail={
                         "adapter_key": reference.adapter_key,
                         "operation": "fetch",
+                        **(
+                            {"query_index": query_index}
+                            if query_index is not None
+                            else {}
+                        ),
                         "retryable": exc.retryable,
                         "claim_attempt": claim.attempt,
                         "diagnostics": _thaw(exc.diagnostics),
@@ -1065,15 +1091,6 @@ class AcquisitionRunner:
 
     def _freeze(self, claim, request, policy) -> None:
         for artifact, reference in self._unbound_artifacts(claim.job_id):
-            try:
-                # Renew BEFORE each artifact freeze: pdf parsing + admission
-                # can take minutes per artifact and a job can carry dozens.
-                # Already-frozen artifacts are skipped on resume via the
-                # unbound query above, so losing the lease here just stops
-                # this run quietly.
-                self._renew(claim)
-            except StaleLeaseError:
-                return
             envelope = RetrievedEnvelope(
                 content=artifact.raw_bytes,
                 mime_type=artifact.mime_type,
@@ -1110,11 +1127,15 @@ class AcquisitionRunner:
             retrieved_at=self._now(),
         )
 
-    def _documents_for_job(self, job_id: uuid.UUID) -> tuple[uuid.UUID, ...]:
+    def _documents_for_job(
+        self, job_id: uuid.UUID, *, per_adapter_limit: int
+    ) -> tuple[uuid.UUID, ...]:
         with self._session_factory() as session:
-            return tuple(
-                session.scalars(
-                    select(RetrievalArtifactDocument.document_version_id)
+            rows = session.execute(
+                    select(
+                        SourceReference.adapter_key,
+                        RetrievalArtifactDocument.document_version_id,
+                    )
                     .join(
                         RetrievalArtifact,
                         RetrievalArtifact.id
@@ -1125,49 +1146,60 @@ class AcquisitionRunner:
                         SourceReference.id == RetrievalArtifact.source_reference_id,
                     )
                     .where(SourceReference.job_id == job_id)
-                    .order_by(RetrievalArtifactDocument.created_at)
-                )
+                    .order_by(
+                        SourceReference.adapter_key,
+                        RetrievalArtifactDocument.created_at,
+                        RetrievalArtifactDocument.document_version_id,
+                    )
             )
+            counts: dict[str, int] = {}
+            selected: list[uuid.UUID] = []
+            for adapter_key, document_id in rows:
+                count = counts.get(adapter_key, 0)
+                if count >= per_adapter_limit:
+                    continue
+                counts[adapter_key] = count + 1
+                selected.append(document_id)
+            return tuple(selected)
 
-    def _extract(self, claim: AcquisitionClaim) -> None:
-        for document_id in self._documents_for_job(claim.job_id):
-            if self._has_successful_extraction(document_id):
+    def _extract(
+        self,
+        claim: AcquisitionClaim,
+        policy: SourcePolicy,
+        request: AcquisitionRequest,
+    ) -> None:
+        grounding_context = {
+            "entity_names": list(request.entity_names),
+            "metric_terms": list(request.metric_terms),
+            "period_start": request.period_start,
+            "period_end": request.period_end,
+        }
+        for document_id in self._documents_for_job(
+            claim.job_id,
+            per_adapter_limit=policy.per_adapter_page_limit,
+        ):
+            if self._has_successful_extraction(document_id, grounding_context):
                 continue
-            # Renew BEFORE each document: one LLM extraction can take minutes,
-            # and a job may carry dozens of documents, so the single lease
-            # granted at claim time can never cover them all.
-            self._renew(claim)
+            self._fence(claim)
             session = self._session_factory()
             try:
                 try:
-                    job = session.get(AcquisitionJob, claim.job_id)
-                    if job is None:
-                        raise StaleLeaseError("acquisition job no longer exists")
-                    with research_audit_context(case_id=job.research_case_id, run_id=job.research_run_id, acquisition_job_id=job.id):
-                        self._extractor.extract(
-                            document_id,
-                            session,
-                            pre_commit_guard=lambda guarded_session: lease_write_fence(
-                                guarded_session,
-                                job_id=claim.job_id,
-                                lease_token=claim.lease_token,
-                                now=self._now(),
-                                allowed_stages=frozenset({"extracting"}),
-                            ),
-                        )
-                except Exception as exc:
-                    # A rotated lease surfaces here as StaleLeaseError; let
-                    # it propagate so run_once / run_claim can decide whether
-                    # to abandon the claim (the worker loop must keep polling
-                    # — another worker now owns the job).
-                    if isinstance(exc, StaleLeaseError):
-                        raise
-                    try:
-                        AcquisitionRepository(session, clock=self._clock).fence(
-                            claim.job_id, lease_token=claim.lease_token
-                        )
-                    except StaleLeaseError:
-                        raise
+                    self._extractor.extract(
+                        document_id,
+                        session,
+                        grounding_context=grounding_context,
+                        pre_commit_guard=lambda guarded_session: lease_write_fence(
+                            guarded_session,
+                            job_id=claim.job_id,
+                            lease_token=claim.lease_token,
+                            now=self._now(),
+                            allowed_stages=frozenset({"extracting"}),
+                        ),
+                    )
+                except Exception:
+                    AcquisitionRepository(session, clock=self._clock).fence(
+                        claim.job_id, lease_token=claim.lease_token
+                    )
                     session.commit()
                     self._record_exception(
                         claim,
@@ -1175,16 +1207,9 @@ class AcquisitionRunner:
                         detail={"document_version_id": str(document_id)},
                     )
                     continue
-                try:
-                    AcquisitionRepository(session, clock=self._clock).fence(
-                        claim.job_id, lease_token=claim.lease_token
-                    )
-                except StaleLeaseError:
-                    # Extraction already committed its own durable work under
-                    # its pre-commit guard; losing the lease afterwards only
-                    # means another worker owns the job — propagate so the
-                    # caller can stop quietly without crashing the worker.
-                    raise
+                AcquisitionRepository(session, clock=self._clock).fence(
+                    claim.job_id, lease_token=claim.lease_token
+                )
                 session.commit()
             except BaseException:
                 session.rollback()
@@ -1192,22 +1217,72 @@ class AcquisitionRunner:
             finally:
                 session.close()
 
-    def _has_successful_extraction(self, document_id: uuid.UUID) -> bool:
+    def _has_successful_extraction(
+        self,
+        document_id: uuid.UUID,
+        grounding_context: Mapping[str, object],
+    ) -> bool:
+        expected_context = _thaw(grounding_context)
         with self._session_factory() as session:
             runs = session.scalars(
-                select(AIRun).where(AIRun.kind == "extract", AIRun.status == "success")
+                select(AIRun).where(
+                    AIRun.kind == "extract",
+                    AIRun.status.in_(("success", "partial")),
+                    AIRun.prompt_version == EXTRACT_PROMPT_VERSION,
+                )
             )
             return any(
                 isinstance(run.input_ref, dict)
                 and run.input_ref.get("document_version_id") == str(document_id)
+                and run.input_ref.get("grounding_context") == expected_context
+                and (
+                    run.status == "success"
+                    or run.input_ref.get("rule_fallback") is True
+                )
                 for run in runs
             )
 
     def _candidate_lineages(self, job_id: uuid.UUID):
         with self._session_factory() as session:
-            return tuple(
-                session.execute(
-                    select(AtomicClaimCandidate.id, RetrievalArtifact.id)
+            job = session.get(AcquisitionJob, job_id)
+            snapshot = (
+                job.request_snapshot
+                if job is not None and isinstance(job.request_snapshot, dict)
+                else {}
+            )
+            expected_context = {
+                "entity_names": list(snapshot.get("entity_names") or ()),
+                "metric_terms": list(snapshot.get("metric_terms") or ()),
+                "period_start": snapshot.get("period_start"),
+                "period_end": snapshot.get("period_end"),
+            }
+            eligible_runs: dict[str, str] = {}
+            for run in session.scalars(
+                select(AIRun).where(
+                    AIRun.kind == "extract",
+                    AIRun.status.in_(("success", "partial")),
+                    AIRun.prompt_version == EXTRACT_PROMPT_VERSION,
+                )
+            ):
+                input_ref = run.input_ref if isinstance(run.input_ref, dict) else {}
+                document_id = input_ref.get("document_version_id")
+                if (
+                    input_ref.get("grounding_context") == expected_context
+                    and isinstance(document_id, str)
+                    and (
+                        run.status == "success"
+                        or input_ref.get("rule_fallback") is True
+                    )
+                ):
+                    eligible_runs[f"extract:{run.id}"] = document_id
+
+            rows = session.execute(
+                    select(
+                        AtomicClaimCandidate.id,
+                        RetrievalArtifact.id,
+                        AtomicClaimCandidate.structured_fields,
+                        SourceSpan.document_version_id,
+                    )
                     .join(
                         SourceSpan,
                         SourceSpan.id == AtomicClaimCandidate.source_span_id,
@@ -1228,6 +1303,20 @@ class AcquisitionRunner:
                     )
                     .where(SourceReference.job_id == job_id)
                     .order_by(AtomicClaimCandidate.created_at, AtomicClaimCandidate.id)
+            )
+            return tuple(
+                (candidate_id, artifact_id)
+                for candidate_id, artifact_id, structured_fields, document_id in rows
+                if isinstance(structured_fields, dict)
+                and (
+                    eligible_runs.get(structured_fields.get("run_ref"))
+                    == str(document_id)
+                    or (
+                        str(document_id) in eligible_runs.values()
+                        and isinstance(structured_fields.get("scope"), dict)
+                        and structured_fields["scope"].get("extraction_method")
+                        == "financial_table_v1"
+                    )
                 )
             )
 
@@ -1377,7 +1466,7 @@ class AcquisitionRunner:
 
     def _retryable_failure_policy(
         self, job_id: uuid.UUID, *, claim_attempt: int
-    ) -> tuple[bool, float]:
+    ) -> tuple[bool, float, dict[str, Any] | None]:
         policy_cap = self._max_retry_delay.total_seconds()
         with self._session_factory() as session:
             attempts = tuple(
@@ -1403,6 +1492,13 @@ class AcquisitionRunner:
             if isinstance(attempt.safe_metadata, dict)
             and attempt.safe_metadata.get("claim_attempt") == claim_attempt
         )
+        current_exceptions = tuple(
+            exception
+            for exception in exceptions
+            if isinstance(exception.detail_json, dict)
+            and exception.detail_json.get("claim_attempt") == claim_attempt
+            and exception.detail_json.get("retryable") is True
+        )
         retry_after_values: list[float] = []
         for attempt in current_attempts:
             value = self._retry_after_from_metadata(
@@ -1410,18 +1506,45 @@ class AcquisitionRunner:
             )
             if value is not None:
                 retry_after_values.append(value)
-        for exception in exceptions:
+        for exception in current_exceptions:
             detail = exception.detail_json
-            if (
-                not isinstance(detail, dict)
-                or detail.get("claim_attempt") != claim_attempt
-                or detail.get("retryable") is not True
-            ):
-                continue
             value = self._retry_after_from_metadata(detail, policy_cap=policy_cap)
             if value is not None:
                 retry_after_values.append(value)
-        return bool(current_attempts), max(retry_after_values, default=0.0)
+        context = None
+        if current_exceptions:
+            detail = current_exceptions[-1].detail_json
+            query_index = detail.get("query_index")
+            context = {
+                "adapter_key": detail.get("adapter_key"),
+                "operation": detail.get("operation"),
+                "reason_code": "source_unavailable",
+                "query_index": (
+                    query_index
+                    if isinstance(query_index, int)
+                    and not isinstance(query_index, bool)
+                    else None
+                ),
+            }
+        elif current_attempts:
+            attempt = current_attempts[-1]
+            query_index = attempt.safe_metadata.get("query_index")
+            context = {
+                "adapter_key": attempt.adapter_key,
+                "operation": attempt.operation,
+                "reason_code": "source_unavailable",
+                "query_index": (
+                    query_index
+                    if isinstance(query_index, int)
+                    and not isinstance(query_index, bool)
+                    else None
+                ),
+            }
+        return (
+            bool(current_attempts or current_exceptions),
+            max(retry_after_values, default=0.0),
+            context,
+        )
 
     def _retry_backoff(self, claim_attempt: int, provider_minimum: float) -> timedelta:
         exponential = min(
@@ -1446,14 +1569,26 @@ class AcquisitionRunner:
         jittered = exponential + jitter_room * float(sample)
         return timedelta(seconds=max(jittered, provider_minimum))
 
-    def _finish_without_artifacts(self, claim: AcquisitionClaim, *, stage: str) -> None:
-        retryable, provider_minimum = self._retryable_failure_policy(
+    def _finish_without_artifacts(
+        self,
+        claim: AcquisitionClaim,
+        *,
+        request: AcquisitionRequest,
+        stage: str,
+    ) -> None:
+        retryable, provider_minimum, retry_context = self._retryable_failure_policy(
             claim.job_id, claim_attempt=claim.attempt
         )
         with self._session_factory() as session:
             repository = AcquisitionRepository(session, clock=self._clock)
             if retryable and claim.attempt < self._max_attempts:
                 backoff = self._retry_backoff(claim.attempt, provider_minimum)
+                if (
+                    retry_context is None
+                    or not isinstance(retry_context.get("adapter_key"), str)
+                    or not isinstance(retry_context.get("operation"), str)
+                ):
+                    raise ValueError("retryable provider failure lacks safe context")
                 repository.advance(
                     claim.job_id,
                     lease_token=claim.lease_token,
@@ -1461,7 +1596,15 @@ class AcquisitionRunner:
                     status="retry_wait",
                     retry_at=self._now() + backoff,
                     counters=self._counts(claim.job_id),
-                    message="acquisition waiting for retryable provider",
+                    message="retry_source_switch",
+                    payload=self._retry_event_payload(
+                        request,
+                        adapter_key=retry_context["adapter_key"],
+                        operation=retry_context["operation"],
+                        query_index=retry_context.get("query_index"),
+                        reason_code=retry_context["reason_code"],
+                        retry_delay_seconds=backoff.total_seconds(),
+                    ),
                 )
             else:
                 repository.advance(

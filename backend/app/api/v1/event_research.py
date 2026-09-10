@@ -2,21 +2,15 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import uuid
-from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, Header, UploadFile, Query, status
-from pydantic import ValidationError as PydanticValidationError
+from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.repositories.operational import IdempotencyRepository
 from app.db import get_db
-from app.ai.runs import record_run
-from app.ai.usage import capture_usage, current_usage
-from app.errors import ConflictError, UpstreamUnavailableError, ValidationFailedError
+from app.errors import UpstreamUnavailableError, ValidationFailedError
 from app.schemas.v1.event_research import (
     CreateEventResearchRequest,
     CreateEventResearchResponse,
@@ -50,12 +44,11 @@ from app.schemas.v1.event_research import (
 )
 from app.queries.event_research import EventResearchQueries
 from app.services.event_extraction import (
-    EVENT_EXTRACTION_PROMPT_VERSION,
     EventExtractionProviderError,
     EventExtractionService,
 )
-from app.services.event_research import EventResearchService, InitialUploadedOriginal
-from app.services.document_uploads import DocumentUploadService, MAX_UPLOAD_BYTES
+from app.services.event_research import EventResearchService
+from app.services.document_uploads import DocumentUploadService
 from app.services.source_governance import SourceGovernanceService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
@@ -64,11 +57,13 @@ from app.services.auto_research import AutoResearchService
 from app.services.case_relation_reviews import CaseRelationReviewService
 from app.api.v1.tenant_context import (
     ResearchActor,
-    configured_tenant_ids,
     require_case_administrator,
+    require_research_actor,
     require_research_tenant,
 )
 from app.services.case_tenant_access import CaseTenantAccess
+from app.services.case_authorization import CaseAuthorizationService
+from app.api.v1.dependencies import RequireCaseRoute
 from app.models.event_research import CaseRelation, EventResearchBrief
 from app.queries.documents import DocumentReadQueries
 from app.queries.basis import HistoricalBasis
@@ -144,17 +139,23 @@ def _record_published_material_decision(
 
 @router.get("", response_model=EventResearchListResponse)
 def list_event_research(
+    case_policy: RequireCaseRoute,
     status: str | None = None,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> EventResearchListResponse:
-    return EventResearchQueries(db).list(status=status, tenant_id=tenant_id)
+    return EventResearchQueries(db).list(
+        status=status,
+        tenant_id=actor.tenant_id,
+        authorized_case_ids=case_policy.authorized_case_ids(),
+    )
 
 
 @router.get(
     "/legacy-admission-queue", response_model=LegacyCaseAdmissionQueueResponse
 )
 def legacy_case_admission_queue(
+    _case_policy: RequireCaseRoute,
     db: Session = Depends(get_db),
     _actor: ResearchActor = Depends(require_case_administrator),
 ) -> LegacyCaseAdmissionQueueResponse:
@@ -204,17 +205,19 @@ def legacy_case_admission_queue(
 
 @router.get("/network", response_model=ResearchNetworkResponse)
 def event_research_network(
+    case_policy: RequireCaseRoute,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> ResearchNetworkResponse:
-    return EventResearchQueries(db).network(tenant_id=tenant_id)
+    return EventResearchQueries(db).network(
+        tenant_id=actor.tenant_id,
+        authorized_case_ids=case_policy.authorized_case_ids(),
+    )
 
 
 @router.get("/{case_id}/documents", response_model=DocumentListResponse)
 def event_case_documents(
     case_id: uuid.UUID,
-    limit: int = Query(default=100, ge=1, le=100),
-    cursor: str | None = Query(default=None, max_length=2048),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(require_research_tenant),
 ) -> DocumentListResponse:
@@ -223,9 +226,8 @@ def event_case_documents(
         query=None,
         case_id=case_id,
         basis=HistoricalBasis.from_cutoff(None),
-        limit=limit,
-        cursor=cursor,
-        tenant_id=tenant_id,
+        limit=100,
+        cursor=None,
     )
 
 
@@ -249,10 +251,14 @@ def event_case_document_detail(
 def event_research_relations(
     case_id: uuid.UUID,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> ResearchNetworkResponse:
-    _require_case(db, case_id, tenant_id)
-    return EventResearchQueries(db).relations(case_id, tenant_id=tenant_id)
+    _require_case(db, case_id, actor.tenant_id)
+    return EventResearchQueries(db).relations(
+        case_id,
+        tenant_id=actor.tenant_id,
+        authorized_case_ids=CaseAuthorizationService(db).authorized_case_ids(actor),
+    )
 
 
 @router.post(
@@ -261,22 +267,25 @@ def event_research_relations(
     status_code=status.HTTP_201_CREATED,
 )
 def review_case_relation(
+    case_policy: RequireCaseRoute,
     candidate_id: uuid.UUID,
     payload: CaseRelationReviewRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> CaseRelationReviewDTO:
     try:
         relation = db.get(CaseRelation, candidate_id)
         if relation is None:
             raise ValidationFailedError("case relation candidate not found")
-        _require_case(db, relation.source_case_id, tenant_id)
-        _require_case(db, relation.target_case_id, tenant_id)
+        _require_case(db, relation.source_case_id, actor.tenant_id)
+        _require_case(db, relation.target_case_id, actor.tenant_id)
+        case_policy.require(relation.source_case_id)
+        case_policy.require(relation.target_case_id)
         review = CaseRelationReviewService(db).review(
             candidate_id,
             outcome=payload.outcome,
             relation_type=payload.relation_type,
-            reviewer=payload.reviewer,
+            reviewer=actor.server_actor,
             reason=payload.reason,
             idempotency_key=payload.idempotency_key,
         )
@@ -299,42 +308,18 @@ def review_case_relation(
 
 
 @router.post("/extract", response_model=ExtractEventResearchResponse)
-@capture_usage()
 def extract_event(
     payload: ExtractEventResearchRequest,
-    db: Session = Depends(get_db),
     tenant_id: str = Depends(require_research_tenant),
 ) -> ExtractEventResearchResponse:
-    started_at = datetime.now(timezone.utc)
-    extraction_id = uuid.uuid4()
-    service = None
-    extraction_status = "failed"
     try:
-        service = EventExtractionService()
-        extracted = service.extract(
+        extracted = EventExtractionService().extract(
             raw_input=payload.raw_input, source_url=payload.source_url
         )
-        extraction_status = "success"
     except EventExtractionProviderError as exc:
         raise UpstreamUnavailableError(
             "event extraction LLM is unavailable or returned an invalid response"
         ) from exc
-    finally:
-        usage = current_usage()
-        if usage and usage["attempts"]:
-            record_run(
-                db, kind="event_extract",
-                model_version=service.model_version if service is not None else "unknown",
-                prompt_version=EVENT_EXTRACTION_PROMPT_VERSION,
-                input_ref={"tenant_id": tenant_id, "extraction_id": str(extraction_id)},
-                output_summary="event extraction provider stage",
-                status=extraction_status,
-                error="event extraction failed" if extraction_status == "failed" else None,
-                started_at=started_at,
-            )
-            # This endpoint creates no research artifacts. Preserve the usage
-            # even when the dependency rolls back the subsequent HTTP error.
-            db.commit()
     return ExtractEventResearchResponse(
         event_title=extracted.event_title,
         company_name=extracted.company_name,
@@ -352,97 +337,14 @@ def extract_event(
 def create_event_research(
     payload: CreateEventResearchRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
-    idempotency_key: str | None = Header(default=None, min_length=1, max_length=256),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> CreateEventResearchResponse:
-    # Cache and intake share a transaction: a lost HTTP response can be replayed
-    # without another Case, admission, or preparation job.
-    repository = IdempotencyRepository(db)
-    slot = None
     try:
-        if idempotency_key is not None:
-            if not idempotency_key.strip():
-                raise ValidationFailedError("Idempotency-Key must not be blank")
-            fingerprint = hashlib.sha256(json.dumps(
-                payload.model_dump(mode="json"), sort_keys=True, separators=(",", ":"),
-            ).encode()).hexdigest()
-            key = "event-create:" + hashlib.sha256(json.dumps(
-                [tenant_id, idempotency_key], separators=(",", ":"),
-            ).encode()).hexdigest()
-            # sqlite legacy transaction mode does not BEGIN for a SAVEPOINT.
-            # Start its outer transaction so a failed intake rolls the key back.
-            connection = db.connection()
-            if connection.dialect.name == "sqlite" and not connection.connection.driver_connection.in_transaction:
-                connection.exec_driver_sql("BEGIN")
-            slot, acquired = repository.acquire(key=key, request_fingerprint=fingerprint)
-            if not acquired:
-                if slot.request_fingerprint != fingerprint or slot.status != "completed":
-                    raise ConflictError("idempotency_conflict")
-                response = CreateEventResearchResponse.model_validate(slot.response_payload)
-                db.rollback()  # Release the replay row lock; no writes to commit.
-                return response
-        created = EventResearchService(db).create(payload, tenant_id=tenant_id, commit=False)
-        lifecycle = created.lifecycle
-        response = CreateEventResearchResponse(
-            case_id=created.case_id,
-            brief_id=created.brief_id,
-            lifecycle=EventResearchLifecycleDTO(
-                status=lifecycle.status,
-                active_run_id=str(lifecycle.active_run_id) if lifecycle.active_run_id else None,
-                current_round=lifecycle.current_round,
-                status_summary=lifecycle.status_summary,
-                current_gap=lifecycle.current_gap,
-                next_human_action=lifecycle.next_human_action,
-            ),
-        )
-        if slot is not None:
-            repository.complete(slot, response_status=201, response_payload=response.model_dump(mode="json"))
-        db.commit()
-        return response
-    except (ValueError, ValidationFailedError) as exc:
-        db.rollback()
-        raise ValidationFailedError(str(exc)) from exc
-    except Exception:
-        db.rollback()
-        raise
-
-
-@router.post("/uploaded", response_model=CreateEventResearchResponse, status_code=status.HTTP_201_CREATED)
-async def create_event_research_from_uploaded_original(
-    payload: str = Form(...),
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
-) -> CreateEventResearchResponse:
-    """Atomically create a Case from one uploaded frozen original.
-
-    The JSON summary is retained only as the human-confirmed event brief.  It
-    is never frozen as a competing source document and preparation is queued
-    only after the file becomes the initial tenant-admitted document.
-    """
-    try:
-        request = CreateEventResearchRequest.model_validate_json(payload)
-        if not file.filename:
-            raise ValidationFailedError("uploaded file must have a file name")
-        raw = await file.read(MAX_UPLOAD_BYTES + 1)
-        if len(raw) > MAX_UPLOAD_BYTES:
-            raise ValidationFailedError("uploaded original must not exceed 20 MiB")
-        source_metadata = {**request.source_metadata, "tenant": tenant_id}
-        request = request.model_copy(update={
-            "source_type": "uploaded_file",
-            "source_metadata": source_metadata,
-        })
         created = EventResearchService(db).create(
-            request,
-            tenant_id=tenant_id,
-            initial_uploaded_original=InitialUploadedOriginal(
-                raw=raw,
-                file_name=file.filename,
-                mime_type=file.content_type or "application/octet-stream",
-                source_metadata=source_metadata,
-            ),
+            payload,
+            principal=actor,
         )
-    except (ValueError, PydanticValidationError, ValidationFailedError) as exc:
+    except (ValueError, ValidationFailedError) as exc:
         db.rollback()
         raise ValidationFailedError(str(exc)) from exc
     lifecycle = created.lifecycle
@@ -469,17 +371,15 @@ def admit_legacy_event_case(
     case_id: uuid.UUID,
     payload: LegacyCaseAdmissionRequest,
     db: Session = Depends(get_db),
-    _actor: ResearchActor = Depends(require_case_administrator),
+    actor: ResearchActor = Depends(require_case_administrator),
 ) -> LegacyCaseAdmissionResponse:
     """Explicitly admit one legacy Case; never infer its tenant ownership."""
-    if payload.tenant_id not in configured_tenant_ids():
-        raise ValidationFailedError("tenant_id is not configured by the host")
     try:
         admission = CaseTenantAccess(db).admit_legacy_case(
             case_id=case_id,
-            tenant_id=payload.tenant_id,
+            tenant_id=actor.tenant_id,
             initial_document_version_id=uuid.UUID(payload.initial_document_version_id),
-            admitted_by=payload.admitted_by,
+            admitted_by=actor.server_actor,
             admission_reason=payload.reason,
         )
         db.commit()
@@ -501,13 +401,13 @@ def update_event_research_scope(
     case_id: uuid.UUID,
     payload: UpdateEventResearchScopeRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> UpdateEventResearchScopeResponse:
-    _require_case(db, case_id, tenant_id)
+    _require_case(db, case_id, actor.tenant_id)
     updated = EventResearchScopeService(db).update(
         case_id,
         factors=payload.factors,
-        changed_by=payload.changed_by,
+        changed_by=actor.server_actor,
         change_reason=payload.change_reason,
     )
     db.commit()
@@ -567,11 +467,11 @@ def publish_event_conclusion(
     case_id: uuid.UUID,
     payload: PublishEventConclusionRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> PublishEventConclusionResponse:
-    _require_case(db, case_id, tenant_id)
+    _require_case(db, case_id, actor.tenant_id)
     published = EventConclusionService(db).publish(
-        case_id, text=payload.text, reviewer=payload.reviewer
+        case_id, text=payload.text, reviewer=actor.server_actor
     )
     db.commit()
     return PublishEventConclusionResponse(conclusion_id=str(published.id), state=published.state)
@@ -582,15 +482,15 @@ def continue_event_research(
     case_id: uuid.UUID,
     payload: ContinueEventResearchRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> ContinueEventResearchResponse:
     try:
-        _require_case(db, case_id, tenant_id)
+        _require_case(db, case_id, actor.tenant_id)
         run = AutoResearchService(db).continue_published_event(
             case_id,
             document_version_id=uuid.UUID(payload.document_version_id),
             reason=payload.reason,
-            triggered_by=payload.triggered_by,
+            triggered_by=actor.server_actor,
         )
         db.commit()
     except (ValueError, ValidationFailedError) as exc:
@@ -616,17 +516,17 @@ def attach_event_material(
     case_id: uuid.UUID,
     payload: AttachEventMaterialRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> AttachEventMaterialResponse:
     try:
-        _require_case(db, case_id, tenant_id)
+        _require_case(db, case_id, actor.tenant_id)
         document = EventResearchService(db).attach_material_to_existing_case(
             case_id,
             raw_input=payload.raw_input,
             source_url=payload.source_url,
             source_type=payload.source_type,
             source_metadata=payload.source_metadata,
-            actor=payload.actor,
+            actor=actor.server_actor,
         )
         emit_event(
             db,
@@ -636,7 +536,7 @@ def attach_event_material(
             ref_type="research_case",
             ref_id=case_id,
             origin="operational",
-            actor=payload.actor,
+            actor=actor.server_actor,
             payload={"source_type": payload.source_type, "case_id": str(case_id)},
         )
         db.commit()
@@ -656,28 +556,25 @@ def attach_event_material(
 async def upload_event_material(
     case_id: uuid.UUID,
     file: UploadFile = File(...),
-    actor: str = Form(...),
     source_metadata: str = Form("{}"),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> UploadEventMaterialResponse:
     try:
-        _require_case(db, case_id, tenant_id)
+        _require_case(db, case_id, actor.tenant_id)
         metadata = json.loads(source_metadata)
         if not isinstance(metadata, dict):
             raise ValidationFailedError("source_metadata must be a JSON object")
-        metadata = {**metadata, "tenant": tenant_id}
-        if not actor.strip():
-            raise ValidationFailedError("actor must not be empty")
-        raw = await file.read(MAX_UPLOAD_BYTES + 1)
-        if len(raw) > MAX_UPLOAD_BYTES:
+        metadata = {**metadata, "tenant": actor.tenant_id}
+        raw = await file.read(20 * 1024 * 1024 + 1)
+        if len(raw) > 20 * 1024 * 1024:
             raise ValidationFailedError("uploaded original must not exceed 20 MiB")
         frozen = DocumentUploadService(db).freeze_case_material(
             case_id=case_id,
             raw=raw,
             file_name=file.filename or "",
             mime_type=file.content_type or "application/octet-stream",
-            actor=actor.strip(),
+            actor=actor.server_actor,
             source_metadata=metadata,
         )
         emit_event(
@@ -688,7 +585,7 @@ async def upload_event_material(
             ref_type="research_case",
             ref_id=case_id,
             origin="operational",
-            actor=actor.strip(),
+            actor=actor.server_actor,
             payload={
                 "source_type": "uploaded_file",
                 "case_id": str(case_id),
@@ -717,17 +614,17 @@ def decide_published_material(
     case_id: uuid.UUID,
     payload: PublishedMaterialDecisionRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> PublishedMaterialDecisionResponse:
     try:
-        _require_case(db, case_id, tenant_id)
+        _require_case(db, case_id, actor.tenant_id)
         document = EventResearchService(db).freeze_published_material(
             case_id,
             raw_input=payload.raw_input,
             source_url=payload.source_url,
             source_type=payload.source_type,
-            source_metadata={**payload.source_metadata, "tenant": tenant_id},
-            actor=payload.actor,
+            source_metadata={**payload.source_metadata, "tenant": actor.tenant_id},
+            actor=actor.server_actor,
         )
         run_id, event, recovery_required = _record_published_material_decision(
             db,
@@ -735,8 +632,8 @@ def decide_published_material(
             document_id=document.id,
             decision=payload.decision,
             reason=payload.reason,
-            actor=payload.actor,
-            source_metadata={**payload.source_metadata, "tenant": tenant_id},
+            actor=actor.server_actor,
+            source_metadata={**payload.source_metadata, "tenant": actor.tenant_id},
         )
         db.commit()
     except (ValueError, ValidationFailedError) as exc:
@@ -762,19 +659,16 @@ async def decide_published_uploaded_material(
     file: UploadFile = File(...),
     decision: Literal["reopen", "no_change"] = Form(...),
     reason: str = Form(...),
-    actor: str = Form(...),
     source_metadata: str = Form("{}"),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> PublishedMaterialDecisionResponse:
     try:
-        _require_case(db, case_id, tenant_id)
+        _require_case(db, case_id, actor.tenant_id)
         metadata = json.loads(source_metadata)
         if not isinstance(metadata, dict):
             raise ValidationFailedError("source_metadata must be a JSON object")
-        metadata = {**metadata, "tenant": tenant_id}
-        if not actor.strip():
-            raise ValidationFailedError("actor must not be empty")
+        metadata = {**metadata, "tenant": actor.tenant_id}
         if not reason.strip():
             raise ValidationFailedError("reason must not be empty")
         if decision == "reopen" and not SourceGovernanceService(
@@ -785,15 +679,15 @@ async def decide_published_uploaded_material(
             raise ValidationFailedError(
                 "current source declaration does not permit research"
             )
-        raw = await file.read(MAX_UPLOAD_BYTES + 1)
-        if len(raw) > MAX_UPLOAD_BYTES:
+        raw = await file.read(20 * 1024 * 1024 + 1)
+        if len(raw) > 20 * 1024 * 1024:
             raise ValidationFailedError("uploaded original must not exceed 20 MiB")
         frozen = DocumentUploadService(db).freeze_published_case_material(
             case_id=case_id,
             raw=raw,
             file_name=file.filename or "",
             mime_type=file.content_type or "application/octet-stream",
-            actor=actor.strip(),
+            actor=actor.server_actor,
             source_metadata=metadata,
         )
         run_id, event, recovery_required = _record_published_material_decision(
@@ -802,7 +696,7 @@ async def decide_published_uploaded_material(
             document_id=frozen.document.id,
             decision=decision,
             reason=reason.strip(),
-            actor=actor.strip(),
+            actor=actor.server_actor,
             recovery_required=(
                 decision == "reopen" and frozen.document.parse_state == "failed"
             ),

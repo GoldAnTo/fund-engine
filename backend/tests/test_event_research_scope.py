@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
 from datetime import datetime, timezone
 from threading import Event, Thread, get_ident
 
@@ -18,12 +19,18 @@ from app.models.event_research import (
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
+from app.models.acquisition import (
+    AcquisitionAttempt,
+    AcquisitionJob,
+    AutomaticAdmissionDecision,
+    RetrievalArtifact,
+    RetrievalArtifactDocument,
+    SourceReference,
+)
 from app.models.events import DomainEvent
 from app.models.ledger import (
-    AtomicClaimReview,
     AIAssessment,
     CaseDocumentVersion,
-    CaseTenantAdmission,
     DocumentVersion,
     EvidenceLink,
     EvidenceSnapshot,
@@ -31,33 +38,31 @@ from app.models.ledger import (
     SourceSpan,
     SourceStatement,
     Thesis,
+    AtomicClaimCandidate,
 )
 from app.models.operational import EventResearchLifecycle, Job, ResearchRun, ResearchTask
 from app.models.proposals import Proposal
-from app.models.research_preparation import ResearchPreparation, ResearchPreparationArtifact
 from app.models.research_monitor import ResearchRunEvent
+from app.models.research_orchestration import AcquisitionQueryPlan, AcquisitionSeries
 from app.models.source_governance import SourceContract
 from app.services.auto_research import AutoResearchService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.event_research_scope import EventResearchScopeService
 from app.services.event_research_scope_evidence import (
+    append_automatic_scope_evidence_assignment,
     append_current_scope_evidence_assignment,
+    current_mapped_evidence_ids,
     lock_event_scope_case,
     lock_event_research_lifecycle,
 )
 from app.services.event_research import EventResearchService
-from app.services.atomic_claims import AtomicClaimService
 from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
 from app.repositories.event_research import EventResearchLifecycleRepository
+from app.queries.event_research import EventResearchQueries
 from app.repositories.operational import TaskRepository
 from app.schemas.v1.event_research import CreateEventResearchRequest
-from app.domain.atomic_claims import AtomicClaimDraft
-from app.domain.research_preparation import preparation_input_fingerprint
-from app.services.research_preparation import (
-    ClaimDecision,
-    ResearchPreparationService,
-)
+from tests.research_identity import persist_research_principal
 
 
 INITIAL_FACTORS = [
@@ -81,7 +86,6 @@ def _create_event(client) -> dict:
             "candidate_factors": INITIAL_FACTORS,
             # Scope replacement coverage preserves the pre-protocol workflow.
             "research_protocol_required": False,
-            "created_by": "tester",
         },
     )
     assert response.status_code == 201
@@ -126,740 +130,6 @@ def _scope_statements(session, version_id: uuid.UUID) -> list[str]:
             .order_by(EventResearchScopeFactor.position)
         )
     )
-
-
-def _complete_preparation_drafts(session, case_id: uuid.UUID) -> ResearchPreparation:
-    preparation = session.scalar(
-        select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id)
-    )
-    assert preparation is not None
-    span = session.scalar(
-        select(SourceSpan)
-        .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
-        .join(CaseDocumentVersion, CaseDocumentVersion.document_version_id == DocumentVersion.id)
-        .where(CaseDocumentVersion.research_case_id == case_id)
-    )
-    assert span is not None
-    candidate = AtomicClaimService(session).admit(
-        AtomicClaimDraft(
-            source_span_id=span.id,
-            quote=span.verbatim_text,
-            quote_start=0,
-            quote_end=len(span.verbatim_text),
-            normalized_text="事件材料中的可核验陈述",
-            claim_type="reported_claim",
-            assertion_actor="company",
-            subject="company",
-            predicate="reported",
-            object_text=None,
-            numeric_value=None,
-            unit=None,
-            observed_period=None,
-            scope={},
-        ),
-        authority_level="user_supplied",
-        run_ref="scope-preparation-fixture",
-    )
-    service = ResearchPreparationService(session)
-    service.complete_system_step(
-        case_id,
-        "parse_claims",
-        {"candidates": [{"candidate_id": str(candidate.id)}]},
-        expected_version=preparation.version,
-        expected_fingerprint=preparation.input_fingerprint,
-    )
-    service.confirm_claims(
-        case_id,
-        actor="reviewer",
-        revision=preparation.version,
-        decisions=[
-            ClaimDecision(
-                candidate_id=candidate.id,
-                outcome="confirmed",
-                reason="source reviewed",
-            )
-        ],
-    )
-    context_fingerprint = service.current_candidate_context_fingerprint(case_id)
-    service.complete_system_step(
-        case_id,
-        "draft_protocol",
-        {},
-        expected_version=preparation.version,
-        expected_fingerprint=preparation.input_fingerprint,
-        expected_context_fingerprint=context_fingerprint,
-    )
-    # These scope-replacement fixtures deliberately use legacy factors with
-    # ``research_protocol_required=False``.  They need a completed workbench
-    # state to exercise later scope invalidation, not a materialized formal
-    # protocol (whose strict confirmation correctly rejects the empty legacy
-    # draft above).
-    preparation.protocol_review_state = "confirmed"
-    session.flush()
-    service.complete_system_step(
-        case_id,
-        "draft_evidence_plan",
-        {},
-        expected_version=preparation.version,
-        expected_fingerprint=preparation.input_fingerprint,
-        expected_context_fingerprint=service.current_candidate_context_fingerprint(case_id),
-    )
-    preparation.plan_review_state = "confirmed"
-    preparation.status = "preparing"
-    session.flush()
-    return preparation
-
-
-def _complete_preparation_parse(session, case_id: uuid.UUID) -> ResearchPreparation:
-    preparation = session.scalar(
-        select(ResearchPreparation).where(
-            ResearchPreparation.research_case_id == case_id
-        )
-    )
-    assert preparation is not None
-    span = session.scalar(
-        select(SourceSpan)
-        .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
-        .join(
-            CaseDocumentVersion,
-            CaseDocumentVersion.document_version_id == DocumentVersion.id,
-        )
-        .where(CaseDocumentVersion.research_case_id == case_id)
-    )
-    assert span is not None
-    candidate = AtomicClaimService(session).admit(
-        AtomicClaimDraft(
-            source_span_id=span.id,
-            quote=span.verbatim_text,
-            quote_start=0,
-            quote_end=len(span.verbatim_text),
-            normalized_text="尚待人工审核的事件陈述",
-            claim_type="reported_claim",
-            assertion_actor="company",
-            subject="company",
-            predicate="reported",
-            object_text=None,
-            numeric_value=None,
-            unit=None,
-            observed_period=None,
-            scope={},
-        ),
-        authority_level="user_supplied",
-        run_ref="scope-preparation-unreviewed-fixture",
-    )
-    ResearchPreparationService(session).complete_system_step(
-        case_id,
-        "parse_claims",
-        {"candidates": [{"candidate_id": str(candidate.id)}]},
-        expected_version=preparation.version,
-        expected_fingerprint=preparation.input_fingerprint,
-    )
-    parse_job = session.scalar(
-        select(Job).where(
-            Job.target_id == preparation.id,
-            Job.correlation_id == f"{preparation.id}:1:parse_claims",
-        )
-    )
-    assert parse_job is not None
-    parse_job.status = "succeeded"
-    return preparation
-
-
-def test_scope_change_preserves_unreviewed_claims_without_queuing_a_new_step(
-    cmd_client, cmd_session
-) -> None:
-    created = _create_event(cmd_client)
-    case_id = uuid.UUID(created["case_id"])
-    preparation = _complete_preparation_parse(cmd_session, case_id)
-    claim_artifact = cmd_session.scalar(
-        select(ResearchPreparationArtifact).where(
-            ResearchPreparationArtifact.research_preparation_id == preparation.id,
-            ResearchPreparationArtifact.kind == "atomic_claim_candidates",
-            ResearchPreparationArtifact.state == "current",
-        )
-    )
-    assert claim_artifact is not None
-
-    response = cmd_client.put(
-        f"/api/v1/event-research/{case_id}/scope",
-        json={
-            "factors": [
-                INITIAL_FACTORS[0],
-                INITIAL_FACTORS[1],
-                "未审核陈述时的范围变化因素",
-            ],
-            "changed_by": "reviewer",
-            "change_reason": "scope changed while claims await review",
-        },
-    )
-
-    assert response.status_code == 200
-    cmd_session.refresh(preparation)
-    assert preparation.status == "awaiting_claim_review"
-    assert preparation.claim_review_state == "awaiting_review"
-    assert preparation.draft_protocol_state == "stale"
-    assert preparation.protocol_review_state == "locked"
-    assert preparation.draft_evidence_plan_state == "stale"
-    assert preparation.plan_review_state == "locked"
-    current_claim_artifact = cmd_session.scalar(
-        select(ResearchPreparationArtifact).where(
-            ResearchPreparationArtifact.research_preparation_id == preparation.id,
-            ResearchPreparationArtifact.kind == "atomic_claim_candidates",
-            ResearchPreparationArtifact.state == "current",
-        )
-    )
-    assert current_claim_artifact is not None
-    assert current_claim_artifact.id == claim_artifact.id
-    assert current_claim_artifact.sequence == claim_artifact.sequence
-    active_jobs = list(
-        cmd_session.scalars(
-            select(Job).where(
-                Job.target_id == preparation.id,
-                Job.status.in_(("queued", "running")),
-            )
-        )
-    )
-    assert active_jobs == []
-
-
-def test_scope_change_requeues_failed_parse_and_refreshes_preparation_status(
-    cmd_client, cmd_session
-) -> None:
-    created = _create_event(cmd_client)
-    case_id = uuid.UUID(created["case_id"])
-    preparation = cmd_session.scalar(
-        select(ResearchPreparation).where(
-            ResearchPreparation.research_case_id == case_id
-        )
-    )
-    assert preparation is not None
-    preparation.status = "recoverable_failure"
-    preparation.parse_claims_state = "failed"
-    preparation.last_error_code = "preparation_provider_unavailable"
-    preparation.next_attempt_at = datetime.now(timezone.utc)
-    cmd_session.commit()
-
-    response = cmd_client.put(
-        f"/api/v1/event-research/{case_id}/scope",
-        json={
-            "factors": [
-                INITIAL_FACTORS[0],
-                INITIAL_FACTORS[1],
-                "解析失败后的范围变化因素",
-            ],
-            "changed_by": "reviewer",
-            "change_reason": "scope changed after parse failure",
-        },
-    )
-
-    assert response.status_code == 200
-    cmd_session.refresh(preparation)
-    assert preparation.parse_claims_state == "queued"
-    assert preparation.status == "preparing"
-    assert preparation.last_error_code is None
-    assert preparation.next_attempt_at is None
-    parse_jobs = list(
-        cmd_session.scalars(
-            select(Job).where(
-                Job.target_id == preparation.id,
-                Job.correlation_id == f"{preparation.id}:{preparation.version}:parse_claims",
-                Job.status.in_(("queued", "running")),
-            )
-        )
-    )
-    assert len(parse_jobs) == 1
-    assert cmd_session.scalars(select(ResearchRun)).all() == []
-
-
-def test_scope_change_invalidates_only_preparation_drafts_without_starting_a_run(
-    cmd_client, cmd_session
-) -> None:
-    created = _create_event(cmd_client)
-    case_id = uuid.UUID(created["case_id"])
-    preparation = _complete_preparation_drafts(cmd_session, case_id)
-    original_version = preparation.version
-    claims_before = list(cmd_session.scalars(select(AtomicClaimReview)))
-    statements_before = list(cmd_session.scalars(select(SourceStatement)))
-
-    response = cmd_client.put(
-        f"/api/v1/event-research/{case_id}/scope",
-        json={
-            "factors": [
-                INITIAL_FACTORS[0],
-                INITIAL_FACTORS[1],
-                "范围变化后的新增因素",
-            ],
-            "changed_by": "reviewer",
-            "change_reason": "scope changed",
-        },
-    )
-
-    assert response.status_code == 200
-    scope = cmd_session.scalar(
-        select(EventResearchScopeVersion).where(
-            EventResearchScopeVersion.research_case_id == case_id,
-            EventResearchScopeVersion.version == 2,
-        )
-    )
-    assert scope is not None
-    cmd_session.refresh(preparation)
-    admission = cmd_session.scalar(
-        select(CaseTenantAdmission).where(
-            CaseTenantAdmission.research_case_id == case_id
-        )
-    )
-    assert admission is not None
-    assert preparation.version == original_version + 1
-    assert preparation.input_fingerprint == preparation_input_fingerprint(
-        admission.initial_document_version_id, scope.id
-    )
-    assert preparation.research_run_id is None
-    assert preparation.claim_review_state == "confirmed"
-    assert preparation.protocol_review_state == "locked"
-    assert preparation.plan_review_state == "locked"
-    assert preparation.draft_protocol_state == "queued"
-    assert preparation.draft_evidence_plan_state == "stale"
-    artifacts = list(
-        cmd_session.scalars(
-            select(ResearchPreparationArtifact).where(
-                ResearchPreparationArtifact.research_preparation_id == preparation.id
-            )
-        )
-    )
-    assert [artifact.kind for artifact in artifacts if artifact.state == "current"] == [
-        "atomic_claim_candidates"
-    ]
-    assert {
-        artifact.kind: artifact.invalidated_reason
-        for artifact in artifacts
-        if artifact.kind in {"research_protocol_draft", "evidence_acquisition_plan"}
-    } == {
-        "research_protocol_draft": "scope_changed",
-        "evidence_acquisition_plan": "scope_changed",
-    }
-    assert list(cmd_session.scalars(select(AtomicClaimReview))) == claims_before
-    assert list(cmd_session.scalars(select(SourceStatement))) == statements_before
-    jobs = list(
-        cmd_session.scalars(
-            select(Job).where(
-                Job.correlation_id == f"{preparation.id}:{preparation.version}:draft_protocol"
-            )
-        )
-    )
-    assert len(jobs) == 1
-    assert cmd_session.scalars(select(ResearchRun)).all() == []
-    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    assert lifecycle.active_run_id is None
-    assert lifecycle.status == "awaiting_key_review"
-
-
-def test_scope_change_revokes_authorized_preparation_without_deleting_its_run(
-    cmd_client, cmd_session
-) -> None:
-    created = _create_event(cmd_client)
-    case_id = uuid.UUID(created["case_id"])
-    preparation = _complete_preparation_drafts(cmd_session, case_id)
-    run = AutoResearchService(cmd_session).start(
-        case_id, max_rounds=3, budget=100, commit=False
-    )
-    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    lifecycle.active_run_id = run.id
-    preparation.research_run_id = run.id
-    preparation.authorized_evidence_plan = {"items": []}
-    preparation.status = "authorized"
-    cmd_session.commit()
-
-    response = cmd_client.put(
-        f"/api/v1/event-research/{case_id}/scope",
-        json={
-            "factors": [
-                INITIAL_FACTORS[0],
-                INITIAL_FACTORS[1],
-                "授权后范围变化的新增因素",
-            ],
-            "changed_by": "reviewer",
-            "change_reason": "scope changed after authorization",
-        },
-    )
-
-    assert response.status_code == 200
-    cmd_session.refresh(preparation)
-    assert preparation.status == "preparing"
-    assert preparation.research_run_id is None
-    old_run = cmd_session.get(ResearchRun, run.id)
-    assert old_run is not None
-    assert old_run.status == "cancelled"
-    assert old_run.stage == "stopped"
-    assert old_run.stop_reason == "scope_changed"
-    old_job = cmd_session.scalar(
-        select(Job).where(Job.target_type == "research_run", Job.target_id == run.id)
-    )
-    assert old_job is not None
-    assert old_job.status == "cancelled"
-    assert old_job.cancel_requested is True
-    cancellation_event = cmd_session.scalar(
-        select(ResearchRunEvent).where(
-            ResearchRunEvent.run_id == run.id,
-            ResearchRunEvent.status == "cancelled",
-        )
-    )
-    assert cancellation_event is not None
-    assert cancellation_event.payload_json == {"stop_reason": "scope_changed"}
-    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    assert lifecycle.active_run_id is None
-    assert len(
-        list(
-            cmd_session.scalars(
-                select(ResearchRun).where(ResearchRun.research_case_id == case_id)
-            )
-        )
-    ) == 1
-
-
-def test_scope_change_does_not_revoke_unlinked_run_for_nonauthorized_preparation(
-    cmd_client, cmd_session
-) -> None:
-    created = _create_event(cmd_client)
-    case_id = uuid.UUID(created["case_id"])
-    preparation = _complete_preparation_drafts(cmd_session, case_id)
-    run = AutoResearchService(cmd_session).start(
-        case_id, max_rounds=3, budget=100, commit=False
-    )
-    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    lifecycle.active_run_id = run.id
-    lifecycle.status = "continuing"
-    preparation.research_run_id = None
-    preparation.status = "preparing"
-    run_job = cmd_session.scalar(
-        select(Job).where(Job.target_type == "research_run", Job.target_id == run.id)
-    )
-    run_tasks = list(
-        cmd_session.scalars(select(ResearchTask).where(ResearchTask.run_id == run.id))
-    )
-    assert run_job is not None
-    assert run_tasks
-    cmd_session.commit()
-
-    response = cmd_client.put(
-        f"/api/v1/event-research/{case_id}/scope",
-        json={
-            "factors": [
-                INITIAL_FACTORS[0],
-                INITIAL_FACTORS[1],
-                "非授权准备阶段的范围变化因素",
-            ],
-            "changed_by": "reviewer",
-            "change_reason": "scope changed without preparation authorization",
-        },
-    )
-
-    assert response.status_code == 200
-    cmd_session.refresh(preparation)
-    cmd_session.refresh(run)
-    cmd_session.refresh(run_job)
-    assert preparation.research_run_id is None
-    assert preparation.status == "preparing"
-    assert run.status == "queued"
-    assert run_job.status == "queued"
-    assert run_job.cancel_requested is False
-    assert {task.status for task in run_tasks} == {"queued"}
-    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    assert lifecycle.active_run_id == run.id
-    assert lifecycle.status == "continuing"
-    assert len(
-        list(
-            cmd_session.scalars(
-                select(ResearchRun).where(ResearchRun.research_case_id == case_id)
-            )
-        )
-    ) == 1
-
-
-def test_scope_change_revokes_current_lineage_successor_of_authorized_preparation(
-    cmd_client, cmd_session
-) -> None:
-    created = _create_event(cmd_client)
-    case_id = uuid.UUID(created["case_id"])
-    preparation = _complete_preparation_drafts(cmd_session, case_id)
-    predecessor = AutoResearchService(cmd_session).start(
-        case_id, max_rounds=3, budget=100, commit=False
-    )
-    predecessor.status = "succeeded"
-    predecessor.stage = "complete"
-    predecessor_job = cmd_session.scalar(
-        select(Job).where(
-            Job.target_type == "research_run", Job.target_id == predecessor.id
-        )
-    )
-    assert predecessor_job is not None
-    predecessor_job.status = "succeeded"
-    successor = AutoResearchService(cmd_session).start(
-        case_id,
-        max_rounds=3,
-        budget=100,
-        commit=False,
-        scope_context={"predecessor_run_id": str(predecessor.id)},
-    )
-    unrelated = AutoResearchService(cmd_session).start(
-        case_id, max_rounds=3, budget=100, commit=False
-    )
-    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    lifecycle.active_run_id = successor.id
-    lifecycle.status = "continuing"
-    preparation.research_run_id = predecessor.id
-    preparation.authorized_evidence_plan = {"items": []}
-    preparation.status = "authorized"
-    successor_job = cmd_session.scalar(
-        select(Job).where(Job.target_type == "research_run", Job.target_id == successor.id)
-    )
-    unrelated_job = cmd_session.scalar(
-        select(Job).where(Job.target_type == "research_run", Job.target_id == unrelated.id)
-    )
-    successor_tasks = list(
-        cmd_session.scalars(select(ResearchTask).where(ResearchTask.run_id == successor.id))
-    )
-    unrelated_tasks = list(
-        cmd_session.scalars(select(ResearchTask).where(ResearchTask.run_id == unrelated.id))
-    )
-    assert successor_job is not None and unrelated_job is not None
-    assert successor_tasks and unrelated_tasks
-    cmd_session.commit()
-
-    response = cmd_client.put(
-        f"/api/v1/event-research/{case_id}/scope",
-        json={
-            "factors": [
-                INITIAL_FACTORS[0],
-                INITIAL_FACTORS[1],
-                "继任运行期间的范围变化因素",
-            ],
-            "changed_by": "reviewer",
-            "change_reason": "scope changed with authorized run successor",
-        },
-    )
-
-    assert response.status_code == 200
-    cmd_session.refresh(preparation)
-    cmd_session.refresh(predecessor)
-    cmd_session.refresh(successor)
-    cmd_session.refresh(unrelated)
-    cmd_session.refresh(successor_job)
-    cmd_session.refresh(unrelated_job)
-    assert preparation.research_run_id is None
-    assert predecessor.status == "succeeded"
-    assert successor.status == "cancelled"
-    assert successor.stage == "stopped"
-    assert successor.stop_reason == "scope_changed"
-    assert successor_job.status == "cancelled"
-    assert successor_job.cancel_requested is True
-    assert {task.status for task in successor_tasks} == {"cancelled"}
-    assert unrelated.status == "queued"
-    assert unrelated_job.status == "queued"
-    assert unrelated_job.cancel_requested is False
-    assert {task.status for task in unrelated_tasks} == {"queued"}
-    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    assert lifecycle.active_run_id is None
-    assert len(
-        list(
-            cmd_session.scalars(
-                select(ResearchRun).where(ResearchRun.research_case_id == case_id)
-            )
-        )
-    ) == 3
-
-
-def test_scope_change_revokes_two_hop_active_descendant_of_authorized_preparation(
-    cmd_client, cmd_session
-) -> None:
-    created = _create_event(cmd_client)
-    case_id = uuid.UUID(created["case_id"])
-    preparation = _complete_preparation_drafts(cmd_session, case_id)
-    root = AutoResearchService(cmd_session).start(
-        case_id, max_rounds=3, budget=100, commit=False
-    )
-    root.status = "succeeded"
-    root.stage = "complete"
-    root_job = cmd_session.scalar(
-        select(Job).where(Job.target_type == "research_run", Job.target_id == root.id)
-    )
-    assert root_job is not None
-    root_job.status = "succeeded"
-    first_successor = AutoResearchService(cmd_session).start(
-        case_id,
-        max_rounds=3,
-        budget=100,
-        commit=False,
-        scope_context={"predecessor_run_id": str(root.id)},
-    )
-    first_successor.status = "succeeded"
-    first_successor.stage = "complete"
-    first_successor_job = cmd_session.scalar(
-        select(
-            Job
-        ).where(Job.target_type == "research_run", Job.target_id == first_successor.id)
-    )
-    assert first_successor_job is not None
-    first_successor_job.status = "succeeded"
-    active_descendant = AutoResearchService(cmd_session).start(
-        case_id,
-        max_rounds=3,
-        budget=100,
-        commit=False,
-        scope_context={"predecessor_run_id": str(first_successor.id)},
-    )
-    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    lifecycle.active_run_id = active_descendant.id
-    lifecycle.status = "continuing"
-    preparation.research_run_id = root.id
-    preparation.authorized_evidence_plan = {"items": []}
-    preparation.status = "authorized"
-    active_job = cmd_session.scalar(
-        select(Job).where(
-            Job.target_type == "research_run", Job.target_id == active_descendant.id
-        )
-    )
-    active_tasks = list(
-        cmd_session.scalars(
-            select(ResearchTask).where(ResearchTask.run_id == active_descendant.id)
-        )
-    )
-    assert active_job is not None and active_tasks
-    cmd_session.commit()
-
-    response = cmd_client.put(
-        f"/api/v1/event-research/{case_id}/scope",
-        json={
-            "factors": [
-                INITIAL_FACTORS[0],
-                INITIAL_FACTORS[1],
-                "两跳继任运行期间的范围变化因素",
-            ],
-            "changed_by": "reviewer",
-            "change_reason": "scope changed with two-hop successor",
-        },
-    )
-
-    assert response.status_code == 200
-    cmd_session.refresh(root)
-    cmd_session.refresh(first_successor)
-    cmd_session.refresh(active_descendant)
-    cmd_session.refresh(active_job)
-    assert root.status == "succeeded"
-    assert first_successor.status == "succeeded"
-    assert active_descendant.status == "cancelled"
-    assert active_descendant.stop_reason == "scope_changed"
-    assert active_job.status == "cancelled"
-    assert {task.status for task in active_tasks} == {"cancelled"}
-    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    assert lifecycle.active_run_id is None
-
-
-@pytest.mark.parametrize("lineage_mode", ["missing", "cycle"])
-def test_scope_change_fails_closed_for_unproven_preparation_successor_lineage(
-    cmd_client, cmd_session, lineage_mode: str
-) -> None:
-    created = _create_event(cmd_client)
-    case_id = uuid.UUID(created["case_id"])
-    preparation = _complete_preparation_drafts(cmd_session, case_id)
-    root = AutoResearchService(cmd_session).start(
-        case_id, max_rounds=3, budget=100, commit=False
-    )
-    root.status = "succeeded"
-    root.stage = "complete"
-    root_job = cmd_session.scalar(
-        select(Job).where(Job.target_type == "research_run", Job.target_id == root.id)
-    )
-    assert root_job is not None
-    root_job.status = "succeeded"
-    if lineage_mode == "missing":
-        active = AutoResearchService(cmd_session).start(
-            case_id,
-            max_rounds=3,
-            budget=100,
-            commit=False,
-            scope_context={"predecessor_run_id": str(uuid.uuid4())},
-        )
-    else:
-        now = datetime.now(timezone.utc)
-        active = ResearchRun(
-            id=uuid.uuid4(),
-            research_case_id=case_id,
-            status="queued",
-            stage="planning",
-            round=0,
-            max_rounds=3,
-            budget=100,
-            budget_used=0,
-            created_at=now,
-            updated_at=now,
-        )
-        cmd_session.add(active)
-        cmd_session.flush()
-        cmd_session.add(
-            Job(
-                kind="prepare_research",
-                status="queued",
-                target_type="research_run",
-                target_id=active.id,
-                research_case_id=case_id,
-                created_at=now,
-            )
-        )
-        cmd_session.add(
-            ResearchRunEvent(
-                run_id=active.id,
-                seq=1,
-                stage="scope",
-                status="completed",
-                message="fixture scope",
-                payload_json={"predecessor_run_id": str(active.id)},
-                created_at=now,
-            )
-        )
-    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    lifecycle.active_run_id = active.id
-    lifecycle.status = "continuing"
-    preparation.research_run_id = root.id
-    preparation.authorized_evidence_plan = {"items": []}
-    preparation.status = "authorized"
-    active_job = cmd_session.scalar(
-        select(Job).where(Job.target_type == "research_run", Job.target_id == active.id)
-    )
-    assert active_job is not None
-    cmd_session.commit()
-
-    response = cmd_client.put(
-        f"/api/v1/event-research/{case_id}/scope",
-        json={
-            "factors": [
-                INITIAL_FACTORS[0],
-                INITIAL_FACTORS[1],
-                f"{lineage_mode} 继任关系范围变化因素",
-            ],
-            "changed_by": "reviewer",
-            "change_reason": f"scope changed with {lineage_mode} lineage",
-        },
-    )
-
-    assert response.status_code == 200
-    cmd_session.refresh(active)
-    cmd_session.refresh(active_job)
-    assert active.status == "queued"
-    assert active_job.status == "queued"
-    assert active_job.cancel_requested is False
-    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    assert lifecycle.active_run_id == active.id
 
 
 def _reviewed_evidence(session, case_id: uuid.UUID, factor: str) -> EvidenceLink:
@@ -936,6 +206,217 @@ def _cover_current_scope(session, case_id: uuid.UUID) -> list[EvidenceLink]:
     return links
 
 
+def _automatically_admitted_evidence(
+    session,
+    case_id: uuid.UUID,
+    factor: str,
+    *,
+    goal_id: str,
+    role: str = "supports",
+    research_run: ResearchRun | None = None,
+    tenant_id: str = "test-tenant",
+) -> tuple[EvidenceLink, AutomaticAdmissionDecision, ResearchRun]:
+    now = datetime.now(timezone.utc)
+    thesis = session.scalar(
+        select(Thesis).where(
+            Thesis.research_case_id == case_id,
+            Thesis.statement == factor,
+        )
+    )
+    assert thesis is not None
+    scope = session.scalar(
+        select(EventResearchScopeVersion)
+        .where(EventResearchScopeVersion.research_case_id == case_id)
+        .order_by(EventResearchScopeVersion.version.desc())
+        .limit(1)
+    )
+    assert scope is not None
+    run = research_run
+    if run is None:
+        run = ResearchRun(
+            research_case_id=case_id,
+            status="prepared",
+            stage="awaiting_acquisition",
+            round=0,
+            max_rounds=3,
+            budget=100,
+            budget_used=0,
+            scope_thesis_ids=[str(thesis.id)],
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(run)
+        session.flush()
+    job = AcquisitionJob(
+        tenant_id=tenant_id,
+        research_case_id=case_id,
+        thesis_id=thesis.id,
+        research_run_id=run.id,
+        idempotency_key=uuid.uuid4().hex,
+        request_snapshot={
+            "goal_id": goal_id,
+            "research_run_id": str(run.id),
+            "scope_version_id": str(scope.id),
+        },
+        policy_snapshot={"version": "b-scope-v2"},
+        status="succeeded",
+        stage="succeeded",
+        attempt=1,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(job)
+    session.flush()
+    series = AcquisitionSeries(
+        tenant_id=job.tenant_id,
+        research_case_id=case_id,
+        research_run_id=run.id,
+        scope_version_id=scope.id,
+        thesis_id=thesis.id,
+        goal_id=goal_id,
+        created_at=now,
+    )
+    session.add(series)
+    session.flush()
+    session.add(
+        AcquisitionQueryPlan(
+            series_id=series.id,
+            acquisition_job_id=job.id,
+            acquisition_round=1,
+            goal_id=goal_id,
+            planner_version="goal-query-v1",
+            policy_version="b-scope-v2",
+            frozen_inputs_json=job.request_snapshot,
+            ordered_queries_json=[],
+            created_at=now,
+        )
+    )
+    reference = SourceReference(
+        job_id=job.id,
+        adapter_key="sse",
+        external_record_id=uuid.uuid4().hex,
+        external_version="v1",
+        canonical_url="https://www.sse.com.cn/automatic.pdf",
+        title="自动准入公告",
+        published_at=now,
+        source_role="company_disclosure",
+        metadata_json={"provider_identity": "Shanghai Stock Exchange"},
+        created_at=now,
+    )
+    session.add(reference)
+    session.flush()
+    attempt = AcquisitionAttempt(
+        job_id=job.id,
+        adapter_key="sse",
+        operation="fetch",
+        attempt_no=1,
+        started_at=now,
+        finished_at=now,
+        outcome="succeeded",
+        retryable=False,
+        safe_metadata={"source_reference_id": str(reference.id)},
+    )
+    session.add(attempt)
+    session.flush()
+    raw = f"automatic evidence:{goal_id}".encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    artifact = RetrievalArtifact(
+        source_reference_id=reference.id,
+        attempt_id=attempt.id,
+        content_sha256=digest,
+        raw_bytes=raw,
+        mime_type="text/plain",
+        byte_size=len(raw),
+        final_url="https://static.sse.com.cn/automatic.pdf",
+        retrieved_at=now,
+    )
+    document = DocumentVersion(
+        content_sha256=digest,
+        source_url=reference.canonical_url,
+        available_at=now,
+        acquired_at=now,
+        parser_version="fixture-v1",
+        source_authority="primary_disclosure",
+    )
+    session.add_all([artifact, document])
+    session.flush()
+    session.add(
+        RetrievalArtifactDocument(
+            retrieval_artifact_id=artifact.id,
+            document_version_id=document.id,
+            relation="created",
+            publication_key=hashlib.sha256(b"automatic-publication").hexdigest(),
+            created_at=now,
+        )
+    )
+    span = SourceSpan(
+        document_version_id=document.id,
+        locator={"page": 1},
+        verbatim_text="自动准入证据",
+    )
+    session.add(span)
+    session.flush()
+    candidate = AtomicClaimCandidate(
+        source_span_id=span.id,
+        canonical_key=uuid.uuid4().hex + uuid.uuid4().hex,
+        quote="自动准入证据",
+        quote_start=0,
+        quote_end=6,
+        quote_sha256=hashlib.sha256("自动准入证据".encode()).hexdigest(),
+        normalized_text="自动准入证据",
+        claim_type="disclosed_fact",
+        authority_level="primary_disclosure",
+        structured_fields={
+            "subject": "Alphabet",
+            "predicate": factor,
+            "unit": "亿元",
+            "observed_period": "2026-08-15",
+        },
+        validation_result={"normalizer_version": "fixture-v1"},
+        created_at=now,
+    )
+    session.add(candidate)
+    session.flush()
+    decision = AutomaticAdmissionDecision(
+        job_id=job.id,
+        candidate_id=candidate.id,
+        retrieval_artifact_id=artifact.id,
+        outcome="admitted",
+        gate_version="b-scope-gate-v1",
+        policy_version="b-scope-v2",
+        gate_results={"source": {"passed": True}},
+        created_at=now,
+    )
+    session.add(decision)
+    session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="fact",
+        normalized_text="自动准入证据",
+        observed_period=now.date(),
+        atomic_claim_candidate_id=candidate.id,
+        automatic_admission_decision_id=decision.id,
+        created_at=now,
+    )
+    session.add(statement)
+    session.flush()
+    link = EvidenceLink(
+        thesis_id=thesis.id,
+        source_statement_id=statement.id,
+        role=role,
+        reason="automatic fixture",
+        scope={"period": "event"},
+        available_at=now,
+        creator_type="ai",
+        review_state="automatically_admitted",
+        automatic_admission_decision_id=decision.id,
+        created_at=now,
+    )
+    session.add(link)
+    session.flush()
+    return link, decision, run
+
+
 def test_creating_event_persists_ordered_scope_version_one(cmd_client, cmd_session) -> None:
     created = _create_event(cmd_client)
     case_id = uuid.UUID(created["case_id"])
@@ -950,8 +431,274 @@ def test_creating_event_persists_ordered_scope_version_one(cmd_client, cmd_sessi
 
     assert len(versions) == 1
     assert versions[0].version == 1
-    assert versions[0].changed_by == "tester"
+    assert versions[0].changed_by == "user:test-team"
     assert _scope_statements(cmd_session, versions[0].id) == INITIAL_FACTORS
+
+
+def test_automatic_admission_mapping_is_goal_bound_append_only_and_visible(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    scope = cmd_session.scalar(
+        select(EventResearchScopeVersion).where(
+            EventResearchScopeVersion.research_case_id == case_id
+        )
+    )
+    assert scope is not None
+    thesis = cmd_session.scalar(
+        select(Thesis).where(
+            Thesis.research_case_id == case_id,
+            Thesis.statement == INITIAL_FACTORS[0],
+        )
+    )
+    assert thesis is not None
+    goal_id = f"thesis:{thesis.id}:support"
+    link, decision, run = _automatically_admitted_evidence(
+        cmd_session, case_id, INITIAL_FACTORS[0], goal_id=goal_id
+    )
+
+    first = append_automatic_scope_evidence_assignment(
+        cmd_session,
+        case_id=case_id,
+        scope_version_id=scope.id,
+        research_run_id=run.id,
+        goal_id=goal_id,
+        evidence_link_id=link.id,
+        automatic_admission_decision_id=decision.id,
+        factor_statement=INITIAL_FACTORS[0],
+        provenance={"policy_version": "event-goal-coverage-v1"},
+        created_at=datetime.now(timezone.utc),
+    )
+    replay = append_automatic_scope_evidence_assignment(
+        cmd_session,
+        case_id=case_id,
+        scope_version_id=scope.id,
+        research_run_id=run.id,
+        goal_id=goal_id,
+        evidence_link_id=link.id,
+        automatic_admission_decision_id=decision.id,
+        factor_statement=INITIAL_FACTORS[0],
+        provenance={"policy_version": "event-goal-coverage-v1"},
+        created_at=datetime.now(timezone.utc),
+    )
+
+    assert replay.id == first.id
+    assert first.assignment_kind == "automatic"
+    assert first.acquisition_goal_id == goal_id
+    assert first.research_run_id == run.id
+    assert first.automatic_admission_decision_id == decision.id
+    assert first.disposition == "mapped"
+    assert link.review_state == "automatically_admitted"
+    assert link.creator_type == "ai"
+    assert current_mapped_evidence_ids(cmd_session, case_id) == [link.id]
+    workbench = EventResearchQueries(cmd_session).workbench(case_id)
+    automatic_row = next(
+        item for item in workbench.evidence if item.document_version_id
+    )
+    assert automatic_row.review_state == "automatically_admitted"
+    assert cmd_session.scalar(
+        select(EventResearchScopeEvidenceAssignment).where(
+            EventResearchScopeEvidenceAssignment.evidence_link_id == link.id
+        )
+    ) is first
+
+
+def test_alternative_explanation_is_event_level_and_never_semantically_mapped(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    scope = cmd_session.scalar(
+        select(EventResearchScopeVersion).where(
+            EventResearchScopeVersion.research_case_id == case_id
+        )
+    )
+    assert scope is not None
+    goal_id = f"event:{case_id}:alternative_explanation"
+    link, decision, run = _automatically_admitted_evidence(
+        cmd_session, case_id, INITIAL_FACTORS[0], goal_id=goal_id
+    )
+
+    assignment = append_automatic_scope_evidence_assignment(
+        cmd_session,
+        case_id=case_id,
+        scope_version_id=scope.id,
+        research_run_id=run.id,
+        goal_id=goal_id,
+        evidence_link_id=link.id,
+        automatic_admission_decision_id=decision.id,
+        factor_statement=None,
+        provenance={
+            "policy_version": "event-goal-coverage-v1",
+            "mapping_scope": "event",
+        },
+        created_at=datetime.now(timezone.utc),
+    )
+
+    assert assignment.factor_statement is None
+    assert assignment.disposition == "unmapped"
+    assert assignment.automatic_provenance_json["mapping_scope"] == "event"
+    assert link.id not in current_mapped_evidence_ids(cmd_session, case_id)
+    workbench = EventResearchQueries(cmd_session).workbench(case_id)
+    assert all(
+        factor.automatically_admitted_support_count == 0
+        and factor.automatically_admitted_contradiction_count == 0
+        for factor in workbench.factors
+    )
+
+
+def test_factor_counts_keep_reviewed_and_automatic_admission_distinct(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    scope = cmd_session.scalar(
+        select(EventResearchScopeVersion).where(
+            EventResearchScopeVersion.research_case_id == case_id
+        )
+    )
+    thesis = cmd_session.scalar(
+        select(Thesis).where(
+            Thesis.research_case_id == case_id,
+            Thesis.statement == INITIAL_FACTORS[0],
+        )
+    )
+    assert scope is not None and thesis is not None
+    reviewed = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
+    append_current_scope_evidence_assignment(
+        cmd_session,
+        case_id=case_id,
+        evidence_link_id=reviewed.id,
+        factor_statement=INITIAL_FACTORS[0],
+        created_at=datetime.now(timezone.utc),
+    )
+    goal_id = f"thesis:{thesis.id}:support"
+    automatic, decision, run = _automatically_admitted_evidence(
+        cmd_session, case_id, INITIAL_FACTORS[0], goal_id=goal_id
+    )
+    append_automatic_scope_evidence_assignment(
+        cmd_session,
+        case_id=case_id,
+        scope_version_id=scope.id,
+        research_run_id=run.id,
+        goal_id=goal_id,
+        evidence_link_id=automatic.id,
+        automatic_admission_decision_id=decision.id,
+        factor_statement=INITIAL_FACTORS[0],
+        provenance={"policy_version": "event-goal-coverage-v1"},
+        created_at=datetime.now(timezone.utc),
+    )
+
+    workbench = EventResearchQueries(cmd_session).workbench(case_id)
+    factor = workbench.factors[0]
+
+    assert factor.reviewed_support_count == 1
+    assert factor.reviewed_contradiction_count == 0
+    assert factor.automatically_admitted_support_count == 1
+    assert factor.automatically_admitted_contradiction_count == 0
+    assert workbench.progress.reviewed_count == 1
+    assert workbench.progress.automatically_admitted_count == 1
+    assert not hasattr(workbench.progress, "verified")
+
+
+def test_automatic_admission_does_not_map_removed_or_unrelated_factor(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    old_scope = cmd_session.scalar(
+        select(EventResearchScopeVersion).where(
+            EventResearchScopeVersion.research_case_id == case_id
+        )
+    )
+    assert old_scope is not None
+    thesis = cmd_session.scalar(
+        select(Thesis).where(
+            Thesis.research_case_id == case_id,
+            Thesis.statement == INITIAL_FACTORS[1],
+        )
+    )
+    assert thesis is not None
+    goal_id = f"thesis:{thesis.id}:support"
+    link, decision, run = _automatically_admitted_evidence(
+        cmd_session, case_id, INITIAL_FACTORS[1], goal_id=goal_id
+    )
+    EventResearchScopeService(cmd_session).update(
+        case_id,
+        [INITIAL_FACTORS[0], INITIAL_FACTORS[2], "新的当前因素"],
+        "tester",
+    )
+    current_scope = cmd_session.scalar(
+        select(EventResearchScopeVersion)
+        .where(EventResearchScopeVersion.research_case_id == case_id)
+        .order_by(EventResearchScopeVersion.version.desc())
+        .limit(1)
+    )
+    assert current_scope is not None and current_scope.id != old_scope.id
+
+    with pytest.raises(ValidationFailedError, match="frozen Case/run/goal"):
+        append_automatic_scope_evidence_assignment(
+            cmd_session,
+            case_id=case_id,
+            scope_version_id=current_scope.id,
+            research_run_id=run.id,
+            goal_id=goal_id,
+            evidence_link_id=link.id,
+            automatic_admission_decision_id=decision.id,
+            factor_statement=INITIAL_FACTORS[1],
+            provenance={"policy_version": "event-goal-coverage-v1"},
+            created_at=datetime.now(timezone.utc),
+        )
+
+    assert link.id not in current_mapped_evidence_ids(cmd_session, case_id)
+
+
+def test_reviewed_scope_mapping_remains_supported(cmd_client, cmd_session) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
+
+    assignment = append_current_scope_evidence_assignment(
+        cmd_session,
+        case_id=case_id,
+        evidence_link_id=link.id,
+        factor_statement=INITIAL_FACTORS[0],
+        created_at=datetime.now(timezone.utc),
+    )
+
+    assert assignment is not None
+    assert assignment.assignment_kind == "reviewed"
+    assert assignment.acquisition_goal_id is None
+    assert assignment.automatic_admission_decision_id is None
+    assert link.id in current_mapped_evidence_ids(cmd_session, case_id)
+
+
+def test_automatic_link_cannot_enter_scope_through_reviewed_mapping_seam(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    thesis = cmd_session.scalar(
+        select(Thesis).where(
+            Thesis.research_case_id == case_id,
+            Thesis.statement == INITIAL_FACTORS[0],
+        )
+    )
+    assert thesis is not None
+    goal_id = f"thesis:{thesis.id}:support"
+    link, _decision, _run = _automatically_admitted_evidence(
+        cmd_session, case_id, INITIAL_FACTORS[0], goal_id=goal_id
+    )
+
+    with pytest.raises(ValidationFailedError, match="reviewed evidence"):
+        append_current_scope_evidence_assignment(
+            cmd_session,
+            case_id=case_id,
+            evidence_link_id=link.id,
+            factor_statement=INITIAL_FACTORS[0],
+            created_at=datetime.now(timezone.utc),
+        )
 
 
 def test_scope_created_factor_requires_research_protocol(cmd_client, cmd_session) -> None:
@@ -977,11 +724,11 @@ def test_scope_created_factor_requires_research_protocol(cmd_client, cmd_session
     assert thesis.research_protocol_required is True
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
-    assert lifecycle.status == "awaiting_key_review"
+    assert lifecycle.status == "awaiting_scope"
     assert lifecycle.active_run_id is None
     assert lifecycle.current_round == 0
-    assert lifecycle.next_human_action is None
-    assert lifecycle.current_gap == "研究准备尚未完成；ResearchRun 未创建，正式补证尚未启动"
+    assert lifecycle.next_human_action == "完成新增因素的研究协议后再启动补证"
+    assert new_factor in lifecycle.current_gap
     assert list(
         cmd_session.scalars(
             select(ResearchRun).where(ResearchRun.research_case_id == case_id)
@@ -989,13 +736,27 @@ def test_scope_created_factor_requires_research_protocol(cmd_client, cmd_session
     ) == []
     workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
     assert workbench.status_code == 200
+    assert workbench.json()["next_action"] == {
+        "kind": "complete_research_protocol",
+        "label": "完成新增因素的研究协议后再启动补证",
+        "count": None,
+    }
     listed = cmd_client.get("/api/v1/event-research")
     assert listed.status_code == 200
-    item = listed.json()["items"][0]
-    assert item["case_id"] == str(case_id)
-    assert item["lifecycle_status"] == "awaiting_key_review"
-    assert item["status_summary"] == "系统正在准备研究材料"
-    assert item["next_human_action"] is None
+    assert listed.json()["items"] == [
+        {
+            "case_id": str(case_id),
+            "event_title": "Alphabet 财报后股价下跌",
+            "company_name": "Alphabet",
+            "ticker": "GOOGL",
+            "event_at": None,
+            "lifecycle_status": "awaiting_scope",
+            "status_summary": "研究范围已更新，新增因素需先完成研究协议",
+            "next_human_action": "完成新增因素的研究协议后再启动补证",
+            "next_action_kind": "complete_research_protocol",
+            "updated_at": listed.json()["items"][0]["updated_at"],
+        }
+    ]
 
 
 def test_scope_update_preserves_reused_thesis_protocol_requirement(
@@ -1024,8 +785,43 @@ def test_scope_update_preserves_reused_thesis_protocol_requirement(
     assert existing.research_protocol_required is False
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
-    assert lifecycle.status == "awaiting_key_review"
-    assert lifecycle.active_run_id is None
+    assert lifecycle.status == "continuing"
+    assert lifecycle.active_run_id is not None
+
+
+def test_legacy_scope_update_cancels_a_prepared_active_run(cmd_client, cmd_session):
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    old_run = AutoResearchService(cmd_session).start(
+        case_id,
+        enqueue=False,
+        commit=False,
+    )
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.active_run_id = old_run.id
+    cmd_session.commit()
+
+    EventResearchScopeService(cmd_session).update(
+        case_id,
+        INITIAL_FACTORS,
+        "reviewer",
+    )
+    cmd_session.commit()
+
+    cmd_session.refresh(old_run)
+    cmd_session.refresh(lifecycle)
+    assert (old_run.status, old_run.stage) == ("cancelled", "stopped")
+    assert lifecycle.active_run_id not in {None, old_run.id}
+    successor = cmd_session.get(ResearchRun, lifecycle.active_run_id)
+    assert successor is not None
+    assert (successor.status, successor.stage) == ("queued", "planning")
+    assert cmd_session.scalar(
+        select(Job.id).where(
+            Job.kind == "research_run",
+            Job.target_id == successor.id,
+        )
+    ) is not None
 
 
 def test_scope_case_lock_requests_a_for_update_research_case_row() -> None:
@@ -1077,9 +873,10 @@ def test_postgres_scope_update_waits_for_publish_then_snapshots_confirmed_link(e
                 research_question="What explains the event?",
                 candidate_factors=INITIAL_FACTORS,
                 research_protocol_required=False,
-                created_by="tester",
             ),
-            tenant_id="test-team",
+            principal=persist_research_principal(
+                bootstrap, tenant_id="test-team", label="scope-concurrency"
+            ),
         )
         case_id = uuid.UUID(created.case_id)
         thesis = bootstrap.scalar(
@@ -1262,9 +1059,10 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
                 research_question="What explains the event?",
                 candidate_factors=INITIAL_FACTORS,
                 research_protocol_required=False,
-                created_by="tester",
             ),
-            tenant_id="test-team",
+            principal=persist_research_principal(
+                bootstrap, tenant_id="test-team", label="scope-replacement"
+            ),
         )
         case_id = uuid.UUID(created.case_id)
         # Intake only freezes source material. This concurrency test needs an
@@ -1276,15 +1074,6 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
         lifecycle = bootstrap.get(EventResearchLifecycle, case_id)
         assert lifecycle is not None
         lifecycle.active_run_id = old_run.id
-        preparation = bootstrap.scalar(
-            select(ResearchPreparation).where(
-                ResearchPreparation.research_case_id == case_id
-            )
-        )
-        assert preparation is not None
-        preparation.research_run_id = old_run.id
-        preparation.authorized_evidence_plan = {"items": []}
-        preparation.status = "authorized"
         old_run_id = old_run.id
         old_run.max_rounds = 1
         tasks = list(
@@ -1420,7 +1209,6 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
         old_task = verify.get(ResearchTask, target_task_id)
         lifecycle = verify.get(EventResearchLifecycle, case_id)
         assert old_run is not None and old_run.status == "cancelled"
-        assert old_run.stop_reason == "scope_changed"
         assert old_task is not None and old_task.status == "cancelled"
         assert old_task.result is None
         old_job = verify.scalar(
@@ -1440,7 +1228,7 @@ def test_postgres_scope_replacement_discards_inflight_old_run_output(
             .where(Thesis.research_case_id == case_id)
         ) is None
         assert lifecycle is not None
-        assert lifecycle.status == "awaiting_key_review"
+        assert lifecycle.status == "awaiting_scope"
         assert lifecycle.active_run_id is None
         assert lifecycle.current_round == 0
         assert verify.scalar(
@@ -1465,9 +1253,10 @@ def test_postgres_scope_update_serializes_draft_snapshot(engine, monkeypatch) ->
                 research_question="What explains the event?",
                 candidate_factors=INITIAL_FACTORS,
                 research_protocol_required=False,
-                created_by="tester",
             ),
-            tenant_id="test-team",
+            principal=persist_research_principal(
+                bootstrap, tenant_id="test-team", label="draft-concurrency"
+            ),
         )
         case_id = uuid.UUID(created.case_id)
         lifecycle = bootstrap.get(EventResearchLifecycle, case_id)
@@ -1483,14 +1272,12 @@ def test_postgres_scope_update_serializes_draft_snapshot(engine, monkeypatch) ->
     errors: list[BaseException] = []
     draft_ids: list[uuid.UUID] = []
     draft_thread_id: list[int] = []
-    original_invalidate = ResearchPreparationService.invalidate_from_scope_change
+    original_continue = EventResearchScopeService._continue_research_if_needed
 
-    def pause_scope(service, case_id, new_scope_id, *, actor, case_locked=False) -> None:
+    def pause_scope(service, lifecycle, active_theses, now) -> None:
         scope_has_lock.set()
         assert release_scope.wait(timeout=5)
-        return original_invalidate(
-            service, case_id, new_scope_id, actor=actor, case_locked=case_locked
-        )
+        original_continue(service, lifecycle, active_theses, now)
 
     def observe_draft_lock(
         _conn, _cursor, statement, _parameters, _context, _executemany
@@ -1504,7 +1291,7 @@ def test_postgres_scope_update_serializes_draft_snapshot(engine, monkeypatch) ->
             draft_lock_attempted.set()
 
     monkeypatch.setattr(
-        ResearchPreparationService, "invalidate_from_scope_change", pause_scope
+        EventResearchScopeService, "_continue_research_if_needed", pause_scope
     )
 
     def update_scope() -> None:
@@ -1587,9 +1374,10 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
                 research_question="What explains the event?",
                 candidate_factors=INITIAL_FACTORS,
                 research_protocol_required=False,
-                created_by="tester",
             ),
-            tenant_id="test-team",
+            principal=persist_research_principal(
+                bootstrap, tenant_id="test-team", label="conclusion-concurrency"
+            ),
         )
         case_id = uuid.UUID(created.case_id)
         lifecycle = bootstrap.get(EventResearchLifecycle, case_id)
@@ -1611,16 +1399,12 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
     publish_lock_attempted, stale_publish_rejected = Event(), Event()
     errors: list[BaseException] = []
     publisher_thread_id: list[int] = []
-    original_invalidate = ResearchPreparationService.invalidate_from_scope_change
+    original_continue = EventResearchScopeService._continue_research_if_needed
 
-    def pause_scope_lifecycle_write(
-        service, case_id, new_scope_id, *, actor, case_locked=False
-    ) -> None:
+    def pause_scope_lifecycle_write(service, lifecycle, active_theses, now) -> None:
         scope_has_lifecycle.set()
         assert allow_scope_continue.wait(timeout=5)
-        return original_invalidate(
-            service, case_id, new_scope_id, actor=actor, case_locked=case_locked
-        )
+        original_continue(service, lifecycle, active_theses, now)
 
     def observe_publish_lock(
         _conn, _cursor, statement, _parameters, _context, _executemany
@@ -1634,8 +1418,8 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
             publish_lock_attempted.set()
 
     monkeypatch.setattr(
-        ResearchPreparationService,
-        "invalidate_from_scope_change",
+        EventResearchScopeService,
+        "_continue_research_if_needed",
         pause_scope_lifecycle_write,
     )
 
@@ -1701,9 +1485,9 @@ def test_postgres_scope_update_invalidates_interleaved_stale_conclusion_publish(
     try:
         lifecycle = verify.get(EventResearchLifecycle, case_id)
         assert lifecycle is not None
-        # Scope history invalidates the stale draft before the publisher's
-        # root-lock request can observe it as current.
-        assert lifecycle.status == "draft_ready"
+        # A changed scope queues a successor; it cannot leave a stale draft
+        # lifecycle that a concurrent publisher could mistake for current.
+        assert lifecycle.status == "continuing"
         assert verify.scalar(
             select(EventResearchConclusion.id).where(
                 EventResearchConclusion.research_case_id == case_id,
@@ -1725,7 +1509,7 @@ def test_scope_update_appends_v2_without_rewriting_v1(cmd_client, cmd_session) -
 
     response = cmd_client.put(
         f"/api/v1/event-research/{case_id}/scope",
-        json={"factors": updated_factors, "changed_by": "reviewer"},
+        json={"factors": updated_factors},
     )
 
     assert response.status_code == 200
@@ -1851,7 +1635,6 @@ def test_legacy_run_scope_falls_back_to_its_own_tasks_not_latest_scope(
                 INITIAL_FACTORS[2],
                 "AI 投入回报周期可能拉长",
             ],
-            "changed_by": "reviewer",
         },
     )
     assert update.status_code == 200
@@ -1875,7 +1658,6 @@ def test_scope_update_keeps_removed_factor_evidence_and_reports_mapping_counts(
                 INITIAL_FACTORS[2],
                 "AI 投入回报周期可能拉长",
             ],
-            "changed_by": "reviewer",
         },
     )
 
@@ -1902,7 +1684,6 @@ def test_publish_resume_after_scope_snapshot_keeps_one_latest_assignment(
                 "广告业务增长弱于市场预期",
                 "AI 投入回报周期可能拉长",
             ],
-            "changed_by": "reviewer",
         },
     )
     assert response.status_code == 200
@@ -2000,7 +1781,6 @@ def test_published_event_rejects_scope_update_without_starting_successor(
                 "广告业务增长弱于市场预期",
                 "AI 投入回报周期可能拉长",
             ],
-            "changed_by": "reviewer",
         },
     )
 
@@ -2041,7 +1821,6 @@ def test_scope_updates_append_auditable_evidence_assignments_and_refresh_lifecyc
                 INITIAL_FACTORS[2],
                 "AI 投入回报周期可能拉长",
             ],
-            "changed_by": "reviewer",
         },
     )
     third = cmd_client.put(
@@ -2052,7 +1831,6 @@ def test_scope_updates_append_auditable_evidence_assignments_and_refresh_lifecyc
                 INITIAL_FACTORS[2],
                 "广告业务增长弱于市场预期",
             ],
-            "changed_by": "reviewer",
         },
     )
 
@@ -2099,10 +1877,10 @@ def test_scope_updates_append_auditable_evidence_assignments_and_refresh_lifecyc
         removed_link.id: (INITIAL_FACTORS[1], "mapped"),
     }
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle.status == "awaiting_key_review"
+    assert lifecycle.status == "awaiting_scope"
     assert lifecycle.active_run_id is None
-    assert lifecycle.status_summary == "资料已冻结；系统正在准备候选陈述、研究协议草案和补证计划"
-    assert lifecycle.next_human_action is None
+    assert lifecycle.status_summary == "研究范围已更新，新增因素需先完成研究协议"
+    assert lifecycle.next_human_action == "完成新增因素的研究协议后再启动补证"
 
 
 @pytest.mark.parametrize("paused_status", ["awaiting_scope", "exhausted"])
@@ -2129,22 +1907,60 @@ def test_scope_update_resumes_research_with_current_scope_factors_only(
 
     response = cmd_client.put(
         f"/api/v1/event-research/{case_id}/scope",
-        json={"factors": active_factors, "changed_by": "reviewer"},
+        json={"factors": active_factors},
     )
 
     assert response.status_code == 200
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    assert lifecycle.status == paused_status
-    assert lifecycle.next_human_action == "补充来源或调整研究范围"
-    assert lifecycle.active_run_id == initial_run_id
-    initial_run = cmd_session.get(ResearchRun, initial_run_id)
-    assert initial_run is not None
-    assert initial_run.status == "queued"
-    assert initial_run.stop_reason is None
-    assert len(
-        list(cmd_session.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)))
-    ) == 1
+    assert lifecycle.status == "continuing"
+    assert lifecycle.next_human_action is None
+    assert lifecycle.active_run_id is not None
+    assert lifecycle.active_run_id != initial_run_id
+    successor = cmd_session.get(ResearchRun, lifecycle.active_run_id)
+    assert successor is not None
+    assert successor.research_case_id == case_id
+    task_statements = set(
+        cmd_session.scalars(
+            select(Thesis.statement)
+            .join(ResearchTask, ResearchTask.thesis_id == Thesis.id)
+            .where(ResearchTask.run_id == successor.id)
+        )
+    )
+    assert task_statements == set(active_factors)
+    assert set(successor.scope_thesis_ids) == {
+        str(thesis_id)
+        for thesis_id in cmd_session.scalars(
+            select(Thesis.id).where(
+                Thesis.research_case_id == case_id,
+                Thesis.statement.in_(active_factors),
+            )
+        )
+    }
+    AutoResearchService(cmd_session)._create_balance_gaps(successor, current_round=1)
+    cmd_session.flush()
+    all_successor_task_statements = set(
+        cmd_session.scalars(
+            select(Thesis.statement)
+            .join(ResearchTask, ResearchTask.thesis_id == Thesis.id)
+            .where(ResearchTask.run_id == successor.id)
+        )
+    )
+    assert all_successor_task_statements == set(active_factors)
+    successor.status = "waiting_for_review"
+    successor.stop_reason = "max_rounds_reached"
+    AutoResearchService(cmd_session).refresh_event_lifecycle(successor)
+    next_successor = cmd_session.get(
+        ResearchRun, cmd_session.get(EventResearchLifecycle, case_id).active_run_id
+    )
+    assert next_successor is not None
+    assert next_successor.id != successor.id
+    assert set(
+        cmd_session.scalars(
+            select(Thesis.statement)
+            .join(ResearchTask, ResearchTask.thesis_id == Thesis.id)
+            .where(ResearchTask.run_id == next_successor.id)
+        )
+    ) == set(active_factors)
     workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
     assert workbench.status_code == 200
     assert [item["statement"] for item in workbench.json()["factors"]] == active_factors
@@ -2189,34 +2005,55 @@ def test_scope_update_replaces_an_active_run_with_latest_factor_successor(
 
     response = cmd_client.put(
         f"/api/v1/event-research/{case_id}/scope",
-        json={"factors": latest_factors, "changed_by": "reviewer"},
+        json={"factors": latest_factors},
     )
 
     assert response.status_code == 200
     cmd_session.refresh(old_run)
-    assert old_run.status == old_status
-    assert old_run.stop_reason is None
+    assert old_run.status == "cancelled"
+    assert old_run.stop_reason == "cancelled"
     old_job = cmd_session.scalar(
         select(Job).where(Job.target_type == "research_run", Job.target_id == old_run_id)
     )
     assert old_job is not None
-    assert old_job.status in {"queued", "running"}
-    assert old_job.cancel_requested is False
+    assert old_job.status == "cancelled"
+    assert old_job.cancel_requested is True
     old_tasks = list(
         cmd_session.scalars(
             select(ResearchTask).where(ResearchTask.id.in_(old_task_ids))
         )
     )
     assert old_tasks
-    assert {task.status for task in old_tasks} != {"cancelled"}
+    assert {task.status for task in old_tasks} == {"cancelled"}
+    # Proposal and assessment decisions both reconcile through this state
+    # transition, while atomic-claim decisions use the resume transition.
+    # Neither may revive a run retired by the scope replacement.
+    service = AutoResearchService(cmd_session)
+    assert not service.reconcile_run(
+        old_run_id, trigger_ref="proposal-or-assessment:reviewed"
+    )
+    assert not service.repo.resume_after_claim_review(old_run)
 
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
-    assert lifecycle.status == "awaiting_key_review"
-    assert lifecycle.active_run_id == old_run_id
-    assert len(
-        list(cmd_session.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)))
-    ) == 1
+    assert lifecycle.status == "continuing"
+    assert lifecycle.active_run_id != old_run_id
+    successor = cmd_session.get(ResearchRun, lifecycle.active_run_id)
+    assert successor is not None
+    successor_task_factors = set(
+        cmd_session.scalars(
+            select(Thesis.statement)
+            .join(ResearchTask, ResearchTask.thesis_id == Thesis.id)
+            .where(ResearchTask.run_id == successor.id)
+        )
+    )
+    assert successor_task_factors == set(latest_factors)
+    assert INITIAL_FACTORS[1] not in successor_task_factors
+
+    old_run.status = "waiting_for_review"
+    old_run.stop_reason = "max_rounds_reached"
+    AutoResearchService(cmd_session).refresh_event_lifecycle(old_run)
+    assert cmd_session.get(EventResearchLifecycle, case_id).active_run_id == successor.id
 
 
 def test_scope_update_makes_removed_factor_pending_proposal_non_actionable(session) -> None:
@@ -2227,9 +2064,10 @@ def test_scope_update_makes_removed_factor_pending_proposal_non_actionable(sessi
             research_question="What explains the event?",
             candidate_factors=INITIAL_FACTORS,
             research_protocol_required=False,
-            created_by="tester",
         ),
-        tenant_id="test-team",
+        principal=persist_research_principal(
+            session, tenant_id="test-team", label="scope-update"
+        ),
     )
     case_id = uuid.UUID(created.case_id)
     removed_thesis = session.scalar(
@@ -2312,6 +2150,16 @@ def test_scope_update_makes_removed_factor_pending_proposal_non_actionable(sessi
 
     lifecycle = session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
+    successor = session.get(ResearchRun, lifecycle.active_run_id)
+    assert successor is not None
+    successor.status = "waiting_for_review"
+    successor.stage = "stopped"
+    successor.stop_reason = "max_rounds_reached"
+    successor.max_rounds = 1
+    session.commit()
+    AutoResearchService(session).refresh_event_lifecycle(successor)
+    session.commit()
+
     session.refresh(task)
     session.refresh(lifecycle)
     assert task.status == "done"
@@ -2326,14 +2174,14 @@ def test_scope_update_makes_removed_factor_pending_proposal_non_actionable(sessi
     queue = EventReviewQueueService(session).review_queue(case_id)
     assert queue.items == []
     assert queue.summary.pending == 0
-    assert lifecycle.status == "awaiting_key_review"
+    assert lifecycle.status != "awaiting_key_review"
 
 def test_scope_assignments_exclude_removed_evidence_from_draft_and_citations(
     cmd_client, cmd_session
 ) -> None:
     created = _create_event(cmd_client)
     case_id = uuid.UUID(created["case_id"])
-    active_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
+    _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[0])
     removed_link = _reviewed_evidence(cmd_session, case_id, INITIAL_FACTORS[1])
     active_factors = [
         INITIAL_FACTORS[0],
@@ -2343,7 +2191,7 @@ def test_scope_assignments_exclude_removed_evidence_from_draft_and_citations(
 
     response = cmd_client.put(
         f"/api/v1/event-research/{case_id}/scope",
-        json={"factors": active_factors, "changed_by": "reviewer"},
+        json={"factors": active_factors},
     )
     assert response.status_code == 200
     _cover_current_scope(cmd_session, case_id)
@@ -2588,7 +2436,6 @@ def test_scope_change_blocks_stale_draft_but_current_scope_draft_can_publish(
                 "广告业务增长弱于市场预期",
                 "AI 投入回报周期可能拉长",
             ],
-            "changed_by": "reviewer",
         },
     )
     assert scope.status_code == 200
@@ -2598,7 +2445,7 @@ def test_scope_change_blocks_stale_draft_but_current_scope_draft_can_publish(
 
     stale_publish = cmd_client.post(
         f"/api/v1/event-research/{case_id}/conclusion/publish",
-        json={"text": "stale draft", "reviewer": "reviewer"},
+        json={"text": "stale draft"},
     )
     assert stale_publish.status_code == 422
     assert cmd_session.get(EventResearchConclusion, v1_draft.id) is not None
@@ -2619,7 +2466,7 @@ def test_scope_change_blocks_stale_draft_but_current_scope_draft_can_publish(
 
     current_publish = cmd_client.post(
         f"/api/v1/event-research/{case_id}/conclusion/publish",
-        json={"text": "current draft", "reviewer": "reviewer"},
+        json={"text": "current draft"},
     )
     assert current_publish.status_code == 201
     published = cmd_session.get(
@@ -2672,6 +2519,8 @@ def test_conclusion_history_keeps_drafts_and_published_versions_in_order(
             "text": "第一版草案", "primary_factor": INITIAL_FACTORS[0],
             "scope_version": None, "based_on_conclusion_id": None,
             "reviewer": None, "evidence_count": 1,
+            "system_generated": True, "human_reviewed": False,
+            "review_label": "系统生成，未经人工审核",
             "created_at": "2026-08-09T08:00:00",
         },
         {
@@ -2679,6 +2528,8 @@ def test_conclusion_history_keeps_drafts_and_published_versions_in_order(
             "text": "人工发布的第一版结论", "primary_factor": INITIAL_FACTORS[0],
             "scope_version": None, "based_on_conclusion_id": str(first.id),
             "reviewer": "human:lin", "evidence_count": 2,
+            "system_generated": False, "human_reviewed": True,
+            "review_label": "人工已审核",
             "created_at": "2026-08-09T09:00:00",
         },
     ]
@@ -2723,7 +2574,6 @@ def test_new_frozen_material_starts_a_successor_run_without_rewriting_published_
             "source_metadata": {"authority_level": "secondary_source"},
             "decision": "no_change",
             "reason": "材料没有改变已发布结论的证据边界。",
-            "actor": "human:lin",
         },
     )
     assert unchanged.status_code == 201, unchanged.text
@@ -2731,6 +2581,11 @@ def test_new_frozen_material_starts_a_successor_run_without_rewriting_published_
     assert unchanged.json()["run_id"] is None
     assert unchanged.json()["lifecycle"]["status"] == "published"
     assert unchanged.json()["decision_event_id"]
+    decision_event = cmd_session.get(
+        DomainEvent, uuid.UUID(unchanged.json()["decision_event_id"])
+    )
+    assert decision_event is not None
+    assert decision_event.actor == "user:test-team"
     CaseMonitorService(cmd_session).save(
         case_id,
         actor="human:lin",
@@ -2755,7 +2610,6 @@ def test_new_frozen_material_starts_a_successor_run_without_rewriting_published_
             },
             "decision": "no_change",
             "reason": "仅保存受限资料的审计元数据。",
-            "actor": "human:lin",
         },
     )
     assert restricted.status_code == 201, restricted.text
@@ -2775,7 +2629,6 @@ def test_new_frozen_material_starts_a_successor_run_without_rewriting_published_
         json={
             "document_version_id": str(restricted_document_id),
             "reason": "尝试用受限资料重开研究。",
-            "triggered_by": "human:lin",
         },
     )
     assert blocked.status_code == 422
@@ -2790,7 +2643,6 @@ def test_new_frozen_material_starts_a_successor_run_without_rewriting_published_
             "source_metadata": {"authority_level": "primary_disclosure"},
             "decision": "reopen",
             "reason": "公司新增业绩说明，需核验是否影响原判断",
-            "actor": "human:lin",
         },
     )
 
@@ -2809,6 +2661,76 @@ def test_new_frozen_material_starts_a_successor_run_without_rewriting_published_
     assert cmd_session.get(EventResearchConclusion, prior.id).text == "原发布结论"
 
 
+def test_material_continuation_rejects_client_actor_and_uses_server_identity(
+    cmd_client, cmd_session
+) -> None:
+    created = _create_event(cmd_client)
+    case_id = uuid.UUID(created["case_id"])
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.status = "published"
+    document_id = cmd_session.scalar(
+        select(CaseDocumentVersion.document_version_id).where(
+            CaseDocumentVersion.research_case_id == case_id
+        )
+    )
+    thesis = cmd_session.scalar(
+        select(Thesis).where(Thesis.research_case_id == case_id).limit(1)
+    )
+    assert document_id is not None and thesis is not None
+    thesis.review_state = "confirmed"
+    cmd_session.add(EventResearchConclusion(
+        research_case_id=case_id,
+        scope_version_id=None,
+        state="published",
+        text="原发布结论",
+        primary_factor=thesis.statement,
+        evidence_link_ids=[],
+        based_on_conclusion_id=None,
+        reviewer="user:prior-reviewer",
+        created_at=datetime.now(timezone.utc),
+    ))
+    CaseMonitorService(cmd_session).save(
+        case_id,
+        actor="user:prior-reviewer",
+        config=CaseMonitorConfig(
+            frequency="daily_20_00",
+            factor_ids=[thesis.id],
+            allowed_source_types=["uploaded_file"],
+            next_verification_event="补充资料复核",
+            budget=9,
+            change_reason="为新材料配置受控补证",
+        ),
+    )
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/continuations",
+        json={
+            "document_version_id": str(document_id),
+            "reason": "新资料改变了验证边界。",
+            "triggered_by": "user:forged-client",
+        },
+    )
+
+    assert response.status_code == 422
+    response = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/continuations",
+        json={
+            "document_version_id": str(document_id),
+            "reason": "新资料改变了验证边界。",
+        },
+    )
+    assert response.status_code == 201, response.text
+    run_event = cmd_session.scalar(
+        select(ResearchRunEvent).where(
+            ResearchRunEvent.run_id == uuid.UUID(response.json()["run_id"])
+        )
+    )
+    assert run_event is not None
+    assert run_event.payload_json["triggered_by"] == "user:test-team"
+
+
 @pytest.mark.parametrize(
     "factors",
     [
@@ -2823,18 +2745,18 @@ def test_scope_update_rejects_invalid_factor_sets(cmd_client, factors: list[str]
 
     response = cmd_client.put(
         f"/api/v1/event-research/{created['case_id']}/scope",
-        json={"factors": factors, "changed_by": "reviewer"},
+        json={"factors": factors},
     )
 
     assert response.status_code == 422
 
 
-def test_scope_update_rejects_changed_by_longer_than_128_characters(cmd_client) -> None:
+def test_scope_update_rejects_client_changed_by(cmd_client) -> None:
     created = _create_event(cmd_client)
 
     response = cmd_client.put(
         f"/api/v1/event-research/{created['case_id']}/scope",
-        json={"factors": INITIAL_FACTORS, "changed_by": "x" * 129},
+        json={"factors": INITIAL_FACTORS, "changed_by": "user:forged"},
     )
 
     assert response.status_code == 422
@@ -2843,7 +2765,7 @@ def test_scope_update_rejects_changed_by_longer_than_128_characters(cmd_client) 
 def test_scope_update_returns_existing_not_found_response_for_unknown_case(cmd_client) -> None:
     response = cmd_client.put(
         f"/api/v1/event-research/{uuid.uuid4()}/scope",
-        json={"factors": INITIAL_FACTORS, "changed_by": "reviewer"},
+        json={"factors": INITIAL_FACTORS},
     )
 
     assert response.status_code == 404

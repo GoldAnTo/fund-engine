@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
-from sqlalchemy import select, or_
+from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
 from app.models.ledger import (
     CaseDocumentVersion,
+    CaseTenantAdmission,
     DocumentVersion,
     EvidenceLink,
     EvidenceReview,
@@ -31,9 +32,7 @@ from app.models.ledger import (
 )
 from app.models.proposals import Proposal
 from app.models.source_governance import SourceContract
-from app.services.source_admission import SourceAdmission, SourceStatus, apply_source_contract, classify_source, source_contract_is_active
-from app.services.case_tenant_access import CaseTenantAccess
-from app.services.review_tenant_access import proposal_tenant_predicate
+from app.services.source_admission import SourceAdmission, SourceStatus, apply_source_contract, classify_source
 from app.schemas.v1.commands import ReviewQueueItemDTO, ReviewQueueResponse
 
 
@@ -47,7 +46,6 @@ class ProposalEvidenceContext:
     span: SourceSpan | None
     document: DocumentVersion | None
     admission: SourceAdmission
-    display_withheld: bool = False
 
 
 def proposal_evidence_context(
@@ -110,13 +108,6 @@ def proposal_evidence_context(
         document.parser_version if document else "",
         bool(document and document.parse_state in {"success", "parsed"}),
     ), source_contract)
-    if source_contract is not None and (
-        not source_contract.allow_display or not source_contract_is_active(source_contract)
-    ):
-        return ProposalEvidenceContext(
-            proposal=proposal, thesis=thesis, statement=None, span=None,
-            document=None, admission=admission, display_withheld=True,
-        )
     return ProposalEvidenceContext(
         proposal=proposal,
         thesis=thesis,
@@ -137,7 +128,6 @@ def _invalid_evidence_context(
         span=None,
         document=None,
         admission=SourceAdmission(SourceStatus.INVALID, reason, False),
-        display_withheld=True,
     )
 
 
@@ -156,15 +146,22 @@ class ReviewQueueQueries:
         self,
         *,
         case_id: uuid.UUID | None = None,
+        tenant_id: str,
+        authorized_case_ids: Select[tuple[uuid.UUID]],
         kind: str | None = None,
         limit: int = 50,
         include_legacy: bool = True,
-        tenant_id: str | None = None,
     ) -> ReviewQueueResponse:
         items: list[ReviewQueueItemDTO] = []
 
         # --- Unified proposal queue (primary) ---
-        proposals = self._pending_proposals(case_id=case_id, kind=kind, limit=limit, tenant_id=tenant_id)
+        proposals = self._pending_proposals(
+            case_id=case_id,
+            tenant_id=tenant_id,
+            authorized_case_ids=authorized_case_ids,
+            kind=kind,
+            limit=limit,
+        )
         for proposal in proposals:
             dto = self._proposal_item(proposal)
             if dto is not None:
@@ -176,7 +173,10 @@ class ReviewQueueQueries:
         if include_legacy and len(items) < limit:
             remaining = limit - len(items)
             for link, thesis, statement, span, version in self._legacy_links(
-                case_id=case_id, limit=remaining, tenant_id=tenant_id
+                case_id=case_id,
+                tenant_id=tenant_id,
+                authorized_case_ids=authorized_case_ids,
+                limit=remaining,
             ):
                 items.append(
                     ReviewQueueItemDTO(
@@ -206,11 +206,24 @@ class ReviewQueueQueries:
         return ReviewQueueResponse(items=items)
 
     def _pending_proposals(
-        self, *, case_id: uuid.UUID | None, kind: str | None, limit: int, tenant_id: str | None = None
+        self,
+        *,
+        case_id: uuid.UUID | None,
+        tenant_id: str,
+        authorized_case_ids: Select[tuple[uuid.UUID]],
+        kind: str | None,
+        limit: int,
     ) -> list[Proposal]:
-        query = select(Proposal).where(Proposal.status == "pending")
-        if tenant_id is not None:
-            query = query.where(proposal_tenant_predicate(tenant_id))
+        query = (
+            select(Proposal)
+            .join(
+                CaseTenantAdmission,
+                CaseTenantAdmission.research_case_id == Proposal.research_case_id,
+            )
+            .where(Proposal.status == "pending")
+            .where(CaseTenantAdmission.tenant_id == tenant_id)
+            .where(Proposal.research_case_id.in_(authorized_case_ids))
+        )
         if case_id is not None:
             query = query.where(Proposal.research_case_id == case_id)
         if kind is not None:
@@ -253,18 +266,22 @@ class ReviewQueueQueries:
             ),
         )
 
-    def _legacy_links(self, *, case_id: uuid.UUID | None, limit: int, tenant_id: str | None = None):
+    def _legacy_links(
+        self,
+        *,
+        case_id: uuid.UUID | None,
+        tenant_id: str,
+        authorized_case_ids: Select[tuple[uuid.UUID]],
+        limit: int,
+    ):
         reviewed = select(EvidenceReview.evidence_link_id)
-        now = datetime.now(timezone.utc)
-        restricted_contract = select(SourceContract.id).where(
-            SourceContract.document_version_id == DocumentVersion.id,
-            or_(SourceContract.allow_display.is_(False),
-                SourceContract.effective_from > now,
-                SourceContract.effective_until < now),
-        ).correlate(DocumentVersion).exists()
         query = (
             select(EvidenceLink, Thesis, SourceStatement, SourceSpan, DocumentVersion)
             .join(Thesis, EvidenceLink.thesis_id == Thesis.id)
+            .join(
+                CaseTenantAdmission,
+                CaseTenantAdmission.research_case_id == Thesis.research_case_id,
+            )
             .join(
                 SourceStatement,
                 EvidenceLink.source_statement_id == SourceStatement.id,
@@ -277,16 +294,11 @@ class ReviewQueueQueries:
             .where(EvidenceLink.creator_type == "ai")
             .where(EvidenceLink.review_state == "machine_generated")
             .where(EvidenceLink.id.not_in(reviewed))
-            .where(~restricted_contract)
+            .where(CaseTenantAdmission.tenant_id == tenant_id)
+            .where(Thesis.research_case_id.in_(authorized_case_ids))
             .order_by(EvidenceLink.created_at)
             .limit(limit)
         )
-        if tenant_id is not None:
-            query = query.where(Thesis.research_case_id.in_(CaseTenantAccess(self._db).case_ids(tenant_id)))
-            query = query.where(select(CaseDocumentVersion.id).where(
-                CaseDocumentVersion.research_case_id == Thesis.research_case_id,
-                CaseDocumentVersion.document_version_id == DocumentVersion.id,
-            ).correlate(Thesis, DocumentVersion).exists())
         if case_id is not None:
             query = query.where(Thesis.research_case_id == case_id)
         return self._db.execute(query)

@@ -18,20 +18,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.assessment_gen import AssessmentGenerator
-from app.ai.client import LLMClient, LLMProviderError
+from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
-from app.ai.prompts import EXTRACT_PROMPT_VERSION
 from app.ai.runs import record_run
 from app.ai.proposal import EvidenceProposer
 from app.api.v1.commands.common import commit_or_rollback
-from app.api.v1.tenant_context import require_research_tenant
-from app.services.review_tenant_access import ReviewTenantAccess
-from app.services.case_tenant_access import CaseTenantAccess
+from app.api.v1.tenant_context import ResearchActor, require_research_actor
 from app.db import get_db
-from app.errors import NotFoundError, UpstreamUnavailableError, ValidationFailedError
+from app.errors import NotFoundError, ValidationFailedError
 from app.models.ledger import (
     CaseDocumentVersion,
     DocumentVersion,
+    Thesis,
     ValidationError,
 )
 from app.models.operational import Job
@@ -42,6 +40,8 @@ from app.services.ingest import DocumentService
 from app.repositories.documents import DocumentRepository
 from app.services.source_governance import SourceGovernanceService
 from app.services.source_admission import source_contract_is_active
+from app.services.case_tenant_access import CaseTenantAccess
+from app.api.v1.dependencies import RequireCaseRoute
 from app.schemas.v1.commands import (
     ExtractResponse,
     ExtractCandidateDTO,
@@ -68,14 +68,22 @@ def _lock_propose_job(db: Session, job_id: uuid.UUID) -> Job | None:
         )
 
 
-def _propose_job_accepts_output(db: Session, job_id: uuid.UUID) -> bool:
+def _propose_job_accepts_output(
+    db: Session,
+    job_id: uuid.UUID,
+    case_id: uuid.UUID,
+    case_policy: RequireCaseRoute,
+) -> bool:
     """Claim the output slot unless a committed cancellation won first."""
     job = _lock_propose_job(db, job_id)
-    return bool(
+    accepts_output = bool(
         job is not None
         and job.status == "running"
         and not job.cancel_requested
     )
+    if accepts_output:
+        case_policy.require_locked(case_id)
+    return accepts_output
 
 
 def _propose_job_is_cancelled(job: Job | None) -> bool:
@@ -116,23 +124,30 @@ def _propose_response(
     status_code=status.HTTP_201_CREATED,
 )
 def create_document_supplement(
+    case_policy: RequireCaseRoute,
     document_version_id: uuid.UUID,
     payload: CreateDocumentSupplementRequest,
-    tenant_id: str = Depends(require_research_tenant),
     db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
     """Freeze user-supplied recovery text without changing the original file."""
+    original = db.get(DocumentVersion, document_version_id)
+    if original is None:
+        raise NotFoundError("document version not found")
     try:
         case_id = uuid.UUID(payload.case_id)
     except ValueError as exc:
         raise ValidationFailedError("case_id must be a UUID") from exc
-    CaseTenantAccess(db).require_case(case_id, tenant_id)
-    original = db.scalar(select(DocumentVersion).where(
-        DocumentVersion.id == document_version_id,
-        DocumentRepository.owned_attachment(tenant_id, case_id),
-    ))
-    if original is None:
-        raise NotFoundError("document version not found")
+    CaseTenantAccess(db).require_case(case_id, actor.tenant_id)
+    case_policy.require(case_id)
+    attached = db.scalar(
+        select(CaseDocumentVersion.id).where(
+            CaseDocumentVersion.research_case_id == case_id,
+            CaseDocumentVersion.document_version_id == document_version_id,
+        )
+    )
+    if attached is None:
+        raise ValidationFailedError("original document is not attached to this Case")
     original_contract = db.scalar(
         select(SourceContract).where(SourceContract.document_version_id == document_version_id)
     )
@@ -176,7 +191,7 @@ def create_document_supplement(
             document=supplement,
             original_contract=original_contract,
             source_metadata=payload.source_metadata,
-            declared_by=payload.created_by,
+            declared_by=actor.server_actor,
         )
     except ValueError as exc:
         db.rollback()
@@ -196,15 +211,27 @@ def create_document_supplement(
     status_code=status.HTTP_201_CREATED,
 )
 def rerun_assessment(
+    case_policy: RequireCaseRoute,
     thesis_id: uuid.UUID,
-    tenant_id: str = Depends(require_research_tenant),
     db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
-    ReviewTenantAccess(db).require_thesis(thesis_id, tenant_id)
+    thesis = db.get(Thesis, thesis_id)
+    if thesis is None:
+        raise NotFoundError(f"thesis {thesis_id} not found")
+    case_policy.require(thesis.research_case_id)
     client = LLMClient.from_env()
+
+    def reauthorize_before_persist() -> bool:
+        case_policy.require_locked(thesis.research_case_id)
+        return True
+
     try:
         assessment = AssessmentGenerator(client).generate(
-            thesis_id, datetime.now(timezone.utc), db
+            thesis_id,
+            datetime.now(timezone.utc),
+            db,
+            before_persist=reauthorize_before_persist,
         )
     except ValueError as exc:
         commit_or_rollback(db)
@@ -243,9 +270,10 @@ def rerun_assessment(
     status_code=status.HTTP_201_CREATED,
 )
 def propose_evidence(
+    case_policy: RequireCaseRoute,
     thesis_id: uuid.UUID,
-    tenant_id: str = Depends(require_research_tenant),
     db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
     """Run the propose step for one thesis.
 
@@ -254,7 +282,10 @@ def propose_evidence(
     — nothing is auto-confirmed; a human decision publishes the formal link.
     The work runs inside a Job row so progress / cancellation are observable.
     """
-    thesis = ReviewTenantAccess(db).require_thesis(thesis_id, tenant_id)
+    thesis = db.get(Thesis, thesis_id)
+    if thesis is None:
+        raise NotFoundError(f"thesis {thesis_id} not found")
+    case_policy.require(thesis.research_case_id)
     client = LLMClient.from_env()
     jobs = JobService(db)
     job = jobs.create(
@@ -273,7 +304,12 @@ def propose_evidence(
         proposal_ids = EvidenceProposer(client).propose(
             thesis_id,
             db,
-            before_persist=lambda: _propose_job_accepts_output(db, job_id),
+            before_persist=lambda: _propose_job_accepts_output(
+                db,
+                job_id,
+                thesis.research_case_id,
+                case_policy,
+            ),
         )
     except Exception:
         # EvidenceProposer records the provider detail on its failed AIRun.
@@ -331,24 +367,38 @@ def propose_evidence(
     status_code=status.HTTP_201_CREATED,
 )
 def extract_statements(
+    case_policy: RequireCaseRoute,
     document_version_id: uuid.UUID,
-    case_id: uuid.UUID | None = None,
-    tenant_id: str = Depends(require_research_tenant),
     db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
     """Run the extract step without publishing formal statements.
 
     Returned candidates retain an exact original quote and await an explicit
     human decision in the Case review workbench.
     """
-    if case_id is not None:
-        CaseTenantAccess(db).require_case(case_id, tenant_id)
-    version = db.scalar(select(DocumentVersion).where(
-        DocumentVersion.id == document_version_id,
-        DocumentRepository.owned_attachment(tenant_id, case_id),
-    ))
+    version = db.get(DocumentVersion, document_version_id)
     if version is None:
-        raise NotFoundError("document version not found")
+        raise NotFoundError(f"document version {document_version_id} not found")
+    attachment_case_ids = sorted(
+        set(
+            db.scalars(
+                select(CaseDocumentVersion.research_case_id).where(
+                    CaseDocumentVersion.document_version_id
+                    == document_version_id
+                )
+            )
+        ),
+        key=str,
+    )
+    for attachment_case_id in attachment_case_ids:
+        case_policy.require(attachment_case_id)
+
+    def reauthorize_before_persist() -> bool:
+        for attachment_case_id in attachment_case_ids:
+            case_policy.require_locked(attachment_case_id)
+        return True
+
     contract = db.scalar(
         select(SourceContract).where(
             SourceContract.document_version_id == document_version_id
@@ -371,27 +421,13 @@ def extract_statements(
         )
         commit_or_rollback(db)
         raise ValidationFailedError(message)
+    client = LLMClient.from_env()
     try:
-        client = LLMClient.from_env()
-    except (ValueError, RuntimeError) as exc:
-        message = "document extraction model configuration is unavailable"
-        record_run(
-            db, kind="extract", model_version="not_run",
-            prompt_version=EXTRACT_PROMPT_VERSION,
-            input_ref={"document_version_id": str(document_version_id), "span_ids": []},
-            output_summary="not started: model configuration unavailable",
-            status="failed", error=message, started_at=datetime.now(timezone.utc),
+        candidates = StatementExtractor(client).extract(
+            document_version_id,
+            db,
+            before_persist=reauthorize_before_persist,
         )
-        commit_or_rollback(db)
-        raise UpstreamUnavailableError(message) from exc
-    try:
-        candidates = StatementExtractor(client).extract(document_version_id, db)
-    except LLMProviderError as exc:
-        # A timeout / connection error is a retryable dependency failure, not
-        # an application defect. StatementExtractor has already persisted the
-        # failed AIRun in its clean post-provider transaction.
-        commit_or_rollback(db)
-        raise UpstreamUnavailableError("LLM provider is temporarily unavailable") from exc
     except Exception:
         # StatementExtractor appends the failed AIRun in the post-provider
         # transaction; preserve it before the request unwinds to a generic 500.

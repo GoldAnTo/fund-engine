@@ -27,7 +27,6 @@ from typing import Any
 import httpx
 
 DEFAULT_BASE_URL = "https://api.gildata.com/mcp-servers/aidata-assistant-srv-tool"
-DEFAULT_MAX_ATTEMPTS = 2
 
 _HEADERS = {
     "Content-Type": "application/json",
@@ -56,17 +55,13 @@ class GildataMCPClient:
         base_url: str = DEFAULT_BASE_URL,
         *,
         timeout: float = 60.0,
-        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         if not token:
             raise GildataMCPError("token must be a non-empty string")
-        if max_attempts < 1:
-            raise ValueError("max_attempts must be a positive integer")
         self._token = token
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
-        self._max_attempts = max_attempts
         client_kwargs: dict[str, Any] = {"timeout": timeout}
         if transport is not None:
             client_kwargs["transport"] = transport
@@ -87,10 +82,7 @@ class GildataMCPClient:
                 "GILDATA_TOKEN environment variable is not set; "
                 "export it before calling from_env()"
             )
-        max_attempts = int(
-            os.getenv("GILDATA_MAX_ATTEMPTS", str(DEFAULT_MAX_ATTEMPTS))
-        )
-        return cls(token=token, max_attempts=max_attempts)
+        return cls(token=token)
 
     # ------------------------------------------------------------------ transport
 
@@ -98,15 +90,12 @@ class GildataMCPClient:
         return f"{self._base_url}?token={self._token}"
 
     def _post(self, payload: dict, *, timeout: float | None = None) -> dict:
-        for attempt in range(self._max_attempts):
-            try:
-                response = self._client.post(
-                    self._url(), json=payload, headers=_HEADERS, timeout=timeout
-                )
-                break
-            except httpx.HTTPError as exc:
-                if attempt + 1 == self._max_attempts:
-                    raise GildataMCPError(GILDATA_REQUEST_ERROR_MESSAGE) from exc
+        try:
+            response = self._client.post(
+                self._url(), json=payload, headers=_HEADERS, timeout=timeout
+            )
+        except httpx.HTTPError as exc:
+            raise GildataMCPError(GILDATA_REQUEST_ERROR_MESSAGE) from exc
 
         if response.status_code != 200:
             raise GildataMCPError(GILDATA_REQUEST_ERROR_MESSAGE)

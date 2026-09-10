@@ -87,6 +87,19 @@ def test_extracts_multi_year_metrics_with_periods():
     assert date(2024, 12, 31) in periods
 
 
+def test_half_year_report_header_uses_the_report_period_end():
+    facts = _extract(
+        "浙江皇马科技股份有限公司2026年半年度报告\n"
+        "单位：元 币种：人民币\n"
+        "主要会计数据 本报告期（1－6月） 上年同期\n"
+        "营业收入 1,317,759,804.17 1,194,055,534.10 10.36\n"
+    )
+
+    assert facts
+    assert facts[0].observed_period == date(2026, 6, 30)
+    assert facts[0].predicate == "营业收入"
+
+
 def test_profit_metrics_keep_accounting_boundaries():
     facts = _extract(
         "单位：亿元\n指标 2025年\n净利润 100\n归属于上市公司股东的净利润 90\n扣非净利润 85\n"
@@ -178,6 +191,52 @@ def test_extractor_keeps_primary_disclosure_table_candidates_as_disclosed_facts(
     assert all(candidate.authority_level == "primary_disclosure" for candidate in candidates)
 
 
+def test_extractor_grounds_primary_table_facts_in_the_confirmed_entity(
+    session, document_service
+):
+    text = (
+        "浙江皇马科技股份有限公司2026年半年度报告\n"
+        "单位：元 币种：人民币\n"
+        "主要会计数据 本报告期（1－6月） 上年同期\n"
+        "营业收入 1,317,759,804.17 1,194,055,534.10 10.36\n"
+    )
+    document = document_service.freeze(
+        raw=text.encode(),
+        source_url="https://www.sse.com.cn/report.pdf",
+        source_authority="primary_disclosure",
+    )
+    document_service.add_span(
+        document_version_id=document.id,
+        locator={"page": 5},
+        verbatim_text=text,
+    )
+
+    candidates = StatementExtractor(
+        LLMClient(model_version="mock-test", mock=True)
+    ).extract(
+        document.id,
+        session,
+        grounding_context={
+            "entity_names": ["皇马科技"],
+            "metric_terms": ["营业收入"],
+            "period_start": "2025-08-17",
+            "period_end": "2026-08-17",
+        },
+    )
+
+    table_candidate = next(
+        candidate
+        for candidate in candidates
+        if candidate.structured_fields["predicate"] == "营业收入"
+    )
+    assert table_candidate.structured_fields["subject"] == "皇马科技"
+    assert table_candidate.structured_fields["observed_period"] == "2026-06-30"
+    assert table_candidate.structured_fields["scope"]["extraction_method"] == (
+        "financial_table_v1"
+    )
+    assert "皇马科技" in table_candidate.normalized_text
+
+
 def test_extractor_commits_rule_fallback_before_narrative_provider(
     session, document_service, document
 ):
@@ -211,6 +270,54 @@ def test_extractor_commits_rule_fallback_before_narrative_provider(
     with patch.object(client, "chat_json", side_effect=provider):
         candidates = StatementExtractor(client).extract(document.id, session)
     assert any(candidate.source_span_id == narrative_span.id for candidate in candidates)
+
+
+def test_extractor_keeps_deterministic_table_facts_when_narrative_provider_fails(
+    session, document_service
+):
+    text = (
+        "浙江皇马科技股份有限公司2026年半年度报告\n"
+        "单位：元 币种：人民币\n"
+        "主要会计数据 本报告期（1－6月） 上年同期\n"
+        "营业收入 1,317,759,804.17 1,194,055,534.10 10.36\n"
+    )
+    document = document_service.freeze(
+        raw=text.encode(),
+        source_url="https://www.sse.com.cn/report.pdf",
+        source_authority="primary_disclosure",
+    )
+    document_service.add_span(
+        document_version_id=document.id,
+        locator={"page": 5},
+        verbatim_text=text,
+    )
+    document_service.add_span(
+        document_version_id=document.id,
+        locator={"page": 6},
+        verbatim_text="浙江皇马科技股份有限公司2026年半年度报告：公司推进电子化学品业务。",
+    )
+    client = LLMClient(model_version="provider-test", mock=False)
+
+    with patch.object(client, "chat_json", side_effect=RuntimeError("provider down")):
+        candidates = StatementExtractor(client).extract(
+            document.id,
+            session,
+            grounding_context={
+                "entity_names": ["皇马科技"],
+                "metric_terms": ["营业收入"],
+                "period_start": "2025-08-17",
+                "period_end": "2026-08-17",
+            },
+        )
+
+    assert any(
+        candidate.structured_fields["predicate"] == "营业收入"
+        for candidate in candidates
+    )
+    run = session.scalars(select(AIRun).where(AIRun.kind == "extract")).one()
+    assert run.status == "partial"
+    assert run.error == "AI operation failed"
+    assert run.input_ref["rule_fallback"] is True
 
 
 def test_extractor_skips_llm_when_all_spans_are_tables(

@@ -14,6 +14,7 @@ from app.acquisition.policy import (
     SourcePolicy,
 )
 from app.domain.acquisition import (
+    ACQUISITION_PLANNER_VERSION,
     AcquisitionRequest,
     EvidenceObjective,
     PlannedQuery,
@@ -21,11 +22,16 @@ from app.domain.acquisition import (
 
 
 def request(**overrides: object) -> AcquisitionRequest:
+    run_id = uuid4()
+    scope_id = uuid4()
+    goal_id = "thesis:contradict"
     values: dict[str, object] = {
         "tenant_id": "team-a",
         "case_id": uuid4(),
         "thesis_id": uuid4(),
-        "research_run_id": None,
+        "research_run_id": run_id,
+        "scope_version_id": scope_id,
+        "goal_id": goal_id,
         "round": 1,
         "objective": EvidenceObjective.CONTRADICT,
         "target_link_role": "contradicts",
@@ -33,6 +39,8 @@ def request(**overrides: object) -> AcquisitionRequest:
         "entity_names": ("示例公司",),
         "security_codes": ("600000",),
         "metric_terms": ("营业收入",),
+        "metric_periods": ("2026-Q2",),
+        "metric_units": ("亿元",),
         "period_start": "2026-01-01",
         "period_end": "2026-12-31",
         "cutoff": datetime(2026, 8, 12, tzinfo=UTC),
@@ -40,7 +48,12 @@ def request(**overrides: object) -> AcquisitionRequest:
             {"company_disclosure", "licensed_provider"}
         ),
         "source_policy_version": B_SCOPE_POLICY.version,
-        "idempotency_key": "run:none:thesis:contradict:1",
+        "planner_version": ACQUISITION_PLANNER_VERSION,
+        "previous_query_plan_id": None,
+        "expansion": None,
+        "idempotency_key": (
+            f"run:{run_id}:scope:{scope_id}:goal:{goal_id}:round:1"
+        ),
     }
     values.update(overrides)
     return AcquisitionRequest(**values)  # type: ignore[arg-type]
@@ -76,6 +89,10 @@ def test_b_scope_policy_only_enables_gildata_and_official_exchanges():
 
 def test_b_scope_policy_version_tracks_exact_network_authority():
     assert B_SCOPE_POLICY.version == "b-scope-v2"
+
+
+def test_query_planner_exposes_the_frozen_contract_version():
+    assert AcquisitionQueryPlanner.version == ACQUISITION_PLANNER_VERSION
 
 
 def test_b_scope_policy_declares_only_exact_exchange_hosts():
@@ -254,6 +271,8 @@ def test_contradiction_query_planning_is_deterministic_and_preserves_scope():
     assert all("示例公司" in item.query for item in first)
     assert all("600000" in item.query for item in first)
     assert all("营业收入" in item.query for item in first)
+    assert all("2026-Q2" in item.query for item in first)
+    assert all("亿元" in item.query for item in first)
     assert all("2026-01-01" in item.query for item in first)
     assert all("2026-12-31" in item.query for item in first)
     assert all("反证" in item.query for item in first)
@@ -264,7 +283,7 @@ def test_contradiction_query_planning_is_deterministic_and_preserves_scope():
 
 def test_contradiction_query_plan_has_exact_public_value():
     query = (
-        "示例公司 600000 营业收入 2026-01-01 至 2026-12-31 "
+        "示例公司 600000 营业收入 2026-Q2 亿元 2026-01-01 至 2026-12-31 "
         "反证 下滑 风险 不及预期"
     )
 

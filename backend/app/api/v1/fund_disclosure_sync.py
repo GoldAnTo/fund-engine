@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
-from app.api.v1.tenant_context import require_research_tenant
+from app.api.v1.tenant_context import ResearchActor, require_research_actor, require_research_tenant
 from app.datasources.gildata.client import GildataMCPClient, GildataMCPError
 from app.db import get_db
 from app.errors import ValidationFailedError
@@ -25,6 +25,7 @@ from app.schemas.v1.fund_disclosure_sync import (
     FundDisclosureSyncSuggestionDTO,
     SaveFundDisclosureSyncConfigRequest,
 )
+from app.api.v1.dependencies import RequireCaseRoute
 from app.services.case_tenant_access import CaseTenantAccess
 from app.services.fund_disclosure_sync import (
     FundDisclosureSyncExecution,
@@ -115,8 +116,9 @@ def _detail_dto(detail: FundDisclosureSyncDetail) -> FundDisclosureSyncDetailRes
     response_model=ActiveFundDisclosureSyncRunsResponse,
 )
 def list_active_fund_disclosure_sync_runs(
+    case_policy: RequireCaseRoute,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> ActiveFundDisclosureSyncRunsResponse:
     """Expose in-flight fund replenishment beside ResearchRun without merging models.
 
@@ -125,7 +127,9 @@ def list_active_fund_disclosure_sync_runs(
     work is currently in progress and to tell the global shell what it is
     doing without leaking source content.
     """
-    case_ids = list(db.scalars(CaseTenantAccess(db).case_ids(tenant_id)))
+    case_ids = list(
+        db.scalars(case_policy.authorized_case_ids())
+    )
     service = FundDisclosureSyncService(db)
     if any(service.recover_interrupted_runs(case_id) for case_id in case_ids):
         db.commit()
@@ -194,13 +198,13 @@ def save_fund_disclosure_sync_config(
     case_id: uuid.UUID,
     payload: SaveFundDisclosureSyncConfigRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> FundDisclosureSyncConfigDTO:
-    _require_case(db, case_id, tenant_id)
+    _require_case(db, case_id, actor.tenant_id)
     try:
         config = FundDisclosureSyncService(db).save_config(
             case_id,
-            actor=payload.actor,
+            actor=actor.server_actor,
             fund_codes=payload.fund_codes,
             frequency=payload.frequency,
             report_period=payload.report_period,
@@ -238,12 +242,12 @@ def _execute_run(
 def start_fund_disclosure_sync(
     case_id: uuid.UUID,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> FundDisclosureSyncRunDTO:
-    _require_case(db, case_id, tenant_id)
+    _require_case(db, case_id, actor.tenant_id)
     service = FundDisclosureSyncService(db)
     try:
-        run = service.start_manual_run(case_id)
+        run = service.start_manual_run(case_id, initiated_by=actor.server_actor)
         db.commit()  # make the frozen manual scope visible before provider work
     except (ValueError, TypeError) as exc:
         db.rollback()
@@ -264,12 +268,12 @@ def retry_fund_disclosure_sync(
     case_id: uuid.UUID,
     run_id: uuid.UUID,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> FundDisclosureSyncRunDTO:
-    _require_case(db, case_id, tenant_id)
+    _require_case(db, case_id, actor.tenant_id)
     service = FundDisclosureSyncService(db)
     try:
-        run = service.start_retry(case_id, run_id)
+        run = service.start_retry(case_id, run_id, initiated_by=actor.server_actor)
         db.commit()  # preserve the retry's frozen scope even if provider setup fails
     except (ValueError, TypeError) as exc:
         db.rollback()

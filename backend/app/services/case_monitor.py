@@ -1,9 +1,6 @@
 """Commands for auditable Case monitor configuration and run activity."""
 from __future__ import annotations
 
-from app.services.monitor_frequencies import MONITOR_TARGETS
-from app.services.event_research_scope_evidence import lock_event_scope_case
-
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,7 +8,6 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.errors import ConflictError
 from app.models.ledger import ResearchCase, Thesis
 from app.models.research_monitor import CaseMonitorVersion, ResearchRunEvent
 
@@ -80,17 +76,14 @@ class CaseMonitorService:
         *,
         actor: str,
         config: CaseMonitorConfig,
-        expected_version: int | None = None,
     ) -> CaseMonitorVersion:
-        lock_event_scope_case(self._session, case_id)
         self._validate(case_id, actor=actor, config=config)
+        self._lock_case(case_id)
         previous_version = self._session.scalar(
             select(func.max(CaseMonitorVersion.version)).where(
                 CaseMonitorVersion.research_case_id == case_id
             )
         )
-        if expected_version is not None and expected_version != (previous_version or 0):
-            raise ConflictError("monitor configuration changed; reload before saving")
         monitor = CaseMonitorVersion(
             research_case_id=case_id,
             version=(previous_version or 0) + 1,
@@ -108,23 +101,76 @@ class CaseMonitorService:
         self._session.flush()
         return monitor
 
-    def set_status(self, case_id: uuid.UUID, *, actor: str, status: str, reason: str, expected_version: int | None = None) -> CaseMonitorVersion:
-        lock_event_scope_case(self._session, case_id)
+    def ensure_default(
+        self,
+        case_id: uuid.UUID,
+        *,
+        actor: str,
+        factor_ids: list[uuid.UUID],
+        allowed_source_types: list[str],
+    ) -> CaseMonitorVersion:
+        """Reuse only the latest active monitor for this exact frozen scope."""
+        self._lock_case(case_id)
+        canonical_factor_ids = list(dict.fromkeys(factor_ids))
+        canonical_sources = sorted(
+            {
+                source.strip()
+                for source in allowed_source_types
+                if source.strip() in SUPPORTED_SOURCE_TYPES
+            }
+        )
+        if not canonical_sources:
+            canonical_sources = ["company_disclosure"]
+        current = self._session.scalar(
+            select(CaseMonitorVersion)
+            .where(CaseMonitorVersion.research_case_id == case_id)
+            .order_by(CaseMonitorVersion.version.desc())
+            .limit(1)
+        )
+        if (
+            current is not None
+            and current.status == "active"
+            and current.factor_ids
+            == [str(factor_id) for factor_id in canonical_factor_ids]
+            and sorted(set(current.allowed_source_types)) == canonical_sources
+        ):
+            return current
+        return self.save(
+            case_id,
+            actor=actor,
+            config=CaseMonitorConfig(
+                frequency="daily_20_00",
+                factor_ids=canonical_factor_ids,
+                allowed_source_types=canonical_sources,
+                next_verification_event="下一次允许来源披露",
+                budget=100,
+                change_reason="系统依据已冻结研究范围创建默认持续监测",
+            ),
+        )
+
+    def set_status(self, case_id: uuid.UUID, *, actor: str, status: str, reason: str) -> CaseMonitorVersion:
+        self._lock_case(case_id)
         previous = self._session.scalar(select(CaseMonitorVersion).where(CaseMonitorVersion.research_case_id == case_id).order_by(CaseMonitorVersion.version.desc()).limit(1))
         if previous is None:
             raise ValueError("case monitor not found")
-        if expected_version is not None and expected_version != previous.version:
-            raise ConflictError("monitor configuration changed; reload before changing status")
         if status not in {"active", "paused"}:
             raise ValueError("unsupported monitor status")
         if not actor.strip() or not reason.strip():
             raise ValueError("actor and change reason must not be empty")
-        if status == "active" and previous.frequency not in MONITOR_TARGETS:
-            raise ValueError("unsupported monitor frequency; save a supported configuration before resuming")
         monitor = CaseMonitorVersion(research_case_id=case_id, version=previous.version + 1, status=status, frequency=previous.frequency, factor_ids=list(previous.factor_ids), allowed_source_types=list(previous.allowed_source_types), next_verification_event=previous.next_verification_event, budget=previous.budget, changed_by=actor.strip(), change_reason=reason.strip(), created_at=_utcnow())
         self._session.add(monitor)
         self._session.flush()
         return monitor
+
+    def _lock_case(self, case_id: uuid.UUID) -> ResearchCase:
+        case = self._session.scalar(
+            select(ResearchCase)
+            .where(ResearchCase.id == case_id)
+            .with_for_update()
+        )
+        if case is None:
+            raise ValueError("research case not found")
+        return case
 
     def _validate(
         self, case_id: uuid.UUID, *, actor: str, config: CaseMonitorConfig
@@ -135,8 +181,6 @@ class CaseMonitorService:
             raise ValueError("actor must not be empty")
         if not config.frequency.strip():
             raise ValueError("frequency must not be empty")
-        if config.frequency.strip() not in MONITOR_TARGETS:
-            raise ValueError("unsupported monitor frequency")
         if not config.factor_ids:
             raise ValueError("at least one confirmed factor is required")
         if not config.allowed_source_types or not all(

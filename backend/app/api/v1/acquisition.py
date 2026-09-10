@@ -13,13 +13,19 @@ from sqlalchemy.orm import Session
 
 from app.acquisition.policy import B_SCOPE_POLICY
 from app.api.v1.commands.common import commit_or_rollback
-from app.api.v1.tenant_context import require_research_tenant
+from app.api.v1.tenant_context import (
+    ResearchActor,
+    require_research_actor,
+    require_research_tenant,
+)
 from app.db import get_db
 from app.domain.acquisition import (
+    ACQUISITION_PLANNER_VERSION,
     AcquisitionPrincipal,
     AcquisitionRequest,
     EvidenceObjective,
 )
+from app.models.event_research import EventResearchScopeVersion
 from app.errors import NotFoundError, ValidationFailedError
 from app.models.acquisition import (
     AcquisitionException,
@@ -44,6 +50,8 @@ from app.models.research_protocol import (
     MetricDefinitionVersion,
     VerificationRuleVersion,
 )
+from app.models.operational import ResearchRun
+from app.models.research_orchestration import ResearchOrchestration
 from app.repositories.research_protocol import ResearchProtocolRepository
 from app.schemas.v1.acquisition import (
     AcquisitionGateName,
@@ -63,6 +71,7 @@ from app.schemas.v1.acquisition import (
 )
 from app.services.acquisition import AcquisitionModule
 from app.services.case_tenant_access import CaseTenantAccess
+from app.api.v1.dependencies import RequireCaseRoute
 
 
 router = APIRouter(
@@ -283,7 +292,12 @@ def _scope_request(
         else binding.metric_definition_id
     )
     metric = db.get(MetricDefinitionVersion, metric_id)
-    if metric is None or not metric.display_name.strip():
+    if (
+        metric is None
+        or not metric.display_name.strip()
+        or not metric.unit.strip()
+        or not metric.period_semantics.strip()
+    ):
         raise ValidationFailedError("acquisition scope has no metric definition")
 
     raw_company_id = binding.entity_scope.get("company_id")
@@ -326,11 +340,50 @@ def _scope_request(
     if not allowed_source_roles:
         raise ValidationFailedError("acquisition scope has no allowed source roles")
 
+    orchestration = db.scalar(
+        select(ResearchOrchestration).where(
+            ResearchOrchestration.tenant_id == tenant_id,
+            ResearchOrchestration.research_case_id == research_case.id,
+        )
+    )
+    if (
+        orchestration is None
+        or orchestration.current_scope_version_id is None
+        or orchestration.current_research_run_id is None
+    ):
+        raise ValidationFailedError(
+            "manual acquisition requires an active event research run and scope"
+        )
+    scope_version = db.get(
+        EventResearchScopeVersion, orchestration.current_scope_version_id
+    )
+    research_run = db.get(ResearchRun, orchestration.current_research_run_id)
+    if (
+        scope_version is None
+        or scope_version.research_case_id != research_case.id
+        or research_run is None
+        or research_run.research_case_id != research_case.id
+    ):
+        raise ValidationFailedError(
+            "active event research run or scope does not belong to the case"
+        )
+    goal_id = f"thesis:{thesis.id}:{payload.objective.value}"
+    canonical_idempotency_key = (
+        f"run:{research_run.id}:scope:{scope_version.id}:"
+        f"goal:{goal_id}:round:1"
+    )
+    if idempotency_key != canonical_idempotency_key:
+        raise ValidationFailedError(
+            "Idempotency-Key must match the active run, scope, goal, and round"
+        )
+
     return AcquisitionRequest(
         tenant_id=tenant_id,
         case_id=research_case.id,
         thesis_id=thesis.id,
-        research_run_id=None,
+        research_run_id=research_run.id,
+        scope_version_id=scope_version.id,
+        goal_id=goal_id,
         round=1,
         objective=payload.objective,
         target_link_role=(
@@ -342,6 +395,12 @@ def _scope_request(
         entity_names=(company.name,),
         security_codes=security_codes,
         metric_terms=(metric.display_name,),
+        metric_periods=(
+            f"{metric.period_semantics.strip()}:"
+            f"{(verification_rule.observed_period_start if verification_rule is not None else binding.horizon_start).isoformat()}/"
+            f"{(verification_rule.observed_period_end if verification_rule is not None else binding.horizon_end).isoformat()}",
+        ),
+        metric_units=(metric.unit.strip(),),
         period_start=(
             verification_rule.observed_period_start.isoformat()
             if verification_rule is not None
@@ -355,8 +414,24 @@ def _scope_request(
         cutoff=cutoff,
         allowed_source_roles=allowed_source_roles,
         source_policy_version=B_SCOPE_POLICY.version,
-        idempotency_key=idempotency_key,
+        planner_version=ACQUISITION_PLANNER_VERSION,
+        previous_query_plan_id=None,
+        expansion=None,
+        idempotency_key=canonical_idempotency_key,
     )
+
+
+def _authorized_acquisition_job(
+    db: Session,
+    job_id: uuid.UUID,
+    actor: ResearchActor,
+    case_policy: RequireCaseRoute,
+) -> AcquisitionJob:
+    job = db.get(AcquisitionJob, job_id)
+    if job is None or job.tenant_id != actor.tenant_id:
+        raise NotFoundError("acquisition job not found")
+    case_policy.require(job.research_case_id)
+    return job
 
 
 @router.post(
@@ -373,15 +448,19 @@ def create_acquisition_job(
         Header(alias="Idempotency-Key", min_length=1, max_length=512),
     ],
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> AcquisitionJobAcceptedDTO:
     principal = AcquisitionPrincipal(
-        tenant_id=tenant_id,
-        actor=f"tenant:{tenant_id}",
+        tenant_id=actor.tenant_id,
+        actor=actor.server_actor,
     )
     module = AcquisitionModule(db)
+    CaseTenantAccess(db).require_case(case_id, actor.tenant_id)
+    thesis = db.get(Thesis, thesis_id)
+    if thesis is None or thesis.research_case_id != case_id:
+        raise NotFoundError("thesis not found")
     existing = module.replay_existing(
-        tenant_id=tenant_id,
+        tenant_id=actor.tenant_id,
         idempotency_key=idempotency_key,
         case_id=case_id,
         thesis_id=thesis_id,
@@ -393,12 +472,34 @@ def create_acquisition_job(
             id=existing.id,
             status=_safe_status(existing.status),
         )
+
+    orchestration = db.scalar(
+        select(ResearchOrchestration).where(
+            ResearchOrchestration.tenant_id == actor.tenant_id,
+            ResearchOrchestration.research_case_id == case_id,
+        )
+    )
+    if (
+        orchestration is not None
+        and orchestration.current_scope_version_id is not None
+        and orchestration.current_research_run_id is not None
+    ):
+        goal_id = f"thesis:{thesis_id}:{payload.objective.value}"
+        canonical_key = (
+            f"run:{orchestration.current_research_run_id}:"
+            f"scope:{orchestration.current_scope_version_id}:"
+            f"goal:{goal_id}:round:1"
+        )
+        if idempotency_key != canonical_key:
+            raise ValidationFailedError(
+                "Idempotency-Key must match the active run, scope, goal, and round"
+            )
     request = _scope_request(
         db,
         case_id=case_id,
         thesis_id=thesis_id,
         payload=payload,
-        tenant_id=tenant_id,
+        tenant_id=actor.tenant_id,
         idempotency_key=idempotency_key,
     )
     job = module.request(
@@ -414,21 +515,20 @@ def create_acquisition_job(
     response_model=AcquisitionJobDetailDTO,
 )
 def acquisition_job_detail(
+    case_policy: RequireCaseRoute,
     job_id: uuid.UUID,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> AcquisitionJobDetailDTO:
+    job = _authorized_acquisition_job(db, job_id, actor, case_policy)
     module = AcquisitionModule(db)
     view = module.get(
         job_id,
         principal=AcquisitionPrincipal(
-            tenant_id=tenant_id,
-            actor=f"tenant:{tenant_id}",
+            tenant_id=actor.tenant_id,
+            actor=actor.server_actor,
         ),
     )
-    job = db.get(AcquisitionJob, job_id)
-    if job is None:
-        raise NotFoundError("acquisition job not found")
     return AcquisitionJobDetailDTO(
         id=view.id,
         status=_safe_status(view.status),
@@ -494,16 +594,18 @@ def _safe_event_payload(payload: object) -> AcquisitionJobEventPayloadDTO:
     response_model_exclude_none=True,
 )
 def acquisition_job_events(
+    case_policy: RequireCaseRoute,
     job_id: uuid.UUID,
     after_seq: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> list[AcquisitionJobEventDTO]:
+    _authorized_acquisition_job(db, job_id, actor, case_policy)
     events = AcquisitionModule(db).events(
         job_id,
         principal=AcquisitionPrincipal(
-            tenant_id=tenant_id,
-            actor=f"tenant:{tenant_id}",
+            tenant_id=actor.tenant_id,
+            actor=actor.server_actor,
         ),
     )
     return [
@@ -545,13 +647,15 @@ def _safe_gate_results(
     response_model=list[AcquisitionEvidenceDTO],
 )
 def acquisition_job_evidence(
+    case_policy: RequireCaseRoute,
     job_id: uuid.UUID,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> list[AcquisitionEvidenceDTO]:
+    _authorized_acquisition_job(db, job_id, actor, case_policy)
     principal = AcquisitionPrincipal(
-        tenant_id=tenant_id,
-        actor=f"tenant:{tenant_id}",
+        tenant_id=actor.tenant_id,
+        actor=actor.server_actor,
     )
     refs = AcquisitionModule(db).admitted_evidence(job_id, principal=principal)
     if not refs:
@@ -716,15 +820,17 @@ def _safe_exception_detail(
     response_model_exclude_none=True,
 )
 def acquisition_job_exceptions(
+    case_policy: RequireCaseRoute,
     job_id: uuid.UUID,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> list[AcquisitionExceptionDTO]:
+    _authorized_acquisition_job(db, job_id, actor, case_policy)
     AcquisitionModule(db).get(
         job_id,
         principal=AcquisitionPrincipal(
-            tenant_id=tenant_id,
-            actor=f"tenant:{tenant_id}",
+            tenant_id=actor.tenant_id,
+            actor=actor.server_actor,
         ),
     )
     records = db.scalars(

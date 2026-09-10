@@ -18,11 +18,6 @@ from app.schemas.v1.companies import AssessmentViewDTO, RoleReviewDTO, Valuation
 
 class UpdateThemeTagsRequest(V1Model):
     tags: list[str]
-    # Who initiated the change. ``"human"`` (default) writes effective
-    # events directly; ``"ai"`` writes pending events that require a
-    # matching human PATCH to take effect. Two-stage review per SPEC
-    # §"AI/人工边界".
-    proposed_by: Literal["human", "ai"] = "human"
 
 
 class ThemeTagsResponse(V1Model):

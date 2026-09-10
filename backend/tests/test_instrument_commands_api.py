@@ -705,7 +705,7 @@ def test_valuation_future_as_of_date_is_422(cmd_client, cmd_session):
 
 
 def test_audit_log_records_successful_create_company(cmd_client, cmd_session):
-    """Every successful command appends an audit row keyed by the actor header."""
+    """Every successful command uses the authenticated server actor."""
     import uuid as _uuid
 
     from app.models.ledger import AuditLog
@@ -724,7 +724,7 @@ def test_audit_log_records_successful_create_company(cmd_client, cmd_session):
         .where(AuditLog.entity_id == company_id)
     )
     assert row is not None
-    assert row.actor == "human:alice"
+    assert row.actor == "user:test-team"
     assert row.result == "success"
     assert row.error_message is None
     assert row.payload["code"] == "688256.SH"
@@ -749,13 +749,13 @@ def test_audit_log_records_failed_duplicate_company(cmd_client, cmd_session):
         .where(AuditLog.result == "failed")
     )
     assert failed is not None
-    assert failed.actor == "human:bob"
+    assert failed.actor == "user:test-team"
     assert "688256.SH" in (failed.error_message or "")
     assert failed.entity_id is None
 
 
-def test_audit_log_default_actor_when_header_missing(cmd_client, cmd_session):
-    """No X-Actor header → ``human:anonymous``, never a blank string."""
+def test_audit_log_actor_is_stable_without_legacy_header(cmd_client, cmd_session):
+    """The authenticated actor is stable without any legacy identity header."""
     from app.models.ledger import AuditLog
 
     cmd_client.post(
@@ -766,4 +766,4 @@ def test_audit_log_default_actor_when_header_missing(cmd_client, cmd_session):
         select(AuditLog).order_by(AuditLog.created_at.desc())
     )
     assert row is not None
-    assert row.actor == "human:anonymous"
+    assert row.actor == "user:test-team"

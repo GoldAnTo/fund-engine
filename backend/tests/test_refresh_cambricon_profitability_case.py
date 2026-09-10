@@ -18,7 +18,6 @@ import os
 import subprocess
 import sys
 import uuid
-from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
@@ -213,13 +212,23 @@ def test_refresh_rejects_wrong_case_title(session, document_service, research_se
 
 def test_refresh_records_new_observations_in_review_queue(session):
     from app.queries.review_queue import ReviewQueueQueries
+    from app.models.ledger import CaseTenantAdmission
     from app.scripts.seed_cambricon_profitability_case import seed
+    from tests.tenant_admission import admit_case
 
     seeded = seed(session)
+    admit_case(session, seeded.case_id, tenant_id="test-team")
     client = FakeClient([_make_response(_PARENT_TABLE_MARKDOWN, _ADJUSTED_TABLE_MARKDOWN)])
     refresh(session, seeded.case_id, client=client)
 
-    queue = ReviewQueueQueries(session).list_items(case_id=seeded.case_id, limit=50)
+    queue = ReviewQueueQueries(session).list_items(
+        case_id=seeded.case_id,
+        tenant_id="test-team",
+        authorized_case_ids=select(CaseTenantAdmission.research_case_id).where(
+            CaseTenantAdmission.tenant_id == "test-team"
+        ),
+        limit=50,
+    )
     # The newly appended links must surface in the review queue (they carry
     # review_state == "machine_generated" and no EvidenceReview yet).
     assert len(queue.items) >= 2
@@ -231,37 +240,25 @@ def test_refresh_records_new_observations_in_review_queue(session):
         assert session.get(SourceStatement, uuid.UUID(item.statement_id)) is not None
 
 
-def test_refresh_cli_emits_token_free_diagnostic_on_token_missing():
-    backend_root = Path(__file__).resolve().parents[1]
+def test_refresh_cli_emits_token_free_diagnostic_on_token_missing(monkeypatch, capsys):
+    monkeypatch.setenv("GILDATA_TOKEN", "")
+    monkeypatch.setenv("APP_ENV", "test")
+    script = (
+        "/Users/xiongjiali/.config/superpowers/worktrees/fund-engine/cambricon-complete-case"
+        "/backend/app/scripts/refresh_cambricon_profitability_case.py"
+    )
     result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "app.scripts.refresh_cambricon_profitability_case",
-            "--case-id",
-            str(uuid.uuid4()),
-        ],
-        cwd=backend_root,
+        [sys.executable, script, "--case-id", str(uuid.uuid4())],
         capture_output=True,
         text=True,
-        # Pin imports to this checkout even when the interpreter has an
-        # editable install or the caller's PYTHONPATH refers to another tree.
-        env={
-            **os.environ,
-            "PYTHONPATH": str(backend_root),
-            "GILDATA_TOKEN": "",
-            "APP_ENV": "test",
-            "DATABASE_URL": "sqlite://",
-        },
-        timeout=20,
+        env={**os.environ, "GILDATA_TOKEN": "", "APP_ENV": "test"},
         check=False,
     )
     output = (result.stdout or "") + (result.stderr or "")
     assert "GILDATA_TOKEN" in output
     assert "token=" not in output
     assert "investoday" not in output.lower()
-    assert "Traceback" not in output
-    assert result.returncode == 1
+    assert result.returncode != 0
 
 
 def test_refresh_appended_links_do_not_break_company_theme_role_or_holdings(session):

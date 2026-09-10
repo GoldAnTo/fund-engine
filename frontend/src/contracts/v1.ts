@@ -4,23 +4,6 @@
  */
 
 export interface paths {
-    "/ready": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Readiness */
-        get: operations["readiness_ready_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/research-cases/{case_id}/workbench": {
         parameters: {
             query?: never;
@@ -71,11 +54,7 @@ export interface paths {
         /** List Cases */
         get: operations["list_cases_api_v1_research_cases_get"];
         put?: never;
-        /**
-         * Create Case
-         * @deprecated
-         * @description Reject the retired source-free intake instead of creating an orphan Case.
-         */
+        /** Create Case */
         post: operations["create_case_api_v1_research_cases_post"];
         delete?: never;
         options?: never;
@@ -1055,91 +1034,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/research-runs/{run_id}/ai-usage": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Run Ai Usage */
-        get: operations["get_run_ai_usage_api_v1_research_runs__run_id__ai_usage_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/research-cases/{case_id}/ai-usage": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Case Ai Usage */
-        get: operations["get_case_ai_usage_api_v1_research_cases__case_id__ai_usage_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/automatic-research": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Start Automatic Research */
-        post: operations["start_automatic_research_api_v1_automatic_research_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/automatic-research/{case_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Automatic Research */
-        get: operations["get_automatic_research_api_v1_automatic_research__case_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/automatic-research/{case_id}/retry": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Retry Automatic Research */
-        post: operations["retry_automatic_research_api_v1_automatic_research__case_id__retry_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/event-research": {
         parameters: {
             query?: never;
@@ -1274,30 +1168,6 @@ export interface paths {
         put?: never;
         /** Extract Event */
         post: operations["extract_event_api_v1_event_research_extract_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/event-research/uploaded": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Create Event Research From Uploaded Original
-         * @description Atomically create a Case from one uploaded frozen original.
-         *
-         *     The JSON summary is retained only as the human-confirmed event brief.  It
-         *     is never frozen as a competing source document and preparation is queued
-         *     only after the file becomes the initial tenant-admitted document.
-         */
-        post: operations["create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1892,108 +1762,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/event-research/{case_id}/preparation": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Preparation */
-        get: operations["get_preparation_api_v1_event_research__case_id__preparation_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/event-research/{case_id}/preparation/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Preparation Events */
-        get: operations["preparation_events_api_v1_event_research__case_id__preparation_events_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/event-research/{case_id}/preparation/claims/confirm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Confirm Claims */
-        post: operations["confirm_claims_api_v1_event_research__case_id__preparation_claims_confirm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/event-research/{case_id}/preparation/protocol/confirm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Confirm Protocol */
-        post: operations["confirm_protocol_api_v1_event_research__case_id__preparation_protocol_confirm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/event-research/{case_id}/preparation/retry": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Retry */
-        post: operations["retry_api_v1_event_research__case_id__preparation_retry_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/event-research/{case_id}/preparation/authorize": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Authorize */
-        post: operations["authorize_api_v1_event_research__case_id__preparation_authorize_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/review-proposals": {
         parameters: {
             query?: never;
@@ -2054,11 +1822,113 @@ export interface paths {
         };
         /**
          * Research Session
-         * @description Expose only the already-authenticated tenant and configured roles.
+         * @description Expose a safe projection of the already-authenticated principal.
          */
         get: operations["research_session_api_v1_research_session_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/workflow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Research Workflow */
+        get: operations["get_research_workflow_api_v1_event_research__case_id__workflow_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/workflow/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Research Workflow Events */
+        get: operations["get_research_workflow_events_api_v1_event_research__case_id__workflow_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/workflow/ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Research Workflow Ledger */
+        get: operations["get_research_workflow_ledger_api_v1_event_research__case_id__workflow_ledger_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/workflow/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm Research Workflow */
+        post: operations["confirm_research_workflow_api_v1_event_research__case_id__workflow_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/workflow/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Research Workflow */
+        post: operations["decide_research_workflow_api_v1_event_research__case_id__workflow_decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/workflow/resume-protocol": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume Protocol Workflow */
+        post: operations["resume_protocol_workflow_api_v1_event_research__case_id__workflow_resume_protocol_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2328,117 +2198,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/underwriting/v1/objects": {
+    "/api/v1/runtime-status": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
-        /** Create Object */
-        post: operations["create_object_api_underwriting_v1_objects_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/object-relations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Object Relation */
-        post: operations["create_object_relation_api_underwriting_v1_object_relations_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/historical-bases": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Basis */
-        post: operations["create_basis_api_underwriting_v1_historical_bases_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/mandates": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Mandate */
-        post: operations["create_mandate_api_underwriting_v1_mandates_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/objects/{object_id}/ledger-entries": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Ledger Entry */
-        post: operations["create_ledger_entry_api_underwriting_v1_objects__object_id__ledger_entries_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/objects/{object_id}/answerability": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Answerability */
-        post: operations["create_answerability_api_underwriting_v1_objects__object_id__answerability_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/objects/{object_id}/snapshots/{basis_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Snapshot */
-        get: operations["get_snapshot_api_underwriting_v1_objects__object_id__snapshots__basis_id__get"];
+        /** Runtime Status */
+        get: operations["runtime_status_api_v1_runtime_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2447,15 +2215,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/underwriting/v1/objects/{object_id}/research-versions/{version_kind}": {
+    "/api/v1/event-research/{case_id}/runtime-status": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Research Revision History */
-        get: operations["get_research_revision_history_api_underwriting_v1_objects__object_id__research_versions__version_kind__get"];
+        /** Case Runtime Status */
+        get: operations["case_runtime_status_api_v1_event_research__case_id__runtime_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2464,590 +2232,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/underwriting/v1/research-versions/{revision_id}": {
+    "/api/v1/event-research/{case_id}/access-grants": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Research Revision */
-        get: operations["get_research_revision_api_underwriting_v1_research_versions__revision_id__get"];
+        /** List Case Access Grants */
+        get: operations["list_case_access_grants_api_v1_event_research__case_id__access_grants_get"];
+        put?: never;
+        /** Grant Case Access */
+        post: operations["grant_case_access_api_v1_event_research__case_id__access_grants_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-research/{case_id}/access-grants/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /** Revoke Case Access */
+        delete: operations["revoke_case_access_api_v1_event_research__case_id__access_grants__user_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/research-versions/{revision_id}/boundary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Research Revision Boundary
-         * @description Return only the selected revision's verified, explicit boundary.
-         */
-        get: operations["get_research_revision_boundary_api_underwriting_v1_research_versions__revision_id__boundary_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/research-versions/{revision_id}/candidate-evidence": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Candidate Evidence
-         * @description Return the exact frozen candidate graph of the selected revision.
-         */
-        get: operations["get_candidate_evidence_api_underwriting_v1_research_versions__revision_id__candidate_evidence_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/research-versions/{from_revision_id}/diff/{to_revision_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Research Revision Diff */
-        get: operations["get_research_revision_diff_api_underwriting_v1_research_versions__from_revision_id__diff__to_revision_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/research-archives": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Research Archives */
-        get: operations["get_research_archives_api_underwriting_v1_research_archives_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/objects/{object_id}/economic-models/{basis_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Evidence Only Economic Model */
-        get: operations["get_evidence_only_economic_model_api_underwriting_v1_objects__object_id__economic_models__basis_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/objects": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Search Product Objects */
-        get: operations["search_product_objects_api_underwriting_v1_product_objects_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/industries/{industry_id}/companies": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Industry Companies */
-        get: operations["list_industry_companies_api_underwriting_v1_product_industries__industry_id__companies_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/projects": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Research Projects */
-        get: operations["list_research_projects_api_underwriting_v1_product_projects_get"];
-        put?: never;
-        /** Create Research Project */
-        post: operations["create_research_project_api_underwriting_v1_product_projects_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/projects/{project_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Research Project */
-        get: operations["get_research_project_api_underwriting_v1_product_projects__project_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/projects/{project_id}/mandates": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Product Mandate */
-        post: operations["create_product_mandate_api_underwriting_v1_product_projects__project_id__mandates_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/projects/{project_id}/scopes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Research Scope */
-        post: operations["create_research_scope_api_underwriting_v1_product_projects__project_id__scopes_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/projects/{project_id}/agendas": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Research Agenda */
-        post: operations["create_research_agenda_api_underwriting_v1_product_projects__project_id__agendas_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/historical-bases": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Product Historical Basis */
-        post: operations["create_product_historical_basis_api_underwriting_v1_product_historical_bases_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/market/price-snapshots": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Price Snapshot */
-        post: operations["create_price_snapshot_api_underwriting_v1_product_market_price_snapshots_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/market/fx-snapshots": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Fx Snapshot */
-        post: operations["create_fx_snapshot_api_underwriting_v1_product_market_fx_snapshots_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/market/capital-structure-snapshots": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Capital Structure Snapshot */
-        post: operations["create_capital_structure_snapshot_api_underwriting_v1_product_market_capital_structure_snapshots_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/market/security-rights/effective": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Effective Security Rights */
-        get: operations["get_effective_security_rights_api_underwriting_v1_product_market_security_rights_effective_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/market/security-rights": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Security Rights */
-        post: operations["create_security_rights_api_underwriting_v1_product_market_security_rights_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/projects/{project_id}/draft": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Workspace Draft */
-        get: operations["get_workspace_draft_api_underwriting_v1_product_projects__project_id__draft_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Patch Workspace Draft */
-        patch: operations["patch_workspace_draft_api_underwriting_v1_product_projects__project_id__draft_patch"];
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/projects/{project_id}/publication-preview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Preview Product Revision */
-        post: operations["preview_product_revision_api_underwriting_v1_product_projects__project_id__publication_preview_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/projects/{project_id}/publish": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Publish Product Revision */
-        post: operations["publish_product_revision_api_underwriting_v1_product_projects__project_id__publish_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/revisions/{revision_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Product Revision */
-        get: operations["get_product_revision_api_underwriting_v1_product_revisions__revision_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/company-research/preview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Preview Company Research */
-        post: operations["preview_company_research_api_underwriting_v1_product_company_research_preview_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/company-research/initializations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Initialize Company Research */
-        post: operations["initialize_company_research_api_underwriting_v1_product_company_research_initializations_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/company-research/projects/{project_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Company Research Project */
-        get: operations["get_company_research_project_api_underwriting_v1_product_company_research_projects__project_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/company-research/projects/{project_id}/retry": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Retry Company Research Project */
-        post: operations["retry_company_research_project_api_underwriting_v1_product_company_research_projects__project_id__retry_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/company-research/projects/{project_id}/workspace": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Company Research Workspace */
-        get: operations["get_company_research_workspace_api_underwriting_v1_product_company_research_projects__project_id__workspace_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/company-research/projects/{project_id}/evidence-reviews": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Review Company Evidence */
-        post: operations["review_company_evidence_api_underwriting_v1_product_company_research_projects__project_id__evidence_reviews_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/company-research/projects/{project_id}/judgment-confirmations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Confirm Company Research Judgment */
-        post: operations["confirm_company_research_judgment_api_underwriting_v1_product_company_research_projects__project_id__judgment_confirmations_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/company-research/projects/{project_id}/publication-preview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Preview Company Research Publication */
-        post: operations["preview_company_research_publication_api_underwriting_v1_product_company_research_projects__project_id__publication_preview_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/company-research/projects/{project_id}/publish": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Publish Company Research */
-        post: operations["publish_company_research_api_underwriting_v1_product_company_research_projects__project_id__publish_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/company-research/projects/{project_id}/revisions/{revision_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Company Research Revision */
-        get: operations["get_company_research_revision_api_underwriting_v1_product_company_research_projects__project_id__revisions__revision_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/underwriting/v1/product/company-research/projects/{project_id}/revisions/{revision_id}/export": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Export Company Research Revision */
-        get: operations["export_company_research_revision_api_underwriting_v1_product_company_research_projects__project_id__revisions__revision_id__export_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
+        /** Change Case Access Role */
+        patch: operations["change_case_access_role_api_v1_event_research__case_id__access_grants__user_id__patch"];
         trace?: never;
     };
     "/health": {
@@ -3391,142 +2609,8 @@ export interface components {
             record_reason: string;
             source: components["schemas"]["ExpressionSourceDTO"];
         };
-        /** AgendaGeneratorRequest */
-        AgendaGeneratorRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Method
-             * @enum {string}
-             */
-            method: "deterministic_template" | "ai_generated";
-            /** Template Key */
-            template_key?: string | null;
-            /** Template Version */
-            template_version?: string | null;
-            /** Model Name */
-            model_name?: string | null;
-            /** Prompt Template Version */
-            prompt_template_version?: string | null;
-            /** Input Summary Hash */
-            input_summary_hash: string;
-            /** Output Hash */
-            output_hash: string;
-        };
-        /** AgendaGeneratorResponse */
-        AgendaGeneratorResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Method
-             * @enum {string}
-             */
-            method: "deterministic_template" | "ai_generated";
-            /** Template Key */
-            template_key: string | null;
-            /** Template Version */
-            template_version: string | null;
-            /** Model Name */
-            model_name: string | null;
-            /** Prompt Template Version */
-            prompt_template_version: string | null;
-            /** Input Summary Hash */
-            input_summary_hash: string;
-            /** Output Hash */
-            output_hash: string;
-        };
-        /** AnswerabilityCreate */
-        AnswerabilityCreate: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Basis Id
-             * Format: uuid
-             */
-            basis_id: string;
-            /** Hard Blockers */
-            hard_blockers: ("missing_key_baseline" | "unresolved_source_conflict" | "mechanism_unidentified" | "financial_model_not_closed" | "expectation_surface_unidentifiable" | "source_unavailable" | "future_information_leakage")[];
-            /** Research Debt Keys */
-            research_debt_keys: string[];
-            /** Resolvable Within Mandate */
-            resolvable_within_mandate: boolean;
-            /**
-             * Requested Action
-             * @enum {string}
-             */
-            requested_action: "observe" | "wait_for_validation" | "eligible_for_probe_entry" | "eligible_for_staged_entry" | "do_not_enter";
-            /** Resolution Requirements */
-            resolution_requirements: string[];
-            /** Expected Parent Id */
-            expected_parent_id?: string | null;
-        };
-        /** AnswerabilityResponse */
-        AnswerabilityResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Basis Id
-             * Format: uuid
-             */
-            basis_id: string;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "answerable" | "partially_answerable" | "not_answerable";
-            /** Blockers */
-            blockers: ("missing_key_baseline" | "unresolved_source_conflict" | "mechanism_unidentified" | "financial_model_not_closed" | "expectation_surface_unidentifiable" | "source_unavailable" | "future_information_leakage")[];
-            /** Research Debt Keys */
-            research_debt_keys: string[];
-            /** Resolvable Within Mandate */
-            resolvable_within_mandate: boolean;
-            /**
-             * Allowed Action
-             * @enum {string}
-             */
-            allowed_action: "observe" | "wait_for_validation" | "eligible_for_probe_entry" | "eligible_for_staged_entry" | "do_not_enter";
-            /** Resolution Requirements */
-            resolution_requirements: string[];
-            /** Version */
-            version: number;
-            /** Supersedes Id */
-            supersedes_id: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
         /** ApproveOutcomeBindingRequest */
         ApproveOutcomeBindingRequest: {
-            /** Reviewer */
-            reviewer: string;
             /** Reason */
             reason: string;
         };
@@ -3566,39 +2650,6 @@ export interface components {
             provisional: boolean;
             review: components["schemas"]["app__schemas__v1__cases__ReviewDecisionDTO"] | null;
         };
-        /** AssessmentPreviewResponse */
-        AssessmentPreviewResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Answerability
-             * @enum {string}
-             */
-            answerability: "answerable" | "partially_answerable" | "not_answerable";
-            /** Direction */
-            direction: ("provisional_bullish" | "provisional_neutral" | "provisional_cautious") | null;
-            /** Confidence */
-            confidence: ("low" | "medium" | "high") | null;
-            /**
-             * Publication Status
-             * @enum {string}
-             */
-            publication_status: "user_frozen" | "superseded";
-            /** Blockers */
-            blockers: string[];
-            /** Resolution Requirements */
-            resolution_requirements: string[];
-            /** Next Review At */
-            next_review_at: string | null;
-            /** Parent Assessment Id */
-            parent_assessment_id: string | null;
-            /** Content Hash */
-            content_hash: string;
-        };
         /** AssessmentReviewRequest */
         AssessmentReviewRequest: {
             /**
@@ -3610,11 +2661,6 @@ export interface components {
             conclusion?: ("supported" | "contradicted" | "insufficient_evidence") | null;
             /** Reason */
             reason: string;
-            /**
-             * Reviewer
-             * @default reviewer
-             */
-            reviewer: string;
         };
         /** AssessmentReviewResponse */
         AssessmentReviewResponse: {
@@ -3706,13 +2752,6 @@ export interface components {
         AtomicClaimQueueResponse: {
             /** Items */
             items: components["schemas"]["AtomicClaimCandidateDTO"][];
-            /**
-             * Has More
-             * @default false
-             */
-            has_more: boolean;
-            /** Next Cursor */
-            next_cursor?: string | null;
         };
         /** AtomicClaimReviewDTO */
         AtomicClaimReviewDTO: {
@@ -3745,8 +2784,6 @@ export interface components {
             normalized_text?: string | null;
             /** Observed Period */
             observed_period?: string | null;
-            /** Reviewer */
-            reviewer: string;
             /** Reason */
             reason: string;
             /** Idempotency Key */
@@ -3768,8 +2805,6 @@ export interface components {
             source_metadata?: {
                 [key: string]: unknown;
             };
-            /** Actor */
-            actor: string;
         };
         /** AttachEventMaterialResponse */
         AttachEventMaterialResponse: {
@@ -3780,189 +2815,6 @@ export interface components {
              * @enum {string}
              */
             source_type: "pasted_snapshot" | "uploaded_file" | "licensed_provider" | "public_url";
-        };
-        /** AuthorizeEvidencePlanRequest */
-        AuthorizeEvidencePlanRequest: {
-            /** Revision */
-            revision: number;
-            /** Actor */
-            actor: string;
-            /** Plan Sequence */
-            plan_sequence: number;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /** AutomaticResearchExceptionDTO */
-        AutomaticResearchExceptionDTO: {
-            /** Reason */
-            reason: string;
-            /** Stage */
-            stage: string;
-            /** Count */
-            count: number;
-        };
-        /** AutomaticResearchResultDTO */
-        AutomaticResearchResultDTO: {
-            /**
-             * Label
-             * @constant
-             */
-            label: "系统生成，未经人工审核";
-            /**
-             * Human Reviewed
-             * @constant
-             */
-            human_reviewed: false;
-            /** Conclusion */
-            conclusion: string;
-            /** Key Findings */
-            key_findings: string[];
-            /** Counter Evidence */
-            counter_evidence: string[];
-            /** Limitations */
-            limitations: string[];
-            /** Sources */
-            sources: components["schemas"]["AutomaticResearchSourceDTO"][];
-        };
-        /** AutomaticResearchSourceDTO */
-        AutomaticResearchSourceDTO: {
-            /** Title */
-            title: string | null;
-            /** Url */
-            url: string | null;
-            /** Role */
-            role: string;
-            /**
-             * Review State
-             * @constant
-             */
-            review_state: "automatically_admitted";
-        };
-        /** AutomaticResearchStageDTO */
-        AutomaticResearchStageDTO: {
-            /**
-             * Key
-             * @enum {string}
-             */
-            key: "acquire" | "parse" | "admit" | "analyze" | "conclude";
-            /** Label */
-            label: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "pending" | "running" | "completed" | "failed";
-            /** Summary */
-            summary: string;
-            /** Started At */
-            started_at?: string | null;
-            /** Completed At */
-            completed_at?: string | null;
-        };
-        /** AutomaticResearchStartRequest */
-        AutomaticResearchStartRequest: {
-            /** Input */
-            input: string;
-        };
-        /** AutomaticResearchStartResponse */
-        AutomaticResearchStartResponse: {
-            /** Case Id */
-            case_id: string;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Status
-             * @constant
-             */
-            status: "queued";
-        };
-        /** AutomaticResearchStatsDTO */
-        AutomaticResearchStatsDTO: {
-            /** Source Count */
-            source_count: number;
-            /** Admitted Evidence Count */
-            admitted_evidence_count: number;
-            /** Skipped Count */
-            skipped_count: number;
-            /** Duration Seconds */
-            duration_seconds: number;
-        };
-        /** AutomaticResearchViewDTO */
-        AutomaticResearchViewDTO: {
-            /** Case Id */
-            case_id: string;
-            /** Run Id */
-            run_id: string;
-            /** Title */
-            title: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "queued" | "running" | "completed" | "failed";
-            /** Stages */
-            stages: components["schemas"]["AutomaticResearchStageDTO"][];
-            stats: components["schemas"]["AutomaticResearchStatsDTO"];
-            /** Recent Activity */
-            recent_activity: string[];
-            /** Exceptions */
-            exceptions: components["schemas"]["AutomaticResearchExceptionDTO"][];
-            /** Failure Reason */
-            failure_reason: string | null;
-            result: components["schemas"]["AutomaticResearchResultDTO"] | null;
-        };
-        /** BasisCreate */
-        BasisCreate: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Cutoff
-             * Format: date-time
-             */
-            cutoff: string;
-            /** Price As Of */
-            price_as_of?: string | null;
-            /** Source Manifest Hash */
-            source_manifest_hash: string;
-        };
-        /** BasisResponse */
-        BasisResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Cutoff
-             * Format: date-time
-             */
-            cutoff: string;
-            /** Price As Of */
-            price_as_of: string | null;
-            /** Source Manifest Hash */
-            source_manifest_hash: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /** Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post */
-        Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post: {
-            /** Payload */
-            payload: string;
-            /** File */
-            file: string;
         };
         /** Body_decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post */
         Body_decide_published_uploaded_material_api_v1_event_research__case_id__published_uploaded_material_decisions_post: {
@@ -3975,8 +2827,6 @@ export interface components {
             decision: "reopen" | "no_change";
             /** Reason */
             reason: string;
-            /** Actor */
-            actor: string;
             /**
              * Source Metadata
              * @default {}
@@ -3987,8 +2837,6 @@ export interface components {
         Body_upload_event_material_api_v1_event_research__case_id__uploaded_materials_post: {
             /** File */
             file: string;
-            /** Actor */
-            actor: string;
             /**
              * Source Metadata
              * @default {}
@@ -4000,8 +2848,6 @@ export interface components {
          * @description Human decision recorded when an in-progress run is stopped.
          */
         CancelRunRequest: {
-            /** Actor */
-            actor: string;
             /** Change Reason */
             change_reason: string;
         };
@@ -4032,495 +2878,29 @@ export interface components {
             /** Next Action */
             next_action: string;
         };
-        /**
-         * CandidateEvidenceAnswerabilityResponse
-         * @description Only the candidate's research state, debt, and requirements.
-         */
-        CandidateEvidenceAnswerabilityResponse: {
+        /** CaseAccessGrantDTO */
+        CaseAccessGrantDTO: {
             /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Reference
+             * User Id
              * Format: uuid
              */
-            reference: string;
-            /** Content Hash */
-            content_hash: string;
+            user_id: string;
+            /** Display Name */
+            display_name: string;
+            /** Normalized Email */
+            normalized_email: string | null;
             /**
-             * State
-             * @constant
-             */
-            state: "not_answerable";
-            /** Research Debt Keys */
-            research_debt_keys: string[];
-            /** Resolution Requirements */
-            resolution_requirements: string[];
-        };
-        /**
-         * CandidateEvidenceDossierCanonicalItemResponse
-         * @description Exact item projection used inside a sealed dossier content hash.
-         */
-        CandidateEvidenceDossierCanonicalItemResponse: {
-            /** Metric Key */
-            metric_key: string;
-            /**
-             * Status
+             * Role
              * @enum {string}
              */
-            status: "source_reported" | "official_aggregate" | "chart_approximation" | "assumption_bound" | "unknown";
-            /** Value */
-            value: string | null;
-            /** Unit */
-            unit: string | null;
-            /** Observed Start */
-            observed_start: string;
-            /** Observed End */
-            observed_end: string;
-            /** Available At */
-            available_at: string;
-            /** Source Id */
-            source_id: string;
-            /** Source Locator */
-            source_locator: string;
-            /** Scope Statement */
-            scope_statement: string;
-            /** Exclusions */
-            exclusions: string[];
-            /** Methodology */
-            methodology: string;
-            /** Prohibited Splicing Declaration */
-            prohibited_splicing_declaration: string;
-            /** Transcription Method */
-            transcription_method: string | null;
-            /** Error Bound */
-            error_bound: string | null;
-            /** Scenario Use */
-            scenario_use: string | null;
-            /** Not Observed Declared */
-            not_observed_declared: boolean;
-            /** Unknown Reason */
-            unknown_reason: string | null;
+            role: "owner" | "editor" | "reviewer" | "viewer";
+            /** Reason */
+            reason: string | null;
         };
-        /**
-         * CandidateEvidenceDossierCanonicalPayloadResponse
-         * @description The complete selected dossier payload whose canonical hash is sealed.
-         */
-        CandidateEvidenceDossierCanonicalPayloadResponse: {
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Basis Id
-             * Format: uuid
-             */
-            basis_id: string;
-            /**
-             * Source Manifest Id
-             * Format: uuid
-             */
-            source_manifest_id: string;
-            /** Dossier Key */
-            dossier_key: string;
-            /** Version */
-            version: number;
-            /** Scope Statement */
-            scope_statement: string;
-            /**
-             * Status
-             * @constant
-             */
-            status: "candidate";
-            /**
-             * Purpose
-             * @constant
-             */
-            purpose: "evidence_candidate";
+        /** CaseAccessGrantListDTO */
+        CaseAccessGrantListDTO: {
             /** Items */
-            items: components["schemas"]["CandidateEvidenceDossierCanonicalItemResponse"][];
-            /** Rejected Calculations */
-            rejected_calculations: string[];
-            /** Source Manifest Hash */
-            source_manifest_hash: string;
-            /** Created At */
-            created_at: string;
-            /** Supersedes Id */
-            supersedes_id: string | null;
-        };
-        /** CandidateEvidenceDossierParentPreimageResponse */
-        CandidateEvidenceDossierParentPreimageResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Raw Content Hash */
-            raw_content_hash: string;
-            /** Created At */
-            created_at: string;
-        };
-        /**
-         * CandidateEvidenceDossierResponse
-         * @description The selected candidate dossier identity and bounded research scope.
-         */
-        CandidateEvidenceDossierResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Reference
-             * Format: uuid
-             */
-            reference: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Dossier Key */
-            dossier_key: string;
-            /** Version */
-            version: number;
-            /**
-             * Status
-             * @constant
-             */
-            status: "candidate";
-            /** Scope Statement */
-            scope_statement: string;
-            /** Rejected Calculations */
-            rejected_calculations: string[];
-            /** Supersedes Id */
-            supersedes_id: string | null;
-            canonical_payload: components["schemas"]["CandidateEvidenceDossierCanonicalPayloadResponse"];
-        };
-        /**
-         * CandidateEvidenceItemResponse
-         * @description One source-bound candidate item; never a formal model input.
-         */
-        CandidateEvidenceItemResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Metric Key */
-            metric_key: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "source_reported" | "official_aggregate" | "chart_approximation" | "assumption_bound" | "unknown";
-            /** Value */
-            value: string | null;
-            /** Unit */
-            unit: string | null;
-            /**
-             * Observed Start
-             * Format: date-time
-             */
-            observed_start: string;
-            /**
-             * Observed End
-             * Format: date-time
-             */
-            observed_end: string;
-            /**
-             * Available At
-             * Format: date-time
-             */
-            available_at: string;
-            /** Source Id */
-            source_id: string;
-            /** Source Locator */
-            source_locator: string;
-            /** Scope Statement */
-            scope_statement: string;
-            /** Exclusions */
-            exclusions: string[];
-            /** Methodology */
-            methodology: string;
-            /** Prohibited Splicing Declaration */
-            prohibited_splicing_declaration: string;
-            /** Transcription Method */
-            transcription_method: string | null;
-            /** Error Bound */
-            error_bound: string | null;
-            /** Scenario Use */
-            scenario_use: string | null;
-            /** Not Observed Declared */
-            not_observed_declared: boolean;
-            /** Unknown Reason */
-            unknown_reason: string | null;
-        };
-        /** CandidateEvidenceManifestParentPreimageResponse */
-        CandidateEvidenceManifestParentPreimageResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Row Content Hash */
-            row_content_hash: string;
-            /** Manifest Hash */
-            manifest_hash: string;
-        };
-        /**
-         * CandidateEvidenceParentResponse
-         * @description One exact descriptor sealed by the selected candidate revision.
-         */
-        CandidateEvidenceParentResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Reference
-             * Format: uuid
-             */
-            reference: string;
-            /**
-             * Artifact Type
-             * @enum {string}
-             */
-            artifact_type: "candidate_dossier" | "candidate_review" | "source_manifest";
-            /** Identity */
-            identity: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Descriptor Preimage */
-            descriptor_preimage: components["schemas"]["CandidateEvidenceDossierParentPreimageResponse"] | components["schemas"]["CandidateEvidenceReviewParentPreimageResponse"] | components["schemas"]["CandidateEvidenceManifestParentPreimageResponse"];
-        };
-        /**
-         * CandidateEvidenceResponse
-         * @description Read-only evidence-candidate projection for one selected revision.
-         */
-        CandidateEvidenceResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Revision Id
-             * Format: uuid
-             */
-            revision_id: string;
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Basis Id
-             * Format: uuid
-             */
-            basis_id: string;
-            /**
-             * Version Kind
-             * @constant
-             */
-            version_kind: "industry_evidence_candidate";
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Cutoff
-             * Format: date-time
-             */
-            cutoff: string;
-            /** Source Manifest Hash */
-            source_manifest_hash: string;
-            /** Parent Refs */
-            parent_refs: components["schemas"]["CandidateEvidenceParentResponse"][];
-            dossier: components["schemas"]["CandidateEvidenceDossierResponse"];
-            /** Items */
-            items: components["schemas"]["CandidateEvidenceItemResponse"][];
-            /** Reviews */
-            reviews: components["schemas"]["CandidateEvidenceReviewResponse"][];
-            answerability: components["schemas"]["CandidateEvidenceAnswerabilityResponse"];
-        };
-        /** CandidateEvidenceReviewParentPreimageResponse */
-        CandidateEvidenceReviewParentPreimageResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Raw Content Hash */
-            raw_content_hash: string;
-            /** Created At */
-            created_at: string;
-            /** Reviewed At */
-            reviewed_at: string;
-        };
-        /**
-         * CandidateEvidenceReviewResponse
-         * @description One independently identified review sealed into the selected revision.
-         */
-        CandidateEvidenceReviewResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Reference
-             * Format: uuid
-             */
-            reference: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Reviewer Identity */
-            reviewer_identity: string;
-            /**
-             * Reviewer Role
-             * @enum {string}
-             */
-            reviewer_role: "provenance" | "methodology";
-            /**
-             * Decision
-             * @enum {string}
-             */
-            decision: "approve" | "reject" | "request_changes";
-            /** Rationale */
-            rationale: string;
-            /**
-             * Reviewed At
-             * Format: date-time
-             */
-            reviewed_at: string;
-        };
-        /** CandidateMechanismResponse */
-        CandidateMechanismResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Key */
-            key: string;
-            /**
-             * Status
-             * @constant
-             */
-            status: "candidate";
-            /** Source Ids */
-            source_ids: string[];
-            /** Formula */
-            formula: string;
-        };
-        /** CapitalStructureSnapshotResponse */
-        CapitalStructureSnapshotResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Company Id
-             * Format: uuid
-             */
-            company_id: string;
-            /**
-             * Currency
-             * @enum {string}
-             */
-            currency: "CNY" | "USD";
-            /** Cash */
-            cash: string;
-            /** Debt */
-            debt: string;
-            /** Minority Interest */
-            minority_interest: string;
-            /** Investments */
-            investments: string;
-            /** Pension Liabilities */
-            pension_liabilities: string;
-            /** Other Adjustments */
-            other_adjustments: string;
-            /** Basic Shares */
-            basic_shares: string;
-            /** Diluted Shares */
-            diluted_shares: string;
-            /** Potential Dilution Descriptors */
-            potential_dilution_descriptors: string[];
-            /**
-             * Report Period Start
-             * Format: date-time
-             */
-            report_period_start: string;
-            /**
-             * Report Period End
-             * Format: date-time
-             */
-            report_period_end: string;
-            /**
-             * Market At
-             * Format: date-time
-             */
-            market_at: string;
-            /**
-             * Available At
-             * Format: date-time
-             */
-            available_at: string;
-            /** Source Id */
-            source_id: string;
-            /** Raw Hash */
-            raw_hash: string;
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /** CaseAIUsageDTO */
-        CaseAIUsageDTO: {
-            /**
-             * Coverage
-             * @default recorded_attributed_operations_only
-             */
-            coverage: string;
-            /** Operation Count */
-            operation_count: number;
-            /** Reported Attempt Count */
-            reported_attempt_count: number;
-            /** Unavailable Attempt Count */
-            unavailable_attempt_count: number;
-            /** Unavailable Operation Count */
-            unavailable_operation_count: number;
-            /** Reported Prompt Tokens */
-            reported_prompt_tokens: number;
-            /** Reported Completion Tokens */
-            reported_completion_tokens: number;
-            /** Reported Total Tokens */
-            reported_total_tokens: number;
-            /** Recorded Total Tokens */
-            recorded_total_tokens: number | null;
-            /** Case Id */
-            case_id: string;
+            items: components["schemas"]["CaseAccessGrantDTO"][];
         };
         /**
          * CaseCompareResponse
@@ -4723,12 +3103,33 @@ export interface components {
              * @enum {string}
              */
             relation_type: "shared_driver" | "follow_up_validation" | "potential_conflict" | "shared_material";
-            /** Reviewer */
-            reviewer: string;
             /** Reason */
             reason: string;
             /** Idempotency Key */
             idempotency_key: string;
+        };
+        /** CaseRuntimeRecoveryDTO */
+        CaseRuntimeRecoveryDTO: {
+            /** Automatic */
+            automatic: boolean;
+            /** Status */
+            status: string;
+            /** Message */
+            message: string;
+        };
+        /** CaseRuntimeStatusDTO */
+        CaseRuntimeStatusDTO: {
+            /**
+             * Runtime Status
+             * @enum {string}
+             */
+            runtime_status: "healthy" | "degraded" | "unavailable";
+            /** Required Services */
+            required_services: components["schemas"]["RuntimeServiceDTO"][];
+            durable_checkpoint: components["schemas"]["DurableCheckpointDTO"];
+            recovery: components["schemas"]["CaseRuntimeRecoveryDTO"];
+            /** Message */
+            message: string;
         };
         /**
          * CaseSnapshotDTO
@@ -4800,22 +3201,15 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
-        /** ClaimDecisionDTO */
-        ClaimDecisionDTO: {
+        /** ChangeCaseAccessRoleRequest */
+        ChangeCaseAccessRoleRequest: {
             /**
-             * Candidate Id
-             * Format: uuid
-             */
-            candidate_id: string;
-            /**
-             * Outcome
+             * Role
              * @enum {string}
              */
-            outcome: "confirmed" | "modified" | "rejected";
+            role: "owner" | "editor" | "reviewer" | "viewer";
             /** Reason */
             reason: string;
-            /** Normalized Text */
-            normalized_text?: string | null;
         };
         /** ClaimResponse */
         ClaimResponse: {
@@ -4930,1575 +3324,6 @@ export interface components {
             /** Items */
             items: components["schemas"]["CompanyListItemDTO"][];
             page: components["schemas"]["CursorPage"];
-        };
-        /** CompanyResearchAgendaModuleResponse */
-        CompanyResearchAgendaModuleResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Key */
-            key: string;
-            /** Label */
-            label: string;
-        };
-        /** CompanyResearchArtifactLineageResponse */
-        CompanyResearchArtifactLineageResponse: {
-            /** Artifact Refs */
-            artifact_refs: components["schemas"]["CompanyResearchArtifactParentResponse"][];
-            /** Market Snapshot Ids */
-            market_snapshot_ids: string[];
-            /** Market Snapshot Bindings */
-            market_snapshot_bindings: components["schemas"]["CompanyResearchMarketSnapshotBindingResponse"][];
-        };
-        /** CompanyResearchArtifactParentResponse */
-        CompanyResearchArtifactParentResponse: {
-            /**
-             * Artifact Id
-             * Format: uuid
-             */
-            artifact_id: string;
-            /**
-             * Artifact Kind
-             * @enum {string}
-             */
-            artifact_kind: "evidence_index" | "research_gaps" | "business_map" | "driver_map" | "financial_bridge" | "scenario_set" | "valuation_set" | "judgment_context" | "memo";
-            /** Content Hash */
-            content_hash: string;
-        };
-        /** CompanyResearchArtifactRegistryReferenceResponse */
-        CompanyResearchArtifactRegistryReferenceResponse: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "evidence_index" | "research_gaps" | "business_map" | "driver_map" | "financial_bridge" | "scenario_set" | "valuation_set" | "judgment_context" | "memo";
-            /** Content Hash */
-            content_hash: string;
-        };
-        /** CompanyResearchArtifactResponse */
-        CompanyResearchArtifactResponse: components["schemas"]["CompanyResearchEvidenceIndexArtifactResponse"] | components["schemas"]["CompanyResearchGapsArtifactResponse"] | components["schemas"]["CompanyResearchBusinessMapArtifactResponse"] | components["schemas"]["CompanyResearchDriverMapArtifactResponse"] | components["schemas"]["CompanyResearchFinancialBridgeArtifactResponse"] | components["schemas"]["CompanyResearchScenarioSetArtifactResponse"] | components["schemas"]["CompanyResearchValuationSetArtifactResponse"] | components["schemas"]["CompanyResearchJudgmentContextArtifactResponse"] | components["schemas"]["CompanyResearchMemoArtifactResponse"];
-        /** CompanyResearchBusinessMapArtifactResponse */
-        CompanyResearchBusinessMapArtifactResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Version */
-            version: number;
-            /** Input Hash */
-            input_hash: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Source Refs */
-            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "business_map";
-            /** Payload */
-            payload: components["schemas"]["CompanyResearchLegacyBusinessMapPayloadResponse"] | components["schemas"]["CompanyResearchBusinessMapPayloadResponse"];
-        };
-        /** CompanyResearchBusinessMapPayloadResponse */
-        CompanyResearchBusinessMapPayloadResponse: {
-            /** Modules */
-            modules: components["schemas"]["CompanyResearchBusinessModuleResponse"][];
-            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
-        };
-        /** CompanyResearchBusinessModuleResponse */
-        CompanyResearchBusinessModuleResponse: {
-            /** Module Key */
-            module_key: string;
-            /** Revenue Sources */
-            revenue_sources: string[];
-            /** Cost Structure */
-            cost_structure: string[];
-            /** Capital Needs */
-            capital_needs: string[];
-            /** Fact Refs */
-            fact_refs: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
-            /** Gap Refs */
-            gap_refs: string[];
-            /** Classified Evidence */
-            classified_evidence: components["schemas"]["CompanyResearchClassifiedEvidenceResponse"][];
-        };
-        /** CompanyResearchChangeSummaryResponse */
-        CompanyResearchChangeSummaryResponse: {
-            /** Artifact Versions */
-            artifact_versions: {
-                [key: string]: number;
-            };
-            /** Reviewed Fact Count */
-            reviewed_fact_count: number;
-        };
-        /** CompanyResearchClassifiedEvidenceResponse */
-        CompanyResearchClassifiedEvidenceResponse: {
-            fact_ref: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"];
-            /** Metric Key */
-            metric_key: string;
-            /**
-             * Category
-             * @enum {string}
-             */
-            category: "revenue" | "cost" | "capital";
-            observation: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            /**
-             * Period Start
-             * Format: date
-             */
-            period_start: string;
-            /**
-             * Period End
-             * Format: date
-             */
-            period_end: string;
-        };
-        /** CompanyResearchComputationNumericSourceResponse */
-        CompanyResearchComputationNumericSourceResponse: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "artifact_computation";
-            /** Artifact Refs */
-            artifact_refs: components["schemas"]["CompanyResearchArtifactParentResponse"][];
-            /** Market Snapshot Ids */
-            market_snapshot_ids: string[];
-            /** Equation Id */
-            equation_id: string;
-        };
-        /** CompanyResearchConfirmedMemoPayloadResponse */
-        CompanyResearchConfirmedMemoPayloadResponse: {
-            /**
-             * Assessment Status
-             * @enum {string}
-             */
-            assessment_status: "not_answerable" | "partially_answerable" | "answerable";
-            business_map_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
-            driver_map_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
-            financial_bridge_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
-            scenario_set_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
-            valuation_set_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"] | null;
-            /** Gap Keys */
-            gap_keys: string[];
-            /** Strongest Counterevidence */
-            strongest_counterevidence: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
-            /** Next Verification Events */
-            next_verification_events: string[];
-            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            candidate_status: "human_confirmed";
-            /**
-             * Reviewer
-             * @constant
-             */
-            reviewer: "human:local-user";
-            /** Markdown */
-            markdown: string;
-        };
-        /** CompanyResearchDriverMapArtifactResponse */
-        CompanyResearchDriverMapArtifactResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Version */
-            version: number;
-            /** Input Hash */
-            input_hash: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Source Refs */
-            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "driver_map";
-            payload: components["schemas"]["CompanyResearchDriverMapPayloadResponse"];
-        };
-        /** CompanyResearchDriverMapPayloadResponse */
-        CompanyResearchDriverMapPayloadResponse: {
-            /** Drivers */
-            drivers: components["schemas"]["CompanyResearchDriverResponse"][];
-            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
-        };
-        /** CompanyResearchDriverResponse */
-        CompanyResearchDriverResponse: {
-            /** Driver Key */
-            driver_key: string;
-            /** Module Key */
-            module_key: string;
-            /** Fact Refs */
-            fact_refs: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
-            /** Assumption Refs */
-            assumption_refs: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
-            /** Equation */
-            equation: string;
-            /** Output Metric */
-            output_metric: string;
-            /** Equation Id */
-            equation_id: string | null;
-            /** Values */
-            values: components["schemas"]["CompanyResearchNumericObservationResponse"][];
-            /** Assumption Rationale */
-            assumption_rationale: string | null;
-            /** Assumption Equation */
-            assumption_equation: string | null;
-        };
-        /** CompanyResearchEvidenceIndexArtifactResponse */
-        CompanyResearchEvidenceIndexArtifactResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Version */
-            version: number;
-            /** Input Hash */
-            input_hash: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Source Refs */
-            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "evidence_index";
-            payload: components["schemas"]["CompanyResearchEvidenceIndexPayloadResponse"];
-        };
-        /** CompanyResearchEvidenceIndexPayloadResponse */
-        CompanyResearchEvidenceIndexPayloadResponse: {
-            /** Fixture Content Hash */
-            fixture_content_hash: string;
-            /**
-             * Cutoff
-             * Format: date-time
-             */
-            cutoff: string;
-            /** Company External Key */
-            company_external_key: string;
-            /** Security External Keys */
-            security_external_keys: string[];
-            /** Facts */
-            facts: (components["schemas"]["CompanyResearchReviewedEvidenceFactResponse"] | components["schemas"]["CompanyResearchUnreviewedEvidenceFactResponse"])[];
-        };
-        /** CompanyResearchEvidenceReviewResponse */
-        CompanyResearchEvidenceReviewResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            evidence_artifact: components["schemas"]["CompanyResearchEvidenceIndexArtifactResponse"];
-        };
-        /** CompanyResearchExternalNumericSourceResponse */
-        CompanyResearchExternalNumericSourceResponse: {
-            /** Raw Hash */
-            raw_hash: string;
-            /** Source Locator */
-            source_locator: string;
-            /** Source Role */
-            source_role: string;
-            /** Source Url */
-            source_url: string;
-            /** Fact Key */
-            fact_key: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "external";
-        };
-        /** CompanyResearchFinancialBridgeArtifactResponse */
-        CompanyResearchFinancialBridgeArtifactResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Version */
-            version: number;
-            /** Input Hash */
-            input_hash: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Source Refs */
-            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "financial_bridge";
-            payload: components["schemas"]["CompanyResearchFinancialBridgePayloadResponse"];
-        };
-        /** CompanyResearchFinancialBridgePayloadResponse */
-        CompanyResearchFinancialBridgePayloadResponse: {
-            /** Rows */
-            rows: components["schemas"]["CompanyResearchFinancialBridgeRowResponse"][];
-            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
-        };
-        /** CompanyResearchFinancialBridgeRowResponse */
-        CompanyResearchFinancialBridgeRowResponse: {
-            /** Period */
-            period: string;
-            revenue: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            operating_income: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            cash_tax_rate: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            depreciation: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            capex: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            working_capital_change: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            fcff: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            /** Fact Refs */
-            fact_refs: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
-            /** Assumption Refs */
-            assumption_refs: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
-        };
-        /** CompanyResearchFrozenArtifactDescriptorResponse */
-        CompanyResearchFrozenArtifactDescriptorResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "evidence_index" | "research_gaps" | "business_map" | "driver_map" | "financial_bridge" | "scenario_set" | "valuation_set" | "judgment_context" | "memo";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Version */
-            version: number;
-            /** Input Hash */
-            input_hash: string;
-            /** Content Hash */
-            content_hash: string;
-        };
-        /** CompanyResearchFrozenAssessmentResponse */
-        CompanyResearchFrozenAssessmentResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Answerability
-             * @enum {string}
-             */
-            answerability: "not_answerable" | "partially_answerable" | "answerable";
-            /** Direction */
-            direction: ("provisional_bullish" | "provisional_neutral" | "provisional_cautious") | null;
-            /** Confidence */
-            confidence: ("low" | "medium" | "high") | null;
-            /** Content Hash */
-            content_hash: string;
-        };
-        /** CompanyResearchFrozenMemoIdentityResponse */
-        CompanyResearchFrozenMemoIdentityResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Content Hash */
-            content_hash: string;
-        };
-        /** CompanyResearchFrozenRevisionResponse */
-        CompanyResearchFrozenRevisionResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Sequence */
-            sequence: number;
-            /**
-             * Published At
-             * Format: date-time
-             */
-            published_at: string;
-            /**
-             * Boundary Id
-             * Format: uuid
-             */
-            boundary_id: string;
-            /**
-             * Manifest Id
-             * Format: uuid
-             */
-            manifest_id: string;
-            /** Manifest Hash */
-            manifest_hash: string;
-            company: components["schemas"]["CompanyResearchIdentityResponse"];
-            /** Securities */
-            securities: components["schemas"]["CompanyResearchFrozenSecurityResponse"][];
-            /**
-             * Cutoff At
-             * Format: date-time
-             */
-            cutoff_at: string;
-            /**
-             * Historical Basis Id
-             * Format: uuid
-             */
-            historical_basis_id: string;
-            /** Historical Basis Content Hash */
-            historical_basis_content_hash: string;
-            /** Strategy Version */
-            strategy_version: string;
-            /** Model Version */
-            model_version: string;
-            assessment: components["schemas"]["CompanyResearchFrozenAssessmentResponse"];
-            value_range: components["schemas"]["CompanyResearchValueRangeSummaryResponse"] | null;
-            return_range: components["schemas"]["CompanyResearchReturnRangeSummaryResponse"] | null;
-            /** Blockers */
-            blockers: string[];
-            /** Strongest Counterevidence */
-            strongest_counterevidence: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
-            /** Next Verification Events */
-            next_verification_events: string[];
-            /** Memo Markdown */
-            memo_markdown: string;
-            /** Artifacts */
-            artifacts: components["schemas"]["CompanyResearchFrozenArtifactDescriptorResponse"][];
-            /**
-             * Preparation Status
-             * @constant
-             */
-            preparation_status: "completed";
-            /** Current Step */
-            current_step: null;
-            /**
-             * Progress
-             * @constant
-             */
-            progress: 100;
-        };
-        /** CompanyResearchFrozenSecurityResponse */
-        CompanyResearchFrozenSecurityResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /** External Key */
-            external_key: string;
-            /** Canonical Name */
-            canonical_name: string;
-            /** Symbol */
-            symbol: string;
-            /** Exchange */
-            exchange: string;
-            /** Share Class */
-            share_class: string;
-            /**
-             * Trading Currency
-             * @enum {string}
-             */
-            trading_currency: "CNY" | "USD";
-            /**
-             * Company Id
-             * Format: uuid
-             */
-            company_id: string;
-        };
-        /** CompanyResearchGapResponse */
-        CompanyResearchGapResponse: {
-            /** Code */
-            code: string;
-            /** Module Key */
-            module_key: string;
-            /**
-             * Severity
-             * @enum {string}
-             */
-            severity: "low" | "medium" | "high" | "critical";
-            /** Message */
-            message: string;
-        };
-        /** CompanyResearchGapsArtifactResponse */
-        CompanyResearchGapsArtifactResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Version */
-            version: number;
-            /** Input Hash */
-            input_hash: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Source Refs */
-            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "research_gaps";
-            /** Payload */
-            payload: components["schemas"]["CompanyResearchLegacyGapsPayloadResponse"] | components["schemas"]["CompanyResearchModelGapsPayloadResponse"];
-        };
-        /** CompanyResearchIdentityResponse */
-        CompanyResearchIdentityResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /** External Key */
-            external_key: string;
-            /** Canonical Name */
-            canonical_name: string;
-        };
-        /** CompanyResearchJudgmentConfirmationResponse */
-        CompanyResearchJudgmentConfirmationResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            preparation: components["schemas"]["CompanyResearchPublicationPreparationResponse"];
-            draft: components["schemas"]["CompanyResearchPublicationDraftResponse"];
-            machine_memo: components["schemas"]["CompanyResearchFrozenMemoIdentityResponse"];
-            confirmed_memo: components["schemas"]["CompanyResearchFrozenMemoIdentityResponse"];
-            /**
-             * Assessment Status
-             * @enum {string}
-             */
-            assessment_status: "not_answerable" | "partially_answerable" | "answerable";
-            /**
-             * Reviewer
-             * @constant
-             */
-            reviewer: "human:local-user";
-            /** Markdown */
-            markdown: string;
-            /**
-             * Confirmed At
-             * Format: date-time
-             */
-            confirmed_at: string;
-        };
-        /** CompanyResearchJudgmentContextArtifactResponse */
-        CompanyResearchJudgmentContextArtifactResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Version */
-            version: number;
-            /** Input Hash */
-            input_hash: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Source Refs */
-            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "judgment_context";
-            payload: components["schemas"]["CompanyResearchJudgmentContextPayloadResponse"];
-        };
-        /** CompanyResearchJudgmentContextPayloadResponse */
-        CompanyResearchJudgmentContextPayloadResponse: {
-            /** Operating Baseline Available */
-            operating_baseline_available: boolean;
-            /** Financial Bridge Closed */
-            financial_bridge_closed: boolean;
-            /** Market Security Bridge Available */
-            market_security_bridge_available: boolean;
-            /** Strongest Counterevidence */
-            strongest_counterevidence: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
-            /** Next Verification Events */
-            next_verification_events: string[];
-            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
-        };
-        /** CompanyResearchLegacyBusinessMapPayloadResponse */
-        CompanyResearchLegacyBusinessMapPayloadResponse: {
-            /**
-             * Evidence Index Id
-             * Format: uuid
-             */
-            evidence_index_id: string;
-            /** Evidence Content Hash */
-            evidence_content_hash: string;
-            /** Modules */
-            modules: components["schemas"]["CompanyResearchLegacyBusinessModuleResponse"][];
-        };
-        /** CompanyResearchLegacyBusinessModuleResponse */
-        CompanyResearchLegacyBusinessModuleResponse: {
-            /** Key */
-            key: string;
-            /** Fact Keys */
-            fact_keys: string[];
-        };
-        /** CompanyResearchLegacyGapResponse */
-        CompanyResearchLegacyGapResponse: {
-            /** Gap Key */
-            gap_key: string;
-            /** Business Module */
-            business_module: string;
-            /** Reason */
-            reason: string;
-        };
-        /** CompanyResearchLegacyGapsPayloadResponse */
-        CompanyResearchLegacyGapsPayloadResponse: {
-            /** Fixture Content Hash */
-            fixture_content_hash: string;
-            /** Company External Key */
-            company_external_key: string;
-            /** Gaps */
-            gaps: components["schemas"]["CompanyResearchLegacyGapResponse"][];
-        };
-        /** CompanyResearchLineageSourceReferenceResponse */
-        CompanyResearchLineageSourceReferenceResponse: {
-            /** Raw Hash */
-            raw_hash: string;
-            /** Source Locator */
-            source_locator: string;
-            /** Source Role */
-            source_role: string;
-            /** Source Url */
-            source_url: string;
-            /** Fact Key */
-            fact_key: string;
-        };
-        /** CompanyResearchMachineMemoPayloadResponse */
-        CompanyResearchMachineMemoPayloadResponse: {
-            /**
-             * Assessment Status
-             * @enum {string}
-             */
-            assessment_status: "not_answerable" | "partially_answerable" | "answerable";
-            business_map_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
-            driver_map_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
-            financial_bridge_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
-            scenario_set_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"];
-            valuation_set_ref: components["schemas"]["CompanyResearchMemoArtifactReferenceResponse"] | null;
-            /** Gap Keys */
-            gap_keys: string[];
-            /** Strongest Counterevidence */
-            strongest_counterevidence: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
-            /** Next Verification Events */
-            next_verification_events: string[];
-            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            candidate_status: "machine_draft";
-        };
-        /** CompanyResearchMarkdownExportResponse */
-        CompanyResearchMarkdownExportResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Filename */
-            filename: string;
-            /**
-             * Media Type
-             * @constant
-             */
-            media_type: "text/markdown";
-            /** Content */
-            content: string;
-            /** Content Hash */
-            content_hash: string;
-        };
-        /** CompanyResearchMarketSnapshotBindingResponse */
-        CompanyResearchMarketSnapshotBindingResponse: {
-            /**
-             * Snapshot Id
-             * Format: uuid
-             */
-            snapshot_id: string;
-            /**
-             * Snapshot Kind
-             * @enum {string}
-             */
-            snapshot_kind: "price" | "fx" | "capital_structure" | "security_rights";
-            /** Snapshot Content Hash */
-            snapshot_content_hash: string;
-            /** Security External Key */
-            security_external_key: string | null;
-            source_ref: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"];
-            /**
-             * Capture Envelope Id
-             * Format: uuid
-             */
-            capture_envelope_id: string;
-            /** Capture Content Hash */
-            capture_content_hash: string;
-            /**
-             * Provenance Role
-             * @constant
-             */
-            provenance_role: "primary";
-            /** Provider Policy Version */
-            provider_policy_version: string;
-            /** Raw Components */
-            raw_components: components["schemas"]["CompanyResearchRawComponentResponse"][];
-        };
-        /** CompanyResearchMemoArtifactReferenceResponse */
-        CompanyResearchMemoArtifactReferenceResponse: {
-            /**
-             * Artifact Kind
-             * @enum {string}
-             */
-            artifact_kind: "business_map" | "driver_map" | "financial_bridge" | "scenario_set" | "valuation_set";
-            /** Content Hash */
-            content_hash: string;
-        };
-        /** CompanyResearchMemoArtifactResponse */
-        CompanyResearchMemoArtifactResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Version */
-            version: number;
-            /** Input Hash */
-            input_hash: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Source Refs */
-            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "memo";
-            /** Payload */
-            payload: components["schemas"]["CompanyResearchMachineMemoPayloadResponse"] | components["schemas"]["CompanyResearchConfirmedMemoPayloadResponse"];
-        };
-        /** CompanyResearchModelGapsPayloadResponse */
-        CompanyResearchModelGapsPayloadResponse: {
-            /** Gaps */
-            gaps: components["schemas"]["CompanyResearchGapResponse"][];
-            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
-        };
-        /** CompanyResearchNumericObservationResponse */
-        CompanyResearchNumericObservationResponse: {
-            /** Key */
-            key: string;
-            /** Value */
-            value: string;
-            /** Unit */
-            unit: string;
-            /** Currency */
-            currency: string;
-            /** Period */
-            period: string;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "reported" | "derived" | "assumption" | "gap";
-            /** Source Ref */
-            source_ref: (components["schemas"]["CompanyResearchExternalNumericSourceResponse"] | components["schemas"]["CompanyResearchComputationNumericSourceResponse"]) | null;
-            /** Gap Key */
-            gap_key: string | null;
-            /** Assumption Key */
-            assumption_key: string | null;
-        };
-        /** CompanyResearchPreparationErrorResponse */
-        CompanyResearchPreparationErrorResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Code */
-            code: string;
-            /**
-             * Failed Step
-             * @enum {string}
-             */
-            failed_step: "evidence_index" | "research_gaps" | "business_map" | "driver_map" | "financial_bridge" | "scenario_set" | "valuation_set" | "judgment_context" | "memo" | "model_bundle";
-            /** Retryable */
-            retryable: boolean;
-            /** Next Attempt At */
-            next_attempt_at: string | null;
-        };
-        /** CompanyResearchPreparationResponse */
-        CompanyResearchPreparationResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Request Hash */
-            request_hash: string;
-            /** Strategy Version */
-            strategy_version: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "queued" | "preparing_sources" | "awaiting_evidence_review" | "building_model" | "awaiting_judgment_review" | "ready_to_freeze" | "recoverable_failure" | "blocked" | "completed";
-            /** Current Step */
-            current_step: string | null;
-            /** Progress */
-            progress: number;
-            /** Attempt */
-            attempt: number;
-            /** Next Attempt At */
-            next_attempt_at: string | null;
-            /** Last Error Code */
-            last_error_code: string | null;
-        };
-        /** CompanyResearchPreviewRequest */
-        CompanyResearchPreviewRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Company Id
-             * Format: uuid
-             */
-            company_id: string;
-            /**
-             * Cutoff At
-             * Format: date-time
-             */
-            cutoff_at: string;
-        };
-        /** CompanyResearchPreviewResponse */
-        CompanyResearchPreviewResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            company: components["schemas"]["CompanyResearchIdentityResponse"];
-            /** Securities */
-            securities: components["schemas"]["CompanyResearchSecurityIdentityResponse"][];
-            /** Strategy Version */
-            strategy_version: string;
-            /** Horizon Years */
-            horizon_years: number;
-            /**
-             * Base Currency
-             * @constant
-             */
-            base_currency: "CNY";
-            /** Required Return */
-            required_return: string;
-            /** Permanent Loss Limit */
-            permanent_loss_limit: string;
-            /**
-             * Cutoff At
-             * Format: date-time
-             */
-            cutoff_at: string;
-            /** Agenda */
-            agenda: components["schemas"]["CompanyResearchAgendaModuleResponse"][];
-            /** Preview Hash */
-            preview_hash: string;
-        };
-        /** CompanyResearchProjectResponse */
-        CompanyResearchProjectResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /**
-             * Company Id
-             * Format: uuid
-             */
-            company_id: string;
-            preparation: components["schemas"]["CompanyResearchPreparationResponse"];
-        };
-        /** CompanyResearchPublicationDraftResponse */
-        CompanyResearchPublicationDraftResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Lock Version */
-            lock_version: number;
-        };
-        /** CompanyResearchPublicationPreparationResponse */
-        CompanyResearchPublicationPreparationResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Status
-             * @constant
-             */
-            status: "ready_to_freeze";
-            /**
-             * Current Step
-             * @constant
-             */
-            current_step: "memo";
-            /**
-             * Progress
-             * @constant
-             */
-            progress: 95;
-        };
-        /** CompanyResearchPublicationPreviewResponse */
-        CompanyResearchPublicationPreviewResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Expected Lock Version */
-            expected_lock_version: number;
-            company: components["schemas"]["CompanyResearchIdentityResponse"];
-            /** Securities */
-            securities: components["schemas"]["CompanyResearchFrozenSecurityResponse"][];
-            /**
-             * Cutoff At
-             * Format: date-time
-             */
-            cutoff_at: string;
-            /**
-             * Historical Basis Id
-             * Format: uuid
-             */
-            historical_basis_id: string;
-            /** Historical Basis Content Hash */
-            historical_basis_content_hash: string;
-            /** Strategy Version */
-            strategy_version: string;
-            /** Model Version */
-            model_version: string;
-            assessment: components["schemas"]["CompanyResearchFrozenAssessmentResponse"];
-            value_range: components["schemas"]["CompanyResearchValueRangeSummaryResponse"] | null;
-            return_range: components["schemas"]["CompanyResearchReturnRangeSummaryResponse"] | null;
-            /** Blockers */
-            blockers: string[];
-            /** Strongest Counterevidence */
-            strongest_counterevidence: components["schemas"]["CompanyResearchLineageSourceReferenceResponse"][];
-            /** Next Verification Events */
-            next_verification_events: string[];
-            /** Memo Markdown */
-            memo_markdown: string;
-            /** Artifacts */
-            artifacts: components["schemas"]["CompanyResearchFrozenArtifactDescriptorResponse"][];
-            /** Manifest Hash */
-            manifest_hash: string;
-        };
-        /** CompanyResearchRawComponentResponse */
-        CompanyResearchRawComponentResponse: {
-            /** Raw File */
-            raw_file: string;
-            /** Raw Hash */
-            raw_hash: string;
-            /** Source Url */
-            source_url: string;
-            /** Source Locator */
-            source_locator: string;
-        };
-        /** CompanyResearchRequiredReturnComparisonResponse */
-        CompanyResearchRequiredReturnComparisonResponse: {
-            /** Security External Key */
-            security_external_key: string;
-            required_return: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            achieved_return_range: components["schemas"]["CompanyResearchValueRangeResponse"];
-            /** Meets Required Return */
-            meets_required_return: boolean;
-        };
-        /** CompanyResearchReturnRangeSummaryResponse */
-        CompanyResearchReturnRangeSummaryResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Minimum */
-            minimum: string;
-            /** Maximum */
-            maximum: string;
-        };
-        /** CompanyResearchReverseDcfResponse */
-        CompanyResearchReverseDcfResponse: {
-            /**
-             * Driver Key
-             * @constant
-             */
-            driver_key: "fcff_multiplier";
-            implied_value: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            achieved_residual: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            iteration_count: components["schemas"]["CompanyResearchNumericObservationResponse"];
-        };
-        /** CompanyResearchReviewedEvidenceFactResponse */
-        CompanyResearchReviewedEvidenceFactResponse: {
-            /** Fact Key */
-            fact_key: string;
-            /** Company External Key */
-            company_external_key: string;
-            /** Business Module */
-            business_module: string;
-            /** Metric Key */
-            metric_key: string;
-            observation: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            /**
-             * Period Start
-             * Format: date
-             */
-            period_start: string;
-            /**
-             * Period End
-             * Format: date
-             */
-            period_end: string;
-            /**
-             * Published At
-             * Format: date-time
-             */
-            published_at: string;
-            /**
-             * Available At
-             * Format: date-time
-             */
-            available_at: string;
-            /** Source Role */
-            source_role: string;
-            /** Source Url */
-            source_url: string;
-            /** Source Locator */
-            source_locator: string;
-            /** Raw Hash */
-            raw_hash: string;
-            /**
-             * Review Decision
-             * @enum {string}
-             */
-            review_decision: "confirmed" | "rejected";
-        };
-        /** CompanyResearchScenarioDcfValueResponse */
-        CompanyResearchScenarioDcfValueResponse: {
-            /**
-             * Scenario Id
-             * @enum {string}
-             */
-            scenario_id: "base" | "bull" | "bear";
-            enterprise_value: components["schemas"]["CompanyResearchNumericObservationResponse"];
-        };
-        /** CompanyResearchScenarioOverrideResponse */
-        CompanyResearchScenarioOverrideResponse: {
-            /** Driver Key */
-            driver_key: string;
-            observation: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            /** Rationale */
-            rationale: string | null;
-            /** Equation */
-            equation: string | null;
-        };
-        /** CompanyResearchScenarioResponse */
-        CompanyResearchScenarioResponse: {
-            /**
-             * Scenario Id
-             * @enum {string}
-             */
-            scenario_id: "base" | "bull" | "bear";
-            /** Mechanism Id */
-            mechanism_id: string;
-            /** Driver Overrides */
-            driver_overrides: components["schemas"]["CompanyResearchScenarioOverrideResponse"][];
-        };
-        /** CompanyResearchScenarioSetArtifactResponse */
-        CompanyResearchScenarioSetArtifactResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Version */
-            version: number;
-            /** Input Hash */
-            input_hash: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Source Refs */
-            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "scenario_set";
-            payload: components["schemas"]["CompanyResearchScenarioSetPayloadResponse"];
-        };
-        /** CompanyResearchScenarioSetPayloadResponse */
-        CompanyResearchScenarioSetPayloadResponse: {
-            /** Scenarios */
-            scenarios: components["schemas"]["CompanyResearchScenarioResponse"][];
-            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
-        };
-        /** CompanyResearchSecurityIdentityResponse */
-        CompanyResearchSecurityIdentityResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /** External Key */
-            external_key: string;
-            /** Canonical Name */
-            canonical_name: string;
-            /** Symbol */
-            symbol: string;
-            /** Exchange */
-            exchange: string;
-            /** Share Class */
-            share_class: string;
-            /**
-             * Trading Currency
-             * @enum {string}
-             */
-            trading_currency: "CNY" | "USD";
-        };
-        /** CompanyResearchSecurityValueRangeResponse */
-        CompanyResearchSecurityValueRangeResponse: {
-            /** Security External Key */
-            security_external_key: string;
-            usd_per_share: components["schemas"]["CompanyResearchValueRangeResponse"];
-            cny_return: components["schemas"]["CompanyResearchValueRangeResponse"];
-        };
-        /** CompanyResearchSourceReferenceResponse */
-        CompanyResearchSourceReferenceResponse: {
-            /** Raw Hash */
-            raw_hash: string;
-            /** Source Locator */
-            source_locator: string;
-            /** Source Role */
-            source_role: string;
-            /** Source Url */
-            source_url: string;
-        };
-        /** CompanyResearchUnreviewedEvidenceFactResponse */
-        CompanyResearchUnreviewedEvidenceFactResponse: {
-            /** Fact Key */
-            fact_key: string;
-            /** Company External Key */
-            company_external_key: string;
-            /** Business Module */
-            business_module: string;
-            /** Metric Key */
-            metric_key: string;
-            observation: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            /**
-             * Period Start
-             * Format: date
-             */
-            period_start: string;
-            /**
-             * Period End
-             * Format: date
-             */
-            period_end: string;
-            /**
-             * Published At
-             * Format: date-time
-             */
-            published_at: string;
-            /**
-             * Available At
-             * Format: date-time
-             */
-            available_at: string;
-            /** Source Role */
-            source_role: string;
-            /** Source Url */
-            source_url: string;
-            /** Source Locator */
-            source_locator: string;
-            /** Raw Hash */
-            raw_hash: string;
-        };
-        /** CompanyResearchValuationSetArtifactResponse */
-        CompanyResearchValuationSetArtifactResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Version */
-            version: number;
-            /** Input Hash */
-            input_hash: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Source Refs */
-            source_refs: components["schemas"]["CompanyResearchSourceReferenceResponse"][];
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "valuation_set";
-            payload: components["schemas"]["CompanyResearchValuationSetPayloadResponse"];
-        };
-        /** CompanyResearchValuationSetPayloadResponse */
-        CompanyResearchValuationSetPayloadResponse: {
-            /** Scenario Dcf Values */
-            scenario_dcf_values: components["schemas"]["CompanyResearchScenarioDcfValueResponse"][];
-            reverse_dcf: components["schemas"]["CompanyResearchReverseDcfResponse"] | null;
-            /** Security Value Ranges */
-            security_value_ranges: components["schemas"]["CompanyResearchSecurityValueRangeResponse"][];
-            required_return: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            /** Required Return Comparisons */
-            required_return_comparisons: components["schemas"]["CompanyResearchRequiredReturnComparisonResponse"][];
-            _lineage: components["schemas"]["CompanyResearchArtifactLineageResponse"];
-        };
-        /** CompanyResearchValueRangeResponse */
-        CompanyResearchValueRangeResponse: {
-            minimum: components["schemas"]["CompanyResearchNumericObservationResponse"];
-            maximum: components["schemas"]["CompanyResearchNumericObservationResponse"];
-        };
-        /** CompanyResearchValueRangeSummaryResponse */
-        CompanyResearchValueRangeSummaryResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Minimum */
-            minimum: string;
-            /** Maximum */
-            maximum: string;
-            /**
-             * Currency
-             * @enum {string}
-             */
-            currency: "CNY" | "USD";
-        };
-        /** CompanyResearchWorkbenchModuleResponse */
-        CompanyResearchWorkbenchModuleResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Key
-             * @enum {string}
-             */
-            key: "overview" | "business_map" | "operating_drivers" | "evidence_and_gaps" | "industry_competition_regulation" | "financials_cash_flow_capital_allocation" | "scenarios_valuation_implied_expectations" | "counterevidence_risks_next_checks" | "versions_changes_memo";
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "not_started" | "preparing" | "needs_review" | "ready" | "blocked";
-            /** Artifact Refs */
-            artifact_refs: components["schemas"]["CompanyResearchArtifactRegistryReferenceResponse"][];
-            /**
-             * Valuation State
-             * @enum {string}
-             */
-            valuation_state: "not_applicable" | "pending" | "ready" | "blocked";
-        };
-        /** CompanyResearchWorkspaceCompanyResponse */
-        CompanyResearchWorkspaceCompanyResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /** External Key */
-            external_key: string;
-            /** Canonical Name */
-            canonical_name: string;
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-        };
-        /** CompanyResearchWorkspaceDraftResponse */
-        CompanyResearchWorkspaceDraftResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Lock Version */
-            lock_version: number;
-            /** Base Revision Id */
-            base_revision_id: string | null;
-        };
-        /** CompanyResearchWorkspacePreparationResponse */
-        CompanyResearchWorkspacePreparationResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "queued" | "preparing_sources" | "awaiting_evidence_review" | "building_model" | "awaiting_judgment_review" | "ready_to_freeze" | "recoverable_failure" | "blocked" | "completed";
-            /** Current Step */
-            current_step: string | null;
-            /** Progress */
-            progress: number;
-            error: components["schemas"]["CompanyResearchPreparationErrorResponse"] | null;
-        };
-        /** CompanyResearchWorkspaceResponse */
-        CompanyResearchWorkspaceResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            company: components["schemas"]["CompanyResearchWorkspaceCompanyResponse"];
-            preparation: components["schemas"]["CompanyResearchWorkspacePreparationResponse"];
-            /** Artifacts */
-            artifacts: components["schemas"]["CompanyResearchArtifactResponse"][];
-            /** Modules */
-            modules: components["schemas"]["CompanyResearchWorkbenchModuleResponse"][];
-            /** Source Count */
-            source_count: number;
-            /** Gap Count */
-            gap_count: number;
-            draft: components["schemas"]["CompanyResearchWorkspaceDraftResponse"];
-            /** Selected Revision */
-            selected_revision: string | null;
-            change_summary: components["schemas"]["CompanyResearchChangeSummaryResponse"];
         };
         /** CompareLinkDTO */
         CompareLinkDTO: {
@@ -6623,47 +3448,54 @@ export interface components {
             causal_path: components["schemas"]["app__schemas__v1__conclusion__CausalStepDTO"][];
             gap_explanation: components["schemas"]["GapExplanationDTO"];
         };
-        /** ConfirmClaimsRequest */
-        ConfirmClaimsRequest: {
-            /** Revision */
-            revision: number;
-            /** Actor */
-            actor: string;
-            /** Decisions */
-            decisions: components["schemas"]["ClaimDecisionDTO"][];
-        };
-        /** ConfirmCompanyResearchJudgmentRequest */
-        ConfirmCompanyResearchJudgmentRequest: {
+        /** ConfirmResearchWorkflowRequest */
+        ConfirmResearchWorkflowRequest: {
             /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Expected Lock Version */
-            expected_lock_version: number;
-            /**
-             * Expected Memo Id
+             * Scope Version Id
              * Format: uuid
              */
-            expected_memo_id: string;
-            /** Expected Memo Content Hash */
-            expected_memo_content_hash: string;
-            /** Markdown */
-            markdown: string;
+            scope_version_id: string;
+            /** Scope Version */
+            scope_version?: number | null;
+            /** Idempotency Key */
+            idempotency_key: string;
         };
-        /** ConfirmProtocolRequest */
-        ConfirmProtocolRequest: {
-            /** Revision */
-            revision: number;
-            /** Actor */
-            actor: string;
-            /** Draft Sequence */
-            draft_sequence: number;
-            /** Edits */
-            edits?: {
-                [key: string]: unknown;
-            };
+        /** ConfirmResearchWorkflowResponse */
+        ConfirmResearchWorkflowResponse: {
+            /**
+             * Orchestration Id
+             * Format: uuid
+             */
+            orchestration_id: string;
+            /**
+             * Case Id
+             * Format: uuid
+             */
+            case_id: string;
+            /**
+             * Scope Version Id
+             * Format: uuid
+             */
+            scope_version_id: string;
+            /** Research Run Id */
+            research_run_id: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "intake" | "awaiting_scope_confirmation" | "planning_acquisition" | "acquiring" | "freezing_sources" | "assessing_coverage" | "synthesizing_evidence" | "adjudicating_thesis" | "generating_report" | "monitoring" | "retry_wait" | "recovering" | "needs_scope_decision" | "exhausted" | "cancelled" | "failed";
+            /**
+             * User Stage
+             * @enum {string}
+             */
+            user_stage: "intake" | "scope_confirmation" | "acquisition" | "evidence_synthesis" | "thesis_adjudication" | "report_monitoring";
+            /** Current System Action */
+            current_system_action: string | null;
+            /** System Action Reason */
+            system_action_reason: string | null;
+            next_action: components["schemas"]["WorkflowNextActionDTO"] | null;
+            /** Version */
+            version: number;
         };
         /** ConfirmedFactorOptionDTO */
         ConfirmedFactorOptionDTO: {
@@ -6678,8 +3510,6 @@ export interface components {
             document_version_id: string;
             /** Reason */
             reason: string;
-            /** Triggered By */
-            triggered_by: string;
         };
         /** ContinueEventResearchResponse */
         ContinueEventResearchResponse: {
@@ -6748,72 +3578,6 @@ export interface components {
             scope?: {
                 [key: string]: string;
             };
-            /** Actor */
-            actor: string;
-        };
-        /** CreateCapitalStructureSnapshotRequest */
-        CreateCapitalStructureSnapshotRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Company Id
-             * Format: uuid
-             */
-            company_id: string;
-            /**
-             * Currency
-             * @enum {string}
-             */
-            currency: "CNY" | "USD";
-            /** Cash */
-            cash: number | string;
-            /** Debt */
-            debt: number | string;
-            /** Minority Interest */
-            minority_interest: number | string;
-            /** Investments */
-            investments: number | string;
-            /** Pension Liabilities */
-            pension_liabilities: number | string;
-            /** Other Adjustments */
-            other_adjustments: number | string;
-            /** Basic Shares */
-            basic_shares: number | string;
-            /** Diluted Shares */
-            diluted_shares: number | string;
-            /**
-             * Potential Dilution Descriptors
-             * @default []
-             */
-            potential_dilution_descriptors: string[];
-            /**
-             * Report Period Start
-             * Format: date-time
-             */
-            report_period_start: string;
-            /**
-             * Report Period End
-             * Format: date-time
-             */
-            report_period_end: string;
-            /**
-             * Market At
-             * Format: date-time
-             */
-            market_at: string;
-            /**
-             * Available At
-             * Format: date-time
-             */
-            available_at: string;
-            /** Source Id */
-            source_id: string;
-            /** Raw Hash */
-            raw_hash: string;
         };
         /**
          * CreateCaseRequest
@@ -6824,8 +3588,6 @@ export interface components {
             title: string;
             /** Industry Topic */
             industry_topic: string;
-            /** Created By */
-            created_by: string;
             /** Research Object */
             research_object?: string | null;
             /** Phenomenon */
@@ -6841,6 +3603,13 @@ export interface components {
             /** Initial Theses */
             initial_theses?: components["schemas"]["ThesisInput"][];
         };
+        /** CreateCaseResponse */
+        CreateCaseResponse: {
+            /** Case Id */
+            case_id: string;
+            /** Theses */
+            theses: components["schemas"]["CreatedThesisDTO"][];
+        };
         /** CreateCausalEdgeRequest */
         CreateCausalEdgeRequest: {
             /**
@@ -6855,11 +3624,6 @@ export interface components {
             target_step_id: string;
             /** Rationale */
             rationale: string;
-            /**
-             * Creator Type
-             * @default human
-             */
-            creator_type: string;
         };
         /** CreateCausalStepRequest */
         CreateCausalStepRequest: {
@@ -6885,8 +3649,6 @@ export interface components {
             raw_text: string;
             /** Claimed Page Reference */
             claimed_page_reference: string;
-            /** Created By */
-            created_by: string;
             /** Source Metadata */
             source_metadata?: {
                 [key: string]: unknown;
@@ -6935,11 +3697,9 @@ export interface components {
             candidate_factors: string[];
             /**
              * Research Protocol Required
-             * @default true
+             * @default false
              */
             research_protocol_required: boolean;
-            /** Created By */
-            created_by: string;
         };
         /** CreateEventResearchResponse */
         CreateEventResearchResponse: {
@@ -6948,46 +3708,6 @@ export interface components {
             /** Brief Id */
             brief_id: string;
             lifecycle: components["schemas"]["EventResearchLifecycleDTO"];
-        };
-        /** CreateFXSnapshotRequest */
-        CreateFXSnapshotRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Base Currency
-             * @enum {string}
-             */
-            base_currency: "CNY" | "USD";
-            /**
-             * Quote Currency
-             * @enum {string}
-             */
-            quote_currency: "CNY" | "USD";
-            /** Rate */
-            rate: number | string;
-            /**
-             * Quote Direction
-             * @constant
-             */
-            quote_direction: "quote_per_base";
-            /**
-             * Market At
-             * Format: date-time
-             */
-            market_at: string;
-            /**
-             * Available At
-             * Format: date-time
-             */
-            available_at: string;
-            /** Source Id */
-            source_id: string;
-            /** Raw Hash */
-            raw_hash: string;
         };
         /** CreateForecastTargetRequest */
         CreateForecastTargetRequest: {
@@ -7035,8 +3755,6 @@ export interface components {
             comparator: "at_least" | "at_most" | "within_tolerance";
             /** Relative Tolerance */
             relative_tolerance?: number | null;
-            /** Reviewed By */
-            reviewed_by: string;
             /** Review Reason */
             review_reason: string;
         };
@@ -7051,8 +3769,6 @@ export interface components {
             outcome?: ("supported" | "contradicted" | "insufficient_evidence" | "not_due") | null;
             /** Reason */
             reason: string;
-            /** Reviewed By */
-            reviewed_by: string;
             /** Supersedes Id */
             supersedes_id?: string | null;
         };
@@ -7113,207 +3829,6 @@ export interface components {
             /** Supersedes Disclosure Id */
             supersedes_disclosure_id?: string | null;
         };
-        /** CreatePriceSnapshotRequest */
-        CreatePriceSnapshotRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Security Identity Id
-             * Format: uuid
-             */
-            security_identity_id: string;
-            /** Price */
-            price: number | string;
-            /**
-             * Currency
-             * @enum {string}
-             */
-            currency: "CNY" | "USD";
-            /** Price Type */
-            price_type: string;
-            /** Adjustment Basis */
-            adjustment_basis: string;
-            /**
-             * Market At
-             * Format: date-time
-             */
-            market_at: string;
-            /**
-             * Available At
-             * Format: date-time
-             */
-            available_at: string;
-            /** Source Id */
-            source_id: string;
-            /** Raw Hash */
-            raw_hash: string;
-        };
-        /** CreateProductHistoricalBasisRequest */
-        CreateProductHistoricalBasisRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Cutoff At
-             * Format: date-time
-             */
-            cutoff_at: string;
-            /** Source Manifest Hash */
-            source_manifest_hash: string;
-            /** Definition Bundle Hash */
-            definition_bundle_hash: string;
-            /** Parser Bundle Hash */
-            parser_bundle_hash: string;
-        };
-        /** CreateProductMandateRequest */
-        CreateProductMandateRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Horizon Years */
-            horizon_years: number;
-            /**
-             * Base Currency
-             * @enum {string}
-             */
-            base_currency: "CNY" | "USD";
-            /** Required Return */
-            required_return: number | string;
-            /** Permanent Loss Limit */
-            permanent_loss_limit: number | string;
-            /** Comparison Set */
-            comparison_set: string[];
-            /** Benchmark Key */
-            benchmark_key?: string | null;
-            /** Required Excess Return */
-            required_excess_return?: number | string | null;
-            /**
-             * Effective At
-             * Format: date-time
-             */
-            effective_at: string;
-            /** Expires At */
-            expires_at?: string | null;
-            /** Expected Parent Id */
-            expected_parent_id?: string | null;
-        };
-        /** CreateResearchAgendaRequest */
-        CreateResearchAgendaRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Scope Id
-             * Format: uuid
-             */
-            scope_id: string;
-            /** Items */
-            items: string[];
-            generator: components["schemas"]["AgendaGeneratorRequest"];
-            /** Expected Parent Id */
-            expected_parent_id?: string | null;
-        };
-        /** CreateResearchProjectRequest */
-        CreateResearchProjectRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Primary Company Id
-             * Format: uuid
-             */
-            primary_company_id: string;
-            /** Target Security Ids */
-            target_security_ids: string[];
-        };
-        /** CreateResearchScopeRequest */
-        CreateResearchScopeRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Primary Company Id
-             * Format: uuid
-             */
-            primary_company_id: string;
-            /** Target Security Ids */
-            target_security_ids: string[];
-            /**
-             * Industry Ids
-             * @default []
-             */
-            industry_ids: string[];
-            /**
-             * Covered Segments
-             * @default []
-             */
-            covered_segments: string[];
-            /** User Focus */
-            user_focus?: string | null;
-            /**
-             * Exclusions
-             * @default []
-             */
-            exclusions: string[];
-            /** Expected Parent Id */
-            expected_parent_id?: string | null;
-        };
-        /** CreateSecurityRightsRequest */
-        CreateSecurityRightsRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Security Identity Id
-             * Format: uuid
-             */
-            security_identity_id: string;
-            /** Economic Units */
-            economic_units: number | string;
-            /** Votes Per Unit */
-            votes_per_unit: number | string;
-            /** Conversion Ratio */
-            conversion_ratio: number | string;
-            /** Adr Ratio */
-            adr_ratio: number | string;
-            /** Dividend Rights Per Unit */
-            dividend_rights_per_unit: number | string;
-            /**
-             * Effective From
-             * Format: date-time
-             */
-            effective_from: string;
-            /** Effective To */
-            effective_to?: string | null;
-            /** Source Id */
-            source_id: string;
-            /** Raw Hash */
-            raw_hash: string;
-            /** Expected Parent Id */
-            expected_parent_id?: string | null;
-        };
         /** CreateStockRequest */
         CreateStockRequest: {
             /** Code */
@@ -7342,7 +3857,7 @@ export interface components {
         };
         /**
          * CreateThesisRequest
-         * @description Add one proposition to an existing case (AI 协助拆分 or human).
+         * @description Add one proposition authored by the authenticated user.
          */
         CreateThesisRequest: {
             /** Statement */
@@ -7359,14 +3874,6 @@ export interface components {
             falsification_condition?: string | null;
             /** Next Verification Event */
             next_verification_event?: string | null;
-            /**
-             * Creator Type
-             * @default human
-             * @enum {string}
-             */
-            creator_type: "human" | "ai";
-            /** Created By */
-            created_by: string;
         };
         /** CreateThesisResponse */
         CreateThesisResponse: {
@@ -7461,6 +3968,23 @@ export interface components {
              * @default false
              */
             has_more: boolean;
+        };
+        /**
+         * DecideResearchWorkflowRequest
+         * @description A business decision only; identity always comes from the session.
+         */
+        DecideResearchWorkflowRequest: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "keep_scope" | "stop";
+            /** Reason */
+            reason: string;
+            /** Expected Version */
+            expected_version: number;
+            /** Idempotency Key */
+            idempotency_key: string;
         };
         /** DerivedFromDTO */
         DerivedFromDTO: {
@@ -7627,105 +4151,25 @@ export interface components {
              */
             counter_research: components["schemas"]["CounterResearchTaskDTO"][];
         };
-        /** EconomicObservationResponse */
-        EconomicObservationResponse: {
+        /** DurableCheckpointDTO */
+        DurableCheckpointDTO: {
+            /** Workflow State */
+            workflow_state: string;
+            /** User Stage */
+            user_stage: string;
+            /** Version */
+            version: number;
+            /** System Action */
+            system_action: string | null;
             /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Metric Key */
-            metric_key: string;
-            /** Value */
-            value: string | null;
-            /** Unit */
-            unit: string;
-            /** Source Id */
-            source_id: string;
-            /** Source Locator */
-            source_locator: string;
-            /**
-             * Available At
+             * Saved At
              * Format: date-time
              */
-            available_at: string;
-            /** Observation Status */
-            observation_status: string;
-            /** Source Role */
-            source_role: string;
-            /** Dimensions */
-            dimensions: {
-                [key: string]: string;
-            };
-        };
-        /** EconomicSourceResponse */
-        EconomicSourceResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Source Id */
-            source_id: string;
-            /** Title */
-            title: string;
-            /** Locator */
-            locator: string;
-            /** Authority */
-            authority: string;
-        };
-        /** EffectiveSecurityRightsResponse */
-        EffectiveSecurityRightsResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Security Identity Id
-             * Format: uuid
-             */
-            security_identity_id: string;
-            /**
-             * As Of
-             * Format: date-time
-             */
-            as_of: string;
-            effective: components["schemas"]["SecurityRightsResponse"] | null;
-            head: components["schemas"]["SecurityRightsHeadResponse"] | null;
-            /** Append Allowed */
-            append_allowed: boolean;
-            /** Expected Parent Id */
-            expected_parent_id: string | null;
-            /** Minimum Effective From */
-            minimum_effective_from: string | null;
-            reason: components["schemas"]["SecurityRightsResolutionReasonResponse"];
-        };
-        /** ErrorBody */
-        ErrorBody: {
-            /** Code */
-            code: string;
-            /** Message */
-            message: string;
-            /** Request Id */
-            request_id: string;
-            /** Details */
-            details?: {
-                [key: string]: unknown;
-            };
-        };
-        /** ErrorEnvelope */
-        ErrorEnvelope: {
-            /**
-             * Schema Version
-             * @default v1
-             * @constant
-             */
-            schema_version: "v1";
-            error: components["schemas"]["ErrorBody"];
+            saved_at: string;
+            /** Last Transition */
+            last_transition: string | null;
+            /** Last Transition At */
+            last_transition_at: string | null;
         };
         /** EvaluateForecastTargetRequest */
         EvaluateForecastTargetRequest: {
@@ -7750,6 +4194,21 @@ export interface components {
             confidence: string;
             /** Citations */
             citations: components["schemas"]["EventKeyEvidenceDTO"][];
+            /**
+             * System Generated
+             * @default false
+             */
+            system_generated: boolean;
+            /**
+             * Human Reviewed
+             * @default false
+             */
+            human_reviewed: boolean;
+            /**
+             * Review Label
+             * @default 人工审核状态未声明
+             */
+            review_label: string;
         };
         /** EventConclusionHistoryResponse */
         EventConclusionHistoryResponse: {
@@ -7778,6 +4237,12 @@ export interface components {
             reviewer: string | null;
             /** Evidence Count */
             evidence_count: number;
+            /** System Generated */
+            system_generated: boolean;
+            /** Human Reviewed */
+            human_reviewed: boolean;
+            /** Review Label */
+            review_label: string;
             /**
              * Created At
              * Format: date-time
@@ -7820,40 +4285,11 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "complete_research_protocol" | "view_conclusion_change" | "review_preparation_claims" | "review_preparation_protocol" | "authorize_preparation_plan" | "recover_preparation";
+            kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "complete_research_protocol" | "view_conclusion_change";
             /** Label */
             label: string;
             /** Count */
             count?: number | null;
-        };
-        /** EventPreparationStepDTO */
-        EventPreparationStepDTO: {
-            /** State */
-            state: string;
-        };
-        /**
-         * EventPreparationSummaryDTO
-         * @description Safe preparation progress shown alongside the existing event lifecycle.
-         */
-        EventPreparationSummaryDTO: {
-            /** Status */
-            status: string;
-            /** Revision */
-            revision: number;
-            /** Research Run Id */
-            research_run_id: string | null;
-            /** Next Attempt At */
-            next_attempt_at: string | null;
-            /** Last Error Message */
-            last_error_message: string | null;
-            /** System */
-            system: {
-                [key: string]: components["schemas"]["EventPreparationStepDTO"];
-            };
-            /** Review */
-            review: {
-                [key: string]: components["schemas"]["EventPreparationStepDTO"];
-            };
         };
         /** EventResearchFactorDTO */
         EventResearchFactorDTO: {
@@ -7869,6 +4305,10 @@ export interface components {
             reviewed_support_count: number;
             /** Reviewed Contradiction Count */
             reviewed_contradiction_count: number;
+            /** Automatically Admitted Support Count */
+            automatically_admitted_support_count: number;
+            /** Automatically Admitted Contradiction Count */
+            automatically_admitted_contradiction_count: number;
             /** Pending Proposal Count */
             pending_proposal_count: number;
             /** Current Gap */
@@ -7893,11 +4333,6 @@ export interface components {
         EventResearchListItemDTO: {
             /** Case Id */
             case_id: string;
-            /**
-             * Workflow Mode
-             * @enum {string}
-             */
-            workflow_mode: "reviewed" | "automatic";
             /** Event Title */
             event_title: string;
             /** Company Name */
@@ -7916,7 +4351,7 @@ export interface components {
              * Next Action Kind
              * @enum {string}
              */
-            next_action_kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "complete_research_protocol" | "view_conclusion_change" | "review_preparation_claims" | "review_preparation_protocol" | "authorize_preparation_plan" | "recover_preparation";
+            next_action_kind: "wait" | "review_intake" | "review_evidence" | "review_conclusion" | "edit_factors" | "complete_research_protocol" | "view_conclusion_change";
             /**
              * Updated At
              * Format: date-time
@@ -8028,11 +4463,6 @@ export interface components {
             source_status_reason: string;
             /** Can Accept */
             can_accept: boolean;
-            /**
-             * Display Withheld
-             * @default false
-             */
-            display_withheld: boolean;
             /** Proposal Reason */
             proposal_reason: string;
             /** Position */
@@ -8071,12 +4501,13 @@ export interface components {
             progress: components["schemas"]["EventWorkbenchProgressDTO"];
             scope: components["schemas"]["EventResearchScopeDTO"];
             next_action: components["schemas"]["EventNextActionDTO"];
-            preparation?: components["schemas"]["EventPreparationSummaryDTO"] | null;
         };
         /** EventWorkbenchProgressDTO */
         EventWorkbenchProgressDTO: {
-            /** Verified */
-            verified: number;
+            /** Reviewed Count */
+            reviewed_count: number;
+            /** Automatically Admitted Count */
+            automatically_admitted_count: number;
             /** Pending */
             pending: number;
             /** Invalid Source */
@@ -8089,122 +4520,6 @@ export interface components {
          * @enum {string}
          */
         EvidenceObjective: "support" | "contradict" | "alternative_explanation" | "verify_rule";
-        /** EvidenceOnlyEarningsResponse */
-        EvidenceOnlyEarningsResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Status
-             * @constant
-             */
-            status: "not_compiled";
-            /** Reason */
-            reason: string;
-        };
-        /** EvidenceOnlyEconomicModelResponse */
-        EvidenceOnlyEconomicModelResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Basis Id
-             * Format: uuid
-             */
-            basis_id: string;
-            /**
-             * Cutoff
-             * Format: date-time
-             */
-            cutoff: string;
-            /**
-             * Research Version Id
-             * Format: uuid
-             */
-            research_version_id: string;
-            /** Snapshot Hash */
-            snapshot_hash: string;
-            /** Sources */
-            sources: components["schemas"]["EconomicSourceResponse"][];
-            /** Observations */
-            observations: components["schemas"]["EconomicObservationResponse"][];
-            /** Candidate Mechanisms */
-            candidate_mechanisms: components["schemas"]["CandidateMechanismResponse"][];
-            /** Formal Mechanisms */
-            formal_mechanisms: components["schemas"]["FormalMechanismResponse"][];
-            industry_state?: components["schemas"]["EvidenceOnlyIndustryStateResponse"] | null;
-            /** Scenarios */
-            scenarios?: components["schemas"]["EvidenceOnlyScenarioResponse"][];
-            company_exposure?: components["schemas"]["EvidenceOnlyExposureResponse"] | null;
-            earnings_engine?: components["schemas"]["EvidenceOnlyEarningsResponse"] | null;
-            answerability: components["schemas"]["AnswerabilityResponse"];
-            /**
-             * Eligible Action
-             * @constant
-             */
-            eligible_action: "wait_for_validation";
-            /** Valuation */
-            valuation?: null;
-        };
-        /** EvidenceOnlyExposureResponse */
-        EvidenceOnlyExposureResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Status
-             * @constant
-             */
-            status: "not_compiled";
-            /** Reason */
-            reason: string;
-        };
-        /** EvidenceOnlyIndustryStateResponse */
-        EvidenceOnlyIndustryStateResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Status
-             * @constant
-             */
-            status: "not_compiled";
-            /** Reason */
-            reason: string;
-        };
-        /** EvidenceOnlyScenarioResponse */
-        EvidenceOnlyScenarioResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Key */
-            key: string;
-            /**
-             * Status
-             * @constant
-             */
-            status: "not_compiled";
-        };
         /** EvidenceRecordDTO */
         EvidenceRecordDTO: {
             /** Link Id */
@@ -8384,58 +4699,6 @@ export interface components {
             /** Candidates */
             candidates: components["schemas"]["ExtractCandidateDTO"][];
         };
-        /** FXSnapshotResponse */
-        FXSnapshotResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Base Currency
-             * @enum {string}
-             */
-            base_currency: "CNY" | "USD";
-            /**
-             * Quote Currency
-             * @enum {string}
-             */
-            quote_currency: "CNY" | "USD";
-            /** Rate */
-            rate: string;
-            /**
-             * Quote Direction
-             * @constant
-             */
-            quote_direction: "quote_per_base";
-            /**
-             * Market At
-             * Format: date-time
-             */
-            market_at: string;
-            /**
-             * Available At
-             * Format: date-time
-             */
-            available_at: string;
-            /** Source Id */
-            source_id: string;
-            /** Raw Hash */
-            raw_hash: string;
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
         /** ForecastEvaluationCandidateDTO */
         ForecastEvaluationCandidateDTO: {
             /** Id */
@@ -8559,58 +4822,6 @@ export interface components {
             /** Items */
             items: components["schemas"]["ForecastVerdictDTO"][];
         };
-        /** FormalMechanismResponse */
-        FormalMechanismResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Key */
-            key: string;
-            /**
-             * Status
-             * @constant
-             */
-            status: "formal";
-            /** Source Ids */
-            source_ids: string[];
-            /** Formula */
-            formula: string;
-        };
-        /**
-         * FrozenAnswerabilityResponse
-         * @description A checked answerability parent from one selected research version.
-         */
-        FrozenAnswerabilityResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Reference
-             * Format: uuid
-             */
-            reference: string;
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "answerable" | "partially_answerable" | "not_answerable";
-            /** Blockers */
-            blockers: ("missing_key_baseline" | "unresolved_source_conflict" | "mechanism_unidentified" | "financial_model_not_closed" | "expectation_surface_unidentifiable" | "source_unavailable" | "future_information_leakage")[];
-            /** Research Debt Keys */
-            research_debt_keys: string[];
-            /** Resolvable Within Mandate */
-            resolvable_within_mandate: boolean;
-            /** Resolution Requirements */
-            resolution_requirements: string[];
-        };
         /**
          * FrozenRunScopeDTO
          * @description Scope recorded when a run started; never reconstructed from current settings.
@@ -8636,64 +4847,6 @@ export interface components {
             configured_by?: string | null;
             /** Configuration Change Reason */
             configuration_change_reason?: string | null;
-        };
-        /**
-         * FrozenUnknownEvidenceGapResponse
-         * @description One explicit Unknown ledger parent sealed into a research version.
-         */
-        FrozenUnknownEvidenceGapResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Reference
-             * Format: uuid
-             */
-            reference: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Metric Key */
-            metric_key: string;
-            /** Unit */
-            unit: string;
-            /** Source Id */
-            source_id: string;
-            /** Source Locator */
-            source_locator: string;
-            /**
-             * Observed Start
-             * Format: date-time
-             */
-            observed_start: string;
-            /**
-             * Observed End
-             * Format: date-time
-             */
-            observed_end: string;
-            /**
-             * Effective At
-             * Format: date-time
-             */
-            effective_at: string;
-            /**
-             * Available At
-             * Format: date-time
-             */
-            available_at: string;
-            /** Source Role */
-            source_role: string;
-            /**
-             * Observation Status
-             * @constant
-             */
-            observation_status: "unknown";
-            /** Dimensions */
-            dimensions: {
-                [key: string]: string;
-            };
         };
         /**
          * FundCompositionResponse
@@ -9025,6 +5178,21 @@ export interface components {
             /** Rationale */
             rationale: string;
         };
+        /** GrantCaseAccessRequest */
+        GrantCaseAccessRequest: {
+            /**
+             * Target User Id
+             * Format: uuid
+             */
+            target_user_id: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "owner" | "editor" | "reviewer" | "viewer";
+            /** Reason */
+            reason: string;
+        };
         /** GraphEdgeDTO */
         GraphEdgeDTO: {
             /** Id */
@@ -9209,56 +5377,6 @@ export interface components {
             link_modified: number;
         };
         /**
-         * IndustryCompanyBrowseItemResponse
-         * @description Public identity projection for an Industry's directly related companies.
-         */
-        IndustryCompanyBrowseItemResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "industry" | "company" | "security";
-            /** External Key */
-            external_key: string;
-            /** Canonical Name */
-            canonical_name: string;
-            /** Symbol */
-            symbol: string | null;
-            /** Exchange */
-            exchange: string | null;
-            /** Share Class */
-            share_class: string | null;
-            /** Trading Currency */
-            trading_currency: ("CNY" | "USD") | null;
-        };
-        /** IndustryCompanyBrowseResponse */
-        IndustryCompanyBrowseResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Industry Id
-             * Format: uuid
-             */
-            industry_id: string;
-            /** Items */
-            items: components["schemas"]["IndustryCompanyBrowseItemResponse"][];
-        };
-        /**
          * IngestRequest
          * @description Trigger a Gildata ingest run.
          *
@@ -9313,27 +5431,6 @@ export interface components {
             /** Case Id */
             case_id: string | null;
         };
-        /** InitializeCompanyResearchRequest */
-        InitializeCompanyResearchRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Company Id
-             * Format: uuid
-             */
-            company_id: string;
-            /**
-             * Cutoff At
-             * Format: date-time
-             */
-            cutoff_at: string;
-            /** Preview Hash */
-            preview_hash: string;
-        };
         /** JobDTO */
         JobDTO: {
             /** Id */
@@ -9346,6 +5443,12 @@ export interface components {
             progress: number;
             /** Attempt */
             attempt: number;
+            /** Failure Count */
+            failure_count: number;
+            /** Next Retry At */
+            next_retry_at?: string | null;
+            /** Retry Policy Version */
+            retry_policy_version?: string | null;
             /** Step */
             step?: string | null;
             /** Error */
@@ -9624,107 +5727,6 @@ export interface components {
              */
             updated_at: string;
         };
-        /** LedgerEntryCreate */
-        LedgerEntryCreate: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Basis Id
-             * Format: uuid
-             */
-            basis_id: string;
-            /**
-             * Ledger Kind
-             * @enum {string}
-             */
-            ledger_kind: "reality" | "belief" | "decision" | "calibration";
-            /** Family Key */
-            family_key: string;
-            /** Entry Type */
-            entry_type: string;
-            /** Payload */
-            payload: {
-                [key: string]: unknown;
-            };
-            /**
-             * Effective At
-             * Format: date-time
-             */
-            effective_at: string;
-            /**
-             * Available At
-             * Format: date-time
-             */
-            available_at: string;
-            /** Source Boundary */
-            source_boundary: string;
-            /** Expected Parent Id */
-            expected_parent_id?: string | null;
-        };
-        /** LedgerEntryResponse */
-        LedgerEntryResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Basis Id
-             * Format: uuid
-             */
-            basis_id: string;
-            /**
-             * Ledger Kind
-             * @enum {string}
-             */
-            ledger_kind: "reality" | "belief" | "decision" | "calibration";
-            /** Family Key */
-            family_key: string;
-            /** Entry Type */
-            entry_type: string;
-            /** Version */
-            version: number;
-            /** Payload */
-            payload: {
-                [key: string]: unknown;
-            };
-            /**
-             * Effective At
-             * Format: date-time
-             */
-            effective_at: string;
-            /**
-             * Available At
-             * Format: date-time
-             */
-            available_at: string;
-            /** Source Boundary */
-            source_boundary: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Supersedes Id */
-            supersedes_id: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
         /** LegacyCaseAdmissionCandidateDTO */
         LegacyCaseAdmissionCandidateDTO: {
             /** Case Id */
@@ -9760,12 +5762,8 @@ export interface components {
         };
         /** LegacyCaseAdmissionRequest */
         LegacyCaseAdmissionRequest: {
-            /** Tenant Id */
-            tenant_id: string;
             /** Initial Document Version Id */
             initial_document_version_id: string;
-            /** Admitted By */
-            admitted_by: string;
             /** Reason */
             reason: string;
         };
@@ -9805,70 +5803,10 @@ export interface components {
             scope_boundary: string;
             /** Reason */
             reason: string;
-            /** Reviewer */
-            reviewer: string;
         };
         /** LinkReviewResponse */
         LinkReviewResponse: {
             review: components["schemas"]["EvidenceReviewDTO"];
-        };
-        /** MandateCreate */
-        MandateCreate: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Mandate Key */
-            mandate_key: string;
-            /** Horizon Years */
-            horizon_years: number;
-            /** Base Currency */
-            base_currency: string;
-            /** Required Return */
-            required_return: number | string;
-            /** Permanent Loss Limit */
-            permanent_loss_limit: number | string;
-            /** Comparison Set */
-            comparison_set: string[];
-            /** Expected Parent Id */
-            expected_parent_id?: string | null;
-        };
-        /** MandateResponse */
-        MandateResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Mandate Key */
-            mandate_key: string;
-            /** Horizon Years */
-            horizon_years: number;
-            /** Base Currency */
-            base_currency: string;
-            /** Required Return */
-            required_return: string;
-            /** Permanent Loss Limit */
-            permanent_loss_limit: string;
-            /** Comparison Set */
-            comparison_set: string[];
-            /** Version */
-            version: number;
-            /** Supersedes Id */
-            supersedes_id: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
         };
         /** MarketExpressionResponse */
         MarketExpressionResponse: {
@@ -10145,8 +6083,6 @@ export interface components {
             allowed_source_roles: string[];
             /** Role Eligibility */
             role_eligibility: ("outcome" | "driver" | "mediator" | "context")[];
-            /** Approved By */
-            approved_by: string;
             /** Reason */
             reason: string;
         };
@@ -10173,63 +6109,17 @@ export interface components {
             /** Points */
             points: components["schemas"]["MetricPointDTO"][];
         };
-        /** ObjectRelationCreate */
-        ObjectRelationCreate: {
+        /** MigrationStatusDTO */
+        MigrationStatusDTO: {
             /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Parent Id
-             * Format: uuid
-             */
-            parent_id: string;
-            /**
-             * Child Id
-             * Format: uuid
-             */
-            child_id: string;
-            /**
-             * Relation Type
+             * Status
              * @enum {string}
              */
-            relation_type: "industry_exposes_company" | "company_has_security";
-        };
-        /** ObjectRelationResponse */
-        ObjectRelationResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Parent Id
-             * Format: uuid
-             */
-            parent_id: string;
-            /**
-             * Child Id
-             * Format: uuid
-             */
-            child_id: string;
-            /**
-             * Relation Type
-             * @enum {string}
-             */
-            relation_type: "industry_exposes_company" | "company_has_security";
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
+            status: "healthy" | "degraded" | "unavailable";
+            /** Current */
+            current: string[];
+            /** Expected */
+            expected: string[];
         };
         /**
          * OriginalFileDTO
@@ -10321,8 +6211,6 @@ export interface components {
              * Format: date
              */
             horizon_end: string;
-            /** Reviewer */
-            reviewer: string;
             /** Reason */
             reason: string;
         };
@@ -10370,35 +6258,6 @@ export interface components {
             /** Major Gaps */
             major_gaps: number;
         };
-        /** PatchWorkspaceDraftRequest */
-        PatchWorkspaceDraftRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Expected Lock Version */
-            expected_lock_version: number;
-            /** Mandate Id */
-            mandate_id?: string | null;
-            /** Scope Id */
-            scope_id?: string | null;
-            /** Agenda Id */
-            agenda_id?: string | null;
-            /** Historical Basis Id */
-            historical_basis_id?: string | null;
-            /** Price Snapshot Ids */
-            price_snapshot_ids?: string[] | null;
-            /** Fx Snapshot Ids */
-            fx_snapshot_ids?: string[] | null;
-            /** Capital Structure Snapshot Id */
-            capital_structure_snapshot_id?: string | null;
-            /** Security Rights Ids */
-            security_rights_ids?: string[] | null;
-            /** User Focus */
-            user_focus?: string | null;
-        };
         /** PendingAssessmentDTO */
         PendingAssessmentDTO: {
             /** Assessment Id */
@@ -10424,505 +6283,6 @@ export interface components {
             task_id: string | null;
             /** Status */
             status: string;
-        };
-        /** PreparationArtifactDTO */
-        PreparationArtifactDTO: {
-            /** Sequence */
-            sequence: number;
-            /** Payload */
-            payload: {
-                [key: string]: unknown;
-            };
-            /** State */
-            state: string;
-            /** Context Fingerprint */
-            context_fingerprint?: string | null;
-            /**
-             * Display Withheld
-             * @default false
-             */
-            display_withheld: boolean;
-        };
-        /** PreparationInitialMaterialDTO */
-        PreparationInitialMaterialDTO: {
-            /**
-             * Document Version Id
-             * Format: uuid
-             */
-            document_version_id: string;
-            /** Title */
-            title?: string | null;
-            /** Parse State */
-            parse_state: string;
-        };
-        /** PreparationProgressDTO */
-        PreparationProgressDTO: {
-            /** Completed Steps */
-            completed_steps: number;
-            /** Total Steps */
-            total_steps: number;
-            /** Current Step */
-            current_step?: string | null;
-            /** Failed Step */
-            failed_step?: string | null;
-        };
-        /** PreparationStepDTO */
-        PreparationStepDTO: {
-            /** State */
-            state: string;
-            /** Review State */
-            review_state?: string | null;
-            /** Artifact Sequence */
-            artifact_sequence?: number | null;
-        };
-        /** PreviewCompanyResearchPublicationRequest */
-        PreviewCompanyResearchPublicationRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Expected Lock Version */
-            expected_lock_version: number;
-        };
-        /** PreviewProductRevisionRequest */
-        PreviewProductRevisionRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Expected Lock Version */
-            expected_lock_version: number;
-        };
-        /** PriceSnapshotResponse */
-        PriceSnapshotResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Security Identity Id
-             * Format: uuid
-             */
-            security_identity_id: string;
-            /** Price */
-            price: string;
-            /**
-             * Currency
-             * @enum {string}
-             */
-            currency: "CNY" | "USD";
-            /** Price Type */
-            price_type: string;
-            /** Adjustment Basis */
-            adjustment_basis: string;
-            /**
-             * Market At
-             * Format: date-time
-             */
-            market_at: string;
-            /**
-             * Available At
-             * Format: date-time
-             */
-            available_at: string;
-            /** Source Id */
-            source_id: string;
-            /** Raw Hash */
-            raw_hash: string;
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /** ProductHistoricalBasisResponse */
-        ProductHistoricalBasisResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Cutoff At
-             * Format: date-time
-             */
-            cutoff_at: string;
-            /** Price As Of */
-            price_as_of?: null;
-            /** Source Manifest Hash */
-            source_manifest_hash: string;
-            /** Definition Bundle Hash */
-            definition_bundle_hash: string;
-            /** Parser Bundle Hash */
-            parser_bundle_hash: string;
-            /**
-             * Boundary Schema Version
-             * @constant
-             */
-            boundary_schema_version: "product.historical-basis.v1";
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /** ProductMandateResponse */
-        ProductMandateResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Mandate Key */
-            mandate_key: string;
-            /** Horizon Years */
-            horizon_years: number;
-            /**
-             * Base Currency
-             * @enum {string}
-             */
-            base_currency: "CNY" | "USD";
-            /** Required Return */
-            required_return: string;
-            /** Permanent Loss Limit */
-            permanent_loss_limit: string;
-            /** Comparison Set */
-            comparison_set: string[];
-            /** Benchmark Key */
-            benchmark_key: string | null;
-            /** Required Excess Return */
-            required_excess_return: string | null;
-            /**
-             * Effective At
-             * Format: date-time
-             */
-            effective_at: string;
-            /** Expires At */
-            expires_at: string | null;
-            /** Version */
-            version: number;
-            /** Supersedes Id */
-            supersedes_id: string | null;
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /** ProductManifestMembershipRefResponse */
-        ProductManifestMembershipRefResponse: {
-            /**
-             * Membership Id
-             * Format: uuid
-             */
-            membership_id: string;
-            /**
-             * Security Id
-             * Format: uuid
-             */
-            security_id: string;
-            /** Content Hash */
-            content_hash: string;
-        };
-        /** ProductManifestPreviewResponse */
-        ProductManifestPreviewResponse: {
-            /**
-             * Schema Version
-             * @constant
-             */
-            schema_version: "underwriting.research-revision-manifest.v1";
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            project_ref: components["schemas"]["ProductManifestProjectRefResponse"];
-            /** Project Membership Refs */
-            project_membership_refs: components["schemas"]["ProductManifestMembershipRefResponse"][];
-            /**
-             * Primary Object Id
-             * Format: uuid
-             */
-            primary_object_id: string;
-            /**
-             * Boundary Ref
-             * @constant
-             */
-            boundary_ref: "$boundary";
-            /**
-             * Mandate Id
-             * Format: uuid
-             */
-            mandate_id: string;
-            /**
-             * Scope Id
-             * Format: uuid
-             */
-            scope_id: string;
-            /**
-             * Agenda Id
-             * Format: uuid
-             */
-            agenda_id: string;
-            /**
-             * Historical Basis Id
-             * Format: uuid
-             */
-            historical_basis_id: string;
-            /** Price Snapshot Ids */
-            price_snapshot_ids: string[];
-            /** Fx Snapshot Ids */
-            fx_snapshot_ids: string[];
-            /**
-             * Capital Structure Snapshot Id
-             * Format: uuid
-             */
-            capital_structure_snapshot_id: string;
-            /** Security Rights Ids */
-            security_rights_ids: string[];
-            /** Market Snapshot Refs */
-            market_snapshot_refs: string[];
-            /** Model Refs */
-            model_refs: string[];
-            /**
-             * Assessment Ref
-             * @constant
-             */
-            assessment_ref: "$assessment";
-            /** Memo Ref */
-            memo_ref: null;
-            /** Parent Revision Id */
-            parent_revision_id: string | null;
-        };
-        /** ProductManifestProjectRefResponse */
-        ProductManifestProjectRefResponse: {
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Content Hash */
-            content_hash: string;
-        };
-        /** ProductObjectSearchItemResponse */
-        ProductObjectSearchItemResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Identity Version Id
-             * Format: uuid
-             */
-            identity_version_id: string;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "industry" | "company" | "security";
-            /** External Key */
-            external_key: string;
-            /** Canonical Name */
-            canonical_name: string;
-            /** Symbol */
-            symbol: string | null;
-            /** Exchange */
-            exchange: string | null;
-            /** Share Class */
-            share_class: string | null;
-            /** Trading Currency */
-            trading_currency: ("CNY" | "USD") | null;
-        };
-        /** ProductObjectSearchResponse */
-        ProductObjectSearchResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Items */
-            items: components["schemas"]["ProductObjectSearchItemResponse"][];
-        };
-        /** ProductRevisionResponse */
-        ProductRevisionResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Basis Id
-             * Format: uuid
-             */
-            basis_id: string;
-            /**
-             * Boundary Id
-             * Format: uuid
-             */
-            boundary_id: string;
-            /**
-             * Manifest Id
-             * Format: uuid
-             */
-            manifest_id: string;
-            /**
-             * Version Kind
-             * @constant
-             */
-            version_kind: "independent_research";
-            /** Sequence */
-            sequence: number;
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Cutoff
-             * Format: date-time
-             */
-            cutoff: string;
-            /** Source Manifest Hash */
-            source_manifest_hash: string;
-            /** Manifest Hash */
-            manifest_hash: string;
-            /** Parent Revision Id */
-            parent_revision_id: string | null;
-            /** Price Snapshot Ids */
-            price_snapshot_ids: string[];
-            /** Fx Snapshot Ids */
-            fx_snapshot_ids: string[];
-            /**
-             * Capital Structure Snapshot Id
-             * Format: uuid
-             */
-            capital_structure_snapshot_id: string;
-            /** Security Rights Ids */
-            security_rights_ids: string[];
-            /** Market Snapshot Ids */
-            market_snapshot_ids: string[];
-            /**
-             * Answerability
-             * @enum {string}
-             */
-            answerability: "answerable" | "partially_answerable" | "not_answerable";
-            /** Direction */
-            direction: ("provisional_bullish" | "provisional_neutral" | "provisional_cautious") | null;
-            /** Confidence */
-            confidence: ("low" | "medium" | "high") | null;
-            /**
-             * Publication Status
-             * @enum {string}
-             */
-            publication_status: "user_frozen" | "superseded";
-        };
-        /** ProjectCompanyIdentityResponse */
-        ProjectCompanyIdentityResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Identity Version Id
-             * Format: uuid
-             */
-            identity_version_id: string;
-            /** Canonical Name */
-            canonical_name: string;
-        };
-        /** ProjectSecurityIdentityResponse */
-        ProjectSecurityIdentityResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Identity Version Id
-             * Format: uuid
-             */
-            identity_version_id: string;
-            /** Canonical Name */
-            canonical_name: string;
-            /** Symbol */
-            symbol: string;
-            /** Exchange */
-            exchange: string;
-            /** Share Class */
-            share_class: string;
-            /**
-             * Trading Currency
-             * @enum {string}
-             */
-            trading_currency: "CNY" | "USD";
         };
         /**
          * ProposeResponse
@@ -10964,6 +6324,30 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** ProviderConfigurationDTO */
+        ProviderConfigurationDTO: {
+            /**
+             * Service
+             * @enum {string}
+             */
+            service: "api" | "research-worker" | "acquisition-worker" | "scheduler";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "configured" | "misconfigured" | "unconfirmed";
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "local_process" | "service_heartbeat";
+            /** Observed At */
+            observed_at: string | null;
+            /** Missing */
+            missing: string[];
+            /** Invalid */
+            invalid: string[];
+        };
         /** ProviderRecordDTO */
         ProviderRecordDTO: {
             /** Provider Name */
@@ -10986,53 +6370,10 @@ export interface components {
             /** Contract Version */
             contract_version: string | null;
         };
-        /** PublicationPreviewResponse */
-        PublicationPreviewResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Expected Lock Version */
-            expected_lock_version: number;
-            /**
-             * Boundary As Of
-             * Format: date-time
-             */
-            boundary_as_of: string;
-            assessment: components["schemas"]["AssessmentPreviewResponse"];
-            boundary: components["schemas"]["RevisionBoundaryResponse"];
-            /** Boundary Hash */
-            boundary_hash: string;
-            manifest: components["schemas"]["ProductManifestPreviewResponse"];
-            /** Manifest Hash */
-            manifest_hash: string;
-        };
-        /** PublishCompanyResearchRequest */
-        PublishCompanyResearchRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Expected Lock Version */
-            expected_lock_version: number;
-            /** Expected Manifest Hash */
-            expected_manifest_hash: string;
-        };
         /** PublishEventConclusionRequest */
         PublishEventConclusionRequest: {
             /** Text */
             text: string;
-            /** Reviewer */
-            reviewer: string;
         };
         /** PublishEventConclusionResponse */
         PublishEventConclusionResponse: {
@@ -11040,17 +6381,6 @@ export interface components {
             conclusion_id: string;
             /** State */
             state: string;
-        };
-        /** PublishProductRevisionRequest */
-        PublishProductRevisionRequest: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Expected Lock Version */
-            expected_lock_version: number;
         };
         /** PublishedMaterialDecisionRequest */
         PublishedMaterialDecisionRequest: {
@@ -11075,8 +6405,6 @@ export interface components {
             decision: "reopen" | "no_change";
             /** Reason */
             reason: string;
-            /** Actor */
-            actor: string;
         };
         /** PublishedMaterialDecisionResponse */
         PublishedMaterialDecisionResponse: {
@@ -11147,8 +6475,6 @@ export interface components {
              * Format: date-time
              */
             available_at: string;
-            /** Recorded By */
-            recorded_by: string;
             /** Record Reason */
             record_reason: string;
         };
@@ -11166,8 +6492,6 @@ export interface components {
             outcome: "supported" | "contradicted" | "insufficient_evidence" | "not_due";
             /** Rationale */
             rationale: string;
-            /** Reviewed By */
-            reviewed_by: string;
             /** Review Reason */
             review_reason: string;
         };
@@ -11192,8 +6516,6 @@ export interface components {
             expected_direction: "positive" | "negative" | "neutral";
             /** Rationale */
             rationale: string;
-            /** Reviewed By */
-            reviewed_by: string;
             /** Review Reason */
             review_reason: string;
         };
@@ -11233,8 +6555,6 @@ export interface components {
             refutation_condition: string;
             /** Next Verification Event */
             next_verification_event: string;
-            /** Reviewed By */
-            reviewed_by: string;
             /** Review Reason */
             review_reason: string;
         };
@@ -11257,8 +6577,6 @@ export interface components {
              * @enum {string}
              */
             relationship_role: "directly_affected" | "supply_chain" | "competitor" | "beneficiary" | "risk_exposure";
-            /** Reviewed By */
-            reviewed_by: string;
             /** Review Reason */
             review_reason: string;
         };
@@ -11294,8 +6612,6 @@ export interface components {
             after_hours_treatment: string;
             /** Relative Return */
             relative_return?: number | null;
-            /** Reviewed By */
-            reviewed_by: string;
             /** Review Reason */
             review_reason: string;
         };
@@ -11317,8 +6633,6 @@ export interface components {
             asserted_period?: string | null;
             /** Asserted By */
             asserted_by: string;
-            /** Reviewed By */
-            reviewed_by: string;
             /** Review Reason */
             review_reason: string;
         };
@@ -11426,107 +6740,6 @@ export interface components {
             mode: string;
             assessment: components["schemas"]["RerunAssessmentDTO"];
         };
-        /** ResearchAgendaPayloadResponse */
-        ResearchAgendaPayloadResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Items */
-            items: string[];
-        };
-        /** ResearchAgendaResponse */
-        ResearchAgendaResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Version */
-            version: number;
-            /**
-             * Scope Id
-             * Format: uuid
-             */
-            scope_id: string;
-            payload: components["schemas"]["ResearchAgendaPayloadResponse"];
-            generator_provenance: components["schemas"]["AgendaGeneratorResponse"];
-            /** Supersedes Id */
-            supersedes_id: string | null;
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /** ResearchArchiveItemResponse */
-        ResearchArchiveItemResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Object Kind
-             * @enum {string}
-             */
-            object_kind: "industry" | "company" | "security";
-            /** Canonical Name */
-            canonical_name: string;
-            /** External Key */
-            external_key: string;
-            /** Version Kind */
-            version_kind: string;
-            /** Version Count */
-            version_count: number;
-            /**
-             * Lineage State
-             * @enum {string}
-             */
-            lineage_state: "readable" | "unreadable";
-            /** Latest Revision Id */
-            latest_revision_id: string | null;
-            /** Latest Sequence */
-            latest_sequence: number | null;
-            /** Cutoff */
-            cutoff: string | null;
-            /** Source Manifest Hash */
-            source_manifest_hash: string | null;
-        };
-        /** ResearchArchiveListResponse */
-        ResearchArchiveListResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Items */
-            items: components["schemas"]["ResearchArchiveItemResponse"][];
-            /** Next Cursor */
-            next_cursor: string | null;
-        };
         /** ResearchNetworkResponse */
         ResearchNetworkResponse: {
             /** Reviewed Relations */
@@ -11535,57 +6748,6 @@ export interface components {
             candidate_relations: components["schemas"]["CaseRelationDTO"][];
             /** Resolved Candidates */
             resolved_candidates?: components["schemas"]["CaseRelationDTO"][];
-        };
-        /** ResearchObjectCreate */
-        ResearchObjectCreate: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "industry" | "company" | "security";
-            /** External Key */
-            external_key: string;
-            /** Canonical Name */
-            canonical_name: string;
-        };
-        /**
-         * ResearchObjectKind
-         * @enum {string}
-         */
-        ResearchObjectKind: "industry" | "company" | "security";
-        /** ResearchObjectResponse */
-        ResearchObjectResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "industry" | "company" | "security";
-            /** External Key */
-            external_key: string;
-            /** Canonical Name */
-            canonical_name: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
         };
         /**
          * ResearchOpsResponse
@@ -11599,303 +6761,6 @@ export interface components {
             throughput: components["schemas"]["ReviewThroughputDTO"];
             agreement: components["schemas"]["HumanAiAgreementDTO"];
             latency: components["schemas"]["JudgmentLatencyDTO"];
-        };
-        /** ResearchPreparationDTO */
-        ResearchPreparationDTO: {
-            /**
-             * Case Id
-             * Format: uuid
-             */
-            case_id: string;
-            /** Case Title */
-            case_title: string;
-            initial_material?: components["schemas"]["PreparationInitialMaterialDTO"] | null;
-            progress: components["schemas"]["PreparationProgressDTO"];
-            /** Revision */
-            revision: number;
-            /** Status */
-            status: string;
-            /** Research Run Id */
-            research_run_id?: string | null;
-            /** System */
-            system: {
-                [key: string]: components["schemas"]["PreparationStepDTO"];
-            };
-            /** Review */
-            review: {
-                [key: string]: components["schemas"]["PreparationStepDTO"];
-            };
-            /** Next Attempt At */
-            next_attempt_at?: string | null;
-            /** Last Error Message */
-            last_error_message?: string | null;
-            /** Artifacts */
-            artifacts: {
-                [key: string]: components["schemas"]["PreparationArtifactDTO"] | null;
-            };
-            /** Authorized Evidence Plan */
-            authorized_evidence_plan?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Authorized Evidence Plan Display Withheld
-             * @default false
-             */
-            authorized_evidence_plan_display_withheld: boolean;
-        };
-        /** ResearchPreparationEventDTO */
-        ResearchPreparationEventDTO: {
-            /** Seq */
-            seq: number;
-            /** Type */
-            type: string;
-            /** Step */
-            step?: string | null;
-            /** Message */
-            message?: string | null;
-            /** Detail */
-            detail?: {
-                [key: string]: unknown;
-            };
-            /** Created At */
-            created_at: string;
-        };
-        /** ResearchPreparationEventsResponse */
-        ResearchPreparationEventsResponse: {
-            /** Items */
-            items: components["schemas"]["ResearchPreparationEventDTO"][];
-            /** Next After Seq */
-            next_after_seq?: number | null;
-        };
-        /** ResearchProjectListResponse */
-        ResearchProjectListResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Items */
-            items: components["schemas"]["ResearchProjectResponse"][];
-        };
-        /** ResearchProjectResponse */
-        ResearchProjectResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Primary Company Id
-             * Format: uuid
-             */
-            primary_company_id: string;
-            /** Target Security Ids */
-            target_security_ids: string[];
-            company_identity: components["schemas"]["ProjectCompanyIdentityResponse"];
-            /** Security Identities */
-            security_identities: components["schemas"]["ProjectSecurityIdentityResponse"][];
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /** ResearchRevisionArtifactResponse */
-        ResearchRevisionArtifactResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /** Reference */
-            reference: string;
-            /** Artifact Type */
-            artifact_type: string;
-            /** Identity */
-            identity: string;
-            /** Content Hash */
-            content_hash: string;
-            /** Source Locators */
-            source_locators: string[];
-            /** Unit */
-            unit: string | null;
-            /** Period Start */
-            period_start: string | null;
-            /** Period End */
-            period_end: string | null;
-            /** Available At */
-            available_at: string | null;
-            /** Status */
-            status: string | null;
-        };
-        /**
-         * ResearchRevisionBoundaryResponse
-         * @description The selected immutable version's explicit research boundary only.
-         */
-        ResearchRevisionBoundaryResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Revision Id
-             * Format: uuid
-             */
-            revision_id: string;
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Basis Id
-             * Format: uuid
-             */
-            basis_id: string;
-            /** Version Kind */
-            version_kind: string;
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Cutoff
-             * Format: date-time
-             */
-            cutoff: string;
-            /** Source Manifest Hash */
-            source_manifest_hash: string;
-            answerability: components["schemas"]["FrozenAnswerabilityResponse"] | null;
-            /** Unknown Evidence Gaps */
-            unknown_evidence_gaps: components["schemas"]["FrozenUnknownEvidenceGapResponse"][];
-        };
-        /** ResearchRevisionChangeResponse */
-        ResearchRevisionChangeResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Group
-             * @enum {string}
-             */
-            group: "evidence" | "mechanism" | "industry_model" | "answerability";
-            /**
-             * Change Type
-             * @enum {string}
-             */
-            change_type: "added" | "removed" | "replaced";
-            /** Artifact Type */
-            artifact_type: string;
-            /** Identity */
-            identity: string;
-            before: components["schemas"]["ResearchRevisionArtifactResponse"] | null;
-            after: components["schemas"]["ResearchRevisionArtifactResponse"] | null;
-        };
-        /** ResearchRevisionDiffResponse */
-        ResearchRevisionDiffResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * From Revision Id
-             * Format: uuid
-             */
-            from_revision_id: string;
-            /**
-             * To Revision Id
-             * Format: uuid
-             */
-            to_revision_id: string;
-            /** From Content Hash */
-            from_content_hash: string;
-            /** To Content Hash */
-            to_content_hash: string;
-            /** Entries */
-            entries: components["schemas"]["ResearchRevisionChangeResponse"][];
-            /** Diff Hash */
-            diff_hash: string;
-        };
-        /** ResearchRevisionHistoryResponse */
-        ResearchRevisionHistoryResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Object Kind
-             * @enum {string}
-             */
-            object_kind: "industry" | "company" | "security";
-            /** Canonical Name */
-            canonical_name: string;
-            /** External Key */
-            external_key: string;
-            /** Version Kind */
-            version_kind: string;
-            /** Revisions */
-            revisions: components["schemas"]["ResearchRevisionResponse"][];
-        };
-        /** ResearchRevisionResponse */
-        ResearchRevisionResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Basis Id
-             * Format: uuid
-             */
-            basis_id: string;
-            /** Version Kind */
-            version_kind: string;
-            /** Sequence */
-            sequence: number;
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Cutoff
-             * Format: date-time
-             */
-            cutoff: string;
-            /** Source Manifest Hash */
-            source_manifest_hash: string;
-            /** Parent Refs */
-            parent_refs: components["schemas"]["ResearchRevisionArtifactResponse"][];
         };
         /**
          * ResearchRunArchiveDTO
@@ -12028,67 +6893,23 @@ export interface components {
             /** Tasks */
             tasks: components["schemas"]["ResearchTaskDTO"][];
         };
-        /** ResearchScopePayloadResponse */
-        ResearchScopePayloadResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Primary Company Id
-             * Format: uuid
-             */
-            primary_company_id: string;
-            /** Target Security Ids */
-            target_security_ids: string[];
-            /** Industry Ids */
-            industry_ids: string[];
-            /** Covered Segments */
-            covered_segments: string[];
-            /** User Focus */
-            user_focus: string | null;
-            /** Exclusions */
-            exclusions: string[];
-        };
-        /** ResearchScopeResponse */
-        ResearchScopeResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Version */
-            version: number;
-            payload: components["schemas"]["ResearchScopePayloadResponse"];
-            /** Supersedes Id */
-            supersedes_id: string | null;
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
         /** ResearchSessionDTO */
         ResearchSessionDTO: {
+            /** User Id */
+            user_id: string;
+            /** Display Name */
+            display_name: string;
             /** Tenant Id */
             tenant_id: string;
             /** Roles */
             roles: string[];
+            /** Issuer */
+            issuer: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
         };
         /** ResearchTaskDTO */
         ResearchTaskDTO: {
@@ -12129,6 +6950,46 @@ export interface components {
             /** State */
             state?: string | null;
         };
+        /** ResearchWorkflowResponse */
+        ResearchWorkflowResponse: {
+            /**
+             * Orchestration Id
+             * Format: uuid
+             */
+            orchestration_id: string;
+            /** Research Run Id */
+            research_run_id: string | null;
+            research_execution: components["schemas"]["WorkflowResearchExecutionDTO"] | null;
+            event: components["schemas"]["WorkflowEventIdentityDTO"];
+            scope: components["schemas"]["WorkflowScopeDTO"];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "intake" | "awaiting_scope_confirmation" | "planning_acquisition" | "acquiring" | "freezing_sources" | "assessing_coverage" | "synthesizing_evidence" | "adjudicating_thesis" | "generating_report" | "monitoring" | "retry_wait" | "recovering" | "needs_scope_decision" | "exhausted" | "cancelled" | "failed";
+            /** Stages */
+            stages: components["schemas"]["WorkflowStageDTO"][];
+            system_action: components["schemas"]["WorkflowSystemActionDTO"];
+            user_action: components["schemas"]["WorkflowUserActionDTO"] | null;
+            /** User Action Summary */
+            user_action_summary: string;
+            /** Events */
+            events: components["schemas"]["WorkflowEventDTO"][];
+            acquisition: components["schemas"]["WorkflowAcquisitionDTO"];
+            source_ledger: components["schemas"]["WorkflowSourceLedgerDTO"];
+            /** Coverage */
+            coverage: components["schemas"]["WorkflowCoverageDTO"][];
+            conclusion: components["schemas"]["WorkflowConclusionDTO"] | null;
+            monitor: components["schemas"]["WorkflowMonitorDTO"] | null;
+            recovery: components["schemas"]["WorkflowRecoveryDTO"];
+            /** Version */
+            version: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** ResearchabilityDTO */
         ResearchabilityDTO: {
             /**
@@ -12143,38 +7004,20 @@ export interface components {
             /** Next Action */
             next_action: string;
         };
-        /** RetryResearchPreparationRequest */
-        RetryResearchPreparationRequest: {
-            /** Revision */
-            revision: number;
-            /** Actor */
-            actor: string;
-        };
-        /** ReviewCompanyEvidenceRequest */
-        ReviewCompanyEvidenceRequest: {
+        /**
+         * ResumeProtocolWorkflowRequest
+         * @description Resume input intentionally carries no caller-supplied identity.
+         */
+        ResumeProtocolWorkflowRequest: {
             /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Evidence Artifact Id
+             * Scope Version Id
              * Format: uuid
              */
-            evidence_artifact_id: string;
-            /** Fact Key */
-            fact_key: string;
-            /**
-             * Decision
-             * @enum {string}
-             */
-            decision: "confirmed" | "rejected";
-            /**
-             * Expected Head Id
-             * Format: uuid
-             */
-            expected_head_id: string;
+            scope_version_id: string;
+            /** Scope Version */
+            scope_version?: number | null;
+            /** Idempotency Key */
+            idempotency_key: string;
         };
         /** ReviewDecisionRequest */
         ReviewDecisionRequest: {
@@ -12187,8 +7030,6 @@ export interface components {
             reason: string;
             /** Expected Version */
             expected_version: number;
-            /** Reviewer Id */
-            reviewer_id: string;
             /** Replacement Payload */
             replacement_payload?: {
                 [key: string]: unknown;
@@ -12273,47 +7114,10 @@ export interface components {
             /** Pending Assessment Reviews */
             pending_assessment_reviews: number;
         };
-        /** RevisionBoundaryResponse */
-        RevisionBoundaryResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Historical Basis Id
-             * Format: uuid
-             */
-            historical_basis_id: string;
-            /**
-             * Mandate Id
-             * Format: uuid
-             */
-            mandate_id: string;
-            /**
-             * Scope Id
-             * Format: uuid
-             */
-            scope_id: string;
-            /**
-             * Agenda Id
-             * Format: uuid
-             */
-            agenda_id: string;
-            /** Price Snapshot Ids */
-            price_snapshot_ids: string[];
-            /** Fx Snapshot Ids */
-            fx_snapshot_ids: string[];
-            /**
-             * Capital Structure Snapshot Id
-             * Format: uuid
-             */
-            capital_structure_snapshot_id: string;
-            /** Security Rights Ids */
-            security_rights_ids: string[];
-            /** Parent Revision Id */
-            parent_revision_id: string | null;
+        /** RevokeCaseAccessRequest */
+        RevokeCaseAccessRequest: {
+            /** Reason */
+            reason: string;
         };
         /** RoleReviewDTO */
         RoleReviewDTO: {
@@ -12327,32 +7131,6 @@ export interface components {
             reviewer?: string | null;
             /** Reviewed At */
             reviewed_at?: string | null;
-        };
-        /** RunAIUsageDTO */
-        RunAIUsageDTO: {
-            /**
-             * Coverage
-             * @default recorded_attributed_operations_only
-             */
-            coverage: string;
-            /** Operation Count */
-            operation_count: number;
-            /** Reported Attempt Count */
-            reported_attempt_count: number;
-            /** Unavailable Attempt Count */
-            unavailable_attempt_count: number;
-            /** Unavailable Operation Count */
-            unavailable_operation_count: number;
-            /** Reported Prompt Tokens */
-            reported_prompt_tokens: number;
-            /** Reported Completion Tokens */
-            reported_completion_tokens: number;
-            /** Reported Total Tokens */
-            reported_total_tokens: number;
-            /** Recorded Total Tokens */
-            recorded_total_tokens: number | null;
-            /** Run Id */
-            run_id: string;
         };
         /** RunListResponse */
         RunListResponse: {
@@ -12393,10 +7171,47 @@ export interface components {
             /** Next Action */
             next_action: string;
         };
+        /** RuntimeCheckDTO */
+        RuntimeCheckDTO: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "healthy" | "degraded" | "unavailable";
+        };
+        /** RuntimeServiceDTO */
+        RuntimeServiceDTO: {
+            /**
+             * Name
+             * @enum {string}
+             */
+            name: "research-worker" | "acquisition-worker" | "scheduler";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "healthy" | "degraded" | "unavailable";
+            /** State */
+            state: string | null;
+            /** Last Seen At */
+            last_seen_at: string | null;
+        };
+        /** RuntimeStatusDTO */
+        RuntimeStatusDTO: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "healthy" | "degraded" | "unavailable";
+            database: components["schemas"]["RuntimeCheckDTO"];
+            migration: components["schemas"]["MigrationStatusDTO"];
+            /** Providers */
+            providers: components["schemas"]["ProviderConfigurationDTO"][];
+            /** Services */
+            services: components["schemas"]["RuntimeServiceDTO"][];
+        };
         /** SaveFundDisclosureSyncConfigRequest */
         SaveFundDisclosureSyncConfigRequest: {
-            /** Actor */
-            actor: string;
             /** Fund Codes */
             fund_codes: string[];
             /**
@@ -12459,97 +7274,6 @@ export interface components {
             groups: components["schemas"]["SearchGroupDTO"][];
             page: components["schemas"]["CursorPage"];
         };
-        /** SecurityRightsHeadResponse */
-        SecurityRightsHeadResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Effective From
-             * Format: date-time
-             */
-            effective_from: string;
-            /** Effective To */
-            effective_to: string | null;
-        };
-        /** SecurityRightsResolutionReasonResponse */
-        SecurityRightsResolutionReasonResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Code
-             * @enum {string}
-             */
-            code: "effective_version_found" | "no_history" | "before_head" | "successor_required";
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "reuse_effective" | "create_initial" | "adjust_market_at" | "append_successor";
-        };
-        /** SecurityRightsResponse */
-        SecurityRightsResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /**
-             * Security Identity Id
-             * Format: uuid
-             */
-            security_identity_id: string;
-            /** Version */
-            version: number;
-            /** Economic Units */
-            economic_units: string;
-            /** Votes Per Unit */
-            votes_per_unit: string;
-            /** Conversion Ratio */
-            conversion_ratio: string;
-            /** Adr Ratio */
-            adr_ratio: string;
-            /** Dividend Rights Per Unit */
-            dividend_rights_per_unit: string;
-            /**
-             * Effective From
-             * Format: date-time
-             */
-            effective_from: string;
-            /** Effective To */
-            effective_to: string | null;
-            /** Source Id */
-            source_id: string;
-            /** Raw Hash */
-            raw_hash: string;
-            /** Supersedes Id */
-            supersedes_id: string | null;
-            /** Content Hash */
-            content_hash: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
         /** SelectMechanismTemplateRequest */
         SelectMechanismTemplateRequest: {
             /**
@@ -12557,47 +7281,13 @@ export interface components {
              * Format: uuid
              */
             template_version_id: string;
-            /** Reviewer */
-            reviewer: string;
             /** Reason */
             reason: string;
         };
         /** SetCaseMonitorStatusRequest */
         SetCaseMonitorStatusRequest: {
-            /** Expected Version */
-            expected_version?: number | null;
-            /** Actor */
-            actor: string;
             /** Change Reason */
             change_reason: string;
-        };
-        /** SnapshotResponse */
-        SnapshotResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Object Id
-             * Format: uuid
-             */
-            object_id: string;
-            /**
-             * Basis Id
-             * Format: uuid
-             */
-            basis_id: string;
-            /**
-             * Cutoff
-             * Format: date-time
-             */
-            cutoff: string;
-            /** Entries */
-            entries: components["schemas"]["LedgerEntryResponse"][];
-            /** Snapshot Hash */
-            snapshot_hash: string;
         };
         /**
          * SourceCitationDTO
@@ -12741,19 +7431,6 @@ export interface components {
              * Format: uuid
              */
             source_statement_id: string;
-            /** Requested By */
-            requested_by: string;
-        };
-        /** StartManualMonitorRunRequest */
-        StartManualMonitorRunRequest: {
-            /** Actor */
-            actor: string;
-            /** Change Reason */
-            change_reason: string;
-            /** Expected Version */
-            expected_version: number;
-            /** Idempotency Key */
-            idempotency_key: string;
         };
         /** StartResearchRunRequest */
         StartResearchRunRequest: {
@@ -13252,12 +7929,6 @@ export interface components {
             falsification_condition?: string | null;
             /** Next Verification Event */
             next_verification_event?: string | null;
-            /**
-             * Creator Type
-             * @default human
-             * @enum {string}
-             */
-            creator_type: "human" | "ai";
         };
         /**
          * ThesisJudgementCardDTO
@@ -13333,38 +8004,8 @@ export interface components {
              */
             review_state: string;
         };
-        /**
-         * UnderwritingErrorBody
-         * @description The error payload nested inside an underwriting response envelope.
-         */
-        UnderwritingErrorBody: {
-            /** Code */
-            code: string;
-            /** Message */
-            message: string;
-            /** Request Id */
-            request_id: string;
-            /** Details */
-            details?: {
-                [key: string]: unknown;
-            };
-        };
-        /** UnderwritingErrorEnvelope */
-        UnderwritingErrorEnvelope: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            error: components["schemas"]["UnderwritingErrorBody"];
-        };
         /** UpdateCaseMonitorRequest */
         UpdateCaseMonitorRequest: {
-            /** Expected Version */
-            expected_version?: number | null;
-            /** Actor */
-            actor: string;
             /** Frequency */
             frequency: string;
             /** Factor Ids */
@@ -13382,8 +8023,6 @@ export interface components {
         UpdateEventResearchScopeRequest: {
             /** Factors */
             factors: (string | components["schemas"]["EventResearchScopeFactorDTO"])[];
-            /** Changed By */
-            changed_by: string;
             /**
              * Change Reason
              * @default 未记录具体原因（兼容旧客户端）
@@ -13405,12 +8044,6 @@ export interface components {
         UpdateThemeTagsRequest: {
             /** Tags */
             tags: string[];
-            /**
-             * Proposed By
-             * @default human
-             * @enum {string}
-             */
-            proposed_by: "human" | "ai";
         };
         /** UploadEventMaterialResponse */
         UploadEventMaterialResponse: {
@@ -13573,76 +8206,503 @@ export interface components {
             available_at_deadline: string;
             /** Next Verification Event */
             next_verification_event: string;
-            /** Reviewer */
-            reviewer: string;
             /** Reason */
             reason: string;
         };
-        /** WorkspaceDraftContentResponse */
-        WorkspaceDraftContentResponse: {
-            /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
-             */
-            schema_version: "underwriting.v1";
-            /**
-             * Publication Status
-             * @constant
-             */
-            publication_status: "draft";
-            /** Mandate Id */
-            mandate_id: string | null;
-            /** Scope Id */
-            scope_id: string | null;
-            /** Agenda Id */
-            agenda_id: string | null;
-            /** Historical Basis Id */
-            historical_basis_id: string | null;
-            /** Price Snapshot Ids */
-            price_snapshot_ids: string[];
-            /** Fx Snapshot Ids */
-            fx_snapshot_ids: string[];
-            /** Capital Structure Snapshot Id */
-            capital_structure_snapshot_id: string | null;
-            /** Security Rights Ids */
-            security_rights_ids: string[];
-            /** User Focus */
-            user_focus: string | null;
+        /** WorkflowAcquisitionDTO */
+        WorkflowAcquisitionDTO: {
+            /** Series Count */
+            series_count: number;
+            /** Rounds */
+            rounds: components["schemas"]["WorkflowAcquisitionRoundDTO"][];
         };
-        /** WorkspaceDraftResponse */
-        WorkspaceDraftResponse: {
+        /** WorkflowAcquisitionRoundDTO */
+        WorkflowAcquisitionRoundDTO: {
             /**
-             * Schema Version
-             * @default underwriting.v1
-             * @constant
+             * Series Id
+             * Format: uuid
              */
-            schema_version: "underwriting.v1";
+            series_id: string;
+            /**
+             * Query Plan Id
+             * Format: uuid
+             */
+            query_plan_id: string;
+            /** Goal Id */
+            goal_id: string;
+            /** Round */
+            round: number;
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /** Status */
+            status: string;
+            /** Stage */
+            stage: string;
+            /** Attempt */
+            attempt: number;
+            /** Retry At */
+            retry_at: string | null;
+            /** Lease Expires At */
+            lease_expires_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Error Code */
+            error_code: string | null;
+            /** Error Detail */
+            error_detail: string | null;
+            /** Recovery Status */
+            recovery_status: string | null;
+            /** Planner Version */
+            planner_version: string;
+            /** Policy Version */
+            policy_version: string;
+            /** Frozen Inputs */
+            frozen_inputs: {
+                [key: string]: unknown;
+            };
+            /** Ordered Query Count */
+            ordered_query_count: number;
+            /** Expansion Trigger */
+            expansion_trigger: string | null;
+        };
+        /** WorkflowConclusionDTO */
+        WorkflowConclusionDTO: {
             /**
              * Id
              * Format: uuid
              */
             id: string;
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Base Revision Id */
-            base_revision_id: string | null;
-            /** Lock Version */
-            lock_version: number;
-            content: components["schemas"]["WorkspaceDraftContentResponse"];
+            /** State */
+            state: string;
+            /** Text */
+            text: string;
+            /** Primary Factor */
+            primary_factor: string | null;
+            /** Evidence Link Ids */
+            evidence_link_ids: string[];
+            /** Citations */
+            citations: components["schemas"]["WorkflowSourceLedgerItemDTO"][];
+            /** Reviewer */
+            reviewer: string | null;
+            /** System Generated */
+            system_generated: boolean;
+            /** Human Reviewed */
+            human_reviewed: boolean;
+            /** Review Label */
+            review_label: string;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
+        };
+        /** WorkflowCoverageDTO */
+        WorkflowCoverageDTO: {
+            /** Goal Id */
+            goal_id: string;
+            /** Thesis Id */
+            thesis_id: string | null;
+            /** Objective */
+            objective: string;
+            /** Status */
+            status: string;
+            /** Reason Codes */
+            reason_codes: string[];
+            /** Required Authority Count */
+            required_authority_count: number;
+            /** Observed Authority Count */
+            observed_authority_count: number;
+            /** Required Independent Source Count */
+            required_independent_source_count: number;
+            /** Observed Independent Source Count */
+            observed_independent_source_count: number;
+            /** Contrary Search Completed */
+            contrary_search_completed: boolean;
+            /** Evidence Link Ids */
+            evidence_link_ids: string[];
+            /** Unresolved */
+            unresolved: unknown[];
+            /** Unknown */
+            unknown: unknown[];
+            /** Evaluation Round */
+            evaluation_round: number;
+        };
+        /** WorkflowEventDTO */
+        WorkflowEventDTO: {
             /**
-             * Updated At
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Sequence */
+            sequence: number;
+            /** Transition */
+            transition: string;
+            /** Actor */
+            actor: string;
+            /** Message */
+            message: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Created At
              * Format: date-time
              */
-            updated_at: string;
+            created_at: string;
+        };
+        /** WorkflowEventIdentityDTO */
+        WorkflowEventIdentityDTO: {
+            /**
+             * Case Id
+             * Format: uuid
+             */
+            case_id: string;
+            /** Title */
+            title: string;
+            /** Research Question */
+            research_question: string;
+        };
+        /** WorkflowEventsPageDTO */
+        WorkflowEventsPageDTO: {
+            /** Items */
+            items: components["schemas"]["WorkflowEventDTO"][];
+            /** Next Cursor */
+            next_cursor: number | null;
+            /** Has More */
+            has_more: boolean;
+            /**
+             * Cursor Direction
+             * @default after
+             * @constant
+             */
+            cursor_direction: "after";
+        };
+        /** WorkflowLedgerPageDTO */
+        WorkflowLedgerPageDTO: {
+            /** Items */
+            items: components["schemas"]["WorkflowSourceLedgerItemDTO"][];
+            /** Total */
+            total: number;
+            /** Has More */
+            has_more: boolean;
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /** WorkflowMonitorDTO */
+        WorkflowMonitorDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Version */
+            version: number;
+            /** Status */
+            status: string;
+            /** Frequency */
+            frequency: string;
+            /** Factor Ids */
+            factor_ids: string[];
+            /** Source Types */
+            source_types: string[];
+            /** Next Verification Event */
+            next_verification_event: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** WorkflowNextActionDTO */
+        WorkflowNextActionDTO: {
+            /** Kind */
+            kind: string;
+            /** Label */
+            label: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+        };
+        /** WorkflowNotInitializedDetailsDTO */
+        WorkflowNotInitializedDetailsDTO: {
+            safe_action: components["schemas"]["WorkflowSafeActionDTO"];
+        };
+        /** WorkflowNotInitializedEnvelopeDTO */
+        WorkflowNotInitializedEnvelopeDTO: {
+            /**
+             * Schema Version
+             * @default v1
+             * @constant
+             */
+            schema_version: "v1";
+            error: components["schemas"]["WorkflowNotInitializedErrorBodyDTO"];
+        };
+        /** WorkflowNotInitializedErrorBodyDTO */
+        WorkflowNotInitializedErrorBodyDTO: {
+            /**
+             * Code
+             * @constant
+             */
+            code: "workflow_not_initialized";
+            /** Message */
+            message: string;
+            /** Request Id */
+            request_id: string;
+            details: components["schemas"]["WorkflowNotInitializedDetailsDTO"];
+        };
+        /** WorkflowRecoveryDTO */
+        WorkflowRecoveryDTO: {
+            /** Status */
+            status: string | null;
+            /** Reason */
+            reason: string | null;
+            /** Source */
+            source: ("orchestration" | "research_job" | "acquisition_job" | "worker" | "checkpoint") | null;
+            /** Attempt */
+            attempt: number | null;
+            /**
+             * Evaluated At
+             * Format: date-time
+             */
+            evaluated_at: string;
+            /** Orchestration Heartbeat At */
+            orchestration_heartbeat_at: string | null;
+            /** Worker Heartbeat At */
+            worker_heartbeat_at: string | null;
+            /** Lease Expires At */
+            lease_expires_at: string | null;
+            /** Retry At */
+            retry_at: string | null;
+            /** Failed At */
+            failed_at: string | null;
+            /** Last Checkpoint */
+            last_checkpoint: {
+                [key: string]: unknown;
+            };
+            /** Decision Diagnostic */
+            decision_diagnostic: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** WorkflowResearchExecutionDTO */
+        WorkflowResearchExecutionDTO: {
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /** Status */
+            status: string;
+            /** Step */
+            step: string | null;
+            /** Attempt */
+            attempt: number;
+            /** Failure Count */
+            failure_count: number;
+            /** Started At */
+            started_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Recovery Count */
+            recovery_count: number;
+            /** Last Recovered At */
+            last_recovered_at: string | null;
+        };
+        /** WorkflowSafeActionDTO */
+        WorkflowSafeActionDTO: {
+            /** Kind */
+            kind: string;
+            /** Label */
+            label: string;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "GET" | "POST" | "PUT";
+            /** Href */
+            href: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+        };
+        /** WorkflowScopeDTO */
+        WorkflowScopeDTO: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Version */
+            version: number;
+            /** Factors */
+            factors: components["schemas"]["WorkflowScopeFactorDTO"][];
+        };
+        /** WorkflowScopeFactorDTO */
+        WorkflowScopeFactorDTO: {
+            /** Statement */
+            statement: string;
+            /** Description */
+            description: string | null;
+            /** Position */
+            position: number;
+        };
+        /** WorkflowSourceLedgerCountsDTO */
+        WorkflowSourceLedgerCountsDTO: {
+            /** Total */
+            total: number;
+            /** Reviewed */
+            reviewed: number;
+            /** Automatically Admitted */
+            automatically_admitted: number;
+            /** Deduplicated */
+            deduplicated: number;
+            /** Quarantined */
+            quarantined: number;
+            /** By Status */
+            by_status: {
+                [key: string]: number;
+            };
+        };
+        /** WorkflowSourceLedgerDTO */
+        WorkflowSourceLedgerDTO: {
+            counts: components["schemas"]["WorkflowSourceLedgerCountsDTO"];
+            /** Items */
+            items: components["schemas"]["WorkflowSourceLedgerItemDTO"][];
+            /** Total */
+            total: number;
+            /** Has More */
+            has_more: boolean;
+        };
+        /** WorkflowSourceLedgerDrilldownDTO */
+        WorkflowSourceLedgerDrilldownDTO: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "acquisition_job" | "acquisition_events" | "acquisition_evidence" | "acquisition_exceptions";
+            /** Href */
+            href: string;
+        };
+        /** WorkflowSourceLedgerItemDTO */
+        WorkflowSourceLedgerItemDTO: {
+            /**
+             * Record Id
+             * Format: uuid
+             */
+            record_id: string;
+            /** Record Type */
+            record_type: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "search_candidate" | "fetching" | "frozen" | "deduplicated" | "conflicted" | "admitted" | "quarantined" | "skipped";
+            /** Reason */
+            reason: string;
+            /** Reason Code */
+            reason_code: string;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Evidence Link Id */
+            evidence_link_id: string | null;
+            /** Review State */
+            review_state: string | null;
+            /** Role */
+            role: string | null;
+            /** Source Role */
+            source_role: string | null;
+            /** Mapping Disposition */
+            mapping_disposition: string | null;
+            /** Mapping Kind */
+            mapping_kind: string | null;
+            /** Adapter Key */
+            adapter_key: string | null;
+            /** Attempt Id */
+            attempt_id: string | null;
+            /** Source Url */
+            source_url: string | null;
+            /** Final Url */
+            final_url: string | null;
+            /** Retrieved At */
+            retrieved_at: string | null;
+            /** Content Sha256 */
+            content_sha256: string | null;
+            /** Publication Key */
+            publication_key: string | null;
+            /** Dedup Relation */
+            dedup_relation: string | null;
+            /** Admission Outcome */
+            admission_outcome: string | null;
+            drilldown: components["schemas"]["WorkflowSourceLedgerDrilldownDTO"] | null;
+            /** Drilldown Unavailable Reason */
+            drilldown_unavailable_reason: string | null;
+        };
+        /** WorkflowStageDTO */
+        WorkflowStageDTO: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "event_intake" | "scope_confirmation" | "source_acquisition" | "evidence_synthesis" | "thesis_adjudication" | "report_monitoring";
+            /** Display Name */
+            display_name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "active" | "completed" | "failed" | "recovering" | "blocked" | "cancelled";
+            /** Reason */
+            reason: string;
+        };
+        /** WorkflowSystemActionDTO */
+        WorkflowSystemActionDTO: {
+            /** Label */
+            label: string | null;
+            /** Reason */
+            reason: string | null;
+            /** Started At */
+            started_at: string | null;
+            /** Heartbeat At */
+            heartbeat_at: string | null;
+            /** Lease Expires At */
+            lease_expires_at: string | null;
+            /** Retry At */
+            retry_at: string | null;
+            /** Recovery Status */
+            recovery_status: string | null;
+        };
+        /** WorkflowUserActionDTO */
+        WorkflowUserActionDTO: {
+            /** Kind */
+            kind: string;
+            /** Label */
+            label: string;
+            /** Reason */
+            reason: string;
+            /** Recommendation */
+            recommendation: {
+                [key: string]: unknown;
+            };
+            /** Alternatives */
+            alternatives: {
+                [key: string]: unknown;
+            }[];
+            /** Impact */
+            impact: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
         };
         /** CausalStepDTO */
         app__schemas__v1__cases__CausalStepDTO: {
@@ -13715,6 +8775,29 @@ export interface components {
              */
             has_more: boolean;
         };
+        /** ErrorEnvelope */
+        ErrorEnvelope: {
+            /**
+             * Schema Version
+             * @default v1
+             * @constant
+             */
+            schema_version: "v1";
+            error: components["schemas"]["ErrorBody"];
+        };
+        /** ErrorBody */
+        ErrorBody: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Request Id */
+            request_id: string;
+            /** Details */
+            details?: {
+                [key: string]: unknown;
+            };
+        };
     };
     responses: never;
     parameters: never;
@@ -13724,33 +8807,6 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    readiness_ready_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Database or schema is not ready */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
     workbench_api_research_cases__case_id__workbench_get: {
         parameters: {
             query?: {
@@ -13858,12 +8914,12 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            409: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
+                    "application/json": components["schemas"]["CreateCaseResponse"];
                 };
             };
             /** @description Validation Error */
@@ -14136,7 +9192,6 @@ export interface operations {
         parameters: {
             query?: {
                 research_mode?: boolean;
-                case_id?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -14316,7 +9371,9 @@ export interface operations {
                 limit?: number;
                 cursor?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -14345,7 +9402,9 @@ export interface operations {
     create_company_api_v1_companies_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -14380,7 +9439,9 @@ export interface operations {
             query?: {
                 cutoff?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 company_id: string;
             };
@@ -14411,7 +9472,9 @@ export interface operations {
     list_themes_api_v1_themes_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -14426,6 +9489,15 @@ export interface operations {
                     "application/json": components["schemas"]["ThemeListResponse"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     theme_view_api_v1_themes__tag__get: {
@@ -14433,7 +9505,9 @@ export interface operations {
             query?: {
                 cutoff?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 tag: string;
             };
@@ -14531,7 +9605,9 @@ export interface operations {
                 case_id?: string | null;
                 as_of?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -14564,7 +9640,9 @@ export interface operations {
                 review_state?: string | null;
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -14840,9 +9918,7 @@ export interface operations {
     };
     extract_statements_api_v1_documents__document_version_id__extract_post: {
         parameters: {
-            query?: {
-                case_id?: string | null;
-            };
+            query?: never;
             header?: {
                 authorization?: string | null;
             };
@@ -14911,7 +9987,9 @@ export interface operations {
     create_stock_api_v1_companies__company_id__stocks_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 company_id: string;
             };
@@ -14946,7 +10024,9 @@ export interface operations {
     create_fund_api_v1_funds_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -14979,7 +10059,9 @@ export interface operations {
     create_holding_disclosure_api_v1_funds__fund_id__holding_disclosures_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 fund_id: string;
             };
@@ -15014,7 +10096,9 @@ export interface operations {
     create_valuation_snapshot_api_v1_stocks__stock_id__valuation_snapshots_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 stock_id: string;
             };
@@ -15049,7 +10133,9 @@ export interface operations {
     create_theme_role_api_v1_companies__company_id__theme_roles_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 company_id: string;
             };
@@ -15158,7 +10244,9 @@ export interface operations {
     update_theme_tags_api_v1_research_cases__case_id__theme_tags_patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
                 case_id: string;
             };
@@ -15514,7 +10602,6 @@ export interface operations {
             query?: {
                 review_state?: string | null;
                 limit?: number;
-                cursor?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -15832,7 +10919,6 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                after_seq?: number;
             };
             header?: {
                 authorization?: string | null;
@@ -15897,173 +10983,6 @@ export interface operations {
             };
         };
     };
-    get_run_ai_usage_api_v1_research_runs__run_id__ai_usage_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunAIUsageDTO"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_case_ai_usage_api_v1_research_cases__case_id__ai_usage_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                case_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CaseAIUsageDTO"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_automatic_research_api_v1_automatic_research_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AutomaticResearchStartRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AutomaticResearchStartResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_automatic_research_api_v1_automatic_research__case_id__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                case_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AutomaticResearchViewDTO"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    retry_automatic_research_api_v1_automatic_research__case_id__retry_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                case_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AutomaticResearchStartResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_event_research_api_v1_event_research_get: {
         parameters: {
             query?: {
@@ -16101,7 +11020,6 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "idempotency-key"?: string | null;
                 authorization?: string | null;
             };
             path?: never;
@@ -16197,10 +11115,7 @@ export interface operations {
     };
     event_case_documents_api_v1_event_research__case_id__documents_get: {
         parameters: {
-            query?: {
-                limit?: number;
-                cursor?: string | null;
-            };
+            query?: never;
             header?: {
                 authorization?: string | null;
             };
@@ -16359,41 +11274,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExtractEventResearchResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_create_event_research_from_uploaded_original_api_v1_event_research_uploaded_post"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CreateEventResearchResponse"];
                 };
             };
             /** @description Validation Error */
@@ -16916,11 +11796,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["StartManualMonitorRunRequest"] | null;
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             201: {
@@ -17759,259 +12635,6 @@ export interface operations {
             };
         };
     };
-    get_preparation_api_v1_event_research__case_id__preparation_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                case_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchPreparationDTO"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    preparation_events_api_v1_event_research__case_id__preparation_events_get: {
-        parameters: {
-            query?: {
-                after_seq?: number;
-                limit?: number;
-            };
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                case_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchPreparationEventsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    confirm_claims_api_v1_event_research__case_id__preparation_claims_confirm_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                case_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ConfirmClaimsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchPreparationDTO"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Validation failed */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    confirm_protocol_api_v1_event_research__case_id__preparation_protocol_confirm_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                case_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ConfirmProtocolRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchPreparationDTO"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Validation failed */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    retry_api_v1_event_research__case_id__preparation_retry_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                case_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RetryResearchPreparationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchPreparationDTO"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Validation failed */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    authorize_api_v1_event_research__case_id__preparation_authorize_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                case_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AuthorizeEvidencePlanRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchPreparationDTO"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Validation failed */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
     list_proposals_api_v1_review_proposals_get: {
         parameters: {
             query?: {
@@ -18135,6 +12758,251 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResearchSessionDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_research_workflow_api_v1_event_research__case_id__workflow_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchWorkflowResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowNotInitializedEnvelopeDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_research_workflow_events_api_v1_event_research__case_id__workflow_events_get: {
+        parameters: {
+            query?: {
+                cursor?: number | null;
+                after?: number | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowEventsPageDTO"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowNotInitializedEnvelopeDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_research_workflow_ledger_api_v1_event_research__case_id__workflow_ledger_get: {
+        parameters: {
+            query?: {
+                status?: ("search_candidate" | "fetching" | "frozen" | "deduplicated" | "conflicted" | "admitted" | "quarantined" | "skipped") | null;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowLedgerPageDTO"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowNotInitializedEnvelopeDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_research_workflow_api_v1_event_research__case_id__workflow_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmResearchWorkflowRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmResearchWorkflowResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_research_workflow_api_v1_event_research__case_id__workflow_decision_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecideResearchWorkflowRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmResearchWorkflowResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_protocol_workflow_api_v1_event_research__case_id__workflow_resume_protocol_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResumeProtocolWorkflowRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmResearchWorkflowResponse"];
                 };
             };
             /** @description Validation Error */
@@ -18672,514 +13540,12 @@ export interface operations {
             };
         };
     };
-    create_object_api_underwriting_v1_objects_post: {
+    runtime_status_api_v1_runtime_status_get: {
         parameters: {
             query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ResearchObjectCreate"];
+            header?: {
+                authorization?: string | null;
             };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchObjectResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    create_object_relation_api_underwriting_v1_object_relations_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ObjectRelationCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObjectRelationResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    create_basis_api_underwriting_v1_historical_bases_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BasisCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BasisResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    create_mandate_api_underwriting_v1_mandates_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MandateCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MandateResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    create_ledger_entry_api_underwriting_v1_objects__object_id__ledger_entries_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                object_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LedgerEntryCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LedgerEntryResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    create_answerability_api_underwriting_v1_objects__object_id__answerability_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                object_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AnswerabilityCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AnswerabilityResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    get_snapshot_api_underwriting_v1_objects__object_id__snapshots__basis_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                object_id: string;
-                basis_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SnapshotResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    get_research_revision_history_api_underwriting_v1_objects__object_id__research_versions__version_kind__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                object_id: string;
-                version_kind: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchRevisionHistoryResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    get_research_revision_api_underwriting_v1_research_versions__revision_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                revision_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchRevisionResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    get_research_revision_boundary_api_underwriting_v1_research_versions__revision_id__boundary_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                revision_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchRevisionBoundaryResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    get_candidate_evidence_api_underwriting_v1_research_versions__revision_id__candidate_evidence_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                revision_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CandidateEvidenceResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    get_research_revision_diff_api_underwriting_v1_research_versions__from_revision_id__diff__to_revision_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                from_revision_id: string;
-                to_revision_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchRevisionDiffResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    get_research_archives_api_underwriting_v1_research_archives_get: {
-        parameters: {
-            query?: {
-                query?: string | null;
-                kind?: components["schemas"]["ResearchObjectKind"] | null;
-                limit?: number;
-                cursor?: string | null;
-            };
-            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -19191,27 +13557,28 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResearchArchiveListResponse"];
+                    "application/json": components["schemas"]["RuntimeStatusDTO"];
                 };
             };
-            /** @description Unprocessable Entity */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    get_evidence_only_economic_model_api_underwriting_v1_objects__object_id__economic_models__basis_id__get: {
+    case_runtime_status_api_v1_event_research__case_id__runtime_status_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
-                object_id: string;
-                basis_id: string;
+                case_id: string;
             };
             cookie?: never;
         };
@@ -19223,146 +13590,67 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EvidenceOnlyEconomicModelResponse"];
+                    "application/json": components["schemas"]["CaseRuntimeStatusDTO"];
                 };
             };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    search_product_objects_api_underwriting_v1_product_objects_get: {
-        parameters: {
-            query: {
-                query: string;
-                as_of?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProductObjectSearchResponse"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    list_industry_companies_api_underwriting_v1_product_industries__industry_id__companies_get: {
-        parameters: {
-            query?: {
-                as_of?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                industry_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IndustryCompanyBrowseResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    list_research_projects_api_underwriting_v1_product_projects_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchProjectListResponse"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    create_research_project_api_underwriting_v1_product_projects_post: {
+    list_case_access_grants_api_v1_event_research__case_id__access_grants_get: {
         parameters: {
             query?: never;
-            header?: never;
-            path?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseAccessGrantListDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grant_case_access_api_v1_event_research__case_id__access_grants_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CreateResearchProjectRequest"];
+                "application/json": components["schemas"]["GrantCaseAccessRequest"];
             };
         };
         responses: {
@@ -19372,504 +13660,71 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResearchProjectResponse"];
+                    "application/json": components["schemas"]["CaseAccessGrantDTO"];
                 };
             };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    get_research_project_api_underwriting_v1_product_projects__project_id__get: {
+    revoke_case_access_api_v1_event_research__case_id__access_grants__user_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
-                project_id: string;
+                case_id: string;
+                user_id: string;
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokeCaseAccessRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
-            200: {
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["ResearchProjectResponse"];
-                };
+                content?: never;
             };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
-    create_product_mandate_api_underwriting_v1_product_projects__project_id__mandates_post: {
+    change_case_access_role_api_v1_event_research__case_id__access_grants__user_id__patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path: {
-                project_id: string;
+                case_id: string;
+                user_id: string;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CreateProductMandateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProductMandateResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    create_research_scope_api_underwriting_v1_product_projects__project_id__scopes_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateResearchScopeRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchScopeResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    create_research_agenda_api_underwriting_v1_product_projects__project_id__agendas_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateResearchAgendaRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResearchAgendaResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    create_product_historical_basis_api_underwriting_v1_product_historical_bases_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateProductHistoricalBasisRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProductHistoricalBasisResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    create_price_snapshot_api_underwriting_v1_product_market_price_snapshots_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreatePriceSnapshotRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PriceSnapshotResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    create_fx_snapshot_api_underwriting_v1_product_market_fx_snapshots_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateFXSnapshotRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FXSnapshotResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    create_capital_structure_snapshot_api_underwriting_v1_product_market_capital_structure_snapshots_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateCapitalStructureSnapshotRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CapitalStructureSnapshotResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    get_effective_security_rights_api_underwriting_v1_product_market_security_rights_effective_get: {
-        parameters: {
-            query: {
-                security_identity_id: string;
-                as_of: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EffectiveSecurityRightsResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    create_security_rights_api_underwriting_v1_product_market_security_rights_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateSecurityRightsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SecurityRightsResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    get_workspace_draft_api_underwriting_v1_product_projects__project_id__draft_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkspaceDraftResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    patch_workspace_draft_api_underwriting_v1_product_projects__project_id__draft_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PatchWorkspaceDraftRequest"];
+                "application/json": components["schemas"]["ChangeCaseAccessRoleRequest"];
             };
         };
         responses: {
@@ -19879,666 +13734,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkspaceDraftResponse"];
+                    "application/json": components["schemas"]["CaseAccessGrantDTO"];
                 };
             };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    preview_product_revision_api_underwriting_v1_product_projects__project_id__publication_preview_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PreviewProductRevisionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PublicationPreviewResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    publish_product_revision_api_underwriting_v1_product_projects__project_id__publish_post: {
-        parameters: {
-            query?: never;
-            header: {
-                "Idempotency-Key": string;
-            };
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PublishProductRevisionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProductRevisionResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    get_product_revision_api_underwriting_v1_product_revisions__revision_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                revision_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProductRevisionResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    preview_company_research_api_underwriting_v1_product_company_research_preview_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CompanyResearchPreviewRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompanyResearchPreviewResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    initialize_company_research_api_underwriting_v1_product_company_research_initializations_post: {
-        parameters: {
-            query?: never;
-            header: {
-                "Idempotency-Key": string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["InitializeCompanyResearchRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompanyResearchProjectResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    get_company_research_project_api_underwriting_v1_product_company_research_projects__project_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompanyResearchProjectResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    retry_company_research_project_api_underwriting_v1_product_company_research_projects__project_id__retry_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompanyResearchProjectResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    get_company_research_workspace_api_underwriting_v1_product_company_research_projects__project_id__workspace_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompanyResearchWorkspaceResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    review_company_evidence_api_underwriting_v1_product_company_research_projects__project_id__evidence_reviews_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReviewCompanyEvidenceRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompanyResearchEvidenceReviewResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    confirm_company_research_judgment_api_underwriting_v1_product_company_research_projects__project_id__judgment_confirmations_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ConfirmCompanyResearchJudgmentRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompanyResearchJudgmentConfirmationResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    preview_company_research_publication_api_underwriting_v1_product_company_research_projects__project_id__publication_preview_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PreviewCompanyResearchPublicationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompanyResearchPublicationPreviewResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    publish_company_research_api_underwriting_v1_product_company_research_projects__project_id__publish_post: {
-        parameters: {
-            query?: never;
-            header: {
-                "Idempotency-Key": string;
-            };
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PublishCompanyResearchRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompanyResearchFrozenRevisionResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    get_company_research_revision_api_underwriting_v1_product_company_research_projects__project_id__revisions__revision_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-                revision_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompanyResearchFrozenRevisionResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-        };
-    };
-    export_company_research_revision_api_underwriting_v1_product_company_research_projects__project_id__revisions__revision_id__export_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-                revision_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompanyResearchMarkdownExportResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

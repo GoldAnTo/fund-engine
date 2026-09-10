@@ -12,6 +12,7 @@ import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
 from app.errors import NotFoundError
 from app.models.ledger import (
@@ -102,7 +103,6 @@ class SnapshotQueries:
         prev_links: set[str] | None = None
         prev_conclusions: dict[uuid.UUID, str] = {}
         prev_gaps: dict[uuid.UUID, int] = {}
-        prev_assessment_id: dict[uuid.UUID, uuid.UUID] = {}
         prev_review_count = 0
         summary_by_cutoff: dict[str, CaseSnapshotEventSummary] = {}
         for cutoff_iso in chronological_cutoffs:
@@ -195,6 +195,7 @@ class KnowledgeQueries:
         case_id: uuid.UUID | None = None,
         review_state: str | None = None,
         limit: int = 100,
+        authorized_case_ids: Select[tuple[uuid.UUID]] | None = None,
     ) -> KnowledgeResponse:
         if case_id is not None and self._repo.get_case(case_id) is None:
             raise NotFoundError(f"research case {case_id} not found")
@@ -211,6 +212,10 @@ class KnowledgeQueries:
         )
         if case_id is not None:
             query = query.where(Thesis.research_case_id == case_id)
+        if authorized_case_ids is not None:
+            query = query.where(
+                Thesis.research_case_id.in_(authorized_case_ids)
+            )
         # NOTE: no SQL filter on review_state — ledger rows are append-only,
         # so the effective state is derived from the latest EvidenceReview
         # below (a confirmed review makes a machine_generated link reviewed).

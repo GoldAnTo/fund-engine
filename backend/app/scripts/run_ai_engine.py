@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 import uuid
 from datetime import datetime, timezone
 
@@ -24,7 +23,7 @@ from sqlalchemy import create_engine, exists, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.ai.assessment_gen import AssessmentGenerator
-from app.ai.client import LLMClient, LLMProviderError, LLM_PROVIDER_ERROR_MESSAGE
+from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
 from app.env import load_local_env
@@ -244,15 +243,5 @@ def main() -> None:
         session.commit()
 
 
-def cli_main() -> int:
-    """Keep known provider exception causes out of terminal/log tracebacks."""
-    try:
-        main()
-    except LLMProviderError:
-        print(LLM_PROVIDER_ERROR_MESSAGE, file=sys.stderr)
-        return 1
-    return 0
-
-
 if __name__ == "__main__":
-    sys.exit(cli_main())
+    main()

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Final
 
 from app.domain.acquisition import (
+    ACQUISITION_SOURCE_ROLES,
+    ACQUISITION_PLANNER_VERSION,
     B_SCOPE_POLICY_VERSION,
     AcquisitionRequest,
     EvidenceObjective,
@@ -150,11 +152,7 @@ class SourcePolicy:
 B_SCOPE_POLICY: Final = SourcePolicy(
     version=B_SCOPE_POLICY_VERSION,
     enabled_adapter_keys=frozenset({"gildata", "sse", "szse"}),
-    # Keep the network-acquisition allowlist closed even though the domain
-    # also recognizes the dedicated, non-network intake-material role.
-    allowed_source_roles=frozenset(
-        {"company_disclosure", "licensed_provider"}
-    ),
+    allowed_source_roles=ACQUISITION_SOURCE_ROLES,
     exact_hosts=frozenset(
         {
             "query.sse.com.cn",
@@ -176,18 +174,6 @@ B_SCOPE_POLICY: Final = SourcePolicy(
 )
 
 
-INTAKE_MATERIAL_POLICY: Final = SourcePolicy(
-    version=B_SCOPE_POLICY_VERSION,
-    enabled_adapter_keys=frozenset(),
-    allowed_source_roles=frozenset({"user_provided_material"}),
-    exact_hosts=frozenset(),
-    suffix_hosts=frozenset(),
-    max_response_bytes=20 * 1024 * 1024,
-    per_adapter_page_limit=1,
-    permission_declarations=(),
-)
-
-
 _OBJECTIVE_QUERY_TERMS: Final = {
     EvidenceObjective.SUPPORT: "支持 增长 改善",
     EvidenceObjective.CONTRADICT: "反证 下滑 风险 不及预期",
@@ -198,6 +184,8 @@ _OBJECTIVE_QUERY_TERMS: Final = {
 
 class AcquisitionQueryPlanner:
     """Compose bounded, replayable queries without accepting source locations."""
+
+    version: Final = ACQUISITION_PLANNER_VERSION
 
     def plan(
         self, request: AcquisitionRequest, policy: SourcePolicy
@@ -215,8 +203,15 @@ class AcquisitionQueryPlanner:
                 " ".join(request.entity_names),
                 " ".join(request.security_codes),
                 " ".join(request.metric_terms),
+                " ".join(request.metric_periods),
+                " ".join(request.metric_units),
                 f"{request.period_start} 至 {request.period_end}",
                 _OBJECTIVE_QUERY_TERMS[request.objective],
+                (
+                    f"受约束扩展 {request.expansion.trigger} 第{request.round}轮"
+                    if request.expansion is not None
+                    else ""
+                ),
             )
             if part
         )

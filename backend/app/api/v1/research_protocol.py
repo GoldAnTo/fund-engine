@@ -16,8 +16,14 @@ from app.models.research_protocol import (
     OutcomeBindingVersion,
 )
 from app.models.ledger import Thesis
-from app.api.v1.tenant_context import require_research_tenant
+from app.api.v1.tenant_context import (
+    ResearchActor,
+    require_metric_definition_administrator,
+    require_research_actor,
+    require_research_tenant,
+)
 from app.services.case_tenant_access import CaseTenantAccess
+from app.api.v1.dependencies import RequireCaseRoute
 from app.errors import NotFoundError
 from app.repositories.research_protocol import ResearchProtocolRepository
 from app.schemas.v1.research_protocol import (
@@ -43,19 +49,30 @@ def _require_case(db: Session, case_id: uuid.UUID, tenant_id: str) -> None:
     CaseTenantAccess(db).require_case(case_id, tenant_id)
 
 
-def _require_thesis_case(db: Session, thesis_id: uuid.UUID, tenant_id: str) -> Thesis:
+def _require_thesis_case(
+    db: Session,
+    thesis_id: uuid.UUID,
+    actor: ResearchActor,
+    case_policy: RequireCaseRoute,
+) -> Thesis:
     thesis = db.get(Thesis, thesis_id)
     if thesis is None:
         raise NotFoundError("thesis not found")
-    _require_case(db, thesis.research_case_id, tenant_id)
+    _require_case(db, thesis.research_case_id, actor.tenant_id)
+    case_policy.require(thesis.research_case_id)
     return thesis
 
 
-def _require_binding_case(db: Session, binding_id: uuid.UUID, tenant_id: str) -> None:
+def _require_binding_case(
+    db: Session,
+    binding_id: uuid.UUID,
+    actor: ResearchActor,
+    case_policy: RequireCaseRoute,
+) -> None:
     binding = db.get(OutcomeBindingVersion, binding_id)
     if binding is None:
         raise NotFoundError("outcome binding not found")
-    _require_thesis_case(db, binding.thesis_id, tenant_id)
+    _require_thesis_case(db, binding.thesis_id, actor, case_policy)
 
 
 def _metric_dto(value) -> MetricDefinitionDTO:
@@ -81,9 +98,13 @@ def _rule_dto(value) -> VerificationRuleDTO:
 
 
 @router.post("/metric-definitions", response_model=MetricDefinitionDTO, status_code=status.HTTP_201_CREATED)
-def create_metric(payload: MetricDefinitionRequest, db: Session = Depends(get_db)):
+def create_metric(
+    payload: MetricDefinitionRequest,
+    db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_metric_definition_administrator),
+):
     service = ResearchProtocolService(db)
-    metric = translate_validation(service.add_metric_version, MetricDefinitionInput(metric_id=payload.metric_id, display_name=payload.display_name, canonical_definition=payload.canonical_definition, entity_scope=payload.entity_scope, unit=payload.unit, frequency=payload.frequency, period_semantics=payload.period_semantics, allowed_source_roles=list(payload.allowed_source_roles), role_eligibility=list(payload.role_eligibility)), approved_by=payload.approved_by, reason=payload.reason)
+    metric = translate_validation(service.add_metric_version, MetricDefinitionInput(metric_id=payload.metric_id, display_name=payload.display_name, canonical_definition=payload.canonical_definition, entity_scope=payload.entity_scope, unit=payload.unit, frequency=payload.frequency, period_semantics=payload.period_semantics, allowed_source_roles=list(payload.allowed_source_roles), role_eligibility=list(payload.role_eligibility)), approved_by=actor.server_actor, reason=payload.reason)
     commit_or_rollback(db)
     return _metric_dto(metric)
 
@@ -94,25 +115,25 @@ def list_metrics(db: Session = Depends(get_db)):
 
 
 @router.post("/theses/{thesis_id}/outcome-bindings", response_model=OutcomeBindingDTO, status_code=status.HTTP_201_CREATED)
-def create_binding(thesis_id: uuid.UUID, payload: OutcomeBindingRequest, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
-    _require_thesis_case(db, thesis_id, tenant_id)
+def create_binding(case_policy: RequireCaseRoute, thesis_id: uuid.UUID, payload: OutcomeBindingRequest, db: Session = Depends(get_db), actor: ResearchActor = Depends(require_research_actor)):
+    _require_thesis_case(db, thesis_id, actor, case_policy)
     service = ResearchProtocolService(db)
-    binding = translate_validation(service.create_outcome_binding, thesis_id, OutcomeBindingInput(metric_definition_id=payload.metric_definition_id, entity_scope=dict(payload.entity_scope), direction=payload.direction, baseline=dict(payload.baseline), horizon_start=payload.horizon_start, horizon_end=payload.horizon_end, reviewer=payload.reviewer, reason=payload.reason))
+    binding = translate_validation(service.create_outcome_binding, thesis_id, OutcomeBindingInput(metric_definition_id=payload.metric_definition_id, entity_scope=dict(payload.entity_scope), direction=payload.direction, baseline=dict(payload.baseline), horizon_start=payload.horizon_start, horizon_end=payload.horizon_end, reviewer=actor.server_actor, reason=payload.reason))
     commit_or_rollback(db)
     return _binding_dto(binding)
 
 
 @router.post("/outcome-bindings/{binding_id}/approve", response_model=OutcomeBindingDTO, status_code=status.HTTP_201_CREATED)
-def approve_binding(binding_id: uuid.UUID, payload: ApproveOutcomeBindingRequest, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
-    _require_binding_case(db, binding_id, tenant_id)
-    binding = translate_validation(ResearchProtocolService(db).approve_outcome_binding, binding_id, reviewer=payload.reviewer, reason=payload.reason)
+def approve_binding(case_policy: RequireCaseRoute, binding_id: uuid.UUID, payload: ApproveOutcomeBindingRequest, db: Session = Depends(get_db), actor: ResearchActor = Depends(require_research_actor)):
+    _require_binding_case(db, binding_id, actor, case_policy)
+    binding = translate_validation(ResearchProtocolService(db).approve_outcome_binding, binding_id, reviewer=actor.server_actor, reason=payload.reason)
     commit_or_rollback(db)
     return _binding_dto(binding)
 
 
 @router.get("/theses/{thesis_id}/researchability", response_model=ResearchabilityDTO)
-def researchability(thesis_id: uuid.UUID, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
-    _require_thesis_case(db, thesis_id, tenant_id)
+def researchability(case_policy: RequireCaseRoute, thesis_id: uuid.UUID, db: Session = Depends(get_db), actor: ResearchActor = Depends(require_research_actor)):
+    _require_thesis_case(db, thesis_id, actor, case_policy)
     result = translate_validation(ResearchProtocolService(db).check_researchability, thesis_id)
     return ResearchabilityDTO(status=result.status, reason_codes=result.reason_codes, effective_binding_id=str(result.effective_binding_id) if result.effective_binding_id else None, next_action=result.next_action)
 
@@ -125,9 +146,9 @@ def list_mechanism_templates(db: Session = Depends(get_db)):
 
 
 @router.post("/research-cases/{case_id}/mechanism-selection", response_model=MechanismSelectionDTO, status_code=status.HTTP_201_CREATED)
-def select_mechanism_template(case_id: uuid.UUID, payload: SelectMechanismTemplateRequest, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
-    _require_case(db, case_id, tenant_id)
-    selection = translate_validation(ResearchProtocolService(db).select_template, case_id, payload.template_version_id, reviewer=payload.reviewer, reason=payload.reason)
+def select_mechanism_template(case_id: uuid.UUID, payload: SelectMechanismTemplateRequest, db: Session = Depends(get_db), actor: ResearchActor = Depends(require_research_actor)):
+    _require_case(db, case_id, actor.tenant_id)
+    selection = translate_validation(ResearchProtocolService(db).select_template, case_id, payload.template_version_id, reviewer=actor.server_actor, reason=payload.reason)
     commit_or_rollback(db)
     return _selection_dto(selection)
 
@@ -147,8 +168,8 @@ def case_mechanism_protocol(case_id: uuid.UUID, db: Session = Depends(get_db), t
 
 
 @router.post("/research-cases/{case_id}/mechanism-edges/{edge_id}/verification-rules", response_model=VerificationRuleDTO, status_code=status.HTTP_201_CREATED)
-def create_verification_rule(case_id: uuid.UUID, edge_id: uuid.UUID, payload: VerificationRuleRequest, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
-    _require_case(db, case_id, tenant_id)
-    rule = translate_validation(ResearchProtocolService(db).add_verification_rule, case_id, edge_id, VerificationRuleInput(metric_definition_id=payload.metric_definition_id, expected_direction=payload.expected_direction, support_predicate=payload.support_predicate, contradiction_predicate=payload.contradiction_predicate, allowed_source_roles=list(payload.allowed_source_roles), observed_period_start=payload.observed_period_start, observed_period_end=payload.observed_period_end, available_at_deadline=payload.available_at_deadline, next_verification_event=payload.next_verification_event, reviewer=payload.reviewer, reason=payload.reason))
+def create_verification_rule(case_id: uuid.UUID, edge_id: uuid.UUID, payload: VerificationRuleRequest, db: Session = Depends(get_db), actor: ResearchActor = Depends(require_research_actor)):
+    _require_case(db, case_id, actor.tenant_id)
+    rule = translate_validation(ResearchProtocolService(db).add_verification_rule, case_id, edge_id, VerificationRuleInput(metric_definition_id=payload.metric_definition_id, expected_direction=payload.expected_direction, support_predicate=payload.support_predicate, contradiction_predicate=payload.contradiction_predicate, allowed_source_roles=list(payload.allowed_source_roles), observed_period_start=payload.observed_period_start, observed_period_end=payload.observed_period_end, available_at_deadline=payload.available_at_deadline, next_verification_event=payload.next_verification_event, reviewer=actor.server_actor, reason=payload.reason))
     commit_or_rollback(db)
     return _rule_dto(rule)

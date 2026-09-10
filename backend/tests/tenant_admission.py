@@ -19,6 +19,14 @@ def admit_case(
     document_version_id: uuid.UUID | None = None,
 ) -> None:
     """Attach a frozen test source and make the test's ownership decision explicit."""
+    existing_admission = session.scalar(
+        select(CaseTenantAdmission).where(
+            CaseTenantAdmission.research_case_id == case_id
+        )
+    )
+    if existing_admission is not None:
+        assert existing_admission.tenant_id == tenant_id
+        return
     document_id = document_version_id
     if document_id is None:
         document_id = session.scalar(

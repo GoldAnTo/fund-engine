@@ -37,7 +37,6 @@ def _event_payload() -> dict:
         "ticker": "TSM",
         "research_question": "资本开支是否会通过订单传导至供应链公司？",
         "candidate_factors": ["客户资本开支", "订单转化", "交付与毛利率"],
-        "created_by": "tester",
     }
 
 
@@ -370,12 +369,12 @@ def test_researcher_can_register_a_reviewed_claim_and_key_factor_from_an_admitte
         "text": "管理层预计下半年订单加速",
         "claim_kind": "research_opinion",
         "asserted_by": "管理层（经研究员转述）",
-        "reviewed_by": "human:researcher",
         "review_reason": "逐句核对冻结原文，作为研究意见保留。",
     })
 
     assert claim_response.status_code == 201
     claim = claim_response.json()
+    assert claim["reviewed_by"] == "user:test-team"
     assert claim["source"]["source_statement_id"] == str(statement.id)
     assert claim["review_reason"] == "逐句核对冻结原文，作为研究意见保留。"
 
@@ -390,12 +389,12 @@ def test_researcher_can_register_a_reviewed_claim_and_key_factor_from_an_admitte
         "support_condition": "公司在定期报告中披露订单同比增长。",
         "refutation_condition": "订单增速未达预期或出现延后。",
         "next_verification_event": "2026 年三季报",
-        "reviewed_by": "human:researcher",
         "review_reason": "指标、窗口和反证条件均已明确。",
     })
 
     assert factor_response.status_code == 201
     factor = factor_response.json()
+    assert factor["reviewed_by"] == "user:test-team"
     assert factor["report_claim_id"] == claim["id"]
     assert factor["allowed_source_types"] == ["company_disclosure", "licensed_provider"]
     assert factor["verification"] is None
@@ -411,7 +410,6 @@ def test_researcher_can_register_a_reviewed_claim_and_key_factor_from_an_admitte
             "support_condition": "公司定期报告披露订单同比增长。",
             "refutation_condition": "订单增速未达预期或出现延后。",
             "next_verification_event": "2026 年三季报",
-            "reviewed_by": "human:researcher",
             "review_reason": "故意缺少观察窗口，用于验证门禁。",
         },
     )
@@ -465,11 +463,12 @@ def test_researcher_can_parse_a_source_bound_key_factor_candidate_without_creati
 
     parsed = cmd_client.post(
         f"/api/v1/research-cases/{case_id}/key-factor-candidate-runs",
-        json={"source_statement_id": str(statement.id), "requested_by": "human:researcher"},
+        json={"source_statement_id": str(statement.id)},
     )
 
     assert parsed.status_code == 201
     payload = parsed.json()
+    assert payload["requested_by"] == "user:test-team"
     assert payload["parser_version"] == "key-factor-rules-v1"
     assert payload["status"] == "completed"
     assert payload["candidate_count"] == 4
@@ -536,7 +535,6 @@ def test_researcher_can_append_a_verification_to_a_reviewed_key_factor(
         "source_statement_id": str(statement.id),
         "outcome": "supported",
         "rationale": "冻结披露中的订单同比增长满足支持条件。",
-        "reviewed_by": "human:researcher",
         "review_reason": "已核对期间、指标和原文定位。",
     })
 
@@ -584,7 +582,6 @@ def test_researcher_can_bind_a_case_to_an_explicit_company_and_stock_from_an_adm
         "stock_id": str(stock.id),
         "source_statement_id": str(statement.id),
         "relationship_role": "supply_chain",
-        "reviewed_by": "human:researcher",
         "review_reason": "原文明确提及该公司与订单传导范围。",
     })
 
@@ -648,7 +645,6 @@ def test_researcher_can_append_a_source_backed_fundamental_impact_only_after_bin
         "metric_name": "收入同比增速",
         "expected_direction": "positive",
         "rationale": "未审核标的不应进入传导。",
-        "reviewed_by": "human:researcher",
         "review_reason": "尝试绕过标的绑定。",
     })
     assert unbound.status_code == 422
@@ -656,7 +652,7 @@ def test_researcher_can_append_a_source_backed_fundamental_impact_only_after_bin
     binding = cmd_client.post(f"/api/v1/research-cases/{case_id}/market-instruments", json={
         "company_id": str(company.id), "stock_id": str(stock.id),
         "source_statement_id": str(statement.id), "relationship_role": "supply_chain",
-        "reviewed_by": "human:researcher", "review_reason": "冻结原文明确该公司处于订单传导范围。",
+        "review_reason": "冻结原文明确该公司处于订单传导范围。",
     })
     assert binding.status_code == 201
 
@@ -666,7 +662,6 @@ def test_researcher_can_append_a_source_backed_fundamental_impact_only_after_bin
         "metric_name": "收入同比增速",
         "expected_direction": "positive",
         "rationale": "订单增长通过履约和确认节奏传导至收入。",
-        "reviewed_by": "human:researcher",
         "review_reason": "已核对标的关系、指标口径和原文定位。",
     })
 
@@ -743,7 +738,7 @@ def test_researcher_can_append_a_reviewed_market_observation_from_a_stock_bindin
     binding = cmd_client.post(f"/api/v1/research-cases/{case_id}/market-instruments", json={
         "company_id": str(company.id), "stock_id": str(stock.id),
         "source_statement_id": str(statement.id), "relationship_role": "directly_affected",
-        "reviewed_by": "human:researcher", "review_reason": "已审核该股票适用于本 Case。",
+        "review_reason": "已审核该股票适用于本 Case。",
     })
     assert binding.status_code == 201
 
@@ -756,7 +751,6 @@ def test_researcher_can_append_a_reviewed_market_observation_from_a_stock_bindin
         "price_source": "licensed_provider",
         "after_hours_treatment": "事件发生在盘后，窗口从下一交易日开盘开始",
         "relative_return": 0.034,
-        "reviewed_by": "human:researcher",
         "review_reason": "只核对窗口、基准和价格来源，不作因果归因。",
     }
     missing_source = cmd_client.post(

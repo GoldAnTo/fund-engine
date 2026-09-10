@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.models.ledger import AIAssessment, ResearchCase
-from app.scripts.seed_cambricon_profitability_case import CASE_TITLE, seed
+from app.models.ledger import AIAssessment
+from app.scripts.seed_cambricon_profitability_case import seed
 from tests.tenant_admission import admit_case
 
 
@@ -66,7 +66,6 @@ def test_cambricon_case_runs_through_existing_http_flow(cmd_client, cmd_session)
                 "factor_role": "盈利拐点事实或范围限制",
                 "scope_boundary": "寒武纪会计利润口径，2024Q4至2025Q4",
                 "reason": "逐项核对聚源冻结结果与年报第10页后确认",
-                "reviewer": "e2e-human-reviewer",
             },
         )
         assert response.status_code == 201, response.text
@@ -80,17 +79,18 @@ def test_cambricon_case_runs_through_existing_http_flow(cmd_client, cmd_session)
             "outcome": "confirmed",
             "conclusion": "supported",
             "reason": "证据关系已逐项确认，维持狭义盈利拐点判断",
-            "reviewer": "e2e-human-reviewer",
         },
     )
     assert reviewed.status_code == 201, reviewed.text
 
-    # --- P6 (after review): formal confirmed state with a real reviewer;
-    # the original AI draft remains visible alongside it. ---
+    # --- P6 (after review): formal confirmed state with the authenticated
+    # server actor, never the client-supplied compatibility field; the
+    # original AI draft remains visible alongside it. ---
     after = cmd_client.get(conclusion_url).json()
     assert after["header"]["conclusion_status"] == "supported"
     assert after["header"]["review_state"] == "confirmed"
-    assert after["header"]["reviewer"] == "e2e-human-reviewer"
+    assert after["header"]["reviewer"] == "user:test-team"
+    assert after["header"]["reviewer"] != "e2e-human-reviewer"
     assert after["header"]["ai_provisional"] is True  # AI draft still flagged
 
     # The review queue is drained once every link has been reviewed.
@@ -102,6 +102,6 @@ def test_cambricon_case_runs_through_existing_http_flow(cmd_client, cmd_session)
 
 def test_cambricon_case_conclusion_404_for_unknown_case(cmd_client):
     response = cmd_client.get(
-        f"/api/v1/research-cases/00000000-0000-0000-0000-000000000000/conclusion"
+        "/api/v1/research-cases/00000000-0000-0000-0000-000000000000/conclusion"
     )
     assert response.status_code == 404

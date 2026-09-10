@@ -11,37 +11,26 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.models.operational import Job
 
-from app.api.v1.tenant_context import require_research_tenant
-from app.services.case_tenant_access import CaseTenantAccess
 from app.db import get_db
-from app.errors import NotFoundError
+from app.api.v1.tenant_context import ResearchActor, require_research_actor
 from app.repositories.operational import JobRepository
-from app.repositories.outbox import emit_event
-from app.schemas.v1.common import CursorPage
 from app.schemas.v1.operational import (
-    ActivityItemDTO,
     JobDTO,
     JobEventDTO,
     JobEventsResponse,
 )
 from app.services.jobs import JobService
+from app.api.v1.dependencies import RequireCaseRoute
 
 # NOTE: no prefix here — the parent v1 router already mounts under /api/v1.
-router = APIRouter(tags=["jobs-v1"], dependencies=[Depends(require_research_tenant)])
+router = APIRouter(tags=["jobs-v1"])
 
 
-def _owned_job(db: Session, job_id: uuid.UUID, tenant_id: str):
-    job = db.scalar(select(Job).where(
-        Job.id == job_id,
-        Job.research_case_id.in_(CaseTenantAccess(db).case_ids(tenant_id)),
-    ))
-    if job is None:
-        raise NotFoundError("job not found")
-    return job
+def _authorize_job_case(job, case_policy: RequireCaseRoute) -> None:
+    if job.research_case_id is not None:
+        case_policy.require(job.research_case_id)
 
 
 def _job_dto(job) -> JobDTO:
@@ -51,6 +40,9 @@ def _job_dto(job) -> JobDTO:
         status=job.status,
         progress=job.progress,
         attempt=job.attempt,
+        failure_count=job.failure_count,
+        next_retry_at=(job.next_retry_at.isoformat() if job.next_retry_at else None),
+        retry_policy_version=job.retry_policy_version,
         step=job.step,
         error=job.error,
         cancel_requested=job.cancel_requested,
@@ -64,22 +56,30 @@ def _job_dto(job) -> JobDTO:
 
 
 @router.get("/jobs/{job_id}", response_model=JobDTO)
-def get_job(job_id: uuid.UUID, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
-    job = _owned_job(db, job_id, tenant_id)
+def get_job(
+    case_policy: RequireCaseRoute,
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
+):
+    job = JobService(db).get_authorized(job_id, tenant_id=actor.tenant_id)
+    _authorize_job_case(job, case_policy)
     return _job_dto(job)
 
 
 @router.get("/jobs/{job_id}/events", response_model=JobEventsResponse)
 def get_job_events(
+    case_policy: RequireCaseRoute,
     job_id: uuid.UUID,
     after_seq: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
     repo = JobRepository(db)
-    _owned_job(db, job_id, tenant_id)
-    events = repo.events_after(job_id, after_seq, limit=limit + 1)
+    job = JobService(db).get_authorized(job_id, tenant_id=actor.tenant_id)
+    _authorize_job_case(job, case_policy)
+    events = repo.events_after(job_id, after_seq)
     page = events[:limit]
     events_dto = [
         JobEventDTO(
@@ -103,35 +103,32 @@ def get_job_events(
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobDTO, status_code=status.HTTP_200_OK)
-def cancel_job(job_id: uuid.UUID, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
-    repo = JobRepository(db)
-    job = _owned_job(db, job_id, tenant_id)
-    JobService(db).request_cancel(job)
+def cancel_job(
+    case_policy: RequireCaseRoute,
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
+):
+    existing = JobService(db).get_authorized(job_id, tenant_id=actor.tenant_id)
+    _authorize_job_case(existing, case_policy)
+    job = JobService(db).request_cancel_authorized(
+        job_id, tenant_id=actor.tenant_id, actor=actor.server_actor
+    )
     db.commit()
     return _job_dto(job)
 
 
 @router.post("/jobs/{job_id}/retries", response_model=JobDTO, status_code=status.HTTP_200_OK)
-def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
-    repo = JobRepository(db)
-    job = _owned_job(db, job_id, tenant_id)
-    if job.status not in {"failed", "cancelled"}:
-        raise NotFoundError(f"job {job_id} is not retryable (status={job.status})")
-    job.status = "queued"
-    job.attempt += 1
-    job.error = None
-    job.cancel_requested = False
-    seq = repo.next_event_seq(job.id)
-    repo.append_event(
-        job_id=job.id, seq=seq, status="queued", message="retry requested"
-    )
-    emit_event(
-        db,
-        type="job_progressed",
-        aggregate_type="job",
-        aggregate_id=job.id,
-        payload={"status": "queued", "retry": True, "attempt": job.attempt},
-        origin="operational",
+def retry_job(
+    case_policy: RequireCaseRoute,
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
+):
+    existing = JobService(db).get_authorized(job_id, tenant_id=actor.tenant_id)
+    _authorize_job_case(existing, case_policy)
+    job = JobService(db).retry_authorized(
+        job_id, tenant_id=actor.tenant_id, actor=actor.server_actor
     )
     db.commit()
     return _job_dto(job)

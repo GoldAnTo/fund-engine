@@ -15,10 +15,12 @@ derivation dossier/graph/knowledge/compare use
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
 from app.errors import ValidationFailedError
 from app.models.ledger import (
@@ -63,6 +65,7 @@ class LedgerSearchQueries:
         limit: int,
         research_mode: bool = False,
         tenant_id: str,
+        authorized_case_ids: Select[tuple[uuid.UUID]],
     ) -> SearchResponse:
         requested = types if types is not None else _VALID_TYPES_SET
         unknown = requested - _VALID_TYPES_SET
@@ -80,7 +83,13 @@ class LedgerSearchQueries:
             if object_type not in requested:
                 continue
             hits = self._search_type(
-                object_type, needle, cutoff, limit, allowed_states, tenant_id
+                object_type,
+                needle,
+                cutoff,
+                limit,
+                allowed_states,
+                tenant_id,
+                authorized_case_ids,
             )
             if len(hits) > limit:
                 has_more = True
@@ -101,12 +110,14 @@ class LedgerSearchQueries:
         limit: int,
         allowed_states: frozenset[str],
         tenant_id: str,
+        authorized_case_ids: Select[tuple[uuid.UUID]],
     ) -> list[SearchHitDTO]:
         if object_type == "case":
             query = (
                 select(ResearchCase)
                 .where(func.lower(ResearchCase.title).like(needle))
                 .where(ResearchCase.created_at <= cutoff)
+                .where(ResearchCase.id.in_(authorized_case_ids))
             )
             query = query.join(
                 CaseTenantAdmission,
@@ -136,6 +147,7 @@ class LedgerSearchQueries:
                 .where(func.lower(Thesis.statement).like(needle))
                 .where(Thesis.created_at <= cutoff)
                 .where(ResearchCase.created_at <= cutoff)
+                .where(ResearchCase.id.in_(authorized_case_ids))
             )
             query = query.join(
                 CaseTenantAdmission,
@@ -220,6 +232,7 @@ class LedgerSearchQueries:
                 .where(SourceStatement.created_at <= cutoff)
                 .where(Thesis.created_at <= cutoff)
                 .where(ResearchCase.created_at <= cutoff)
+                .where(ResearchCase.id.in_(authorized_case_ids))
                 .where(effective_state.in_(list(allowed_states)))
                 .where(CaseTenantAdmission.tenant_id == tenant_id)
                 .where(CaseTenantAdmission.admitted_at <= cutoff)
@@ -274,6 +287,7 @@ class LedgerSearchQueries:
                 .where(ThemeRole.created_at <= cutoff)
                 .where(CaseTenantAdmission.tenant_id == tenant_id)
                 .where(CaseTenantAdmission.admitted_at <= cutoff)
+                .where(ThemeRole.research_case_id.in_(authorized_case_ids))
                 .where(
                     or_(
                         ThemeRole.applicable_from.is_(None),
@@ -333,6 +347,7 @@ class LedgerSearchQueries:
                 .where(ThemeRole.created_at <= cutoff)
                 .where(CaseTenantAdmission.tenant_id == tenant_id)
                 .where(CaseTenantAdmission.admitted_at <= cutoff)
+                .where(ThemeRole.research_case_id.in_(authorized_case_ids))
                 .where(
                     or_(
                         ThemeRole.applicable_from.is_(None),
@@ -395,6 +410,7 @@ class LedgerSearchQueries:
             .where(ThemeRole.created_at <= cutoff)
             .where(CaseTenantAdmission.tenant_id == tenant_id)
             .where(CaseTenantAdmission.admitted_at <= cutoff)
+            .where(ThemeRole.research_case_id.in_(authorized_case_ids))
             .where(
                 or_(
                     ThemeRole.applicable_from.is_(None),

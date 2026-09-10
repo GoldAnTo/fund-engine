@@ -19,6 +19,7 @@ from sqlalchemy import select
 from app.models.ledger import (
     AIAssessment,
     CaseDocumentVersion,
+    CaseTenantAdmission,
     DocumentVersion,
     EvidenceLink,
     EvidenceSnapshot,
@@ -28,6 +29,7 @@ from app.models.ledger import (
     Thesis,
 )
 from app.models.proposals import Proposal, ProposalReviewDecision
+from app.models.identity import CaseAccessGrant, ResearchUser
 from app.models.operational import ResearchRun, ResearchTask
 from app.models.research_monitor import ResearchRunEvent
 from app.models.versions import EvidenceLinkVersion
@@ -35,14 +37,74 @@ from app.repositories.operational import TaskRepository
 from app.services.auto_research import AutoResearchService
 
 
-def _seed_proposal(cmd_session, *, research_case_id=None) -> Proposal:
-    proposal = _seed_event_evidence_proposal(
-        cmd_session, source_url=f"https://www.cninfo.com.cn/new/disclosure/detail?announcementId={uuid.uuid4()}"
+def _grant_test_owner(cmd_session, case_id: uuid.UUID, now: datetime) -> None:
+    user_id = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        "test-research-principal:test-team:token:test-tenant-token",
     )
-    assert research_case_id is None, "use an explicitly scoped fixture for another Case"
-    cmd_session.add(proposal)
-    cmd_session.flush()
-    return proposal
+    user = cmd_session.get(ResearchUser, user_id)
+    if user is None:
+        user = ResearchUser(
+            id=user_id,
+            issuer="https://test-identity.invalid/realms/research",
+            subject="token:test-tenant-token",
+            tenant_id="test-team",
+            display_name="test-team",
+            normalized_email=None,
+            active=True,
+            last_seen_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        cmd_session.add(user)
+        cmd_session.flush()
+    cmd_session.add(
+        CaseAccessGrant(
+            research_case_id=case_id,
+            user_id=user_id,
+            role="owner",
+            granted_by_principal_id="test:fixture",
+            reason="proposal authorization fixture",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def _seed_proposal(
+    cmd_session,
+    *,
+    research_case_id=None,
+    legacy_unscoped: bool = False,
+) -> Proposal:
+    from app.repositories.proposals import ProposalRepository
+
+    if research_case_id is None and not legacy_unscoped:
+        proposal = _seed_event_evidence_proposal(
+            cmd_session,
+            source_url=(
+                "https://investor.tsmc.com/english/quarterly-results/"
+                f"proposal-{uuid.uuid4()}"
+            ),
+        )
+        cmd_session.add(proposal)
+        cmd_session.flush()
+        return proposal
+
+    repo = ProposalRepository(cmd_session)
+    return repo.add_proposal(
+        kind="evidence_link",
+        payload={
+            "source_statement_id": str(uuid.uuid4()),
+            "role": "supports",
+            "reason": "orders rose",
+            "scope": {"segment": "DC"},
+        },
+        target_context={"thesis_id": str(uuid.uuid4()), "entity_type": "evidence_link"},
+        proposed_by_type="ai",
+        proposed_by_ref="mock",
+        research_case_id=research_case_id,
+    )
 
 
 def _seed_waiting_run_with_proposals(cmd_session, *, proposal_count: int):
@@ -56,6 +118,30 @@ def _seed_waiting_run_with_proposals(cmd_session, *, proposal_count: int):
     )
     cmd_session.add(case)
     cmd_session.flush()
+    document = DocumentVersion(
+        content_sha256=uuid.uuid4().hex,
+        source_url=f"https://example.test/run-review/{case.id}",
+        available_at=now,
+        acquired_at=now,
+        parser_version="test",
+    )
+    cmd_session.add(document)
+    cmd_session.flush()
+    cmd_session.add_all([
+        CaseDocumentVersion(
+            research_case_id=case.id,
+            document_version_id=document.id,
+            linked_at=now,
+        ),
+        CaseTenantAdmission(
+            research_case_id=case.id,
+            tenant_id="test-team",
+            initial_document_version_id=document.id,
+            admitted_by="test-fixture",
+            admitted_at=now,
+        ),
+    ])
+    _grant_test_owner(cmd_session, case.id, now)
     thesis = Thesis(
         research_case_id=case.id,
         statement="review all outputs before completing the run",
@@ -63,8 +149,6 @@ def _seed_waiting_run_with_proposals(cmd_session, *, proposal_count: int):
         created_at=now,
     )
     cmd_session.add(thesis)
-    from tests.tenant_admission import admit_case
-    admit_case(cmd_session, case.id)
     run = ResearchRun(
         research_case_id=case.id,
         status="waiting_for_review",
@@ -152,13 +236,21 @@ def _seed_event_evidence_proposal(cmd_session, *, source_url: str) -> Proposal:
     )
     cmd_session.add_all([thesis, document])
     cmd_session.flush()
-    cmd_session.add(
+    cmd_session.add_all([
         CaseDocumentVersion(
             research_case_id=case.id,
             document_version_id=document.id,
             linked_at=now,
-        )
-    )
+        ),
+        CaseTenantAdmission(
+            research_case_id=case.id,
+            tenant_id="test-team",
+            initial_document_version_id=document.id,
+            admitted_by="test-fixture",
+            admitted_at=now,
+        ),
+    ])
+    _grant_test_owner(cmd_session, case.id, now)
     span = SourceSpan(
         document_version_id=document.id,
         locator={"page": 1},
@@ -174,8 +266,6 @@ def _seed_event_evidence_proposal(cmd_session, *, source_url: str) -> Proposal:
     )
     cmd_session.add(statement)
     cmd_session.flush()
-    from tests.tenant_admission import admit_case
-    admit_case(cmd_session, case.id, document_version_id=document.id)
     return Proposal(
         kind="evidence_link",
         payload={
@@ -204,12 +294,12 @@ def test_confirmed_proposal_publishes_evidence_link_version(
             "outcome": "confirmed",
             "reason": "looks correct",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
         },
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["outcome"] == "confirmed"
+    assert body["reviewer_id"] == "user:test-team"
     assert body["published_entity_id"]
 
     # A formal EvidenceLinkVersion was published.
@@ -242,7 +332,6 @@ def test_invalid_event_source_decision_is_rejected_without_publication(
         status="open",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     cmd_session.commit()
 
@@ -250,7 +339,6 @@ def test_invalid_event_source_decision_is_rejected_without_publication(
         "outcome": outcome,
         "reason": "looks correct",
         "expected_version": 1,
-        "reviewer_id": "human:alice",
     }
     if outcome == "modified":
         decision["replacement_payload"] = {
@@ -287,7 +375,6 @@ def test_valid_event_source_can_be_confirmed_and_published(cmd_client, cmd_sessi
             "outcome": "confirmed",
             "reason": "looks correct",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
         },
     )
 
@@ -323,7 +410,6 @@ def test_event_evidence_publish_takes_the_case_lifecycle_lock(
             "outcome": "confirmed",
             "reason": "looks correct",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
         },
     )
 
@@ -346,7 +432,6 @@ def test_modified_event_proposal_with_empty_replacement_uses_original_source(
             "outcome": "modified",
             "reason": "no payload changes",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
             "replacement_payload": {},
         },
     )
@@ -397,7 +482,6 @@ def test_modified_event_proposal_rejects_invalid_replacement_source(
         status="open",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     cmd_session.commit()
 
@@ -407,7 +491,6 @@ def test_modified_event_proposal_rejects_invalid_replacement_source(
             "outcome": "modified",
             "reason": "change source",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
             "replacement_payload": {
                 **proposal.payload,
                 "source_statement_id": str(invalid_statement.id),
@@ -440,7 +523,6 @@ def test_invalid_event_source_can_be_rejected(cmd_client, cmd_session):
             "outcome": "rejected",
             "reason": "source is invalid",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
         },
     )
 
@@ -461,7 +543,6 @@ def test_modified_proposal_publishes_replacement(cmd_client, cmd_session):
             "outcome": "modified",
             "reason": "scope too broad",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
             "replacement_payload": {
                 "source_statement_id": proposal.payload["source_statement_id"],
                 "role": "supports",
@@ -486,7 +567,6 @@ def test_rejected_proposal_publishes_no_entity(cmd_client, cmd_session):
             "outcome": "rejected",
             "reason": "not supported by statement",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
         },
     )
     assert resp.status_code == 201, resp.text
@@ -504,7 +584,6 @@ def test_concurrent_decision_conflicts(cmd_client, cmd_session):
             "outcome": "confirmed",
             "reason": "ok",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
         },
     )
     assert first.status_code == 201
@@ -516,7 +595,6 @@ def test_concurrent_decision_conflicts(cmd_client, cmd_session):
             "outcome": "confirmed",
             "reason": "also ok",
             "expected_version": 1,
-            "reviewer_id": "human:bob",
         },
     )
     assert second.status_code == 409, second.text
@@ -532,7 +610,6 @@ def test_decision_rejects_stale_expected_version(cmd_client, cmd_session):
             "outcome": "confirmed",
             "reason": "ok",
             "expected_version": 99,  # never matches the real version (1)
-            "reviewer_id": "human:alice",
         },
     )
     assert resp.status_code == 409, resp.text
@@ -547,7 +624,6 @@ def test_decision_requires_expected_version_field(cmd_client, cmd_session):
         json={
             "outcome": "confirmed",
             "reason": "ok",
-            "reviewer_id": "human:alice",
         },
     )
     assert resp.status_code == 422, resp.text
@@ -562,7 +638,6 @@ def test_modified_requires_replacement_payload(cmd_client, cmd_session):
             "outcome": "modified",
             "reason": "needs change",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
         },
     )
     assert resp.status_code == 422, resp.text
@@ -589,7 +664,6 @@ def test_decision_closes_review_proposal_task(cmd_client, cmd_session):
         status="open",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     in_progress_other = task_repo.add_task(
         title="Review other proposal",
@@ -597,7 +671,6 @@ def test_decision_closes_review_proposal_task(cmd_client, cmd_session):
         status="in_progress",
         ref_type="proposal",
         ref_id=other.id,
-        research_case_id=other.research_case_id,
     )
     cmd_session.commit()
 
@@ -607,7 +680,6 @@ def test_decision_closes_review_proposal_task(cmd_client, cmd_session):
             "outcome": "rejected",
             "reason": "not supported",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
         },
     )
     assert resp.status_code == 201, resp.text
@@ -647,7 +719,6 @@ def test_deciding_final_run_proposal_reconciles_run_once(cmd_client, cmd_session
             "outcome": "rejected",
             "reason": "not supported",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
         },
     )
 
@@ -693,7 +764,6 @@ def test_deciding_proposal_keeps_run_waiting_for_other_run_local_proposal(
             "outcome": "rejected",
             "reason": "not supported",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
         },
     )
 
@@ -768,7 +838,6 @@ def test_deciding_proposal_keeps_run_waiting_for_run_local_assessment(
             "outcome": "rejected",
             "reason": "not supported",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
         },
     )
 
@@ -795,7 +864,6 @@ def test_confirmed_decision_closes_in_progress_review_task(
         status="in_progress",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     cmd_session.commit()
 
@@ -805,7 +873,6 @@ def test_confirmed_decision_closes_in_progress_review_task(
             "outcome": "confirmed",
             "reason": "looks correct",
             "expected_version": 1,
-            "reviewer_id": "human:alice",
         },
     )
     assert resp.status_code == 201, resp.text

@@ -21,7 +21,6 @@ def _event_payload(*, source_type: str, source_metadata: dict[str, object]) -> d
         "ticker": "000001",
         "research_question": "新增投入是否会改变后续收入和毛利率预期？",
         "candidate_factors": ["资本开支", "订单交付", "毛利率"],
-        "created_by": "human:researcher",
     }
 
 
@@ -786,7 +785,7 @@ def test_contract_that_forbids_ai_processing_blocks_formal_evidence_acceptance(
     item = next(row for row in queue.json()["items"] if row["proposal_id"] == str(proposal.id))
     decision = cmd_client.post(
         f"/api/v1/review-proposals/{proposal.id}/decisions",
-        json={"outcome": "confirmed", "reason": "尝试采纳", "reviewer_id": "human:reviewer", "expected_version": proposal.version},
+        json={"outcome": "confirmed", "reason": "尝试采纳", "expected_version": proposal.version},
     )
 
     assert item["source_status"] == "restricted"

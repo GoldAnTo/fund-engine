@@ -19,12 +19,12 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
 from app.errors import NotFoundError, ValidationFailedError
 from app.models.events import DomainEvent
 from app.models.ledger import ResearchCase
 from app.models.operational import TaskItem
-from app.queries.activity import ActivityQueries
 from app.queries.basis import HistoricalBasis
 from app.queries.effective_state import (
     effective_review_state,
@@ -73,7 +73,12 @@ class CaseReadQueries:
     # --------------------------------------------------------------- list
 
     def list_cases(
-        self, *, cursor: str | None, limit: int, tenant_id: str | None = None
+        self,
+        *,
+        cursor: str | None,
+        limit: int,
+        tenant_id: str | None = None,
+        authorized_case_ids: Select[tuple[uuid.UUID]] | None = None,
     ) -> CaseListResponse:
         after_created_at, after_id = (None, None)
         if cursor is not None:
@@ -84,6 +89,7 @@ class CaseReadQueries:
             after_created_at=after_created_at,
             after_id=after_id,
             tenant_id=tenant_id,
+            authorized_case_ids=authorized_case_ids,
         )
         has_more = len(cases) > limit
         page_items = cases[:limit]

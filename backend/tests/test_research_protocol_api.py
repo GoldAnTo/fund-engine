@@ -24,7 +24,6 @@ METRIC_BODY = {
     "period_semantics": "period_end",
     "allowed_source_roles": ["primary_disclosure"],
     "role_eligibility": ["outcome"],
-    "approved_by": "human:owner",
     "reason": "初始指标定义",
 }
 
@@ -87,6 +86,7 @@ def test_metric_outcome_binding_and_researchability_api_flow(cmd_client, cmd_ses
     baseline_document = _attach_frozen_baseline(cmd_session, thesis)
     metric = cmd_client.post("/api/v1/metric-definitions", json=METRIC_BODY)
     assert metric.status_code == 201, metric.text
+    assert metric.json()["approved_by"] == "user:test-team"
     metric_id = metric.json()["id"]
     draft = cmd_client.post(
         f"/api/v1/theses/{thesis.id}/outcome-bindings",
@@ -97,17 +97,18 @@ def test_metric_outcome_binding_and_researchability_api_flow(cmd_client, cmd_ses
             "baseline": {"source_ref": f"document:{baseline_document.id}", "value": "10", "unit": "yuan", "observed_period": "2025-12-31", "available_at": "2026-03-01T00:00:00Z"},
             "horizon_start": "2026-04-01",
             "horizon_end": "2026-12-31",
-            "reviewer": "human:researcher",
             "reason": "固定结果变量",
         },
     )
     assert draft.status_code == 201, draft.text
     assert draft.json()["state"] == "draft"
+    assert draft.json()["reviewer"] == "user:test-team"
     approved = cmd_client.post(
         f"/api/v1/outcome-bindings/{draft.json()['id']}/approve",
-        json={"reviewer": "human:reviewer", "reason": "范围和基线已核对"},
+        json={"reason": "范围和基线已核对"},
     )
     assert approved.status_code == 201, approved.text
+    assert approved.json()["reviewer"] == "user:test-team"
     gate = cmd_client.get(f"/api/v1/theses/{thesis.id}/researchability")
     assert gate.status_code == 200
     assert gate.json()["status"] == "blocked"
@@ -115,12 +116,73 @@ def test_metric_outcome_binding_and_researchability_api_flow(cmd_client, cmd_ses
     assert cmd_session.get(MetricDefinitionVersion, uuid.UUID(metric_id)) is not None
 
 
+def test_metric_definition_requires_global_catalog_role(
+    cmd_client, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS",
+        '{"ordinary-token":{"tenant_id":"test-team","actor_id":"ordinary"}}',
+    )
+
+    response = cmd_client.post(
+        "/api/v1/metric-definitions",
+        headers={"Authorization": "Bearer ordinary-token"},
+        json={**METRIC_BODY, "approved_by": "human:forged-admin"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "permission_denied"
+
+
+def test_metric_definition_rejects_client_approver(cmd_client) -> None:
+    response = cmd_client.post(
+        "/api/v1/metric-definitions",
+        json={**METRIC_BODY, "approved_by": "human:forged-admin"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_mechanism_protocol_uses_server_reviewer_identity(cmd_client, cmd_session) -> None:
+    thesis = _protocol_thesis(cmd_session)
+    metric = cmd_client.post("/api/v1/metric-definitions", json=METRIC_BODY).json()
+    template = cmd_client.get("/api/v1/mechanism-templates").json()[0]
+
+    selected = cmd_client.post(
+        f"/api/v1/research-cases/{thesis.research_case_id}/mechanism-selection",
+        json={
+            "template_version_id": template["id"],
+            "reason": "固定机制模板",
+        },
+    )
+    assert selected.status_code == 201, selected.text
+    assert selected.json()["reviewer"] == "user:test-team"
+
+    rule = cmd_client.post(
+        f"/api/v1/research-cases/{thesis.research_case_id}/mechanism-edges/{template['edges'][0]['id']}/verification-rules",
+        json={
+            "metric_definition_id": metric["id"],
+            "expected_direction": "increase",
+            "support_predicate": "收入同比增长",
+            "contradiction_predicate": "收入同比下降",
+            "allowed_source_roles": ["primary_disclosure"],
+            "observed_period_start": "2026-01-01",
+            "observed_period_end": "2026-06-30",
+            "available_at_deadline": "2026-08-31",
+            "next_verification_event": "2026 半年报",
+            "reason": "固定验证规则",
+        },
+    )
+    assert rule.status_code == 201, rule.text
+    assert rule.json()["reviewer"] == "user:test-team"
+
+
 def test_outcome_binding_api_rejects_untraceable_baseline(cmd_client, cmd_session) -> None:
     thesis = _protocol_thesis(cmd_session)
     metric = cmd_client.post("/api/v1/metric-definitions", json=METRIC_BODY).json()
     response = cmd_client.post(
         f"/api/v1/theses/{thesis.id}/outcome-bindings",
-        json={"metric_definition_id": metric["id"], "entity_scope": {"company_id": "company-a", "business_line": "800G optics"}, "direction": "increase", "baseline": {"value": "10"}, "horizon_start": "2026-04-01", "horizon_end": "2026-12-31", "reviewer": "human", "reason": "不完整"},
+        json={"metric_definition_id": metric["id"], "entity_scope": {"company_id": "company-a", "business_line": "800G optics"}, "direction": "increase", "baseline": {"value": "10"}, "horizon_start": "2026-04-01", "horizon_end": "2026-12-31", "reason": "不完整"},
     )
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_failed"

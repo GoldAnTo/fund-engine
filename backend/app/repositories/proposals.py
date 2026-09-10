@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
 from app.models.proposals import (
     Proposal,
@@ -90,12 +91,18 @@ class ProposalRepository:
         )
 
     def pending_for_case(
-        self, *, case_id: uuid.UUID | None = None, kind: str | None = None, limit: int = 50, tenant_id: str | None = None
+        self,
+        *,
+        case_id: uuid.UUID | None = None,
+        kind: str | None = None,
+        limit: int = 50,
+        authorized_case_ids: Select[tuple[uuid.UUID]] | None = None,
     ) -> list[Proposal]:
         query = select(Proposal).where(Proposal.status == "pending")
-        if tenant_id is not None:
-            from app.services.review_tenant_access import proposal_tenant_predicate
-            query = query.where(proposal_tenant_predicate(tenant_id))
+        if authorized_case_ids is not None:
+            query = query.where(
+                Proposal.research_case_id.in_(authorized_case_ids)
+            )
         if case_id is not None:
             query = query.where(Proposal.research_case_id == case_id)
         if kind is not None:

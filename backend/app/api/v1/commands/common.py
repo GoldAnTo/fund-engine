@@ -51,21 +51,6 @@ def translate_validation(fn, *args, **kwargs):
 translate_conflict = translate_validation
 
 
-def resolve_actor(request: Request) -> str:
-    """Extract a best-effort actor identifier from request headers.
-
-    Production deployments will plug authentication in here; for now the
-    only signal is an optional ``X-Actor`` header (``"human:alice"`` or
-    ``"ai:openai/gpt-4"`` etc.). The fallback ``"human:anonymous"`` is
-    deliberately distinct from any well-known identity so it's easy to
-    spot un-attributed writes in the audit log.
-    """
-    actor = request.headers.get("X-Actor", "").strip()
-    if not actor:
-        return "human:anonymous"
-    return actor[:128]
-
-
 def _record_audit(
     db: Session,
     *,
@@ -106,6 +91,7 @@ def audit_command(
     db: Session,
     request: Request,
     *,
+    actor: str,
     action: str,
     entity_type: str,
     payload: dict[str, Any],
@@ -115,14 +101,13 @@ def audit_command(
 ) -> Any:
     """Run a service call, appending an audit row for the outcome.
 
-    The audit row carries the ``actor`` (from ``X-Actor`` header) and the
+    The audit row carries the server-derived authenticated ``actor`` and the
     request id (from middleware-injected ``request.state.request_id``).
     On success, ``entity_id`` is taken from the returned object if it has
     an ``.id`` attribute. On any exception, a ``result='failed'`` row is
     appended before the exception is re-raised so the original HTTP error
     envelope is unaffected.
     """
-    actor = resolve_actor(request)
     request_id = getattr(request.state, "request_id", "") or ""
     entity_id: uuid.UUID | None = None
     bound_kwargs = kwargs or {}

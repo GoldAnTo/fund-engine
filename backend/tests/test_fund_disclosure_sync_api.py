@@ -422,7 +422,6 @@ def _admitted_case(cmd_session) -> ResearchCase:
 def test_case_scoped_api_exposes_saved_scope_replay_and_hides_other_tenants(cmd_client, cmd_session, monkeypatch) -> None:
     case = _admitted_case(cmd_session)
     payload = {
-        "actor": "human:researcher",
         "fund_codes": ["005827"],
         "frequency": "monthly",
         "report_period": "2025-06-30",
@@ -440,6 +439,7 @@ def test_case_scoped_api_exposes_saved_scope_replay_and_hides_other_tenants(cmd_
 
     assert saved.status_code == 200, saved.text
     assert saved.json()["version"] == 1
+    assert saved.json()["changed_by"] == "user:test-team"
     assert detail.status_code == 200, detail.text
     assert detail.json()["effective_config"]["frequency"] == "monthly"
     assert detail.json()["effective_config"]["fund_codes"] == ["005827"]
@@ -453,7 +453,6 @@ def test_config_requires_and_freezes_a_report_period_for_the_run(cmd_client, cmd
     missing_period = cmd_client.put(
         url,
         json={
-            "actor": "human:researcher",
             "fund_codes": ["515050"],
             "frequency": "monthly",
             "change_reason": "历史回放",
@@ -462,7 +461,6 @@ def test_config_requires_and_freezes_a_report_period_for_the_run(cmd_client, cmd
     saved = cmd_client.put(
         url,
         json={
-            "actor": "human:researcher",
             "fund_codes": ["515050"],
             "frequency": "monthly",
             "report_period": "2024-12-31",
@@ -527,7 +525,6 @@ def test_case_scoped_api_records_immediate_unmatched_run_and_retries_frozen_scop
     configured = cmd_client.put(
         f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
         json={
-            "actor": "human:researcher",
             "fund_codes": ["005827"],
             "frequency": "weekly",
             "report_period": "2025-06-30",
@@ -544,6 +541,9 @@ def test_case_scoped_api_records_immediate_unmatched_run_and_retries_frozen_scop
     )
 
     assert started.status_code == 201, started.text
+    assert started.json()["events"][0]["stage"] == "scope"
+    assert started.json()["events"][0]["payload"]["executor_actor"] == "service:fund-disclosure-sync"
+    assert started.json()["events"][0]["payload"]["initiated_by"] == "user:test-team"
     assert started.json()["events"][-1]["stage"] == "finished"
     assert started.json()["events"][-1]["payload"]["pending_match_rows"] == 1
     assert retried.status_code == 201, retried.text
@@ -560,7 +560,6 @@ def test_case_scoped_api_redacts_client_factory_failure(
     configured = cmd_client.put(
         f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
         json={
-            "actor": "human:researcher",
             "fund_codes": ["005827"],
             "frequency": "weekly",
             "report_period": "2025-06-30",
@@ -623,7 +622,6 @@ def test_run_route_does_not_convert_client_factory_programming_error_to_422(
     configured = cmd_client.put(
         f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
         json={
-            "actor": "human:researcher",
             "fund_codes": ["005827"],
             "frequency": "weekly",
             "report_period": "2025-06-30",
@@ -660,7 +658,6 @@ def test_start_and_retry_routes_do_not_convert_service_programming_errors(
     configured = cmd_client.put(
         f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
         json={
-            "actor": "human:researcher",
             "fund_codes": ["005827"],
             "frequency": "weekly",
             "report_period": "2025-06-30",
@@ -721,7 +718,6 @@ def test_real_provider_failures_remain_transparent_replayable_runs(
     configured = cmd_client.put(
         f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
         json={
-            "actor": "human:researcher",
             "fund_codes": ["005827"],
             "frequency": "weekly",
             "report_period": "2025-06-30",
@@ -769,7 +765,6 @@ def test_malformed_fund_provider_results_are_safe_failed_runs(
     configured = cmd_client.put(
         f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
         json={
-            "actor": "human:researcher",
             "fund_codes": ["005827"],
             "frequency": "weekly",
             "report_period": "2025-06-30",

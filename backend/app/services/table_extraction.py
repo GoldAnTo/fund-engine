@@ -192,6 +192,7 @@ class TableFact:
     """One disclosed numeric fact extracted from a table row."""
 
     metric_name: str
+    predicate: str
     statement_text: str
     observed_period: date
     quote: str
@@ -213,6 +214,7 @@ class FinancialTableExtractor:
     def extract(self, text: str) -> list[TableFact]:
         facts: list[TableFact] = []
         current_years: list[str] = []
+        period_ends: dict[str, date] = {}
         current_unit: str | None = None
         offset = 0
 
@@ -226,6 +228,13 @@ class FinancialTableExtractor:
             quote_start = line_offset + line.index(clean)
 
             years = [m.group("year") for m in re.finditer(YEAR_PATTERN, clean)]
+            for year in years:
+                suffix = clean[clean.find(year) + len(year) :]
+                period_ends[year] = (
+                    date(int(year), 6, 30)
+                    if re.search(r"(?:半年度|上半年|1\s*[－—-]\s*6\s*月)", suffix)
+                    else date(int(year), 12, 31)
+                )
             unit = self._unit_from_line(clean)
             if unit:
                 current_unit = unit
@@ -262,8 +271,11 @@ class FinancialTableExtractor:
                 facts.append(
                     TableFact(
                         metric_name=metric_name,
+                        predicate=self._grounded_predicate(clean, metric_base, label),
                         statement_text=f"{period}年{label}为{value}",
-                        observed_period=date(int(period), 12, 31),
+                        observed_period=period_ends.get(
+                            period, date(int(period), 12, 31)
+                        ),
                         quote=clean,
                         quote_start=quote_start,
                         quote_end=quote_start + len(clean),
@@ -271,6 +283,26 @@ class FinancialTableExtractor:
                 )
 
         return facts
+
+    @staticmethod
+    def _grounded_predicate(line: str, metric_base: str, fallback: str) -> str:
+        candidates = {
+            "net_profit_parent": (
+                "归属于上市公司股东的净利润",
+                "归属于母公司所有者的净利润",
+                "归属于母公司股东的净利润",
+                "归母净利润",
+            ),
+            "net_profit_deducted": ("扣非净利润", "扣除非经常性损益"),
+            "net_profit": ("净利润",),
+            "revenue": ("营业总收入", "营业收入", "销售收入", "收入"),
+            "R&D_expenditure": ("研发费用",),
+            "R&D_total_spending": ("研发投入",),
+            "production_capacity": ("产能",),
+            "production_volume": ("产量",),
+            "sales_volume": ("销量",),
+        }.get(metric_base, ())
+        return next((candidate for candidate in candidates if candidate in line), fallback)
 
     # ------------------------------------------------------------- helpers
 

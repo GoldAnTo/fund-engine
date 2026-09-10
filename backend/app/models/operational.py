@@ -22,7 +22,6 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
-    Index,
     Integer,
     JSON,
     String,
@@ -38,16 +37,8 @@ from app.models.ledger import Base, _uuid
 # --------------------------------------------------------------------------- #
 # Jobs
 # --------------------------------------------------------------------------- #
-JobStatus = Literal[
-    "queued",
-    "running",
-    "waiting_for_sources",
-    "waiting_for_review",
-    "succeeded",
-    "failed",
-    "cancelled",
-]
-JobKind = Literal["ingest", "extract", "propose", "assess", "project", "parse", "prepare_research"]
+JobStatus = Literal["queued", "running", "waiting_for_review", "succeeded", "failed", "cancelled"]
+JobKind = Literal["ingest", "extract", "propose", "assess", "project", "parse"]
 
 
 class Job(Base):
@@ -67,15 +58,21 @@ class Job(Base):
     progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # 1-based attempt counter; incremented on retry.
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Provider failures consume the bounded retry policy. Lease expiry does
+    # not: ``attempt`` still advances for fencing, while this counter does not.
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    retry_policy_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     # Human-readable step label (e.g. "recalling statements", "generating").
     step: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # Free-form error detail when status == failed.
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Soft cancel: the worker polls this and stops at the next safe boundary.
     cancel_requested: Mapped[bool] = mapped_column(default=False, nullable=False)
-    # Per-claim ownership lease.  A recovered worker must never be able to
-    # mutate a Job that a newer worker has subsequently claimed.
-    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # The ledger entity this job ultimately mutates (e.g. thesis_id for an
     # assess job), used to resume and to build task items.
     target_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -103,22 +100,6 @@ class Job(Base):
             from datetime import datetime as _dt, timezone as _tz
 
             self.created_at = _dt.now(_tz.utc)
-
-
-Index(
-    "ix_jobs_company_research_worker_candidates",
-    Job.status,
-    Job.created_at,
-    Job.id,
-    sqlite_where=text(
-        "kind = 'prepare_company_research' AND "
-        "target_type = 'company_research_preparation' AND research_case_id IS NULL"
-    ),
-    postgresql_where=text(
-        "kind = 'prepare_company_research' AND "
-        "target_type = 'company_research_preparation' AND research_case_id IS NULL"
-    ),
-)
 
 
 class JobEvent(Base):
@@ -282,14 +263,6 @@ class ProjectionCheckpoint(Base):
 # --------------------------------------------------------------------------- #
 class ResearchRun(Base):
     __tablename__ = "research_runs"
-    __table_args__ = (
-        Index(
-            "uq_research_runs_case_id",
-            "research_case_id",
-            "id",
-            unique=True,
-        ),
-    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     research_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False)
@@ -340,13 +313,22 @@ class ResearchWorkerHeartbeat(Base):
     """
 
     __tablename__ = "research_worker_heartbeats"
+    __table_args__ = (
+        CheckConstraint(
+            "configuration_status IN ('configured', 'misconfigured', 'unknown')",
+            name="ck_research_worker_heartbeats_configuration_status",
+        ),
+    )
 
     worker_id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    worker_kind: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="research_run", server_default="research_run"
-    )
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False)
+    configuration_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="unknown", server_default="unknown"
+    )
+    configuration_issues: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'")
+    )
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -362,7 +344,6 @@ EVENT_RESEARCH_LIFECYCLE_STATES = frozenset(
         "continuing",
         "awaiting_scope",
         "draft_ready",
-        "completed",
         "published",
         "exhausted",
     }
@@ -381,7 +362,7 @@ class EventResearchLifecycle(Base):
     __table_args__ = (
         CheckConstraint(
             "status IN ('extracting', 'researching', 'awaiting_key_review', "
-            "'continuing', 'awaiting_scope', 'draft_ready', 'completed', 'published', 'exhausted')",
+            "'continuing', 'awaiting_scope', 'draft_ready', 'published', 'exhausted')",
             name="ck_event_research_lifecycle_status",
         ),
     )

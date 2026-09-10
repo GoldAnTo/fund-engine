@@ -40,122 +40,50 @@ def test_extraction_keeps_unknown_event_facts_empty_and_marks_confirmation() -> 
     assert len(result.candidate_factors) in {3, 4, 5}
 
 
-def test_extraction_preserves_provider_material_classification() -> None:
-    class MaterialClient:
-        def chat_json(self, messages, schema_hint=""):
-            assert schema_hint == "event_research_extract"
+def test_extraction_prompt_defines_the_candidate_factor_wire_shape() -> None:
+    captured: list[dict] = []
+
+    class CapturingClient:
+        def chat_json(self, messages, schema_hint):
+            captured.extend(messages)
             return {
-                "input_kind": "material",
-                "research_question": "公告说明了什么？",
-                "candidate_factors": ["收入", "利润", "订单"],
+                "research_question": "哪些因素需要验证？",
+                "candidate_factors": ["因素一", "因素二", "因素三"],
             }
 
-    result = EventExtractionService(client=MaterialClient()).extract(
-        raw_input="公司公告：收入和利润变化，订单增加。", source_url=None
-    )
-
-    assert result.input_kind == "material"
-
-
-def test_extraction_defaults_unknown_input_kind_to_topic() -> None:
-    class UnknownKindClient:
-        def chat_json(self, messages, schema_hint=""):
-            return {
-                "input_kind": "guess",
-                "research_question": "行业会如何变化？",
-                "candidate_factors": ["需求", "供给", "替代"],
-            }
-
-    result = EventExtractionService(client=UnknownKindClient()).extract(
-        raw_input="行业会如何变化？", source_url=None
-    )
-
-    assert result.input_kind == "topic"
-
-
-def test_extraction_does_not_turn_a_topic_prompt_into_material_on_model_label() -> None:
-    class MisclassifyingClient:
-        def chat_json(self, messages, schema_hint=""):
-            return {
-                "input_kind": "material",
-                "research_question": "英伟达供应链会如何变化？",
-                "candidate_factors": ["需求", "供给", "替代"],
-            }
-
-    result = EventExtractionService(client=MisclassifyingClient()).extract(
-        raw_input="研究英伟达供应链会如何变化？", source_url=None
-    )
-
-    assert result.input_kind == "topic"
-
-
-@pytest.mark.parametrize(
-    "raw_input",
-    [
-        "请分析公告：公司披露收入增长20%",
-        "公司公告显示收入增长20%，意味着什么？",
-        "Please analyze this announcement: Example Corp disclosed revenue increased 20%.",
-        "The filing reports revenue increased 20%. What does it mean?",
-        "According to the research report, orders increased 15% and revenue reached 300 USD.",
-        "研报指出：公司订单增长15%，收入达到20亿元。",
-        "Research report:\nRevenue increased 20%.\nOrders reached 300 USD.",
-        "公司一季度收入增长20%。\n订单同比增加15%。\n毛利率达到30%。",
-    ],
-)
-def test_extraction_prioritizes_strong_material_facts_over_prompt_shape(
-    raw_input: str,
-) -> None:
-    class MaterialClient:
-        def chat_json(self, messages, schema_hint=""):
-            return {
-                "input_kind": "material",
-                "research_question": "材料中的变化意味着什么？",
-                "candidate_factors": ["收入", "订单", "利润率"],
-            }
-
-    result = EventExtractionService(client=MaterialClient()).extract(
-        raw_input=raw_input,
+    EventExtractionService(client=CapturingClient()).extract(
+        raw_input="公司披露新的经营数据，等待人工核验。",
         source_url=None,
     )
 
-    assert result.input_kind == "material"
+    system_prompt = captured[0]["content"]
+    assert '"candidate_factors": ["string", "string", "string"]' in system_prompt
+    assert "3 到 5 个互不重复的非空 JSON 字符串" in system_prompt
+    assert "禁止返回对象、数字或 null" in system_prompt
+    assert "company_name 只能是原文中的简短主体名称" in system_prompt
 
 
-@pytest.mark.parametrize(
-    "raw_input",
-    [
-        "请研究AI服务器电力需求",
-        "AI服务器电力需求会如何变化？",
-        "研究公告行业",
-        "Please research the announcement industry",
-        "研究公司公告中收入增长20%对股价的影响",
-        "2026年8月公司公告会如何影响股价？",
-        "Research the impact of 20% revenue growth in the company announcement",
-        "How will the 2026/08 company announcement affect the share price?",
-        (
-            "围绕AI服务器电力需求建立研究框架。先讨论需求增长，再分析供给约束；"
-            "同时比较不同地区的电网建设节奏。还需要研究设备效率、能源成本和替代方案，"
-            "并评估这些变量对行业竞争格局的长期影响。最后整理可验证的问题和候选因素，"
-            "供后续自动检索公开资料使用。研究范围还包括需求弹性、供给周期、竞争壁垒、"
-            "政策环境和技术路线；这些都只是待验证的问题，不是用户提供的事实材料。"
+def test_extraction_rejects_an_event_sentence_as_the_company_name() -> None:
+    class SentenceAsCompanyClient:
+        def chat_json(self, messages, schema_hint):
+            return {
+                "company_name": (
+                    "TSMC stated that advanced packaging capacity remains a key "
+                    "constraint and CoWoS capacity is expanding."
+                ),
+                "research_question": "CoWoS 扩产能否缓解约束？",
+                "candidate_factors": ["产能", "需求", "供应链"],
+            }
+
+    result = EventExtractionService(client=SentenceAsCompanyClient()).extract(
+        raw_input=(
+            "TSMC stated that advanced packaging capacity remains a key "
+            "constraint and CoWoS capacity is expanding."
         ),
-    ],
-)
-def test_extraction_keeps_short_research_prompts_as_topic(raw_input: str) -> None:
-    class MisclassifyingClient:
-        def chat_json(self, messages, schema_hint=""):
-            return {
-                "input_kind": "material",
-                "research_question": "这个主题会如何变化？",
-                "candidate_factors": ["需求", "供给", "替代"],
-            }
-
-    result = EventExtractionService(client=MisclassifyingClient()).extract(
-        raw_input=raw_input,
         source_url=None,
     )
 
-    assert result.input_kind == "topic"
+    assert result.company_name is None
 
 
 def test_extraction_drops_model_values_that_are_not_supported_by_the_raw_input() -> None:

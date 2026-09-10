@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.commands.common import commit_or_rollback, translate_validation
-from app.api.v1.tenant_context import require_research_tenant
+from app.api.v1.tenant_context import ResearchActor, require_research_actor, require_research_tenant
 from app.db import get_db
 from app.errors import NotFoundError
 from app.models.research_expression import ForecastEvaluationCandidate, ForecastTargetVersion
@@ -27,6 +27,7 @@ from app.schemas.v1.forecast_verdicts import (
     RecordActualMetricObservationRequest,
 )
 from app.services.case_tenant_access import CaseTenantAccess
+from app.api.v1.dependencies import RequireCaseRoute
 from app.services.forecast_verdicts import (
     ActualObservationInput,
     ForecastTargetInput,
@@ -51,12 +52,18 @@ def _target_for_case(db: Session, *, target_id: uuid.UUID, case_id: uuid.UUID) -
     return target
 
 
-def _case_for_candidate(db: Session, candidate_id: uuid.UUID, tenant_id: str) -> ForecastTargetVersion:
+def _case_for_candidate(
+    db: Session,
+    candidate_id: uuid.UUID,
+    actor: ResearchActor,
+    case_policy: RequireCaseRoute,
+) -> ForecastTargetVersion:
     candidate = db.get(ForecastEvaluationCandidate, candidate_id)
     target = db.get(ForecastTargetVersion, candidate.forecast_target_id) if candidate else None
     if target is None:
         raise NotFoundError("forecast evaluation candidate not found")
-    _require_case(db, target.research_case_id, tenant_id)
+    _require_case(db, target.research_case_id, actor.tenant_id)
+    case_policy.require(target.research_case_id)
     return target
 
 
@@ -83,9 +90,9 @@ def create_forecast_target(
     case_id: uuid.UUID,
     payload: CreateForecastTargetRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> ForecastTargetDTO:
-    _require_case(db, case_id, tenant_id)
+    _require_case(db, case_id, actor.tenant_id)
     record = translate_validation(ForecastVerdictService(db).create_target, case_id, ForecastTargetInput(
         key_factor_id=payload.key_factor_id, report_claim_id=payload.report_claim_id,
         forecast_source_statement_id=payload.forecast_source_statement_id,
@@ -96,7 +103,7 @@ def create_forecast_target(
         forecast_period_start=payload.forecast_period_start, forecast_period_end=payload.forecast_period_end,
         comparator=payload.comparator,
         relative_tolerance=Decimal(str(payload.relative_tolerance)) if payload.relative_tolerance is not None else None,
-        reviewed_by=payload.reviewed_by, review_reason=payload.review_reason,
+        reviewed_by=actor.server_actor, review_reason=payload.review_reason,
     ))
     commit_or_rollback(db)
     source = ForecastVerdictQueries(db)._source(record.forecast_source_statement_id)
@@ -118,15 +125,15 @@ def record_actual_metric_observation(
     case_id: uuid.UUID,
     payload: RecordActualMetricObservationRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> ActualMetricObservationDTO:
-    _require_case(db, case_id, tenant_id)
+    _require_case(db, case_id, actor.tenant_id)
     _target_for_case(db, target_id=payload.forecast_target_id, case_id=case_id)
     record = translate_validation(ForecastVerdictService(db).record_actual, payload.forecast_target_id, ActualObservationInput(
         source_statement_id=payload.source_statement_id, entity_key=payload.entity_key,
         observed_value=Decimal(str(payload.observed_value)), unit=payload.unit,
         observed_period_start=payload.observed_period_start, observed_period_end=payload.observed_period_end,
-        available_at=payload.available_at, recorded_by=payload.recorded_by, record_reason=payload.record_reason,
+        available_at=payload.available_at, recorded_by=actor.server_actor, record_reason=payload.record_reason,
     ))
     commit_or_rollback(db)
     return ActualMetricObservationDTO(
@@ -140,15 +147,17 @@ def record_actual_metric_observation(
 
 @router.post("/forecast-targets/{target_id}/evaluate", response_model=ForecastEvaluationCandidateDTO, status_code=status.HTTP_201_CREATED)
 def evaluate_forecast_target(
+    case_policy: RequireCaseRoute,
     target_id: uuid.UUID,
     payload: EvaluateForecastTargetRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> ForecastEvaluationCandidateDTO:
     target = db.get(ForecastTargetVersion, target_id)
     if target is None:
         raise NotFoundError("forecast target not found")
-    _require_case(db, target.research_case_id, tenant_id)
+    _require_case(db, target.research_case_id, actor.tenant_id)
+    case_policy.require(target.research_case_id)
     record = translate_validation(ForecastVerdictService(db).evaluate, target_id, payload.actual_observation_id, cutoff=payload.cutoff)
     commit_or_rollback(db)
     return ForecastEvaluationCandidateDTO(
@@ -160,15 +169,16 @@ def evaluate_forecast_target(
 
 @router.post("/forecast-evaluations/{candidate_id}/verdicts", response_model=ForecastVerdictDTO, status_code=status.HTTP_201_CREATED)
 def create_forecast_verdict(
+    case_policy: RequireCaseRoute,
     candidate_id: uuid.UUID,
     payload: CreateForecastVerdictRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> ForecastVerdictDTO:
-    target = _case_for_candidate(db, candidate_id, tenant_id)
+    target = _case_for_candidate(db, candidate_id, actor, case_policy)
     record = translate_validation(ForecastVerdictService(db).create_verdict, candidate_id, ForecastVerdictInput(
         decision=payload.decision, outcome=payload.outcome, reason=payload.reason,
-        reviewed_by=payload.reviewed_by, supersedes_id=payload.supersedes_id,
+        reviewed_by=actor.server_actor, supersedes_id=payload.supersedes_id,
     ))
     commit_or_rollback(db)
     return _history_item(db, target.research_case_id, record.id)

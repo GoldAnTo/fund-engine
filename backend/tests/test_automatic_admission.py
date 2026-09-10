@@ -147,6 +147,10 @@ def _seed(
     unit: str | None = "亿元",
     observed_period: str | None = "2026-12-31",
     normalized_text: str = "示例公司2026年12月31日营业收入为100亿元",
+    candidate_quote: str | None = None,
+    candidate_scope: dict | None = None,
+    ai_run_status: str = "success",
+    ai_run_input_extras: dict | None = None,
     request_extras: dict | None = None,
     policy_extras: dict | None = None,
 ) -> AdmissionFixture:
@@ -329,22 +333,25 @@ def _seed(
         input_ref={
             "document_version_id": str(document.id),
             "span_ids": [str(span.id)],
-        },
+        }
+        | (ai_run_input_extras or {}),
         output_summary="fixture extraction",
-        status="success",
-        error=None,
+        status=ai_run_status,
+        error="AI operation failed" if ai_run_status == "partial" else None,
         started_at=NOW,
         finished_at=NOW,
     )
     session.add(ai_run)
     session.flush()
-    quote_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    quote = candidate_quote or text
+    quote_start = text.index(quote)
+    quote_digest = hashlib.sha256(quote.encode("utf-8")).hexdigest()
     candidate = AtomicClaimCandidate(
         source_span_id=span.id,
         canonical_key=uuid.uuid4().hex + uuid.uuid4().hex,
-        quote=text,
-        quote_start=0,
-        quote_end=len(text),
+        quote=quote,
+        quote_start=quote_start,
+        quote_end=quote_start + len(quote),
         quote_sha256=quote_sha256 or quote_digest,
         normalized_text=normalized_text,
         claim_type="disclosed_fact",
@@ -357,7 +364,8 @@ def _seed(
             "numeric_value": numeric_value,
             "unit": unit,
             "observed_period": observed_period,
-            "scope": {"company": "示例公司", "metric": "营业收入"},
+            "scope": candidate_scope
+            or {"company": "示例公司", "metric": "营业收入"},
             "run_ref": f"extract:{ai_run_id}",
         },
         validation_result={
@@ -867,6 +875,47 @@ def test_decision_and_exception_retries_are_idempotent(session) -> None:
     assert _counts(session) == (1, 1, 0, 0, 0)
 
 
+def test_new_gate_version_reuses_existing_quarantine_exception_marker(session) -> None:
+    seeded = _seed(session, subject=None)
+    old_decision = AutomaticAdmissionDecision(
+        job_id=seeded.job.id,
+        candidate_id=seeded.candidate.id,
+        retrieval_artifact_id=seeded.artifact.id,
+        outcome="quarantined",
+        gate_version="b-scope-admission-gates-v2",
+        policy_version=seeded.context.policy_version,
+        gate_results={"semantic": {"passed": False}},
+        created_at=NOW - timedelta(days=1),
+    )
+    session.add(old_decision)
+    session.flush()
+    old_exception = AcquisitionException(
+        job_id=seeded.job.id,
+        source_reference_id=seeded.reference.id,
+        retrieval_artifact_id=seeded.artifact.id,
+        candidate_id=seeded.candidate.id,
+        reason_code="automatic_admission_quarantined",
+        detail_json={
+            "decision_id": str(old_decision.id),
+            "failed_gates": ["semantic"],
+            "reason_codes": {"semantic": "semantic_subject_missing"},
+            "gate_version": old_decision.gate_version,
+            "policy_version": old_decision.policy_version,
+        },
+        created_at=NOW - timedelta(days=1),
+    )
+    session.add(old_exception)
+    session.flush()
+
+    decision = AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+        seeded.candidate, seeded.context
+    )
+
+    assert decision.gate_version == B_SCOPE_GATE_VERSION
+    assert decision.outcome == "quarantined"
+    assert _counts(session) == (2, 1, 0, 0, 0)
+
+
 def test_quarantine_uniqueness_race_reuses_exact_exception_winner(
     session, monkeypatch
 ) -> None:
@@ -1197,6 +1246,12 @@ def test_source_gate_rejects_unauthorized_adapter_provider_or_url_without_crashi
             "provider_identity": "Shanghai Stock Exchange",
         },
         {
+            "adapter_key": "sse",
+            "canonical_url": "https://www.sse.com.cn/report.txt",
+            "final_url": "https://big5.sse.com.cn/site/cht/www.sse.com.cn/report.txt",
+            "provider_identity": "Shanghai Stock Exchange",
+        },
+        {
             "adapter_key": "szse",
             "canonical_url": "https://disc.static.szse.cn/report.txt",
             "final_url": "https://disc.static.szse.cn/report.txt",
@@ -1347,6 +1402,47 @@ def test_temporal_gate_accepts_post_cutoff_backfill_of_pre_cutoff_announcement(
 
     assert decision.outcome == "admitted"
     assert decision.gate_results["temporal"]["passed"] is True
+
+
+def test_temporal_gate_accepts_a_later_fetch_of_identical_frozen_content(
+    session,
+) -> None:
+    seeded = _seed(
+        session,
+        binding_relation="content_duplicate",
+        acquired_at=NOW - timedelta(days=1),
+        retrieved_at=NOW,
+    )
+
+    decision = AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+        seeded.candidate, seeded.context
+    )
+
+    assert decision.outcome == "admitted"
+    assert decision.gate_results["temporal"]["passed"] is True
+
+
+def test_publication_accepts_a_later_fetch_of_identical_frozen_content(
+    session,
+) -> None:
+    seeded = _seed(
+        session,
+        binding_relation="content_duplicate",
+        acquired_at=NOW - timedelta(days=1),
+        retrieved_at=NOW,
+    )
+    decision = AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+        seeded.candidate, seeded.context
+    )
+
+    statement, link = AtomicClaimService(
+        session, clock=lambda: NOW
+    ).publish_automatically(
+        seeded.candidate.id, decision.id, lease_token=LEASE_TOKEN
+    )
+
+    assert statement.id is not None
+    assert link.automatic_admission_decision_id == decision.id
 
 
 def test_temporal_gate_requires_reference_and_document_publication_to_match(
@@ -1593,6 +1689,58 @@ def test_semantic_gate_binds_each_metric_to_its_own_following_value(
     assert decision.gate_results["semantic"]["passed"] is (
         expected_outcome == "admitted"
     )
+
+
+def test_semantic_gate_accepts_primary_table_row_with_page_level_entity_and_period(
+    session,
+) -> None:
+    row = "营业收入 1,317,759,804.17 1,194,055,534.10 10.36"
+    text = (
+        "浙江皇马科技股份有限公司2026年半年度报告\n"
+        "主要会计数据 本报告期（1－6月） 上年同期\n"
+        f"{row}\n"
+    )
+    seeded = _seed(
+        session,
+        text=text,
+        raw_bytes=text.encode(),
+        entity_names=("皇马科技",),
+        metric_terms=("营业收入",),
+        subject="皇马科技",
+        predicate="营业收入",
+        numeric_value=None,
+        unit=None,
+        observed_period="2026-06-30",
+        normalized_text="皇马科技2026年6月30日营业收入为1317759804.17元",
+        candidate_quote=row,
+        candidate_scope={"extraction_method": "financial_table_v1"},
+        ai_run_status="partial",
+        ai_run_input_extras={"rule_fallback": True},
+        request_extras={
+            "period_start": "2025-08-17",
+            "period_end": "2026-08-17",
+        },
+    )
+
+    decision = AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+        seeded.candidate, seeded.context
+    )
+
+    assert decision.outcome == "admitted"
+    assert decision.gate_results["semantic"]["passed"] is True
+
+
+def test_partial_ai_run_cannot_authorize_a_non_table_candidate(session) -> None:
+    seeded = _seed(
+        session,
+        ai_run_status="partial",
+        ai_run_input_extras={"rule_fallback": True},
+    )
+
+    with pytest.raises(ValidationError, match="extraction lineage"):
+        AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+            seeded.candidate, seeded.context
+        )
 
 
 @pytest.mark.parametrize(

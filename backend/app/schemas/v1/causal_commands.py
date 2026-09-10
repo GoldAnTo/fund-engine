@@ -25,7 +25,6 @@ class CreateCausalEdgeRequest(V1Model):
     source_step_id: uuid.UUID
     target_step_id: uuid.UUID
     rationale: str
-    creator_type: str = "human"
 
 
 class CreatedCausalEdgeDTO(V1Model):

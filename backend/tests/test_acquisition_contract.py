@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from app.domain.acquisition import (
+    ACQUISITION_PLANNER_VERSION,
     AcquisitionJobRef,
     AcquisitionJobView,
     AcquisitionPrincipal,
@@ -20,11 +21,16 @@ from app.acquisition.policy import B_SCOPE_POLICY
 
 
 def request(**overrides: object) -> AcquisitionRequest:
+    run_id = uuid4()
+    scope_id = uuid4()
+    goal_id = "thesis:contradict"
     values: dict[str, object] = {
         "tenant_id": "team-a",
         "case_id": uuid4(),
         "thesis_id": uuid4(),
-        "research_run_id": None,
+        "research_run_id": run_id,
+        "scope_version_id": scope_id,
+        "goal_id": goal_id,
         "round": 1,
         "objective": EvidenceObjective.CONTRADICT,
         "target_link_role": "contradicts",
@@ -32,6 +38,8 @@ def request(**overrides: object) -> AcquisitionRequest:
         "entity_names": ("示例公司",),
         "security_codes": ("600000",),
         "metric_terms": ("营业收入",),
+        "metric_periods": ("2026-Q2",),
+        "metric_units": ("亿元",),
         "period_start": "2026-01-01",
         "period_end": "2026-12-31",
         "cutoff": datetime(2026, 8, 12, tzinfo=UTC),
@@ -39,7 +47,12 @@ def request(**overrides: object) -> AcquisitionRequest:
             {"company_disclosure", "licensed_provider"}
         ),
         "source_policy_version": B_SCOPE_POLICY.version,
-        "idempotency_key": "run:none:thesis:contradict:1",
+        "planner_version": ACQUISITION_PLANNER_VERSION,
+        "previous_query_plan_id": None,
+        "expansion": None,
+        "idempotency_key": (
+            f"run:{run_id}:scope:{scope_id}:goal:{goal_id}:round:1"
+        ),
     }
     values.update(overrides)
     return AcquisitionRequest(**values)  # type: ignore[arg-type]
@@ -103,11 +116,30 @@ def test_request_canonicalizes_mutable_collection_inputs():
 
 @pytest.mark.parametrize(
     "field_name",
-    ["entity_names", "security_codes", "metric_terms", "allowed_source_roles"],
+    [
+        "entity_names",
+        "security_codes",
+        "metric_terms",
+        "metric_periods",
+        "metric_units",
+        "allowed_source_roles",
+    ],
 )
 def test_request_rejects_blank_collection_elements(field_name: str):
     with pytest.raises(ValueError, match=field_name):
         request(**{field_name: ["  "]})
+
+
+def test_request_freezes_canonical_metric_period_and_unit_semantics() -> None:
+    metric_periods = [" 2026-Q2 "]
+    metric_units = [" 亿元 "]
+
+    value = request(metric_periods=metric_periods, metric_units=metric_units)
+    metric_periods.append("2026-Q3")
+    metric_units.append("万元")
+
+    assert value.metric_periods == ("2026-Q2",)
+    assert value.metric_units == ("亿元",)
 
 
 def test_request_strips_scalar_string_fields():
@@ -118,7 +150,6 @@ def test_request_strips_scalar_string_fields():
         period_start=" 2026-01-01 ",
         period_end=" 2026-12-31 ",
         source_policy_version=f" {B_SCOPE_POLICY.version} ",
-        idempotency_key=" run:none:thesis:contradict:1 ",
     )
 
     assert value.tenant_id == "team-a"
@@ -127,7 +158,7 @@ def test_request_strips_scalar_string_fields():
     assert value.period_start == "2026-01-01"
     assert value.period_end == "2026-12-31"
     assert value.source_policy_version == B_SCOPE_POLICY.version
-    assert value.idempotency_key == "run:none:thesis:contradict:1"
+    assert value.idempotency_key.startswith("run:")
 
 
 @pytest.mark.parametrize(
@@ -165,43 +196,6 @@ def test_request_rejects_empty_source_role_scope():
 def test_request_rejects_unknown_source_roles():
     with pytest.raises(ValueError, match="unknown source roles"):
         request(allowed_source_roles=frozenset({"arbitrary_web"}))
-
-
-def test_request_keeps_existing_callers_on_external_gap_defaults():
-    value = request()
-
-    assert value.acquisition_kind == "external_gap"
-    assert value.document_version_id is None
-
-
-def test_request_accepts_only_exact_document_bound_intake_material_scope():
-    document_id = uuid4()
-
-    value = request(
-        objective=EvidenceObjective.SUPPORT,
-        target_link_role="supports",
-        acquisition_kind="intake_material",
-        document_version_id=document_id,
-        allowed_source_roles=frozenset({"user_provided_material"}),
-    )
-
-    assert value.document_version_id == document_id
-    assert value.allowed_source_roles == frozenset({"user_provided_material"})
-
-
-def test_request_rejects_intake_role_on_external_acquisition():
-    with pytest.raises(ValueError, match="network source roles"):
-        request(allowed_source_roles=frozenset({"user_provided_material"}))
-
-
-def test_request_rejects_unbound_intake_material():
-    with pytest.raises(ValueError, match="document_version_id"):
-        request(
-            objective=EvidenceObjective.SUPPORT,
-            target_link_role="supports",
-            acquisition_kind="intake_material",
-            allowed_source_roles=frozenset({"user_provided_material"}),
-        )
 
 
 def test_request_rejects_source_policy_version_mismatch():

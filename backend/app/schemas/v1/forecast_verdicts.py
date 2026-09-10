@@ -25,7 +25,6 @@ class CreateForecastTargetRequest(V1Model):
     forecast_period_end: date
     comparator: Literal["at_least", "at_most", "within_tolerance"]
     relative_tolerance: float | None = None
-    reviewed_by: str = Field(min_length=1)
     review_reason: str = Field(min_length=1)
 
 
@@ -38,7 +37,6 @@ class RecordActualMetricObservationRequest(V1Model):
     observed_period_start: date
     observed_period_end: date
     available_at: datetime
-    recorded_by: str = Field(min_length=1)
     record_reason: str = Field(min_length=1)
 
 
@@ -51,7 +49,6 @@ class CreateForecastVerdictRequest(V1Model):
     decision: Literal["confirmed", "modified", "rejected"]
     outcome: Literal["supported", "contradicted", "insufficient_evidence", "not_due"] | None = None
     reason: str = Field(min_length=1)
-    reviewed_by: str = Field(min_length=1)
     supersedes_id: uuid.UUID | None = None
 
 

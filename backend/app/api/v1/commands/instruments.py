@@ -6,6 +6,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.v1.commands.common import (
@@ -13,14 +14,18 @@ from app.api.v1.commands.common import (
     commit_or_rollback,
     translate_validation,
 )
+from app.api.v1.dependencies import RequireCaseRoute, require_case_route_permission
+from app.api.v1.tenant_context import ResearchActor, require_research_actor
 from app.db import get_db
-from app.errors import NotFoundError
+from app.errors import NotFoundError, ValidationFailedError
 from app.models.ledger import (
+    CaseDocumentVersion,
     Company,
     Fund,
     HoldingDisclosure,
     ResearchCase,
     SourceStatement as Statement,
+    SourceSpan,
     Stock,
     ThemeRole,
     ValuationSnapshot,
@@ -49,10 +54,12 @@ def create_company(
     payload: CreateCompanyRequest,
     request: Request,
     db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> Company:
     company = audit_command(
         db,
         request,
+        actor=actor.server_actor,
         action="create_company",
         entity_type="Company",
         payload=payload.model_dump(mode="json"),
@@ -78,6 +85,7 @@ def create_stock(
     payload: CreateStockRequest,
     request: Request,
     db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> Stock:
     company = db.get(Company, company_id)
     if company is None:
@@ -86,6 +94,7 @@ def create_stock(
     stock = audit_command(
         db,
         request,
+        actor=actor.server_actor,
         action="add_stock",
         entity_type="Stock",
         payload=payload.model_dump(mode="json"),
@@ -107,10 +116,12 @@ def create_fund(
     payload: CreateFundRequest,
     request: Request,
     db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> Fund:
     fund = audit_command(
         db,
         request,
+        actor=actor.server_actor,
         action="create_fund",
         entity_type="Fund",
         payload=payload.model_dump(mode="json"),
@@ -139,6 +150,7 @@ def create_holding_disclosure(
     payload: CreateHoldingDisclosureRequest,
     request: Request,
     db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> HoldingDisclosure:
     fund = db.get(Fund, fund_id)
     if fund is None:
@@ -150,6 +162,7 @@ def create_holding_disclosure(
     row = audit_command(
         db,
         request,
+        actor=actor.server_actor,
         action="add_holding_disclosure",
         entity_type="HoldingDisclosure",
         payload=payload.model_dump(mode="json"),
@@ -184,6 +197,7 @@ def create_valuation_snapshot(
     payload: CreateValuationSnapshotRequest,
     request: Request,
     db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> ValuationSnapshot:
     stock = db.get(Stock, stock_id)
     if stock is None:
@@ -192,6 +206,7 @@ def create_valuation_snapshot(
     snapshot = audit_command(
         db,
         request,
+        actor=actor.server_actor,
         action="add_valuation_snapshot",
         entity_type="ValuationSnapshot",
         payload=payload.model_dump(mode="json"),
@@ -214,30 +229,51 @@ def create_valuation_snapshot(
     "/companies/{company_id}/theme-roles",
     response_model=ThemeRoleDTO,
     status_code=201,
+    dependencies=[Depends(require_case_route_permission)],
 )
 def create_theme_role(
+    case_policy: RequireCaseRoute,
     company_id: uuid.UUID,
     payload: CreateThemeRoleRequest,
     request: Request,
     db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> ThemeRole:
     company = db.get(Company, company_id)
     if company is None:
         raise NotFoundError("Company", str(company_id))
     research_case: ResearchCase | None = None
     if payload.research_case_id is not None:
+        case_policy.require(payload.research_case_id)
         research_case = db.get(ResearchCase, payload.research_case_id)
         if research_case is None:
             raise NotFoundError("ResearchCase", str(payload.research_case_id))
     source_statement: Statement | None = None
     if payload.source_statement_id is not None:
-        source_statement = db.get(Statement, payload.source_statement_id)
+        if research_case is None:
+            raise ValidationFailedError(
+                "source_statement_id requires research_case_id"
+            )
+        source_statement = db.scalar(
+            select(Statement)
+            .join(SourceSpan, SourceSpan.id == Statement.source_span_id)
+            .join(
+                CaseDocumentVersion,
+                CaseDocumentVersion.document_version_id
+                == SourceSpan.document_version_id,
+            )
+            .where(
+                Statement.id == payload.source_statement_id,
+                CaseDocumentVersion.research_case_id == research_case.id,
+            )
+        )
         if source_statement is None:
             raise NotFoundError("Statement", str(payload.source_statement_id))
 
     row = audit_command(
         db,
         request,
+        actor=actor.server_actor,
         action="add_theme_role",
         entity_type="ThemeRole",
         payload=payload.model_dump(mode="json"),

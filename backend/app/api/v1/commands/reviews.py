@@ -4,12 +4,11 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.v1.commands.common import commit_or_rollback, translate_validation
-from app.api.v1.tenant_context import require_research_tenant
-from app.services.case_tenant_access import CaseTenantAccess
-from app.services.review_tenant_access import ReviewTenantAccess
+from app.api.v1.tenant_context import ResearchActor, require_research_actor
 from app.db import get_db
 from app.errors import NotFoundError
 from app.queries.review_queue import ReviewQueueQueries
@@ -26,20 +25,30 @@ from app.schemas.v1.commands import (
 from app.services.assessment import AssessmentService
 from app.services.auto_research import AutoResearchService
 from app.services.review import ReviewService
+from app.services.case_tenant_access import CaseTenantAccess
+from app.api.v1.dependencies import RequireCaseRoute
+from app.models.ledger import AIAssessment, EvidenceLink, EvidenceSnapshot, Thesis
 
 router = APIRouter(tags=["review-commands-v1"])
 
 
 @router.get("/review-queue", response_model=ReviewQueueResponse)
 def review_queue(
+    case_policy: RequireCaseRoute,
     case_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
     if case_id is not None:
-        CaseTenantAccess(db).require_case(case_id, tenant_id)
-    return ReviewQueueQueries(db).list_items(case_id=case_id, limit=limit, tenant_id=tenant_id)
+        CaseTenantAccess(db).require_case(case_id, actor.tenant_id)
+        case_policy.require(case_id)
+    return ReviewQueueQueries(db).list_items(
+        case_id=case_id,
+        tenant_id=actor.tenant_id,
+        authorized_case_ids=case_policy.authorized_case_ids(),
+        limit=limit,
+    )
 
 
 @router.post(
@@ -48,12 +57,22 @@ def review_queue(
     status_code=status.HTTP_201_CREATED,
 )
 def review_link(
+    case_policy: RequireCaseRoute,
     link_id: uuid.UUID,
     payload: LinkReviewRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
-    ReviewTenantAccess(db).require_link(link_id, tenant_id)
+    case_id = db.scalar(
+        select(Thesis.research_case_id)
+        .select_from(EvidenceLink)
+        .join(Thesis, Thesis.id == EvidenceLink.thesis_id)
+        .where(EvidenceLink.id == link_id)
+    )
+    if case_id is None:
+        raise NotFoundError(f"evidence link {link_id} not found")
+    CaseTenantAccess(db).require_case(case_id, actor.tenant_id)
+    case_policy.require(case_id)
     review = translate_validation(
         ReviewService(ResearchRepository(db)).review_link,
         link_id,
@@ -62,7 +81,7 @@ def review_link(
         factor_role=payload.factor_role,
         scope_boundary=payload.scope_boundary,
         reason=payload.reason,
-        reviewer=payload.reviewer,
+        reviewer=actor.server_actor,
     )
     commit_or_rollback(db)
     return LinkReviewResponse(
@@ -86,28 +105,38 @@ def review_link(
     status_code=status.HTTP_201_CREATED,
 )
 def review_assessment(
+    case_policy: RequireCaseRoute,
     assessment_id: uuid.UUID,
     payload: AssessmentReviewRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
-    case_id = ReviewTenantAccess(db).require_assessment(assessment_id, tenant_id)
     repo = ResearchRepository(db)
     if repo.get_ai_assessment(assessment_id) is None:
         raise NotFoundError(f"assessment {assessment_id} not found")
+    case_id = db.scalar(
+        select(Thesis.research_case_id)
+        .select_from(AIAssessment)
+        .join(EvidenceSnapshot, EvidenceSnapshot.id == AIAssessment.snapshot_id)
+        .join(Thesis, Thesis.id == EvidenceSnapshot.thesis_id)
+        .where(AIAssessment.id == assessment_id)
+    )
+    if case_id is None:
+        raise NotFoundError(f"assessment {assessment_id} not found")
+    CaseTenantAccess(db).require_case(case_id, actor.tenant_id)
+    case_policy.require(case_id)
     review = translate_validation(
         AssessmentService(repo, db).review,
         assessment_id,
         outcome=payload.outcome,
         conclusion=payload.conclusion,
         reason=payload.reason,
-        reviewer=payload.reviewer,
+        reviewer=actor.server_actor,
     )
     TaskRepository(db).close_review_task(
         task_type="review_assessment",
         ref_type="ai_assessment",
         ref_id=assessment_id,
-        research_case_id=case_id,
     )
     AutoResearchService(db).reconcile_runs_for_output(
         key="assessment_id",

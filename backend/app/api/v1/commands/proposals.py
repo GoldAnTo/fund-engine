@@ -12,32 +12,24 @@ the whole endpoint is idempotency-key protected at the route layer.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.commands.common import (
     commit_or_rollback,
-    resolve_actor,
     translate_validation,
 )
-from app.api.v1.tenant_context import require_research_tenant
-from app.services.case_tenant_access import CaseTenantAccess
-from app.services.review_tenant_access import ReviewTenantAccess
+from app.api.v1.tenant_context import ResearchActor, require_research_actor
 from app.db import get_db
 from app.errors import ConflictError, NotFoundError
 from app.models.ledger import ValidationError
-from app.models.proposals import ProposalReviewDecision
-from app.queries.review_queue import ReviewQueueQueries
 from app.queries.review_queue import proposal_evidence_context
 from app.repositories.operational import ReviewAssignmentRepository, TaskRepository
 from app.repositories.proposals import ProposalRepository
 from app.services.auto_research import AutoResearchService
 from app.schemas.v1.operational import (
-    ActivityItemDTO,
     ClaimResponse,
-    JobDTO,
     ProposalItemDTO,
     ReviewDecisionDTO,
     ReviewDecisionRequest,
@@ -45,39 +37,44 @@ from app.schemas.v1.operational import (
 )
 from app.services.proposal_publisher import ProposalPublisher, final_evidence_payload
 from app.services.proposals import ProposalService, ReviewConflictError
+from app.services.case_tenant_access import CaseTenantAccess
+from app.api.v1.dependencies import RequireCaseRoute
 
 router = APIRouter(tags=["proposal-review-commands-v1"])
 
 
 @router.get("/review-proposals", response_model=ReviewQueueResponse)
 def list_proposals(
+    case_policy: RequireCaseRoute,
     kind: str | None = Query(default=None),
     case_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
     if case_id is not None:
-        CaseTenantAccess(db).require_case(case_id, tenant_id)
+        case_policy.require(case_id)
     proposals = ProposalRepository(db).pending_for_case(
-        case_id=case_id, kind=kind, limit=limit, tenant_id=tenant_id
+        case_id=case_id,
+        kind=kind,
+        limit=limit,
+        authorized_case_ids=case_policy.authorized_case_ids(),
     )
-    items = []
-    for p in proposals:
-        withheld = p.kind == "evidence_link" and proposal_evidence_context(db, p).display_withheld
-        items.append(ProposalItemDTO(
+    items = [
+        ProposalItemDTO(
             id=str(p.id),
             kind=p.kind,
-            payload={} if withheld else p.payload,
-            target_context={} if withheld else p.target_context,
-            display_withheld=withheld,
+            payload=p.payload,
+            target_context=p.target_context,
             proposed_by_type=p.proposed_by_type,
             proposed_by_ref=p.proposed_by_ref,
             proposed_at=p.proposed_at.isoformat(),
             basis_cutoff=p.basis_cutoff.isoformat() if p.basis_cutoff else None,
             status=p.status,
             version=p.version,
-        ))
+        )
+        for p in proposals
+    ]
     return ReviewQueueResponse(items=items)
 
 
@@ -87,15 +84,20 @@ def list_proposals(
     status_code=status.HTTP_201_CREATED,
 )
 def claim_proposal(
+    case_policy: RequireCaseRoute,
     proposal_id: uuid.UUID,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
-    ReviewTenantAccess(db).require_proposal(proposal_id, tenant_id)
+    proposal = ProposalRepository(db).get_proposal(proposal_id)
+    if proposal is None or proposal.research_case_id is None:
+        raise NotFoundError(f"pending proposal {proposal_id} not found")
+    case_policy.require(proposal.research_case_id)
     assignment = translate_validation(
         _claim,
         proposal_id,
         db,
+        actor.server_actor,
     )
     commit_or_rollback(db)
     return ClaimResponse(
@@ -110,13 +112,12 @@ def claim_proposal(
     )
 
 
-def _claim(proposal_id: uuid.UUID, db: Session):
+def _claim(proposal_id: uuid.UUID, db: Session, actor: str):
     from app.models.proposals import Proposal
 
     proposal = db.get(Proposal, proposal_id)
     if proposal is None or proposal.status != "pending":
         raise NotFoundError(f"pending proposal {proposal_id} not found")
-    actor = resolve_actor_plain(proposal_id)
     return ReviewAssignmentRepository(db).claim(
         proposal_id=proposal_id,
         assignee=actor,
@@ -130,17 +131,23 @@ def _claim(proposal_id: uuid.UUID, db: Session):
     status_code=status.HTTP_201_CREATED,
 )
 def decide_proposal(
+    case_policy: RequireCaseRoute,
     proposal_id: uuid.UUID,
     payload: ReviewDecisionRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
-    ReviewTenantAccess(db).require_proposal(proposal_id, tenant_id)
+    proposal = ProposalRepository(db).get_proposal(proposal_id)
+    if proposal is None or proposal.research_case_id is None:
+        raise NotFoundError(f"pending proposal {proposal_id} not found")
+    CaseTenantAccess(db).require_case(proposal.research_case_id, actor.tenant_id)
+    case_policy.require(proposal.research_case_id)
     decision, published_id = translate_validation(
         _decide,
         proposal_id,
         payload,
         db,
+        actor.server_actor,
     )
     commit_or_rollback(db)
     return ReviewDecisionDTO(
@@ -156,7 +163,10 @@ def decide_proposal(
 
 
 def _decide(
-    proposal_id: uuid.UUID, payload: ReviewDecisionRequest, db: Session
+    proposal_id: uuid.UUID,
+    payload: ReviewDecisionRequest,
+    db: Session,
+    reviewer_id: str,
 ):
     proposal = ProposalRepository(db).get_proposal(proposal_id)
     final_payload = (
@@ -180,16 +190,15 @@ def _decide(
         raise ValidationError(
             "event evidence source cannot be accepted for formal publication"
         )
-    actor = resolve_actor_plain(proposal_id)
     try:
         decision = ProposalService(db).decide(
             proposal_id=proposal_id,
             outcome=payload.outcome,
             reason=payload.reason,
-            reviewer_id=payload.reviewer_id,
+            reviewer_id=reviewer_id,
             expected_proposal_version=payload.expected_version,
             replacement_payload=payload.replacement_payload,
-            actor=actor,
+            actor=reviewer_id,
         )
     except ReviewConflictError as exc:
         raise ConflictError(str(exc)) from exc
@@ -206,7 +215,6 @@ def _decide(
         task_type="review_proposal",
         ref_type="proposal",
         ref_id=proposal_id,
-        research_case_id=proposal.research_case_id if proposal is not None else None,
     )
     AutoResearchService(db).reconcile_runs_for_output(
         key="proposed_proposal_ids",
@@ -226,10 +234,3 @@ def _decide(
             if thesis is not None:
                 AutoResearchService(db).continue_after_key_review(thesis.research_case_id)
     return decision, published_id
-
-
-def resolve_actor_plain(proposal_id: uuid.UUID) -> str:
-    """Best-effort actor; review endpoints currently run without auth (the
-    reviewer id is supplied by the client).  Once auth lands, this resolves
-    from the principal instead."""
-    return "human:anonymous"

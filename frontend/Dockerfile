@@ -1,16 +1,27 @@
-FROM node:24-alpine AS build
+FROM node:22-alpine AS build
 
 WORKDIR /app
-
 COPY package.json package-lock.json ./
 RUN npm ci
-
 COPY . .
-RUN npm run build
+
+ARG VITE_OIDC_AUTHORITY
+ARG VITE_OIDC_CLIENT_ID
+ARG VITE_OIDC_SCOPE="openid profile email"
+ARG VITE_OIDC_REDIRECT_URI
+ARG VITE_OIDC_SILENT_REDIRECT_URI
+ARG VITE_OIDC_POST_LOGOUT_REDIRECT_URI
+ENV VITE_OIDC_AUTHORITY=$VITE_OIDC_AUTHORITY \
+    VITE_OIDC_CLIENT_ID=$VITE_OIDC_CLIENT_ID \
+    VITE_OIDC_SCOPE=$VITE_OIDC_SCOPE \
+    VITE_OIDC_REDIRECT_URI=$VITE_OIDC_REDIRECT_URI \
+    VITE_OIDC_SILENT_REDIRECT_URI=$VITE_OIDC_SILENT_REDIRECT_URI \
+    VITE_OIDC_POST_LOGOUT_REDIRECT_URI=$VITE_OIDC_POST_LOGOUT_REDIRECT_URI
+RUN test -n "$VITE_OIDC_AUTHORITY" \
+    && test -n "$VITE_OIDC_CLIENT_ID" \
+    && npm run build
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine
-
-COPY nginx.one-click.conf.template /etc/nginx/templates/default.conf.template
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
-
 EXPOSE 8080

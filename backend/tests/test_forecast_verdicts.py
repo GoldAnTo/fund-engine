@@ -55,7 +55,6 @@ def test_source_statement_options_preserve_utc_availability_after_sqlite_reload(
         "raw_input": "验证实际披露来源时间", "event_title": "火星人年报验证",
         "company_name": "火星人", "ticker": "300894.SZ",
         "research_question": "实际值何时可得？", "candidate_factors": ["归母净利润", "毛利率", "渠道费用"],
-        "created_by": "tester",
     }).json()["case_id"])
     available_at = datetime(2024, 4, 22, 8, 0, tzinfo=timezone.utc)
     document = DocumentVersion(
@@ -113,7 +112,6 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
         "ticker": "300894.SZ",
         "research_question": "预测是否兑现？",
         "candidate_factors": ["归母净利润", "毛利率", "渠道费用"],
-        "created_by": "tester",
     })
     assert case_response.status_code == 201, case_response.text
     case_id = uuid.UUID(case_response.json()["case_id"])
@@ -201,10 +199,11 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
         "baseline_value": 315000000, "expected_value": 455000000, "unit": "CNY",
         "forecast_period_start": "2023-01-01", "forecast_period_end": "2023-12-31",
         "comparator": "within_tolerance", "relative_tolerance": 0.10,
-        "reviewed_by": "human:reviewer", "review_reason": "冻结研报表格数值。",
+        "review_reason": "冻结研报表格数值。",
     })
     assert target_response.status_code == 201, target_response.text
     target_body = target_response.json()
+    assert target_body["reviewed_by"] == "user:test-team"
     for source_name in ("forecast_source", "baseline_source"):
         assert target_body[source_name]["available_at"].endswith(("Z", "+00:00"))
     target_id = target_response.json()["id"]
@@ -212,10 +211,11 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
         "forecast_target_id": target_id, "source_statement_id": str(actual_statement.id),
         "entity_key": "300894.SZ", "observed_value": 247245713.03, "unit": "CNY",
         "observed_period_start": "2023-01-01", "observed_period_end": "2023-12-31",
-        "available_at": actual_at_local.isoformat(), "recorded_by": "human:reviewer",
+        "available_at": actual_at_local.isoformat(),
         "record_reason": "年报第123页审计口径。",
     })
     assert actual_response.status_code == 201, actual_response.text
+    assert actual_response.json()["recorded_by"] == "user:test-team"
     actual_id = uuid.UUID(actual_response.json()["id"])
     assert actual_response.json()["available_at"] in {
         "2024-04-22T00:00:00Z", "2024-04-22T00:00:00+00:00",
@@ -250,9 +250,9 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
     verdict_response = cmd_client.post(f"/api/v1/forecast-evaluations/{candidate['id']}/verdicts", json={
         "decision": "confirmed", "outcome": None,
         "reason": "实际值显著低于冻结预测，确认未兑现。",
-        "reviewed_by": "human:reviewer",
     })
     assert verdict_response.status_code == 201, verdict_response.text
+    assert verdict_response.json()["reviewed_by"] == "user:test-team"
 
     assert candidate["outcome"] == "contradicted"
     assert candidate["review_state"] == "machine_generated"

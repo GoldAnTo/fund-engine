@@ -1,0 +1,103 @@
+/// <reference types="vite/client" />
+import type { Conclusion, ReviewOutcome } from "../domain/types";
+import type { ActiveResearchClient } from "../domain/prototypeTypes";
+import { HttpResearchAdapter } from "./httpResearchAdapter";
+
+// The application always reads from the real HTTP ledger by default. Use an
+// explicit VITE_RESEARCH_API_URL when the API is on another origin; otherwise
+// the same-origin /api/v1 path works with the Vite proxy and production host.
+// MockResearchAdapter remains available only through explicit setResearchClient
+// calls in tests and prototypes.
+function defaultClient(): ActiveResearchClient {
+  const baseUrl = import.meta.env.VITE_RESEARCH_API_URL || "/api/v1";
+  return new HttpResearchAdapter({
+    baseUrl: baseUrl.replace(/\/$/, ""),
+  });
+}
+
+let _client: ActiveResearchClient = defaultClient();
+
+export function setResearchClient(client: ActiveResearchClient): void {
+  _client = client;
+}
+
+export function resetResearchClient(): void {
+  _client = defaultClient();
+}
+
+export const researchClient: ActiveResearchClient = {
+  extractEventResearch: (input) => _client.extractEventResearch(input),
+  createEventResearch: (input) => _client.createEventResearch(input),
+  attachEventMaterial: (input) => _client.attachEventMaterial(input),
+  uploadEventMaterial: (input) => _client.uploadEventMaterial(input),
+  listEventResearch: (status) => _client.listEventResearch(status),
+  getEventWorkflow: (caseId, options) => _client.getEventWorkflow(caseId, options),
+  getCaseRuntimeStatus: (caseId, options) => {
+    if (!_client.getCaseRuntimeStatus) {
+      return Promise.reject(new Error("运行状态接口不可用"));
+    }
+    return _client.getCaseRuntimeStatus(caseId, options);
+  },
+  getEventWorkflowLedger: (caseId, options) =>
+    _client.getEventWorkflowLedger(caseId, options),
+  confirmEventWorkflow: (caseId, scopeVersionId, options) =>
+    _client.confirmEventWorkflow(caseId, scopeVersionId, options),
+  resumeProtocolWorkflow: (caseId, scopeVersionId, options) =>
+    _client.resumeProtocolWorkflow(caseId, scopeVersionId, options),
+  decideEventScope: (caseId, decision, options) =>
+    _client.decideEventScope(caseId, decision, options),
+  getEventWorkbench: (caseId) => _client.getEventWorkbench(caseId),
+  getEventConclusionHistory: (caseId) => _client.getEventConclusionHistory(caseId),
+  continueEventResearch: (input) => _client.continueEventResearch(input),
+  decidePublishedMaterial: (input) => _client.decidePublishedMaterial(input),
+  decidePublishedUploadedMaterial: (input) =>
+    _client.decidePublishedUploadedMaterial(input),
+  updateEventResearchScope: (input) => _client.updateEventResearchScope(input),
+  getEventReviewQueue: (caseId) => _client.getEventReviewQueue(caseId),
+  publishEventConclusion: (input) => _client.publishEventConclusion(input),
+  getOverview: (q) => _client.getOverview(q),
+  getCaseDossier: (id, q) => _client.getCaseDossier(id, q),
+  getRelationshipGraph: (id, q) => _client.getRelationshipGraph(id, q),
+  getDocuments: (q) => _client.getDocuments(q),
+  getDocumentDetail: (id, caseId) => _client.getDocumentDetail(id, caseId),
+  getReviewQueue: () => _client.getReviewQueue(),
+  search: (q) => _client.search(q),
+  getCaseSummaries: () => _client.getCaseSummaries(),
+  createResearchTask: (input) => _client.createResearchTask(input),
+  updateResearchTask: (taskId, status, assignee) =>
+    _client.updateResearchTask(taskId, status, assignee),
+  submitReviewDecision: (itemId, decision) =>
+    _client.submitReviewDecision(itemId, decision),
+  createCase: (input) => _client.createCase(input),
+  listCaseSummaries: () => _client.listCaseSummaries(),
+  getCaseWorkbenchView: (id, options) =>
+    _client.getCaseWorkbenchView(id, options),
+  getRelationshipGraphView: (id, thesisId) =>
+    _client.getRelationshipGraphView(id, thesisId),
+  getReviewQueueView: (caseId) => _client.getReviewQueueView(caseId),
+  submitLinkReview: (linkId, payload) =>
+    _client.submitLinkReview(linkId, payload),
+  reviewAssessment: (assessmentId, payload) =>
+    _client.reviewAssessment(assessmentId, payload),
+  rerunThesis: (thesisId) => _client.rerunThesis(thesisId),
+  proposeEvidence: (thesisId) => _client.proposeEvidence(thesisId),
+  ingestDocuments: (caseId, extra) => _client.ingestDocuments(caseId, extra),
+  extractStatements: (versionId) => _client.extractStatements(versionId),
+  getDataCenterMetric: (stockId, metricName) =>
+    _client.getDataCenterMetric(stockId, metricName),
+  listCompanies: (query, cursor) => _client.listCompanies(query, cursor),
+  getCompanyDossier: (companyId, opts) =>
+    _client.getCompanyDossier(companyId, opts),
+  listThemes: () => _client.listThemes(),
+  getThemeView: (tag, opts) => _client.getThemeView(tag, opts),
+  getConclusionView: (caseId, opts) => _client.getConclusionView(caseId, opts),
+  listResearchRuns: (caseId) => _client.listResearchRuns(caseId),
+  getResearchRun: (runId) => _client.getResearchRun(runId),
+  startResearchRun: (caseId, options) => _client.startResearchRun(caseId, options),
+  cancelResearchRun: (runId) => _client.cancelResearchRun(runId),
+  listReviewProposals: (caseId) => _client.listReviewProposals(caseId),
+  reviewProposal: (proposalId, payload) => _client.reviewProposal(proposalId, payload),
+};
+
+// Re-export common types so call sites don't need to dig into the adapter.
+export type { Conclusion, ReviewOutcome };

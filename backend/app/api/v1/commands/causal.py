@@ -8,11 +8,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.v1.commands.common import commit_or_rollback, translate_validation
-from app.api.v1.tenant_context import require_research_tenant
-from app.services.review_tenant_access import ReviewTenantAccess
+from app.api.v1.tenant_context import ResearchActor, require_research_actor
 from app.db import get_db
 from app.errors import NotFoundError
-from app.models.ledger import CausalEdge, CausalStep
+from app.models.ledger import CausalEdge, CausalStep, Thesis
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.causal_commands import (
     CreateCausalEdgeRequest,
@@ -20,6 +19,7 @@ from app.schemas.v1.causal_commands import (
     CreateCausalStepRequest,
     CreatedCausalStepDTO,
 )
+from app.api.v1.dependencies import RequireCaseRoute
 from app.services.research import ResearchService
 
 router = APIRouter(tags=["causal-commands-v1"])
@@ -29,18 +29,27 @@ def _service(db: Session) -> ResearchService:
     return ResearchService(ResearchRepository(db))
 
 
+def _get_thesis(db: Session, thesis_id: uuid.UUID) -> Thesis:
+    thesis = db.get(Thesis, thesis_id)
+    if thesis is None:
+        raise NotFoundError("Thesis", str(thesis_id))
+    return thesis
+
+
 @router.post(
     "/theses/{thesis_id}/causal-steps",
     response_model=CreatedCausalStepDTO,
     status_code=201,
 )
 def create_causal_step(
+    case_policy: RequireCaseRoute,
     thesis_id: uuid.UUID,
     payload: CreateCausalStepRequest,
-    tenant_id: str = Depends(require_research_tenant),
     db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> CausalStep:
-    thesis = ReviewTenantAccess(db).require_thesis(thesis_id, tenant_id)
+    thesis = _get_thesis(db, thesis_id)
+    case_policy.require(thesis.research_case_id)
     step = translate_validation(
         _service(db).add_causal_step,
         thesis,
@@ -57,17 +66,19 @@ def create_causal_step(
     status_code=201,
 )
 def create_causal_edge(
+    case_policy: RequireCaseRoute,
     thesis_id: uuid.UUID,
     payload: CreateCausalEdgeRequest,
-    tenant_id: str = Depends(require_research_tenant),
     db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> CausalEdge:
-    thesis = ReviewTenantAccess(db).require_thesis(thesis_id, tenant_id)
+    thesis = _get_thesis(db, thesis_id)
+    case_policy.require(thesis.research_case_id)
     source_step = db.get(CausalStep, payload.source_step_id)
-    if source_step is None or source_step.thesis_id != thesis.id:
+    if source_step is None:
         raise NotFoundError("CausalStep", str(payload.source_step_id))
     target_step = db.get(CausalStep, payload.target_step_id)
-    if target_step is None or target_step.thesis_id != thesis.id:
+    if target_step is None:
         raise NotFoundError("CausalStep", str(payload.target_step_id))
 
     edge = translate_validation(
@@ -76,7 +87,7 @@ def create_causal_edge(
         source_step=source_step,
         target_step=target_step,
         rationale=payload.rationale,
-        creator_type=payload.creator_type,
+        creator_type="human",
     )
     commit_or_rollback(db)
     return edge

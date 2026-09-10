@@ -5,12 +5,12 @@ and evidence-changes feeds (§8.7), and the task queue (§8.1 / §8.7).
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import Field
 
-from app.schemas.v1.common import CursorPage, V1Model
+from app.schemas.v1.common import V1Model
 
 
 # --------------------------------------------------------------------------- #
@@ -27,14 +27,12 @@ class ProposalItemDTO(V1Model):
     basis_cutoff: str | None = None
     status: str
     version: int
-    display_withheld: bool = False
 
 
 class ReviewDecisionRequest(V1Model):
     outcome: Literal["confirmed", "modified", "rejected", "needs_more_evidence"]
     reason: str = Field(min_length=1)
     expected_version: int = Field(ge=1)
-    reviewer_id: str = Field(min_length=1)
     replacement_payload: dict[str, Any] | None = None
 
 
@@ -72,6 +70,9 @@ class JobDTO(V1Model):
     status: str
     progress: int
     attempt: int
+    failure_count: int
+    next_retry_at: str | None = None
+    retry_policy_version: str | None = None
     step: str | None = None
     error: str | None = None
     cancel_requested: bool
@@ -132,12 +133,12 @@ class TaskCreateRequest(V1Model):
     ref_type: str | None = None
     ref_id: str | None = None
     research_case_id: str | None = None
-    assignee: str | None = None
+    assignee: UUID | None = None
 
 
 class TaskUpdateRequest(V1Model):
     status: Literal["open", "in_progress", "done", "cancelled"]
-    assignee: str | None = None
+    assignee: UUID | None = None
 
 
 class TaskItemDTO(V1Model):

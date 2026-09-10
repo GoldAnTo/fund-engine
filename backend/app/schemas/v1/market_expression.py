@@ -44,7 +44,6 @@ class RegisterReportClaimRequest(V1Model):
     claim_kind: Literal["disclosed_fact", "forecast", "research_opinion"]
     asserted_period: date | None = None
     asserted_by: str = Field(min_length=1)
-    reviewed_by: str = Field(min_length=1)
     review_reason: str = Field(min_length=1)
 
 
@@ -60,13 +59,11 @@ class RegisterKeyFactorRequest(V1Model):
     support_condition: str = Field(min_length=1)
     refutation_condition: str = Field(min_length=1)
     next_verification_event: str = Field(min_length=1)
-    reviewed_by: str = Field(min_length=1)
     review_reason: str = Field(min_length=1)
 
 
 class StartKeyFactorCandidateRunRequest(V1Model):
     source_statement_id: uuid.UUID
-    requested_by: str = Field(min_length=1)
 
 
 class KeyFactorCandidateDTO(V1Model):
@@ -104,7 +101,6 @@ class RegisterClaimVerificationRequest(V1Model):
     source_statement_id: uuid.UUID
     outcome: Literal["supported", "contradicted", "insufficient_evidence", "not_due"]
     rationale: str = Field(min_length=1)
-    reviewed_by: str = Field(min_length=1)
     review_reason: str = Field(min_length=1)
 
 
@@ -113,7 +109,6 @@ class RegisterMarketInstrumentBindingRequest(V1Model):
     stock_id: uuid.UUID | None = None
     source_statement_id: uuid.UUID
     relationship_role: Literal["directly_affected", "supply_chain", "competitor", "beneficiary", "risk_exposure"]
-    reviewed_by: str = Field(min_length=1)
     review_reason: str = Field(min_length=1)
 
 
@@ -123,7 +118,6 @@ class RegisterFundamentalImpactRequest(V1Model):
     metric_name: str = Field(min_length=1)
     expected_direction: Literal["positive", "negative", "neutral"]
     rationale: str = Field(min_length=1)
-    reviewed_by: str = Field(min_length=1)
     review_reason: str = Field(min_length=1)
 
 
@@ -137,7 +131,6 @@ class RegisterMarketObservationRequest(V1Model):
     price_source: str = Field(min_length=1)
     after_hours_treatment: str = Field(min_length=1)
     relative_return: float | None = None
-    reviewed_by: str = Field(min_length=1)
     review_reason: str = Field(min_length=1)
 
 

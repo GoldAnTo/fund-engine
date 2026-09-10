@@ -6,11 +6,11 @@ from datetime import date, datetime, timezone
 
 from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
 from app.models.ledger import (
     AIAssessment,
     CaseTenantAdmission,
-    CaseDocumentVersion,
     CaseThemeTagEvent,
     CausalEdge,
     CausalStep,
@@ -383,21 +383,6 @@ class ResearchRepository:
             )
         )
 
-    def document_attached_to_case(self, document_id: uuid.UUID, case_id: uuid.UUID) -> bool:
-        return self._session.scalar(select(CaseDocumentVersion.id).where(
-            CaseDocumentVersion.document_version_id == document_id,
-            CaseDocumentVersion.research_case_id == case_id,
-        ).limit(1)) is not None
-
-    def get_thesis(self, thesis_id: uuid.UUID) -> Thesis | None:
-        return self._session.get(Thesis, thesis_id)
-
-    def source_contract_for_document(self, document_id: uuid.UUID):
-        from app.models.source_governance import SourceContract
-        return self._session.scalar(select(SourceContract).where(
-            SourceContract.document_version_id == document_id,
-        ))
-
     def visible_links(
         self,
         *,
@@ -625,6 +610,7 @@ class ResearchRepository:
         after_created_at: datetime | None = None,
         after_id: uuid.UUID | None = None,
         tenant_id: str | None = None,
+        authorized_case_ids: Select[tuple[uuid.UUID]] | None = None,
     ) -> list[ResearchCase]:
         """Return up to ``limit + 1`` cases newest-first for cursor pagination."""
         query = select(ResearchCase).order_by(
@@ -635,6 +621,8 @@ class ResearchRepository:
                 CaseTenantAdmission,
                 CaseTenantAdmission.research_case_id == ResearchCase.id,
             ).where(CaseTenantAdmission.tenant_id == tenant_id)
+        if authorized_case_ids is not None:
+            query = query.where(ResearchCase.id.in_(authorized_case_ids))
         if after_created_at is not None and after_id is not None:
             query = query.where(
                 tuple_(ResearchCase.created_at, ResearchCase.id)

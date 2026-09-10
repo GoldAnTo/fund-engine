@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.v1.commands.common import commit_or_rollback, translate_validation
@@ -30,11 +29,12 @@ from app.domain.atomic_claims import AtomicClaimDraft
 from app.services.atomic_claims import AtomicClaimService
 from app.services.auto_research import AutoResearchService
 from app.repositories.operational import TaskRepository
-from app.api.v1.tenant_context import require_research_tenant
+from app.api.v1.tenant_context import ResearchActor, require_research_actor, require_research_tenant
 from app.services.case_tenant_access import CaseTenantAccess
 from app.models.ledger import CaseTenantAdmission
 from app.models.source_governance import SourceContract
 from app.services.source_admission import source_contract_is_active
+from app.api.v1.dependencies import RequireCaseRoute
 
 
 router = APIRouter(
@@ -46,16 +46,24 @@ def _require_case(db: Session, case_id: uuid.UUID, tenant_id: str) -> None:
     CaseTenantAccess(db).require_case(case_id, tenant_id)
 
 
-def _require_candidate_tenant(db: Session, candidate_id: uuid.UUID, tenant_id: str) -> None:
+def _require_candidate_review(
+    db: Session,
+    candidate_id: uuid.UUID,
+    actor: ResearchActor,
+    case_policy: RequireCaseRoute,
+) -> None:
     """A global candidate can be reviewed only when every admitted Case using
     its frozen document belongs to the caller's tenant.
 
     This prevents one tenant's irreversible review from changing another
     tenant's view of a deduplicated source document.
     """
-    tenants = set(
-        db.scalars(
-            select(CaseTenantAdmission.tenant_id)
+    rows = list(
+        db.execute(
+            select(
+                CaseTenantAdmission.research_case_id,
+                CaseTenantAdmission.tenant_id,
+            )
             .join(
                 CaseDocumentVersion,
                 CaseDocumentVersion.research_case_id
@@ -67,21 +75,13 @@ def _require_candidate_tenant(db: Session, candidate_id: uuid.UUID, tenant_id: s
             .where(AtomicClaimCandidate.id == candidate_id)
         )
     )
-    if tenants != {tenant_id}:
+    if not rows or {tenant_id for _, tenant_id in rows} != {actor.tenant_id}:
         # Hide both foreign candidates and shared cross-tenant candidates. The
         # latter require a future Case-scoped review record, not a global one.
         from app.errors import NotFoundError
         raise NotFoundError("atomic claim candidate not found")
-
-    contract = db.scalar(
-        select(SourceContract)
-        .join(SourceSpan, SourceSpan.document_version_id == SourceContract.document_version_id)
-        .join(AtomicClaimCandidate, AtomicClaimCandidate.source_span_id == SourceSpan.id)
-        .where(AtomicClaimCandidate.id == candidate_id)
-    )
-    if contract is not None and (not contract.allow_display or not source_contract_is_active(contract)):
-        from app.errors import NotFoundError
-        raise NotFoundError("atomic claim candidate not found")
+    for case_id, _tenant_id in rows:
+        case_policy.require(case_id)
 
 
 def _statement_dto(value: SourceStatement | None) -> PublishedSourceStatementDTO | None:
@@ -121,7 +121,7 @@ def _candidate_dto(
         db.scalars(
             select(AtomicClaimReview)
             .where(AtomicClaimReview.atomic_claim_candidate_id == candidate.id)
-            .order_by(AtomicClaimReview.created_at.asc(), AtomicClaimReview.id.asc())
+            .order_by(AtomicClaimReview.created_at.asc())
         )
     )
     latest = reviews[-1] if reviews else None
@@ -161,54 +161,26 @@ def list_atomic_claims(
     case_id: uuid.UUID,
     review_state: str | None = Query(default=None, pattern="^(awaiting_review|confirmed|modified|rejected)$"),
     limit: int = Query(default=100, ge=1, le=200),
-    cursor: uuid.UUID | None = Query(default=None),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(require_research_tenant),
 ):
     _require_case(db, case_id, tenant_id)
-    now = datetime.now(timezone.utc)
-    latest_outcome = (
-        select(AtomicClaimReview.outcome)
-        .where(AtomicClaimReview.atomic_claim_candidate_id == AtomicClaimCandidate.id)
-        .order_by(AtomicClaimReview.created_at.desc(), AtomicClaimReview.id.desc())
-        .limit(1)
-        .correlate(AtomicClaimCandidate)
-        .scalar_subquery()
-    )
-    query = (
+    rows = db.execute(
         select(AtomicClaimCandidate, SourceSpan, DocumentVersion)
         .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
         .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
         .join(CaseDocumentVersion, CaseDocumentVersion.document_version_id == DocumentVersion.id)
-        .outerjoin(SourceContract, SourceContract.document_version_id == DocumentVersion.id)
         .where(CaseDocumentVersion.research_case_id == case_id)
-        .where(or_(SourceContract.id.is_(None), and_(
-            SourceContract.allow_display.is_(True),
-            or_(SourceContract.effective_from.is_(None), SourceContract.effective_from <= now),
-            or_(SourceContract.effective_until.is_(None), SourceContract.effective_until >= now),
-        )))
-        .order_by(AtomicClaimCandidate.created_at.desc(), AtomicClaimCandidate.id.desc())
-    )
-    if cursor is not None:
-        # Resolve the anchor only inside this Case and its currently visible sources.
-        # A review decision can change between pages; do not require the anchor
-        # itself to retain the requested review state.
-        anchor = db.execute(query.where(AtomicClaimCandidate.id == cursor)).first()
-        if anchor is None:
-            from app.errors import NotFoundError
-            raise NotFoundError("atomic claim cursor not found")
-        candidate = anchor[0]
-        query = query.where(or_(
-            AtomicClaimCandidate.created_at < candidate.created_at,
-            and_(AtomicClaimCandidate.created_at == candidate.created_at,
-                 AtomicClaimCandidate.id < candidate.id),
-        ))
-    if review_state:
-        query = query.where(func.coalesce(latest_outcome, "awaiting_review") == review_state)
-    rows = db.execute(query.limit(limit + 1)).all()
-    has_more = len(rows) > limit
-    items = [_candidate_dto(db, candidate, span, document) for candidate, span, document in rows[:limit]]
-    return AtomicClaimQueueResponse(items=items, has_more=has_more, next_cursor=items[-1].id if has_more else None)
+        .order_by(AtomicClaimCandidate.created_at.desc())
+        .limit(limit)
+    ).all()
+    items: list[AtomicClaimCandidateDTO] = []
+    for candidate, span, document in rows:
+        item = _candidate_dto(db, candidate, span, document)
+        if review_state and item.review_state != review_state:
+            continue
+        items.append(item)
+    return AtomicClaimQueueResponse(items=items)
 
 
 @router.post(
@@ -220,7 +192,7 @@ def propose_atomic_claim(
     case_id: uuid.UUID,
     payload: CreateAtomicClaimCandidateRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
     """Create a human-proposed candidate from exactly one frozen span.
 
@@ -228,7 +200,7 @@ def propose_atomic_claim(
     come from the immutable span, and the result stays awaiting human review.
     A visible source permission is sufficient because no AI processing occurs.
     """
-    _require_case(db, case_id, tenant_id)
+    _require_case(db, case_id, actor.tenant_id)
     row = db.execute(
         select(SourceSpan, DocumentVersion, SourceContract)
         .join(DocumentVersion, DocumentVersion.id == SourceSpan.document_version_id)
@@ -277,7 +249,7 @@ def propose_atomic_claim(
             scope=payload.scope,
         ),
         authority_level=document.source_authority or "unknown",
-        run_ref=f"human:source-reader:{payload.actor.strip()}",
+        run_ref=f"human:source-reader:{actor.server_actor}",
     )
     commit_or_rollback(db)
     return _candidate_dto(db, candidate, span, document)
@@ -289,17 +261,18 @@ def propose_atomic_claim(
     status_code=status.HTTP_201_CREATED,
 )
 def review_atomic_claim(
+    case_policy: RequireCaseRoute,
     candidate_id: uuid.UUID,
     payload: AtomicClaimReviewRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: ResearchActor = Depends(require_research_actor),
 ):
-    _require_candidate_tenant(db, candidate_id, tenant_id)
+    _require_candidate_review(db, candidate_id, actor, case_policy)
     review = translate_validation(
         AtomicClaimService(db).review,
         candidate_id,
         outcome=payload.outcome,
-        reviewer=payload.reviewer,
+        reviewer=actor.server_actor,
         reason=payload.reason,
         idempotency_key=payload.idempotency_key,
         normalized_text=payload.normalized_text,
@@ -312,7 +285,7 @@ def review_atomic_claim(
     )
     AutoResearchService(db).resume_after_atomic_claim_review(
         candidate_id,
-        reviewer=payload.reviewer,
+        reviewer=actor.server_actor,
     )
     commit_or_rollback(db)
     return _review_dto(db, review)

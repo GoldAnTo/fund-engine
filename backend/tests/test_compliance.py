@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import select
 
 from app.ai.assessment_gen import AssessmentGenerator
-from app.ai.client import DEFAULT_TIMEOUT_SECONDS, LLMClient
+from app.ai.client import LLMClient
 from app.ai.proposal import EvidenceProposer
 from app.models.ledger import AIRun
 from app.services.compliance import (
@@ -155,8 +155,6 @@ def _isolate_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "LLM_MODEL",
         "LLM_TEMPERATURE",
         "LLM_SEED",
-        "LLM_TIMEOUT_SECONDS",
-        "LLM_MAX_ATTEMPTS",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LLM_BASE_URL", "https://llm.example.invalid/v1")
@@ -216,7 +214,7 @@ def test_test_environment_with_api_key_uses_external_client(monkeypatch):
     openai_constructor.assert_called_once_with(
         api_key="dummy",
         base_url=base_url,
-        timeout=DEFAULT_TIMEOUT_SECONDS,
+        timeout=120.0,
         max_retries=0,
     )
     assert client._client is sdk_client

@@ -1,15 +1,15 @@
 """Persistent automatic research orchestration executed by a worker."""
+
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Callable, Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.ai.runs import research_audit_context
 from app.ai.assessment_gen import AssessmentGenerator
 from app.ai.client import LLMClient
 from app.ai.error_safety import (
@@ -35,10 +35,18 @@ from app.models.proposals import Proposal
 from app.models.operational import Job, ResearchRun, ResearchTask, TaskItem
 from app.models.research_monitor import CaseMonitorVersion, ResearchRunEvent
 from app.models.research_expression import KeyFactor
-from app.models.event_research import EventResearchBrief, EventResearchConclusion
+from app.models.event_research import (
+    EventResearchConclusion,
+    EventResearchScopeVersion,
+)
+from app.models.research_orchestration import ResearchOrchestration
 from app.models.source_governance import SourceContract
 from app.repositories.operational import TaskRepository
-from app.repositories.auto_research import AutoResearchRepository
+from app.repositories.auto_research import (
+    AutoResearchRepository,
+    LostResearchRunLeaseError,
+    ResearchRunJobClaim,
+)
 from app.repositories.event_research import EventResearchLifecycleRepository
 from app.scripts.run_ai_engine import _pending_versions
 from app.services.compliance import ComplianceRefusedError
@@ -49,15 +57,59 @@ from app.services.source_admission import source_contract_is_active
 from app.services.event_research_scope_evidence import (
     lock_event_scope_case,
     lock_event_research_lifecycle,
+    validated_automatic_run_evidence,
 )
 
 
+@dataclass(frozen=True, slots=True)
+class SynthesisRetryPolicy:
+    version: str = "research-synthesis-retry-v1"
+    max_failures: int = 3
+    base_delay: timedelta = timedelta(minutes=1)
+    max_delay: timedelta = timedelta(minutes=15)
+
+    def __post_init__(self) -> None:
+        if not self.version.strip():
+            raise ValueError("retry policy version is required")
+        if self.max_failures < 1:
+            raise ValueError("retry max_failures must be positive")
+        if self.base_delay <= timedelta(0) or self.max_delay < self.base_delay:
+            raise ValueError("retry backoff bounds are invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class SynthesisRetryStatus:
+    run_id: uuid.UUID
+    job_id: uuid.UUID
+    state: Literal[
+        "failed",
+        "scheduled",
+        "exhausted",
+        "queued",
+        "running",
+        "waiting_for_review",
+        "succeeded",
+        "cancelled",
+    ]
+    attempt: int
+    failure_count: int
+    next_retry_at: datetime | None
+    policy_version: str | None
+
+
 class AutoResearchService:
-    def __init__(self, session: Session) -> None:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self.session = session
         self.repo = AutoResearchRepository(session)
         self.task_repo = TaskRepository(session)
         self._client: LLMClient | None = None
+        self._active_claim: ResearchRunJobClaim | None = None
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     @property
     def client(self) -> LLMClient:
@@ -80,9 +132,11 @@ class AutoResearchService:
         budget: int = 100,
         auto_execute: bool = False,
         commit: bool = True,
+        enqueue: bool = True,
         thesis_ids: list[uuid.UUID] | None = None,
         monitor_version_id: uuid.UUID | None = None,
         trigger: str = "manual",
+        initiated_by: str | None = None,
         allowed_source_types: list[str] | None = None,
         scope_context: dict[str, object] | None = None,
     ):
@@ -106,22 +160,23 @@ class AutoResearchService:
                 raise ValueError("scheduled research is paused for this case")
             thesis_ids = [uuid.UUID(value) for value in monitor.factor_ids]
         if allowed_source_types is not None:
-            if monitor is None or not set(allowed_source_types).issubset(set(monitor.allowed_source_types)):
-                raise ValueError("run sources must be a subset of the saved case monitor")
+            if monitor is None or not set(allowed_source_types).issubset(
+                set(monitor.allowed_source_types)
+            ):
+                raise ValueError(
+                    "run sources must be a subset of the saved case monitor"
+                )
         thesis_stmt = select(Thesis).where(Thesis.research_case_id == case_id)
         if thesis_ids is not None:
             thesis_stmt = thesis_stmt.where(Thesis.id.in_(thesis_ids))
         theses = list(self.session.scalars(thesis_stmt))
         if thesis_ids is not None:
-            if len(thesis_ids) != len(set(thesis_ids)):
-                raise ValueError("run thesis scope contains duplicate theses")
-            theses_by_id = {thesis.id: thesis for thesis in theses}
-            if set(theses_by_id) != set(thesis_ids):
-                raise ValueError("run thesis scope contains an unknown Case thesis")
-            # Explicit scopes are immutable ordered snapshots.  SQL IN does
-            # not preserve caller order, so restore it before writing both the
-            # run identity and scope event.
-            theses = [theses_by_id[thesis_id] for thesis_id in thesis_ids]
+            thesis_by_id = {thesis.id: thesis for thesis in theses}
+            theses = [
+                thesis_by_id[thesis_id]
+                for thesis_id in thesis_ids
+                if thesis_id in thesis_by_id
+            ]
         # A protocol-required thesis may not create a run merely because a
         # caller reached the run endpoint. The same immutable protocol gate
         # used by assessment generation is enforced at orchestration time.
@@ -135,7 +190,8 @@ class AutoResearchService:
                 blocked_reasons.extend(result.reason_codes)
         if blocked_reasons:
             raise ValidationFailedError(
-                "researchability gate blocked: " + ", ".join(sorted(set(blocked_reasons)))
+                "researchability gate blocked: "
+                + ", ".join(sorted(set(blocked_reasons)))
             )
         run = self.repo.create_run(
             research_case_id=case_id,
@@ -143,18 +199,28 @@ class AutoResearchService:
             budget=max(1, budget),
             scope_thesis_ids=[str(thesis.id) for thesis in theses],
             monitor_version_id=monitor.id if monitor is not None else None,
+            status="queued" if enqueue else "prepared",
+            stage="planning" if enqueue else "awaiting_acquisition",
         )
         scope_payload: dict[str, object] = {
             "trigger": trigger,
             "monitor_version_id": str(monitor.id) if monitor is not None else None,
             "factor_ids": [str(thesis.id) for thesis in theses],
             "factor_statements": [thesis.statement for thesis in theses],
-            "allowed_source_types": allowed_source_types if allowed_source_types is not None else (monitor.allowed_source_types if monitor is not None else []),
+            "allowed_source_types": allowed_source_types
+            if allowed_source_types is not None
+            else (monitor.allowed_source_types if monitor is not None else []),
             "budget": run.budget,
             "frequency": monitor.frequency if monitor is not None else None,
-            "next_verification_event": monitor.next_verification_event if monitor is not None else None,
+            "next_verification_event": monitor.next_verification_event
+            if monitor is not None
+            else None,
             "configured_by": monitor.changed_by if monitor is not None else None,
-            "configuration_change_reason": monitor.change_reason if monitor is not None else None,
+            "configuration_change_reason": monitor.change_reason
+            if monitor is not None
+            else None,
+            "executor_actor": "service:research-worker",
+            "initiated_by": initiated_by,
         }
         for key, value in (scope_context or {}).items():
             if key not in scope_payload:
@@ -180,28 +246,11 @@ class AutoResearchService:
                     task_type=task_type,
                     query=f"{label}: {thesis.statement}",
                 )
-            material_document_id = (scope_context or {}).get(
-                "intake_material_document_version_id"
-            )
-            if (scope_context or {}).get("input_kind") == "material":
-                if not isinstance(material_document_id, str):
-                    raise ValueError(
-                        "automatic material scope is missing its frozen document"
-                    )
-                self.repo.create_task(
-                    run_id=run.id,
-                    research_case_id=case_id,
-                    thesis_id=thesis.id,
-                    task_type="intake_material",
-                    query=(
-                        "先处理用户提供材料: "
-                        f"{material_document_id}: {thesis.statement}"
-                    ),
-                )
-        self.repo.enqueue_run_job(run)
-        # HTTP commands only persist a run + job.  A separately supervised
-        # worker claims the job, so a provider timeout cannot hold an API
-        # request open or lose the work on process restart.
+        if enqueue:
+            self.repo.enqueue_run_job(run)
+        # Normal callers persist a run + job for a separately supervised
+        # worker. Scope confirmation deliberately prepares the run without
+        # dispatching it; a later workflow stage owns that handoff.
         if commit:
             self.session.commit()
         else:
@@ -212,11 +261,168 @@ class AutoResearchService:
         del auto_execute
         return run
 
+    def enqueue_prepared_run(
+        self,
+        run_id: uuid.UUID,
+        *,
+        commit: bool = True,
+    ) -> Job:
+        run = self._lock_run_for_transition(run_id)
+        if run is None:
+            raise ValueError(f"research run {run_id} not found")
+        if run.status == "cancelled":
+            raise ValueError("research run must be prepared before enqueue")
+        existing = self.repo.job_for_run(run_id)
+        if existing is not None:
+            job = existing
+        else:
+            if run.status != "prepared":
+                raise ValueError("research run must be prepared before enqueue")
+            job = self.repo.enqueue_run_job(run)
+        if commit:
+            self.session.commit()
+        else:
+            self.session.flush()
+        return job
+
+    def cancel_for_scope_replacement(
+        self,
+        run_id: uuid.UUID,
+        *,
+        case_id: uuid.UUID,
+    ) -> ResearchRun:
+        run = self.repo.get_run_for_update(run_id)
+        if run is None or run.research_case_id != case_id:
+            raise ValueError("scope revision current run is unavailable")
+        if run.status != "cancelled" and not self.repo.cancel_run(run):
+            raise ValueError("scope revision cannot cancel the current research run")
+        return run
+
+    def requeue_failed_run(self, run_id: uuid.UUID, *, commit: bool = True) -> Job:
+        status = self.reconcile_synthesis_failure(run_id, commit=commit)
+        job = self.repo.job_for_run(status.run_id)
+        if job is None:
+            raise ValueError("research run job not found")
+        return job
+
+    def synthesis_status(self, run_id: uuid.UUID) -> SynthesisRetryStatus:
+        run = self.repo.get_run(run_id)
+        job = self.repo.job_for_run(run_id)
+        if run is None or job is None or job.research_case_id != run.research_case_id:
+            raise ValueError("research run job not found")
+        if run.status == "failed" and job.status == "failed":
+            state = (
+                "exhausted"
+                if job.failure_count >= SynthesisRetryPolicy().max_failures
+                else "scheduled"
+                if job.next_retry_at is not None
+                else "failed"
+            )
+        else:
+            state = job.status
+        return SynthesisRetryStatus(
+            run_id=run.id,
+            job_id=job.id,
+            state=state,
+            attempt=job.attempt,
+            failure_count=job.failure_count,
+            next_retry_at=job.next_retry_at,
+            policy_version=job.retry_policy_version,
+        )
+
+    def reconcile_synthesis_failure(
+        self,
+        run_id: uuid.UUID,
+        *,
+        policy: SynthesisRetryPolicy | None = None,
+        commit: bool = True,
+    ) -> SynthesisRetryStatus:
+        selected = policy or SynthesisRetryPolicy()
+        state, run, job = self.repo.reconcile_failed_run_retry(
+            run_id,
+            now=self._clock(),
+            policy_version=selected.version,
+            max_failures=selected.max_failures,
+            base_delay_seconds=selected.base_delay.total_seconds(),
+            max_delay_seconds=selected.max_delay.total_seconds(),
+        )
+        if commit:
+            self.session.commit()
+        else:
+            self.session.flush()
+        return SynthesisRetryStatus(
+            run_id=run.id,
+            job_id=job.id,
+            state=state,
+            attempt=job.attempt,
+            failure_count=job.failure_count,
+            next_retry_at=job.next_retry_at,
+            policy_version=job.retry_policy_version,
+        )
+
+    def recover_stale_run_jobs(self, *, before: datetime) -> int:
+        """Public recovery checkpoint; lease expiry does not consume failures."""
+        return self.repo.recover_stale_run_jobs(before=before)
+
+    def claim_next_run_job(self) -> ResearchRunJobClaim | None:
+        """Claim only a server-issued, state-compatible research attempt."""
+        return self.repo.claim_next_run_job()
+
+    def record_job_completion(
+        self,
+        claim: ResearchRunJobClaim,
+        *,
+        status: str,
+        step: str,
+        error: str | None = None,
+        run: ResearchRun | None = None,
+    ) -> bool:
+        return self.repo.record_job_completion(
+            claim,
+            status=status,
+            step=step,
+            error=error,
+            run=run,
+        )
+
+    def record_execution_failure(
+        self,
+        claim: ResearchRunJobClaim,
+        *,
+        run: ResearchRun,
+        error: str,
+    ) -> bool:
+        """Fence and persist an unhandled worker failure as one terminal write."""
+        run.status = "failed"
+        run.stage = "failed"
+        run.stop_reason = "execution_failed"
+        return self.record_job_completion(
+            claim,
+            status="failed",
+            step="failed",
+            error=error,
+            run=run,
+        )
+
+    def reconcile_orchestration_after_worker(
+        self,
+        run_id: uuid.UUID,
+        *,
+        actor: str,
+    ):
+        """Notify the public orchestration seam after terminal worker writes."""
+        from app.services.research_orchestration import ResearchOrchestrationService
+
+        return ResearchOrchestrationService(
+            self.session
+        ).reconcile_research_run_completion(run_id, actor=actor)
+
     def start_from_monitor(
         self,
         case_id: uuid.UUID,
         *,
         trigger: str = "manual",
+        initiated_by: str | None = None,
         commit: bool = True,
         scope_context: dict[str, object] | None = None,
     ):
@@ -235,21 +441,37 @@ class AutoResearchService:
             .limit(1)
         )
         if monitor is None:
-            raise ValueError("a saved case monitor is required before starting a monitor run")
+            raise ValueError(
+                "a saved case monitor is required before starting a monitor run"
+            )
         return self.start(
             case_id,
             max_rounds=3,
             budget=monitor.budget,
             monitor_version_id=monitor.id,
             trigger=trigger,
+            initiated_by=initiated_by,
             commit=commit,
             scope_context=scope_context,
         )
 
-    def start_from_key_factor(self, case_id: uuid.UUID, *, key_factor_id: uuid.UUID):
+    def start_from_key_factor(
+        self,
+        case_id: uuid.UUID,
+        *,
+        key_factor_id: uuid.UUID,
+        initiated_by: str | None = None,
+    ):
         factor = self.session.get(KeyFactor, key_factor_id)
-        if factor is None or factor.research_case_id != case_id or factor.review_state != "reviewed" or factor.thesis_id is None:
-            raise ValueError("reviewed key factor is not explicitly linked to this Case research scope")
+        if (
+            factor is None
+            or factor.research_case_id != case_id
+            or factor.review_state != "reviewed"
+            or factor.thesis_id is None
+        ):
+            raise ValueError(
+                "reviewed key factor is not explicitly linked to this Case research scope"
+            )
         if (
             factor.verification_window_start is None
             or factor.verification_window_end is None
@@ -257,15 +479,31 @@ class AutoResearchService:
             raise ValueError(
                 "key factor must have a frozen verification window before starting replenishment"
             )
-        monitor = self.session.scalar(select(CaseMonitorVersion).where(CaseMonitorVersion.research_case_id == case_id).order_by(CaseMonitorVersion.version.desc()).limit(1))
+        monitor = self.session.scalar(
+            select(CaseMonitorVersion)
+            .where(CaseMonitorVersion.research_case_id == case_id)
+            .order_by(CaseMonitorVersion.version.desc())
+            .limit(1)
+        )
         if monitor is None or str(factor.thesis_id) not in monitor.factor_ids:
-            raise ValueError("linked key factor is not in the current CaseMonitor scope")
-        source_types = [source for source in monitor.allowed_source_types if source in factor.allowed_source_types]
+            raise ValueError(
+                "linked key factor is not in the current CaseMonitor scope"
+            )
+        source_types = [
+            source
+            for source in monitor.allowed_source_types
+            if source in factor.allowed_source_types
+        ]
         if not source_types:
-            raise ValueError("key factor has no allowed source shared with the current CaseMonitor")
-        if self.repo.active_run_for_exact_thesis_scope(
-            research_case_id=case_id, thesis_id=factor.thesis_id
-        ) is not None:
+            raise ValueError(
+                "key factor has no allowed source shared with the current CaseMonitor"
+            )
+        if (
+            self.repo.active_run_for_exact_thesis_scope(
+                research_case_id=case_id, thesis_id=factor.thesis_id
+            )
+            is not None
+        ):
             raise ValueError(
                 "this key factor already has an active replenishment run; inspect or stop it before starting another"
             )
@@ -276,6 +514,7 @@ class AutoResearchService:
             thesis_ids=[factor.thesis_id],
             monitor_version_id=monitor.id,
             trigger="factor_manual",
+            initiated_by=initiated_by,
             allowed_source_types=source_types,
             scope_context={"requested_key_factor_id": str(factor.id)},
         )
@@ -356,7 +595,9 @@ class AutoResearchService:
         """
         lifecycle = lock_event_research_lifecycle(self.session, case_id)
         if lifecycle is None or lifecycle.status != "published":
-            raise ValidationFailedError("only a published event research case can start a material continuation")
+            raise ValidationFailedError(
+                "only a published event research case can start a material continuation"
+            )
         if not reason.strip() or not triggered_by.strip():
             raise ValidationFailedError("continuation reason and actor are required")
         source = self.session.scalar(
@@ -366,7 +607,9 @@ class AutoResearchService:
             .limit(1)
         )
         if source is None:
-            raise ValidationFailedError("continuation document is not frozen in this case")
+            raise ValidationFailedError(
+                "continuation document is not frozen in this case"
+            )
         contract = self.session.scalar(
             select(SourceContract).where(
                 SourceContract.document_version_id == document_version_id
@@ -389,7 +632,9 @@ class AutoResearchService:
             .limit(1)
         )
         if previous is None:
-            raise ValidationFailedError("published lifecycle has no immutable published conclusion")
+            raise ValidationFailedError(
+                "published lifecycle has no immutable published conclusion"
+            )
         run = self.start_from_monitor(
             case_id,
             trigger="material_continuation",
@@ -412,35 +657,32 @@ class AutoResearchService:
         )
         return run
 
-    def _is_automatic_workflow(self, run: ResearchRun) -> bool:
-        scope = self.session.scalar(
-            select(ResearchRunEvent)
-            .where(ResearchRunEvent.run_id == run.id)
-            .where(ResearchRunEvent.stage == "scope")
-            .order_by(ResearchRunEvent.seq.desc())
-            .limit(1)
-        )
-        payload = scope.payload_json if scope is not None else None
-        scope_mode = (
-            payload.get("workflow_mode", "reviewed")
-            if isinstance(payload, dict)
-            else "reviewed"
-        )
-        return scope_mode == "automatic"
-
-    def execute(self, run):
-        if self._is_automatic_workflow(run):
-            # Import locally so the automatic acquisition seam can depend on
-            # repository/model vocabulary without creating a service cycle.
-            from app.services.automatic_research_pipeline import (
-                AutomaticResearchPipeline,
+    def execute(
+        self,
+        run,
+        claim: ResearchRunJobClaim | None = None,
+    ):
+        if claim is None:
+            claim = self.repo.claim_run_job(run.id)
+            if claim is None:
+                raise LostResearchRunLeaseError(
+                    "research run has no queued worker attempt"
+                )
+            self.session.commit()
+        if (
+            claim.research_run_id != run.id
+            or claim.research_case_id != run.research_case_id
+        ):
+            raise LostResearchRunLeaseError("research run claim ownership mismatch")
+        self._active_claim = claim
+        self._require_active_claim(run, touch_heartbeat=True)
+        scope_payload = self._run_scope_payload(run)
+        if scope_payload.get("execution_mode") == "orchestrated_evidence_synthesis":
+            self._execute_orchestrated_evidence_synthesis(
+                run,
+                scope_payload=scope_payload,
             )
-
-            return AutomaticResearchPipeline(
-                self.session,
-                client=self.client,
-                repository=self.repo,
-            ).advance(run)
+            return
         self.repo.update_run(run, status="running", stage="extract")
         ResearchRunEventRepository(self.session).append(
             run.id,
@@ -452,21 +694,25 @@ class AutoResearchService:
         self.session.commit()
         used = run.budget_used or 0
         previous = self._run_evidence_count(run)
-        failed = False
+        # Restart truth comes from persisted task state. A process must never
+        # turn a previously failed necessary task into a successful terminal
+        # run merely because this local variable was reinitialized.
+        failed = any(
+            task.status == "failed" for task in self.repo.tasks_for_run(run.id)
+        )
         extraction_failed = False
         extraction_cancelled = False
         allowed_source_types = self._run_allowed_source_types(run)
         for current_round in range(max(1, run.round + 1), run.max_rounds + 1):
             if self._is_cancelled(run):
                 break
+            self._require_active_claim(run, touch_heartbeat=True)
             run.round = current_round
             if used >= run.budget:
                 self.repo.update_run(
                     run,
                     status=(
-                        "failed"
-                        if failed
-                        else self._successful_terminal_status(run)
+                        "failed" if failed else self._successful_terminal_status(run)
                     ),
                     stage="failed" if failed else "stopped",
                     budget_used=used,
@@ -482,33 +728,36 @@ class AutoResearchService:
                 if used >= run.budget:
                     break
                 try:
-                    with research_audit_context(case_id=run.research_case_id, run_id=run.id):
-                        extracted = StatementExtractor(self.client).extract(
-                            version.id,
-                            self.session,
-                            before_persist=lambda: self._claim_extraction_output_slot(run),
-                        )
+                    extracted = StatementExtractor(self.client).extract(
+                        version.id,
+                        self.session,
+                        before_persist=lambda: self._claim_extraction_output_slot(run),
+                    )
                 except ComplianceRefusedError:
                     used += 1
                     if not self._claim_extraction_output_slot(run):
                         self.session.rollback()
-                        extraction_cancelled = True
-                        self._is_cancelled(run)
-                        break
+                        raise LostResearchRunLeaseError(
+                            "research run attempt changed during extraction"
+                        )
                     extraction_failed = True
                     failed = True
                 except Exception:
                     used += 1
                     if not self._claim_extraction_output_slot(run):
                         self.session.rollback()
-                        extraction_cancelled = True
-                        self._is_cancelled(run)
-                        break
+                        raise LostResearchRunLeaseError(
+                            "research run attempt changed during extraction"
+                        )
                     extraction_failed = True
                     failed = True
                 else:
-                    if extracted is None:
+                    if not self._claim_extraction_output_slot(run):
                         self.session.rollback()
+                        raise LostResearchRunLeaseError(
+                            "research run attempt changed during extraction"
+                        )
+                    if extracted is None:
                         extraction_cancelled = True
                         self._is_cancelled(run)
                         break
@@ -525,6 +774,8 @@ class AutoResearchService:
                 self.session.commit()
             if extraction_failed or extraction_cancelled or run.status == "cancelled":
                 break
+            self.session.flush()
+            self._require_active_claim(run, touch_heartbeat=True)
             pending_claims = self._pending_atomic_claims(
                 run.research_case_id,
                 allowed_source_types=allowed_source_types,
@@ -532,12 +783,20 @@ class AutoResearchService:
             if pending_claims:
                 self._pause_for_atomic_claim_review(run, pending_claims, used)
                 break
-            proposer, generator = EvidenceProposer(self.client), AssessmentGenerator(self.client)
+            proposer, generator = (
+                EvidenceProposer(self.client),
+                AssessmentGenerator(self.client),
+            )
             for task in self.repo.queued_tasks_for_run(run.id, current_round):
                 if self._is_cancelled(run):
                     break
                 if used >= run.budget:
                     break
+                if not self._claim_task_start_slot(run, task):
+                    self.session.rollback()
+                    raise LostResearchRunLeaseError(
+                        "research run attempt changed before task start"
+                    )
                 task.status, task.stage = "running", "research"
                 # A provider call can take seconds.  Persist and end this
                 # short task-state transaction before it starts, otherwise
@@ -546,21 +805,27 @@ class AutoResearchService:
                 self.session.commit()
                 cancelled_during_task = False
                 try:
-                    with research_audit_context(case_id=run.research_case_id, run_id=run.id, task_id=task.id):
-                        if task.task_type in {"support", "contradict", "alternative"}:
-                            proposed_ids = self._propose_for_task(
-                                proposer,
-                                task,
-                                run,
-                                allowed_source_types=allowed_source_types,
-                            )
-                        else:
-                            assessment = generator.generate(
-                                task.thesis_id,
-                                datetime.now(timezone.utc),
-                                self.session,
-                                before_persist=lambda: self._claim_task_output_slot(run, task),
-                            )
+                    if task.task_type in {"support", "contradict", "alternative"}:
+                        proposed_ids = self._propose_for_task(
+                            proposer,
+                            task,
+                            run,
+                            allowed_source_types=allowed_source_types,
+                        )
+                    else:
+                        assessment = generator.generate(
+                            task.thesis_id,
+                            datetime.now(timezone.utc),
+                            self.session,
+                            before_persist=lambda: self._claim_task_output_slot(
+                                run, task
+                            ),
+                        )
+                    if not self._claim_task_output_slot(run, task):
+                        self.session.rollback()
+                        raise LostResearchRunLeaseError(
+                            "research run attempt changed during task provider call"
+                        )
                     # Providers may return after their run was superseded.
                     # Do not flush their proposals/assessments or overwrite a
                     # task that the scope update has already cancelled.
@@ -571,7 +836,9 @@ class AutoResearchService:
                     elif task.task_type in {"support", "contradict", "alternative"}:
                         task.result = {
                             "task_type": task.task_type,
-                            "proposed_proposal_ids": [str(item) for item in proposed_ids],
+                            "proposed_proposal_ids": [
+                                str(item) for item in proposed_ids
+                            ],
                         }
                         task.evidence_count = self._evidence_count(task.thesis_id)
                     else:
@@ -593,6 +860,11 @@ class AutoResearchService:
                     if not cancelled_during_task:
                         task.status, task.stage = "done", "completed"
                 except ComplianceRefusedError:
+                    if not self._claim_task_output_slot(run, task):
+                        self.session.rollback()
+                        raise LostResearchRunLeaseError(
+                            "research run attempt changed during task provider call"
+                        )
                     if self._is_cancelled(run, task):
                         cancelled_during_task = True
                     else:
@@ -604,6 +876,11 @@ class AutoResearchService:
                         }
                         failed = True
                 except Exception:
+                    if not self._claim_task_output_slot(run, task):
+                        self.session.rollback()
+                        raise LostResearchRunLeaseError(
+                            "research run attempt changed during task provider call"
+                        )
                     if self._is_cancelled(run, task):
                         cancelled_during_task = True
                     else:
@@ -645,6 +922,7 @@ class AutoResearchService:
                 )
                 break
 
+            self._require_active_claim(run, touch_heartbeat=True)
             self._create_balance_gaps(run, current_round)
             now = self._run_evidence_count(run)
             self.repo.update_run(run, budget_used=used, round=current_round)
@@ -652,24 +930,41 @@ class AutoResearchService:
                 self.repo.update_run(
                     run,
                     status=(
-                        "failed"
-                        if failed
-                        else self._successful_terminal_status(run)
+                        "failed" if failed else self._successful_terminal_status(run)
                     ),
                     stage="failed" if failed else "stopped",
                     stop_reason="task_failed" if failed else "budget_exhausted",
                 )
                 break
             if current_round >= run.max_rounds:
-                self.repo.update_run(run, status="failed" if failed else self._successful_terminal_status(run), stage="failed" if failed else "stopped", stop_reason="task_failed" if failed else "max_rounds_reached")
+                self.repo.update_run(
+                    run,
+                    status="failed"
+                    if failed
+                    else self._successful_terminal_status(run),
+                    stage="failed" if failed else "stopped",
+                    stop_reason="task_failed" if failed else "max_rounds_reached",
+                )
                 break
             next_tasks = self.repo.queued_tasks_for_run(run.id, current_round + 1)
             if now <= previous and not next_tasks:
-                self.repo.update_run(run, status="failed" if failed else self._successful_terminal_status(run), stage="failed" if failed else "stopped", stop_reason="task_failed" if failed else "no_new_evidence")
+                self.repo.update_run(
+                    run,
+                    status="failed"
+                    if failed
+                    else self._successful_terminal_status(run),
+                    stage="failed" if failed else "stopped",
+                    stop_reason="task_failed" if failed else "no_new_evidence",
+                )
                 break
             previous = now
         else:
-            self.repo.update_run(run, status="failed" if failed else self._successful_terminal_status(run), stage="failed" if failed else "stopped", stop_reason="task_failed" if failed else "max_rounds_reached")
+            self.repo.update_run(
+                run,
+                status="failed" if failed else self._successful_terminal_status(run),
+                stage="failed" if failed else "stopped",
+                stop_reason="task_failed" if failed else "max_rounds_reached",
+            )
         # Start the final transaction in the same Case -> ResearchRun -> Job
         # order used by scope replacement and worker terminalization.  The
         # provider calls and intermediate task commits have already finished;
@@ -699,6 +994,147 @@ class AutoResearchService:
             },
         )
         self.session.flush()
+
+    def _execute_orchestrated_evidence_synthesis(
+        self,
+        run: ResearchRun,
+        *,
+        scope_payload: dict[str, object],
+    ) -> None:
+        """Summarize only frozen, admitted evidence already owned by the workflow.
+
+        Event orchestration performs retrieval, freezing, deduplication, and
+        automatic admission before this worker starts.  Re-running the legacy
+        extraction/proposal pipeline here would manufacture a second review
+        boundary over the same material, so this execution mode records the
+        exact admitted links consumed by each persisted research task instead.
+        """
+        try:
+            scope_version_id = uuid.UUID(str(scope_payload["scope_version_id"]))
+            orchestration_id = uuid.UUID(str(scope_payload["orchestration_id"]))
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise ValidationFailedError(
+                "orchestrated evidence synthesis scope is incomplete"
+            ) from exc
+
+        self.repo.update_run(run, status="running", stage="synthesize")
+        ResearchRunEventRepository(self.session).append(
+            run.id,
+            stage="synthesize",
+            status="started",
+            message="正在归并当前研究范围内已冻结并准入的证据",
+            payload_json={
+                "execution_mode": "orchestrated_evidence_synthesis",
+                "scope_version_id": str(scope_version_id),
+            },
+        )
+        self.session.commit()
+
+        lock_event_scope_case(self.session, run.research_case_id)
+        self._require_active_claim(run, touch_heartbeat=True)
+        current_scope_id = self.session.scalar(
+            select(EventResearchScopeVersion.id)
+            .where(EventResearchScopeVersion.research_case_id == run.research_case_id)
+            .order_by(EventResearchScopeVersion.version.desc())
+            .limit(1)
+        )
+        orchestration = self.session.get(ResearchOrchestration, orchestration_id)
+        if (
+            current_scope_id != scope_version_id
+            or orchestration is None
+            or orchestration.research_case_id != run.research_case_id
+            or orchestration.current_scope_version_id != scope_version_id
+            or orchestration.current_research_run_id != run.id
+            or orchestration.state != "synthesizing_evidence"
+        ):
+            raise ValidationFailedError(
+                "orchestrated evidence synthesis no longer owns the current scope"
+            )
+
+        admitted_rows = validated_automatic_run_evidence(
+            self.session,
+            tenant_id=orchestration.tenant_id,
+            case_id=run.research_case_id,
+            scope_version_id=scope_version_id,
+            research_run_id=run.id,
+        )
+        now = self._clock()
+        consumed_ids: set[uuid.UUID] = set()
+        for task in self.repo.tasks_for_run(run.id):
+            task_links: list[EvidenceLink] = []
+            for admitted in admitted_rows:
+                assignment, link, thesis = (
+                    admitted.assignment,
+                    admitted.link,
+                    admitted.thesis,
+                )
+                same_factor = (
+                    task.thesis_id == thesis.id
+                    and assignment.factor_statement == thesis.statement
+                )
+                event_context = (
+                    assignment.factor_statement is None
+                    and task.task_type in {"result", "alternative"}
+                )
+                role_matches = (
+                    (task.task_type == "support" and link.role == "supports")
+                    or (task.task_type == "contradict" and link.role == "contradicts")
+                    or (
+                        task.task_type == "alternative"
+                        and link.role == "contextualizes"
+                    )
+                    or task.task_type == "result"
+                )
+                if (same_factor or event_context) and role_matches:
+                    task_links.append(link)
+            evidence_ids = [str(link.id) for link in task_links]
+            consumed_ids.update(link.id for link in task_links)
+            task.status = "done"
+            task.stage = "completed"
+            task.evidence_count = len(evidence_ids)
+            task.result = {
+                "task_type": task.task_type,
+                "execution_mode": "orchestrated_evidence_synthesis",
+                "scope_version_id": str(scope_version_id),
+                "evidence_link_ids": evidence_ids,
+            }
+            task.updated_at = now
+
+        self._require_active_claim(run, touch_heartbeat=True)
+        claim = self._active_claim
+        if claim is None:
+            raise LostResearchRunLeaseError("research run claim is missing")
+        self.repo.update_run(
+            run,
+            status="succeeded",
+            stage="complete",
+            stop_reason="orchestrated_evidence_synthesized",
+        )
+        ResearchRunEventRepository(self.session).append(
+            run.id,
+            stage="complete",
+            status="completed",
+            message="当前研究范围内已准入证据归并完成",
+            payload_json={
+                "execution_mode": "orchestrated_evidence_synthesis",
+                "scope_version_id": str(scope_version_id),
+                "job_id": str(claim.job_id),
+                "job_attempt": claim.claimed_attempt,
+                "evidence_link_ids": sorted(str(item) for item in consumed_ids),
+                "evidence_count": len(consumed_ids),
+            },
+        )
+        self.session.flush()
+
+    def _run_scope_payload(self, run: ResearchRun) -> dict[str, object]:
+        scope = self.session.scalar(
+            select(ResearchRunEvent)
+            .where(ResearchRunEvent.run_id == run.id)
+            .where(ResearchRunEvent.stage == "scope")
+            .order_by(ResearchRunEvent.seq.desc())
+            .limit(1)
+        )
+        return dict(scope.payload_json or {}) if scope is not None else {}
 
     def refresh_event_lifecycle(self, run) -> None:
         """Project one terminal event-run into its next user-facing state.
@@ -782,7 +1218,6 @@ class AutoResearchService:
                     budget=run.budget,
                     commit=False,
                     thesis_ids=self._run_thesis_ids(run),
-                    scope_context={"predecessor_run_id": str(run.id)},
                 )
                 lifecycle_repo.update(
                     lifecycle,
@@ -821,7 +1256,11 @@ class AutoResearchService:
                 next_human_action=f"审核 {review_count} 条关键证据",
             )
             return
-        active_run = self.repo.get_run(lifecycle.active_run_id) if lifecycle.active_run_id else None
+        active_run = (
+            self.repo.get_run(lifecycle.active_run_id)
+            if lifecycle.active_run_id
+            else None
+        )
         if lifecycle.current_round >= 3:
             from app.services.event_conclusion import EventConclusionService
 
@@ -852,7 +1291,6 @@ class AutoResearchService:
             budget=active_run.budget if active_run else 100,
             commit=False,
             thesis_ids=self._run_thesis_ids(active_run) if active_run else None,
-            scope_context={"predecessor_run_id": str(active_run.id)} if active_run else None,
         )
         next_round = lifecycle.current_round + 1
         lifecycle_repo.update(
@@ -902,63 +1340,60 @@ class AutoResearchService:
         confirm that this task still owns an active run.  The caller keeps
         this short transaction through proposal/result persistence.
         """
-        lock_event_scope_case(self.session, run.research_case_id)
-        with self.session.no_autoflush:
-            current_run = self.session.scalar(
-                select(ResearchRun)
-                .where(ResearchRun.id == run.id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
-            current_task = self.session.scalar(
-                select(ResearchTask)
-                .where(ResearchTask.id == task.id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
-            job = self.session.scalar(
-                select(Job)
-                .where(Job.kind == "research_run")
-                .where(Job.target_type == "research_run")
-                .where(Job.target_id == run.id)
-                .order_by(Job.created_at.desc())
-                .limit(1)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
+        claim = self._active_claim
+        if claim is None:
+            return False
+        locked = self.repo.lock_active_claim(
+            claim,
+            task_id=task.id,
+            touch_heartbeat=True,
+        )
+        if locked is None:
+            return False
+        current_run, _job, current_task = locked
         return bool(
-            current_run is not None
-            and current_run.status != "cancelled"
+            current_run.status == "running"
             and current_task is not None
-            and current_task.status != "cancelled"
-            and (job is None or not job.cancel_requested)
+            and current_task.status == "running"
+        )
+
+    def _claim_task_start_slot(self, run, task) -> bool:
+        claim = self._active_claim
+        if claim is None:
+            return False
+        locked = self.repo.lock_active_claim(
+            claim,
+            task_id=task.id,
+            touch_heartbeat=True,
+        )
+        if locked is None:
+            return False
+        current_run, _job, current_task = locked
+        return bool(
+            current_run.status == "running"
+            and current_task is not None
+            and current_task.status == "queued"
         )
 
     def _claim_extraction_output_slot(self, run) -> bool:
         """Serialize extraction persistence with run cancellation/replacement."""
-        lock_event_scope_case(self.session, run.research_case_id)
-        with self.session.no_autoflush:
-            current_run = self.session.scalar(
-                select(ResearchRun)
-                .where(ResearchRun.id == run.id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
-            job = self.session.scalar(
-                select(Job)
-                .where(Job.kind == "research_run")
-                .where(Job.target_type == "research_run")
-                .where(Job.target_id == run.id)
-                .order_by(Job.created_at.desc())
-                .limit(1)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
-        return bool(
-            current_run is not None
-            and current_run.status != "cancelled"
-            and (job is None or not job.cancel_requested)
+        claim = self._active_claim
+        if claim is None:
+            return False
+        locked = self.repo.lock_active_claim(claim, touch_heartbeat=True)
+        return bool(locked is not None and locked[0].status == "running")
+
+    def _require_active_claim(self, run, *, touch_heartbeat: bool = False) -> None:
+        claim = self._active_claim
+        if claim is None:
+            raise LostResearchRunLeaseError("research run claim is missing")
+        locked = self.repo.lock_active_claim(
+            claim,
+            touch_heartbeat=touch_heartbeat,
         )
+        if locked is None or locked[0].id != run.id:
+            self.session.rollback()
+            raise LostResearchRunLeaseError("research run attempt is no longer active")
 
     def _handoff_for_review(self, run) -> None:
         """Create idempotent home-page tasks for this run's reviewable outputs."""
@@ -969,20 +1404,23 @@ class AutoResearchService:
         assessment_ids: set[uuid.UUID] = set()
         for research_task in research_tasks:
             proposal_ids.update(
-                self._result_output_ids(
-                    research_task.result, "proposed_proposal_ids"
-                )
+                self._result_output_ids(research_task.result, "proposed_proposal_ids")
             )
             assessment_ids.update(
                 self._result_output_ids(research_task.result, "assessment_id")
             )
         for proposal_id in proposal_ids:
             proposal = self.session.get(Proposal, proposal_id)
-            if proposal is None or proposal.kind != "evidence_link" or proposal.status != "pending":
+            if (
+                proposal is None
+                or proposal.kind != "evidence_link"
+                or proposal.status != "pending"
+            ):
                 continue
-            if self.task_repo.find_by_ref(task_type="review_proposal", ref_type="proposal", ref_id=proposal.id):
+            if self.task_repo.find_by_ref(
+                task_type="review_proposal", ref_type="proposal", ref_id=proposal.id
+            ):
                 continue
-            thesis_id = (proposal.target_context or {}).get("thesis_id")
             self.task_repo.add_task(
                 title="审核自动研究提出的证据",
                 description="自动研究产生的待审核证据，请人工确认后再发布。",
@@ -992,7 +1430,11 @@ class AutoResearchService:
                 research_case_id=run.research_case_id,
             )
         for assessment_id in assessment_ids:
-            if self.task_repo.find_by_ref(task_type="review_assessment", ref_type="ai_assessment", ref_id=assessment_id):
+            if self.task_repo.find_by_ref(
+                task_type="review_assessment",
+                ref_type="ai_assessment",
+                ref_id=assessment_id,
+            ):
                 continue
             self.task_repo.add_task(
                 title="确认临时 AI 评估",
@@ -1006,7 +1448,11 @@ class AutoResearchService:
             run.research_case_id,
             allowed_source_types=self._run_allowed_source_types(run),
         ):
-            if self.task_repo.find_by_ref(task_type="review_atomic_claim", ref_type="atomic_claim_candidate", ref_id=candidate.id):
+            if self.task_repo.find_by_ref(
+                task_type="review_atomic_claim",
+                ref_type="atomic_claim_candidate",
+                ref_id=candidate.id,
+            ):
                 continue
             self.task_repo.add_task(
                 title="审核自动抽取的原子陈述",
@@ -1025,7 +1471,11 @@ class AutoResearchService:
                 task.result, "proposed_proposal_ids"
             ):
                 proposal = self.session.get(Proposal, proposal_id)
-                if proposal is not None and proposal.kind == "evidence_link" and proposal.status == "pending":
+                if (
+                    proposal is not None
+                    and proposal.kind == "evidence_link"
+                    and proposal.status == "pending"
+                ):
                     return "waiting_for_review"
             if self._result_output_ids(task.result, "assessment_id"):
                 return "waiting_for_review"
@@ -1085,7 +1535,9 @@ class AutoResearchService:
         )
         return True
 
-    def complete_runs_after_assessment_review(self, assessment_id: uuid.UUID) -> list[uuid.UUID]:
+    def complete_runs_after_assessment_review(
+        self, assessment_id: uuid.UUID
+    ) -> list[uuid.UUID]:
         """Compatibility wrapper for the assessment command's existing seam."""
         return self.reconcile_runs_for_output(
             key="assessment_id",
@@ -1147,7 +1599,11 @@ class AutoResearchService:
             result = task.result
             for proposal_id in self._result_output_ids(result, "proposed_proposal_ids"):
                 proposal = self.session.get(Proposal, proposal_id)
-                if proposal is None or proposal.kind != "evidence_link" or proposal.status != "pending":
+                if (
+                    proposal is None
+                    or proposal.kind != "evidence_link"
+                    or proposal.status != "pending"
+                ):
                     continue
                 review_task = self.task_repo.find_by_ref(
                     task_type="review_proposal", ref_type="proposal", ref_id=proposal.id
@@ -1160,7 +1616,9 @@ class AutoResearchService:
                 if assessment is None:
                     continue
                 review_task = self.task_repo.find_by_ref(
-                    task_type="review_assessment", ref_type="ai_assessment", ref_id=assessment.id
+                    task_type="review_assessment",
+                    ref_type="ai_assessment",
+                    ref_id=assessment.id,
                 )
                 if review_task is None or review_task.status in {"open", "in_progress"}:
                     return True
@@ -1175,7 +1633,9 @@ class AutoResearchService:
             .order_by(ResearchRunEvent.seq.desc())
             .limit(1)
         )
-        raw_types = (scope.payload_json or {}).get("allowed_source_types", []) if scope else []
+        raw_types = (
+            (scope.payload_json or {}).get("allowed_source_types", []) if scope else []
+        )
         return {str(value).strip() for value in raw_types if str(value).strip()}
 
     def _pending_versions_in_run_scope(
@@ -1192,7 +1652,9 @@ class AutoResearchService:
             item.document_version_id: item
             for item in self.session.scalars(
                 select(SourceContract).where(
-                    SourceContract.document_version_id.in_([item.id for item in candidates])
+                    SourceContract.document_version_id.in_(
+                        [item.id for item in candidates]
+                    )
                 )
             )
         }
@@ -1204,7 +1666,9 @@ class AutoResearchService:
                 reason = "missing_source_contract"
             elif contract.research_source_type not in allowed_source_types:
                 reason = "source_type_not_in_frozen_scope"
-            elif not contract.allow_ai_processing or not source_contract_is_active(contract):
+            elif not contract.allow_ai_processing or not source_contract_is_active(
+                contract
+            ):
                 reason = "source_contract_not_usable"
             else:
                 included.append(document)
@@ -1233,17 +1697,25 @@ class AutoResearchService:
         """Return only candidates from this Case that have no human decision."""
         reviewed = (
             select(AtomicClaimReview.id)
-            .where(AtomicClaimReview.atomic_claim_candidate_id == AtomicClaimCandidate.id)
+            .where(
+                AtomicClaimReview.atomic_claim_candidate_id == AtomicClaimCandidate.id
+            )
             .exists()
         )
-        candidates = list(self.session.scalars(
-            select(AtomicClaimCandidate)
-            .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
-            .join(CaseDocumentVersion, CaseDocumentVersion.document_version_id == SourceSpan.document_version_id)
-            .where(CaseDocumentVersion.research_case_id == case_id)
-            .where(~reviewed)
-            .order_by(AtomicClaimCandidate.created_at, AtomicClaimCandidate.id)
-        ))
+        candidates = list(
+            self.session.scalars(
+                select(AtomicClaimCandidate)
+                .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
+                .join(
+                    CaseDocumentVersion,
+                    CaseDocumentVersion.document_version_id
+                    == SourceSpan.document_version_id,
+                )
+                .where(CaseDocumentVersion.research_case_id == case_id)
+                .where(~reviewed)
+                .order_by(AtomicClaimCandidate.created_at, AtomicClaimCandidate.id)
+            )
+        )
         if not allowed_source_types:
             return candidates
         document_ids = {
@@ -1251,7 +1723,11 @@ class AutoResearchService:
             for candidate, document_id in self.session.execute(
                 select(AtomicClaimCandidate, SourceSpan.document_version_id)
                 .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
-                .where(AtomicClaimCandidate.id.in_([candidate.id for candidate in candidates]))
+                .where(
+                    AtomicClaimCandidate.id.in_(
+                        [candidate.id for candidate in candidates]
+                    )
+                )
             )
         }
         contracts = {
@@ -1265,7 +1741,8 @@ class AutoResearchService:
         return [
             candidate
             for candidate in candidates
-            if (contract := contracts.get(document_ids.get(candidate.source_span_id))) is not None
+            if (contract := contracts.get(document_ids.get(candidate.source_span_id)))
+            is not None
             and contract.research_source_type in allowed_source_types
             and contract.allow_ai_processing
             and source_contract_is_active(contract)
@@ -1285,7 +1762,9 @@ class AutoResearchService:
             return []
         reviewed = (
             select(AtomicClaimReview.id)
-            .where(AtomicClaimReview.atomic_claim_candidate_id == AtomicClaimCandidate.id)
+            .where(
+                AtomicClaimReview.atomic_claim_candidate_id == AtomicClaimCandidate.id
+            )
             .exists()
         )
         return list(
@@ -1304,7 +1783,9 @@ class AutoResearchService:
             )
         )
 
-    def _pause_for_atomic_claim_review(self, run, candidates: list[AtomicClaimCandidate], used: int) -> None:
+    def _pause_for_atomic_claim_review(
+        self, run, candidates: list[AtomicClaimCandidate], used: int
+    ) -> None:
         """Persist an explicit, replayable stop before any propose/assess work."""
         self.repo.update_run(
             run,
@@ -1394,7 +1875,9 @@ class AutoResearchService:
         theses = self._run_theses(run)
         for thesis in theses:
             current = counts.get(str(thesis.id), {})
-            missing = [role for role in ("support", "contradict") if not current.get(role, 0)]
+            missing = [
+                role for role in ("support", "contradict") if not current.get(role, 0)
+            ]
             for role in missing:
                 self._create_gap_task(
                     run,
@@ -1410,8 +1893,9 @@ class AutoResearchService:
             return 0
         return int(
             self.session.scalar(
-                select(func.count(func.distinct(EvidenceLink.id)))
-                .where(EvidenceLink.thesis_id == thesis_id)
+                select(func.count(func.distinct(EvidenceLink.id))).where(
+                    EvidenceLink.thesis_id == thesis_id
+                )
             )
             or 0
         )
@@ -1454,13 +1938,15 @@ class AutoResearchService:
         thesis_ids = self._run_thesis_ids(run)
         if thesis_ids is not None and not thesis_ids:
             return 0
-        stmt = select(func.count(func.distinct(EvidenceLink.id))).join(
-            Thesis, Thesis.id == EvidenceLink.thesis_id
-        ).where(Thesis.research_case_id == run.research_case_id)
+        stmt = (
+            select(func.count(func.distinct(EvidenceLink.id)))
+            .join(Thesis, Thesis.id == EvidenceLink.thesis_id)
+            .where(Thesis.research_case_id == run.research_case_id)
+        )
         if thesis_ids is not None:
             stmt = stmt.where(EvidenceLink.thesis_id.in_(thesis_ids))
         return int(self.session.scalar(stmt) or 0)
-    
+
     def list_runs(
         self,
         case_id: uuid.UUID,
@@ -1484,12 +1970,7 @@ class AutoResearchService:
         # Already cancelled is idempotent success; other terminal states conflict.
         if run.status == "cancelled":
             return self._run_summary_dict(run)
-        if run.status not in {
-            "running",
-            "queued",
-            "waiting_for_sources",
-            "waiting_for_review",
-        }:
+        if run.status not in {"running", "queued", "waiting_for_review"}:
             raise RuntimeError(f"research run {run_id} is terminal ({run.status})")
         self.repo.cancel_run(run)
         ResearchRunEventRepository(self.session).append(
@@ -1527,9 +2008,7 @@ class AutoResearchService:
         proposal_ids: set[uuid.UUID] = set()
         for research_task in tasks:
             proposal_ids.update(
-                self._result_output_ids(
-                    research_task.result, "proposed_proposal_ids"
-                )
+                self._result_output_ids(research_task.result, "proposed_proposal_ids")
             )
         pending_proposals = []
         review_tasks = []
@@ -1540,12 +2019,14 @@ class AutoResearchService:
             review_task = self.task_repo.find_by_ref(
                 task_type="review_proposal", ref_type="proposal", ref_id=proposal.id
             )
-            pending_proposals.append({
-                "id": str(proposal.id),
-                "thesis_id": (proposal.target_context or {}).get("thesis_id"),
-                "task_id": str(review_task.id) if review_task else None,
-                "status": proposal.status,
-            })
+            pending_proposals.append(
+                {
+                    "id": str(proposal.id),
+                    "thesis_id": (proposal.target_context or {}).get("thesis_id"),
+                    "task_id": str(review_task.id) if review_task else None,
+                    "status": proposal.status,
+                }
+            )
             if review_task:
                 review_tasks.append(self._review_task_dict(review_task))
         for research_task in tasks:
@@ -1576,14 +2057,16 @@ class AutoResearchService:
                     or review_task.status not in {"open", "in_progress"}
                 ):
                     continue
-                pending_assessments.append({
-                    "assessment_id": str(assessment.id),
-                    "conclusion": assessment.conclusion,
-                    "rationale": assessment.rationale,
-                    "gaps": list(assessment.gaps or []),
-                    "task_id": str(review_task.id),
-                    "task_status": review_task.status,
-                })
+                pending_assessments.append(
+                    {
+                        "assessment_id": str(assessment.id),
+                        "conclusion": assessment.conclusion,
+                        "rationale": assessment.rationale,
+                        "gaps": list(assessment.gaps or []),
+                        "task_id": str(review_task.id),
+                        "task_status": review_task.status,
+                    }
+                )
         return {
             "id": str(run.id),
             "case_id": str(run.research_case_id),
@@ -1595,10 +2078,15 @@ class AutoResearchService:
             "budget_used": run.budget_used,
             "stop_reason": run.stop_reason,
             "scope_thesis_ids": list(run.scope_thesis_ids or []),
-            "progress": {"total": len(tasks), "completed": sum(t.status == "done" for t in tasks)},
+            "progress": {
+                "total": len(tasks),
+                "completed": sum(t.status == "done" for t in tasks),
+            },
             "evidence": {
                 "support": sum(item.get("support", 0) for item in by_thesis.values()),
-                "contradict": sum(item.get("contradict", 0) for item in by_thesis.values()),
+                "contradict": sum(
+                    item.get("contradict", 0) for item in by_thesis.values()
+                ),
             },
             "by_thesis": by_thesis,
             "gaps": [t.query for t in gaps],

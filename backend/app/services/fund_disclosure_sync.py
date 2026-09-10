@@ -105,18 +105,26 @@ class FundDisclosureSyncService:
         self._session.flush()
         return config
 
-    def start_manual_run(self, case_id: uuid.UUID) -> FundDisclosureSyncRun:
-        return self._start_run(case_id, trigger="manual")
+    def start_manual_run(
+        self, case_id: uuid.UUID, *, initiated_by: str | None = None
+    ) -> FundDisclosureSyncRun:
+        return self._start_run(case_id, trigger="manual", initiated_by=initiated_by)
 
     def start_scheduled_run(self, case_id: uuid.UUID) -> FundDisclosureSyncRun:
-        return self._start_run(case_id, trigger="scheduled")
+        return self._start_run(case_id, trigger="scheduled", initiated_by=None)
 
     def run_now(self, case_id: uuid.UUID, *, client: object) -> FundDisclosureSyncExecution:
         """Execute one transparent, bounded run against its frozen config."""
         run = self.start_manual_run(case_id)
         return self.execute(run.id, client=client)
 
-    def start_retry(self, case_id: uuid.UUID, run_id: uuid.UUID) -> FundDisclosureSyncRun:
+    def start_retry(
+        self,
+        case_id: uuid.UUID,
+        run_id: uuid.UUID,
+        *,
+        initiated_by: str | None = None,
+    ) -> FundDisclosureSyncRun:
         previous = self._session.get(FundDisclosureSyncRun, run_id)
         if previous is None or previous.research_case_id != case_id:
             raise ValueError("fund disclosure sync run not found")
@@ -134,6 +142,7 @@ class FundDisclosureSyncService:
             raise ValueError("fund disclosure sync run has no frozen report period; create a successor configuration")
         self._session.add(run)
         self._session.flush()
+        self._append_scope_event(run, initiated_by=initiated_by)
         return run
 
     def execute(self, run_id: uuid.UUID, *, client: object) -> FundDisclosureSyncExecution:
@@ -142,19 +151,6 @@ class FundDisclosureSyncService:
             raise ValueError("fund disclosure sync run not found")
         if run.report_period is None:
             raise ValueError("fund disclosure sync run has no frozen report period; create a successor configuration")
-        self._append_event(
-            run.id,
-            stage="scope",
-            status="completed",
-            message="已冻结基金与当前 Case 股票范围",
-            payload_json={
-                "config_version_id": str(run.config_version_id),
-                "fund_codes": list(run.fund_codes),
-                "stock_codes": list(run.stock_codes),
-                "report_period": run.report_period.isoformat() if run.report_period else None,
-                "allow_display": run.allow_display,
-            },
-        )
         try:
             capability = self._provider_capability_snapshot(client)
         except GildataMCPError as exc:
@@ -345,7 +341,13 @@ class FundDisclosureSyncService:
                 candidate = local_now.replace(year=year, month=month, day=1, hour=9, minute=0, second=0, microsecond=0)
         return candidate.astimezone(timezone.utc)
 
-    def _start_run(self, case_id: uuid.UUID, *, trigger: str) -> FundDisclosureSyncRun:
+    def _start_run(
+        self,
+        case_id: uuid.UUID,
+        *,
+        trigger: str,
+        initiated_by: str | None,
+    ) -> FundDisclosureSyncRun:
         config = self._latest_config(case_id)
         if config is None:
             raise ValueError("fund disclosure sync configuration not found")
@@ -363,7 +365,32 @@ class FundDisclosureSyncService:
         )
         self._session.add(run)
         self._session.flush()
+        self._append_scope_event(run, initiated_by=initiated_by)
         return run
+
+    def _append_scope_event(
+        self,
+        run: FundDisclosureSyncRun,
+        *,
+        initiated_by: str | None,
+    ) -> None:
+        self._append_event(
+            run.id,
+            stage="scope",
+            status="completed",
+            message="已冻结基金与当前 Case 股票范围",
+            payload_json={
+                "config_version_id": str(run.config_version_id),
+                "fund_codes": list(run.fund_codes),
+                "stock_codes": list(run.stock_codes),
+                "report_period": run.report_period.isoformat()
+                if run.report_period
+                else None,
+                "allow_display": run.allow_display,
+                "executor_actor": "service:fund-disclosure-sync",
+                "initiated_by": initiated_by,
+            },
+        )
 
     def _run(self, run_id: uuid.UUID) -> FundDisclosureSyncExecution:
         run = self._session.get(FundDisclosureSyncRun, run_id)

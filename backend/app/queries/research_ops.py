@@ -28,6 +28,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
 from app.errors import NotFoundError
 from app.models.ledger import (
@@ -72,6 +73,7 @@ class ResearchOpsQueries:
         *,
         case_id: uuid.UUID | None = None,
         as_of: datetime | None = None,
+        authorized_case_ids: Select[tuple[uuid.UUID]] | None = None,
     ) -> ResearchOpsResponse:
         as_of = as_of or datetime.now(UTC)
         if case_id is not None and self._db.get(ResearchCase, case_id) is None:
@@ -80,6 +82,10 @@ class ResearchOpsQueries:
         thesis_query = select(Thesis.id)
         if case_id is not None:
             thesis_query = thesis_query.where(Thesis.research_case_id == case_id)
+        if authorized_case_ids is not None:
+            thesis_query = thesis_query.where(
+                Thesis.research_case_id.in_(authorized_case_ids)
+            )
         thesis_ids = set(self._db.scalars(thesis_query).all())
 
         links = [

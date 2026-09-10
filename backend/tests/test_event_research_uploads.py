@@ -23,7 +23,6 @@ def _create_event(cmd_client) -> uuid.UUID:
             "research_question": "新增经营数据是否改变收入与利润率预期？",
             "candidate_factors": ["订单", "收入", "利润率"],
             "research_protocol_required": False,
-            "created_by": "human:lin",
         },
     )
     assert response.status_code == 201, response.text
@@ -43,7 +42,7 @@ def _upload(
         f"/api/v1/event-research/{case_id}/uploaded-materials",
         files={"file": (name, raw, mime)},
         data={
-            "actor": "human:lin",
+            "actor": "user:forged",
             "source_metadata": json.dumps(
                 source_metadata
                 or {
@@ -106,7 +105,7 @@ def test_uploaded_text_original_is_frozen_attached_and_readable_without_a_run(
         "mime_type": "text/plain",
         "byte_size": len(raw),
         "object_version": f"sha256:{hashlib.sha256(raw).hexdigest()}",
-        "uploaded_by": "human:lin",
+        "uploaded_by": "user:test-team",
         "retention_policy": "case_retained",
     }
     assert cmd_session.scalars(
@@ -272,7 +271,7 @@ def test_published_case_freezes_pdf_original_before_recording_no_change_decision
         f"/api/v1/event-research/{case_id}/published-uploaded-material-decisions",
         files={"file": ("late-report.pdf", raw, "application/pdf")},
         data={
-            "actor": "human:lin",
+            "actor": "user:forged",
             "decision": "no_change",
             "reason": "该报告未提供改变已发布判断的新证据。",
             "source_metadata": json.dumps(
@@ -304,6 +303,7 @@ def test_published_case_freezes_pdf_original_before_recording_no_change_decision
     assert detail.status_code == 200
     assert detail.json()["document"]["parse_state"] == "failed"
     assert detail.json()["document"]["original_file"]["file_name"] == "late-report.pdf"
+    assert detail.json()["document"]["original_file"]["uploaded_by"] == "user:test-team"
 
 
 def test_published_case_keeps_unparseable_pdf_when_reopen_requires_recovery(
@@ -381,29 +381,3 @@ def test_published_material_rejects_deduplicated_original_with_restrictive_new_d
     assert restricted.status_code == 422
     assert "deduplicated original has a different source contract" in restricted.json()["error"]["message"]
     assert len(cmd_session.scalars(select(DocumentUploadArtifact)).all()) == 1
-
-
-@pytest.mark.parametrize('mode', ['success', 'parse_failure', 'oversize', 'unsupported'])
-def test_upload_closes_spooled_file_on_success_and_failure(cmd_client, cmd_session, monkeypatch, mode):
-    from starlette.datastructures import UploadFile
-    case_id = _create_event(cmd_client)
-    opened = []
-    original_init = UploadFile.__init__
-
-    def observe_upload(self, *args, **kwargs):
-        original_init(self, *args, **kwargs)
-        opened.append(self.file)
-
-    monkeypatch.setattr(UploadFile, '__init__', observe_upload)
-    raw = b'x' * ((20 * 1024 * 1024 + 1) if mode == 'oversize' else (1024 * 1024 + 1))
-    mime = {'parse_failure':'application/pdf', 'unsupported':'application/octet-stream'}.get(mode, 'text/plain')
-    before = len(list(cmd_session.scalars(select(DocumentUploadArtifact))))
-    response = _upload(cmd_client, case_id, name='cleanup-test.pdf' if mode == 'parse_failure' else 'cleanup-test.txt', raw=raw, mime=mime)
-    assert response.status_code == (422 if mode in {'oversize', 'unsupported'} else 201), response.text
-    assert len(opened) == 1
-    assert opened[0]._rolled is True  # Exercise a real disk-backed spool, not just BytesIO.
-    assert opened[0].closed is True
-    after = len(list(cmd_session.scalars(select(DocumentUploadArtifact))))
-    assert after == before + (mode in {'success', 'parse_failure'})
-    if mode == 'parse_failure':
-        assert response.json()['parse_state'] == 'failed'

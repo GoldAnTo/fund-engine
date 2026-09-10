@@ -33,7 +33,7 @@ from app.schemas.v1.market_expression import (
     SourceStatementOptionsResponse,
 )
 from app.services.market_expression import ClaimVerificationInput, FundamentalImpactInput, KeyFactorInput, MarketExpressionService, MarketInstrumentBindingInput, MarketObservationInput, ReportClaimInput
-from app.api.v1.tenant_context import require_research_tenant
+from app.api.v1.tenant_context import ResearchActor, require_research_actor, require_research_tenant
 from app.services.case_tenant_access import CaseTenantAccess
 
 
@@ -67,13 +67,13 @@ def key_factor_candidate_runs(case_id: uuid.UUID, db: Session = Depends(get_db),
 
 
 @router.post("/research-cases/{case_id}/key-factor-candidate-runs", response_model=KeyFactorCandidateRunDTO, status_code=status.HTTP_201_CREATED)
-def parse_key_factor_candidates(case_id: uuid.UUID, payload: StartKeyFactorCandidateRunRequest, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)) -> KeyFactorCandidateRunDTO:
-    _require_case(db, case_id, tenant_id)
+def parse_key_factor_candidates(case_id: uuid.UUID, payload: StartKeyFactorCandidateRunRequest, db: Session = Depends(get_db), actor: ResearchActor = Depends(require_research_actor)) -> KeyFactorCandidateRunDTO:
+    _require_case(db, case_id, actor.tenant_id)
     record = translate_validation(
         MarketExpressionService(db).parse_key_factor_candidates,
         case_id,
         source_statement_id=payload.source_statement_id,
-        requested_by=payload.requested_by,
+        requested_by=actor.server_actor,
     )
     commit_or_rollback(db)
     return MarketExpressionQueries(db)._key_factor_candidate_run(record)
@@ -91,8 +91,8 @@ def market_instrument_catalog(query: str = "", db: Session = Depends(get_db)) ->
 
 
 @router.post("/research-cases/{case_id}/market-instruments", response_model=MarketInstrumentBindingDTO, status_code=status.HTTP_201_CREATED)
-def register_market_instrument_binding(case_id: uuid.UUID, payload: RegisterMarketInstrumentBindingRequest, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)) -> MarketInstrumentBindingDTO:
-    _require_case(db, case_id, tenant_id)
+def register_market_instrument_binding(case_id: uuid.UUID, payload: RegisterMarketInstrumentBindingRequest, db: Session = Depends(get_db), actor: ResearchActor = Depends(require_research_actor)) -> MarketInstrumentBindingDTO:
+    _require_case(db, case_id, actor.tenant_id)
     record = translate_validation(
         MarketExpressionService(db).register_market_instrument_binding,
         case_id,
@@ -100,7 +100,7 @@ def register_market_instrument_binding(case_id: uuid.UUID, payload: RegisterMark
             company_id=payload.company_id, stock_id=payload.stock_id,
             source_statement_id=payload.source_statement_id,
             relationship_role=payload.relationship_role,
-            reviewed_by=payload.reviewed_by, review_reason=payload.review_reason,
+            reviewed_by=actor.server_actor, review_reason=payload.review_reason,
         ),
     )
     commit_or_rollback(db)
@@ -108,8 +108,8 @@ def register_market_instrument_binding(case_id: uuid.UUID, payload: RegisterMark
 
 
 @router.post("/research-cases/{case_id}/key-factors/{factor_id}/fundamental-impacts", response_model=FundamentalImpactDTO, status_code=status.HTTP_201_CREATED)
-def register_fundamental_impact(case_id: uuid.UUID, factor_id: uuid.UUID, payload: RegisterFundamentalImpactRequest, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)) -> FundamentalImpactDTO:
-    _require_case(db, case_id, tenant_id)
+def register_fundamental_impact(case_id: uuid.UUID, factor_id: uuid.UUID, payload: RegisterFundamentalImpactRequest, db: Session = Depends(get_db), actor: ResearchActor = Depends(require_research_actor)) -> FundamentalImpactDTO:
+    _require_case(db, case_id, actor.tenant_id)
     record = translate_validation(
         MarketExpressionService(db).register_fundamental_impact,
         case_id,
@@ -120,7 +120,7 @@ def register_fundamental_impact(case_id: uuid.UUID, factor_id: uuid.UUID, payloa
             metric_name=payload.metric_name,
             expected_direction=payload.expected_direction,
             rationale=payload.rationale,
-            reviewed_by=payload.reviewed_by,
+            reviewed_by=actor.server_actor,
             review_reason=payload.review_reason,
         ),
     )
@@ -129,8 +129,8 @@ def register_fundamental_impact(case_id: uuid.UUID, factor_id: uuid.UUID, payloa
 
 
 @router.post("/research-cases/{case_id}/key-factors/{factor_id}/market-observations", response_model=MarketObservationDTO, status_code=status.HTTP_201_CREATED)
-def register_market_observation(case_id: uuid.UUID, factor_id: uuid.UUID, payload: RegisterMarketObservationRequest, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)) -> MarketObservationDTO:
-    _require_case(db, case_id, tenant_id)
+def register_market_observation(case_id: uuid.UUID, factor_id: uuid.UUID, payload: RegisterMarketObservationRequest, db: Session = Depends(get_db), actor: ResearchActor = Depends(require_research_actor)) -> MarketObservationDTO:
+    _require_case(db, case_id, actor.tenant_id)
     record = translate_validation(
         MarketExpressionService(db).register_market_observation,
         case_id,
@@ -145,7 +145,7 @@ def register_market_observation(case_id: uuid.UUID, factor_id: uuid.UUID, payloa
             price_source=payload.price_source,
             after_hours_treatment=payload.after_hours_treatment,
             relative_return=Decimal(str(payload.relative_return)) if payload.relative_return is not None else None,
-            reviewed_by=payload.reviewed_by,
+            reviewed_by=actor.server_actor,
             review_reason=payload.review_reason,
         ),
     )
@@ -154,15 +154,15 @@ def register_market_observation(case_id: uuid.UUID, factor_id: uuid.UUID, payloa
 
 
 @router.post("/research-cases/{case_id}/report-claims", response_model=ReportClaimDTO, status_code=status.HTTP_201_CREATED)
-def register_report_claim(case_id: uuid.UUID, payload: RegisterReportClaimRequest, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)) -> ReportClaimDTO:
-    _require_case(db, case_id, tenant_id)
+def register_report_claim(case_id: uuid.UUID, payload: RegisterReportClaimRequest, db: Session = Depends(get_db), actor: ResearchActor = Depends(require_research_actor)) -> ReportClaimDTO:
+    _require_case(db, case_id, actor.tenant_id)
     record = translate_validation(
         MarketExpressionService(db).register_report_claim,
         case_id,
         ReportClaimInput(
             source_statement_id=payload.source_statement_id, text=payload.text,
             claim_kind=payload.claim_kind, asserted_period=payload.asserted_period,
-            asserted_by=payload.asserted_by, reviewed_by=payload.reviewed_by,
+            asserted_by=payload.asserted_by, reviewed_by=actor.server_actor,
             review_reason=payload.review_reason,
         ),
     )
@@ -171,8 +171,8 @@ def register_report_claim(case_id: uuid.UUID, payload: RegisterReportClaimReques
 
 
 @router.post("/research-cases/{case_id}/key-factors", response_model=KeyFactorDTO, status_code=status.HTTP_201_CREATED)
-def register_key_factor(case_id: uuid.UUID, payload: RegisterKeyFactorRequest, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)) -> KeyFactorDTO:
-    _require_case(db, case_id, tenant_id)
+def register_key_factor(case_id: uuid.UUID, payload: RegisterKeyFactorRequest, db: Session = Depends(get_db), actor: ResearchActor = Depends(require_research_actor)) -> KeyFactorDTO:
+    _require_case(db, case_id, actor.tenant_id)
     record = translate_validation(
         MarketExpressionService(db).register_key_factor,
         case_id,
@@ -182,7 +182,7 @@ def register_key_factor(case_id: uuid.UUID, payload: RegisterKeyFactorRequest, d
             allowed_source_types=list(payload.allowed_source_types), verification_window_start=payload.verification_window_start,
             verification_window_end=payload.verification_window_end, support_condition=payload.support_condition,
             refutation_condition=payload.refutation_condition, next_verification_event=payload.next_verification_event,
-            reviewed_by=payload.reviewed_by, review_reason=payload.review_reason,
+            reviewed_by=actor.server_actor, review_reason=payload.review_reason,
         ),
     )
     commit_or_rollback(db)
@@ -190,15 +190,15 @@ def register_key_factor(case_id: uuid.UUID, payload: RegisterKeyFactorRequest, d
 
 
 @router.post("/research-cases/{case_id}/key-factors/{factor_id}/verifications", response_model=ClaimVerificationDTO, status_code=status.HTTP_201_CREATED)
-def register_claim_verification(case_id: uuid.UUID, factor_id: uuid.UUID, payload: RegisterClaimVerificationRequest, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)) -> ClaimVerificationDTO:
-    _require_case(db, case_id, tenant_id)
+def register_claim_verification(case_id: uuid.UUID, factor_id: uuid.UUID, payload: RegisterClaimVerificationRequest, db: Session = Depends(get_db), actor: ResearchActor = Depends(require_research_actor)) -> ClaimVerificationDTO:
+    _require_case(db, case_id, actor.tenant_id)
     record = translate_validation(
         MarketExpressionService(db).register_claim_verification,
         case_id,
         factor_id,
         ClaimVerificationInput(
             source_statement_id=payload.source_statement_id, outcome=payload.outcome,
-            rationale=payload.rationale, reviewed_by=payload.reviewed_by,
+            rationale=payload.rationale, reviewed_by=actor.server_actor,
             review_reason=payload.review_reason,
         ),
     )

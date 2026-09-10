@@ -13,33 +13,100 @@ statement count (split into rule-based and LLM), and success/failure status.
 """
 from __future__ import annotations
 
-from app.ai.usage import capture_usage
-
 import json
+import re
 import uuid
 from collections.abc import Callable
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai.client import (
-    LLMClient,
-    LLMMalformedResponseError,
-    LLM_MALFORMED_RESPONSE_MESSAGE,
-)
+from app.ai.client import LLMClient
 from app.ai.error_safety import AI_OPERATION_ERROR_MESSAGE
 from app.ai.prompts import EXTRACT_PROMPT_VERSION, EXTRACT_SYSTEM
 from app.ai.runs import record_run
 from app.domain.atomic_claims import AtomicClaimDraft
-from app.models.ledger import (
-    AtomicClaimCandidate,
-    DocumentVersion,
-    SourceSpan,
-    ValidationError,
-)
+from app.models.ledger import AtomicClaimCandidate, DocumentVersion, SourceSpan
 from app.services.atomic_claims import AtomicClaimService
 from app.services.table_extraction import FinancialTableExtractor
+
+
+EXTRACT_SELECTION_VERSION = "grounded-span-selection-v1"
+_MAX_LLM_SPANS = 8
+_MAX_LLM_CHARACTERS = 24_000
+
+
+def _context_values(context: Mapping[str, object], key: str) -> tuple[str, ...]:
+    raw = context.get(key)
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    return tuple(value.strip() for value in raw if isinstance(value, str) and value.strip())
+
+
+def _search_needles(values: tuple[str, ...]) -> tuple[str, ...]:
+    needles: set[str] = set()
+    for value in values:
+        for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9._%+-]*|[\u3400-\u9fff]+", value):
+            folded = token.casefold()
+            if re.fullmatch(r"[\u3400-\u9fff]+", token):
+                if len(token) <= 4:
+                    if len(token) >= 2:
+                        needles.add(token)
+                else:
+                    needles.update(
+                        token[index : index + 4]
+                        for index in range(len(token) - 3)
+                    )
+            elif len(folded) >= 3:
+                needles.add(folded)
+    return tuple(sorted(needles, key=lambda item: (-len(item), item)))
+
+
+def _select_llm_spans(
+    spans: list[SourceSpan], grounding_context: Mapping[str, object]
+) -> list[SourceSpan]:
+    """Bound provider input to the report pages grounded in the Case scope."""
+
+    metric_needles = _search_needles(_context_values(grounding_context, "metric_terms"))
+    entity_needles = _search_needles(_context_values(grounding_context, "entity_names"))
+    period_needles = tuple(
+        sorted(
+            {
+                match
+                for key in ("period_start", "period_end")
+                for match in re.findall(r"\b\d{4}\b", str(grounding_context.get(key) or ""))
+            }
+        )
+    )
+    scored: list[tuple[int, int, int, int, SourceSpan]] = []
+    for index, span in enumerate(spans):
+        text = span.verbatim_text.casefold()
+        metric_score = sum(1 for needle in metric_needles if needle in text)
+        entity_score = sum(1 for needle in entity_needles if needle in text)
+        period_score = sum(1 for needle in period_needles if needle in text)
+        scored.append((metric_score, entity_score, period_score, index, span))
+
+    if metric_needles and any(item[0] > 0 for item in scored):
+        candidates = [item for item in scored if item[0] > 0]
+    elif entity_needles and any(item[1] > 0 for item in scored):
+        candidates = [item for item in scored if item[1] > 0]
+    else:
+        candidates = scored
+    candidates.sort(key=lambda item: (-item[0], -item[1], -item[2], item[3]))
+
+    selected: list[SourceSpan] = []
+    character_count = 0
+    for *_score, span in candidates:
+        span_size = len(span.verbatim_text)
+        if selected and character_count + span_size > _MAX_LLM_CHARACTERS:
+            continue
+        selected.append(span)
+        character_count += span_size
+        if len(selected) >= _MAX_LLM_SPANS or character_count >= _MAX_LLM_CHARACTERS:
+            break
+    return selected
 
 
 class StatementExtractor:
@@ -49,12 +116,12 @@ class StatementExtractor:
         self._client = client
         self._table_extractor = FinancialTableExtractor()
 
-    @capture_usage()
     def extract(
         self,
         document_version_id: uuid.UUID,
         session: Session,
         *,
+        grounding_context: Mapping[str, object] | None = None,
         before_persist: Callable[[], bool] | None = None,
         pre_commit_guard: Callable[[Session], None] | None = None,
     ) -> list[AtomicClaimCandidate] | None:
@@ -74,9 +141,12 @@ class StatementExtractor:
         )
 
         span_ids = [str(span.id) for span in spans]
+        frozen_grounding_context = dict(grounding_context or {})
         input_ref = {
             "document_version_id": str(document_version_id),
             "span_ids": span_ids,
+            "grounding_context": frozen_grounding_context,
+            "selection_version": EXTRACT_SELECTION_VERSION,
         }
 
         if not spans:
@@ -107,27 +177,46 @@ class StatementExtractor:
             handled_span_ids: set[str] = set()
             for span in spans:
                 facts = self._table_extractor.extract(span.verbatim_text)
+                matched_entities = tuple(
+                    entity
+                    for entity in _context_values(
+                        frozen_grounding_context, "entity_names"
+                    )
+                    if entity in span.verbatim_text
+                )
+                table_subject = (
+                    matched_entities[0] if len(matched_entities) == 1 else None
+                )
                 for fact in facts:
+                    period_text = (
+                        f"{fact.observed_period.year}年"
+                        f"{fact.observed_period.month}月{fact.observed_period.day}日"
+                    )
+                    value_text = fact.statement_text.split("为", 1)[-1]
+                    normalized_text = (
+                        f"{table_subject or ''}{period_text}"
+                        f"{fact.predicate}为{value_text}"
+                    )
                     rule_drafts.append(
                         AtomicClaimDraft(
                             source_span_id=span.id,
                             quote=fact.quote,
                             quote_start=fact.quote_start,
                             quote_end=fact.quote_end,
-                            normalized_text=fact.statement_text,
+                            normalized_text=normalized_text,
                             # A table's shape alone cannot establish that its
                             # document is a primary disclosure. Only an
                             # immutable intake authority declaration may keep
                             # the candidate as a disclosed fact.
                             claim_type=("disclosed_fact" if authority_level == "primary_disclosure" else "reported_claim"),
-                            assertion_actor=None,
-                            subject=None,
-                            predicate=fact.metric_name,
+                            assertion_actor=table_subject,
+                            subject=table_subject,
+                            predicate=fact.predicate,
                             object_text=fact.statement_text,
                             numeric_value=None,
                             unit=None,
                             observed_period=fact.observed_period,
-                            scope={},
+                            scope={"extraction_method": "financial_table_v1"},
                         )
                     )
                 if facts:
@@ -135,8 +224,13 @@ class StatementExtractor:
 
             # 2. LLM pass: narrative spans only.
             statements_data: list[dict] = []
+            llm_failed = False
             span_ids_by_text_id: dict[str, uuid.UUID] = {}
-            llm_spans = [s for s in spans if str(s.id) not in handled_span_ids]
+            llm_spans = _select_llm_spans(
+                [s for s in spans if str(s.id) not in handled_span_ids],
+                frozen_grounding_context,
+            )
+            input_ref["selected_span_ids"] = [str(span.id) for span in llm_spans]
             if llm_spans:
                 span_ids_by_text_id = {
                     str(span.id): span.id for span in llm_spans
@@ -145,7 +239,8 @@ class StatementExtractor:
                     "spans": [
                         {"span_id": str(span.id), "verbatim_text": span.verbatim_text}
                         for span in llm_spans
-                    ]
+                    ],
+                    "grounding_context": frozen_grounding_context,
                 }
                 messages = [
                     {"role": "system", "content": EXTRACT_SYSTEM},
@@ -158,13 +253,14 @@ class StatementExtractor:
                 if pre_commit_guard is not None:
                     pre_commit_guard(session)
                 session.commit()
-                result = self._client.chat_json(messages, schema_hint="extract")
-                # Only an explicit array can establish an empty extraction.
-                # Treating a missing/wrong-shaped field as [] would create a
-                # success watermark and permanently suppress automatic retry.
-                if not isinstance(result.get("statements"), list):
-                    raise LLMMalformedResponseError(LLM_MALFORMED_RESPONSE_MESSAGE)
-                statements_data = result["statements"]
+                try:
+                    result = self._client.chat_json(messages, schema_hint="extract")
+                    statements_data = result.get("statements", [])
+                except Exception:
+                    if not rule_drafts:
+                        raise
+                    llm_failed = True
+                    input_ref["rule_fallback"] = True
 
             # Every output path, including deterministic table-only
             # extraction, must claim the caller's current output slot before
@@ -223,7 +319,7 @@ class StatementExtractor:
                         authority_level=authority_level,
                         run_ref=run_ref,
                     )
-                except (KeyError, TypeError, ValueError, ValidationError):
+                except (KeyError, TypeError, ValueError):
                     continue
                 created.append(candidate)
 
@@ -240,6 +336,9 @@ class StatementExtractor:
                     f"({len(rule_drafts)} rule-based, "
                     f"{len(created) - len(rule_drafts)} llm) from {len(spans)} spans"
                     + (
+                        "; narrative provider failed, deterministic table facts retained"
+                        if llm_failed
+                        else
                         "; llm returned 0 statements"
                         if len(created) - len(rule_drafts) == 0
                         and len(rule_drafts) == 0
@@ -247,7 +346,8 @@ class StatementExtractor:
                         else ""
                     )
                 ),
-                status="success",
+                status="partial" if llm_failed else "success",
+                error=AI_OPERATION_ERROR_MESSAGE if llm_failed else None,
                 started_at=started_at,
                 run_id=run_id,
             )

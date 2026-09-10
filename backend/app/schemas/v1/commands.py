@@ -29,7 +29,6 @@ class ThesisInput(V1Model):
     support_condition: str | None = None
     falsification_condition: str | None = None
     next_verification_event: str | None = None
-    creator_type: Literal["human", "ai"] = "human"
 
 
 class CreateCaseRequest(V1Model):
@@ -37,7 +36,6 @@ class CreateCaseRequest(V1Model):
 
     title: str = Field(min_length=1)
     industry_topic: str = Field(min_length=1)
-    created_by: str = Field(min_length=1)
     research_object: str | None = None
     phenomenon: str | None = None
     core_question: str | None = None
@@ -61,9 +59,9 @@ class CreateCaseResponse(V1Model):
 
 
 class CreateThesisRequest(ThesisInput):
-    """Add one proposition to an existing case (AI 协助拆分 or human)."""
+    """Add one proposition authored by the authenticated user."""
 
-    created_by: str = Field(min_length=1)
+    pass
 
 
 class CreateThesisResponse(V1Model):
@@ -74,7 +72,6 @@ class CreateDocumentSupplementRequest(V1Model):
     case_id: str = Field(min_length=1)
     raw_text: str = Field(min_length=1)
     claimed_page_reference: str = Field(min_length=1, max_length=256)
-    created_by: str = Field(min_length=1, max_length=128)
     source_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -103,7 +100,6 @@ class LinkReviewRequest(V1Model):
     factor_role: str = Field(min_length=1)
     scope_boundary: str = Field(min_length=1)
     reason: str = Field(min_length=1)
-    reviewer: str = Field(min_length=1)
 
 
 class EvidenceReviewDTO(V1Model):
@@ -126,7 +122,6 @@ class AssessmentReviewRequest(V1Model):
     outcome: Literal["confirmed", "modified", "rejected"]
     conclusion: Literal["supported", "contradicted", "insufficient_evidence"] | None = None
     reason: str = Field(min_length=1)
-    reviewer: str = Field(default="reviewer", min_length=1)
 
 
 class AssessmentReviewResponse(V1Model):
@@ -246,15 +241,12 @@ class AtomicClaimCandidateDTO(V1Model):
 
 class AtomicClaimQueueResponse(V1Model):
     items: list[AtomicClaimCandidateDTO]
-    has_more: bool = False
-    next_cursor: str | None = None
 
 
 class AtomicClaimReviewRequest(V1Model):
     outcome: Literal["confirmed", "modified", "rejected"]
     normalized_text: str | None = Field(default=None, min_length=1)
     observed_period: date | None = None
-    reviewer: str = Field(min_length=1)
     reason: str = Field(min_length=1)
     idempotency_key: str = Field(min_length=1)
 
@@ -283,7 +275,6 @@ class CreateAtomicClaimCandidateRequest(V1Model):
     unit: str | None = Field(default=None, max_length=128)
     observed_period: date | None = None
     scope: dict[str, str] = Field(default_factory=dict)
-    actor: str = Field(min_length=1, max_length=128)
 
 
 # ---------------------------------------------------------------------------

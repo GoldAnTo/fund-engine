@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-import pytest
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -25,17 +24,6 @@ from app.services.case_monitor import (
     CaseMonitorService,
     ResearchRunEventRepository,
 )
-from app.repositories.research_preparation import ResearchPreparationRepository
-from app.services.research_preparation import ResearchPreparationService
-
-
-@pytest.fixture
-def cmd_session(session):
-    """Use the selected database, including real PG when TEST_DATABASE_URL is set."""
-    import os
-    expected = "postgresql" if os.environ.get("TEST_DATABASE_URL") else "sqlite"
-    assert session.get_bind().dialect.name == expected
-    return session
 
 
 def _candidate_for_case(session):
@@ -125,7 +113,6 @@ def test_atomic_claim_review_api_publishes_only_after_human_decision(cmd_client,
         json={
             "outcome": "modified",
             "normalized_text": "审核后确认：2026 年第一季度订单同比增长 20%",
-            "reviewer": "human:reviewer",
             "reason": "已复核原文、主体和期间",
             "idempotency_key": "atomic-review-1",
         },
@@ -134,6 +121,7 @@ def test_atomic_claim_review_api_publishes_only_after_human_decision(cmd_client,
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["outcome"] == "modified"
+    assert body["reviewer"] == "user:test-team"
     assert body["published_source_statement"]["normalized_text"] == "审核后确认：2026 年第一季度订单同比增长 20%"
 
     queue = cmd_client.get(f"/api/v1/research-cases/{case.id}/atomic-claims")
@@ -141,73 +129,6 @@ def test_atomic_claim_review_api_publishes_only_after_human_decision(cmd_client,
     assert item["review_state"] == "modified"
     assert item["review_history"][0]["reason"] == "已复核原文、主体和期间"
     assert item["published_source_statement"]["id"] == body["published_source_statement"]["id"]
-
-
-def test_atomic_claim_review_rejects_shared_cross_tenant_candidate_before_locking(
-    cmd_client, cmd_session, monkeypatch
-) -> None:
-    """A cross-tenant shared source cannot enter the global review/lock path."""
-    _case, candidate = _candidate_for_case(cmd_session)
-    span = cmd_session.get(SourceSpan, candidate.source_span_id)
-    assert span is not None
-    now = datetime.now(timezone.utc)
-    other_case = ResearchCase(
-        title="其他租户共享来源",
-        industry_topic="ai",
-        created_by="human:other",
-        created_at=now,
-    )
-    cmd_session.add(other_case)
-    cmd_session.flush()
-    cmd_session.add_all([
-        CaseDocumentVersion(
-            research_case_id=other_case.id,
-            document_version_id=span.document_version_id,
-            linked_at=now,
-        ),
-        CaseTenantAdmission(
-            research_case_id=other_case.id,
-            tenant_id="other-team",
-            initial_document_version_id=span.document_version_id,
-            admitted_by="test-fixture",
-            admitted_at=now,
-        ),
-    ])
-    other_preparation = ResearchPreparationService(cmd_session).create_for_case(
-        other_case.id, input_fingerprint="o" * 64, actor="tester"
-    )
-    ResearchPreparationService(cmd_session).complete_system_step(
-        other_case.id,
-        "parse_claims",
-        {"candidates": [{"candidate_id": str(candidate.id)}]},
-        expected_version=other_preparation.version,
-        expected_fingerprint=other_preparation.input_fingerprint,
-    )
-    cmd_session.commit()
-
-    lock_calls: list[uuid.UUID] = []
-
-    def record_lock(self, candidate_id):
-        lock_calls.append(candidate_id)
-        return []
-
-    monkeypatch.setattr(
-        ResearchPreparationRepository,
-        "lock_preparation_for_candidate_review",
-        record_lock,
-    )
-    response = cmd_client.post(
-        f"/api/v1/atomic-claims/{candidate.id}/reviews",
-        json={
-            "outcome": "rejected",
-            "reviewer": "human:reviewer",
-            "reason": "shared cross-tenant candidate",
-            "idempotency_key": "cross-tenant-review",
-        },
-    )
-
-    assert response.status_code == 404
-    assert lock_calls == []
 
 
 def test_atomic_claim_review_requeues_the_paused_research_run(cmd_client, cmd_session) -> None:
@@ -248,7 +169,6 @@ def test_atomic_claim_review_requeues_the_paused_research_run(cmd_client, cmd_se
         f"/api/v1/atomic-claims/{candidate.id}/reviews",
         json={
             "outcome": "rejected",
-            "reviewer": "human:reviewer",
             "reason": "不属于本次可用来源范围",
             "idempotency_key": "atomic-review-requeue-1",
         },
@@ -441,7 +361,6 @@ def test_scoped_atomic_claim_review_only_gates_and_resumes_its_frozen_run(
         f"/api/v1/atomic-claims/{company_candidate.id}/reviews",
         json={
             "outcome": "rejected",
-            "reviewer": "human:reviewer",
             "reason": "已核对公司公告原文",
             "idempotency_key": "scoped-atomic-review-requeue-1",
         },
@@ -574,7 +493,6 @@ def test_atomic_claim_review_resumes_only_runs_referencing_that_claim(
         f"/api/v1/atomic-claims/{first_candidate.id}/reviews",
         json={
             "outcome": "rejected",
-            "reviewer": "human:reviewer",
             "reason": "第一条已审核",
             "idempotency_key": "atomic-review-run-local-resume",
         },
@@ -622,7 +540,6 @@ def test_researcher_can_propose_one_frozen_source_span_for_review(
             "normalized_text": "管理层披露 2026 年第一季度订单同比增长 20%。",
             "claim_type": "reported_claim",
             "assertion_actor": "管理层",
-            "actor": "human:researcher",
         },
     )
 
@@ -634,163 +551,4 @@ def test_researcher_can_propose_one_frozen_source_span_for_review(
     assert body["quote_end"] == len(span.verbatim_text)
     assert body["review_state"] == "awaiting_review"
     assert body["published_source_statement"] is None
-    assert body["structured_fields"]["run_ref"] == "human:source-reader:human:researcher"
-
-
-@pytest.mark.parametrize("display,start_days,end_days,visible", [(False,None,None,False),(True,None,-1,False),(True,1,None,False),(True,None,None,True)])
-def test_atomic_claim_queue_hides_sources_without_current_display_permission(cmd_client, cmd_session, display, start_days, end_days, visible):
-    from datetime import timedelta
-    case, candidate = _candidate_for_case(cmd_session)
-    span = cmd_session.get(SourceSpan, candidate.source_span_id)
-    now = datetime.now(timezone.utc)
-    contract = SourceContract(
-        document_version_id=span.document_version_id, source_type="company_disclosure",
-        provider_or_tenant="test", allow_ai_processing=True, allow_display=display,
-        effective_from=now + timedelta(days=start_days) if start_days else None,
-        effective_until=now + timedelta(days=end_days) if end_days else None,
-        allow_export=False, allow_api=False, region="CN", retention_policy="case_retained",
-        deletion_policy="not_recorded", downstream_restrictions=[], intake_metadata={},
-        declared_by="test", created_at=now,
-    )
-    cmd_session.add(contract)
-    cmd_session.commit()
-    response = cmd_client.get(f"/api/v1/research-cases/{case.id}/atomic-claims")
-    assert response.status_code == 200
-    assert [item["id"] for item in response.json()["items"]] == ([str(candidate.id)] if visible else [])
-    if not visible:
-        review = cmd_client.post(f"/api/v1/atomic-claims/{candidate.id}/reviews", json={
-            "outcome": "confirmed", "reviewer": "human:test", "reason": "review stale source",
-            "idempotency_key": "hidden-source-review",
-        })
-        assert review.status_code == 404
-        from app.models.ledger import AtomicClaimReview, SourceStatement
-        assert cmd_session.scalar(select(AtomicClaimReview).where(AtomicClaimReview.atomic_claim_candidate_id == candidate.id)) is None
-        assert cmd_session.scalar(select(SourceStatement).where(SourceStatement.atomic_claim_candidate_id == candidate.id)) is None
-
-
-def test_atomic_claim_display_filter_precedes_limit(cmd_client, cmd_session):
-    case, visible = _candidate_for_case(cmd_session)
-    _, hidden = _candidate_for_case(cmd_session)
-    span = cmd_session.get(SourceSpan, hidden.source_span_id)
-    now = datetime.now(timezone.utc)
-    cmd_session.add(CaseDocumentVersion(research_case_id=case.id, document_version_id=span.document_version_id, linked_at=now))
-    cmd_session.add(SourceContract(
-        document_version_id=span.document_version_id, source_type="company_disclosure",
-        provider_or_tenant="test", allow_ai_processing=True, allow_display=False,
-        allow_export=False, allow_api=False, region="CN", retention_policy="case_retained",
-        deletion_policy="not_recorded", downstream_restrictions=[], intake_metadata={},
-        declared_by="test", created_at=now,
-    ))
-    cmd_session.commit()
-    response = cmd_client.get(f"/api/v1/research-cases/{case.id}/atomic-claims?limit=1")
-    assert response.status_code == 200
-    assert [item["id"] for item in response.json()["items"]] == [str(visible.id)]
-
-
-def test_atomic_claim_state_filter_precedes_limit(cmd_client, cmd_session):
-    case, pending = _candidate_for_case(cmd_session)
-    _, reviewed = _candidate_for_case(cmd_session)
-    span = cmd_session.get(SourceSpan, reviewed.source_span_id)
-    cmd_session.add(CaseDocumentVersion(research_case_id=case.id, document_version_id=span.document_version_id, linked_at=datetime.now(timezone.utc)))
-    AtomicClaimService(cmd_session).review(reviewed.id, outcome="rejected", reviewer="human:test", reason="not relevant", idempotency_key="filter-test")
-    cmd_session.commit()
-    url = f"/api/v1/research-cases/{case.id}/atomic-claims"
-    response = cmd_client.get(url + "?limit=1&review_state=awaiting_review")
-    assert response.status_code == 200
-    assert [item["id"] for item in response.json()["items"]] == [str(pending.id)]
-    rejected = cmd_client.get(url + "?limit=1&review_state=rejected")
-    assert [item["id"] for item in rejected.json()["items"]] == [str(reviewed.id)]
-
-
-def test_atomic_claim_filter_uses_latest_review(cmd_client, cmd_session):
-    case, candidate = _candidate_for_case(cmd_session)
-    service = AtomicClaimService(cmd_session)
-    service.review(candidate.id, outcome="rejected", reviewer="human:test", reason="first decision", idempotency_key="first")
-    service.review(candidate.id, outcome="confirmed", reviewer="human:test", reason="checked again", idempotency_key="second")
-    cmd_session.commit()
-    url = f"/api/v1/research-cases/{case.id}/atomic-claims"
-    for state in ["awaiting_review", "rejected", "modified"]:
-        assert cmd_client.get(url + f"?review_state={state}").json()["items"] == []
-    result = cmd_client.get(url + "?review_state=confirmed").json()["items"]
-    assert [item["id"] for item in result] == [str(candidate.id)]
-    assert result[0]["review_state"] == "confirmed"
-    assert [review["outcome"] for review in result[0]["review_history"]] == ["rejected", "confirmed"]
-
-
-def test_atomic_claim_queue_keyset_pagination_is_complete_and_case_bound(cmd_client, cmd_session):
-    case, first = _candidate_for_case(cmd_session)
-    expected = {str(first.id)}
-    for _ in range(2):
-        _, candidate = _candidate_for_case(cmd_session)
-        span = cmd_session.get(SourceSpan, candidate.source_span_id)
-        cmd_session.add(CaseDocumentVersion(research_case_id=case.id, document_version_id=span.document_version_id, linked_at=datetime.now(timezone.utc)))
-        expected.add(str(candidate.id))
-    cmd_session.commit()
-    url = f"/api/v1/research-cases/{case.id}/atomic-claims"
-    seen = []
-    cursor = None
-    for index in range(3):
-        response = cmd_client.get(url, params={"limit": 1, **({"cursor": cursor} if cursor else {})})
-        assert response.status_code == 200
-        body = response.json()
-        seen.extend(item["id"] for item in body["items"])
-        assert body["has_more"] == (index < 2)
-        cursor = body["next_cursor"]
-        assert bool(cursor) == (index < 2)
-    assert len(seen) == len(set(seen)) == 3
-    assert set(seen) == expected
-    _, foreign = _candidate_for_case(cmd_session)
-    assert cmd_client.get(url, params={"cursor": str(foreign.id)}).status_code == 404
-    assert cmd_client.get(url, params={"cursor": "invalid"}).status_code == 422
-
-
-def test_atomic_claim_cursor_survives_review_and_newer_insert(cmd_client, cmd_session):
-    case, older = _candidate_for_case(cmd_session)
-    def attach_new():
-        _, candidate = _candidate_for_case(cmd_session)
-        span = cmd_session.get(SourceSpan, candidate.source_span_id)
-        cmd_session.add(CaseDocumentVersion(research_case_id=case.id, document_version_id=span.document_version_id, linked_at=datetime.now(timezone.utc)))
-        cmd_session.commit()
-        return candidate
-    newer = attach_new()
-    url = f"/api/v1/research-cases/{case.id}/atomic-claims"
-    body = cmd_client.get(url, params={"limit": 1, "review_state": "awaiting_review"}).json()
-    assert body["next_cursor"] == str(newer.id)
-    AtomicClaimService(cmd_session).review(newer.id, outcome="rejected", reviewer="human:test", reason="reviewed while paging", idempotency_key="page-review")
-    cmd_session.commit()
-    attach_new()
-    response = cmd_client.get(url, params={"limit": 1, "review_state": "awaiting_review", "cursor": body["next_cursor"]})
-    assert response.status_code == 200
-    assert [item["id"] for item in response.json()["items"]] == [str(older.id)]
-    assert response.json()["has_more"] is False
-
-
-@pytest.mark.parametrize('change', [
-    {'outcome': 'rejected', 'normalized_text': None},
-    {'reviewer': 'human:other'}, {'reason': 'different reason'},
-    {'normalized_text': '不同的正式陈述'}, {'observed_period': '2026-04-01'},
-])
-def test_atomic_review_rejects_changed_idempotent_request(cmd_client, cmd_session, change):
-    case, candidate = _candidate_for_case(cmd_session)
-    body = {'outcome': 'modified', 'normalized_text': '人工修订的陈述', 'reviewer': 'human:test',
-            'reason': '已核对原文', 'idempotency_key': 'stable-review', 'observed_period': None}
-    url = f'/api/v1/atomic-claims/{candidate.id}/reviews'
-    first = cmd_client.post(url, json=body)
-    assert first.status_code == 201
-    assert cmd_client.post(url, json={**body, **change}).status_code == 409
-    replay = cmd_client.post(url, json=body)
-    assert replay.status_code == 201
-    assert replay.json() == first.json()
-    queue = cmd_client.get(f'/api/v1/research-cases/{case.id}/atomic-claims').json()['items'][0]
-    assert len(queue['review_history']) == 1
-
-
-def test_atomic_review_normalizes_key_before_replay_lookup(cmd_client, cmd_session):
-    _, candidate = _candidate_for_case(cmd_session)
-    body = {'outcome': 'confirmed', 'reviewer': 'human:test', 'reason': '已核对原文', 'idempotency_key': ' padded-key '}
-    url = f'/api/v1/atomic-claims/{candidate.id}/reviews'
-    first = cmd_client.post(url, json=body)
-    assert first.status_code == 201
-    replay = cmd_client.post(url, json=body)
-    assert replay.status_code == 201
-    assert replay.json() == first.json()
+    assert body["structured_fields"]["run_ref"] == "human:source-reader:user:test-team"

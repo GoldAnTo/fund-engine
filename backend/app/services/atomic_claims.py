@@ -6,14 +6,13 @@ import hashlib
 import json
 from calendar import monthrange
 from datetime import date, datetime, timezone
-from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.domain.atomic_claims import AtomicClaimDraft
-from app.acquisition.policy import B_SCOPE_POLICY, INTAKE_MATERIAL_POLICY
+from app.acquisition.policy import B_SCOPE_POLICY
 from app.models.acquisition import (
     AcquisitionAttempt,
     AcquisitionJob,
@@ -40,8 +39,6 @@ from app.services.automatic_admission import (
     automatic_temporal_failures,
     canonical_admission_digest,
     frozen_request_digest,
-    intake_material_temporal_failures,
-    intake_material_url_is_authorized,
     lease_write_fence,
     parser_replay_identity,
     trusted_extraction_run,
@@ -49,7 +46,6 @@ from app.services.automatic_admission import (
 )
 from app.services.source_admission import source_contract_is_active
 from app.models.source_governance import SourceContract
-from app.repositories.research_preparation import ResearchPreparationRepository
 
 
 _CLAIM_TYPES = frozenset(
@@ -186,17 +182,7 @@ class AtomicClaimService:
         idempotency_key: str,
         normalized_text: str | None = None,
         observed_period: date | None = None,
-        preparation_locking: Literal["direct", "already_locked"] = "direct",
     ) -> AtomicClaimReview:
-        repository = ResearchPreparationRepository(self._session)
-        # Candidate rows are always locked before any Case/preparation lock.
-        # ``confirm_claims`` already owns its Case → preparation lock after
-        # taking this candidate lock, so it must not traverse shared mappings.
-        repository.lock_candidate_rows({candidate_id})
-        if preparation_locking == "direct":
-            repository.lock_preparation_for_candidate_review(candidate_id)
-        elif preparation_locking != "already_locked":
-            raise ValueError("atomic claim preparation locking mode is invalid")
         if self._session.get(AtomicClaimCandidate, candidate_id) is None:
             raise ValidationError("atomic claim candidate not found")
         if (
@@ -216,17 +202,6 @@ class AtomicClaimService:
             raise ValidationError(
                 "only a modified atomic claim may change published fields"
             )
-        # Compare the persisted semantic decision before replaying its result.
-        # Normalization must precede both lookup and insertion.
-        reviewer, reason, idempotency_key = reviewer.strip(), reason.strip(), idempotency_key.strip()
-        candidate = self._session.get(AtomicClaimCandidate, candidate_id)
-        assert candidate is not None
-        published_text = None
-        published_period = None
-        if outcome in {"confirmed", "modified"}:
-            candidate_period = candidate.structured_fields.get("observed_period")
-            published_text = (normalized_text or candidate.normalized_text).strip()
-            published_period = observed_period or (date.fromisoformat(candidate_period) if candidate_period else None)
         existing = self._session.scalar(
             select(AtomicClaimReview).where(
                 AtomicClaimReview.atomic_claim_candidate_id == candidate_id,
@@ -234,23 +209,19 @@ class AtomicClaimService:
             )
         )
         if existing is not None:
-            published = self._session.get(SourceStatement, existing.published_source_statement_id) if existing.published_source_statement_id else None
-            if (
-                existing.outcome != outcome or existing.reviewer != reviewer or existing.reason != reason
-                or (published.normalized_text if published else None) != published_text
-                or (published.observed_period if published else None) != published_period
-            ):
-                from app.errors import ConflictError
-                raise ConflictError("atomic claim review key was already used for a different decision")
             return existing
+        candidate = self._session.get(AtomicClaimCandidate, candidate_id)
+        assert candidate is not None
         statement = None
         if outcome in {"confirmed", "modified"}:
+            candidate_period = candidate.structured_fields.get("observed_period")
             statement = SourceStatement(
                 source_span_id=candidate.source_span_id,
                 atomic_claim_candidate_id=candidate.id,
                 kind=candidate.claim_type,
-                normalized_text=published_text,
-                observed_period=published_period,
+                normalized_text=(normalized_text or candidate.normalized_text).strip(),
+                observed_period=observed_period
+                or (date.fromisoformat(candidate_period) if candidate_period else None),
                 created_at=datetime.now(timezone.utc),
             )
             self._session.add(statement)
@@ -511,36 +482,7 @@ class AtomicClaimService:
                 if isinstance(reference.metadata_json, dict)
                 else None
             )
-            is_intake_material = (
-                current_snapshot.get("acquisition_kind") == "intake_material"
-            )
-            if is_intake_material:
-                metadata = (
-                    reference.metadata_json
-                    if isinstance(reference.metadata_json, dict)
-                    else {}
-                )
-                document_id = str(document.id)
-                if (
-                    tuple(enabled_adapters)
-                    or frozenset(current_snapshot.get("allowed_source_roles") or ())
-                    != INTAKE_MATERIAL_POLICY.allowed_source_roles
-                    or frozenset(current_policy.get("allowed_source_roles") or ())
-                    != INTAKE_MATERIAL_POLICY.allowed_source_roles
-                    or reference.adapter_key != "intake_material"
-                    or reference.source_role != "user_provided_material"
-                    or current_snapshot.get("document_version_id") != document_id
-                    or reference.external_record_id != document_id
-                    or metadata.get("document_version_id") != document_id
-                    or document.source_authority != "user_supplied"
-                    or candidate.authority_level != "user_supplied"
-                    or document.source_url != reference.canonical_url
-                    or artifact.final_url != reference.canonical_url
-                ):
-                    raise ValidationError(
-                        "automatic publication source authorization failed"
-                    )
-            elif (
+            if (
                 reference.adapter_key not in B_SCOPE_POLICY.enabled_adapter_keys
                 or reference.adapter_key not in enabled_adapters
                 or mapped_identity is None
@@ -569,56 +511,41 @@ class AtomicClaimService:
                 or attempt.safe_metadata.get("source_reference_id") != str(reference.id)
             ):
                 raise ValidationError("automatic publication attempt lineage mismatch")
-            contract_invalid = (
+            if (
                 current_contract is None
                 or not source_contract_is_active(current_contract, at=checked_at)
                 or not current_contract.allow_ai_processing
                 or not current_contract.allow_display
-            )
-            if is_intake_material and current_contract is not None:
-                contract_invalid = contract_invalid or (
-                    current_contract.source_type
-                    not in {"pasted_snapshot", "uploaded_file"}
-                    or current_contract.research_source_type
-                    != current_contract.source_type
-                    or provider_identity != current_contract.provider_or_tenant
-                    or not intake_material_url_is_authorized(
-                        reference.canonical_url, current_contract.source_type
-                    )
-                    or not intake_material_url_is_authorized(
-                        artifact.final_url, current_contract.source_type
-                    )
-                )
-            elif not is_intake_material:
-                contract_invalid = contract_invalid or (
-                    mapped_identity is None
-                    or current_contract is None
-                    or current_contract.source_type != mapped_identity[0]
-                    or current_contract.research_source_type != mapped_identity[0]
-                )
-            if contract_invalid:
+                or mapped_identity is None
+                or current_contract.source_type != mapped_identity[0]
+                or current_contract.research_source_type != mapped_identity[0]
+            ):
                 raise ValidationError(
                     "automatic publication source contract is invalid"
                 )
-            temporal_failures = (
-                intake_material_temporal_failures(
-                    reference,
-                    attempt,
-                    artifact,
-                    document,
-                    cutoff=cutoff,
-                    evaluation_at=checked_at,
-                )
-                if is_intake_material
-                else automatic_temporal_failures(
-                    reference,
-                    attempt,
-                    artifact,
-                    document,
-                    cutoff=cutoff,
-                    evaluation_at=checked_at,
-                )
+            temporal_failures = automatic_temporal_failures(
+                reference,
+                attempt,
+                artifact,
+                document,
+                cutoff=cutoff,
+                evaluation_at=checked_at,
             )
+            if binding.relation == "content_duplicate":
+                temporal_failures = [
+                    failure
+                    for failure in temporal_failures
+                    if failure != "temporal_retrieved_at_after_acquired_at"
+                ]
+                if (
+                    document.acquired_at is not None
+                    and artifact.retrieved_at is not None
+                    and self._as_utc(document.acquired_at)
+                    > self._as_utc(artifact.retrieved_at)
+                ):
+                    temporal_failures.append(
+                        "temporal_duplicate_acquired_after_retrieved_at"
+                    )
             if temporal_failures:
                 raise ValidationError(
                     "automatic publication exceeds the request cutoff"

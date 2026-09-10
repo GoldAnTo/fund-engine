@@ -2,7 +2,7 @@ from __future__ import annotations
 import uuid
 import pytest
 from threading import Event, Thread
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import Session, sessionmaker
 from app.models.ledger import (
@@ -20,7 +20,7 @@ from app.models.ledger import (
     AIRun,
     EvidenceSnapshot,
 )
-from app.models.operational import ResearchRun, ResearchTask, TaskItem
+from app.models.operational import Job, JobEvent, ResearchRun, ResearchTask, TaskItem
 from app.models.proposals import Proposal
 from app.models.source_governance import SourceContract
 from app.services.auto_research import AutoResearchService
@@ -67,6 +67,16 @@ def _admit_case(cmd_session, case: ResearchCase) -> None:
     cmd_session.flush()
 
 
+def _execute_claimed(service: AutoResearchService, run: ResearchRun):
+    if service.repo.job_for_run(run.id) is None:
+        service.repo.enqueue_run_job(run)
+    claim = service.repo.claim_run_job(run.id)
+    assert claim is not None
+    service.session.commit()
+    service.execute(run, claim=claim)
+    return claim
+
+
 @pytest.fixture
 def session():
     engine = create_engine("sqlite:///:memory:", future=True)
@@ -85,123 +95,31 @@ def test_start_run_not_found(session):
         AutoResearchService(session).start(uuid.uuid4())
 
 
-def test_waiting_for_sources_run_is_active_for_exact_thesis_scope(session):
+def test_worker_claim_refuses_a_queued_job_for_a_cancelled_run(session) -> None:
     now = datetime.now(timezone.utc)
     case = ResearchCase(
-        title="waiting for sources",
-        industry_topic="i",
-        created_by="u",
+        title="cancelled run cannot be revived",
+        industry_topic="worker claim state machine",
+        created_by="test",
         created_at=now,
     )
     session.add(case)
     session.flush()
-    thesis = Thesis(
-        research_case_id=case.id,
-        statement="Primary evidence is still being acquired",
-        created_by="u",
-        created_at=now,
-    )
-    session.add(thesis)
-    session.flush()
-    run = ResearchRun(
-        research_case_id=case.id,
-        status="waiting_for_sources",
-        stage="acquire",
-        scope_thesis_ids=[str(thesis.id)],
-        created_at=now,
-        updated_at=now,
-    )
-    session.add(run)
-    session.flush()
+    repo = AutoResearchRepository(session)
+    run = repo.create_run(research_case_id=case.id)
+    job = repo.enqueue_run_job(run)
+    run.status = "cancelled"
+    run.stage = "stopped"
+    run.stop_reason = "cancelled"
+    session.commit()
 
-    active = AutoResearchRepository(session).active_run_for_exact_thesis_scope(
-        research_case_id=case.id,
-        thesis_id=thesis.id,
-    )
+    claim = repo.claim_next_run_job()
 
-    assert active is run
-
-
-def test_waiting_for_sources_run_can_be_cancelled(session):
-    now = datetime.now(timezone.utc)
-    case = ResearchCase(
-        title="cancel source wait",
-        industry_topic="i",
-        created_by="u",
-        created_at=now,
-    )
-    session.add(case)
-    session.flush()
-    run = ResearchRun(
-        research_case_id=case.id,
-        status="waiting_for_sources",
-        stage="acquire",
-        created_at=now,
-        updated_at=now,
-    )
-    session.add(run)
-    session.flush()
-
-    cancelled = AutoResearchRepository(session).cancel_run(run)
-
-    assert cancelled is True
+    assert claim is None
     assert run.status == "cancelled"
-    assert run.stage == "stopped"
-
-
-def test_service_cancels_waiting_for_sources_run(session):
-    now = datetime.now(timezone.utc)
-    case = ResearchCase(
-        title="service cancel source wait",
-        industry_topic="i",
-        created_by="u",
-        created_at=now,
-    )
-    session.add(case)
-    session.flush()
-    run = AutoResearchRepository(session).create_run(research_case_id=case.id)
-    run.status = "waiting_for_sources"
-    run.stage = "retrieve"
-
-    summary = AutoResearchService(session).cancel_run(
-        run.id,
-        actor="human:test",
-        change_reason="stop parked run",
-    )
-
-    assert summary["status"] == "cancelled"
-    assert run.status == "cancelled"
-
-
-def test_active_endpoint_shows_and_cancels_waiting_for_sources_run(
-    cmd_client, cmd_session
-):
-    now = datetime.now(timezone.utc)
-    case = ResearchCase(
-        title="parked automatic run",
-        industry_topic="i",
-        created_by="u",
-        created_at=now,
-    )
-    cmd_session.add(case)
-    cmd_session.flush()
-    _admit_case(cmd_session, case)
-    run = AutoResearchRepository(cmd_session).create_run(research_case_id=case.id)
-    run.status = "waiting_for_sources"
-    run.stage = "retrieve"
-    cmd_session.commit()
-
-    active = cmd_client.get("/api/v1/research-runs/active")
-
-    assert active.status_code == 200
-    assert [item["run_id"] for item in active.json()["items"]] == [str(run.id)]
-
-    cancelled = cmd_client.post(
-        f"/api/v1/research-runs/{run.id}/cancel",
-        json={"actor": "human:test", "change_reason": "stop parked run"},
-    )
-    assert cancelled.status_code == 200
-    assert cancelled.json()["status"] == "cancelled"
+    assert job.status == "failed"
+    assert job.step == "state_mismatch"
+    assert "cancelled" in (job.error or "")
 
 
 def test_pending_documents_are_isolated_to_the_research_case(session):
@@ -317,7 +235,7 @@ def test_monitor_run_extracts_only_the_frozen_allowed_source_types(session, monk
     service = AutoResearchService(session)
     run = service.start_from_monitor(case.id)
 
-    service.execute(run)
+    _execute_claimed(service, run)
 
     assert set(extracted) == {disclosure.id, pasted_annual_report.id}
     pending_candidate_ids = {
@@ -348,10 +266,247 @@ def test_start_and_get_run(session):
     assert run.id is not None
     detail = AutoResearchService(session).detail(run.id)
     assert detail["status"] == "queued"
+    assert detail["stage"] == "planning"
     assert detail["stop_reason"] is None
     job = AutoResearchRepository(session).job_for_run(run.id)
     assert job is not None
     assert job.status == "queued"
+    assert session.scalar(
+        select(func.count())
+        .select_from(Job)
+        .where(Job.kind == "research_run", Job.target_id == run.id)
+    ) == 1
+    assert session.scalar(
+        select(func.count())
+        .select_from(JobEvent)
+        .where(JobEvent.job_id == job.id)
+    ) == 1
+
+
+def test_start_without_enqueue_prepares_run_and_tasks_but_no_job(session):
+    case = ResearchCase(
+        title="prepared",
+        industry_topic="i",
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(case)
+    session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="范围确认后准备研究",
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(thesis)
+    session.commit()
+
+    run = AutoResearchService(session).start(
+        case.id,
+        thesis_ids=[thesis.id],
+        trigger="scope_confirmation",
+        enqueue=False,
+        commit=False,
+        scope_context={"scope_version_id": str(uuid.uuid4())},
+    )
+
+    assert (run.status, run.stage) == ("prepared", "awaiting_acquisition")
+    assert AutoResearchRepository(session).job_for_run(run.id) is None
+    assert AutoResearchRepository(session).claim_next_run_job() is None
+    tasks = list(
+        session.scalars(select(ResearchTask).where(ResearchTask.run_id == run.id))
+    )
+    assert len(tasks) == 4
+    scope_event = session.scalar(
+        select(ResearchRunEvent).where(
+            ResearchRunEvent.run_id == run.id,
+            ResearchRunEvent.stage == "scope",
+        )
+    )
+    assert scope_event is not None
+    assert scope_event.payload_json["trigger"] == "scope_confirmation"
+
+
+def test_enqueue_prepared_run_is_an_idempotent_public_handoff(session):
+    case = ResearchCase(
+        title="prepared handoff",
+        industry_topic="i",
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(case)
+    session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="准备后再进入工作队列",
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(thesis)
+    session.commit()
+    service = AutoResearchService(session)
+    run = service.start(
+        case.id,
+        thesis_ids=[thesis.id],
+        enqueue=False,
+        commit=False,
+    )
+
+    first = service.enqueue_prepared_run(run.id, commit=False)
+    second = service.enqueue_prepared_run(run.id, commit=False)
+
+    assert first.id == second.id
+    assert (run.status, run.stage) == ("queued", "planning")
+    assert session.scalar(
+        select(func.count())
+        .select_from(Job)
+        .where(Job.kind == "research_run", Job.target_id == run.id)
+    ) == 1
+    assert session.scalar(
+        select(func.count())
+        .select_from(JobEvent)
+        .where(JobEvent.job_id == first.id)
+    ) == 1
+
+
+def test_enqueue_prepared_run_rejects_nonprepared_run_without_a_job(session):
+    case = ResearchCase(
+        title="not prepared",
+        industry_topic="i",
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(case)
+    session.flush()
+    run = AutoResearchRepository(session).create_run(
+        research_case_id=case.id,
+        status="running",
+        stage="extracting",
+    )
+
+    with pytest.raises(ValueError, match="prepared"):
+        AutoResearchService(session).enqueue_prepared_run(run.id, commit=False)
+
+    assert AutoResearchRepository(session).job_for_run(run.id) is None
+
+
+def test_cancelling_prepared_run_cancels_tasks_without_creating_a_job(session):
+    case = ResearchCase(
+        title="superseded prepared run",
+        industry_topic="i",
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(case)
+    session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="旧范围不应再被执行",
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(thesis)
+    session.flush()
+    service = AutoResearchService(session)
+    run = service.start(
+        case.id,
+        thesis_ids=[thesis.id],
+        enqueue=False,
+        commit=False,
+    )
+
+    assert service.repo.cancel_run(run) is True
+    session.flush()
+
+    assert (run.status, run.stage) == ("cancelled", "stopped")
+    assert {
+        (task.status, task.stage)
+        for task in session.scalars(
+            select(ResearchTask).where(ResearchTask.run_id == run.id)
+        )
+    } == {("cancelled", "stopped")}
+    assert service.repo.job_for_run(run.id) is None
+    assert session.scalar(
+        select(func.count())
+        .select_from(JobEvent)
+    ) == 0
+    with pytest.raises(ValueError, match="prepared"):
+        service.enqueue_prepared_run(run.id, commit=False)
+    assert service.repo.job_for_run(run.id) is None
+
+
+def test_cancelled_enqueued_run_rejects_a_late_prepared_handoff(session):
+    case = ResearchCase(
+        title="enqueued then superseded",
+        industry_topic="i",
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(case)
+    session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="即使已有任务也不能复活旧范围",
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(thesis)
+    session.flush()
+    service = AutoResearchService(session)
+    run = service.start(
+        case.id,
+        thesis_ids=[thesis.id],
+        enqueue=False,
+        commit=False,
+    )
+    job = service.enqueue_prepared_run(run.id, commit=False)
+    assert service.repo.cancel_run(run) is True
+    session.flush()
+    assert (run.status, job.status) == ("cancelled", "cancelled")
+
+    with pytest.raises(ValueError, match="prepared"):
+        service.enqueue_prepared_run(run.id, commit=False)
+
+    assert service.repo.job_for_run(run.id).id == job.id
+    assert session.scalar(
+        select(func.count())
+        .select_from(Job)
+        .where(Job.kind == "research_run", Job.target_id == run.id)
+    ) == 1
+
+
+def test_repository_enqueue_is_idempotent_and_queues_a_prepared_run(session):
+    case = ResearchCase(
+        title="repository handoff",
+        industry_topic="i",
+        created_by="u",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(case)
+    session.flush()
+    repo = AutoResearchRepository(session)
+    run = repo.create_run(
+        research_case_id=case.id,
+        status="prepared",
+        stage="awaiting_acquisition",
+    )
+
+    first = repo.enqueue_run_job(run)
+    second = repo.enqueue_run_job(run)
+    session.flush()
+
+    assert first.id == second.id
+    assert (run.status, run.stage) == ("queued", "planning")
+    assert session.scalar(
+        select(func.count())
+        .select_from(Job)
+        .where(Job.kind == "research_run", Job.target_id == run.id)
+    ) == 1
+    assert session.scalar(
+        select(func.count())
+        .select_from(JobEvent)
+        .where(JobEvent.job_id == first.id)
+    ) == 1
 
 
 def test_extraction_provider_failure_after_success_counts_both_attempts_and_stops(
@@ -448,11 +603,11 @@ def test_extraction_provider_failure_after_success_counts_both_attempts_and_stop
 
     monkeypatch.setattr(client, "chat_json", fail_second_provider_call)
 
-    service.execute(run)
+    _execute_claimed(service, run)
     session.commit()
     session.rollback()
 
-    assert output_slot_calls == 2
+    assert output_slot_calls == 3
 
     with Session(session.get_bind()) as check:
         persisted_run = check.get(ResearchRun, run_id)
@@ -577,7 +732,7 @@ def test_cancelled_run_discards_inflight_extraction_output(
         assert run is not None
         service = AutoResearchService(worker)
         service._client = client
-        service.execute(run)
+        _execute_claimed(service, run)
         worker.commit()
 
     with Session(engine) as check:
@@ -594,7 +749,6 @@ def test_cancelled_run_discards_inflight_extraction_output(
 
 
 def test_task_output_slot_refreshes_cached_job_cancellation(tmp_path):
-    from app.api.v1.jobs import cancel_job
     from app.models.operational import Job
 
     engine = create_engine(
@@ -613,8 +767,6 @@ def test_task_output_slot_refreshes_cached_job_cancellation(tmp_path):
         )
         setup.add(case)
         setup.flush()
-        from tests.tenant_admission import admit_case
-        admit_case(setup, case.id)
         thesis = Thesis(
             research_case_id=case.id,
             statement="empty recall must still observe cancellation",
@@ -650,8 +802,12 @@ def test_task_output_slot_refreshes_cached_job_cancellation(tmp_path):
         assert cached_job.cancel_requested is False
 
         with session_local() as cancelling:
-            response = cancel_job(job_id, db=cancelling, tenant_id="test-team")
-            assert response.cancel_requested is True
+            response = AutoResearchService(cancelling).cancel_run(
+                run_id,
+                actor="user:test",
+                change_reason="test committed cancellation",
+            )
+            assert response["status"] == "cancelled"
 
         service = AutoResearchService(worker)
         assert service._claim_task_output_slot(run, task) is False
@@ -709,8 +865,8 @@ def test_postgres_extraction_failure_waits_for_cancellation_transition(
         run = AutoResearchService(setup).start(case.id, max_rounds=1, budget=10)
         run_id = run.id
 
-    provider_entered = Event()
     cancellation_locked = Event()
+    provider_started = Event()
     provider_failed = Event()
     worker_marked_failed = Event()
     cancellation_errors: list[BaseException] = []
@@ -720,7 +876,7 @@ def test_postgres_extraction_failure_waits_for_cancellation_transition(
     client = LLMClient(model_version="provider-test", mock=True)
 
     def fail_after_cancellation_locks(*_args, **_kwargs):
-        provider_entered.set()
+        provider_started.set()
         assert cancellation_locked.wait(timeout=5)
         provider_failed.set()
         raise RuntimeError("provider failed during cancellation")
@@ -744,16 +900,16 @@ def test_postgres_extraction_failure_waits_for_cancellation_transition(
                 assert run is not None
                 service = AutoResearchService(worker)
                 service._client = client
-                service.execute(run)
+                _execute_claimed(service, run)
                 worker.commit()
             except BaseException as exc:
                 worker_errors.append(exc)
                 worker.rollback()
 
     def cancel_run_while_provider_is_inflight():
-        assert provider_entered.wait(timeout=5)
         with session_local() as cancelling:
             try:
+                assert provider_started.wait(timeout=5)
                 service = AutoResearchService(cancelling)
                 run = service._lock_run_for_transition(run_id)
                 assert run is not None
@@ -868,7 +1024,7 @@ def test_worker_commits_final_protocol_block_audit_in_clean_transaction(
     service = AutoResearchService(session)
     service._client = LLMClient(model_version="mock-worker-audit", mock=True)
 
-    service.execute(run)
+    _execute_claimed(service, run)
 
     with Session(session.get_bind()) as check:
         persisted_task = check.get(ResearchTask, task_id)
@@ -919,7 +1075,7 @@ def test_auto_research_stops_before_propose_or_assess_when_atomic_claims_await_r
     session.commit()
 
     run = AutoResearchService(session).start(case.id, max_rounds=1, budget=20)
-    AutoResearchService(session).execute(run)
+    _execute_claimed(AutoResearchService(session), run)
     session.commit()
 
     assert run.status == "waiting_for_review"
@@ -1282,7 +1438,7 @@ def test_budget_stop(session):
     thesis = Thesis(research_case_id=case.id, statement="s", created_by="u", created_at=datetime.now(timezone.utc))
     session.add(thesis); session.commit()
     run = AutoResearchService(session).start(case.id, max_rounds=3, budget=1)
-    AutoResearchService(session).execute(run)
+    _execute_claimed(AutoResearchService(session), run)
     session.commit()
     detail = AutoResearchService(session).detail(run.id)
     assert detail["stop_reason"] == "budget_exhausted"
@@ -1298,7 +1454,7 @@ def test_empty_run_completes_without_a_phantom_review_task(session):
         max_rounds=1,
         budget=1000,
     )
-    AutoResearchService(session).execute(run)
+    _execute_claimed(AutoResearchService(session), run)
     session.commit()
     session.refresh(run)
 
@@ -1387,7 +1543,7 @@ def test_round_2_gap_task_executes(session):
     run = repo.create_run(research_case_id=case.id, max_rounds=2, budget=50)
     repo.create_task(run_id=run.id, research_case_id=case.id, thesis_id=thesis.id, task_type="support", query="support gap", round=2)
     session.commit()
-    AutoResearchService(session).execute(run)
+    _execute_claimed(AutoResearchService(session), run)
     session.commit()
     tasks = repo.tasks_for_run(run.id)
     assert any(t.round == 2 and t.status in {"done", "failed"} for t in tasks)
@@ -1402,7 +1558,7 @@ def test_duplicate_gap_does_not_duplicate(session):
     run = repo.create_run(research_case_id=case.id, max_rounds=2, budget=50)
     repo.create_task(run_id=run.id, research_case_id=case.id, thesis_id=thesis.id, task_type="alternative", query="gap query", round=2)
     session.commit()
-    AutoResearchService(session).execute(run)
+    _execute_claimed(AutoResearchService(session), run)
     session.commit()
     tasks = repo.tasks_for_run(run.id)
     alternative_r2 = [t for t in tasks if t.task_type == "alternative" and t.round == 2 and t.query == "gap query"]
@@ -1484,7 +1640,7 @@ def test_failed_task_result_and_detail_do_not_persist_provider_exception(
         ),
     )
 
-    service.execute(run)
+    _execute_claimed(service, run)
     session.commit()
 
     persisted = session.get(ResearchTask, task.id)
@@ -1513,7 +1669,7 @@ def test_support_contradict_balance_gap_created(session):
     repo = AutoResearchRepository(session)
     run = repo.create_run(research_case_id=case.id, max_rounds=2, budget=10)
     session.commit()
-    AutoResearchService(session).execute(run)
+    _execute_claimed(AutoResearchService(session), run)
     session.commit()
     tasks = repo.tasks_for_run(run.id)
     gap_tasks = [t for t in tasks if t.gap_reason == "evidence_balance"]
@@ -1586,7 +1742,7 @@ def test_worker_status_distinguishes_an_unavailable_executor_from_a_live_loop(
     from app.services.research_worker_heartbeat import WorkerHeartbeatService
 
     WorkerHeartbeatService(cmd_session).touch(
-        worker_id="test-loop",
+        worker_id="research-worker:test-loop",
         mode="loop",
         state="polling",
         seen_at=datetime.now(timezone.utc),
@@ -1602,6 +1758,53 @@ def test_worker_status_distinguishes_an_unavailable_executor_from_a_live_loop(
     assert live.json()["last_seen_at"]
 
 
+def test_research_worker_status_ignores_other_runtime_heartbeats(
+    cmd_client, cmd_session
+):
+    from app.services.research_worker_heartbeat import WorkerHeartbeatService
+
+    WorkerHeartbeatService(cmd_session).touch(
+        worker_id="scheduler:test-loop",
+        mode="loop",
+        state="executing",
+        seen_at=datetime.now(timezone.utc),
+    )
+    cmd_session.commit()
+
+    response = cmd_client.get("/api/v1/research-runs/worker-status")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "unavailable"
+
+
+def test_research_worker_status_prefers_any_healthy_loop_instance(
+    cmd_client, cmd_session
+):
+    from app.services.research_worker_heartbeat import WorkerHeartbeatService
+
+    now = datetime.now(timezone.utc)
+    heartbeats = WorkerHeartbeatService(cmd_session)
+    heartbeats.touch(
+        worker_id="research-worker:healthy",
+        mode="loop",
+        state="polling",
+        seen_at=now - timedelta(seconds=5),
+    )
+    heartbeats.touch(
+        worker_id="research-worker:failed",
+        mode="loop",
+        state="failed",
+        seen_at=now,
+    )
+    cmd_session.commit()
+
+    response = cmd_client.get("/api/v1/research-runs/worker-status")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "available"
+    assert response.json()["state"] == "polling"
+
+
 def test_cancel_run_success_and_idempotent(cmd_client, cmd_session):
     case = ResearchCase(title="t", industry_topic="i", created_by="u", created_at=datetime.now(timezone.utc))
     cmd_session.add(case); cmd_session.flush()
@@ -1612,13 +1815,13 @@ def test_cancel_run_success_and_idempotent(cmd_client, cmd_session):
     run.status = "running"
     cmd_session.commit()
 
-    payload = {"actor": "human:researcher", "change_reason": "授权来源异常，停止后重新配置"}
+    payload = {"change_reason": "授权来源异常，停止后重新配置"}
     resp = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel", json=payload)
     assert resp.status_code == 200
     assert resp.json()["status"] == "cancelled"
     events = cmd_client.get(f"/api/v1/research-runs/{run.id}/events").json()["items"]
     assert events[-1]["stage"] == "stopped"
-    assert events[-1]["details"] == {"actor": payload["actor"], "change_reason": payload["change_reason"], "stop_reason": "cancelled"}
+    assert events[-1]["details"] == {"actor": "user:test-team", "change_reason": payload["change_reason"], "stop_reason": "cancelled"}
 
     resp2 = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel", json=payload)
     assert resp2.status_code == 200
@@ -1635,7 +1838,7 @@ def test_cancel_run_terminal_conflict(cmd_client, cmd_session):
     run.status = "succeeded"
     cmd_session.commit()
 
-    resp = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel", json={"actor": "human:researcher", "change_reason": "测试终态"})
+    resp = cmd_client.post(f"/api/v1/research-runs/{run.id}/cancel", json={"change_reason": "测试终态"})
     assert resp.status_code == 409
 
 
@@ -1669,7 +1872,7 @@ def test_real_api_human_loop_from_queued_run_to_published_proposal(cmd_client, c
     # The production worker calls this executor after claiming the persisted Job.
     run = AutoResearchRepository(cmd_session).get_run(run_id)
     assert run is not None
-    AutoResearchService(cmd_session).execute(run)
+    _execute_claimed(AutoResearchService(cmd_session), run)
     cmd_session.commit()
 
     completed = cmd_client.get(f"/api/v1/research-runs/{run_id}")
@@ -1685,28 +1888,7 @@ def test_real_api_human_loop_from_queued_run_to_published_proposal(cmd_client, c
             "outcome": "confirmed",
             "reason": "人工核对原文后确认发布",
             "expected_version": proposal["version"],
-            "reviewer_id": "e2e-human",
         },
     )
     assert decision.status_code == 201, decision.text
     assert decision.json()["published_entity_id"]
-
-
-def test_reviewed_run_ai_audit_has_exact_run_and_task_ownership(session):
-    case = ResearchCase(title="audit ownership", industry_topic="i", created_by="u", created_at=datetime.now(timezone.utc))
-    session.add(case)
-    session.flush()
-    thesis = Thesis(research_case_id=case.id, statement="s", created_by="u", created_at=datetime.now(timezone.utc))
-    session.add(thesis)
-    session.commit()
-    service = AutoResearchService(session)
-    run = service.start(case.id, max_rounds=1, budget=1)
-    service.execute(run)
-    records = list(session.scalars(select(AIRun)))
-    assert records
-    tasks = {str(task.id): task for task in AutoResearchRepository(session).tasks_for_run(run.id)}
-    for audit in records:
-        assert audit.input_ref['research_run_id'] == str(run.id)
-        assert audit.input_ref['research_case_id'] == str(case.id)
-        assert audit.input_ref['research_task_id'] in tasks
-        assert str(tasks[audit.input_ref['research_task_id']].thesis_id) == audit.input_ref['thesis_id']

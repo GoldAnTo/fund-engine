@@ -27,8 +27,9 @@ from app.errors import NotFoundError, UpstreamUnavailableError
 from app.models.ledger import ResearchCase
 from app.schemas.v1.commands import IngestRequest, IngestResponse
 from app.scripts.ingest_real_data import ingest
-from app.api.v1.tenant_context import require_research_tenant
+from app.api.v1.tenant_context import ResearchActor, require_research_actor
 from app.services.case_tenant_access import CaseTenantAccess
+from app.api.v1.dependencies import RequireCaseRoute
 
 router = APIRouter(prefix="/documents", tags=["ingest-commands-v1"])
 
@@ -51,10 +52,11 @@ def get_gildata_client() -> Iterator[GildataMCPClient]:
     status_code=status.HTTP_201_CREATED,
 )
 def ingest_documents(
+    case_policy: RequireCaseRoute,
     payload: IngestRequest,
+    actor: ResearchActor = Depends(require_research_actor),
     db: Session = Depends(get_db),
     client: GildataMCPClient = Depends(get_gildata_client),
-    tenant_id: str = Depends(require_research_tenant),
 ):
     try:
         case_id = uuid.UUID(payload.case_id)
@@ -62,7 +64,13 @@ def ingest_documents(
         raise NotFoundError(f"case {payload.case_id} not found") from exc
     if db.get(ResearchCase, case_id) is None:
         raise NotFoundError(f"case {payload.case_id} not found")
-    CaseTenantAccess(db).require_case(case_id, tenant_id)
+    CaseTenantAccess(db).require_case(case_id, actor.tenant_id)
+    case_policy.require(case_id)
+
+    def reauthorize_before_persist() -> bool:
+        case_policy.require_locked(case_id)
+        return True
+
     try:
         summary = ingest(
             db,
@@ -74,6 +82,7 @@ def ingest_documents(
             quote_query=payload.quote_query,
             quote_stock_code=payload.quote_stock_code,
             macro_queries=payload.macro_queries,
+            before_persist=reauthorize_before_persist,
         )
     except GildataMCPError as exc:
         db.rollback()

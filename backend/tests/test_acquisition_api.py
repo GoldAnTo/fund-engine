@@ -25,7 +25,10 @@ from app.models.acquisition import (
     RetrievalArtifact,
     SourceReference,
 )
+from app.models.event_research import EventResearchScopeVersion
 from app.models.ledger import ResearchCase
+from app.models.operational import ResearchRun
+from app.models.research_orchestration import ResearchOrchestration
 from app.models.research_protocol import (
     MechanismEdgeVersion,
     MetricDefinitionVersion,
@@ -185,6 +188,8 @@ class AcquisitionAPIScope:
     case_id: uuid.UUID
     thesis_id: uuid.UUID
     verification_rule_id: uuid.UUID
+    research_run_id: uuid.UUID
+    scope_version_id: uuid.UUID
 
 
 @pytest.fixture
@@ -314,11 +319,50 @@ def acquisition_api_scope(
             reason="Freeze the revenue verification rule",
         ),
     )
+    scope = EventResearchScopeVersion(
+        research_case_id=research_case.id,
+        version=1,
+        changed_by="human:test",
+        change_summary="confirmed acquisition API scope",
+        created_at=RUNNER_NOW,
+    )
+    run = ResearchRun(
+        research_case_id=research_case.id,
+        status="queued",
+        stage="planning",
+        round=0,
+        max_rounds=3,
+        budget=100,
+        budget_used=0,
+        scope_thesis_ids=[str(thesis.id)],
+        created_at=RUNNER_NOW,
+        updated_at=RUNNER_NOW,
+    )
+    session.add_all((scope, run))
+    session.flush()
+    session.add(
+        ResearchOrchestration(
+            tenant_id="test-team",
+            research_case_id=research_case.id,
+            current_scope_version_id=scope.id,
+            current_research_run_id=run.id,
+            state="planning_acquisition",
+            user_stage="acquisition",
+            current_system_action="Preparing acquisition",
+            system_action_reason="Confirmed scope",
+            checkpoint_json={},
+            version=0,
+            created_at=RUNNER_NOW,
+            updated_at=RUNNER_NOW,
+        )
+    )
     session.flush()
     return AcquisitionAPIScope(
         case_id=research_case.id,
         thesis_id=thesis.id,
         verification_rule_id=verification_rule.id,
+        research_run_id=run.id,
+        scope_version_id=scope.id,
     )
 
 
@@ -327,6 +371,18 @@ def _create_path(scope: AcquisitionAPIScope) -> str:
         f"/api/v1/research-cases/{scope.case_id}/theses/{scope.thesis_id}"
         "/acquisition-jobs"
     )
+
+
+def _idempotency_headers(
+    scope: AcquisitionAPIScope, objective: str
+) -> dict[str, str]:
+    goal_id = f"thesis:{scope.thesis_id}:{objective}"
+    return {
+        "Idempotency-Key": (
+            f"run:{scope.research_run_id}:scope:{scope.scope_version_id}:"
+            f"goal:{goal_id}:round:1"
+        )
+    }
 
 
 def _strip_request_id(payload: dict) -> dict:
@@ -383,7 +439,7 @@ def test_post_acquisition_job_returns_202_without_client_identity_fields(
 ):
     response = api_client.post(
         _create_path(acquisition_api_scope),
-        headers={"Idempotency-Key": "api-task9-post-1"},
+        headers=_idempotency_headers(acquisition_api_scope, "support"),
         json={"objective": "support"},
     )
 
@@ -406,11 +462,11 @@ def test_post_requires_idempotency_key(api_client, acquisition_api_scope):
     assert response.json()["error"]["code"] == "validation_failed"
 
 
-def test_post_is_idempotent_for_same_frozen_request_and_conflicts_on_change(
+def test_post_is_idempotent_per_stable_goal_and_separates_other_objectives(
     api_client,
     acquisition_api_scope,
 ):
-    headers = {"Idempotency-Key": "api-task9-idempotent-1"}
+    headers = _idempotency_headers(acquisition_api_scope, "support")
     first = api_client.post(
         _create_path(acquisition_api_scope),
         headers=headers,
@@ -423,14 +479,14 @@ def test_post_is_idempotent_for_same_frozen_request_and_conflicts_on_change(
     )
     conflicting = api_client.post(
         _create_path(acquisition_api_scope),
-        headers=headers,
+        headers=_idempotency_headers(acquisition_api_scope, "contradict"),
         json={"objective": "contradict"},
     )
 
     assert first.status_code == repeated.status_code == 202
     assert repeated.json() == first.json()
-    assert conflicting.status_code == 409
-    assert conflicting.json()["error"]["code"] == "conflict"
+    assert conflicting.status_code == 202
+    assert conflicting.json()["id"] != first.json()["id"]
 
 
 def test_post_replay_bypasses_scope_resolution_after_scope_records_change(
@@ -439,7 +495,7 @@ def test_post_replay_bypasses_scope_resolution_after_scope_records_change(
     session,
     monkeypatch,
 ):
-    headers = {"Idempotency-Key": "api-task9-scope-drift-1"}
+    headers = _idempotency_headers(acquisition_api_scope, "support")
     first = api_client.post(
         _create_path(acquisition_api_scope),
         headers=headers,
@@ -522,11 +578,66 @@ def test_post_replay_bypasses_scope_resolution_after_scope_records_change(
     assert repeated.json() == first.json()
 
 
-def test_post_same_key_with_different_path_conflicts_without_resolving_new_scope(
+def test_post_replays_frozen_job_after_orchestration_switches_run_and_scope(
+    api_client,
+    acquisition_api_scope,
+    session,
+):
+    headers = _idempotency_headers(acquisition_api_scope, "support")
+    first = api_client.post(
+        _create_path(acquisition_api_scope),
+        headers=headers,
+        json={"objective": "support"},
+    )
+    assert first.status_code == 202
+
+    next_scope = EventResearchScopeVersion(
+        research_case_id=acquisition_api_scope.case_id,
+        version=2,
+        changed_by="human:test",
+        change_summary="advance orchestration after freezing acquisition",
+        created_at=RUNNER_NOW + timedelta(minutes=1),
+    )
+    next_run = ResearchRun(
+        research_case_id=acquisition_api_scope.case_id,
+        status="queued",
+        stage="planning",
+        round=0,
+        max_rounds=3,
+        budget=100,
+        budget_used=0,
+        scope_thesis_ids=[str(acquisition_api_scope.thesis_id)],
+        created_at=RUNNER_NOW + timedelta(minutes=1),
+        updated_at=RUNNER_NOW + timedelta(minutes=1),
+    )
+    session.add_all((next_scope, next_run))
+    session.flush()
+    orchestration = session.scalar(
+        select(ResearchOrchestration).where(
+            ResearchOrchestration.research_case_id
+            == acquisition_api_scope.case_id
+        )
+    )
+    assert orchestration is not None
+    orchestration.current_scope_version_id = next_scope.id
+    orchestration.current_research_run_id = next_run.id
+    session.flush()
+
+    repeated = api_client.post(
+        _create_path(acquisition_api_scope),
+        headers=headers,
+        json={"objective": "support"},
+    )
+
+    assert repeated.status_code == 202
+    assert repeated.json() == first.json()
+
+
+def test_post_same_legacy_header_does_not_override_server_case_identity(
     api_client,
     acquisition_api_scope,
 ):
-    headers = {"Idempotency-Key": "api-task9-path-conflict-1"}
+    headers = _idempotency_headers(acquisition_api_scope, "support")
     first = api_client.post(
         _create_path(acquisition_api_scope),
         headers=headers,
@@ -543,8 +654,8 @@ def test_post_same_key_with_different_path_conflicts_without_resolving_new_scope
         json={"objective": "support"},
     )
 
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "conflict"
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
 
 
 def test_post_freezes_scope_and_actor_only_from_server_records(
@@ -555,7 +666,7 @@ def test_post_freezes_scope_and_actor_only_from_server_records(
     response = api_client.post(
         _create_path(acquisition_api_scope),
         headers={
-            "Idempotency-Key": "api-task9-frozen-scope-1",
+            **_idempotency_headers(acquisition_api_scope, "contradict"),
             "X-Actor": "human:attacker",
         },
         json={"objective": "contradict"},
@@ -564,19 +675,35 @@ def test_post_freezes_scope_and_actor_only_from_server_records(
 
     job = session.get(AcquisitionJob, uuid.UUID(response.json()["id"]))
     assert job is not None
-    assert job.request_snapshot == {
+    snapshot = job.request_snapshot
+    assert {
+        key: snapshot[key]
+        for key in (
+            "allowed_source_roles",
+            "case_id",
+            "cutoff",
+            "entity_names",
+            "metric_terms",
+            "objective",
+            "period_end",
+            "period_start",
+            "round",
+            "security_codes",
+            "source_policy_version",
+            "target_link_role",
+            "tenant_id",
+            "thesis_id",
+            "thesis_statement",
+        )
+    } == {
         "allowed_source_roles": ["company_disclosure", "licensed_provider"],
-        "acquisition_kind": "external_gap",
         "case_id": str(acquisition_api_scope.case_id),
         "cutoff": "2026-08-13T23:59:59.999999Z",
-        "document_version_id": None,
         "entity_names": ["Example Corp"],
-        "idempotency_key": "api-task9-frozen-scope-1",
         "metric_terms": ["Revenue"],
         "objective": "contradict",
         "period_end": "2026-12-31",
         "period_start": "2026-01-01",
-        "research_run_id": None,
         "round": 1,
         "security_codes": ["600001"],
         "source_policy_version": B_SCOPE_POLICY.version,
@@ -585,6 +712,17 @@ def test_post_freezes_scope_and_actor_only_from_server_records(
         "thesis_id": str(acquisition_api_scope.thesis_id),
         "thesis_statement": "Example Corp revenue will grow in 2026",
     }
+    assert snapshot["research_run_id"]
+    assert snapshot["scope_version_id"]
+    assert snapshot["goal_id"] == f"thesis:{acquisition_api_scope.thesis_id}:contradict"
+    assert snapshot["planner_version"] == "goal-query-v1"
+    assert snapshot["previous_query_plan_id"] is None
+    assert snapshot["expansion"] is None
+    assert snapshot["query_plan_id"]
+    assert snapshot["idempotency_key"] == (
+        f"run:{snapshot['research_run_id']}:scope:{snapshot['scope_version_id']}:"
+        f"goal:{snapshot['goal_id']}:round:1"
+    )
     assert job.policy_snapshot["enabled_adapter_keys"] == ["gildata", "sse", "szse"]
     events = api_client.get(f"/api/v1/acquisition-jobs/{job.id}/events")
     assert events.status_code == 200
@@ -639,7 +777,7 @@ def test_verify_rule_resolves_case_rule_and_freezes_support_role(
 ):
     response = api_client.post(
         _create_path(acquisition_api_scope),
-        headers={"Idempotency-Key": "api-task9-rule-1"},
+        headers=_idempotency_headers(acquisition_api_scope, "verify_rule"),
         json={"objective": "verify_rule"},
     )
 
@@ -714,7 +852,7 @@ def test_verify_rule_rejects_multiple_compatible_effective_rules(
 
     response = api_client.post(
         _create_path(acquisition_api_scope),
-        headers={"Idempotency-Key": "api-task9-rule-ambiguous-1"},
+        headers=_idempotency_headers(acquisition_api_scope, "verify_rule"),
         json={"objective": "verify_rule"},
     )
 
@@ -740,7 +878,7 @@ def test_acquisition_job_read_is_non_disclosing_for_another_tenant(
     )
     created = api_client.post(
         _create_path(acquisition_api_scope),
-        headers={"Idempotency-Key": "api-task9-tenant-1"},
+        headers=_idempotency_headers(acquisition_api_scope, "support"),
         json={"objective": "support"},
     )
     assert created.status_code == 202
@@ -760,7 +898,7 @@ def test_runner_results_are_exposed_only_through_safe_status_reads(
 ):
     created = api_client.post(
         _create_path(acquisition_api_scope),
-        headers={"Idempotency-Key": "api-task9-runner-1"},
+        headers=_idempotency_headers(acquisition_api_scope, "support"),
         json={"objective": "support"},
     )
     assert created.status_code == 202
@@ -862,7 +1000,7 @@ def test_runner_exceptions_and_failure_summary_are_safely_projected(
 ):
     created = api_client.post(
         _create_path(acquisition_api_scope),
-        headers={"Idempotency-Key": "api-task9-exception-1"},
+        headers=_idempotency_headers(acquisition_api_scope, "support"),
         json={"objective": "support"},
     )
     assert created.status_code == 202
@@ -902,7 +1040,7 @@ def test_public_reads_redact_nested_persisted_pollution_without_losing_safe_gate
 ):
     created = api_client.post(
         _create_path(acquisition_api_scope),
-        headers={"Idempotency-Key": "api-task9-pollution-1"},
+        headers=_idempotency_headers(acquisition_api_scope, "support"),
         json={"objective": "support"},
     )
     assert created.status_code == 202

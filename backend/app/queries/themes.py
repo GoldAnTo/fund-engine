@@ -23,7 +23,6 @@ from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
 from app.models.ledger import (
-    Company,
     DocumentVersion,
     EvidenceLink,
     Fund,
@@ -31,10 +30,10 @@ from app.models.ledger import (
     ResearchCase,
     SourceSpan,
     SourceStatement,
-    Stock,
     ThemeRole,
 )
 from app.queries.basis import HistoricalBasis
+from app.queries.source_backlinks import statement_is_attached_to_case
 from app.repositories.instruments import InstrumentRepository
 from app.repositories.research import ResearchRepository
 from app.services.exposure import choose_latest_disclosure_per_fund_stock
@@ -78,11 +77,19 @@ class ThemeReadQueries:
 
     # --------------------------------------------------------- tag index
 
-    def _tags_by_case(self) -> dict[uuid.UUID, set[str]]:
+    def _tags_by_case(
+        self,
+        authorized_case_ids: set[uuid.UUID] | None = None,
+    ) -> dict[uuid.UUID, set[str]]:
         # Events arrive in global creation order, which preserves per-case
         # relative order, so a single pass folds each case's effective set.
         tags: dict[uuid.UUID, set[str]] = {}
         for event in self._research.theme_tag_events():
+            if (
+                authorized_case_ids is not None
+                and event.research_case_id not in authorized_case_ids
+            ):
+                continue
             current = tags.setdefault(event.research_case_id, set())
             if event.op == "add":
                 current.add(event.tag)
@@ -92,8 +99,12 @@ class ThemeReadQueries:
 
     # --------------------------------------------------------------- list
 
-    def list_themes(self) -> ThemeListResponse:
-        tags_by_case = self._tags_by_case()
+    def list_themes(
+        self,
+        *,
+        authorized_case_ids: set[uuid.UUID] | None = None,
+    ) -> ThemeListResponse:
+        tags_by_case = self._tags_by_case(authorized_case_ids)
         by_tag: dict[str, list[uuid.UUID]] = {}
         for case_id, tags in tags_by_case.items():
             for tag in tags:
@@ -124,11 +135,17 @@ class ThemeReadQueries:
 
     # --------------------------------------------------------------- view
 
-    def theme_view(self, *, tag: str, basis: HistoricalBasis) -> ThemeViewResponse:
+    def theme_view(
+        self,
+        *,
+        tag: str,
+        basis: HistoricalBasis,
+        authorized_case_ids: set[uuid.UUID] | None = None,
+    ) -> ThemeViewResponse:
         if tag not in THEME_TAG_VOCABULARY:
             raise NotFoundError("theme tag not found")
 
-        tags_by_case = self._tags_by_case()
+        tags_by_case = self._tags_by_case(authorized_case_ids)
         case_ids = sorted(
             case_id for case_id, tags in tags_by_case.items() if tag in tags
         )
@@ -342,7 +359,15 @@ class ThemeReadQueries:
                     applicable_to=(
                         role.applicable_to.isoformat() if role.applicable_to else None
                     ),
-                    statement_id=role.source_statement_id,
+                    statement_id=(
+                        role.source_statement_id
+                        if statement_is_attached_to_case(
+                            self._session,
+                            statement_id=role.source_statement_id,
+                            research_case_id=role.research_case_id,
+                        )
+                        else None
+                    ),
                     valuations=[
                         ValuationViewDTO(
                             stock_id=stock.id,

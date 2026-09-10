@@ -1,6 +1,6 @@
 """v1 API router. Combines all versioned read routes."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.api.v1.cases import router as cases_router
 from app.api.v1.conclusion import router as conclusion_router
@@ -28,17 +28,19 @@ from app.api.v1.jobs import router as jobs_router
 from app.api.v1.activity import router as activity_router
 from app.api.v1.atomic_claims import router as atomic_claims_router
 from app.api.v1.auto_research import router as auto_research_router
-from app.api.v1.automatic_research import router as automatic_research_router
 from app.api.v1.event_research import router as event_research_router
 from app.api.v1.case_monitor import router as case_monitor_router
 from app.api.v1.market_expression import router as market_expression_router
 from app.api.v1.research_protocol import router as research_protocol_router
-from app.api.v1.research_preparation import router as research_preparation_router
 from app.api.v1.research_session import router as research_session_router
+from app.api.v1.research_workflow import router as research_workflow_router
 from app.api.v1.fund_disclosure_sync import router as fund_disclosure_sync_router
 from app.api.v1.forecast_verdicts import router as forecast_verdicts_router
 from app.api.v1.acquisition import router as acquisition_router
+from app.api.v1.runtime_status import router as runtime_status_router
+from app.api.v1.case_access import router as case_access_router
 from app.schemas.v1.common import HealthResponse
+from app.api.v1.dependencies import require_case_route_permission
 
 router = APIRouter(prefix="/api/v1")
 
@@ -51,41 +53,44 @@ def health_v1() -> HealthResponse:
     )
 
 
-router.include_router(cases_router)
-router.include_router(conclusion_router)
-router.include_router(compare_router)
-router.include_router(graph_router)
-router.include_router(documents_router)
-router.include_router(search_router)
-router.include_router(overview_router)
-router.include_router(penetration_router)
-router.include_router(companies_router)
-router.include_router(themes_router)
+case_permission = [Depends(require_case_route_permission)]
+
+router.include_router(cases_router, dependencies=case_permission)
+router.include_router(conclusion_router, dependencies=case_permission)
+router.include_router(compare_router, dependencies=case_permission)
+router.include_router(graph_router, dependencies=case_permission)
+router.include_router(documents_router, dependencies=case_permission)
+router.include_router(search_router, dependencies=case_permission)
+router.include_router(overview_router, dependencies=case_permission)
+router.include_router(penetration_router, dependencies=case_permission)
+router.include_router(companies_router, dependencies=case_permission)
+router.include_router(themes_router, dependencies=case_permission)
 router.include_router(metrics_router)
-router.include_router(research_ops_router)
-router.include_router(knowledge_router)
+router.include_router(research_ops_router, dependencies=case_permission)
+router.include_router(knowledge_router, dependencies=case_permission)
 # Command (write) routes live in app/api/v1/commands/, decoupled from reads.
-router.include_router(case_commands_router)
-router.include_router(review_commands_router)
-router.include_router(engine_commands_router)
-router.include_router(engine_doc_commands_router)
-router.include_router(ingest_commands_router)
+router.include_router(case_commands_router, dependencies=case_permission)
+router.include_router(review_commands_router, dependencies=case_permission)
+router.include_router(engine_commands_router, dependencies=case_permission)
+router.include_router(engine_doc_commands_router, dependencies=case_permission)
+router.include_router(ingest_commands_router, dependencies=case_permission)
 router.include_router(instrument_commands_router)
-router.include_router(causal_commands_router)
-router.include_router(theme_commands_router)
+router.include_router(causal_commands_router, dependencies=case_permission)
+router.include_router(theme_commands_router, dependencies=case_permission)
 # Operational / proposal / activity endpoints (jobs, proposals, activity).
-router.include_router(jobs_router)
-router.include_router(activity_router)
-router.include_router(atomic_claims_router)
-router.include_router(auto_research_router)
-router.include_router(automatic_research_router)
-router.include_router(event_research_router)
-router.include_router(case_monitor_router)
-router.include_router(market_expression_router)
-router.include_router(research_protocol_router)
-router.include_router(research_preparation_router)
-router.include_router(review_proposals_router)
+router.include_router(jobs_router, dependencies=case_permission)
+router.include_router(activity_router, dependencies=case_permission)
+router.include_router(atomic_claims_router, dependencies=case_permission)
+router.include_router(auto_research_router, dependencies=case_permission)
+router.include_router(event_research_router, dependencies=case_permission)
+router.include_router(case_monitor_router, dependencies=case_permission)
+router.include_router(market_expression_router, dependencies=case_permission)
+router.include_router(research_protocol_router, dependencies=case_permission)
+router.include_router(review_proposals_router, dependencies=case_permission)
 router.include_router(research_session_router)
-router.include_router(fund_disclosure_sync_router)
-router.include_router(forecast_verdicts_router)
-router.include_router(acquisition_router)
+router.include_router(research_workflow_router, dependencies=case_permission)
+router.include_router(fund_disclosure_sync_router, dependencies=case_permission)
+router.include_router(forecast_verdicts_router, dependencies=case_permission)
+router.include_router(acquisition_router, dependencies=case_permission)
+router.include_router(runtime_status_router, dependencies=case_permission)
+router.include_router(case_access_router, dependencies=case_permission)

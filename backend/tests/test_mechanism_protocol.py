@@ -201,8 +201,15 @@ def test_template_and_verification_rule_mutations_take_the_shared_case_lock(
 @pytest.mark.pg_only
 def test_postgres_protocol_mutation_wins_before_final_assessment_write(engine) -> None:
     """A protocol mutation holding the Case lock cannot be assessed stale."""
+    from datetime import timedelta
+
+    from app.models.identity import CaseAccessGrant, ResearchUser
+    from app.models.ledger import CaseTenantAdmission
+    from app.security.principal import ResearchPrincipal
+
     SessionLocal = sessionmaker(bind=engine, future=True)
     now = datetime.now(timezone.utc)
+    user_id = uuid.uuid4()
     with SessionLocal.begin() as setup:
         case = ResearchCase(
             title="protocol assessment race",
@@ -212,6 +219,49 @@ def test_postgres_protocol_mutation_wins_before_final_assessment_write(engine) -
         )
         setup.add(case)
         setup.flush()
+        document = DocumentVersion(
+            content_sha256=uuid.uuid4().hex,
+            source_url="https://example.test/protocol-race",
+            available_at=now,
+            acquired_at=now,
+            parser_version="test",
+        )
+        setup.add(document)
+        setup.add(
+            ResearchUser(
+                id=user_id,
+                issuer="https://identity.example.test/realms/research",
+                subject="protocol-race-editor",
+                tenant_id="test-team",
+                display_name="Protocol Race Editor",
+                normalized_email=None,
+                active=True,
+                last_seen_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        setup.flush()
+        setup.add_all(
+            [
+                CaseTenantAdmission(
+                    research_case_id=case.id,
+                    tenant_id="test-team",
+                    initial_document_version_id=document.id,
+                    admitted_by="test:fixture",
+                    admitted_at=now,
+                ),
+                CaseAccessGrant(
+                    research_case_id=case.id,
+                    user_id=user_id,
+                    role="editor",
+                    granted_by_principal_id="test:fixture",
+                    reason="protocol race authorization",
+                    created_at=now,
+                    updated_at=now,
+                ),
+            ]
+        )
         thesis = Thesis(
             research_case_id=case.id,
             statement="A directional result must match the locked protocol footprint",
@@ -311,9 +361,16 @@ def test_postgres_protocol_mutation_wins_before_final_assessment_write(engine) -
         case_id = case.id
         thesis_id = thesis.id
         blocked_template_id = blocked_template.id
-        from tests.tenant_admission import admit_case
 
-        admit_case(setup, case.id)
+    principal = ResearchPrincipal(
+        user_id=user_id,
+        issuer="https://identity.example.test/realms/research",
+        subject="protocol-race-editor",
+        tenant_id="test-team",
+        display_name="Protocol Race Editor",
+        roles=frozenset(),
+        expires_at=now + timedelta(hours=1),
+    )
 
     # Hold the shared Case lock with an uncommitted mutation. The assessment
     # initial read sees the prior monitoring protocol, calls the provider, and
@@ -348,7 +405,9 @@ def test_postgres_protocol_mutation_wins_before_final_assessment_write(engine) -
         from unittest.mock import patch
 
         from app.api.v1.commands.engine import rerun_assessment
+        from app.api.v1.dependencies import CaseRoutePolicy
         from app.errors import ValidationFailedError
+        from app.services.case_authorization import CaseAuthorizationService
 
         assessing = SessionLocal()
         assessment_thread_id.append(get_ident())
@@ -368,7 +427,16 @@ def test_postgres_protocol_mutation_wins_before_final_assessment_write(engine) -
                 "app.api.v1.commands.engine.LLMClient.from_env",
                 return_value=client,
             ):
-                rerun_assessment(thesis_id, tenant_id="test-team", db=assessing)
+                rerun_assessment(
+                    case_policy=CaseRoutePolicy(
+                        actor=principal,
+                        authorization=CaseAuthorizationService(assessing),
+                        permission="edit",
+                    ),
+                    thesis_id=thesis_id,
+                    db=assessing,
+                    actor=principal,
+                )
         except BaseException as exc:
             errors.append(exc)
             assert isinstance(exc, ValidationFailedError)

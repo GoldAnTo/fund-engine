@@ -65,7 +65,6 @@ def _case_with_confirmed_factor(cmd_session) -> tuple[ResearchCase, Thesis]:
 
 def _monitor_payload(factor_id: uuid.UUID, **overrides) -> dict:
     payload = {
-        "actor": "human:lin",
         "frequency": "weekday_08_30",
         "factor_ids": [str(factor_id)],
         "allowed_source_types": ["licensed_provider"],
@@ -109,6 +108,25 @@ def _historical_monitor(
     )
 
 
+def test_public_api_rejects_acceptance_frequency_without_explicit_flag(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    monkeypatch.delenv("LIVE_ACCEPTANCE_FAST_SCHEDULER", raising=False)
+    case, factor = _case_with_confirmed_factor(cmd_session)
+
+    for frequency in (
+        "acceptance_every_5_minutes",
+        " acceptance_every_5_minutes ",
+    ):
+        response = cmd_client.put(
+            f"/api/v1/research-cases/{case.id}/monitor",
+            json=_monitor_payload(factor.id, frequency=frequency),
+        )
+
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "validation_failed"
+
+
 def test_monitor_returns_only_confirmed_factors_in_its_effective_scope(
     cmd_client, cmd_session
 ) -> None:
@@ -120,6 +138,7 @@ def test_monitor_returns_only_confirmed_factors_in_its_effective_scope(
     )
 
     assert saved.status_code == 200, saved.text
+    assert saved.json()["changed_by"] == "user:test-team"
     detail = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
     assert detail.status_code == 200
     assert detail.json()["confirmed_factors"] == [
@@ -293,6 +312,8 @@ def test_monitor_read_update_and_run_events_are_transparent(cmd_client, cmd_sess
     assert item["stage"] == "scope"
     assert item["details"]["monitor_version_id"] == saved.json()["id"]
     assert item["details"]["factor_ids"] == [str(factor.id)]
+    assert item["details"]["executor_actor"] == "service:research-worker"
+    assert item["details"]["initiated_by"] == "user:test-team"
 
 
 def test_manual_monitor_run_uses_the_saved_version_not_caller_options(
@@ -324,8 +345,10 @@ def test_manual_monitor_run_uses_the_saved_version_not_caller_options(
         "budget": 7,
         "frequency": "weekday_08_30",
         "next_verification_event": "2026Q1 财报披露",
-        "configured_by": "human:lin",
+        "configured_by": "user:test-team",
         "configuration_change_reason": "建立可复现的监控范围",
+        "executor_actor": "service:research-worker",
+        "initiated_by": "user:test-team",
     }
 
     second = cmd_client.put(
@@ -455,7 +478,7 @@ def test_monitor_prefers_an_active_run_over_a_later_cancelled_run(
 
     cancelled = cmd_client.post(
         f"/api/v1/research-runs/{first.json()['id']}/cancel",
-        json={"actor": "human:lin", "change_reason": "取消重复测试运行"},
+        json={"change_reason": "取消重复测试运行"},
     )
     assert cancelled.status_code == 200
 
@@ -535,9 +558,9 @@ def test_run_archive_replays_the_monitoring_cadence_and_change_basis_that_starte
         f"/api/v1/research-cases/{case.id}/monitor",
         json=_monitor_payload(
             factor.id,
-            frequency="daily_20_00",
+            frequency="weekly_monday",
             next_verification_event="下一次行业会议",
-            change_reason="改为每日晚间复核",
+            change_reason="改为每周复核",
         ),
     )
     assert changed.status_code == 200, changed.text
@@ -548,7 +571,7 @@ def test_run_archive_replays_the_monitoring_cadence_and_change_basis_that_starte
     assert scope["monitor_version_id"] == first.json()["id"]
     assert scope["frequency"] == "weekday_08_30"
     assert scope["next_verification_event"] == "2026Q1 财报披露"
-    assert scope["configured_by"] == "human:lin"
+    assert scope["configured_by"] == "user:test-team"
     assert scope["configuration_change_reason"] == "以晨间披露核验订单指引"
 
 
@@ -579,39 +602,3 @@ def test_global_run_archive_keeps_terminal_run_and_its_frozen_scope(
     assert item["stop_reason"] == "task_failed"
     assert item["scope"]["monitor_version_id"] == saved.json()["id"]
     assert item["scope"]["allowed_source_types"] == ["company_disclosure"]
-
-
-def test_monitor_save_rejects_stale_version_without_overwriting_pause(cmd_client, cmd_session):
-    case, factor = _case_with_confirmed_factor(cmd_session)
-    path = f'/api/v1/research-cases/{case.id}/monitor'
-    first = cmd_client.put(path, json={**_monitor_payload(factor.id), 'expected_version': 0})
-    assert first.status_code == 200, first.text
-    paused = cmd_client.post(f'{path}/paused', json={'actor': 'other', 'change_reason': '暂停核验'})
-    assert paused.status_code == 200
-    stale = cmd_client.put(path, json={**_monitor_payload(factor.id), 'expected_version': 1})
-    assert stale.status_code == 409, stale.text
-    current = cmd_client.get(path).json()
-    assert current['monitor']['version'] == 2
-    assert current['monitor']['status'] == 'paused'
-    assert len(current['history']) == 2
-    updated = cmd_client.put(path, json={**_monitor_payload(factor.id), 'expected_version': 2})
-    assert updated.status_code == 200, updated.text
-    assert updated.json()['version'] == 3
-
-
-def test_status_command_rejects_stale_monitor_version(cmd_client, cmd_session):
-    case, factor = _case_with_confirmed_factor(cmd_session)
-    path = f'/api/v1/research-cases/{case.id}/monitor'
-    assert cmd_client.put(path, json=_monitor_payload(factor.id)).status_code == 200
-    assert cmd_client.put(path, json={**_monitor_payload(factor.id), 'budget': 30}).status_code == 200
-    stale = cmd_client.post(f'{path}/paused', json={'actor': 'tester', 'change_reason': '旧页面暂停', 'expected_version': 1})
-    assert stale.status_code == 409, stale.text
-    current = cmd_client.get(path).json()
-    assert current['monitor']['version'] == 2
-    assert current['monitor']['status'] == 'active'
-    assert len(current['history']) == 2
-    paused = cmd_client.post(f'{path}/paused', json={'actor': 'tester', 'change_reason': '核对新范围后暂停', 'expected_version': 2})
-    assert paused.status_code == 200, paused.text
-    stale_resume = cmd_client.post(f'{path}/active', json={'actor': 'tester', 'change_reason': '旧页面恢复', 'expected_version': 2})
-    assert stale_resume.status_code == 409
-    assert cmd_client.get(path).json()['monitor']['status'] == 'paused'

@@ -9,6 +9,8 @@ import uuid
 
 from sqlalchemy import select
 
+from tests.tenant_admission import admit_case
+
 
 def _error_code(response) -> str:
     return response.json()["error"]["code"]
@@ -17,9 +19,25 @@ def _error_code(response) -> str:
 def _seed_case(cmd_session, title: str = "AI 算力链") -> object:
     from app.repositories.research import ResearchRepository
 
-    return ResearchRepository(cmd_session).add_case(
+    case = ResearchRepository(cmd_session).add_case(
         title=title, industry_topic="ai_compute", created_by="tester"
     )
+    admit_case(cmd_session, case.id)
+    return case
+
+
+def _propose_theme_tags(cmd_session, case, tags: list[str]):
+    """AI provenance is created by the trusted service seam, never HTTP input."""
+    from app.repositories.research import ResearchRepository
+    from app.services.themes import ThemeService
+
+    result = ThemeService(ResearchRepository(cmd_session)).apply_theme_tags(
+        case=case,
+        desired=tags,
+        proposed_by="ai",
+    )
+    cmd_session.commit()
+    return result
 
 
 def test_patch_theme_tags_human_appends_confirmed_events(cmd_client, cmd_session):
@@ -46,8 +64,8 @@ def test_patch_theme_tags_human_appends_confirmed_events(cmd_client, cmd_session
     assert all(event.proposal_id is None for event in events)
 
 
-def test_patch_theme_tags_ai_appends_pending_events(cmd_client, cmd_session):
-    """AI PATCHes create a proposal whose events are pending — effective set unchanged."""
+def test_patch_theme_tags_rejects_client_authored_ai_provenance(cmd_client, cmd_session):
+    """A browser cannot relabel its own PATCH as an AI proposal."""
     from app.models.ledger import CaseThemeTagEvent
 
     case = _seed_case(cmd_session)
@@ -56,21 +74,9 @@ def test_patch_theme_tags_ai_appends_pending_events(cmd_client, cmd_session):
         f"/api/v1/research-cases/{case.id}/theme-tags",
         json={"tags": ["算力国产化", "云厂商CapEx"], "proposed_by": "ai"},
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    # Effective set is empty (the proposal does not change it yet).
-    assert body["tags"] == []
-    assert body["proposed_by"] == "ai"
-    assert body["events_appended"] == 2
-    assert body["proposal_id"] is not None
-    assert body["promoted_proposal_id"] is None
-
-    events = cmd_session.scalars(select(CaseThemeTagEvent)).all()
-    assert len(events) == 2
-    assert all(event.status == "pending" for event in events)
-    assert all(event.proposed_by == "ai" for event in events)
-    proposal_id = body["proposal_id"]
-    assert all(str(event.proposal_id) == proposal_id for event in events)
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
+    assert cmd_session.scalars(select(CaseThemeTagEvent)).all() == []
 
 
 def test_patch_theme_tags_human_promotes_matching_ai_proposal(cmd_client, cmd_session):
@@ -84,17 +90,14 @@ def test_patch_theme_tags_human_promotes_matching_ai_proposal(cmd_client, cmd_se
     case = _seed_case(cmd_session)
 
     # 1) AI proposes
-    proposed = cmd_client.patch(
-        f"/api/v1/research-cases/{case.id}/theme-tags",
-        json={"tags": ["算力国产化", "云厂商CapEx"], "proposed_by": "ai"},
-    )
-    proposal_id = proposed.json()["proposal_id"]
-    assert proposed.json()["tags"] == []
+    proposed = _propose_theme_tags(cmd_session, case, ["算力国产化", "云厂商CapEx"])
+    proposal_id = str(proposed.proposal_id)
+    assert proposed.tags == []
 
     # 2) Human confirms with the same desired set
     confirmed = cmd_client.patch(
         f"/api/v1/research-cases/{case.id}/theme-tags",
-        json={"tags": ["算力国产化", "云厂商CapEx"], "proposed_by": "human"},
+        json={"tags": ["算力国产化", "云厂商CapEx"]},
     )
     assert confirmed.status_code == 200
     body = confirmed.json()
@@ -134,14 +137,11 @@ def test_patch_theme_tags_human_with_different_set_does_not_promote(
 
     case = _seed_case(cmd_session)
 
-    cmd_client.patch(
-        f"/api/v1/research-cases/{case.id}/theme-tags",
-        json={"tags": ["算力国产化"], "proposed_by": "ai"},
-    )
+    _propose_theme_tags(cmd_session, case, ["算力国产化"])
 
     response = cmd_client.patch(
         f"/api/v1/research-cases/{case.id}/theme-tags",
-        json={"tags": ["光模块"], "proposed_by": "human"},
+        json={"tags": ["光模块"]},
     )
     assert response.status_code == 200
     body = response.json()
@@ -167,7 +167,7 @@ def test_patch_theme_tags_human_direct_write_when_no_proposal(
 
     response = cmd_client.patch(
         f"/api/v1/research-cases/{case.id}/theme-tags",
-        json={"tags": ["算力国产化"], "proposed_by": "human"},
+        json={"tags": ["算力国产化"]},
     )
     assert response.status_code == 200
     body = response.json()
@@ -247,8 +247,8 @@ def test_patch_theme_tags_blank_tag_is_422(cmd_client, cmd_session):
     assert _error_code(response) == "validation_failed"
 
 
-def test_patch_theme_tags_unknown_proposed_by_is_422(cmd_client, cmd_session):
-    """Pydantic rejects any value other than 'human' / 'ai' for proposed_by."""
+def test_patch_theme_tags_rejects_any_client_proposed_by(cmd_client, cmd_session):
+    """The acting source is always derived server-side for HTTP writes."""
     case = _seed_case(cmd_session)
     response = cmd_client.patch(
         f"/api/v1/research-cases/{case.id}/theme-tags",

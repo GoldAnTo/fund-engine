@@ -25,7 +25,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.acquisition.policy import B_SCOPE_POLICY, INTAKE_MATERIAL_POLICY
+from app.acquisition.policy import B_SCOPE_POLICY
 from app.datasources.docling import (
     PARSER_VERSION_PYPDF,
     PYPDF_CONFIG_VERSION,
@@ -70,7 +70,7 @@ from app.repositories.acquisition import (
 from app.services.source_admission import source_contract_is_active
 
 
-B_SCOPE_GATE_VERSION: Final = "b-scope-admission-gates-v1"
+B_SCOPE_GATE_VERSION: Final = "b-scope-admission-gates-v3"
 AUTOMATIC_ADMISSION_GATE_VERSION: Final = B_SCOPE_GATE_VERSION
 _GATE_NAMES: Final = ("source", "temporal", "locator", "semantic")
 _QUARANTINE_REASON: Final = "automatic_admission_quarantined"
@@ -84,11 +84,6 @@ _AUTHORITY_BY_SOURCE_ROLE: Final = {
     "company_disclosure": "primary_disclosure",
     "licensed_provider": "licensed_research",
 }
-_INTAKE_MATERIAL_ROLE: Final = "user_provided_material"
-_INTAKE_MATERIAL_ADAPTER: Final = "intake_material"
-_INTAKE_MATERIAL_CONTRACT_TYPES: Final = frozenset(
-    {"pasted_snapshot", "uploaded_file"}
-)
 ADAPTER_SOURCE_IDENTITY: Final = {
     "gildata": ("licensed_provider", "Gildata", "licensed_research"),
     "sse": (
@@ -155,7 +150,9 @@ _WORKER_IDENTITY_RE: Final = re.compile(
 _URL_HOSTS: Final = {
     "sse": {
         "canonical": frozenset({"www.sse.com.cn"}),
-        "final": frozenset({"www.sse.com.cn", "static.sse.com.cn"}),
+        "final": frozenset(
+            {"www.sse.com.cn", "static.sse.com.cn", "big5.sse.com.cn"}
+        ),
     },
     "szse": {
         "canonical": frozenset({"disc.static.szse.cn"}),
@@ -341,10 +338,19 @@ def trusted_extraction_run(
         ) from exc
     run = session.get(AIRun, run_id)
     input_ref = run.input_ref if run is not None and isinstance(run.input_ref, dict) else {}
+    scope = fields.get("scope") if isinstance(fields.get("scope"), Mapping) else {}
+    trusted_status = run is not None and (
+        run.status == "success"
+        or (
+            run.status == "partial"
+            and input_ref.get("rule_fallback") is True
+            and scope.get("extraction_method") == "financial_table_v1"
+        )
+    )
     if (
         run is None
         or run.kind != "extract"
-        or run.status != "success"
+        or not trusted_status
         or run.finished_at is None
         or input_ref.get("document_version_id") != str(document.id)
         or str(span.id) not in tuple(input_ref.get("span_ids") or ())
@@ -464,64 +470,6 @@ def automatic_temporal_failures(
     return failures
 
 
-def intake_material_temporal_failures(
-    reference: SourceReference,
-    attempt: AcquisitionAttempt,
-    artifact: RetrievalArtifact,
-    document: DocumentVersion,
-    *,
-    cutoff: datetime,
-    evaluation_at: datetime,
-) -> list[str]:
-    """Validate an already-frozen original without inventing publication time."""
-    cutoff = _require_aware(cutoff, "cutoff")
-    evaluation_at = _require_aware(evaluation_at, "evaluation_at")
-    failures: list[str] = []
-    required = {
-        "available_at": document.available_at,
-        "acquired_at": document.acquired_at,
-        "reference_created_at": reference.created_at,
-        "attempt_started_at": attempt.started_at,
-        "attempt_finished_at": attempt.finished_at,
-        "retrieved_at": artifact.retrieved_at,
-    }
-    for name, value in required.items():
-        if value is None:
-            failures.append(f"temporal_{name}_missing")
-    if any(value is None for value in required.values()):
-        return failures
-    normalized = {name: _as_utc(value) for name, value in required.items()}
-    published = document.published_at
-    reference_published = reference.published_at
-    if (published is None) != (reference_published is None):
-        failures.append("temporal_publication_mismatch")
-    elif published is not None and reference_published is not None:
-        published_at = _as_utc(published)
-        if published_at != _as_utc(reference_published):
-            failures.append("temporal_publication_mismatch")
-        if published_at > cutoff:
-            failures.append("temporal_published_at_after_cutoff")
-        if published_at > normalized["available_at"]:
-            failures.append("temporal_publication_after_availability")
-    for name in ("available_at", "acquired_at"):
-        if normalized[name] > cutoff:
-            failures.append(f"temporal_{name}_after_cutoff")
-    for name in required:
-        if normalized[name] > evaluation_at:
-            failures.append(f"temporal_{name}_after_evaluation")
-    chronology = (
-        ("available_at", "acquired_at"),
-        ("acquired_at", "reference_created_at"),
-        ("reference_created_at", "attempt_started_at"),
-        ("attempt_started_at", "attempt_finished_at"),
-        ("attempt_finished_at", "retrieved_at"),
-    )
-    for earlier, later in chronology:
-        if normalized[earlier] > normalized[later]:
-            failures.append(f"temporal_{earlier}_after_{later}")
-    return failures
-
-
 def adapter_url_is_authorized(adapter_key: str, url: object, *, final: bool) -> bool:
     """Apply exact adapter URL boundaries to persisted canonical/final URLs."""
     if not isinstance(url, str) or not url or url != url.strip():
@@ -556,35 +504,6 @@ def adapter_url_is_authorized(adapter_key: str, url: object, *, final: bool) -> 
         return False
     kind = "final" if final else "canonical"
     return parsed.scheme == "https" and parsed.hostname in boundary[kind]
-
-
-def intake_material_url_is_authorized(url: object, contract_type: object) -> bool:
-    """Recognize only immutable intake locations created by our own intake paths."""
-    if not isinstance(url, str) or not isinstance(contract_type, str):
-        return False
-    try:
-        parsed = urlsplit(url)
-        port = parsed.port
-    except ValueError:
-        return False
-    if (
-        url != url.strip()
-        or parsed.username is not None
-        or parsed.password is not None
-        or port is not None
-        or parsed.query
-        or parsed.fragment
-        or parsed.path not in {"", "/"}
-    ):
-        return False
-    if contract_type == "pasted_snapshot":
-        return parsed.scheme == "event" and parsed.hostname == "pasted-news"
-    if contract_type == "uploaded_file":
-        return parsed.scheme == "upload" and bool(
-            parsed.hostname == "event-text-snapshot"
-            or re.fullmatch(r"[0-9a-f]{64}", parsed.hostname or "")
-        )
-    return False
 
 
 def successful_fetch_attempt(lineage: _Lineage) -> bool:
@@ -688,10 +607,7 @@ class AdmissionContext:
             raise ValueError("gate_version does not match the active B-scope gates")
         if self.policy_version != B_SCOPE_POLICY_VERSION:
             raise ValueError("policy_version does not match the active B-scope policy")
-        if not (
-            roles <= B_SCOPE_POLICY.allowed_source_roles
-            or roles == INTAKE_MATERIAL_POLICY.allowed_source_roles
-        ):
+        if not roles <= B_SCOPE_POLICY.allowed_source_roles:
             raise ValueError("allowed_source_roles exceed the active B-scope policy")
 
 
@@ -875,151 +791,6 @@ class AutomaticAdmissionGate:
             facts={**facts, "failures": failures},
         )
 
-    def _intake_material_source_gate(
-        self,
-        lineage: _Lineage,
-        context: AdmissionContext,
-        *,
-        evaluation_at: datetime,
-    ) -> GateResult:
-        snapshot = lineage.job.request_snapshot
-        policy_snapshot = (
-            lineage.job.policy_snapshot
-            if isinstance(lineage.job.policy_snapshot, dict)
-            else {}
-        )
-        snapshot_roles = frozenset(snapshot.get("allowed_source_roles") or ())
-        policy_roles = frozenset(policy_snapshot.get("allowed_source_roles") or ())
-        policy_adapters = tuple(policy_snapshot.get("enabled_adapter_keys") or ())
-        contract = lineage.contract
-        contract_type = contract.source_type if contract is not None else None
-        provider_identity = (
-            lineage.reference.metadata_json.get("provider_identity")
-            if isinstance(lineage.reference.metadata_json, dict)
-            else None
-        )
-        metadata_document_id = (
-            lineage.reference.metadata_json.get("document_version_id")
-            if isinstance(lineage.reference.metadata_json, dict)
-            else None
-        )
-        expected_roles = INTAKE_MATERIAL_POLICY.allowed_source_roles
-        failures: list[str] = []
-        if (
-            snapshot_roles != expected_roles
-            or context.allowed_source_roles != expected_roles
-            or policy_roles != expected_roles
-            or lineage.reference.source_role != _INTAKE_MATERIAL_ROLE
-        ):
-            failures.append("source_role_not_allowed")
-        if snapshot_roles != context.allowed_source_roles:
-            failures.append("source_allowlist_context_mismatch")
-        if (
-            snapshot.get("source_policy_version") != context.policy_version
-            or policy_snapshot.get("version") != context.policy_version
-            or INTAKE_MATERIAL_POLICY.version != context.policy_version
-        ):
-            failures.append("source_policy_context_mismatch")
-        if (
-            lineage.reference.adapter_key != _INTAKE_MATERIAL_ADAPTER
-            or policy_adapters
-            or INTAKE_MATERIAL_POLICY.enabled_adapter_keys
-        ):
-            failures.append("source_adapter_not_enabled")
-        expected_document_id = str(lineage.document.id)
-        if (
-            snapshot.get("document_version_id") != expected_document_id
-            or lineage.reference.external_record_id != expected_document_id
-            or metadata_document_id != expected_document_id
-        ):
-            failures.append("source_intake_document_mismatch")
-        if contract is None:
-            failures.append("source_contract_missing")
-        else:
-            if not source_contract_is_active(contract, at=evaluation_at):
-                failures.append("source_contract_inactive")
-            if not contract.allow_ai_processing or not contract.allow_display:
-                failures.append("source_contract_permissions_denied")
-            if (
-                contract.source_type not in _INTAKE_MATERIAL_CONTRACT_TYPES
-                or contract.research_source_type != contract.source_type
-            ):
-                failures.append("source_contract_type_mismatch")
-            if (
-                not isinstance(provider_identity, str)
-                or not provider_identity.strip()
-                or provider_identity != contract.provider_or_tenant
-            ):
-                failures.append("source_provider_identity_mismatch")
-        canonical_authorized = intake_material_url_is_authorized(
-            lineage.reference.canonical_url, contract_type
-        )
-        final_authorized = intake_material_url_is_authorized(
-            lineage.artifact.final_url, contract_type
-        )
-        if not canonical_authorized:
-            failures.append("source_canonical_url_not_authorized")
-        if not final_authorized:
-            failures.append("source_final_url_not_authorized")
-        if (
-            lineage.document.source_url != lineage.reference.canonical_url
-            or lineage.artifact.final_url != lineage.reference.canonical_url
-        ):
-            failures.append("source_document_url_mismatch")
-        if not successful_fetch_attempt(lineage):
-            failures.append("source_fetch_attempt_lineage_mismatch")
-        if (
-            lineage.document.source_authority != "user_supplied"
-            or lineage.candidate.authority_level != "user_supplied"
-        ):
-            failures.append("source_authority_mismatch")
-        if not lineage.case_attached:
-            failures.append("source_case_attachment_missing")
-        return self._result(
-            "source",
-            failures,
-            {
-                "acquisition_kind": "intake_material",
-                "adapter_key": lineage.reference.adapter_key,
-                "adapter_enabled": not policy_adapters,
-                "active_policy_adapter_enabled": not bool(
-                    INTAKE_MATERIAL_POLICY.enabled_adapter_keys
-                ),
-                "provider_identity_present": isinstance(provider_identity, str)
-                and bool(provider_identity.strip()),
-                "provider_identity_matches_contract": bool(
-                    contract is not None
-                    and provider_identity == contract.provider_or_tenant
-                ),
-                "canonical_url_authorized": canonical_authorized,
-                "final_url_authorized": final_authorized,
-                "successful_fetch_attempt": successful_fetch_attempt(lineage),
-                "source_role": lineage.reference.source_role,
-                "allowed_source_roles": sorted(context.allowed_source_roles),
-                "request_policy_version": snapshot.get("source_policy_version"),
-                "policy_snapshot_version": policy_snapshot.get("version"),
-                "contract_present": contract is not None,
-                "contract_source_type": contract_type,
-                "contract_research_source_type": (
-                    contract.research_source_type if contract is not None else None
-                ),
-                "contract_active": bool(
-                    contract is not None
-                    and source_contract_is_active(contract, at=evaluation_at)
-                ),
-                "allow_ai_processing": bool(contract and contract.allow_ai_processing),
-                "allow_display": bool(contract and contract.allow_display),
-                "case_attached": lineage.case_attached,
-                "document_authority": lineage.document.source_authority,
-                "document_id_matches_request": (
-                    snapshot.get("document_version_id") == expected_document_id
-                ),
-                "document_url_matches_reference": (
-                    lineage.document.source_url == lineage.reference.canonical_url
-                ),
-            },
-        )
-
     def _source_gate(
         self,
         lineage: _Lineage,
@@ -1027,10 +798,6 @@ class AutomaticAdmissionGate:
         *,
         evaluation_at: datetime,
     ) -> GateResult:
-        if lineage.job.request_snapshot.get("acquisition_kind") == "intake_material":
-            return self._intake_material_source_gate(
-                lineage, context, evaluation_at=evaluation_at
-            )
         snapshot = lineage.job.request_snapshot
         snapshot_roles = tuple(snapshot.get("allowed_source_roles") or ())
         request_policy_version = snapshot.get("source_policy_version")
@@ -1199,24 +966,30 @@ class AutomaticAdmissionGate:
             "acquired_at": lineage.document.acquired_at,
             "retrieved_at": lineage.artifact.retrieved_at,
         }
-        if lineage.job.request_snapshot.get("acquisition_kind") == "intake_material":
-            failures = intake_material_temporal_failures(
-                lineage.reference,
-                lineage.attempt,
-                lineage.artifact,
-                lineage.document,
-                cutoff=context.cutoff,
-                evaluation_at=evaluation_at,
-            )
-        else:
-            failures = automatic_temporal_failures(
-                lineage.reference,
-                lineage.attempt,
-                lineage.artifact,
-                lineage.document,
-                cutoff=context.cutoff,
-                evaluation_at=evaluation_at,
-            )
+        failures = automatic_temporal_failures(
+            lineage.reference,
+            lineage.attempt,
+            lineage.artifact,
+            lineage.document,
+            cutoff=context.cutoff,
+            evaluation_at=evaluation_at,
+        )
+        if lineage.binding.relation == "content_duplicate":
+            # The immutable document predates this later retrieval of the
+            # exact same bytes. Requiring the reused document's acquired_at
+            # to follow every duplicate fetch reverses valid chronology.
+            failures = [
+                failure
+                for failure in failures
+                if failure != "temporal_retrieved_at_after_acquired_at"
+            ]
+            if (
+                lineage.document.acquired_at is not None
+                and lineage.artifact.retrieved_at is not None
+                and _as_utc(lineage.document.acquired_at)
+                > _as_utc(lineage.artifact.retrieved_at)
+            ):
+                failures.append("temporal_duplicate_acquired_after_retrieved_at")
         if snapshot_cutoff is None:
             failures.append("temporal_snapshot_cutoff_missing")
         elif snapshot_cutoff != context.cutoff:
@@ -1229,6 +1002,7 @@ class AutomaticAdmissionGate:
                 "snapshot_cutoff": (
                     snapshot_cutoff.isoformat() if snapshot_cutoff else None
                 ),
+                "binding_relation": lineage.binding.relation,
                 **{
                     name: _as_utc(value).isoformat() if value is not None else None
                     for name, value in values.items()
@@ -1686,6 +1460,11 @@ class AutomaticAdmissionGate:
         period = fields.get("observed_period")
         numeric_value = fields.get("numeric_value")
         unit = fields.get("unit")
+        scope = fields.get("scope") if isinstance(fields.get("scope"), dict) else {}
+        table_context = (
+            scope.get("extraction_method") == "financial_table_v1"
+            and lineage.candidate.authority_level == "primary_disclosure"
+        )
         parsed_period: str | None = None
         parsed_date: date | None = None
         period_grain: str | None = None
@@ -1721,6 +1500,7 @@ class AutomaticAdmissionGate:
         )
         normalized_subject = self._normalize_grounding(subject)
         normalized_predicate = self._normalize_grounding(predicate)
+        normalized_span = self._normalize_grounding(lineage.span.verbatim_text)
         failures: list[str] = []
         if not isinstance(subject, str) or not subject.strip():
             failures.append("semantic_subject_missing")
@@ -1728,9 +1508,9 @@ class AutomaticAdmissionGate:
             self._normalize_metric(entity) for entity in snapshot_entities
         }:
             failures.append("semantic_subject_mismatch")
-        elif (
+        elif normalized_subject not in normalized_claim_text or (
             normalized_subject not in quote_text
-            or normalized_subject not in normalized_claim_text
+            and not (table_context and normalized_subject in normalized_span)
         ):
             failures.append("semantic_subject_not_grounded")
         if not isinstance(period, str) or not period.strip():
@@ -1801,7 +1581,38 @@ class AutomaticAdmissionGate:
                 failures.append("semantic_normalized_text_numeric_mismatch")
         quote_segments = self._segments(lineage.candidate.quote)
         supporting_segments = ()
-        if parsed_date is not None and period_grain is not None:
+        if parsed_date is not None and period_grain is not None and table_context:
+            table_period_grounded = self._period_grounded(
+                parsed_date, period_grain, lineage.span.verbatim_text
+            ) or (
+                parsed_date.month == 6
+                and parsed_date.day == 30
+                and re.search(
+                    rf"{parsed_date.year}\s*年\s*(?:半年度|上半年)",
+                    lineage.span.verbatim_text,
+                )
+                is not None
+            )
+            source_polarity = self._polarity(quote_text)
+            claim_polarity = self._polarity(normalized_claim_text)
+            metric_value_grounded = parsed_numeric is None or self._metric_value_grounded(
+                lineage.candidate.quote,
+                predicate=predicate,
+                metric_terms=snapshot_metrics,
+                numeric=parsed_numeric,
+                unit=unit,
+            )
+            if (
+                normalized_subject in normalized_span
+                and normalized_predicate in quote_text
+                and normalized_predicate in normalized_claim_text
+                and table_period_grounded
+                and metric_value_grounded
+                and source_polarity is not None
+                and source_polarity == claim_polarity
+            ):
+                supporting_segments = (quote_text,)
+        elif parsed_date is not None and period_grain is not None:
             supporting_segments = tuple(
                 segment
                 for segment in quote_segments
@@ -1937,9 +1748,19 @@ class AutomaticAdmissionGate:
         validate_persistable_json(detail, path="$.automatic_admission_exception")
         if existing is not None:
             if existing.detail_json != detail:
-                raise ConflictError(
-                    "automatic-admission exception differs from existing decision"
+                existing_decision_id = (
+                    existing.detail_json.get("decision_id")
+                    if isinstance(existing.detail_json, dict)
+                    else None
                 )
+                if existing_decision_id == str(decision.id):
+                    raise ConflictError(
+                        "automatic-admission exception differs from existing decision"
+                    )
+                # The exception row is a candidate-level quarantine marker and its
+                # uniqueness key deliberately does not include the gate version.
+                # A newer immutable decision therefore reuses the historical marker;
+                # the version-specific gate facts remain on the new decision itself.
             return existing
         exception = AcquisitionException(
             job_id=decision.job_id,

@@ -4,19 +4,19 @@ all tables (ledger + operational + events + versions + proposals).
 Importing this package is enough to make ``create_all`` / Alembic autogenerate
 see every table.  Keep the imports side-effect-free (no engine creation).
 """
+
 from app.models import acquisition  # noqa: F401
 from app.models import events  # noqa: F401
 from app.models import event_research  # noqa: F401
 from app.models import fund_disclosure_sync  # noqa: F401
+from app.models import identity  # noqa: F401
 from app.models import operational  # noqa: F401
 from app.models import proposals  # noqa: F401
 from app.models import research_monitor  # noqa: F401
 from app.models import research_protocol  # noqa: F401
-from app.models import research_preparation  # noqa: F401
 from app.models import research_expression  # noqa: F401
+from app.models import research_orchestration  # noqa: F401
 from app.models import source_governance  # noqa: F401
-from app.underwriting.persistence import models as underwriting  # noqa: F401
-from app.underwriting.persistence import research_models as underwriting_research  # noqa: F401
 from app.models import versions  # noqa: F401
 from app.models.ledger import Base  # noqa: F401
 
@@ -26,15 +26,14 @@ __all__ = [
     "events",
     "event_research",
     "fund_disclosure_sync",
+    "identity",
     "operational",
     "proposals",
     "research_monitor",
     "research_protocol",
-    "research_preparation",
     "research_expression",
+    "research_orchestration",
     "source_governance",
-    "underwriting",
-    "underwriting_research",
     "versions",
     "ledger",
 ]

@@ -12,10 +12,6 @@ EventNextActionKind: TypeAlias = Literal[
     "edit_factors",
     "complete_research_protocol",
     "view_conclusion_change",
-    "review_preparation_claims",
-    "review_preparation_protocol",
-    "authorize_preparation_plan",
-    "recover_preparation",
 ]
 
 # Stored in the lifecycle projection until it gains a dedicated action-code

@@ -1,6 +1,7 @@
 """Cross-case theme v1 read contract (横切主题 ThemeView)."""
 
 from app.services.themes import ThemeService
+from tests.tenant_admission import admit_case
 
 
 def _tag(research_repository, case_id, *tags):
@@ -15,13 +16,14 @@ def test_theme_list_empty_without_tags(api_client, workbench_case):
 
 
 def test_theme_list_aggregates_across_cases(
-    api_client, workbench_case, research_service, research_repository
+    api_client, session, workbench_case, research_service, research_repository
 ):
     _tag(research_repository, workbench_case.case.id, "算力国产化")
     other = research_service.add_case(
         title="储能链", industry_topic="storage", created_by="tester"
     )
     research_service.add_thesis(other.id, statement="储能需求增长", created_by="tester")
+    admit_case(session, other.id)
     _tag(research_repository, other.id, "算力国产化", "锂电储能")
 
     payload = api_client.get("/api/v1/themes").json()

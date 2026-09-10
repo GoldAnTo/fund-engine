@@ -37,3 +37,11 @@ class ConflictError(Exception):
     record*, not *fix your request body*. Mapped to a 409 ``conflict`` v1
     error envelope.
     """
+
+
+class WorkflowNotInitializedError(Exception):
+    """Raised when a Case exists but has no durable workflow state owner."""
+
+    def __init__(self, message: str, *, safe_action: dict[str, object]) -> None:
+        super().__init__(message)
+        self.safe_action = safe_action

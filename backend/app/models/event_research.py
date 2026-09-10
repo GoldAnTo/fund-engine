@@ -31,12 +31,6 @@ class EventResearchBrief(Base):
     """Immutable, confirmed interpretation of the original event input."""
 
     __tablename__ = "event_research_briefs"
-    __table_args__ = (
-        CheckConstraint(
-            "workflow_mode IN ('reviewed', 'automatic')",
-            name="ck_event_research_briefs_workflow_mode",
-        ),
-    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     research_case_id: Mapped[uuid.UUID] = mapped_column(
@@ -52,9 +46,6 @@ class EventResearchBrief(Base):
     event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     market_reaction: Mapped[str | None] = mapped_column(Text, nullable=True)
     research_question: Mapped[str] = mapped_column(Text, nullable=False)
-    workflow_mode: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="reviewed", server_default="reviewed"
-    )
     extraction_state: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -189,6 +180,22 @@ class EventResearchScopeEvidenceAssignment(Base):
             "disposition IN ('mapped', 'unmapped')",
             name="ck_event_research_scope_evidence_assignment_disposition",
         ),
+        CheckConstraint(
+            "assignment_kind IN ('reviewed', 'automatic')",
+            name="ck_event_research_scope_evidence_assignment_kind",
+        ),
+        CheckConstraint(
+            "(assignment_kind = 'reviewed' AND research_run_id IS NULL "
+            "AND acquisition_goal_id IS NULL "
+            "AND automatic_admission_decision_id IS NULL "
+            "AND automatic_provenance_json IS NULL) OR "
+            "(assignment_kind = 'automatic' AND research_run_id IS NOT NULL "
+            "AND acquisition_goal_id IS NOT NULL "
+            "AND trim(acquisition_goal_id) <> '' "
+            "AND automatic_admission_decision_id IS NOT NULL "
+            "AND automatic_provenance_json IS NOT NULL)",
+            name="ck_event_research_scope_evidence_assignment_lineage",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
@@ -200,6 +207,31 @@ class EventResearchScopeEvidenceAssignment(Base):
     )
     factor_statement: Mapped[str | None] = mapped_column(Text, nullable=True)
     disposition: Mapped[str] = mapped_column(String(16), nullable=False)
+    assignment_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="reviewed", server_default="reviewed"
+    )
+    research_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "research_runs.id",
+            name="fk_event_scope_evidence_assignment_research_run",
+        ),
+        nullable=True,
+    )
+    acquisition_goal_id: Mapped[str | None] = mapped_column(
+        String(256), nullable=True
+    )
+    automatic_admission_decision_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "automatic_admission_decisions.id",
+            name="fk_event_scope_evidence_assignment_admission_decision",
+        ),
+        nullable=True,
+    )
+    automatic_provenance_json: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

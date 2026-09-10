@@ -1,0 +1,138 @@
+x-database-environment: &database-environment
+  APP_ENV: local
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-evidence}:${POSTGRES_PASSWORD:-evidence}@postgres:5432/${POSTGRES_DB:-evidence}
+
+x-oidc-environment: &oidc-environment
+  OIDC_ISSUER: http://localhost:8081/realms/fund-engine
+  OIDC_AUDIENCE: research-api
+  OIDC_JWKS_URL: http://keycloak:8080/realms/fund-engine/protocol/openid-connect/certs
+  OIDC_TENANT_CLAIM: tenant_id
+  OIDC_ALLOW_INSECURE_HTTP: "true"
+
+x-llm-environment: &llm-environment
+  LLM_API_KEY: ${LLM_API_KEY:?LLM_API_KEY is required}
+  LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+  LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+  LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0}
+  LLM_SEED: ${LLM_SEED:-}
+
+x-gildata-environment: &gildata-environment
+  GILDATA_TOKEN: ${GILDATA_TOKEN:?GILDATA_TOKEN is required}
+
+x-runtime-healthcheck: &runtime-healthcheck
+  interval: 30s
+  timeout: 20s
+  retries: 12
+  start_period: 15s
+
+services:
+  migrate:
+    image: fund-engine-backend:${IMAGE_TAG:-local}
+    build:
+      context: ./backend
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *database-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: fund-engine-backend:${IMAGE_TAG:-local}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: [*database-environment, *oidc-environment, *llm-environment, *gildata-environment]
+      LIVE_ACCEPTANCE_FAST_SCHEDULER: "true"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      <<: *runtime-healthcheck
+      test: ["CMD", "python", "-m", "app.scripts.runtime_probe", "--service", "api"]
+
+  research-worker:
+    image: fund-engine-backend:${IMAGE_TAG:-local}
+    command: ["python", "-m", "app.scripts.run_research_worker", "--loop", "--poll-seconds", "1", "--recover-after-minutes", "0.25", "--claim-observation-seconds", "15"]
+    environment:
+      <<: [*database-environment, *llm-environment]
+      RUNTIME_INSTANCE_ID: research-worker-1
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 45s
+    healthcheck:
+      <<: *runtime-healthcheck
+      test: ["CMD", "python", "-m", "app.scripts.runtime_probe", "--service", "research-worker"]
+
+  acquisition-worker:
+    image: fund-engine-backend:${IMAGE_TAG:-local}
+    command:
+      - python
+      - -m
+      - app.scripts.run_acquisition_worker
+      - --loop
+      - --poll-seconds
+      - "1"
+      - --lease-seconds
+      - "300"
+      - --retry-seconds
+      - "5"
+    environment:
+      <<: [*database-environment, *llm-environment, *gildata-environment]
+      ACQUISITION_ENABLED_ADAPTERS: ${ACQUISITION_ENABLED_ADAPTERS:-sse,szse,gildata}
+      ACQUISITION_WORKER_VERSION: ${IMAGE_TAG:-local}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 45s
+    healthcheck:
+      <<: *runtime-healthcheck
+      test: ["CMD", "python", "-m", "app.scripts.runtime_probe", "--service", "acquisition-worker"]
+
+  scheduler:
+    image: fund-engine-backend:${IMAGE_TAG:-local}
+    command: ["python", "-m", "app.scripts.run_scheduler", "--loop", "--poll-seconds", "5", "--recover-after-minutes", "0.25"]
+    environment:
+      <<: [*database-environment, *gildata-environment]
+      LIVE_ACCEPTANCE_FAST_SCHEDULER: "true"
+      RUNTIME_INSTANCE_ID: scheduler-1
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 45s
+    healthcheck:
+      <<: *runtime-healthcheck
+      test: ["CMD", "python", "-m", "app.scripts.runtime_probe", "--service", "scheduler"]
+
+  frontend:
+    image: fund-engine-frontend:${IMAGE_TAG:-local}
+    build:
+      context: ./frontend
+      args:
+        VITE_OIDC_AUTHORITY: http://localhost:8081/realms/fund-engine
+        VITE_OIDC_CLIENT_ID: fund-engine-web
+        VITE_OIDC_SCOPE: openid profile email
+    depends_on:
+      api:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12

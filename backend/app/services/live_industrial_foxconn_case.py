@@ -10,13 +10,14 @@ from __future__ import annotations
 import hashlib
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import DocumentVersion, EvidenceLink, ResearchCase, SourceSpan, SourceStatement, Thesis
+from app.models.identity import ResearchUser
 from app.models.operational import EventResearchLifecycle
 from app.models.research_protocol import MechanismEdgeVersion, MechanismNodeVersion
 from app.models.research_expression import KeyFactor, MarketInstrumentBinding, MarketObservation
@@ -52,6 +53,7 @@ from app.services.research_protocol import (
     VerificationRuleInput,
 )
 from app.services.source_governance import SourceGovernanceService
+from app.security.principal import ResearchPrincipal
 
 
 CASE_TITLE = "工业富联：2024 年归母净利润预测历史验证（海通证券）"
@@ -70,6 +72,44 @@ class LiveCaseResult:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _seed_principal(session: Session, tenant_id: str) -> ResearchPrincipal:
+    """Persist the dedicated non-API identity that owns this offline seed."""
+    issuer = "https://seed-identity.invalid/realms/fund-engine"
+    subject = f"industrial-foxconn-demo:{tenant_id}"
+    user = session.scalar(
+        select(ResearchUser).where(
+            ResearchUser.issuer == issuer,
+            ResearchUser.subject == subject,
+        )
+    )
+    now = _now()
+    if user is None:
+        user = ResearchUser(
+            issuer=issuer,
+            subject=subject,
+            tenant_id=tenant_id,
+            display_name="Industrial Foxconn seed service",
+            normalized_email=None,
+            active=True,
+            last_seen_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(user)
+        session.flush()
+    if not user.active or user.tenant_id != tenant_id:
+        raise ValueError("offline seed principal is inactive or belongs to another tenant")
+    return ResearchPrincipal(
+        user_id=user.id,
+        issuer=user.issuer,
+        subject=user.subject,
+        tenant_id=user.tenant_id,
+        display_name=user.display_name,
+        roles=frozenset({"service_principal"}),
+        expires_at=now + timedelta(hours=1),
+    )
 
 
 def _provider_url(tool: str, title: str) -> str:
@@ -453,9 +493,8 @@ def materialize_live_industrial_foxconn_case(
             event_at=bundle.report.published_at,
             research_question="海通证券对工业富联 2024 年归母净利润的预测是否在预设容差内兑现，AI 业务因素和历史基金披露如何对应？",
             candidate_factors=["2024 年归母净利润预测", "AI 服务器收入", "800G 高速交换机"],
-            created_by=ACTOR,
         ),
-        tenant_id=tenant_id,
+        principal=_seed_principal(session, tenant_id),
     )
     case_id = uuid.UUID(created.case_id)
     report_doc = _admit_document(

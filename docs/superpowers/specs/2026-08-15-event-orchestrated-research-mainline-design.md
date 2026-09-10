@@ -246,6 +246,8 @@ failed
 6. 每次 search 保存原始结果列表；每次 fetch 保存原始响应、时间、最终 URL 和哈希；
 7. 来源内容改变时创建新版本，不覆盖旧 RetrievalArtifact 或 DocumentVersion。
 
+`AcquisitionJob` 保持“一轮一个不可变请求”。同一个 tenant、Case、research run、scope version、thesis 和 `goal_id` 由稳定的 `AcquisitionSeries` 聚合；每轮计划属于独立 Job，但其前驱必须是同一 Series 的上一轮计划。技术重试仍留在当前 Job，绝不创建新计划。
+
 ### 6.4 来源适配器
 
 统一 `SourceAdapter.search/fetch` 协议承载来源差异。当前 SSE/SZSE adapter 是内核起点，后续按 SourcePolicy 逐项接入：

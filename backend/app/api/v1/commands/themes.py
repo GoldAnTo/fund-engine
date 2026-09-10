@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.api.v1.commands.common import audit_command, translate_validation
+from app.api.v1.tenant_context import ResearchActor, require_research_actor
 from app.db import get_db
 from app.errors import NotFoundError
 from app.models.ledger import ResearchCase
@@ -24,6 +25,7 @@ def update_theme_tags(
     payload: UpdateThemeTagsRequest,
     request: Request,
     db: Session = Depends(get_db),
+    actor: ResearchActor = Depends(require_research_actor),
 ) -> ThemeTagsResponse:
     case = db.get(ResearchCase, case_id)
     if case is None:
@@ -32,15 +34,16 @@ def update_theme_tags(
     result = audit_command(
         db,
         request,
+        actor=actor.server_actor,
         action="update_theme_tags",
         entity_type="ResearchCase",
-        payload=payload.model_dump(mode="json"),
+        payload={"tags": payload.tags, "proposed_by": "human"},
         fn=translate_validation,
         args=(ThemeService(ResearchRepository(db)).apply_theme_tags,),
         kwargs={
             "case": case,
             "desired": payload.tags,
-            "proposed_by": payload.proposed_by,
+            "proposed_by": "human",
         },
     )
     return ThemeTagsResponse(

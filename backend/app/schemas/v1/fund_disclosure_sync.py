@@ -10,7 +10,6 @@ from app.schemas.v1.common import V1Model
 
 
 class SaveFundDisclosureSyncConfigRequest(V1Model):
-    actor: str = Field(min_length=1, max_length=128)
     fund_codes: list[str] = Field(min_length=1, max_length=50)
     frequency: Literal["weekly", "monthly"]
     report_period: date

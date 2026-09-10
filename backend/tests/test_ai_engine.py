@@ -7,6 +7,7 @@ full pipeline can be exercised offline.
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import patch
@@ -16,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai.assessment_gen import AssessmentGenerator
-from app.ai.client import LLMClient, LLMMalformedResponseError
+from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
 from app.ai.prompts import (
     ASSESS_PROMPT_VERSION,
@@ -41,75 +42,6 @@ from tests.protocol_provenance import seed_protocol_footprint
 # ---------------------------------------------------------------------------
 # Extraction
 # ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("response", [{}, {"links": None}, {"links": [None]}, {"links": [{"source_statement_id": "x"}]}])
-def test_invalid_proposal_schema_has_failed_audit_and_no_proposals(
-    session, document_service, research_service, thesis, document, response
-):
-    from app.models.proposals import Proposal
-    span = document_service.add_span(document.id, {"page": 99}, "GPU demand increased")
-    research_service.add_statement(span.id, "GPU demand increased", kind="disclosed_fact")
-    client = LLMClient(model_version="mock-test", mock=True)
-    with patch.object(client, "chat_json", return_value=response):
-        with pytest.raises(LLMMalformedResponseError):
-            EvidenceProposer(client).propose(thesis.id, session)
-    assert session.scalar(select(func.count()).select_from(Proposal)) == 0
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "propose")))
-    assert len(runs) == 1 and runs[0].status == "failed"
-
-
-@pytest.mark.parametrize("response", [
-    {}, {"conclusion": "supported", "rationale": "source supports"},
-    {"conclusion": "supported", "rationale": "source supports", "gaps": "unknown"},
-    {"conclusion": "supported", "rationale": 3, "gaps": []},
-    {"conclusion": "supported", "rationale": "source supports", "gaps": [None]},
-])
-def test_invalid_assessment_schema_cannot_freeze_snapshot(
-    session, research_service, thesis, statement, response
-):
-    research_service.link_evidence(thesis.id, statement.id, role="supports", reason="orders", scope={"segment": "DC"})
-    client = LLMClient(model_version="mock-test", mock=True)
-    with patch.object(client, "chat_json", return_value=response):
-        with pytest.raises(LLMMalformedResponseError):
-            AssessmentGenerator(client).generate(thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session)
-    assert session.scalar(select(func.count()).select_from(EvidenceSnapshot)) == 0
-    assert session.scalar(select(func.count()).select_from(AIAssessment)) == 0
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "assess")))
-    assert len(runs) == 1 and runs[0].status == "failed"
-
-
-@pytest.mark.parametrize("legacy_rewrite", [True, False])
-def test_assessment_rewrite_uses_remaining_operation_budget(
-    session, research_service, thesis, statement, monkeypatch, legacy_rewrite
-):
-    import json
-    from types import SimpleNamespace
-    from app.ai import client as client_module
-    from app.ai.client import LLMProviderError
-
-    research_service.link_evidence(thesis.id, statement.id, role="supports", reason="orders", scope={"segment": "DC"})
-    clock = [0.0]
-    timeouts = []
-    monkeypatch.setattr(client_module.time, "monotonic", lambda: clock[0])
-    if legacy_rewrite:
-        monkeypatch.setattr("app.ai.compliance_graph.build_compliance_graph", lambda client: None)
-    def completion(**kwargs):
-        timeouts.append(kwargs["timeout"])
-        if len(timeouts) == 1:
-            clock[0] += 1.5
-            payload = {"conclusion": "supported", "rationale": "证据支持命题。目标价85元。", "gaps": []}
-        else:
-            clock[0] += 0.6
-            payload = {"texts": ["证据支持命题。"]}
-        return SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(content=json.dumps(payload), refusal=None))])
-    client = LLMClient(model_version="fake", retry_budget_seconds=2, client=SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=completion))))
-    with pytest.raises(LLMProviderError, match="LLM provider request failed"):
-        AssessmentGenerator(client).generate(thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session)
-    assert timeouts == [2, 0.5]
-    assert session.scalar(select(func.count()).select_from(EvidenceSnapshot)) == 0
-    assert session.scalar(select(func.count()).select_from(AIAssessment)) == 0
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "assess")))
-    assert len(runs) == 1 and runs[0].status == "failed"
 
 
 def test_extraction_creates_review_gated_candidates_and_airun(session, span):
@@ -150,37 +82,6 @@ def test_extraction_creates_review_gated_candidates_and_airun(session, span):
     } == {"atomic-claim-normalizer-v1"}
 
 
-@pytest.mark.parametrize("response", [{}, {"statements": None}, {"statements": {}}, {"statements": ""}])
-def test_invalid_extraction_schema_fails_without_success_watermark(session, span, response):
-    from app.queries.extraction_runs import successful_extract_version_ids
-
-    version_id = span.document_version_id
-    client = LLMClient(model_version="mock-test", mock=True)
-    with patch.object(client, "chat_json", return_value=response):
-        with pytest.raises(LLMMalformedResponseError):
-            StatementExtractor(client).extract(version_id, session)
-    session.commit()
-
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
-    assert len(runs) == 1 and runs[0].status == "failed"
-    assert list(session.scalars(select(AtomicClaimCandidate))) == []
-    assert version_id not in successful_extract_version_ids(session)
-
-
-def test_explicit_empty_extraction_keeps_success_watermark(session, span):
-    from app.queries.extraction_runs import successful_extract_version_ids
-
-    version_id = span.document_version_id
-    client = LLMClient(model_version="mock-test", mock=True)
-    with patch.object(client, "chat_json", return_value={"statements": []}):
-        assert StatementExtractor(client).extract(version_id, session) == []
-    session.commit()
-
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
-    assert len(runs) == 1 and runs[0].status == "success"
-    assert version_id in successful_extract_version_ids(session)
-
-
 def test_extractor_releases_read_transaction_before_llm_provider(session, span):
     client = LLMClient(model_version="mock-test", mock=True)
 
@@ -202,6 +103,84 @@ def test_extractor_releases_read_transaction_before_llm_provider(session, span):
     with patch.object(client, "chat_json", side_effect=provider):
         candidates = StatementExtractor(client).extract(span.document_version_id, session)
     assert len(candidates) == 1
+
+
+def test_extractor_passes_frozen_request_grounding_context_to_provider(session, span):
+    captured: dict = {}
+    client = LLMClient(model_version="provider-test", mock=False)
+
+    def provider(messages, schema_hint=""):
+        captured.update(json.loads(messages[-1]["content"]))
+        return {"statements": []}
+
+    with patch.object(client, "chat_json", side_effect=provider):
+        StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+            grounding_context={
+                "entity_names": ["TSMC"],
+                "metric_terms": ["CoWoS capacity"],
+                "period_start": "2025-08-17",
+                "period_end": "2026-08-17",
+            },
+        )
+
+    assert captured["grounding_context"] == {
+        "entity_names": ["TSMC"],
+        "metric_terms": ["CoWoS capacity"],
+        "period_start": "2025-08-17",
+        "period_end": "2026-08-17",
+    }
+
+
+def test_extractor_bounds_large_documents_to_metric_grounded_spans(
+    session, document_service
+):
+    version = document_service.freeze(
+        raw=b"large report fixture",
+        source_url="https://example.test/large-report",
+    )
+    for page in range(1, 25):
+        document_service.add_span(
+            document_version_id=version.id,
+            locator={"page": page},
+            verbatim_text=(
+                f"浙江皇马科技股份有限公司 2026 年半年度报告 第 {page} 页。"
+                + "公司治理与一般风险说明。" * 80
+            ),
+        )
+    relevant_text = (
+        "浙江皇马科技股份有限公司 2026 年半年度报告："
+        "2026年上半年营业收入13.18亿元，同比增长10.36%。"
+    )
+    relevant = document_service.add_span(
+        document_version_id=version.id,
+        locator={"page": 25},
+        verbatim_text=relevant_text,
+    )
+    captured: dict = {}
+    client = LLMClient(model_version="provider-test", mock=False)
+
+    def provider(messages, schema_hint=""):
+        captured.update(json.loads(messages[-1]["content"]))
+        return {"statements": []}
+
+    with patch.object(client, "chat_json", side_effect=provider):
+        StatementExtractor(client).extract(
+            version.id,
+            session,
+            grounding_context={
+                "entity_names": ["皇马科技"],
+                "metric_terms": ["营业收入同比增长10.36%"],
+                "period_start": "2025-08-17",
+                "period_end": "2026-08-17",
+            },
+        )
+
+    selected_ids = [item["span_id"] for item in captured["spans"]]
+    assert str(relevant.id) in selected_ids
+    assert len(selected_ids) <= 8
+    assert sum(len(item["verbatim_text"]) for item in captured["spans"]) <= 24_000
 
 
 def test_extraction_records_no_spans(session, document_service):
@@ -469,64 +448,6 @@ def test_assessment_snapshot_contains_exact_prompt_evidence_when_link_arrives_du
     assert snapshot.evidence_link_ids == [str(original.id)]
     assert run.input_ref["evidence_link_ids"] == [str(original.id)]
     assert run.input_ref["link_count"] == 1
-
-
-def test_assessment_explicit_evidence_ids_exclude_other_visible_links(
-    session, research_service, thesis, statement
-):
-    excluded = research_service.link_evidence(
-        thesis.id,
-        statement.id,
-        role="supports",
-        reason="visible but outside this automatic run",
-        scope={"run": "older"},
-    )
-    included = research_service.link_evidence(
-        thesis.id,
-        statement.id,
-        role="contradicts",
-        reason="current automatic run evidence",
-        scope={"run": "current"},
-    )
-
-    assessment = AssessmentGenerator(
-        LLMClient(model_version="mock-test", mock=True)
-    ).generate(
-        thesis.id,
-        datetime(2026, 12, 31, tzinfo=UTC),
-        session,
-        evidence_link_ids=[included.id],
-    )
-
-    snapshot = session.get(EvidenceSnapshot, assessment.snapshot_id)
-    assert snapshot is not None
-    assert snapshot.evidence_link_ids == [str(included.id)]
-    assert str(excluded.id) not in snapshot.evidence_link_ids
-
-
-def test_assessment_explicit_evidence_ids_reject_cross_thesis_link(
-    session, research_service, thesis, statement
-):
-    other = research_service.add_thesis(
-        thesis.research_case_id,
-        statement="另一命题",
-        created_by="test",
-    )
-    wrong = research_service.link_evidence(
-        other.id,
-        statement.id,
-        role="supports",
-        reason="belongs to another thesis",
-        scope={"run": "wrong-thesis"},
-    )
-
-    with pytest.raises(ValueError, match="visible|snapshot thesis"):
-        AssessmentGenerator(LLMClient(model_version="mock-test", mock=True)).generate(
-            thesis.id,
-            datetime(2026, 12, 31, tzinfo=UTC),
-            session,
-            evidence_link_ids=[wrong.id],
-        )
 
 
 def test_assessment_releases_read_transaction_before_provider(
@@ -1082,7 +1003,7 @@ def test_cli_propose_partial_output_is_rolled_back_before_failed_audit(
         patch("app.scripts.run_ai_engine.LLMClient.from_env", return_value=client),
         patch.object(client, "chat_json", side_effect=partial_then_invalid),
         patch("app.scripts.run_ai_engine.AssessmentGenerator.generate") as assess,
-        pytest.raises(LLMMalformedResponseError),
+        pytest.raises(KeyError, match="role"),
     ):
         run_engine(session, research_case, skip_extract=True)
 

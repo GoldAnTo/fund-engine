@@ -12,15 +12,15 @@ without touching callers — they only see the Job contract.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.errors import ConflictError
+from app.errors import ConflictError, NotFoundError
 from app.models.operational import Job
 from app.repositories.operational import JobRepository
 from app.repositories.outbox import emit_event
+from app.services.case_tenant_access import CaseTenantAccess
 
 
 class JobService:
@@ -77,7 +77,7 @@ class JobService:
         )
         self._append_event(job, status=status, step=step, message=error)
 
-    def request_cancel(self, job: Job) -> None:
+    def request_cancel(self, job: Job, *, actor: str | None = None) -> None:
         # Serialize cancellation with the provider's short post-return output
         # slot.  A request that waited behind a successful terminal commit
         # must re-read that status and fail instead of leaving a misleading
@@ -101,13 +101,78 @@ class JobService:
             status=current.status,
             step=None,
             message="cancel requested",
+            actor=actor,
         )
+
+    def request_cancel_authorized(
+        self, job_id: uuid.UUID, *, tenant_id: str, actor: str
+    ) -> Job:
+        job = self._authorized_job(job_id, tenant_id=tenant_id)
+        self._reject_research_run(job)
+        self.request_cancel(job, actor=actor)
+        return job
+
+    def get_authorized(self, job_id: uuid.UUID, *, tenant_id: str) -> Job:
+        """Return a Case-owned Job without revealing foreign or unowned rows."""
+        return self._authorized_job(job_id, tenant_id=tenant_id)
+
+    def retry_authorized(
+        self, job_id: uuid.UUID, *, tenant_id: str, actor: str
+    ) -> Job:
+        job = self._authorized_job(job_id, tenant_id=tenant_id, lock=True)
+        self._reject_research_run(job)
+        if job.status not in {"failed", "cancelled"}:
+            raise ConflictError(
+                f"job {job.id} is not retryable (status={job.status})"
+            )
+        job.status = "queued"
+        job.attempt += 1
+        job.error = None
+        job.cancel_requested = False
+        job.started_at = None
+        job.finished_at = None
+        self._append_event(
+            job,
+            status="queued",
+            step="retry",
+            message="retry requested",
+            actor=actor,
+            payload_extra={"retry": True, "attempt": job.attempt},
+        )
+        return job
+
+    def _authorized_job(
+        self, job_id: uuid.UUID, *, tenant_id: str, lock: bool = False
+    ) -> Job:
+        stmt = select(Job).where(Job.id == job_id)
+        if lock:
+            stmt = stmt.with_for_update()
+        job = self._session.scalar(stmt.execution_options(populate_existing=True))
+        if job is None or job.research_case_id is None:
+            raise NotFoundError("job not found")
+        CaseTenantAccess(self._session).require_case(job.research_case_id, tenant_id)
+        return job
+
+    @staticmethod
+    def _reject_research_run(job: Job) -> None:
+        if job.kind == "research_run" or job.target_type == "research_run":
+            raise ConflictError(
+                "research_run jobs require the automatic research service"
+            )
 
     def should_cancel(self, job: Job) -> bool:
         return bool(job.cancel_requested)
 
     def _append_event(
-        self, job: Job, *, status: str | None, step: str | None, progress: int | None = None, message: str | None = None
+        self,
+        job: Job,
+        *,
+        status: str | None,
+        step: str | None,
+        progress: int | None = None,
+        message: str | None = None,
+        actor: str | None = None,
+        payload_extra: dict[str, object] | None = None,
     ) -> None:
         seq = self._repo.next_event_seq(job.id)
         self._repo.append_event(
@@ -118,11 +183,19 @@ class JobService:
             progress=progress,
             message=message,
         )
+        payload = {
+            "seq": seq,
+            "status": status,
+            "step": step,
+            "progress": progress,
+        }
+        payload.update(payload_extra or {})
         emit_event(
             self._session,
             type="job_progressed",
             aggregate_type="job",
             aggregate_id=job.id,
-            payload={"seq": seq, "status": status, "step": step, "progress": progress},
+            payload=payload,
             origin="operational",
+            actor=actor,
         )

@@ -1,22 +1,39 @@
 """Repository for automatic research runs and tasks."""
 from __future__ import annotations
-import secrets
 import uuid
-from datetime import datetime, timezone
-from sqlalchemy import or_, select, func
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import select, func, update
 from sqlalchemy.orm import Session
-from app.domain.automatic_research import (
-    AUTOMATIC_RESEARCH_ACTIVE_RUN_STATUSES,
-    AUTOMATIC_SOURCE_JOB_TERMINAL,
-)
-from app.models.acquisition import AcquisitionJob
-from app.models.ledger import CaseTenantAdmission, ResearchCase
-from app.models.operational import ResearchRun, ResearchTask, Job, JobEvent, TaskItem
+from app.models.ledger import ResearchCase
+from app.models.operational import ResearchRun, ResearchTask, Job, JobEvent
 from app.services.case_monitor import ResearchRunEventRepository
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchRunJobClaim:
+    """Immutable server-issued identity for one worker attempt."""
+
+    job_id: uuid.UUID
+    research_run_id: uuid.UUID
+    research_case_id: uuid.UUID
+    claimed_attempt: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ResearchRunJobCandidate:
+    job_id: uuid.UUID
+    research_run_id: uuid.UUID
+    research_case_id: uuid.UUID
+    attempt: int
+
+
+class LostResearchRunLeaseError(RuntimeError):
+    """Raised when a worker tries to persist after its attempt was replaced."""
 
 
 class AutoResearchRepository:
@@ -31,9 +48,13 @@ class AutoResearchRepository:
         budget: int = 100,
         scope_thesis_ids: list[str] | None = None,
         monitor_version_id: uuid.UUID | None = None,
+        status: str = "queued",
+        stage: str = "planning",
     ) -> ResearchRun:
         run = ResearchRun(
             research_case_id=research_case_id,
+            status=status,
+            stage=stage,
             max_rounds=max_rounds,
             budget=budget,
             scope_thesis_ids=scope_thesis_ids,
@@ -45,14 +66,54 @@ class AutoResearchRepository:
         self._session.flush()
         return run
 
+    def get_run_for_update(self, run_id: uuid.UUID) -> ResearchRun | None:
+        case_id = self._session.scalar(
+            select(ResearchRun.research_case_id).where(ResearchRun.id == run_id)
+        )
+        if case_id is None:
+            return None
+        self._session.scalar(
+            select(ResearchCase)
+            .where(ResearchCase.id == case_id)
+            .with_for_update()
+        )
+        return self._session.scalar(
+            select(ResearchRun)
+            .where(
+                ResearchRun.id == run_id,
+                ResearchRun.research_case_id == case_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
     def enqueue_run_job(self, run: ResearchRun) -> Job:
-        """Persist the worker handoff in the operational jobs table."""
+        """Persist one idempotent handoff under Case -> Run -> Job locks."""
+        locked_run = self.get_run_for_update(run.id)
+        if locked_run is None:
+            raise ValueError(f"research run {run.id} not found")
+        existing = self._session.scalar(
+            select(Job)
+            .where(Job.kind == "research_run")
+            .where(Job.target_type == "research_run")
+            .where(Job.target_id == locked_run.id)
+            .order_by(Job.created_at.desc(), Job.id.desc())
+            .limit(1)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if locked_run.status == "prepared":
+            locked_run.status = "queued"
+            locked_run.stage = "planning"
+            locked_run.updated_at = _utcnow()
+        if existing is not None:
+            return existing
         job = Job(
             kind="research_run",
             status="queued",
             target_type="research_run",
-            target_id=run.id,
-            research_case_id=run.research_case_id,
+            target_id=locked_run.id,
+            research_case_id=locked_run.research_case_id,
             created_at=_utcnow(),
         )
         self._session.add(job)
@@ -84,7 +145,7 @@ class AutoResearchRepository:
         runs = self._session.scalars(
             select(ResearchRun)
             .where(ResearchRun.research_case_id == research_case_id)
-            .where(ResearchRun.status.in_(AUTOMATIC_RESEARCH_ACTIVE_RUN_STATUSES))
+            .where(ResearchRun.status.in_(["queued", "running", "waiting_for_review"]))
             .order_by(ResearchRun.created_at.desc(), ResearchRun.id.desc())
         )
         return next(
@@ -92,144 +153,295 @@ class AutoResearchRepository:
             None,
         )
 
-    def claim_next_run_job(self) -> Job | None:
-        """Claim one queued job atomically; PostgreSQL workers skip each other."""
-        stmt = (
-            select(Job)
+    def claim_next_run_job(self) -> ResearchRunJobClaim | None:
+        """Claim one queued job in stable Case -> Run -> Job lock order."""
+        rows = self._session.execute(
+            select(
+                Job.id,
+                Job.target_id,
+                Job.research_case_id,
+                Job.attempt,
+            )
             .where(Job.kind == "research_run")
+            .where(Job.target_type == "research_run")
             .where(Job.status == "queued")
             .order_by(Job.created_at, Job.id)
         )
-        if self._session.bind is not None and self._session.bind.dialect.name == "postgresql":
-            stmt = stmt.with_for_update(skip_locked=True)
-        job = self._session.scalar(stmt.limit(1))
+        for job_id, run_id, case_id, attempt in rows:
+            if case_id is None or run_id is None:
+                raise ValueError("research run job has incomplete ownership")
+            claim = self._claim_job(
+                _ResearchRunJobCandidate(
+                    job_id=job_id,
+                    research_run_id=run_id,
+                    research_case_id=case_id,
+                    attempt=attempt,
+                ),
+                skip_locked_case=True,
+            )
+            if claim is not None:
+                return claim
+        return None
+
+    def _claim_job(
+        self,
+        candidate: _ResearchRunJobCandidate,
+        *,
+        skip_locked_case: bool,
+    ) -> ResearchRunJobClaim | None:
+        case_statement = select(ResearchCase).where(
+            ResearchCase.id == candidate.research_case_id
+        )
+        if (
+            skip_locked_case
+            and self._session.bind is not None
+            and self._session.bind.dialect.name == "postgresql"
+        ):
+            case_statement = case_statement.with_for_update(skip_locked=True)
+        else:
+            case_statement = case_statement.with_for_update()
+        case = self._session.scalar(case_statement)
+        if case is None:
+            return None
+        run = self._session.scalar(
+            select(ResearchRun)
+            .where(
+                ResearchRun.id == candidate.research_run_id,
+                ResearchRun.research_case_id == candidate.research_case_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        job = self._session.scalar(
+            select(Job)
+            .where(
+                Job.id == candidate.job_id,
+                Job.kind == "research_run",
+                Job.target_type == "research_run",
+                Job.target_id == candidate.research_run_id,
+                Job.research_case_id == candidate.research_case_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if job is None:
             return None
-        job.status = "running"
-        job.step = "extract"
-        job.claim_token = secrets.token_hex(16)
-        job.started_at = _utcnow()
-        self._append_job_event(job, status="running", step="extract", message="worker claimed run")
-        return job
-
-    def recover_stale_run_jobs(self, *, before: datetime) -> int:
-        """Requeue jobs abandoned by a dead worker after a conservative timeout."""
-        jobs = list(
-            self._session.scalars(
-                select(Job)
-                .where(Job.kind == "research_run")
-                .where(Job.status == "running")
-                .where(Job.started_at.is_not(None))
-                .where(Job.started_at < before)
+        if job.status != "queued" or job.attempt != candidate.attempt:
+            return None
+        if job.research_case_id is None or job.target_id is None:
+            raise ValueError("research run job has incomplete ownership")
+        if run is None or run.status != "queued":
+            actual_status = run.status if run is not None else "missing"
+            rejected = self._session.execute(
+                update(Job)
+                .where(
+                    Job.id == job.id,
+                    Job.kind == "research_run",
+                    Job.status == "queued",
+                    Job.attempt == candidate.attempt,
+                )
+                .values(
+                    status="failed",
+                    step="state_mismatch",
+                    error=(
+                        "research run is not claimable "
+                        f"(status={actual_status})"
+                    ),
+                    finished_at=_utcnow(),
+                )
+                .execution_options(synchronize_session="fetch")
             )
-        )
-        for job in jobs:
-            job.status = "queued"
-            job.step = "recovered"
-            job.claim_token = None
-            job.started_at = None
-            job.error = "worker lease expired; requeued"
-            self._append_job_event(job, status="queued", step="recovered", message=job.error)
-        return len(jobs)
-
-    def wait_for_sources(
-        self,
-        run: ResearchRun,
-        job: Job,
-        *,
-        expected_claim_token: str | None = None,
-    ) -> None:
-        """Park a claimed automatic run until its governed source jobs finish."""
-        current_run, current_job = self._lock_terminal_rows(
-            run_id=run.id,
-            case_id=run.research_case_id,
-            job_id=job.id,
-        )
-        if current_run is None or current_job is None:
-            self._session.rollback()
-            return
-        if (
-            expected_claim_token is not None
-            and current_job.claim_token != expected_claim_token
-        ) or current_job.status in {"succeeded", "failed"}:
-            # A reclaimed or finished job belongs to the newer worker. Drop
-            # the old worker's staged Run/source writes as well as its park.
-            self._session.rollback()
-            return
-        if (
-            current_run.status == "cancelled"
-            or current_job.status == "cancelled"
-            or current_job.cancel_requested
-        ):
-            # Discard any governed-acquisition writes staged by the losing
-            # worker. A cancellation committed before these locks wins.
-            self._session.rollback()
-            return
-        now = _utcnow()
-        current_run.status = "waiting_for_sources"
-        current_run.stage = "retrieve"
-        current_run.updated_at = now
-        current_job.status = "waiting_for_sources"
-        current_job.step = "retrieve"
-        current_job.claim_token = None
-        current_job.finished_at = None
-        self._append_job_event(
-            current_job,
-            status="waiting_for_sources",
-            step="retrieve",
-            message="waiting for governed acquisition jobs",
-        )
-
-    def lock_source_dispatch(
-        self, run_id: uuid.UUID
-    ) -> tuple[ResearchRun | None, Job | None]:
-        """Lock Case -> Run -> latest Job before automatic source dispatch."""
+            if rejected.rowcount == 1:
+                self._append_job_event(
+                    job,
+                    status="failed",
+                    step="state_mismatch",
+                    message=job.error,
+                )
+            return None
+        claimed_at = _utcnow()
         with self._session.no_autoflush:
-            case_id = self._session.scalar(
-                select(ResearchRun.research_case_id).where(ResearchRun.id == run_id)
+            claimed = self._session.execute(
+                update(Job)
+                .where(
+                    Job.id == job.id,
+                    Job.kind == "research_run",
+                    Job.target_type == "research_run",
+                    Job.target_id == job.target_id,
+                    Job.research_case_id == job.research_case_id,
+                    Job.status == "queued",
+                    Job.attempt == candidate.attempt,
+                )
+                .values(
+                    status="running",
+                    step="extract",
+                    error=None,
+                    started_at=claimed_at,
+                    finished_at=None,
+                )
+                .execution_options(synchronize_session="fetch")
             )
-            if case_id is None:
-                return None, None
-            self._session.scalar(
+        if claimed.rowcount != 1:
+            return None
+        self._append_job_event(
+            job,
+            status="running",
+            step="extract",
+            message="worker claimed run",
+        )
+        return ResearchRunJobClaim(
+            job_id=job.id,
+            research_run_id=job.target_id,
+            research_case_id=job.research_case_id,
+            claimed_attempt=candidate.attempt,
+        )
+
+    def claim_run_job(self, run_id: uuid.UUID) -> ResearchRunJobClaim | None:
+        """Server-side claim used by synchronous service callers and tests."""
+        row = self._session.execute(
+            select(
+                Job.id,
+                Job.target_id,
+                Job.research_case_id,
+                Job.attempt,
+            )
+            .where(Job.kind == "research_run")
+            .where(Job.target_type == "research_run")
+            .where(Job.target_id == run_id)
+            .where(Job.status == "queued")
+            .order_by(Job.created_at, Job.id)
+            .limit(1)
+        ).first()
+        if row is None:
+            return None
+        job_id, target_id, case_id, attempt = row
+        if target_id is None or case_id is None:
+            raise ValueError("research run job has incomplete ownership")
+        return self._claim_job(
+            _ResearchRunJobCandidate(
+                job_id=job_id,
+                research_run_id=target_id,
+                research_case_id=case_id,
+                attempt=attempt,
+            ),
+            skip_locked_case=False,
+        )
+
+    def lock_active_claim(
+        self,
+        claim: ResearchRunJobClaim,
+        *,
+        task_id: uuid.UUID | None = None,
+        touch_heartbeat: bool = False,
+    ) -> tuple[ResearchRun, Job, ResearchTask | None] | None:
+        """Lock and validate one attempt before any worker-owned write.
+
+        The stable Case -> Run -> Job -> Task order is shared with stale
+        recovery and terminalization.  Returning ``None`` is a typed lease
+        loss at the service boundary; callers must roll back their transaction.
+        """
+        with self._session.no_autoflush:
+            case = self._session.scalar(
                 select(ResearchCase)
-                .where(ResearchCase.id == case_id)
+                .where(ResearchCase.id == claim.research_case_id)
                 .with_for_update()
             )
             run = self._session.scalar(
                 select(ResearchRun)
-                .where(ResearchRun.id == run_id)
+                .where(
+                    ResearchRun.id == claim.research_run_id,
+                    ResearchRun.research_case_id == claim.research_case_id,
+                )
                 .with_for_update()
                 .execution_options(populate_existing=True)
             )
             job = self._session.scalar(
                 select(Job)
-                .where(Job.kind == "research_run")
-                .where(Job.target_type == "research_run")
-                .where(Job.target_id == run_id)
-                .order_by(Job.created_at.desc(), Job.id.desc())
-                .limit(1)
+                .where(
+                    Job.id == claim.job_id,
+                    Job.kind == "research_run",
+                    Job.target_type == "research_run",
+                    Job.target_id == claim.research_run_id,
+                    Job.research_case_id == claim.research_case_id,
+                )
                 .with_for_update()
                 .execution_options(populate_existing=True)
             )
-        return run, job
+        if (
+            case is None
+            or run is None
+            or job is None
+        ):
+            return None
+        heartbeat_at = _utcnow()
+        heartbeat_value = heartbeat_at if touch_heartbeat else Job.started_at
+        with self._session.no_autoflush:
+            guarded = self._session.execute(
+                update(Job)
+                .where(
+                    Job.id == claim.job_id,
+                    Job.kind == "research_run",
+                    Job.target_type == "research_run",
+                    Job.target_id == claim.research_run_id,
+                    Job.research_case_id == claim.research_case_id,
+                    Job.status == "running",
+                    Job.cancel_requested.is_(False),
+                    Job.finished_at.is_(None),
+                    Job.attempt == claim.claimed_attempt,
+                )
+                .values(started_at=heartbeat_value)
+                .execution_options(synchronize_session="fetch")
+            )
+            if guarded.rowcount != 1:
+                return None
+            task = None
+            if task_id is not None:
+                task = self._session.scalar(
+                    select(ResearchTask)
+                    .where(
+                        ResearchTask.id == task_id,
+                        ResearchTask.run_id == claim.research_run_id,
+                        ResearchTask.research_case_id == claim.research_case_id,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+        if task_id is not None and task is None:
+            return None
+        return run, job, task
 
-    def requeue_source_ready_runs(self) -> int:
-        """Requeue parked runs once every tenant-bound acquisition is terminal."""
-        waiting_jobs = list(
+    def recover_stale_run_jobs(self, *, before: datetime) -> int:
+        """Atomically requeue one dead worker's Job, Run, and running tasks."""
+        candidates = list(
             self._session.execute(
-                select(Job.id, Job.target_id, Job.research_case_id)
+                select(Job.id, Job.research_case_id, Job.target_id)
                 .where(Job.kind == "research_run")
                 .where(Job.target_type == "research_run")
-                .where(Job.status == "waiting_for_sources")
+                .where(Job.status == "running")
+                .where(Job.cancel_requested.is_(False))
+                .where(Job.started_at.is_not(None))
+                .where(Job.started_at < before)
+                .where(Job.finished_at.is_(None))
                 .order_by(Job.created_at, Job.id)
             )
         )
-        requeued = 0
-        for job_id, run_id, case_id in waiting_jobs:
-            if run_id is None or case_id is None:
+        recovered = 0
+        for job_id, case_id, run_id in candidates:
+            if case_id is None or run_id is None:
+                job = self._lock_stale_job(job_id, before=before)
+                if job is not None:
+                    self._reject_stale_recovery(job)
                 continue
-            # Keep the same Case -> Run -> Job lock order as terminal writes
-            # so a source-ready poll cannot deadlock a cancelling worker.
+
+            run_case_id = self._session.scalar(
+                select(ResearchRun.research_case_id).where(ResearchRun.id == run_id)
+            )
+            if run_case_id != case_id:
+                job = self._lock_stale_job(job_id, before=before)
+                if job is not None:
+                    self._reject_stale_recovery(job)
+                continue
+
             self._session.scalar(
                 select(ResearchCase)
                 .where(ResearchCase.id == case_id)
@@ -237,62 +449,212 @@ class AutoResearchRepository:
             )
             run = self._session.scalar(
                 select(ResearchRun)
-                .where(ResearchRun.id == run_id)
-                .where(ResearchRun.research_case_id == case_id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
-            if run is None or run.status != "waiting_for_sources":
-                continue
-            job = self._session.scalar(
-                select(Job)
-                .where(Job.id == job_id)
-                .where(Job.target_id == run.id)
-                .where(Job.research_case_id == run.research_case_id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
-            if job is None or job.status != "waiting_for_sources":
-                continue
-            admission = self._session.scalar(
-                select(CaseTenantAdmission).where(
-                    CaseTenantAdmission.research_case_id == run.research_case_id
+                .where(
+                    ResearchRun.id == run_id,
+                    ResearchRun.research_case_id == case_id,
                 )
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
-            if admission is None:
+            job = self._lock_stale_job(job_id, before=before)
+            if run is None or job is None:
                 continue
-            source_statuses = list(
+            tasks = list(
                 self._session.scalars(
-                    select(AcquisitionJob.status).where(
-                        AcquisitionJob.research_run_id == run.id,
-                        AcquisitionJob.research_case_id == run.research_case_id,
-                        AcquisitionJob.tenant_id == admission.tenant_id,
-                    )
+                    select(ResearchTask)
+                    .where(ResearchTask.run_id == run.id)
+                    .order_by(ResearchTask.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
                 )
             )
-            if not source_statuses or any(
-                status not in AUTOMATIC_SOURCE_JOB_TERMINAL
-                for status in source_statuses
-            ):
+            if any(task.research_case_id != case_id for task in tasks):
+                self._reject_stale_recovery(job)
                 continue
+            if run.status not in {"queued", "running"}:
+                continue
+
+            recovered_error = "worker lease expired; run and running tasks requeued"
+            next_attempt = job.attempt + 1
+            with self._session.no_autoflush:
+                recovery_won = self._session.execute(
+                    update(Job)
+                    .where(
+                        Job.id == job.id,
+                        Job.kind == "research_run",
+                        Job.target_type == "research_run",
+                        Job.target_id == run.id,
+                        Job.research_case_id == case_id,
+                        Job.status == "running",
+                        Job.cancel_requested.is_(False),
+                        Job.started_at.is_not(None),
+                        Job.started_at < before,
+                        Job.finished_at.is_(None),
+                        Job.attempt == job.attempt,
+                    )
+                    .values(
+                        status="queued",
+                        step="recovered",
+                        error=recovered_error,
+                        attempt=next_attempt,
+                        started_at=None,
+                        finished_at=None,
+                    )
+                    .execution_options(synchronize_session="fetch")
+                )
+            if recovery_won.rowcount != 1:
+                continue
+
+            running_tasks = [task for task in tasks if task.status == "running"]
+            interrupted_round = min(
+                (task.round for task in running_tasks),
+                default=max(1, run.round),
+            )
             run.status = "queued"
-            run.stage = "analyze"
+            run.stage = "planning"
+            run.round = min(run.round, max(0, interrupted_round - 1))
+            run.stop_reason = None
             run.updated_at = _utcnow()
-            job.status = "queued"
-            job.step = "analyze"
-            job.claim_token = None
-            job.error = None
-            job.started_at = None
-            job.finished_at = None
-            job.attempt += 1
+            for task in running_tasks:
+                task.status = "queued"
+                task.stage = "planning"
+                task.updated_at = _utcnow()
+            self._append_job_event(job, status="queued", step="recovered", message=job.error)
+            recovered += 1
+        return recovered
+
+    def _lock_stale_job(self, job_id: uuid.UUID, *, before: datetime) -> Job | None:
+        return self._session.scalar(
+            select(Job)
+            .where(
+                Job.id == job_id,
+                Job.kind == "research_run",
+                Job.target_type == "research_run",
+                Job.status == "running",
+                Job.cancel_requested.is_(False),
+                Job.started_at.is_not(None),
+                Job.started_at < before,
+                Job.finished_at.is_(None),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
+    def _reject_stale_recovery(self, job: Job) -> None:
+        job.status = "failed"
+        job.step = "recovery_rejected"
+        job.error = "research run ownership mismatch; recovery refused"
+        job.finished_at = _utcnow()
+        self._append_job_event(
+            job,
+            status="failed",
+            step="recovery_rejected",
+            message=job.error,
+        )
+
+    def requeue_failed_run(self, run_id: uuid.UUID) -> tuple[ResearchRun, Job]:
+        """Legacy seam: schedule/requeue through the bounded default policy."""
+        _state, run, job = self.reconcile_failed_run_retry(
+            run_id,
+            now=_utcnow(),
+            policy_version="research-synthesis-retry-v1",
+            max_failures=3,
+            base_delay_seconds=60,
+            max_delay_seconds=900,
+        )
+        return run, job
+
+    def reconcile_failed_run_retry(
+        self,
+        run_id: uuid.UUID,
+        *,
+        now: datetime,
+        policy_version: str,
+        max_failures: int,
+        base_delay_seconds: float,
+        max_delay_seconds: float,
+    ) -> tuple[str, ResearchRun, Job]:
+        """Persist a bounded retry schedule or atomically requeue when due."""
+        run = self.get_run_for_update(run_id)
+        if run is None:
+            raise ValueError("research run not found")
+        job = self._session.scalar(
+            select(Job)
+            .where(Job.kind == "research_run")
+            .where(Job.target_type == "research_run")
+            .where(Job.target_id == run.id)
+            .order_by(Job.created_at.desc(), Job.id.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        if job is None:
+            raise ValueError("research run job not found")
+        if run.status == "queued" and job.status == "queued":
+            return "queued", run, job
+        if run.status != "failed" or job.status != "failed":
+            raise ValueError("only a failed research run can be reconciled")
+        job.retry_policy_version = policy_version
+        if job.failure_count >= max_failures:
+            job.next_retry_at = None
+            job.step = "retry_exhausted"
+            self._session.flush()
+            return "exhausted", run, job
+
+        current_now = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+        persisted_retry_at = job.next_retry_at
+        if persisted_retry_at is None:
+            exponent = max(0, job.failure_count - 1)
+            delay_seconds = min(
+                max_delay_seconds,
+                base_delay_seconds * (2**exponent),
+            )
+            job.next_retry_at = current_now + timedelta(seconds=delay_seconds)
+            job.step = "retry_scheduled"
             self._append_job_event(
                 job,
-                status="queued",
-                step="analyze",
-                message="sources ready",
+                status="failed",
+                step="retry_scheduled",
+                message="failed synthesis retry scheduled",
             )
-            requeued += 1
-        return requeued
+            self._session.flush()
+            return "scheduled", run, job
+        comparable_retry_at = (
+            persisted_retry_at
+            if persisted_retry_at.tzinfo is not None
+            else persisted_retry_at.replace(tzinfo=timezone.utc)
+        )
+        if current_now < comparable_retry_at:
+            return "scheduled", run, job
+
+        run.status = "queued"
+        run.stage = "planning"
+        run.stop_reason = None
+        run.budget_used = 0
+        run.updated_at = _utcnow()
+        for task in self._session.scalars(
+            select(ResearchTask)
+            .where(ResearchTask.run_id == run.id)
+            .where(ResearchTask.status == "failed")
+        ):
+            task.status = "queued"
+            task.stage = "planning"
+            task.gap_reason = None
+            task.updated_at = _utcnow()
+        job.status = "queued"
+        job.step = "retry"
+        job.error = None
+        job.attempt += 1
+        job.next_retry_at = None
+        job.started_at = None
+        job.finished_at = None
+        self._append_job_event(
+            job,
+            status="queued",
+            step="retry",
+            message="failed synthesis run requeued",
+        )
+        self._session.flush()
+        return "queued", run, job
 
     def get_run(self, run_id: uuid.UUID) -> ResearchRun | None:
         return self._session.get(ResearchRun, run_id)
@@ -318,8 +680,27 @@ class AutoResearchRepository:
         )
 
     def cancel_run(self, run: ResearchRun) -> bool:
-        if run.status not in AUTOMATIC_RESEARCH_ACTIVE_RUN_STATUSES:
+        locked_run = self.get_run_for_update(run.id)
+        if locked_run is None:
             return False
+        run = locked_run
+        if run.status not in {
+            "prepared",
+            "running",
+            "queued",
+            "waiting_for_review",
+        }:
+            return False
+        job = self._session.scalar(
+            select(Job)
+            .where(Job.kind == "research_run")
+            .where(Job.target_type == "research_run")
+            .where(Job.target_id == run.id)
+            .order_by(Job.created_at.desc())
+            .limit(1)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         run.status = "cancelled"
         run.stage = "stopped"
         if run.stop_reason is None:
@@ -333,45 +714,25 @@ class AutoResearchRepository:
             task.status = "cancelled"
             task.stage = "stopped"
             task.updated_at = _utcnow()
-        job = self._session.scalar(
-            select(Job)
-            .where(Job.kind == "research_run")
-            .where(Job.target_type == "research_run")
-            .where(Job.target_id == run.id)
-            .order_by(Job.created_at.desc())
-            .limit(1)
-            .with_for_update()
-        )
         if job is not None and job.status not in {"succeeded", "failed", "cancelled"}:
             job.cancel_requested = True
             job.status = "cancelled"
-            job.claim_token = None
             job.finished_at = _utcnow()
             self._append_job_event(job, status="cancelled", step="stopped", message="cancel requested")
         return True
 
     def record_job_completion(
         self,
-        job: Job,
+        claim: ResearchRunJobClaim,
         *,
         status: str,
         step: str,
         error: str | None = None,
         run: ResearchRun | None = None,
-        expected_claim_token: str | None = None,
-    ) -> None:
-        """Serialize the worker terminal write with public Job cancellation.
-
-        The worker locks in Case -> ResearchRun -> Job order.  A public cancel
-        only takes the Job lock, so it either commits ``cancel_requested``
-        first or waits until the worker has committed a terminal state.
-        """
+    ) -> bool:
+        """Serialize terminal writes with Case -> Run -> Job cancellation."""
         desired_run = None
-        run_id = None
-        case_id = None
         if run is not None:
-            run_id = run.id
-            case_id = run.research_case_id
             desired_run = {
                 "status": run.status,
                 "stage": run.stage,
@@ -379,27 +740,30 @@ class AutoResearchRepository:
                 "budget_used": run.budget_used,
                 "stop_reason": run.stop_reason,
             }
-        job_id = job.id
-
         current_run, current_job = self._lock_terminal_rows(
-            run_id=run_id,
-            case_id=case_id,
-            job_id=job_id,
+            claim=claim,
         )
         if current_job is None:
-            return
+            self._session.rollback()
+            return False
         if (
-            expected_claim_token is not None
-            and current_job.claim_token != expected_claim_token
+            current_job.attempt != claim.claimed_attempt
+            or current_job.target_id != claim.research_run_id
+            or current_job.research_case_id != claim.research_case_id
         ):
             self._session.rollback()
-            return
+            return False
         if current_job.status in {"succeeded", "failed"}:
             # A different worker already won terminal ownership.  Nothing
             # from this worker's losing Run/event/handoff transaction may be
             # published by run_once's outer commit.
             self._session.rollback()
-            return
+            return False
+        if not self._acquire_terminal_claim_guard(claim):
+            self._session.rollback()
+            return False
+        with self._session.no_autoflush:
+            self._session.refresh(current_job)
 
         cancel_won = bool(
             current_job.cancel_requested or current_job.status == "cancelled"
@@ -410,16 +774,23 @@ class AutoResearchRepository:
             # lock order in a clean transaction before publishing cancellation.
             self._session.rollback()
             current_run, current_job = self._lock_terminal_rows(
-                run_id=run_id,
-                case_id=case_id,
-                job_id=job_id,
+                claim=claim,
             )
-            if current_job is None or current_job.status in {"succeeded", "failed"}:
-                return
+            if (
+                current_job is None
+                or current_job.attempt != claim.claimed_attempt
+                or current_job.status in {"succeeded", "failed"}
+            ):
+                return False
+            if not self._acquire_terminal_claim_guard(claim):
+                self._session.rollback()
+                return False
+            with self._session.no_autoflush:
+                self._session.refresh(current_job)
             if not (
                 current_job.cancel_requested or current_job.status == "cancelled"
             ):
-                return
+                return False
             self._cancel_locked_run(current_run)
             self._set_job_completion(
                 current_job,
@@ -427,7 +798,7 @@ class AutoResearchRepository:
                 step="stopped",
                 error=None,
             )
-            return
+            return True
 
         if current_job.status == "cancelled" or current_job.cancel_requested:
             self._set_job_completion(
@@ -436,7 +807,11 @@ class AutoResearchRepository:
                 step="stopped",
                 error=None,
             )
-            return
+            return True
+
+        if current_job.status != "running":
+            self._session.rollback()
+            return False
 
         if current_run is not None and desired_run is not None:
             current_run.status = str(desired_run["status"])
@@ -451,31 +826,63 @@ class AutoResearchRepository:
             step=step,
             error=error,
         )
+        return True
+
+    def _acquire_terminal_claim_guard(
+        self,
+        claim: ResearchRunJobClaim,
+    ) -> bool:
+        """Reserve the current attempt before publishing terminal state.
+
+        PostgreSQL already holds the Job row lock.  The conditional no-op
+        update provides the equivalent compare-and-swap guard for SQLite,
+        where ``FOR UPDATE`` is ignored.
+        """
+        guarded = self._session.execute(
+            update(Job)
+            .where(
+                Job.id == claim.job_id,
+                Job.kind == "research_run",
+                Job.target_type == "research_run",
+                Job.target_id == claim.research_run_id,
+                Job.research_case_id == claim.research_case_id,
+                Job.status.in_(("running", "cancelled")),
+                Job.attempt == claim.claimed_attempt,
+            )
+            .values(started_at=Job.started_at)
+            .execution_options(synchronize_session="fetch")
+        )
+        return guarded.rowcount == 1
 
     def _lock_terminal_rows(
         self,
         *,
-        run_id: uuid.UUID | None,
-        case_id: uuid.UUID | None,
-        job_id: uuid.UUID,
+        claim: ResearchRunJobClaim,
     ) -> tuple[ResearchRun | None, Job | None]:
         with self._session.no_autoflush:
-            current_run = None
-            if run_id is not None and case_id is not None:
-                self._session.scalar(
-                    select(ResearchCase)
-                    .where(ResearchCase.id == case_id)
-                    .with_for_update()
+            self._session.scalar(
+                select(ResearchCase)
+                .where(ResearchCase.id == claim.research_case_id)
+                .with_for_update()
+            )
+            current_run = self._session.scalar(
+                select(ResearchRun)
+                .where(
+                    ResearchRun.id == claim.research_run_id,
+                    ResearchRun.research_case_id == claim.research_case_id,
                 )
-                current_run = self._session.scalar(
-                    select(ResearchRun)
-                    .where(ResearchRun.id == run_id)
-                    .with_for_update()
-                    .execution_options(populate_existing=True)
-                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
             current_job = self._session.scalar(
                 select(Job)
-                .where(Job.id == job_id)
+                .where(
+                    Job.id == claim.job_id,
+                    Job.kind == "research_run",
+                    Job.target_type == "research_run",
+                    Job.target_id == claim.research_run_id,
+                    Job.research_case_id == claim.research_case_id,
+                )
                 .with_for_update()
                 .execution_options(populate_existing=True)
             )
@@ -512,10 +919,12 @@ class AutoResearchRepository:
         step: str,
         error: str | None,
     ) -> None:
+        if status == "failed":
+            job.failure_count += 1
+            job.next_retry_at = None
         job.status = status
         job.step = step
         job.error = error
-        job.claim_token = None
         job.finished_at = _utcnow()
         self._append_job_event(
             job,
@@ -531,6 +940,10 @@ class AutoResearchRepository:
         We only reopen operational work that was explicitly blocked by that gate;
         a budget stop or any other review state must not be silently resumed.
         """
+        locked_run = self.get_run_for_update(run.id)
+        if locked_run is None:
+            return False
+        run = locked_run
         if not (
             run.status == "waiting_for_review"
             and run.stop_reason == "pending_atomic_claim_review"
@@ -688,8 +1101,6 @@ class AutoResearchRepository:
         Returns a mapping thesis_id -> {'support': int, 'contradict': int, 'context': int}.
         """
         from app.models.ledger import EvidenceLink
-        from app.models.proposals import Proposal
-
         # Only count formal EvidenceLinks; proposals are not counted.
         from app.models.ledger import Thesis
 

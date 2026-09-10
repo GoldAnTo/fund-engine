@@ -21,6 +21,7 @@ from datetime import UTC, datetime, time, timezone
 
 from sqlalchemy import func, or_, select, tuple_
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
 from app.errors import NotFoundError, ValidationFailedError
 from app.models.ledger import (
@@ -32,6 +33,7 @@ from app.models.ledger import (
     ValuationSnapshot,
 )
 from app.queries.basis import HistoricalBasis
+from app.queries.source_backlinks import statement_is_attached_to_case
 from app.repositories.instruments import InstrumentRepository
 from app.repositories.research import ResearchRepository
 from app.services.exposure import choose_latest_disclosure_per_fund_stock
@@ -72,7 +74,12 @@ class CompanyReadQueries:
     # --------------------------------------------------------------- list
 
     def list_companies(
-        self, *, query: str | None, limit: int, cursor: str | None
+        self,
+        *,
+        query: str | None,
+        limit: int,
+        cursor: str | None,
+        authorized_case_ids: Select[tuple[uuid.UUID]] | None = None,
     ) -> CompanyListResponse:
         after_created_at, after_id = (None, None)
         if cursor is not None:
@@ -100,22 +107,38 @@ class CompanyReadQueries:
             last = page_items[-1]
             next_cursor = self._encode_cursor(last.created_at, last.id)
 
-        items = [self._list_item(company) for company in page_items]
+        items = [
+            self._list_item(company, authorized_case_ids=authorized_case_ids)
+            for company in page_items
+        ]
         return CompanyListResponse(
             items=items, page=CursorPage(next_cursor=next_cursor, has_more=has_more)
         )
 
-    def _list_item(self, company: Company) -> CompanyListItemDTO:
+    def _list_item(
+        self,
+        company: Company,
+        *,
+        authorized_case_ids: Select[tuple[uuid.UUID]] | None = None,
+    ) -> CompanyListItemDTO:
         stock_count = self._session.scalar(
             select(func.count())
             .select_from(Stock)
             .where(Stock.company_id == company.id)
         ) or 0
-        role_count = self._session.scalar(
+        role_count_query = (
             select(func.count())
             .select_from(ThemeRole)
             .where(ThemeRole.company_id == company.id)
-        ) or 0
+        )
+        if authorized_case_ids is not None:
+            role_count_query = role_count_query.where(
+                or_(
+                    ThemeRole.research_case_id.is_(None),
+                    ThemeRole.research_case_id.in_(authorized_case_ids),
+                )
+            )
+        role_count = self._session.scalar(role_count_query) or 0
         latest_period = self._session.scalar(
             select(func.max(HoldingDisclosure.report_period))
             .select_from(HoldingDisclosure)
@@ -137,7 +160,11 @@ class CompanyReadQueries:
     # ------------------------------------------------------------ dossier
 
     def dossier(
-        self, *, company_id: uuid.UUID, basis: HistoricalBasis
+        self,
+        *,
+        company_id: uuid.UUID,
+        basis: HistoricalBasis,
+        authorized_case_ids: Select[tuple[uuid.UUID]] | None = None,
     ) -> CompanyDossierResponse:
         company = self._session.get(Company, company_id)
         if company is None:
@@ -151,7 +178,12 @@ class CompanyReadQueries:
         stock_by_id = {stock.id: stock for stock in stocks}
         as_of = basis.cutoff.date()
 
-        theme_roles = self._theme_roles(company.id, as_of=as_of, basis=basis)
+        theme_roles = self._theme_roles(
+            company.id,
+            as_of=as_of,
+            basis=basis,
+            authorized_case_ids=authorized_case_ids,
+        )
         related_theses = self._related_theses(theme_roles, basis=basis)
         valuations = self._valuations(list(stock_by_id), stock_by_id, as_of)
         fund_holders = self._fund_holders(list(stock_by_id), stock_by_id, basis)
@@ -180,12 +212,16 @@ class CompanyReadQueries:
     # ------------------------------------------------------------ sections
 
     def _theme_roles(
-        self, company_id: uuid.UUID, *, as_of, basis: HistoricalBasis
+        self,
+        company_id: uuid.UUID,
+        *,
+        as_of,
+        basis: HistoricalBasis,
+        authorized_case_ids: Select[tuple[uuid.UUID]] | None = None,
     ) -> list[ThemeRoleViewDTO]:
         """Active ThemeRoles at the basis: applicable window + ledger cutoff."""
-        roles = list(
-            self._session.scalars(
-                select(ThemeRole)
+        query = (
+            select(ThemeRole)
                 .where(ThemeRole.company_id == company_id)
                 .where(ThemeRole.created_at <= basis.cutoff)
                 .where(
@@ -201,8 +237,15 @@ class CompanyReadQueries:
                     )
                 )
                 .order_by(ThemeRole.created_at)
-            )
         )
+        if authorized_case_ids is not None:
+            query = query.where(
+                or_(
+                    ThemeRole.research_case_id.is_(None),
+                    ThemeRole.research_case_id.in_(authorized_case_ids),
+                )
+            )
+        roles = list(self._session.scalars(query))
         views: list[ThemeRoleViewDTO] = []
         for role in roles:
             case = None
@@ -213,7 +256,12 @@ class CompanyReadQueries:
             statement = None
             span = None
             document_version = None
-            if role.source_statement_id is not None:
+            backlink_visible = statement_is_attached_to_case(
+                self._session,
+                statement_id=role.source_statement_id,
+                research_case_id=role.research_case_id,
+            )
+            if backlink_visible:
                 statement = self._research.get_statement(role.source_statement_id)
                 if statement is not None and (
                     _to_aware(statement.created_at) > basis.cutoff

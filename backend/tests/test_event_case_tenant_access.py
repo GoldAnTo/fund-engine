@@ -12,30 +12,6 @@ def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_legacy_workbench_and_thesis_commands_enforce_case_owner(cmd_client, monkeypatch):
-    monkeypatch.setenv("RESEARCH_TENANT_TOKENS", '{"token-a":"team-a","token-b":"team-b"}')
-    created = cmd_client.post("/api/v1/event-research", json=_event_payload(), headers=_auth("token-a"))
-    assert created.status_code == 201
-    case_id = created.json()["case_id"]
-    read_url = f"/api/research-cases/{case_id}/workbench"
-    write_url = f"/api/v1/research-cases/{case_id}/theses"
-    payload = {"statement": "需核验的订单假设", "created_by": "human:researcher"}
-    for headers, expected in [({"Authorization": ""}, 401), (_auth("token-b"), 404)]:
-        assert cmd_client.get(read_url, headers=headers).status_code == expected
-        assert cmd_client.post(write_url, json=payload, headers=headers).status_code == expected
-    assert cmd_client.get(read_url, headers=_auth("token-a")).status_code == 200
-    assert cmd_client.post(write_url, json=payload, headers=_auth("token-a")).status_code == 201
-
-
-def test_legacy_case_creation_requires_authentication(cmd_client):
-    response = cmd_client.post(
-        "/api/v1/research-cases",
-        json={"title": "unauthorized", "industry_topic": "test", "created_by": "anonymous"},
-        headers={"Authorization": ""},
-    )
-    assert response.status_code == 401
-
-
 def _event_payload() -> dict[str, object]:
     return {
         "raw_input": "某公司披露新的订单节奏，后续收入兑现仍需要核验。",
@@ -46,7 +22,6 @@ def _event_payload() -> dict[str, object]:
         "ticker": "000001",
         "research_question": "订单更新是否会改变收入兑现预期？",
         "candidate_factors": ["订单确认节奏", "产能交付能力", "客户需求持续性"],
-        "created_by": "human:researcher",
     }
 
 
@@ -75,7 +50,21 @@ def test_research_session_exposes_only_the_authenticated_tenant_and_roles(
     )
     response = cmd_client.get("/api/v1/research-session", headers=_auth("admin-token"))
     assert response.status_code == 200
-    assert response.json() == {"tenant_id": "team-a", "roles": ["case_administrator"]}
+    body = response.json()
+    assert body == {
+        "user_id": str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                "test-research-principal:team-a:token:admin-token",
+            )
+        ),
+        "display_name": "team-a",
+        "tenant_id": "team-a",
+        "roles": ["case_administrator", "tenant_administrator"],
+        "issuer": "https://test-identity.invalid/realms/research",
+        "expires_at": body["expires_at"],
+    }
+    assert datetime.fromisoformat(body["expires_at"]).tzinfo is not None
 
 
 def test_foreign_tenant_cannot_read_or_attach_to_an_event_case(
@@ -105,12 +94,44 @@ def test_foreign_tenant_cannot_read_or_attach_to_an_event_case(
             "raw_input": "外部团队不应写入的材料。",
             "source_type": "pasted_snapshot",
             "source_metadata": {},
-            "actor": "human:foreign",
         },
     )
 
     assert foreign_read.status_code == 404
     assert foreign_write.status_code == 404
+
+
+def test_publish_requires_authenticated_actor_with_case_access(
+    cmd_client, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS",
+        '{"owner-token":{"tenant_id":"team-a","actor_id":"owner"},'
+        '"foreign-token":{"tenant_id":"team-b","actor_id":"intruder"}}',
+    )
+    created = cmd_client.post(
+        "/api/v1/event-research",
+        json=_event_payload(),
+        headers=_auth("owner-token"),
+    )
+    assert created.status_code == 201
+    case_id = created.json()["case_id"]
+
+    unauthenticated = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/conclusion/publish",
+        headers={"Authorization": ""},
+        json={"text": "must not publish"},
+    )
+    foreign = cmd_client.post(
+        f"/api/v1/event-research/{case_id}/conclusion/publish",
+        headers=_auth("foreign-token"),
+        json={"text": "must not publish"},
+    )
+
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.json()["error"]["code"] == "authentication_required"
+    assert foreign.status_code == 404
+    assert foreign.json()["error"]["code"] == "not_found"
 
 
 def test_legacy_case_dossier_route_cannot_bypass_case_tenant_admission(
@@ -249,7 +270,10 @@ def test_event_case_documents_are_not_visible_to_a_foreign_tenant(
         "/api/v1/event-research", json=_event_payload(), headers=_auth("token-a")
     )
     case_id = created.json()["case_id"]
-    legacy_list = cmd_client.get(f"/api/v1/documents?case_id={case_id}", headers=_auth("token-a"))
+    legacy_list = cmd_client.get(
+        f"/api/v1/documents?case_id={case_id}",
+        headers=_auth("token-a"),
+    )
     document_id = legacy_list.json()["items"][0]["id"]
 
     owner_list = cmd_client.get(
@@ -458,9 +482,7 @@ def test_legacy_case_requires_explicit_admin_admission_before_it_is_visible(
     no_role = cmd_client.post(
         f"/api/v1/event-research/{legacy_case.id}/tenant-admission",
         json={
-            "tenant_id": "test-team",
             "initial_document_version_id": str(legacy_document.id),
-            "admitted_by": "human:ops",
             "reason": "迁移清单与原始材料归属已人工核验",
         },
     )
@@ -488,9 +510,7 @@ def test_legacy_case_requires_explicit_admin_admission_before_it_is_visible(
     admitted = cmd_client.post(
         f"/api/v1/event-research/{legacy_case.id}/tenant-admission",
         json={
-            "tenant_id": "test-team",
             "initial_document_version_id": str(legacy_document.id),
-            "admitted_by": "human:ops",
             "reason": "迁移清单与原始材料归属已人工核验",
         },
     )

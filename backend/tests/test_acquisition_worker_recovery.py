@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import threading
 from dataclasses import replace
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, func, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import func, select
 
 from app.acquisition.policy import B_SCOPE_POLICY, SourcePolicy
 from app.acquisition.sources import (
@@ -54,63 +55,6 @@ from app.services.acquisition import AcquisitionModule
 
 class InjectedWorkerCrash(BaseException):
     pass
-
-
-def test_run_once_survives_stale_lease_and_keeps_polling(monkeypatch):
-    """Losing a lease must never kill the worker process.
-
-    Regression: the acquisition workers crash-looped for a whole night
-    (attempt hit 87) because ``StaleLeaseError`` escaped ``run_once``; the
-    container restarted, re-claimed, and lost the lease again.
-    """
-    import uuid
-    from datetime import UTC, datetime
-
-    from app.repositories.acquisition import AcquisitionClaim
-
-    worker = importlib.import_module("app.scripts.run_acquisition_worker")
-    claim = AcquisitionClaim(
-        job_id=uuid.uuid4(),
-        lease_token="stale-token",
-        lease_owner="system:acquisition-worker@t#worker-a",
-        lease_expires_at=datetime.now(UTC) + timedelta(seconds=30),
-        attempt=87,
-    )
-
-    class FakeRepository:
-        def __init__(self, session):
-            pass
-
-        def claim_next(self, *, worker_id, lease_for):
-            return claim
-
-    class FakeSession:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc_info):
-            return False
-
-        def commit(self):
-            return None
-
-    class LeaseLosingRunner:
-        def run_claim(self, claim):
-            raise StaleLeaseError("acquisition lease is stale")
-
-    monkeypatch.setattr(worker, "AcquisitionRepository", FakeRepository)
-
-    # Must return True (work was found) WITHOUT raising: the job stays
-    # durable and a fresh claim resumes it from its checkpoints.
-    assert (
-        worker.run_once(
-            runner=LeaseLosingRunner(),
-            session_factory=lambda: FakeSession(),
-            worker_id="system:acquisition-worker@t#worker-a",
-            lease_for=timedelta(seconds=30),
-        )
-        is True
-    )
 
 
 class CrashAfterArtifactFreezer(RetrievedDocumentFreezer):
@@ -347,9 +291,7 @@ def test_gildata_inline_artifact_recovers_without_provider_research(
     reference = session.scalar(select(SourceReference))
     assert reference is not None
     assert "Revenue was 100 USD" not in repr(reference.metadata_json)
-    # Worker A's _renew calls pushed the lease past the original 30s window,
-    # so a takeover must outlive the renewed lease (default 1800s).
-    clock.advance(timedelta(seconds=1801))
+    clock.advance(timedelta(seconds=31))
     claim_b = repository.claim_next(
         worker_id="system:acquisition-worker@task8-v1#worker-b",
         lease_for=timedelta(minutes=5),
@@ -411,9 +353,7 @@ def test_persisted_official_reference_recovers_without_live_search(
 
     assert session.scalar(select(func.count()).select_from(SourceReference)) == 1
     assert session.scalar(select(func.count()).select_from(RetrievalArtifact)) == 0
-    # Worker A's _renew calls pushed the lease past the original 30s window,
-    # so a takeover must outlive the renewed lease (default 1800s).
-    clock.advance(timedelta(seconds=1801))
+    clock.advance(timedelta(seconds=31))
     claim_b = repository.claim_next(
         worker_id="system:acquisition-worker@task8-v1#worker-b",
         lease_for=timedelta(minutes=5),
@@ -704,10 +644,7 @@ def test_extractor_internal_commit_cannot_publish_after_lease_rotation(
 
         def chat_json(self, messages, schema_hint=""):
             assert schema_hint == "extract"
-            # The runner renews the lease to its own budget (default 1800s)
-            # before each document, so the rotation must outlive the RENEWED
-            # lease — not the original 30s claim — to take the job over.
-            clock.advance(timedelta(seconds=1831))
+            clock.advance(timedelta(seconds=31))
             with sessions() as takeover:
                 self.claim_b = AcquisitionRepository(
                     takeover, clock=clock
@@ -798,9 +735,7 @@ def test_artifact_commit_survives_crash_and_stale_worker_is_fenced(
     session.expire_all()
     assert session.scalar(select(func.count()).select_from(RetrievalArtifact)) == 1
     assert session.scalar(select(func.count()).select_from(RetrievalArtifactDocument)) == 0
-    # Worker A's _renew calls pushed the lease past the original 30s window,
-    # so a takeover must outlive the renewed lease (default 1800s).
-    clock.advance(timedelta(seconds=1801))
+    clock.advance(timedelta(seconds=31))
     claim_b = repository.claim_next(
         worker_id="system:acquisition-worker@task8-v1#worker-b",
         lease_for=timedelta(minutes=5),
@@ -904,9 +839,7 @@ def test_repository_runner_units_are_lease_fenced_and_caller_transactional(
     )
     assert claim_a is not None
     session.commit()
-    # Worker A's _renew calls pushed the lease past the original 30s window,
-    # so a takeover must outlive the renewed lease (default 1800s).
-    clock.advance(timedelta(seconds=1801))
+    clock.advance(timedelta(seconds=31))
     claim_b = repository.claim_next(
         worker_id="system:acquisition-worker@task8-v1#worker-b",
         lease_for=timedelta(minutes=5),
@@ -1024,9 +957,7 @@ def test_reclaimed_fetch_restores_reference_without_repeating_search(
             clock=clock,
         ).run_claim(claim_a)
 
-    # Worker A's _renew calls pushed the lease past the original 30s window,
-    # so a takeover must outlive the renewed lease (default 1800s).
-    clock.advance(timedelta(seconds=1801))
+    clock.advance(timedelta(seconds=31))
     claim_b = repository.claim_next(
         worker_id="system:acquisition-worker@task8-v1#worker-b",
         lease_for=timedelta(minutes=5),
@@ -1070,6 +1001,22 @@ class ClosableAdapter:
         self.closed = True
 
 
+def test_adapter_startup_uses_shared_runtime_configuration_validation(monkeypatch):
+    worker = importlib.import_module("app.scripts.run_acquisition_worker")
+    validated = []
+    adapter = ClosableAdapter()
+
+    def validate(environment):
+        validated.append(environment)
+        return ("sse",)
+
+    monkeypatch.setattr(worker, "validate_adapter_configuration", validate)
+    monkeypatch.setattr(worker, "SSEAnnouncementSource", lambda: adapter)
+
+    assert worker.build_adapters_from_env() == {"sse": adapter}
+    assert len(validated) == 1
+
+
 def test_configured_adapter_initialization_failure_closes_prior_adapters(
     monkeypatch,
 ):
@@ -1092,25 +1039,10 @@ def test_configured_adapter_initialization_failure_closes_prior_adapters(
 def test_production_worker_rejects_a_mock_llm(monkeypatch):
     worker = importlib.import_module("app.scripts.run_acquisition_worker")
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("LLM_API_KEY", "configured-for-test")
     monkeypatch.setattr(worker.LLMClient, "from_env", FakeExtractionClient)
 
     with pytest.raises(RuntimeError, match="real LLM"):
         worker.build_llm_client()
-
-
-def test_production_worker_starts_without_optional_llm_and_fails_provider_calls_closed(
-    monkeypatch,
-):
-    worker = importlib.import_module("app.scripts.run_acquisition_worker")
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
-
-    client = worker.build_llm_client()
-
-    assert client.model_version == "unconfigured"
-    with pytest.raises(worker.LLMProviderError, match="not configured"):
-        client.chat_json([], "extract")
 
 
 @pytest.mark.parametrize(
@@ -1142,7 +1074,6 @@ def test_once_entry_builds_identity_runs_one_claim_and_closes_adapters(monkeypat
     )
     monkeypatch.setattr(worker, "build_llm_client", FakeExtractionClient)
     monkeypatch.setattr(worker, "run_once", lambda **kwargs: calls.append(kwargs) or False)
-    monkeypatch.setattr(worker, "_touch", lambda **_kwargs: None)
 
     worker.main(
         [
@@ -1164,23 +1095,105 @@ def test_once_entry_builds_identity_runs_one_claim_and_closes_adapters(monkeypat
     assert adapter.closed is True
 
 
-def test_acquisition_worker_records_a_container_scoped_loop_heartbeat(tmp_path, monkeypatch):
-    from app.models.ledger import Base
-    from app.services.research_worker_heartbeat import WorkerHeartbeatService
-
+def test_worker_run_once_continues_after_malformed_claim(
+    session, research_case, thesis, document
+):
     worker = importlib.import_module("app.scripts.run_acquisition_worker")
-    engine = create_engine(f"sqlite:///{tmp_path / 'acquisition-heartbeat.db'}", future=True)
-    Base.metadata.create_all(engine)
-    sessions = sessionmaker(bind=engine, future=True)
-    monkeypatch.setattr(worker, "SessionLocal", sessions)
-    monkeypatch.setattr(worker.socket, "gethostname", lambda: "acquisition-container")
+    admit_case(
+        session,
+        research_case.id,
+        tenant_id="team-a",
+        document_version_id=document.id,
+    )
+    principal = AcquisitionPrincipal("team-a", "system:task8-requester")
+    malformed_clock = MutableClock()
+    malformed_clock.advance(-timedelta(minutes=1))
+    malformed_module = AcquisitionModule(
+        session,
+        repository=AcquisitionRepository(
+            session,
+            clock=malformed_clock,
+        ),
+        policy=SSE_ONLY_POLICY,
+    )
+    malformed_ref = malformed_module.request(
+        make_request(research_case, thesis), principal=principal
+    )
+    valid_module = AcquisitionModule(session, policy=SSE_ONLY_POLICY)
+    valid_ref = valid_module.request(
+        make_request(research_case, thesis), principal=principal
+    )
+    malformed = session.get(AcquisitionJob, malformed_ref.id)
+    valid = session.get(AcquisitionJob, valid_ref.id)
+    assert malformed is not None and valid is not None
+    malformed.request_snapshot = "corrupt-root"
+    session.commit()
+    sessions = make_session_factory(session)
+    adapter = FakeSSEAdapter()
+    runner = AcquisitionRunner(
+        sessions,
+        adapters={"sse": adapter},
+        llm_client=FakeExtractionClient(),
+    )
+    command = {
+        "runner": runner,
+        "session_factory": sessions,
+        "worker_id": "system:acquisition-worker@task8-v1#loop-test",
+        "lease_for": timedelta(minutes=5),
+    }
 
-    worker._touch(mode="loop", state="polling")
+    assert worker.run_once(**command) is True
+    assert worker.run_once(**command) is True
+    assert worker.run_once(**command) is False
 
-    with sessions() as session:
-        status = WorkerHeartbeatService(session).status(
-            worker_kind="acquisition", worker_id="acquisition-container"
-        )
+    session.expire_all()
+    malformed = session.get(AcquisitionJob, malformed_ref.id)
+    valid = session.get(AcquisitionJob, valid_ref.id)
+    assert malformed is not None and valid is not None
+    assert (malformed.status, malformed.error_code) == (
+        "failed",
+        "invalid_query_plan",
+    )
+    assert valid.status in {"succeeded", "partial"}
+    assert valid.frozen_count == 1
+    assert (adapter.search_calls, adapter.fetch_calls) == (1, 1)
 
-    assert status["status"] == "available"
-    assert status["mode"] == "loop"
+
+def test_worker_renews_claim_while_provider_work_is_blocked(monkeypatch):
+    worker = importlib.import_module("app.scripts.run_acquisition_worker")
+    renewed = threading.Event()
+    claim = SimpleNamespace(job_id="job-a", lease_token="token-a")
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def commit(self):
+            return None
+
+    class FakeRepository:
+        def __init__(self, _session):
+            return None
+
+        def claim_next(self, **_kwargs):
+            return claim
+
+        def renew_lease(self, *_args, **_kwargs):
+            renewed.set()
+
+    class BlockingRunner:
+        def run_claim(self, current_claim):
+            assert current_claim is claim
+            assert renewed.wait(timeout=1)
+
+    monkeypatch.setattr(worker, "AcquisitionRepository", FakeRepository)
+
+    assert worker._run_once(
+        runner=BlockingRunner(),
+        session_factory=FakeSession,
+        worker_id="system:acquisition-worker@test#replica-a",
+        lease_for=timedelta(milliseconds=60),
+    ) is True

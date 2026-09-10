@@ -17,15 +17,16 @@ def _error_code(response) -> str:
 
 
 def _create_thesis(cmd_client) -> str:
-    from tests.event_case_factory import create_event_case
-
-    case_id = create_event_case(cmd_client, title="因果链测试案例")
     response = cmd_client.post(
-        f"/api/v1/research-cases/{case_id}/theses",
-        json={"statement": "需求爆发驱动收入增长", "created_by": "analyst-test"},
+        "/api/v1/research-cases",
+        json={
+            "title": "因果链测试案例",
+            "industry_topic": "ai_compute",
+            "initial_theses": [{"statement": "需求爆发驱动收入增长"}],
+        },
     )
     assert response.status_code == 201, response.text
-    return response.json()["thesis"]["id"]
+    return response.json()["theses"][0]["id"]
 
 
 def _create_step(cmd_client, thesis_id: str, sequence: int = 1) -> dict:
@@ -141,7 +142,7 @@ def test_create_causal_edge_human_confirmed(cmd_client, cmd_session):
     assert str(row.target_step_id) == s2["id"]
 
 
-def test_create_causal_edge_ai_starts_as_draft(cmd_client):
+def test_create_causal_edge_rejects_client_authored_creator_type(cmd_client):
     thesis_id = _create_thesis(cmd_client)
     s1 = _create_step(cmd_client, thesis_id, 1)
     s2 = _create_step(cmd_client, thesis_id, 2)
@@ -150,8 +151,8 @@ def test_create_causal_edge_ai_starts_as_draft(cmd_client):
         f"/api/v1/theses/{thesis_id}/causal-edges",
         json=_edge_payload(s1["id"], s2["id"], creator_type="ai"),
     )
-    assert response.status_code == 201, response.text
-    assert response.json()["review_state"] == "draft"
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
 
 
 def test_causal_edge_missing_thesis_is_404(cmd_client):
@@ -191,7 +192,7 @@ def test_causal_edge_self_loop_is_422(cmd_client):
     assert _error_code(response) == "validation_failed"
 
 
-def test_causal_edge_cross_thesis_steps_is_404(cmd_client):
+def test_causal_edge_cross_thesis_steps_is_422(cmd_client):
     thesis_a = _create_thesis(cmd_client)
     thesis_b = _create_thesis(cmd_client)
     s1 = _create_step(cmd_client, thesis_a, 1)
@@ -201,8 +202,8 @@ def test_causal_edge_cross_thesis_steps_is_404(cmd_client):
         f"/api/v1/theses/{thesis_a}/causal-edges",
         json=_edge_payload(s1["id"], s2["id"]),
     )
-    assert response.status_code == 404
-    assert _error_code(response) == "not_found"
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
 
 
 def test_causal_edge_duplicate_pair_is_422(cmd_client, cmd_session):
@@ -229,7 +230,7 @@ def test_causal_edge_duplicate_pair_is_422(cmd_client, cmd_session):
     assert count == 1
 
 
-def test_causal_edge_invalid_creator_type_is_422(cmd_client):
+def test_causal_edge_unknown_creator_type_is_422(cmd_client):
     thesis_id = _create_thesis(cmd_client)
     s1 = _create_step(cmd_client, thesis_id, 1)
     s2 = _create_step(cmd_client, thesis_id, 2)

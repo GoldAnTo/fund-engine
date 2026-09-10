@@ -15,8 +15,6 @@ MonitorSourceType = Literal[
 
 
 class UpdateCaseMonitorRequest(V1Model):
-    expected_version: int | None = Field(default=None, ge=0)
-    actor: str = Field(min_length=1, max_length=128)
     frequency: str = Field(min_length=1, max_length=64)
     factor_ids: list[str] = Field(min_length=1)
     allowed_source_types: list[MonitorSourceType] = Field(min_length=1)
@@ -26,8 +24,6 @@ class UpdateCaseMonitorRequest(V1Model):
 
 
 class SetCaseMonitorStatusRequest(V1Model):
-    expected_version: int | None = Field(default=None, ge=1)
-    actor: str = Field(min_length=1, max_length=128)
     change_reason: str = Field(min_length=1)
 
 
@@ -68,10 +64,3 @@ class CaseMonitorDetailResponse(V1Model):
     next_scheduled_at: datetime | None = None
     confirmed_factors: list[ConfirmedFactorOptionDTO]
     available_confirmed_factors: list[ConfirmedFactorOptionDTO]
-
-
-class StartManualMonitorRunRequest(V1Model):
-    actor: str = Field(min_length=1, max_length=128)
-    change_reason: str = Field(min_length=1, max_length=2000)
-    expected_version: int = Field(ge=1)
-    idempotency_key: str = Field(min_length=1, max_length=128)

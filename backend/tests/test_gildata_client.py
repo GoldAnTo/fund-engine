@@ -201,28 +201,6 @@ def test_transport_error_does_not_echo_token_bearing_url():
     client.close()
 
 
-def test_transport_error_retries_once_before_succeeding():
-    attempts = 0
-    inner_text = json.dumps({"code": "0", "results": []})
-
-    def handler(request):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise httpx.ConnectError("transient disconnect", request=request)
-        return httpx.Response(200, json=_envelope(inner_text))
-
-    client = GildataMCPClient(
-        token="tok",
-        max_attempts=2,
-        transport=_mock_transport(handler),
-    )
-
-    assert client.call_tool("FinQuery", {"query": "x"}) == inner_text
-    assert attempts == 2
-    client.close()
-
-
 def test_list_tools(monkeypatch):
     tools = [{"name": "FinQuery"}, {"name": "FinancialResearchReport"}]
 
@@ -452,6 +430,25 @@ def test_ingest_without_case_does_not_adopt_the_first_global_case(session):
 
     assert summary["case_id"] is None
     assert list(session.scalars(select(CaseDocumentVersion))) == []
+
+
+def test_ingest_checks_output_authorization_before_freezing_provider_rows(session):
+    from sqlalchemy import select
+
+    from app.models.ledger import DocumentVersion
+    from app.scripts.ingest_real_data import ingest
+
+    checks: list[bool] = []
+
+    def reject_output() -> bool:
+        checks.append(True)
+        return False
+
+    with pytest.raises(RuntimeError, match="no longer authorized"):
+        ingest(session, _make_client(), before_persist=reject_output)
+
+    assert checks == [True]
+    assert list(session.scalars(select(DocumentVersion))) == []
 
 
 def test_ingest_is_idempotent(session):

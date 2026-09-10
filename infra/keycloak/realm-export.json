@@ -1,0 +1,397 @@
+{
+  "realm": "fund-engine",
+  "displayName": "Fund Engine (local acceptance only)",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "registrationEmailAsUsername": false,
+  "rememberMe": true,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "tenant_administrator",
+        "description": "May administer research cases within the authenticated tenant"
+      },
+      {
+        "name": "researcher",
+        "description": "May research explicitly granted cases"
+      },
+      {
+        "name": "reviewer",
+        "description": "May review explicitly granted cases"
+      }
+    ],
+    "client": {
+      "fund-engine-research-worker": [
+        {
+          "name": "execute_research",
+          "description": "May execute queued research jobs"
+        }
+      ],
+      "fund-engine-acquisition-worker": [
+        {
+          "name": "execute_acquisition",
+          "description": "May execute queued acquisition jobs"
+        }
+      ],
+      "fund-engine-scheduler": [
+        {
+          "name": "schedule_research",
+          "description": "May enqueue and reconcile scheduled research work"
+        }
+      ]
+    }
+  },
+  "clients": [
+    {
+      "clientId": "research-api",
+      "name": "Research API",
+      "description": "Audience resource for Fund Engine API access tokens",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "bearerOnly": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": false
+    },
+    {
+      "clientId": "fund-engine-web",
+      "name": "Fund Engine Web",
+      "description": "Public browser client for local acceptance testing",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "bearerOnly": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "fullScopeAllowed": true,
+      "redirectUris": [
+        "http://localhost:8080/*",
+        "http://127.0.0.1:8080/*"
+      ],
+      "webOrigins": [
+        "http://localhost:8080",
+        "http://127.0.0.1:8080"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:8080/*##http://127.0.0.1:8080/*"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "offline_access",
+        "organization",
+        "microprofile-jwt"
+      ],
+      "protocolMappers": [
+        {
+          "name": "research-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "research-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "tenant-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "tenant_id",
+            "claim.name": "tenant_id",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "multivalued": "false",
+            "aggregate.attrs": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "fund-engine-research-worker",
+      "name": "Fund Engine Research Worker",
+      "description": "Local-only confidential service client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "clientAuthenticatorType": "client-secret",
+      "secret": "local-only-research-worker-secret",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "frontchannelLogout": false,
+      "fullScopeAllowed": false,
+      "attributes": {
+        "local.only": "true"
+      },
+      "defaultClientScopes": [
+        "roles"
+      ],
+      "protocolMappers": [
+        {
+          "name": "research-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "research-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "tenant-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "tenant_id",
+            "claim.name": "tenant_id",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false",
+            "introspection.token.claim": "true",
+            "multivalued": "false",
+            "aggregate.attrs": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "fund-engine-acquisition-worker",
+      "name": "Fund Engine Acquisition Worker",
+      "description": "Local-only confidential service client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "clientAuthenticatorType": "client-secret",
+      "secret": "local-only-acquisition-worker-secret",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "frontchannelLogout": false,
+      "fullScopeAllowed": false,
+      "attributes": {
+        "local.only": "true"
+      },
+      "defaultClientScopes": [
+        "roles"
+      ],
+      "protocolMappers": [
+        {
+          "name": "research-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "research-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "tenant-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "tenant_id",
+            "claim.name": "tenant_id",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false",
+            "introspection.token.claim": "true",
+            "multivalued": "false",
+            "aggregate.attrs": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "fund-engine-scheduler",
+      "name": "Fund Engine Scheduler",
+      "description": "Local-only confidential service client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "clientAuthenticatorType": "client-secret",
+      "secret": "local-only-scheduler-secret",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "frontchannelLogout": false,
+      "fullScopeAllowed": false,
+      "attributes": {
+        "local.only": "true"
+      },
+      "defaultClientScopes": [
+        "roles"
+      ],
+      "protocolMappers": [
+        {
+          "name": "research-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "research-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "tenant-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "tenant_id",
+            "claim.name": "tenant_id",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false",
+            "introspection.token.claim": "true",
+            "multivalued": "false",
+            "aggregate.attrs": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Local Acceptance",
+      "email": "alice@local.invalid",
+      "attributes": {
+        "tenant_id": [
+          "local-acceptance"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "alice-local-only-change-me",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "tenant_administrator",
+        "researcher",
+        "reviewer"
+      ]
+    },
+    {
+      "username": "bob",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Local Acceptance",
+      "email": "bob@local.invalid",
+      "attributes": {
+        "tenant_id": [
+          "local-acceptance"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "bob-local-only-change-me",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "researcher"
+      ]
+    },
+    {
+      "username": "service-account-fund-engine-research-worker",
+      "enabled": true,
+      "serviceAccountClientId": "fund-engine-research-worker",
+      "attributes": {
+        "tenant_id": [
+          "local-acceptance"
+        ]
+      },
+      "clientRoles": {
+        "fund-engine-research-worker": [
+          "execute_research"
+        ]
+      }
+    },
+    {
+      "username": "service-account-fund-engine-acquisition-worker",
+      "enabled": true,
+      "serviceAccountClientId": "fund-engine-acquisition-worker",
+      "attributes": {
+        "tenant_id": [
+          "local-acceptance"
+        ]
+      },
+      "clientRoles": {
+        "fund-engine-acquisition-worker": [
+          "execute_acquisition"
+        ]
+      }
+    },
+    {
+      "username": "service-account-fund-engine-scheduler",
+      "enabled": true,
+      "serviceAccountClientId": "fund-engine-scheduler",
+      "attributes": {
+        "tenant_id": [
+          "local-acceptance"
+        ]
+      },
+      "clientRoles": {
+        "fund-engine-scheduler": [
+          "schedule_research"
+        ]
+      }
+    }
+  ]
+}

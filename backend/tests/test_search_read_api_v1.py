@@ -494,7 +494,6 @@ def test_search_evidence_surfaces_after_human_review(cmd_client, cmd_session):
             "factor_role": "证据因素",
             "scope_boundary": "行业范围：AI 算力",
             "reason": "人工复核确认",
-            "reviewer": "tester",
         },
     )
     assert review.status_code == 201

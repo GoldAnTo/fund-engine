@@ -9,7 +9,127 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
-from app.models.ledger import Thesis
+
+
+def _seed_foreign_proposal(cmd_session):
+    import hashlib
+
+    from app.models.ledger import (
+        CaseDocumentVersion,
+        CaseTenantAdmission,
+        DocumentVersion,
+        ResearchCase,
+        SourceSpan,
+        SourceStatement,
+        Thesis,
+    )
+    from app.models.proposals import Proposal
+    from app.models.identity import CaseAccessGrant, ResearchUser
+
+    now = datetime.now(timezone.utc)
+    case = ResearchCase(
+        title="foreign review queue case",
+        industry_topic="tenant-isolation",
+        created_by="foreign-user",
+        created_at=now,
+    )
+    cmd_session.add(case)
+    cmd_session.flush()
+    thesis = Thesis(
+        research_case_id=case.id,
+        statement="foreign tenant factor",
+        created_by="foreign-user",
+        created_at=now,
+    )
+    document = DocumentVersion(
+        content_sha256=hashlib.sha256(b"foreign review source").hexdigest(),
+        source_url="https://foreign.example.test/private-source",
+        available_at=now,
+        acquired_at=now,
+        parser_version="test-v1",
+        parse_state="success",
+    )
+    cmd_session.add_all([thesis, document])
+    cmd_session.flush()
+    cmd_session.add_all(
+        [
+            CaseDocumentVersion(
+                research_case_id=case.id,
+                document_version_id=document.id,
+                linked_at=now,
+            ),
+            CaseTenantAdmission(
+                research_case_id=case.id,
+                tenant_id="other-team",
+                initial_document_version_id=document.id,
+                admitted_by="test-fixture",
+                admitted_at=now,
+            ),
+        ]
+    )
+    user_id = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        "test-research-principal:other-team:foreign-user",
+    )
+    cmd_session.add(
+        ResearchUser(
+            id=user_id,
+            issuer="https://test-identity.invalid/realms/research",
+            subject="foreign-user",
+            tenant_id="other-team",
+            display_name="foreign-user",
+            normalized_email=None,
+            active=True,
+            last_seen_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    cmd_session.flush()
+    cmd_session.add(
+        CaseAccessGrant(
+            research_case_id=case.id,
+            user_id=user_id,
+            role="owner",
+            granted_by_principal_id="test:fixture",
+            reason="foreign authorization fixture",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    span = SourceSpan(
+        document_version_id=document.id,
+        verbatim_text="FOREIGN PRIVATE VERBATIM",
+        locator={"page": 7},
+    )
+    cmd_session.add(span)
+    cmd_session.flush()
+    statement = SourceStatement(
+        source_span_id=span.id,
+        kind="fact",
+        normalized_text="foreign private statement",
+        created_at=now,
+    )
+    cmd_session.add(statement)
+    cmd_session.flush()
+    proposal = Proposal(
+        kind="evidence_link",
+        payload={
+            "source_statement_id": str(statement.id),
+            "role": "supports",
+            "reason": "foreign private reason",
+            "scope": {},
+        },
+        target_context={"thesis_id": str(thesis.id)},
+        proposed_by_type="ai",
+        proposed_by_ref="foreign-worker",
+        proposed_at=now,
+        research_case_id=case.id,
+        status="pending",
+    )
+    cmd_session.add(proposal)
+    cmd_session.commit()
+    return case, proposal
 
 
 def _error_code(response) -> str:
@@ -21,89 +141,86 @@ def _error_code(response) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_retired_case_creation_requires_auth_and_never_writes(cmd_client, cmd_session):
-    from sqlalchemy import func
-    from app.models.ledger import ResearchCase, Thesis, DocumentVersion
+def test_create_case_with_framing_and_initial_theses(cmd_client, cmd_session):
+    from app.models.ledger import ResearchCase, Thesis
 
-    payload = {"title": "旧无来源创建", "industry_topic": "ai_compute", "created_by": "u"}
-    anonymous = cmd_client.post(
-        "/api/v1/research-cases", json=payload, headers={"Authorization": ""}
+    response = cmd_client.post(
+        "/api/v1/research-cases",
+        json={
+            "title": "AI 算力产业链",
+            "industry_topic": "ai_compute",
+            "research_object": "从云厂商资本开支到芯片收入的传导",
+            "phenomenon": "AI 资本开支持续扩张但订单收入确认节奏分化",
+            "core_question": "截至 2026-06-30 算力资本开支能否通过已披露订单验证？",
+            "period_start": "2026-01-01",
+            "period_end": "2027-12-31",
+            "evidence_cutoff": "2026-06-30",
+            "initial_theses": [
+                {
+                    "statement": "云厂商资本开支形成持续算力需求",
+                    "title": "命题 1",
+                    "observation_start": "2026-01-01",
+                    "observation_end": "2027-12-31",
+                    "support_condition": "至少两家主要云厂商给出资本开支扩张指引",
+                    "falsification_condition": "主要云厂商下调资本开支",
+                    "next_verification_event": "核对 2026Q2 云厂商财报",
+                },
+                {
+                    "statement": "第二条人工命题",
+                },
+            ],
+        },
     )
-    assert anonymous.status_code == 401
-    authenticated = cmd_client.post("/api/v1/research-cases", json=payload)
-    assert authenticated.status_code == 409
-    assert _error_code(authenticated) == "conflict"
-    assert "/api/v1/event-research" in authenticated.json()["error"]["message"]
-    operation = cmd_client.get("/openapi.json").json()["paths"]["/api/v1/research-cases"]["post"]
-    assert operation["deprecated"] is True
-    assert "409" in operation["responses"]
-    assert "201" not in operation["responses"]
-    for model in (ResearchCase, Thesis, DocumentVersion):
-        assert cmd_session.scalar(select(func.count()).select_from(model)) == 0
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["theses"][0]["review_state"] == "confirmed"
+    assert body["theses"][1]["review_state"] == "confirmed"
+
+    case = cmd_session.scalar(select(ResearchCase))
+    assert case.core_question.startswith("截至 2026-06-30")
+    assert str(case.evidence_cutoff) == "2026-06-30"
+
+    theses = cmd_session.scalars(select(Thesis)).all()
+    assert len(theses) == 2
+    assert theses[0].falsification_condition == "主要云厂商下调资本开支"
+    assert theses[1].creator_type == "human"
 
 
-def test_event_creation_can_open_legacy_workbench_and_add_theses(cmd_client, cmd_session):
-    from tests.event_case_factory import create_event_case
-    from app.models.ledger import Thesis
-
-    case_id = create_event_case(cmd_client)
-    workbench = cmd_client.get(f"/api/research-cases/{case_id}/workbench")
-    assert workbench.status_code == 200, workbench.text
-    for creator, expected_state in (("human", "confirmed"), ("ai", "draft")):
-        response = cmd_client.post(
-            f"/api/v1/research-cases/{case_id}/theses",
-            json={
-                "statement": f"{creator} 资本开支形成持续算力需求",
-                "created_by": "analyst-test",
-                "creator_type": creator,
-                "title": "新增论点",
-                "observation_start": "2026-01-01",
-                "observation_end": "2027-12-31",
-                "support_condition": "主要云厂商给出扩张指引",
-                "falsification_condition": "主要云厂商下调资本开支",
-                "next_verification_event": "核对季度财报",
-            },
-        )
-        assert response.status_code == 201, response.text
-        assert response.json()["thesis"]["review_state"] == expected_state
-        thesis = cmd_session.get(Thesis, uuid.UUID(response.json()["thesis"]["id"]))
-        assert thesis.falsification_condition == "主要云厂商下调资本开支"
-
-
-def test_retired_case_creation_does_not_resume_legacy_period_validation(cmd_client):
+def test_create_case_rejects_inverted_period(cmd_client):
     response = cmd_client.post(
         "/api/v1/research-cases",
         json={
             "title": "x",
             "industry_topic": "t",
-            "created_by": "u",
             "period_start": "2027-01-01",
             "period_end": "2026-01-01",
         },
     )
-    assert response.status_code == 409
-    assert _error_code(response) == "conflict"
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
 
 
-def test_add_thesis_to_missing_case_is_404(cmd_client):
+def test_add_thesis_to_missing_case_is_422(cmd_client):
     response = cmd_client.post(
         "/api/v1/research-cases/00000000-0000-0000-0000-000000000000/theses",
-        json={"statement": "x", "created_by": "u"},
+        json={"statement": "x"},
     )
     assert response.status_code == 404
     assert _error_code(response) == "not_found"
 
 
 def test_add_thesis_rejects_inverted_observation_window(cmd_client, cmd_session):
-    from tests.event_case_factory import create_event_case
-
-    case_id = create_event_case(cmd_client)
+    created = cmd_client.post(
+        "/api/v1/research-cases",
+        json={"title": "c", "industry_topic": "t"},
+    )
+    case_id = created.json()["case_id"]
 
     response = cmd_client.post(
         f"/api/v1/research-cases/{case_id}/theses",
         json={
             "statement": "s",
-            "created_by": "u",
             "observation_start": "2027-01-01",
             "observation_end": "2026-01-01",
         },
@@ -136,6 +253,65 @@ def test_review_queue_empty_when_nothing_seeded(cmd_client, cmd_session):
     assert response.json()["items"] == []
 
 
+def test_review_queue_requires_authentication(cmd_client):
+    response = cmd_client.get(
+        "/api/v1/review-queue",
+        headers={"Authorization": ""},
+    )
+
+    assert response.status_code == 401
+
+
+def test_global_review_queue_filters_proposals_and_legacy_links_by_tenant(
+    cmd_client, cmd_seeded, monkeypatch
+):
+    foreign_case, foreign_proposal = _seed_foreign_proposal(cmd_seeded)
+
+    owner_response = cmd_client.get("/api/v1/review-queue")
+    assert owner_response.status_code == 200, owner_response.text
+    owner_payload = owner_response.text
+    assert str(foreign_proposal.id) not in owner_payload
+    assert "FOREIGN PRIVATE VERBATIM" not in owner_payload
+    assert "https://foreign.example.test/private-source" not in owner_payload
+
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS",
+        '{"other-token":{"tenant_id":"other-team","actor_id":"foreign-user"}}',
+    )
+    foreign_response = cmd_client.get(
+        "/api/v1/review-queue",
+        headers={"Authorization": "Bearer other-token"},
+    )
+    assert foreign_response.status_code == 200, foreign_response.text
+    foreign_items = foreign_response.json()["items"]
+    assert [item["link_id"] for item in foreign_items] == [str(foreign_proposal.id)]
+    assert foreign_items[0]["case_id"] == str(foreign_case.id)
+    assert foreign_items[0]["verbatim_text"] == "FOREIGN PRIVATE VERBATIM"
+
+
+def test_case_review_queue_hides_a_foreign_case(
+    cmd_client, cmd_seeded, monkeypatch
+):
+    from app.models.ledger import ResearchCase
+
+    case_id = cmd_seeded.scalar(select(ResearchCase.id))
+    assert case_id is not None
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS",
+        '{"other-token":{"tenant_id":"other-team","actor_id":"intruder"}}',
+    )
+
+    response = cmd_client.get(
+        "/api/v1/review-queue",
+        params={"case_id": str(case_id)},
+        headers={"Authorization": "Bearer other-token"},
+    )
+
+    assert response.status_code == 404
+    assert "document_source_url" not in response.text
+    assert "verbatim_text" not in response.text
+
+
 # ---------------------------------------------------------------------------
 # 关系级审核: POST /api/v1/evidence-links/{id}/reviews
 # ---------------------------------------------------------------------------
@@ -156,13 +332,13 @@ def test_confirmed_link_review_leaves_queue(cmd_client, cmd_seeded):
             "factor_role": "需求驱动因素",
             "scope_boundary": "仅适用于当前截止日与该分部口径",
             "reason": "原文披露与 AI 提议一致",
-            "reviewer": "reviewer-test",
         },
     )
     assert response.status_code == 201, response.text
     review = response.json()["review"]
     assert review["outcome"] == "confirmed"
     assert review["relation"] == "supports"
+    assert review["reviewer"] == "user:test-team"
 
     remaining = cmd_client.get("/api/v1/review-queue").json()["items"]
     assert len(remaining) == 14
@@ -185,7 +361,6 @@ def test_confirmed_link_review_transitions_link_to_reviewed(cmd_client, cmd_seed
             "factor_role": "x",
             "scope_boundary": "y",
             "reason": "z",
-            "reviewer": "reviewer-test",
         },
     )
     assert response.status_code == 201, response.text
@@ -193,22 +368,24 @@ def test_confirmed_link_review_transitions_link_to_reviewed(cmd_client, cmd_seed
     items = cmd_client.get("/api/v1/knowledge?review_state=reviewed").json()[
         "items"
     ]
-    reviewed_links = [l for i in items for l in i["links"]]
-    assert any(l["link_id"] == link_id for l in reviewed_links)
+    reviewed_links = [link for item in items for link in item["links"]]
+    assert any(link["link_id"] == link_id for link in reviewed_links)
     # The derived-state filter must apply before the scan cap (limit=1 used
     # to hide reviewed links behind newer machine_generated rows).
     limited = cmd_client.get(
         "/api/v1/knowledge?review_state=reviewed&limit=1"
     ).json()["items"]
     assert any(
-        l["link_id"] == link_id for i in limited for l in i["links"]
+        link["link_id"] == link_id
+        for item in limited
+        for link in item["links"]
     )
     # Append-only ledger: role stays the AI proposal; the human decision is
     # carried by the latest review on the link.
-    hit = next(l for l in reviewed_links if l["link_id"] == link_id)
+    hit = next(link for link in reviewed_links if link["link_id"] == link_id)
     assert hit["review_state"] == "reviewed"
     assert hit["latest_review_outcome"] == "confirmed"
-    assert hit["latest_reviewer"] == "reviewer-test"
+    assert hit["latest_reviewer"] == "user:test-team"
 
 
 def test_rejected_link_review_transitions_link_to_rejected(cmd_client, cmd_seeded):
@@ -221,7 +398,6 @@ def test_rejected_link_review_transitions_link_to_rejected(cmd_client, cmd_seede
             "factor_role": "x",
             "scope_boundary": "y",
             "reason": "z",
-            "reviewer": "reviewer-test",
         },
     )
     assert response.status_code == 201, response.text
@@ -230,13 +406,17 @@ def test_rejected_link_review_transitions_link_to_rejected(cmd_client, cmd_seede
         "items"
     ]
     assert any(
-        l["link_id"] == link_id for i in rejected for l in i["links"]
+        link["link_id"] == link_id
+        for item in rejected
+        for link in item["links"]
     )
     reviewed = cmd_client.get("/api/v1/knowledge?review_state=reviewed").json()[
         "items"
     ]
     assert all(
-        l["link_id"] != link_id for i in reviewed for l in i["links"]
+        link["link_id"] != link_id
+        for item in reviewed
+        for link in item["links"]
     )
 
 
@@ -249,7 +429,6 @@ def test_confirmed_review_requires_relation(cmd_client, cmd_seeded):
             "factor_role": "x",
             "scope_boundary": "y",
             "reason": "z",
-            "reviewer": "r",
         },
     )
     assert response.status_code == 422
@@ -266,7 +445,6 @@ def test_confirmed_review_rejects_evidence_gap_relation(cmd_client, cmd_seeded):
             "factor_role": "x",
             "scope_boundary": "y",
             "reason": "z",
-            "reviewer": "r",
         },
     )
     assert response.status_code == 422
@@ -281,7 +459,6 @@ def test_rejected_review_needs_no_relation(cmd_client, cmd_seeded):
             "factor_role": "不适用",
             "scope_boundary": "不适用",
             "reason": "AI 误把公司整体口径当作分部证据",
-            "reviewer": "r",
         },
     )
     assert response.status_code == 201, response.text
@@ -296,9 +473,30 @@ def test_review_missing_link_is_404(cmd_client, cmd_seeded):
             "factor_role": "x",
             "scope_boundary": "y",
             "reason": "z",
-            "reviewer": "r",
         },
     )
+    assert response.status_code == 404
+    assert _error_code(response) == "not_found"
+
+
+def test_link_review_rejects_a_different_tenant(cmd_client, cmd_seeded, monkeypatch):
+    link_id = _first_queue_item_id(cmd_client)
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS",
+        '{"other-token":{"tenant_id":"other-team","actor_id":"intruder"}}',
+    )
+
+    response = cmd_client.post(
+        f"/api/v1/evidence-links/{link_id}/reviews",
+        headers={"Authorization": "Bearer other-token"},
+        json={
+            "outcome": "rejected",
+            "factor_role": "x",
+            "scope_boundary": "y",
+            "reason": "z",
+        },
+    )
+
     assert response.status_code == 404
     assert _error_code(response) == "not_found"
 
@@ -319,7 +517,6 @@ def test_assessment_review_roundtrip(cmd_client, cmd_seeded):
         status="in_progress",
         ref_type="ai_assessment",
         ref_id=assessment.id,
-        research_case_id=cmd_seeded.scalar(select(Thesis.research_case_id)),
     )
     cmd_seeded.commit()
     response = cmd_client.post(
@@ -328,11 +525,11 @@ def test_assessment_review_roundtrip(cmd_client, cmd_seeded):
             "outcome": "confirmed",
             "conclusion": assessment.conclusion,
             "reason": "人工确认",
-            "reviewer": "reviewer-test",
         },
     )
     assert response.status_code == 201, response.text
     assert response.json()["outcome"] == "confirmed"
+    assert response.json()["reviewer"] == "user:test-team"
     cmd_seeded.refresh(task)
     assert task.status == "done"
 
@@ -353,7 +550,7 @@ def test_assessment_review_roundtrip(cmd_client, cmd_seeded):
 def test_assessment_review_missing_is_404(cmd_client, cmd_seeded):
     response = cmd_client.post(
         "/api/v1/assessments/00000000-0000-0000-0000-000000000000/reviews",
-        json={"outcome": "confirmed", "reason": "x", "reviewer": "r"},
+        json={"outcome": "confirmed", "reason": "x"},
     )
     assert response.status_code == 404
     assert _error_code(response) == "not_found"
@@ -400,7 +597,6 @@ def test_strict_single_metric_assessment_review_rejects_directional_conclusion(
             "outcome": "rejected",
             "conclusion": "contradicted",
             "reason": "attempted override",
-            "reviewer": "human:researcher",
         },
     )
 
@@ -434,7 +630,6 @@ def test_assessment_review_closes_open_task(cmd_client, cmd_seeded):
         status="open",
         ref_type="ai_assessment",
         ref_id=assessment.id,
-        research_case_id=cmd_seeded.scalar(select(Thesis.research_case_id)),
     )
     cmd_seeded.commit()
 
@@ -444,7 +639,6 @@ def test_assessment_review_closes_open_task(cmd_client, cmd_seeded):
             "outcome": "confirmed",
             "conclusion": assessment.conclusion,
             "reason": "人工确认",
-            "reviewer": "reviewer-test",
         },
     )
     assert response.status_code == 201, response.text
@@ -505,7 +699,6 @@ def test_assessment_review_completes_final_run_gate(cmd_client, cmd_seeded):
             "outcome": "confirmed",
             "conclusion": assessment.conclusion,
             "reason": "人工确认资料不足",
-            "reviewer": "human:researcher",
         },
     )
 
@@ -585,7 +778,6 @@ def test_assessment_review_keeps_run_waiting_when_other_review_remains(cmd_clien
             "outcome": "confirmed",
             "conclusion": first_assessment.conclusion,
             "reason": "只确认第一项评估",
-            "reviewer": "human:researcher",
         },
     )
 
