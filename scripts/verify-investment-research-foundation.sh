@@ -31,16 +31,5 @@ fi
   "$PYTHON_BIN" -m compileall -q app tests
 )
 
-(
-  cd "$REPO_ROOT/frontend"
-  npm test -- \
-    InvestmentResearchShell.test.tsx \
-    NewResearchPage.test.tsx \
-    InvestmentResearchApi.test.ts \
-    productAccessibility.test.ts \
-    researchFoundation.test.ts
-  npm run typecheck
-  npm run build
-)
 
 printf 'Investment research foundation gate passed.\n'

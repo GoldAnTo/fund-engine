@@ -209,14 +209,12 @@ validate_one_click_runtime_profile() {
   validate_memory_limit ONE_CLICK_RESEARCH_WORKER_MEMORY_LIMIT 768m
   validate_memory_limit ONE_CLICK_ACQUISITION_WORKER_MEMORY_LIMIT 768m
   validate_memory_limit ONE_CLICK_COMPANY_RESEARCH_WORKER_MEMORY_LIMIT 1280m
-  validate_memory_limit ONE_CLICK_FRONTEND_MEMORY_LIMIT 256m
 
   validate_cpu_limit ONE_CLICK_POSTGRES_CPU_LIMIT 1.5
   validate_cpu_limit ONE_CLICK_API_CPU_LIMIT 1.5
   validate_cpu_limit ONE_CLICK_RESEARCH_WORKER_CPU_LIMIT 1.0
   validate_cpu_limit ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT 1.0
   validate_cpu_limit ONE_CLICK_COMPANY_RESEARCH_WORKER_CPU_LIMIT 1.5
-  validate_cpu_limit ONE_CLICK_FRONTEND_CPU_LIMIT 0.5
 }
 
 prevalidate_one_click_profile() {
@@ -528,7 +526,7 @@ init_runtime_environment() {
 
 legacy_service_is_allowed() {
   case "$1" in
-    api|frontend|research-worker|acquisition-worker|scheduler) return 0 ;;
+    api|research-worker|acquisition-worker|scheduler) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -562,6 +560,8 @@ normalize_legacy_stop_state() {
         rm -f "$temporary_state_file"
         exit 1
       }
+      # Retired UI containers must never be restarted by legacy rollback.
+      [[ "$service" != frontend ]] || continue
       legacy_service_is_allowed "$service" || {
         rm -f "$temporary_state_file"
         exit 1
@@ -589,7 +589,7 @@ prepare_legacy_stop_state() {
   [[ -e "$LEGACY_STOPPED_STATE_FILE" ]] && return 0
   begin_legacy_stop_state
 
-  for service in api frontend research-worker acquisition-worker scheduler; do
+  for service in api research-worker acquisition-worker scheduler; do
     while IFS= read -r container_id; do
       [[ -n "$container_id" ]] || continue
       full_container_id="$(docker inspect --format '{{.Id}}' "$container_id")" || return 1
@@ -719,7 +719,6 @@ start_one_click_runtime() (
   validate_docker_memory
   upgrade_legacy_runtime_defaults
   compose build migrate
-  compose build frontend
   project_name="$(compose_project_name)"
   postgres_volume="$(postgres_volume_name)"
   if volume_exists "$postgres_volume"; then
@@ -735,7 +734,7 @@ start_one_click_runtime() (
   # Stop every writer from an earlier deployment of this same Compose project
   # before Alembic changes the event hash contract. The new schema deliberately
   # has no hash_version default, so an old writer can never be silently relabeled.
-  compose stop api research-worker acquisition-worker company-research-worker frontend \
+  compose stop api research-worker acquisition-worker company-research-worker \
     || die "failed to stop existing one-click application services"
   compose up -d --no-build --scale "acquisition-worker=${acquisition_replicas}" \
     || die "one-click startup failed"

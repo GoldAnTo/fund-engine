@@ -48,5 +48,4 @@ pythonpath = ["."]
 markers = [
     "pg_only: requires a live PostgreSQL database (set TEST_DATABASE_URL)",
     "neo4j_only: requires a live Neo4j (set NEO4J_URL)",
-    "live_company_research: requires the repository backend venv, frontend dependencies, and an installed Playwright browser",
 ]

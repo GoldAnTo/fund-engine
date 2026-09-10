@@ -22,8 +22,8 @@ readonly STABILITY_HELPER="$REPO_ROOT/scripts/one_click_stability.py"
 readonly LEGACY_PROJECT="fund-engine-event"
 readonly LEGACY_DATABASE_SERVICE="postgres"
 readonly LEGACY_DATABASE_CONTAINER="fund-engine-event-postgres-1"
-readonly API_URL="${ONE_CLICK_API_URL:-http://127.0.0.1:${ONE_CLICK_API_PORT:-8000}}" FRONTEND_URL="${ONE_CLICK_FRONTEND_URL:-http://127.0.0.1:${ONE_CLICK_FRONTEND_PORT:-8080}}"
-readonly MONITORED_SERVICES=(postgres api research-worker acquisition-worker company-research-worker frontend)
+readonly API_URL="${ONE_CLICK_API_URL:-http://127.0.0.1:${ONE_CLICK_API_PORT:-8000}}"
+readonly MONITORED_SERVICES=(postgres api research-worker acquisition-worker company-research-worker)
 TMPDIR_EXACT='' SETUP_COMPLETE=false BASELINE_SNAPSHOT='' BASELINE_LEGACY_ID='' ACQUISITION_REPLICAS='' CONNECTION_CAP=''
 PREEXISTING_TEMP_PATHS=('')
 
@@ -127,13 +127,11 @@ capture_snapshot() {
     ids[${#ids[@]}]="$id"
   done <<< "$ids_output"
   [[ ${#ids[@]} -gt 0 ]] || die 'one-click compose project has no containers'
-  if ! docker inspect "${ids[@]}" | python3 "$STABILITY_HELPER" snapshot --expect postgres=1 --expect api=1 --expect research-worker=1 --expect "acquisition-worker=${ACQUISITION_REPLICAS}" --expect company-research-worker=1 --expect frontend=1 > "$destination"; then die 'container snapshot is invalid'; fi
+  if ! docker inspect "${ids[@]}" | python3 "$STABILITY_HELPER" snapshot --expect postgres=1 --expect api=1 --expect research-worker=1 --expect "acquisition-worker=${ACQUISITION_REPLICAS}" --expect company-research-worker=1 > "$destination"; then die 'container snapshot is invalid'; fi
 }
 http_checks() {
   local bearer_token="$1" product_objects
   curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "$API_URL/health" >/dev/null || die 'API health endpoint check failed'
-  curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "$FRONTEND_URL/health" >/dev/null || die 'frontend health endpoint check failed'
-  curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "$FRONTEND_URL/research" | grep -q '投资研究' || die 'frontend research route check failed'
   product_objects="$(printf 'Authorization: Bearer %s\n' "$bearer_token" | curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --header @- "$API_URL/api/underwriting/v1/product/objects?query=CATL")" || die 'product foundation API check failed'
   printf '%s' "$product_objects" | python3 -c 'import json,sys; value=json.load(sys.stdin); items=value.get("items") if isinstance(value,dict) else None; keys={item.get("external_key") for item in items if isinstance(item,dict)} if isinstance(items,list) else set(); required={"CN:300750:COMPANY","SZSE:300750"}; required.issubset(keys) or (_ for _ in ()).throw(SystemExit("CATL object foundation is incomplete"))'
 }
