@@ -13,8 +13,6 @@ statement count (split into rule-based and LLM), and success/failure status.
 """
 from __future__ import annotations
 
-from app.ai.usage import capture_usage
-
 import json
 import uuid
 from collections.abc import Callable
@@ -23,11 +21,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai.client import (
-    LLMClient,
-    LLMMalformedResponseError,
-    LLM_MALFORMED_RESPONSE_MESSAGE,
-)
+from app.ai.client import LLMClient
 from app.ai.error_safety import AI_OPERATION_ERROR_MESSAGE
 from app.ai.prompts import EXTRACT_PROMPT_VERSION, EXTRACT_SYSTEM
 from app.ai.runs import record_run
@@ -49,7 +43,6 @@ class StatementExtractor:
         self._client = client
         self._table_extractor = FinancialTableExtractor()
 
-    @capture_usage()
     def extract(
         self,
         document_version_id: uuid.UUID,
@@ -159,12 +152,7 @@ class StatementExtractor:
                     pre_commit_guard(session)
                 session.commit()
                 result = self._client.chat_json(messages, schema_hint="extract")
-                # Only an explicit array can establish an empty extraction.
-                # Treating a missing/wrong-shaped field as [] would create a
-                # success watermark and permanently suppress automatic retry.
-                if not isinstance(result.get("statements"), list):
-                    raise LLMMalformedResponseError(LLM_MALFORMED_RESPONSE_MESSAGE)
-                statements_data = result["statements"]
+                statements_data = result.get("statements", [])
 
             # Every output path, including deterministic table-only
             # extraction, must claim the caller's current output slot before
@@ -192,8 +180,19 @@ class StatementExtractor:
                 quote = stmt_data.get("quote")
                 quote_start = stmt_data.get("quote_start")
                 quote_end = stmt_data.get("quote_end")
-                if not isinstance(quote, str) or not isinstance(quote_start, int) or not isinstance(quote_end, int):
+                offsets = _verified_quote_offsets(
+                    source_text=next(
+                        span.verbatim_text
+                        for span in llm_spans
+                        if span.id == source_span_id
+                    ),
+                    quote=quote,
+                    quote_start=quote_start,
+                    quote_end=quote_end,
+                )
+                if offsets is None:
                     continue
+                quote_start, quote_end = offsets
                 try:
                     if pre_commit_guard is not None:
                         pre_commit_guard(session)
@@ -284,6 +283,35 @@ class StatementExtractor:
                     session.rollback()
                 raise
             raise
+
+
+def _verified_quote_offsets(
+    *,
+    source_text: str,
+    quote: object,
+    quote_start: object,
+    quote_end: object,
+) -> tuple[int, int] | None:
+    """Return a source-verified quote location without guessing ambiguity.
+
+    Some OpenAI-compatible providers preserve the verbatim quote but emit
+    byte- rather than Python-character offsets.  Trust a correct offset as-is;
+    otherwise derive it only if the exact quote occurs once in this span.
+    """
+    if not isinstance(quote, str) or not quote:
+        return None
+    if (
+        isinstance(quote_start, int)
+        and isinstance(quote_end, int)
+        and quote_start >= 0
+        and quote_end > quote_start
+        and source_text[quote_start:quote_end] == quote
+    ):
+        return quote_start, quote_end
+    derived_start = source_text.find(quote)
+    if derived_start < 0 or source_text.find(quote, derived_start + 1) >= 0:
+        return None
+    return derived_start, derived_start + len(quote)
 
 
 def _parse_period(value):

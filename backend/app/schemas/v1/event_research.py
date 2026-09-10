@@ -295,7 +295,6 @@ class EventReviewQueueItemDTO(V1Model):
     source_status: SourceStatus
     source_status_reason: str
     can_accept: bool
-    display_withheld: bool = False
     proposal_reason: str
     position: int | None
 

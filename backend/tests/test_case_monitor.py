@@ -199,29 +199,3 @@ def test_run_events_are_ordered_and_append_only(session) -> None:
             .where(type(retrieved).id == retrieved.id)
             .values(message="changed")
         )
-
-@pytest.mark.parametrize("frequency", ["daily:20:00", "daily", "unknown"])
-def test_monitor_rejects_frequency_that_scheduler_cannot_execute(session, frequency):
-    case, factor = _case_with_confirmed_factor(session)
-    with pytest.raises(ValueError, match="unsupported monitor frequency"):
-        CaseMonitorService(session).save(case.id, actor="tester",
-            config=_monitor_config(factor.id, frequency=frequency))
-    assert session.scalar(select(CaseMonitorVersion).where(
-        CaseMonitorVersion.research_case_id == case.id)) is None
-
-
-def test_legacy_invalid_frequency_can_be_paused_but_not_reactivated(session):
-    case, factor = _case_with_confirmed_factor(session)
-    legacy = CaseMonitorVersion(research_case_id=case.id, version=1, status='active',
-        frequency='weekly_monday', factor_ids=[str(factor.id)],
-        allowed_source_types=['company_disclosure'], next_verification_event='财报',
-        budget=20, changed_by='legacy', change_reason='历史配置', created_at=datetime.now(timezone.utc))
-    session.add(legacy)
-    session.flush()
-    service = CaseMonitorService(session)
-    paused = service.set_status(case.id, actor='human', status='paused', reason='停用无效计划')
-    assert paused.version == 2
-    with pytest.raises(ValueError, match='unsupported monitor frequency'):
-        service.set_status(case.id, actor='human', status='active', reason='尝试恢复')
-    assert session.scalar(select(CaseMonitorVersion.version).where(
-        CaseMonitorVersion.research_case_id == case.id).order_by(CaseMonitorVersion.version.desc()).limit(1)) == 2

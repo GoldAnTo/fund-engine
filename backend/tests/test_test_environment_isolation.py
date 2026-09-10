@@ -19,8 +19,11 @@ def test_conftest_forces_offline_provider_environment_before_collection() -> Non
         "LLM_SEED",
         "LLM_TIMEOUT_SECONDS",
         "LLM_MAX_ATTEMPTS",
+        "LLM_MAX_OUTPUT_TOKENS",
         "GILDATA_MAX_ATTEMPTS",
         "GILDATA_TOKEN",
+        "GILDATA_ALLOW_AI_PROCESSING",
+        "GILDATA_ALLOW_DISPLAY",
     )
     test_database_url = "postgresql://test-isolation.example.invalid/test"
     neo4j_url = "bolt://test-isolation.example.invalid:7687"
@@ -35,8 +38,11 @@ def test_conftest_forces_offline_provider_environment_before_collection() -> Non
             "LLM_SEED": "999",
             "LLM_TIMEOUT_SECONDS": "123",
             "LLM_MAX_ATTEMPTS": "9",
+            "LLM_MAX_OUTPUT_TOKENS": "999",
             "GILDATA_MAX_ATTEMPTS": "9",
             "GILDATA_TOKEN": "sentinel-gildata-token",
+            "GILDATA_ALLOW_AI_PROCESSING": "true",
+            "GILDATA_ALLOW_DISPLAY": "true",
             "TEST_DATABASE_URL": test_database_url,
             "NEO4J_URL": neo4j_url,
         }

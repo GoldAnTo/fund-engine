@@ -132,13 +132,7 @@ class AutoResearchRepository:
             self._append_job_event(job, status="queued", step="recovered", message=job.error)
         return len(jobs)
 
-    def wait_for_sources(
-        self,
-        run: ResearchRun,
-        job: Job,
-        *,
-        expected_claim_token: str | None = None,
-    ) -> None:
+    def wait_for_sources(self, run: ResearchRun, job: Job) -> None:
         """Park a claimed automatic run until its governed source jobs finish."""
         current_run, current_job = self._lock_terminal_rows(
             run_id=run.id,
@@ -146,14 +140,6 @@ class AutoResearchRepository:
             job_id=job.id,
         )
         if current_run is None or current_job is None:
-            self._session.rollback()
-            return
-        if (
-            expected_claim_token is not None
-            and current_job.claim_token != expected_claim_token
-        ) or current_job.status in {"succeeded", "failed"}:
-            # A reclaimed or finished job belongs to the newer worker. Drop
-            # the old worker's staged Run/source writes as well as its park.
             self._session.rollback()
             return
         if (

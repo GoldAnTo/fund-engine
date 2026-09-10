@@ -29,17 +29,6 @@ from tests.legacy_market_conflicts import (
 )
 
 
-def _expected_head() -> str:
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
-    backend = Path(__file__).parents[1]
-    config = Config(str(backend / "alembic.ini"))
-    config.set_main_option("script_location", str(backend / "alembic"))
-    head = ScriptDirectory.from_config(config).get_current_head()
-    assert head is not None
-    return head
-
-
 WAVE2_TABLES = {
     "uw_source_manifest_versions",
     "uw_metric_definition_versions",
@@ -195,7 +184,7 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             connection.execute(
                 sa.text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == _expected_head()
+            == "0070"
         )
         event_columns = {
             column["name"]: column
@@ -1353,7 +1342,7 @@ def test_0070_repairs_a_stamped_0069_database_without_event_triggers(
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == _expected_head()
+        ).scalar_one() == "0070"
         for statement in (
             "UPDATE uw_company_research_events SET event_type = 'changed' "
             f"WHERE id = '{event_id}'",
@@ -1468,7 +1457,7 @@ def test_0070_authenticates_populated_stamped_0069_histories(
         with engine.connect() as connection:
             assert connection.scalar(
                 sa.text("SELECT version_num FROM alembic_version")
-            ) == _expected_head()
+            ) == "0070"
             assert tuple(
                 connection.scalars(
                     sa.text(
@@ -2100,7 +2089,7 @@ with SessionLocal() as session:
 
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == _expected_head()
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0070"
         assert {
             "research_preparations",
             "research_preparation_artifacts",
@@ -2864,7 +2853,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == _expected_head()
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0070"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -2928,7 +2917,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == _expected_head()
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0070"
         assert {
             row[0]
             for row in connection.execute(
@@ -3134,7 +3123,7 @@ def test_unmanaged_adoption_installs_the_0070_company_worker_index(
     with engine.connect() as connection:
         assert connection.scalar(
             sa.text("SELECT version_num FROM alembic_version")
-        ) == _expected_head()
+        ) == "0070"
         index = {
             row["name"]: row
             for row in sa.inspect(connection).get_indexes("jobs")
@@ -3383,7 +3372,7 @@ def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> 
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == _expected_head()
+        ).scalar_one() == "0070"
         assert connection.execute(
             sa.text(
                 "SELECT research_source_type FROM source_contracts WHERE id = :id"
@@ -3473,21 +3462,3 @@ with SessionLocal() as session:
         cwd=backend, env=environment, text=True, capture_output=True, check=False,
     )
     assert verified.returncode == 0, verified.stderr + verified.stdout
-
-
-def test_unmanaged_adoption_installs_ai_scope_index(tmp_path):
-    import app.models  # noqa: F401
-    from app.db_migrations import upgrade_database_to_head
-    from app.models.ledger import Base
-    url = f"sqlite:///{tmp_path / 'unmanaged-ai-scope.db'}"
-    engine = sa.create_engine(url)
-    try:
-        Base.metadata.create_all(engine)
-        with engine.begin() as connection:
-            connection.exec_driver_sql('DROP INDEX ix_ai_runs_research_scope')
-        upgrade_database_to_head(url)
-        with engine.connect() as connection:
-            indexes = connection.exec_driver_sql("PRAGMA index_list('ai_runs')").all()
-            assert any(row[1] == 'ix_ai_runs_research_scope' for row in indexes)
-    finally:
-        engine.dispose()

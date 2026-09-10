@@ -186,6 +186,54 @@ def classify_source(
     )
 
 
+def classify_document_source(
+    *,
+    source_url: str | None,
+    parser_version: str,
+    content_verified: bool,
+    contract: object | None,
+) -> SourceAdmission:
+    """Classify a frozen document without weakening generic URL admission.
+
+    A Gildata provider URI is eligible only when its immutable source contract
+    proves the exact provider and downstream-use boundary.  Every other source
+    continues through the strict HTTP(S) URL classifier.
+    """
+    if _is_authorised_gildata_reference(
+        source_url=source_url,
+        parser_version=parser_version,
+        content_verified=content_verified,
+        contract=contract,
+    ):
+        admission = SourceAdmission(
+            SourceStatus.ACCESSIBLE,
+            "授权 Gildata 资料已冻结并可用于正式证据。",
+            True,
+        )
+    else:
+        admission = classify_source(source_url, parser_version, content_verified)
+    return apply_source_contract(admission, contract)
+
+
+def _is_authorised_gildata_reference(
+    *,
+    source_url: str | None,
+    parser_version: str,
+    content_verified: bool,
+    contract: object | None,
+) -> bool:
+    if not source_url or not content_verified or not parser_version.startswith("gildata-mcp-"):
+        return False
+    parsed = urlparse(source_url)
+    if parsed.scheme.lower() != "gildata" or not parsed.netloc or not parsed.path.strip("/"):
+        return False
+    return (
+        getattr(contract, "source_type", None) == "licensed_provider"
+        and getattr(contract, "research_source_type", None) == "licensed_provider"
+        and getattr(contract, "provider_or_tenant", None) == "gildata"
+    )
+
+
 def _has_browser_ambiguous_characters(source_url: str) -> bool:
     """Reject raw characters whose URL interpretation differs between parsers."""
     return any(

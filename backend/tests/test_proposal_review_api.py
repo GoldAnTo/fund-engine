@@ -29,6 +29,7 @@ from app.models.ledger import (
 )
 from app.models.proposals import Proposal, ProposalReviewDecision
 from app.models.operational import ResearchRun, ResearchTask
+from app.models.source_governance import SourceContract
 from app.models.research_monitor import ResearchRunEvent
 from app.models.versions import EvidenceLinkVersion
 from app.repositories.operational import TaskRepository
@@ -36,13 +37,22 @@ from app.services.auto_research import AutoResearchService
 
 
 def _seed_proposal(cmd_session, *, research_case_id=None) -> Proposal:
-    proposal = _seed_event_evidence_proposal(
-        cmd_session, source_url=f"https://www.cninfo.com.cn/new/disclosure/detail?announcementId={uuid.uuid4()}"
+    from app.repositories.proposals import ProposalRepository
+
+    repo = ProposalRepository(cmd_session)
+    return repo.add_proposal(
+        kind="evidence_link",
+        payload={
+            "source_statement_id": str(uuid.uuid4()),
+            "role": "supports",
+            "reason": "orders rose",
+            "scope": {"segment": "DC"},
+        },
+        target_context={"thesis_id": str(uuid.uuid4()), "entity_type": "evidence_link"},
+        proposed_by_type="ai",
+        proposed_by_ref="mock",
+        research_case_id=research_case_id,
     )
-    assert research_case_id is None, "use an explicitly scoped fixture for another Case"
-    cmd_session.add(proposal)
-    cmd_session.flush()
-    return proposal
 
 
 def _seed_waiting_run_with_proposals(cmd_session, *, proposal_count: int):
@@ -63,8 +73,6 @@ def _seed_waiting_run_with_proposals(cmd_session, *, proposal_count: int):
         created_at=now,
     )
     cmd_session.add(thesis)
-    from tests.tenant_admission import admit_case
-    admit_case(cmd_session, case.id)
     run = ResearchRun(
         research_case_id=case.id,
         status="waiting_for_review",
@@ -125,7 +133,9 @@ def _seed_waiting_run_with_proposals(cmd_session, *, proposal_count: int):
     return run, proposals
 
 
-def _seed_event_evidence_proposal(cmd_session, *, source_url: str) -> Proposal:
+def _seed_event_evidence_proposal(
+    cmd_session, *, source_url: str, authorised_gildata: bool = False
+) -> Proposal:
     now = datetime.now(timezone.utc)
     case = ResearchCase(
         title="event evidence admission",
@@ -147,11 +157,34 @@ def _seed_event_evidence_proposal(cmd_session, *, source_url: str) -> Proposal:
         title="event source",
         available_at=now,
         acquired_at=now,
-        parser_version="html-v1",
+        parser_version="gildata-mcp-1" if authorised_gildata else "html-v1",
         parse_state="success",
     )
     cmd_session.add_all([thesis, document])
     cmd_session.flush()
+    if authorised_gildata:
+        cmd_session.add(
+            SourceContract(
+                document_version_id=document.id,
+                source_type="licensed_provider",
+                research_source_type="licensed_provider",
+                provider_or_tenant="gildata",
+                allow_ai_processing=True,
+                allow_display=True,
+                allow_export=False,
+                allow_api=False,
+                region="CN",
+                effective_from=None,
+                effective_until=None,
+                retention_policy="case_retained",
+                deletion_policy="contract_controlled",
+                downstream_restrictions=[],
+                contract_version=None,
+                intake_metadata={},
+                declared_by="tester",
+                created_at=now,
+            )
+        )
     cmd_session.add(
         CaseDocumentVersion(
             research_case_id=case.id,
@@ -174,8 +207,6 @@ def _seed_event_evidence_proposal(cmd_session, *, source_url: str) -> Proposal:
     )
     cmd_session.add(statement)
     cmd_session.flush()
-    from tests.tenant_admission import admit_case
-    admit_case(cmd_session, case.id, document_version_id=document.id)
     return Proposal(
         kind="evidence_link",
         payload={
@@ -242,7 +273,6 @@ def test_invalid_event_source_decision_is_rejected_without_publication(
         status="open",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     cmd_session.commit()
 
@@ -296,6 +326,31 @@ def test_valid_event_source_can_be_confirmed_and_published(cmd_client, cmd_sessi
         proposal.target_context["thesis_id"]
     )
     assert cmd_session.scalars(select(EvidenceLinkVersion)).one().proposal_id == proposal.id
+
+
+def test_confirmed_authorised_gildata_proposal_publishes_formal_evidence(
+    cmd_client, cmd_session
+):
+    proposal = _seed_event_evidence_proposal(
+        cmd_session,
+        source_url="gildata://research_report/content-sha256",
+        authorised_gildata=True,
+    )
+    cmd_session.add(proposal)
+    cmd_session.commit()
+
+    response = cmd_client.post(
+        f"/api/v1/review-proposals/{proposal.id}/decisions",
+        json={
+            "outcome": "confirmed",
+            "reason": "licence permits use",
+            "reviewer_id": "human",
+            "expected_version": proposal.version,
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["published_entity_id"]
 
 
 def test_event_evidence_publish_takes_the_case_lifecycle_lock(
@@ -397,7 +452,6 @@ def test_modified_event_proposal_rejects_invalid_replacement_source(
         status="open",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     cmd_session.commit()
 
@@ -589,7 +643,6 @@ def test_decision_closes_review_proposal_task(cmd_client, cmd_session):
         status="open",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     in_progress_other = task_repo.add_task(
         title="Review other proposal",
@@ -597,7 +650,6 @@ def test_decision_closes_review_proposal_task(cmd_client, cmd_session):
         status="in_progress",
         ref_type="proposal",
         ref_id=other.id,
-        research_case_id=other.research_case_id,
     )
     cmd_session.commit()
 
@@ -795,7 +847,6 @@ def test_confirmed_decision_closes_in_progress_review_task(
         status="in_progress",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     cmd_session.commit()
 

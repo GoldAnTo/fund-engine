@@ -356,10 +356,6 @@ class ResearchPreparationGenerator:
     def __init__(self, client: LLMClient | None = None) -> None:
         self._client = client
 
-    @property
-    def model_version(self) -> str:
-        return self._client.model_version if self._client is not None else "uninitialized"
-
     def parse_claims(self, input: PreparationInput, session: Session) -> dict[str, object]:
         drafts = self.validate_claim_drafts(input)
         payload = self.persist_claim_drafts(

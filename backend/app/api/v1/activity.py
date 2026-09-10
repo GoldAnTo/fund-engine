@@ -11,13 +11,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import select
-from app.api.v1.tenant_context import require_research_tenant
-from app.errors import NotFoundError, ValidationFailedError
-from app.services.case_tenant_access import CaseTenantAccess
-from app.models.operational import TaskItem
-from app.repositories.operational import task_tenant_predicate
-from app.queries.activity import resource_case_predicate
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -56,16 +50,12 @@ def get_activity(
     case_id: uuid.UUID | None = None,
     actor_id: str | None = None,
     event_type: str | None = None,
-    after: uuid.UUID | None = Query(default=None, description="opaque cursor = last event_id"),
+    after: str | None = Query(default=None, description="opaque cursor = last event_id"),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
-    after_id = after
-    if case_id is not None:
-        CaseTenantAccess(db).require_case(case_id, tenant_id)
+    after_id = uuid.UUID(after) if after else None
     rows, has_more = ActivityQueries(db).activity(
-        tenant_id=tenant_id,
         case_id=case_id,
         actor_id=actor_id,
         event_type=event_type,
@@ -80,16 +70,12 @@ def get_activity(
 @router.get("/evidence-changes", response_model=ActivityResponse)
 def get_evidence_changes(
     case_id: uuid.UUID | None = None,
-    after: uuid.UUID | None = Query(default=None, description="opaque cursor = last event_id"),
+    after: str | None = Query(default=None, description="opaque cursor = last event_id"),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
-    after_id = after
-    if case_id is not None:
-        CaseTenantAccess(db).require_case(case_id, tenant_id)
+    after_id = uuid.UUID(after) if after else None
     rows, has_more = ActivityQueries(db).evidence_changes(
-        tenant_id=tenant_id,
         case_id=case_id, after_id=after_id, limit=limit
     )
     items = [_to_dto(e) for e in rows]
@@ -101,24 +87,7 @@ def get_evidence_changes(
 def create_task(
     payload: TaskCreateRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
-    if not payload.research_case_id:
-        raise ValidationFailedError("research_case_id is required")
-    try:
-        case_id = uuid.UUID(payload.research_case_id)
-        ref_id = uuid.UUID(payload.ref_id) if payload.ref_id else None
-    except ValueError as exc:
-        raise ValidationFailedError("invalid resource UUID") from exc
-    CaseTenantAccess(db).require_case(case_id, tenant_id)
-    if bool(payload.ref_type) != (ref_id is not None):
-        raise ValidationFailedError("ref_type and ref_id must be supplied together")
-    if ref_id is not None:
-        predicate = resource_case_predicate(payload.ref_type, str(ref_id), case_id)
-        if predicate is None:
-            raise ValidationFailedError("unsupported task reference type")
-        if not db.scalar(select(predicate)):
-            raise NotFoundError("task reference not found")
     repo = TaskRepository(db)
     task = repo.add_task(
         title=payload.title,
@@ -126,8 +95,10 @@ def create_task(
         task_type=payload.task_type,
         priority=payload.priority,
         ref_type=payload.ref_type,
-        ref_id=ref_id,
-        research_case_id=case_id,
+        ref_id=uuid.UUID(payload.ref_id) if payload.ref_id else None,
+        research_case_id=(
+            uuid.UUID(payload.research_case_id) if payload.research_case_id else None
+        ),
         assignee=payload.assignee,
     )
     db.commit()
@@ -139,11 +110,11 @@ def update_task(
     task_id: uuid.UUID,
     payload: TaskUpdateRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
     repo = TaskRepository(db)
-    task = db.scalar(select(TaskItem).where(TaskItem.id == task_id, task_tenant_predicate(tenant_id)))
+    task = repo.get_task(task_id)
     if task is None:
+        from app.errors import NotFoundError
         raise NotFoundError(f"task {task_id} not found")
     repo.set_status(task, status=payload.status, assignee=payload.assignee)
     db.commit()
@@ -171,30 +142,17 @@ def get_tasks(
     case_id: uuid.UUID | None = None,
     status: str | None = None,
     assignee: str | None = None,
-    after: uuid.UUID | None = Query(default=None, description="opaque cursor = last task id"),
+    after: str | None = Query(default=None, description="opaque cursor = last task id"),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
     repo = TaskRepository(db)
-    after_id = after
-    if case_id is not None:
-        CaseTenantAccess(db).require_case(case_id, tenant_id)
+    after_id = uuid.UUID(after) if after else None
     after_created = None
     if after_id is not None:
-        query = select(TaskItem).where(TaskItem.id == after_id, task_tenant_predicate(tenant_id))
-        if case_id is not None:
-            query = query.where(TaskItem.research_case_id == case_id)
-        if status is not None:
-            query = query.where(TaskItem.status == status)
-        if assignee is not None:
-            query = query.where(TaskItem.assignee == assignee)
-        task = db.scalar(query)
-        if task is None:
-            raise NotFoundError("task cursor not found")
-        after_created = task.created_at
+        task = repo.get_task(after_id)
+        after_created = task.created_at if task else None
     rows = repo.tasks_page(
-        tenant_id=tenant_id,
         case_id=case_id,
         status=status,
         assignee=assignee,

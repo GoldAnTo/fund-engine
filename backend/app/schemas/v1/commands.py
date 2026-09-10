@@ -246,8 +246,6 @@ class AtomicClaimCandidateDTO(V1Model):
 
 class AtomicClaimQueueResponse(V1Model):
     items: list[AtomicClaimCandidateDTO]
-    has_more: bool = False
-    next_cursor: str | None = None
 
 
 class AtomicClaimReviewRequest(V1Model):
@@ -380,6 +378,7 @@ class IngestResponse(V1Model):
     """
 
     research_reports: int
+    research_reports_skipped_degenerate: int
     announcements: int
     news: int
     macro_series: int = 0

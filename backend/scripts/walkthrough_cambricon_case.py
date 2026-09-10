@@ -48,6 +48,7 @@ from app.scripts.walkthrough_support import (  # noqa: E402
     assessment_review_payload,
     atomic_claim_review_payload,
     classify_historical_case_read,
+    configured_gildata_evidence_rights,
     configured_research_headers,
     proposal_review_payload,
     walkthrough_database_path,
@@ -60,6 +61,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 from app.env import load_local_env  # noqa: E402
 
 load_local_env()  # GILDATA_TOKEN / LLM_API_KEY from backend/.env
+GILDATA_EVIDENCE_RIGHTS = configured_gildata_evidence_rights()
 
 from app.models.ledger import Base  # noqa: E402
 from app.db import engine  # noqa: E402

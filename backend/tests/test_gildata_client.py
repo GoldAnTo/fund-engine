@@ -15,6 +15,7 @@ import pytest
 
 from app.datasources.gildata import adapters
 from app.datasources.gildata.client import GildataMCPClient, GildataMCPError
+from app.datasources.gildata.governance import GildataEvidenceRights
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +115,20 @@ def test_from_env_requires_token(monkeypatch):
     monkeypatch.delenv("GILDATA_TOKEN", raising=False)
     with pytest.raises(GildataMCPError):
         GildataMCPClient.from_env()
+
+
+def test_gildata_evidence_rights_default_to_no_formal_use(monkeypatch):
+    monkeypatch.delenv("GILDATA_ALLOW_AI_PROCESSING", raising=False)
+    monkeypatch.delenv("GILDATA_ALLOW_DISPLAY", raising=False)
+
+    assert GildataEvidenceRights.from_env().formal_evidence_allowed is False
+
+
+def test_gildata_evidence_rights_require_both_explicit_grants(monkeypatch):
+    monkeypatch.setenv("GILDATA_ALLOW_AI_PROCESSING", "true")
+    monkeypatch.setenv("GILDATA_ALLOW_DISPLAY", "true")
+
+    assert GildataEvidenceRights.from_env().formal_evidence_allowed is True
 
 
 def test_empty_token_rejected():
@@ -430,6 +445,44 @@ def test_ingest_freezes_documents_and_valuations(session):
     stock = session.scalar(select(Stock).where(Stock.code == "688256.SH"))
     assert stock is not None
     assert stock.name == "寒武纪"
+
+
+def test_ingest_skips_degenerate_provider_report_bodies(session):
+    """Different report metadata can share a non-evidentiary placeholder body."""
+    from sqlalchemy import select
+
+    from app.models.ledger import DocumentVersion
+    from app.scripts.ingest_real_data import ingest
+
+    placeholder_reports = [
+        {
+            "table_markdown": (
+                "报告标题：报告甲；\n发布时间：2026-08-20；\n原文：相关研究"
+            )
+        },
+        {
+            "table_markdown": (
+                "报告标题：报告乙；\n发布时间：2026-08-17；\n原文：相关研究"
+            )
+        },
+    ]
+    client = _FakeClient(
+        [[placeholder_reports[0]], [placeholder_reports[1]]], [], [], news_results=[]
+    )
+
+    summary = ingest(
+        session,
+        client,
+        research_queries=["报告甲", "报告乙"],
+        announcement_query="无公告",
+        news_query="无新闻",
+        quote_query="无行情",
+    )
+
+    assert summary["research_reports"] == 0
+    assert summary["research_reports_skipped_degenerate"] == 2
+    assert summary["spans"] == 0
+    assert list(session.scalars(select(DocumentVersion))) == []
 
 
 def test_ingest_without_case_does_not_adopt_the_first_global_case(session):

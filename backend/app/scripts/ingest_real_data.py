@@ -35,17 +35,15 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.datasources.gildata import adapters
 from app.datasources.gildata.client import GildataMCPClient
+from app.datasources.gildata.governance import GildataEvidenceRights
 from app.env import load_local_env
 from app.models.ledger import Base, Stock, ValuationSnapshot
 from app.repositories.documents import DocumentRepository
 from app.repositories.instruments import InstrumentRepository
-from app.services.ingest import DocumentService
+from app.services.ingest import DocumentService, compute_natural_key
+from app.services.source_governance import SourceGovernanceService
 
 SOURCE_GILDATA = "gildata"
-RESEARCH_SOURCE_URL = "gildata://research_report"
-ANNOUNCEMENT_SOURCE_URL = "gildata://announcement"
-NEWS_SOURCE_URL = "gildata://news"
-MACRO_SOURCE_URL = "gildata://macro_industry"
 PARSER_VERSION = "gildata-mcp-1"
 
 # Fixed queries verified against the Gildata MCP tools.
@@ -207,6 +205,60 @@ def _resolve_case_id(session: Session, case_id: uuid.UUID | None) -> uuid.UUID |
     return case_id
 
 
+def _freeze_gildata_document(
+    session: Session,
+    documents: DocumentService,
+    *,
+    source_kind: str,
+    raw: bytes,
+    published_at: datetime | None,
+    title: str,
+    declared_by: str,
+) -> tuple:
+    """Freeze one provider result with its immutable rights declaration."""
+    # The provider response does not expose a durable material ID.  Reuse the
+    # document layer's semantic identity (provider kind + normalized title +
+    # publication date), so a revised body returned for the same report has
+    # the same immutable source-contract declaration as the deduplicated
+    # DocumentVersion.
+    source_prefix = f"gildata://{source_kind}"
+    provider_record_id = compute_natural_key(source_prefix, title, published_at)
+    source_url = f"{source_prefix}/{provider_record_id}"
+    document, created = documents._freeze(
+        raw=raw,
+        source_url=source_url,
+        published_at=published_at,
+        parser_version=PARSER_VERSION,
+        title=title,
+        natural_key=None,
+        source_authority="licensed_research",
+    )
+    rights = GildataEvidenceRights.from_env()
+    SourceGovernanceService(session).record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata={
+            "research_source_type": "licensed_provider",
+            "provider_name": SOURCE_GILDATA,
+            "provider_record_id": provider_record_id,
+            "retrieval_reference": source_url,
+            "permissions": {
+                "ai_processing": rights.allow_ai_processing,
+                "display": rights.allow_display,
+                "export": False,
+                "api": False,
+            },
+            "region": "CN",
+            "retention_policy": "case_retained",
+            "deletion_policy": "contract_controlled",
+            "downstream_restrictions": ["仅限已授权的研究 Case 与人工审核"],
+        },
+        declared_by=declared_by,
+        incoming_source_url=source_url,
+    )
+    return document, created
+
+
 def ingest(
     session: Session,
     client: GildataMCPClient,
@@ -218,6 +270,7 @@ def ingest(
     quote_query: str | None = None,
     quote_stock_code: str | None = None,
     macro_queries: list[str] | None = None,
+    declared_by: str = "system:gildata-ingest",
 ) -> dict:
     """Ingest real Gildata data into *session*.
 
@@ -238,6 +291,7 @@ def ingest(
 
     summary = {
         "research_reports": 0,
+        "research_reports_skipped_degenerate": 0,
         "announcements": 0,
         "news": 0,
         "macro_series": 0,
@@ -275,16 +329,27 @@ def ingest(
             content = report.get("content", "")
             if not content:
                 continue
+            # Provider searches sometimes return a report title paired only
+            # with a four-character placeholder body.  It cannot support an
+            # atomic claim, and freezing it would let unrelated report
+            # metadata collide on the same global content hash.  Keep this
+            # known placeholder shape outside the evidence ledger and make
+            # the omission visible to the caller.  Longer terse reports stay
+            # in the ledger for the normal read-side quality gate.
+            if len(content.strip()) <= 4:
+                summary["research_reports_skipped_degenerate"] += 1
+                continue
             published_at = _parse_datetime(report.get("publish_date", ""))
             # 传 title 让自然键判重：同来源 + 同标题 + 同发布日期视为同一份
             # 研报；之前仅靠 SHA256 会被正文/摘要/港股版绕过去重。
-            version, created = document_service._freeze(
+            version, created = _freeze_gildata_document(
+                session,
+                document_service,
+                source_kind="research_report",
                 raw=content.encode("utf-8"),
-                source_url=RESEARCH_SOURCE_URL,
                 published_at=published_at,
-                parser_version=PARSER_VERSION,
                 title=report.get("title", ""),
-                natural_key=None,
+                declared_by=declared_by,
             )
             if resolved_case_id is not None:
                 document_service.attach_to_case(
@@ -313,13 +378,14 @@ def ingest(
         if not content:
             continue
         published_at = _parse_datetime(ann.get("publish_date", ""))
-        version, created = document_service._freeze(
+        version, created = _freeze_gildata_document(
+            session,
+            document_service,
+            source_kind="announcement",
             raw=content.encode("utf-8"),
-            source_url=ANNOUNCEMENT_SOURCE_URL,
             published_at=published_at,
-            parser_version=PARSER_VERSION,
             title=ann.get("title", ""),
-            natural_key=None,
+            declared_by=declared_by,
         )
         if resolved_case_id is not None:
             document_service.attach_to_case(
@@ -348,13 +414,14 @@ def ingest(
         if not content:
             continue
         published_at = _parse_datetime(news.get("publish_date", ""))
-        version, created = document_service._freeze(
+        version, created = _freeze_gildata_document(
+            session,
+            document_service,
+            source_kind="news",
             raw=content.encode("utf-8"),
-            source_url=NEWS_SOURCE_URL,
             published_at=published_at,
-            parser_version=PARSER_VERSION,
             title=news.get("title", ""),
-            natural_key=None,
+            declared_by=declared_by,
         )
         if resolved_case_id is not None:
             document_service.attach_to_case(
@@ -410,13 +477,14 @@ def ingest(
         # the slice; freeze metadata stays query-driven.
         latest = max(rows, key=lambda r: r.get("date", ""))
         published_at = _parse_datetime(latest.get("date", ""))
-        version, created = document_service._freeze(
+        version, created = _freeze_gildata_document(
+            session,
+            document_service,
+            source_kind="macro_industry",
             raw=body,
-            source_url=MACRO_SOURCE_URL,
             published_at=published_at,
-            parser_version=PARSER_VERSION,
             title=title,
-            natural_key=None,
+            declared_by=declared_by,
         )
         if resolved_case_id is not None:
             document_service.attach_to_case(

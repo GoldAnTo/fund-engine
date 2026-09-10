@@ -618,7 +618,7 @@ def test_0063_candidate_tables_install_immutable_triggers() -> None:
                         SELECT c.relname
                         FROM pg_trigger t
                         JOIN pg_class c ON c.oid = t.tgrelid
-                        WHERE NOT t.tgisinternal AND c.relnamespace = current_schema()::regnamespace AND c.relname LIKE 'uw_%'
+                        WHERE NOT t.tgisinternal AND c.relname LIKE 'uw_%'
                         """
                     )
                 ).scalars()
@@ -733,7 +733,7 @@ def test_0065_product_tables_install_precise_immutable_and_draft_delete_triggers
                     SELECT c.relname, t.tgname
                     FROM pg_trigger AS t
                     JOIN pg_class AS c ON c.oid = t.tgrelid
-                    WHERE NOT t.tgisinternal AND c.relnamespace = current_schema()::regnamespace AND c.relname LIKE 'uw_%'
+                    WHERE NOT t.tgisinternal AND c.relname LIKE 'uw_%'
                     """
                 )
             ).all()

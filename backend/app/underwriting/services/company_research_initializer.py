@@ -196,7 +196,7 @@ class CompanyResearchInitializer:
             return build_company_research_preview(
                 adapter=adapter,
                 identities=identities,
-                cutoff_at=boundary.cutoff_at,
+                cutoff_at=requested_cutoff,
             )
 
     def preview(

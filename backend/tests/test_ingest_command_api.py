@@ -59,6 +59,72 @@ def test_ingest_freezes_documents_and_valuations(fake_gildata, cmd_seeded):
     assert vals == seeded_vals + 3
 
 
+def test_ingest_records_authorised_gildata_contracts(
+    fake_gildata, cmd_seeded, monkeypatch
+):
+    from app.models.ledger import ResearchCase
+    from app.models.source_governance import SourceContract
+
+    monkeypatch.setenv("GILDATA_ALLOW_AI_PROCESSING", "true")
+    monkeypatch.setenv("GILDATA_ALLOW_DISPLAY", "true")
+    case = cmd_seeded.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
+    assert case is not None
+
+    response = fake_gildata.post(
+        "/api/v1/documents/ingest", json={"case_id": str(case.id)}
+    )
+
+    assert response.status_code == 201, response.text
+    contracts = list(cmd_seeded.scalars(select(SourceContract)))
+    assert any(
+        contract.provider_or_tenant == "gildata"
+        and contract.allow_ai_processing
+        and contract.allow_display
+        for contract in contracts
+    )
+
+
+def test_gildata_natural_key_reuse_keeps_the_same_provider_contract(
+    session, document_service, monkeypatch
+):
+    """A provider may return revised bytes for one report in a later query.
+
+    DocumentService deliberately collapses that semantic duplicate by title and
+    date.  The immutable provider declaration must use that same identity,
+    rather than a content hash which would turn the second intake into a
+    conflicting contract for the already-frozen document.
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from app.models.source_governance import SourceContract
+    from app.scripts.ingest_real_data import _freeze_gildata_document
+
+    monkeypatch.setenv("GILDATA_ALLOW_AI_PROCESSING", "true")
+    monkeypatch.setenv("GILDATA_ALLOW_DISPLAY", "true")
+    kwargs = {
+        "source_kind": "research_report",
+        "published_at": datetime(2026, 9, 3, tzinfo=timezone.utc),
+        "title": "同一份恒生聚源研报",
+        "declared_by": "tenant:test-team",
+    }
+
+    first, first_created = _freeze_gildata_document(
+        session, document_service, raw=b"first provider body", **kwargs
+    )
+    second, second_created = _freeze_gildata_document(
+        session, document_service, raw=b"revised provider body", **kwargs
+    )
+
+    assert first_created is True
+    assert second_created is False
+    assert second.id == first.id
+    contracts = list(session.scalars(select(SourceContract)))
+    assert len(contracts) == 1
+    assert contracts[0].provider_or_tenant == "gildata"
+
+
 def test_ingest_is_idempotent_via_api(fake_gildata, cmd_seeded):
     from app.models.ledger import ResearchCase
 

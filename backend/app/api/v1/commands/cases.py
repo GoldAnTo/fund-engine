@@ -12,23 +12,17 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.commands.common import commit_or_rollback, translate_validation
 from app.db import get_db
-from app.errors import ConflictError
-from app.schemas.v1.common import ErrorEnvelope
-from app.api.v1.tenant_context import require_research_tenant
-from app.services.case_tenant_access import CaseTenantAccess
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.commands import (
     CreateCaseRequest,
+    CreateCaseResponse,
     CreatedThesisDTO,
     CreateThesisRequest,
     CreateThesisResponse,
 )
 from app.services.research import ResearchService
 
-router = APIRouter(
-    prefix="/research-cases", tags=["research-case-commands-v1"],
-    dependencies=[Depends(require_research_tenant)],
-)
+router = APIRouter(prefix="/research-cases", tags=["research-case-commands-v1"])
 
 
 def _service(db: Session) -> ResearchService:
@@ -47,15 +41,51 @@ def _thesis_dto(thesis) -> CreatedThesisDTO:
 
 @router.post(
     "",
-    response_model=ErrorEnvelope,
-    status_code=status.HTTP_409_CONFLICT,
-    deprecated=True,
+    response_model=CreateCaseResponse,
+    status_code=status.HTTP_201_CREATED,
 )
-def create_case(payload: CreateCaseRequest):
-    """Reject the retired source-free intake instead of creating an orphan Case."""
-    raise ConflictError(
-        "source-free case creation is retired; use POST /api/v1/event-research "
-        "with an original source to create a tenant-owned case"
+def create_case(
+    payload: CreateCaseRequest,
+    db: Session = Depends(get_db),
+):
+    service = _service(db)
+    case = translate_validation(
+        service.add_case,
+        title=payload.title,
+        industry_topic=payload.industry_topic,
+        created_by=payload.created_by,
+        research_object=payload.research_object,
+        phenomenon=payload.phenomenon,
+        core_question=payload.core_question,
+        period_start=payload.period_start,
+        period_end=payload.period_end,
+        evidence_cutoff=payload.evidence_cutoff,
+    )
+    theses = []
+    for spec in payload.initial_theses:
+        # AI-drafted propositions start as unconfirmed drafts (AI 草案·未经
+        # 人工复核); human-authored ones are confirmed on entry.
+        review_state = "draft" if spec.creator_type == "ai" else "confirmed"
+        theses.append(
+            translate_validation(
+                service.add_thesis,
+                case.id,
+                statement=spec.statement,
+                created_by=payload.created_by,
+                title=spec.title,
+                observation_start=spec.observation_start,
+                observation_end=spec.observation_end,
+                support_condition=spec.support_condition,
+                falsification_condition=spec.falsification_condition,
+                next_verification_event=spec.next_verification_event,
+                creator_type=spec.creator_type,
+                review_state=review_state,
+            )
+        )
+    commit_or_rollback(db)
+    return CreateCaseResponse(
+        case_id=str(case.id),
+        theses=[_thesis_dto(t) for t in theses],
     )
 
 
@@ -68,9 +98,7 @@ def add_thesis(
     case_id: uuid.UUID,
     payload: CreateThesisRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
-    CaseTenantAccess(db).require_case(case_id, tenant_id)
     service = _service(db)
     review_state = "draft" if payload.creator_type == "ai" else "confirmed"
     thesis = translate_validation(

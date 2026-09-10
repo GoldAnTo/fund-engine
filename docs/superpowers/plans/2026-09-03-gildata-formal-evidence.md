@@ -180,12 +180,15 @@ source_url = f"gildata://{source_kind}/{hashlib.sha256(raw).hexdigest()}"
 Immediately after `DocumentService._freeze`, call
 `SourceGovernanceService(session).record_event_intake(...)` with
 `source_type="licensed_provider"`, `research_source_type="licensed_provider"`,
-`provider_name="gildata"`, `provider_record_id=<content sha256>`,
+`provider_name="gildata"`, `provider_record_id=<stable document natural key>`,
 `retrieval_reference=<provider URI>`, and permissions from
 `GildataEvidenceRights.from_env()`. Use the case tenant as `declared_by` when
 available, otherwise `"system:gildata-ingest"`; rights remain false unless
 both deployment flags are true. Call the same function on reused frozen
-documents so incompatible existing contracts fail closed.
+documents so incompatible existing contracts fail closed.  The provider URI
+must use the same kind/title/publication-date natural key as `DocumentService`;
+using a body hash would conflict when the provider returns revised bytes for an
+otherwise deduplicated material.
 
 - [ ] **Step 4: Re-run ingest regressions.**
 

@@ -314,8 +314,7 @@ def test_internal_generator_error_fails_preparation_safely_and_can_retry(tmp_pat
         assert check.scalar(select(Job).where(Job.target_id == preparation_id, Job.status == "queued")) is not None
 
 
-@pytest.mark.parametrize("autoflush", [True, False])
-def test_preparation_worker_runs_parse_without_creating_a_research_run(tmp_path, autoflush) -> None:
+def test_preparation_worker_runs_parse_without_creating_a_research_run(tmp_path) -> None:
     from app.scripts import run_research_preparation_worker as worker
 
     engine, sessions = _session_factory(tmp_path)
@@ -324,7 +323,6 @@ def test_preparation_worker_runs_parse_without_creating_a_research_run(tmp_path,
         case_id, preparation_id = case.id, preparation.id
         setup.commit()
 
-    sessions.configure(autoflush=autoflush)
     assert worker.run_once(session_factory=sessions, generator_factory=_ParseGenerator)
 
     with Session(engine) as check:
@@ -344,8 +342,7 @@ def test_preparation_worker_runs_parse_without_creating_a_research_run(tmp_path,
         assert check.scalars(select(ResearchRun).where(ResearchRun.research_case_id == case_id)).all() == []
 
 
-@pytest.mark.parametrize("autoflush", [True, False])
-def test_protocol_then_plan_wait_for_their_respective_human_reviews(tmp_path, autoflush) -> None:
+def test_protocol_then_plan_wait_for_their_respective_human_reviews(tmp_path) -> None:
     from app.scripts import run_research_preparation_worker as worker
 
     engine, sessions = _session_factory(tmp_path)
@@ -354,7 +351,6 @@ def test_protocol_then_plan_wait_for_their_respective_human_reviews(tmp_path, au
         case_id, preparation_id = case.id, preparation.id
         strict_protocol = _materializable_protocol(setup, case_id)
         setup.commit()
-    sessions.configure(autoflush=autoflush)
     assert worker.run_once(session_factory=sessions, generator_factory=_ParseGenerator)
     with sessions() as review:
         preparation = review.get(ResearchPreparation, preparation_id)
@@ -824,66 +820,3 @@ def test_once_cli_records_once_heartbeat_mode(tmp_path, monkeypatch) -> None:
     with sessions() as session:
         status = WorkerHeartbeatService(session).status(worker_kind="research_preparation")
         assert status["mode"] == "once" and status["state"] == "idle"
-
-
-def test_provider_failure_persists_usage_correlated_to_preparation_job(tmp_path):
-    from types import SimpleNamespace
-    from unittest.mock import MagicMock
-    from app.ai.client import LLMClient
-    from app.ai.research_preparation import ResearchPreparationGenerator
-    from app.models.ledger import AIRun
-    from app.scripts import run_research_preparation_worker as worker
-    engine, sessions = _session_factory(tmp_path)
-    try:
-        with sessions() as setup:
-            case, preparation, _ = _preparation(setup)
-            case_id, preparation_id = case.id, preparation.id
-            setup.commit()
-        sdk = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=MagicMock(
-            return_value=SimpleNamespace(usage=SimpleNamespace(prompt_tokens=6, completion_tokens=2, total_tokens=8),
-                choices=[SimpleNamespace(finish_reason='length', message=SimpleNamespace(content='{}', refusal=None))])))))
-        generator = ResearchPreparationGenerator(LLMClient(model_version='test-model', client=sdk))
-        assert worker.run_once(session_factory=sessions, generator_factory=lambda: generator)
-        with sessions() as check:
-            audit = check.scalar(select(AIRun).where(AIRun.kind == 'prepare'))
-            assert audit is not None
-            assert audit.status == 'failed'
-            assert audit.input_ref['research_case_id'] == str(case_id)
-            assert audit.input_ref['preparation_id'] == str(preparation_id)
-            assert check.get(Job, uuid.UUID(audit.input_ref['job_id'])) is not None
-            assert audit.usage['attempts'][0]['total_tokens'] == 8
-    finally:
-        engine.dispose()
-
-
-def test_usage_survives_later_output_transaction_failure(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-    from app.ai.usage import record_attempt
-    from app.models.ledger import AIRun
-    from app.scripts import run_research_preparation_worker as worker
-
-    class MeteredGenerator(_ParseGenerator):
-        model_version = 'test-model'
-
-        def validate_claim_drafts(self, input):
-            record_attempt(SimpleNamespace(usage=SimpleNamespace(prompt_tokens=3, completion_tokens=2, total_tokens=5)), outcome='response_received')
-            return super().validate_claim_drafts(input)
-
-    def fail_completion(*args, **kwargs):
-        raise RuntimeError('output transaction failed')
-
-    engine, sessions = _session_factory(tmp_path)
-    try:
-        with sessions() as setup:
-            _preparation(setup)
-            setup.commit()
-        monkeypatch.setattr(worker, '_complete', fail_completion)
-        with pytest.raises(RuntimeError, match='output transaction failed'):
-            worker.run_once(session_factory=sessions, generator_factory=MeteredGenerator)
-        with sessions() as check:
-            audit = check.scalar(select(AIRun).where(AIRun.kind == 'prepare'))
-            assert audit.status == 'success'  # provider stage, not the failed artifact stage
-            assert audit.usage['attempts'][0]['total_tokens'] == 5
-            assert list(check.scalars(select(ResearchPreparationArtifact))) == []
-    finally:
-        engine.dispose()

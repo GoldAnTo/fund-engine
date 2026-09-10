@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 from app.models.ledger import (
     AIAssessment,
     CaseTenantAdmission,
-    CaseDocumentVersion,
     CaseThemeTagEvent,
     CausalEdge,
     CausalStep,
@@ -382,21 +381,6 @@ class ResearchRepository:
                 DocumentVersion.id == span.document_version_id
             )
         )
-
-    def document_attached_to_case(self, document_id: uuid.UUID, case_id: uuid.UUID) -> bool:
-        return self._session.scalar(select(CaseDocumentVersion.id).where(
-            CaseDocumentVersion.document_version_id == document_id,
-            CaseDocumentVersion.research_case_id == case_id,
-        ).limit(1)) is not None
-
-    def get_thesis(self, thesis_id: uuid.UUID) -> Thesis | None:
-        return self._session.get(Thesis, thesis_id)
-
-    def source_contract_for_document(self, document_id: uuid.UUID):
-        from app.models.source_governance import SourceContract
-        return self._session.scalar(select(SourceContract).where(
-            SourceContract.document_version_id == document_id,
-        ))
 
     def visible_links(
         self,

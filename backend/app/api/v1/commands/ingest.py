@@ -68,6 +68,7 @@ def ingest_documents(
             db,
             client,
             case_id=case_id,
+            declared_by=f"tenant:{tenant_id}",
             research_queries=payload.research_queries,
             announcement_query=payload.announcement_query,
             news_query=payload.news_query,

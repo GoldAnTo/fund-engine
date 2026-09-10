@@ -21,9 +21,12 @@ discard the licensed-provider workflow that the source policy already models.
 
 ## Data flow
 
-1. The Gildata ingest command freezes each result with its existing provider
-   URI and records a `SourceContract` of type `licensed_provider` plus a
-   provider record.  The contract is created only from explicit local
+1. The Gildata ingest command gives each result a stable internal provider URI
+   derived from the same provider-kind, normalized-title and publication-date
+   identity used by document deduplication, then records a `SourceContract` of
+   type `licensed_provider` plus a provider record.  A later revised response
+   for that same material therefore reuses — rather than conflicts with — its
+   immutable declaration.  The contract is created only from explicit local
    deployment configuration declaring the licence rights; absent or false
    rights fail closed.
 2. Evidence-proposal admission first resolves that contract.  A valid,

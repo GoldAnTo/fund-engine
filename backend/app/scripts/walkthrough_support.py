@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.api.v1.tenant_context import _configured_tokens
+from app.datasources.gildata.governance import GildataEvidenceRights
 
 
 class WalkthroughConfigurationError(RuntimeError):
@@ -27,6 +28,16 @@ def configured_research_headers() -> dict[str, str]:
         )
     token, _actor = configured[0]
     return {"Authorization": f"Bearer {token}"}
+
+
+def configured_gildata_evidence_rights() -> GildataEvidenceRights:
+    """Require an explicit deployment grant before a live evidence walkthrough."""
+    rights = GildataEvidenceRights.from_env()
+    if not rights.formal_evidence_allowed:
+        raise WalkthroughConfigurationError(
+            "GILDATA_ALLOW_AI_PROCESSING and GILDATA_ALLOW_DISPLAY must both be true"
+        )
+    return rights
 
 
 def walkthrough_paths(output_dir: Path, run_id: str) -> WalkthroughPaths:

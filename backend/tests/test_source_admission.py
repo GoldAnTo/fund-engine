@@ -11,6 +11,7 @@ from app.services.source_admission import (
     SourceAdmission,
     SourceStatus,
     apply_source_contract,
+    classify_document_source,
     classify_source,
 )
 
@@ -257,6 +258,54 @@ def test_valid_verified_source_is_accessible():
         reason="来源链接可访问且内容已验证。",
         can_accept=True,
     )
+
+
+def _licensed_gildata_contract(*, ai: bool, display: bool):
+    return SimpleNamespace(
+        source_type="licensed_provider",
+        research_source_type="licensed_provider",
+        provider_or_tenant="gildata",
+        allow_ai_processing=ai,
+        allow_display=display,
+        effective_from=None,
+        effective_until=None,
+    )
+
+
+def test_authorised_gildata_contract_admits_its_provider_uri():
+    result = classify_document_source(
+        source_url="gildata://research_report/content-sha256",
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=_licensed_gildata_contract(ai=True, display=True),
+    )
+
+    assert result.status is SourceStatus.ACCESSIBLE
+    assert result.can_accept is True
+
+
+def test_gildata_uri_without_both_contract_rights_remains_rejected():
+    result = classify_document_source(
+        source_url="gildata://research_report/content-sha256",
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=_licensed_gildata_contract(ai=True, display=False),
+    )
+
+    assert result.status is SourceStatus.RESTRICTED
+    assert result.can_accept is False
+
+
+def test_generic_gildata_uri_without_a_contract_remains_invalid():
+    result = classify_document_source(
+        source_url="gildata://research_report/content-sha256",
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=None,
+    )
+
+    assert result.status is SourceStatus.INVALID
+    assert result.can_accept is False
 
 
 def test_source_admission_is_immutable():

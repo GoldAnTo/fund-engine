@@ -12,6 +12,7 @@ from app.scripts.walkthrough_support import (
     assessment_review_payload,
     atomic_claim_review_payload,
     classify_historical_case_read,
+    configured_gildata_evidence_rights,
     configured_research_headers,
     proposal_review_payload,
     walkthrough_database_path,
@@ -35,6 +36,14 @@ def test_configured_research_headers_fail_closed_without_a_token(monkeypatch) ->
 
     with pytest.raises(WalkthroughConfigurationError, match="RESEARCH_TENANT_TOKENS"):
         configured_research_headers()
+
+
+def test_configured_gildata_rights_fail_closed_without_both_grants(monkeypatch) -> None:
+    monkeypatch.setenv("GILDATA_ALLOW_AI_PROCESSING", "true")
+    monkeypatch.delenv("GILDATA_ALLOW_DISPLAY", raising=False)
+
+    with pytest.raises(WalkthroughConfigurationError, match="GILDATA_ALLOW_DISPLAY"):
+        configured_gildata_evidence_rights()
 
 
 def test_walkthrough_paths_are_unique_per_run_and_resumable(tmp_path) -> None:
@@ -96,6 +105,8 @@ def test_walkthrough_cli_starts_without_running_any_stage() -> None:
     environment = os.environ | {
         "RESEARCH_TENANT_TOKENS": '{"walkthrough-token":"walkthrough"}',
         "WALKTHROUGH_RUN_ID": "cli-startup-test",
+        "GILDATA_ALLOW_AI_PROCESSING": "true",
+        "GILDATA_ALLOW_DISPLAY": "true",
     }
 
     result = subprocess.run(

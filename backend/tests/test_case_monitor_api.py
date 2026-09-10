@@ -535,9 +535,9 @@ def test_run_archive_replays_the_monitoring_cadence_and_change_basis_that_starte
         f"/api/v1/research-cases/{case.id}/monitor",
         json=_monitor_payload(
             factor.id,
-            frequency="daily_20_00",
+            frequency="weekly_monday",
             next_verification_event="下一次行业会议",
-            change_reason="改为每日晚间复核",
+            change_reason="改为每周复核",
         ),
     )
     assert changed.status_code == 200, changed.text
@@ -579,39 +579,3 @@ def test_global_run_archive_keeps_terminal_run_and_its_frozen_scope(
     assert item["stop_reason"] == "task_failed"
     assert item["scope"]["monitor_version_id"] == saved.json()["id"]
     assert item["scope"]["allowed_source_types"] == ["company_disclosure"]
-
-
-def test_monitor_save_rejects_stale_version_without_overwriting_pause(cmd_client, cmd_session):
-    case, factor = _case_with_confirmed_factor(cmd_session)
-    path = f'/api/v1/research-cases/{case.id}/monitor'
-    first = cmd_client.put(path, json={**_monitor_payload(factor.id), 'expected_version': 0})
-    assert first.status_code == 200, first.text
-    paused = cmd_client.post(f'{path}/paused', json={'actor': 'other', 'change_reason': '暂停核验'})
-    assert paused.status_code == 200
-    stale = cmd_client.put(path, json={**_monitor_payload(factor.id), 'expected_version': 1})
-    assert stale.status_code == 409, stale.text
-    current = cmd_client.get(path).json()
-    assert current['monitor']['version'] == 2
-    assert current['monitor']['status'] == 'paused'
-    assert len(current['history']) == 2
-    updated = cmd_client.put(path, json={**_monitor_payload(factor.id), 'expected_version': 2})
-    assert updated.status_code == 200, updated.text
-    assert updated.json()['version'] == 3
-
-
-def test_status_command_rejects_stale_monitor_version(cmd_client, cmd_session):
-    case, factor = _case_with_confirmed_factor(cmd_session)
-    path = f'/api/v1/research-cases/{case.id}/monitor'
-    assert cmd_client.put(path, json=_monitor_payload(factor.id)).status_code == 200
-    assert cmd_client.put(path, json={**_monitor_payload(factor.id), 'budget': 30}).status_code == 200
-    stale = cmd_client.post(f'{path}/paused', json={'actor': 'tester', 'change_reason': '旧页面暂停', 'expected_version': 1})
-    assert stale.status_code == 409, stale.text
-    current = cmd_client.get(path).json()
-    assert current['monitor']['version'] == 2
-    assert current['monitor']['status'] == 'active'
-    assert len(current['history']) == 2
-    paused = cmd_client.post(f'{path}/paused', json={'actor': 'tester', 'change_reason': '核对新范围后暂停', 'expected_version': 2})
-    assert paused.status_code == 200, paused.text
-    stale_resume = cmd_client.post(f'{path}/active', json={'actor': 'tester', 'change_reason': '旧页面恢复', 'expected_version': 2})
-    assert stale_resume.status_code == 409
-    assert cmd_client.get(path).json()['monitor']['status'] == 'paused'
