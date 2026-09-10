@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.ledger import DocumentVersion
@@ -36,6 +37,13 @@ RESEARCH_SOURCE_TYPES = frozenset(
         "company_disclosure",
     }
 )
+_GOVERNANCE_DOCUMENT_CONSTRAINTS = frozenset(
+    {"uq_source_contracts_document", "uq_provider_records_document"}
+)
+
+
+class SourceGovernanceCompatibilityError(ValueError):
+    """Raised when immutable source governance cannot be safely reused."""
 
 
 def _utcnow() -> datetime:
@@ -74,6 +82,17 @@ def _contract_time_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _normalized_request_scope(metadata: dict[str, Any]) -> dict[str, Any]:
+    raw_scope = metadata.get("request_scope")
+    if raw_scope is None:
+        return {}
+    if not isinstance(raw_scope, dict):
+        raise SourceGovernanceCompatibilityError(
+            "provider request_scope must be an object"
+        )
+    return dict(raw_scope)
 
 
 def _normalize_research_source_type(
@@ -224,7 +243,7 @@ class SourceGovernanceService:
         if _existing_declared_source_url(
             existing=existing, document=document
         ) != declared_source_url:
-            raise ValueError(
+            raise SourceGovernanceCompatibilityError(
                 "deduplicated original has a different source contract; "
                 "do not reuse it under incompatible permissions"
             )
@@ -284,10 +303,206 @@ class SourceGovernanceService:
                 existing_value = _contract_time_utc(existing_value)
                 value = _contract_time_utc(value)
             if existing_value != value:
-                raise ValueError(
+                raise SourceGovernanceCompatibilityError(
                     "deduplicated original has a different source contract; "
                     "do not reuse it under incompatible permissions"
                 )
+
+    def _assert_existing_provider_record_compatible(
+        self,
+        *,
+        existing_contract: SourceContract,
+        document: DocumentVersion,
+        source_type: str,
+        source_metadata: dict[str, Any] | None,
+        provider_records: tuple[ProviderRecord, ...] | None = None,
+    ) -> None:
+        metadata = dict(source_metadata or {})
+        if not (
+            source_type == "licensed_provider"
+            and metadata.get("provider_name")
+            and metadata.get("provider_record_id")
+        ):
+            return
+        records = list(
+            provider_records
+            if provider_records is not None
+            else self._session.scalars(
+                select(ProviderRecord).where(
+                    ProviderRecord.document_version_id == document.id
+                )
+            )
+        )
+        if len(records) != 1:
+            raise SourceGovernanceCompatibilityError(
+                "deduplicated original has an incompatible provider record"
+            )
+        record = records[0]
+        incoming_scope = _normalized_request_scope(metadata)
+        existing_scope = (
+            dict(record.request_scope)
+            if isinstance(record.request_scope, dict)
+            else None
+        )
+        if not isinstance(existing_contract.intake_metadata, dict):
+            raise SourceGovernanceCompatibilityError(
+                "deduplicated original has an incompatible provider record"
+            )
+        contract_scope = _normalized_request_scope(existing_contract.intake_metadata)
+        scope_matches = (
+            existing_scope is not None
+            and existing_scope == contract_scope
+        )
+        incoming_provider_name = str(metadata["provider_name"])
+        is_gildata = (
+            str(record.provider_name).casefold() == "gildata"
+            and incoming_provider_name.casefold() == "gildata"
+        )
+        if scope_matches and is_gildata and (
+            existing_scope != incoming_scope
+            or "query_sha256" in existing_scope
+            or "query_sha256" in incoming_scope
+        ):
+            stored_query_sha256 = (
+                existing_scope.get("query_sha256")
+                if existing_scope is not None
+                else None
+            )
+            incoming_query_sha256 = incoming_scope.get("query_sha256")
+            scope_matches = (
+                isinstance(stored_query_sha256, str)
+                and len(stored_query_sha256) == 64
+                and all(
+                    character in "0123456789abcdef"
+                    for character in stored_query_sha256
+                )
+                and isinstance(incoming_query_sha256, str)
+                and len(incoming_query_sha256) == 64
+                and all(
+                    character in "0123456789abcdef"
+                    for character in incoming_query_sha256
+                )
+                and {
+                    key: value
+                    for key, value in existing_scope.items()
+                    if key != "query_sha256"
+                }
+                == {
+                    key: value
+                    for key, value in incoming_scope.items()
+                    if key != "query_sha256"
+                }
+            )
+        elif scope_matches:
+            scope_matches = existing_scope == incoming_scope
+        expected = {
+            "provider_name": incoming_provider_name,
+            "provider_record_id": str(metadata["provider_record_id"]),
+            "content_sha256": document.content_sha256,
+            "retrieval_reference": (
+                str(metadata["retrieval_reference"])
+                if metadata.get("retrieval_reference")
+                else None
+            ),
+            "contract_version": (
+                str(metadata["contract_version"])
+                if metadata.get("contract_version")
+                else None
+            ),
+        }
+        if not scope_matches or any(
+            getattr(record, field) != value for field, value in expected.items()
+        ):
+            raise SourceGovernanceCompatibilityError(
+                "deduplicated original has an incompatible provider record"
+            )
+
+    def _load_existing_governance(
+        self,
+        document_id: Any,
+        *,
+        refresh: bool = False,
+    ) -> tuple[SourceContract | None, tuple[ProviderRecord, ...]]:
+        contract_statement = select(SourceContract).where(
+            SourceContract.document_version_id == document_id
+        )
+        records_statement = select(ProviderRecord).where(
+            ProviderRecord.document_version_id == document_id
+        )
+        if refresh:
+            contract_statement = contract_statement.execution_options(
+                populate_existing=True
+            )
+            records_statement = records_statement.execution_options(
+                populate_existing=True
+            )
+        return (
+            self._session.scalar(contract_statement),
+            tuple(self._session.scalars(records_statement)),
+        )
+
+    @staticmethod
+    def _is_governance_document_conflict(exc: IntegrityError) -> bool:
+        diagnostic = getattr(getattr(exc, "orig", None), "diag", None)
+        constraint_name = getattr(diagnostic, "constraint_name", None)
+        if isinstance(constraint_name, str):
+            return constraint_name in _GOVERNANCE_DOCUMENT_CONSTRAINTS
+        detail = (
+            str(getattr(exc, "orig", exc))
+            .casefold()
+            .replace('"', "")
+            .replace("main.", "")
+        )
+        return any(
+            f"unique constraint failed: {table}.document_version_id" in detail
+            for table in ("source_contracts", "provider_records")
+        )
+
+    def _flush_governance_bundle(
+        self,
+        contract: SourceContract,
+        provider_record: ProviderRecord | None,
+    ) -> None:
+        connection = self._session.connection()
+        if connection.dialect.name == "sqlite":
+            dbapi_connection = getattr(
+                connection.connection,
+                "driver_connection",
+                connection.connection,
+            )
+            if not dbapi_connection.in_transaction:
+                connection.exec_driver_sql("BEGIN")
+        rows = [contract]
+        if provider_record is not None:
+            rows.append(provider_record)
+        with self._session.begin_nested():
+            self._session.add_all(rows)
+            self._session.flush(rows)
+
+    def _assert_existing_governance_compatible(
+        self,
+        *,
+        existing: SourceContract,
+        provider_records: tuple[ProviderRecord, ...],
+        document: DocumentVersion,
+        source_type: str,
+        source_metadata: dict[str, Any] | None,
+        incoming_source_url: str | None,
+    ) -> None:
+        self._assert_existing_contract_compatible(
+            existing=existing,
+            source_type=source_type,
+            source_metadata=source_metadata,
+            document=document,
+            incoming_source_url=incoming_source_url,
+        )
+        self._assert_existing_provider_record_compatible(
+            existing_contract=existing,
+            document=document,
+            source_type=source_type,
+            source_metadata=source_metadata,
+            provider_records=provider_records,
+        )
 
     def record_event_intake(
         self,
@@ -303,25 +518,33 @@ class SourceGovernanceService:
             source_metadata=source_metadata,
             incoming_source_url=incoming_source_url,
         )
-        existing = self._session.scalar(
-            select(SourceContract).where(
-                SourceContract.document_version_id == document.id
-            )
-        )
+        existing, provider_records = self._load_existing_governance(document.id)
         if existing is not None:
-            self._assert_existing_contract_compatible(
+            self._assert_existing_governance_compatible(
                 existing=existing,
+                provider_records=provider_records,
                 source_type=source_type,
                 source_metadata=source_metadata,
                 document=document,
                 incoming_source_url=incoming_source_url,
             )
             return existing
+        if provider_records:
+            raise SourceGovernanceCompatibilityError(
+                "document has a provider record without its source contract"
+            )
         metadata = dict(source_metadata or {})
         metadata[DECLARED_SOURCE_URL_METADATA_KEY] = declared_source_url
         metadata[DECLARED_SOURCE_URL_EXPLICIT_METADATA_KEY] = (
             incoming_source_url is not None
         )
+        has_provider_record = (
+            source_type == "licensed_provider"
+            and bool(metadata.get("provider_name"))
+            and bool(metadata.get("provider_record_id"))
+        )
+        if has_provider_record:
+            metadata["request_scope"] = _normalized_request_scope(metadata)
         user_controlled = source_type in USER_CONTROLLED_TYPES
         research_source_type = _normalize_research_source_type(
             source_type=source_type,
@@ -362,22 +585,48 @@ class SourceGovernanceService:
             declared_by=declared_by,
             created_at=now,
         )
-        self._session.add(contract)
-        if source_type == "licensed_provider" and metadata.get("provider_name") and metadata.get("provider_record_id"):
-            self._session.add(
-                ProviderRecord(
-                    document_version_id=document.id,
-                    provider_name=str(metadata["provider_name"]),
-                    provider_record_id=str(metadata["provider_record_id"]),
-                    request_scope=dict(metadata.get("request_scope") or {}),
-                    retrieval_reference=(str(metadata["retrieval_reference"]) if metadata.get("retrieval_reference") else None),
-                    content_sha256=document.content_sha256,
-                    retrieved_at=now,
-                    contract_version=(str(metadata["contract_version"]) if metadata.get("contract_version") else None),
-                    created_at=now,
-                )
+        provider_record = None
+        if has_provider_record:
+            provider_record = ProviderRecord(
+                document_version_id=document.id,
+                provider_name=str(metadata["provider_name"]),
+                provider_record_id=str(metadata["provider_record_id"]),
+                request_scope=dict(metadata["request_scope"]),
+                retrieval_reference=(str(metadata["retrieval_reference"]) if metadata.get("retrieval_reference") else None),
+                content_sha256=document.content_sha256,
+                retrieved_at=now,
+                contract_version=(str(metadata["contract_version"]) if metadata.get("contract_version") else None),
+                created_at=now,
             )
+        # ``begin_nested`` flushes pre-existing pending rows before opening its
+        # SAVEPOINT. Flush those rows outside the conflict classifier so an
+        # unrelated unique error can never masquerade as this bundle's race.
         self._session.flush()
+        try:
+            self._flush_governance_bundle(contract, provider_record)
+        except IntegrityError as exc:
+            if not self._is_governance_document_conflict(exc):
+                raise
+            winner, winner_records = self._load_existing_governance(
+                document.id,
+                refresh=True,
+            )
+            if winner is None:
+                raise SourceGovernanceCompatibilityError(
+                    "concurrent source governance is incomplete"
+                ) from exc
+            try:
+                self._assert_existing_governance_compatible(
+                    existing=winner,
+                    provider_records=winner_records,
+                    source_type=source_type,
+                    source_metadata=source_metadata,
+                    document=document,
+                    incoming_source_url=incoming_source_url,
+                )
+            except SourceGovernanceCompatibilityError as compatibility_error:
+                raise compatibility_error from exc
+            return winner
         return contract
 
     def record_supplement_intake(

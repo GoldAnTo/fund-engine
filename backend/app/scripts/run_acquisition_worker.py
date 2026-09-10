@@ -98,8 +98,14 @@ class _UnconfiguredLLMClient(LLMClient):
     def __init__(self) -> None:
         super().__init__(model_version="unconfigured")
 
-    def chat_json(self, messages: list[dict], schema_hint: str = "") -> dict:
-        del messages, schema_hint
+    def chat_json(
+        self,
+        messages: list[dict],
+        schema_hint: str = "",
+        *,
+        malformed_retry_system: str | None = None,
+    ) -> dict:
+        del messages, schema_hint, malformed_retry_system
         raise LLMProviderError("LLM provider is not configured")
 
 

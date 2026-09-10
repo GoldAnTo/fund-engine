@@ -3,8 +3,11 @@
 ## Goal
 
 Make the authenticated live walkthrough distinguish a genuinely unavailable
-provider from an application defect, retry only transient provider failures
-within an explicit bound, and report historical Case non-existence honestly.
+provider from an application defect, retry transient provider failures within
+an explicit bound, and report historical Case non-existence honestly. The
+September 3 extraction hardening extends that same bound with one explicit,
+extraction-only malformed-JSON correction policy; other callers remain on the
+original terminal-malformed policy.
 
 ## Decisions
 
@@ -19,7 +22,9 @@ within an explicit bound, and report historical Case non-existence honestly.
 3. `LLMClient` performs a small, configurable number of retries for its
    provider exception boundary. Every attempt has the existing finite timeout;
    a final failure still raises the stable safe error and creates one failed
-   `AIRun` through the existing extractor transaction.
+   `AIRun` through the existing extractor transaction. Malformed responses are
+   terminal unless a caller explicitly supplies a fixed correction protocol;
+   only `StatementExtractor` does so, under the same total attempt budget.
 4. The Gildata client uses the same bounded retry policy for transport errors
    only. Protocol and application-level response errors are not retried.
 5. The walkthrough preserves both ledger review gates: it confirms atomic
@@ -32,8 +37,9 @@ within an explicit bound, and report historical Case non-existence honestly.
 
 ## Verification
 
-- Unit tests prove retry count, no retry for malformed protocol data, and
-  preservation of the safe public error.
+- Unit tests prove the shared retry count, default no-retry behavior for
+  malformed protocol data, extraction-only correction, and preservation of the
+  safe public error.
 - API tests prove historical pre-creation reads are represented as an expected
   walkthrough observation and that genuine programming errors still return
   500.

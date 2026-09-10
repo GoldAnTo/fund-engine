@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import select, or_
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import (
@@ -31,10 +31,13 @@ from app.models.ledger import (
 )
 from app.models.proposals import Proposal
 from app.models.source_governance import SourceContract
-from app.services.source_admission import SourceAdmission, SourceStatus, apply_source_contract, classify_source, source_contract_is_active
-from app.services.case_tenant_access import CaseTenantAccess
-from app.services.review_tenant_access import proposal_tenant_predicate
 from app.schemas.v1.commands import ReviewQueueItemDTO, ReviewQueueResponse
+from app.services.source_admission import (
+    SourceAdmission,
+    SourceStatus,
+    classify_document_source,
+    document_source_can_display,
+)
 
 
 @dataclass(frozen=True)
@@ -47,7 +50,7 @@ class ProposalEvidenceContext:
     span: SourceSpan | None
     document: DocumentVersion | None
     admission: SourceAdmission
-    display_withheld: bool = False
+    can_display: bool
 
 
 def proposal_evidence_context(
@@ -105,18 +108,24 @@ def proposal_evidence_context(
         if document is not None
         else None
     )
-    admission = apply_source_contract(classify_source(
-        document.source_url if document else None,
-        document.parser_version if document else "",
-        bool(document and document.parse_state in {"success", "parsed"}),
-    ), source_contract)
-    if source_contract is not None and (
-        not source_contract.allow_display or not source_contract_is_active(source_contract)
-    ):
-        return ProposalEvidenceContext(
-            proposal=proposal, thesis=thesis, statement=None, span=None,
-            document=None, admission=admission, display_withheld=True,
-        )
+    evaluated_at = datetime.now(UTC)
+    source_url = document.source_url if document else None
+    parser_version = document.parser_version if document else None
+    content_verified = bool(document and document.parse_state in {"success", "parsed"})
+    admission = classify_document_source(
+        source_url=source_url,
+        parser_version=parser_version,
+        content_verified=content_verified,
+        contract=source_contract,
+        at=evaluated_at,
+    )
+    can_display = document_source_can_display(
+        source_url=source_url,
+        parser_version=parser_version,
+        content_verified=content_verified,
+        contract=source_contract,
+        at=evaluated_at,
+    )
     return ProposalEvidenceContext(
         proposal=proposal,
         thesis=thesis,
@@ -124,6 +133,7 @@ def proposal_evidence_context(
         span=span,
         document=document,
         admission=admission,
+        can_display=can_display,
     )
 
 
@@ -137,7 +147,7 @@ def _invalid_evidence_context(
         span=None,
         document=None,
         admission=SourceAdmission(SourceStatus.INVALID, reason, False),
-        display_withheld=True,
+        can_display=False,
     )
 
 
@@ -159,12 +169,11 @@ class ReviewQueueQueries:
         kind: str | None = None,
         limit: int = 50,
         include_legacy: bool = True,
-        tenant_id: str | None = None,
     ) -> ReviewQueueResponse:
         items: list[ReviewQueueItemDTO] = []
 
         # --- Unified proposal queue (primary) ---
-        proposals = self._pending_proposals(case_id=case_id, kind=kind, limit=limit, tenant_id=tenant_id)
+        proposals = self._pending_proposals(case_id=case_id, kind=kind, limit=limit)
         for proposal in proposals:
             dto = self._proposal_item(proposal)
             if dto is not None:
@@ -175,42 +184,68 @@ class ReviewQueueQueries:
         # --- Legacy machine_generated link queue (transition) ---
         if include_legacy and len(items) < limit:
             remaining = limit - len(items)
-            for link, thesis, statement, span, version in self._legacy_links(
-                case_id=case_id, limit=remaining, tenant_id=tenant_id
-            ):
+            legacy_rows = list(
+                self._legacy_links(case_id=case_id, limit=remaining)
+            )
+            document_ids = {version.id for *_, version in legacy_rows}
+            contracts_by_document_id = (
+                {
+                    contract.document_version_id: contract
+                    for contract in self._db.scalars(
+                        select(SourceContract).where(
+                            SourceContract.document_version_id.in_(document_ids)
+                        )
+                    )
+                }
+                if document_ids
+                else {}
+            )
+            evaluated_at = datetime.now(UTC)
+            for link, thesis, statement, span, version in legacy_rows:
+                can_display = document_source_can_display(
+                    source_url=version.source_url,
+                    parser_version=version.parser_version,
+                    content_verified=version.parse_state in {"success", "parsed"},
+                    contract=contracts_by_document_id.get(version.id),
+                    at=evaluated_at,
+                )
                 items.append(
                     ReviewQueueItemDTO(
                         link_id=str(link.id),
                         thesis_id=str(thesis.id),
                         case_id=str(thesis.research_case_id),
-                        thesis_statement=thesis.statement,
+                        thesis_statement=thesis.statement if can_display else "",
                         ai_role=link.role,
-                        ai_reason=link.reason,
-                        ai_scope=link.scope,
+                        ai_reason=link.reason if can_display else "",
+                        ai_scope=link.scope if can_display else {},
                         statement_id=str(statement.id),
-                        statement_text=statement.normalized_text,
+                        statement_text=(
+                            statement.normalized_text if can_display else ""
+                        ),
                         statement_kind=statement.kind,
                         span_id=str(span.id),
-                        verbatim_text=span.verbatim_text,
-                        locator=span.locator,
+                        verbatim_text=span.verbatim_text if can_display else "",
+                        locator=span.locator if can_display else {},
                         document_version_id=str(version.id),
-                        document_source_url=version.source_url,
+                        document_source_url=(
+                            version.source_url if can_display else ""
+                        ),
                         document_published_at=(
                             version.published_at.isoformat()
-                            if version.published_at
+                            if version.published_at and can_display
                             else None
                         ),
-                        available_at=link.available_at.isoformat(),
+                        available_at=(
+                            link.available_at.isoformat() if can_display else ""
+                        ),
                     )
                 )
         return ReviewQueueResponse(items=items)
 
     def _pending_proposals(
-        self, *, case_id: uuid.UUID | None, kind: str | None, limit: int, tenant_id: str | None = None
+        self, *, case_id: uuid.UUID | None, kind: str | None, limit: int
     ) -> list[Proposal]:
         query = select(Proposal).where(Proposal.status == "pending")
-        if tenant_id is not None:
-            query = query.where(proposal_tenant_predicate(tenant_id))
         if case_id is not None:
             query = query.where(Proposal.research_case_id == case_id)
         if kind is not None:
@@ -235,33 +270,34 @@ class ReviewQueueQueries:
             case_id=str(thesis.research_case_id),
             thesis_statement=thesis.statement,
             ai_role=payload.get("role", ""),
-            ai_reason=payload.get("reason", ""),
-            ai_scope=payload.get("scope", {}),
+            ai_reason=payload.get("reason", "") if context.can_display else "",
+            ai_scope=payload.get("scope", {}) if context.can_display else {},
             statement_id=str(statement.id),
-            statement_text=statement.normalized_text,
+            statement_text=(statement.normalized_text if context.can_display else ""),
             statement_kind=statement.kind,
             span_id=str(span.id) if span else "",
-            verbatim_text=span.verbatim_text if span else "",
-            locator=span.locator if span else {},
+            verbatim_text=(
+                span.verbatim_text if span and context.can_display else ""
+            ),
+            locator=span.locator if span and context.can_display else {},
             document_version_id=str(version.id) if version else "",
-            document_source_url=version.source_url if version else "",
+            document_source_url=(
+                version.source_url if version and context.can_display else ""
+            ),
             document_published_at=(
-                version.published_at.isoformat() if version and version.published_at else None
+                version.published_at.isoformat()
+                if version and version.published_at and context.can_display
+                else None
             ),
             available_at=(
-                proposal.basis_cutoff.isoformat() if proposal.basis_cutoff else ""
+                proposal.basis_cutoff.isoformat()
+                if proposal.basis_cutoff and context.can_display
+                else ""
             ),
         )
 
-    def _legacy_links(self, *, case_id: uuid.UUID | None, limit: int, tenant_id: str | None = None):
+    def _legacy_links(self, *, case_id: uuid.UUID | None, limit: int):
         reviewed = select(EvidenceReview.evidence_link_id)
-        now = datetime.now(timezone.utc)
-        restricted_contract = select(SourceContract.id).where(
-            SourceContract.document_version_id == DocumentVersion.id,
-            or_(SourceContract.allow_display.is_(False),
-                SourceContract.effective_from > now,
-                SourceContract.effective_until < now),
-        ).correlate(DocumentVersion).exists()
         query = (
             select(EvidenceLink, Thesis, SourceStatement, SourceSpan, DocumentVersion)
             .join(Thesis, EvidenceLink.thesis_id == Thesis.id)
@@ -277,16 +313,9 @@ class ReviewQueueQueries:
             .where(EvidenceLink.creator_type == "ai")
             .where(EvidenceLink.review_state == "machine_generated")
             .where(EvidenceLink.id.not_in(reviewed))
-            .where(~restricted_contract)
             .order_by(EvidenceLink.created_at)
             .limit(limit)
         )
-        if tenant_id is not None:
-            query = query.where(Thesis.research_case_id.in_(CaseTenantAccess(self._db).case_ids(tenant_id)))
-            query = query.where(select(CaseDocumentVersion.id).where(
-                CaseDocumentVersion.research_case_id == Thesis.research_case_id,
-                CaseDocumentVersion.document_version_id == DocumentVersion.id,
-            ).correlate(Thesis, DocumentVersion).exists())
         if case_id is not None:
             query = query.where(Thesis.research_case_id == case_id)
         return self._db.execute(query)

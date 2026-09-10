@@ -17,17 +17,17 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.commands.common import commit_or_rollback
+from app.api.v1.tenant_context import require_research_tenant
 from app.datasources.gildata.client import (
     GILDATA_REQUEST_ERROR_MESSAGE,
     GildataMCPClient,
     GildataMCPError,
 )
 from app.db import get_db
-from app.errors import NotFoundError, UpstreamUnavailableError
+from app.errors import NotFoundError, UpstreamUnavailableError, ValidationFailedError
 from app.models.ledger import ResearchCase
 from app.schemas.v1.commands import IngestRequest, IngestResponse
-from app.scripts.ingest_real_data import ingest
-from app.api.v1.tenant_context import require_research_tenant
+from app.scripts.ingest_real_data import GildataRequestValidationError, ingest
 from app.services.case_tenant_access import CaseTenantAccess
 
 router = APIRouter(prefix="/documents", tags=["ingest-commands-v1"])
@@ -74,7 +74,11 @@ def ingest_documents(
             quote_query=payload.quote_query,
             quote_stock_code=payload.quote_stock_code,
             macro_queries=payload.macro_queries,
+            declared_by=f"tenant:{tenant_id}",
         )
+    except GildataRequestValidationError as exc:
+        db.rollback()
+        raise ValidationFailedError("quote_stock_code is invalid") from exc
     except GildataMCPError as exc:
         db.rollback()
         raise UpstreamUnavailableError(GILDATA_REQUEST_ERROR_MESSAGE) from exc

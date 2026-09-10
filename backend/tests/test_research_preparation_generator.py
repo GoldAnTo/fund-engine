@@ -8,18 +8,15 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from openai import OpenAIError
-from sqlalchemy import select
-
-from app.ai.client import LLMClient, LLMMalformedResponseError
+from app.ai.client import LLMClient, LLMMalformedResponseError, LLMProviderError
 from app.ai.research_preparation import (
     MAX_CANDIDATE_NORMALIZED_CHARACTERS,
     MAX_CANDIDATE_QUOTE_CHARACTERS,
     MAX_FACTOR_CHARACTERS,
     MAX_PARSE_CONTEXT_CHARACTERS,
     PREPARATION_CONTEXT_LIMIT_MESSAGE,
-    PREPARATION_PROVIDER_ERROR_MESSAGE,
     PREPARATION_INPUT_UNAVAILABLE_MESSAGE,
+    PREPARATION_PROVIDER_ERROR_MESSAGE,
     PreparationCandidateSummary,
     PreparationInputUnavailableError,
     ResearchPreparationGenerator,
@@ -34,7 +31,6 @@ from app.models.event_research import (
 )
 from app.models.ledger import (
     AtomicClaimCandidate,
-    AtomicClaimReview,
     CaseDocumentVersion,
     CaseTenantAdmission,
     DocumentVersion,
@@ -44,13 +40,15 @@ from app.models.ledger import (
 )
 from app.models.operational import ResearchRun
 from app.models.research_preparation import ResearchPreparation
-from app.repositories.research_preparation import ResearchPreparationRepository
-from app.services.atomic_claims import AtomicClaimService
-from app.models.source_governance import SourceContract
 from app.models.research_protocol import (
     OutcomeBindingVersion,
     VerificationRuleVersion,
 )
+from app.models.source_governance import SourceContract
+from app.repositories.research_preparation import ResearchPreparationRepository
+from app.services.atomic_claims import AtomicClaimService
+from openai import OpenAIError
+from sqlalchemy import select
 
 
 class FakeClient:
@@ -432,7 +430,7 @@ def test_load_input_accepts_active_primary_source_contract(session) -> None:
 
 def test_load_input_rejects_contract_expired_at_execution_even_when_valid_at_availability(session) -> None:
     old_available_at = datetime.now(UTC) - timedelta(days=10)
-    case, document, _ = _input(
+    case, _document, _ = _input(
         session,
         contract_effective_until=datetime.now(UTC) - timedelta(days=1),
         document_available_at=old_available_at,
@@ -771,11 +769,27 @@ def test_known_provider_failures_are_safe_but_programming_errors_pass_through(se
             ResearchPreparationGenerator(FakeClient(error("programming defect"))).draft_protocol(context)
 
 
-@pytest.mark.parametrize("response", [SimpleNamespace(choices=[]), SimpleNamespace(choices=[SimpleNamespace()]), SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace())])])
-def test_llm_client_malformed_choices_are_named_errors(response) -> None:
+@pytest.mark.parametrize(
+    ("response", "expected_error"),
+    [
+        (SimpleNamespace(choices=[]), LLMMalformedResponseError),
+        (SimpleNamespace(choices=[SimpleNamespace()]), LLMProviderError),
+        (
+            SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace())]
+            ),
+            LLMProviderError,
+        ),
+    ],
+)
+def test_llm_client_malformed_choices_are_named_errors(
+    response, expected_error
+) -> None:
     sdk = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **_kwargs: response)))
-    with pytest.raises(LLMMalformedResponseError):
+    with pytest.raises(expected_error) as exc_info:
         LLMClient(model_version="test", client=sdk).chat_json([])
+    if expected_error is LLMProviderError:
+        assert exc_info.value.failure_category == "response_validation"
 
 
 def test_prompts_are_drafts_and_user_payload_excludes_source_metadata(session) -> None:

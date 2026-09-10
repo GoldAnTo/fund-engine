@@ -721,7 +721,7 @@ def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> Non
         "frontend",
     ):
         assert service in script
-    assert 'require_revision "$new_revision" 0070' in script
+    assert 'require_revision "$new_revision" 0071' in script
     assert "0062" in script
     assert "fund-engine-event" in script
     assert 'LEGACY_DATABASE_CONTAINER="fund-engine-event-postgres-1"' in script

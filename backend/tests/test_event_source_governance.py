@@ -339,6 +339,57 @@ def test_licensed_provider_intake_preserves_provider_record_and_contract_version
     assert provider.content_sha256 == cmd_session.get(DocumentVersion, document_id).content_sha256
 
 
+@pytest.mark.parametrize("include_null_scope", [False, True])
+def test_licensed_provider_without_request_scope_replays_one_governance_bundle(
+    cmd_session,
+    include_null_scope,
+) -> None:
+    from app.repositories.documents import DocumentRepository
+    from app.services.ingest import DocumentService
+    from app.services.source_governance import SourceGovernanceService
+
+    source_url = "juyuan://research-report/JRPT-no-scope"
+    document = DocumentService(DocumentRepository(cmd_session)).freeze(
+        raw=b"licensed provider report without request scope",
+        source_url=source_url,
+        parser_version="provider-snapshot-v1",
+        parse_state="partial",
+    )
+    metadata = {
+        "provider_name": "juyuan",
+        "provider_record_id": "JRPT-no-scope",
+        "retrieval_reference": source_url,
+    }
+    if include_null_scope:
+        metadata["request_scope"] = None
+    service = SourceGovernanceService(cmd_session)
+
+    first = service.record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata=metadata,
+        declared_by="human:researcher",
+    )
+    second = service.record_event_intake(
+        document=document,
+        source_type="licensed_provider",
+        source_metadata=metadata,
+        declared_by="human:researcher",
+    )
+
+    records = list(
+        cmd_session.scalars(
+            select(ProviderRecord).where(
+                ProviderRecord.document_version_id == document.id
+            )
+        )
+    )
+    assert second.id == first.id
+    assert first.intake_metadata["request_scope"] == {}
+    assert len(records) == 1
+    assert records[0].request_scope == {}
+
+
 def test_legacy_licensed_provider_replay_uses_retrieval_reference_as_declaration_url(
     cmd_client, cmd_session
 ) -> None:

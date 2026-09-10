@@ -450,7 +450,7 @@ def _make_multiparagraph_pdf(*paragraphs: str) -> bytes:
 class _DeterministicExtractionClient:
     model_version = "fake-deterministic-extractor-v1"
 
-    def chat_json(self, messages, schema_hint=""):
+    def chat_json(self, messages, schema_hint="", **_kwargs):
         assert schema_hint == "extract"
         payload = json.loads(messages[-1]["content"])
         target = next(

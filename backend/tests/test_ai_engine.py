@@ -6,21 +6,36 @@ full pipeline can be exercised offline.
 """
 from __future__ import annotations
 
-from dataclasses import replace
+import json
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai.assessment_gen import AssessmentGenerator
-from app.ai.client import LLMClient, LLMMalformedResponseError
-from app.ai.extraction import StatementExtractor
+from app.ai.client import (
+    LLMClient,
+    LLMJSONResponse,
+    LLMMalformedResponseError,
+    LLMProviderError,
+)
+from app.ai.extraction import StatementExtractor, _resolve_verbatim_quote_offsets
 from app.ai.prompts import (
     ASSESS_PROMPT_VERSION,
+    EXTRACT_JSON_RETRY_SYSTEM,
+    EXTRACT_JSON_RETRY_VERSION,
     EXTRACT_PROMPT_VERSION,
+    EXTRACT_SYSTEM,
+    MAX_EXTRACT_NORMALIZED_TEXT_CHARACTERS,
+    MAX_EXTRACT_QUOTE_CHARACTERS,
+    MAX_EXTRACT_RETRY_STATEMENTS,
+    MAX_EXTRACT_STATEMENTS_PER_RESPONSE,
     PROPOSE_PROMPT_VERSION,
 )
 from app.ai.proposal import EvidenceProposer
@@ -32,84 +47,38 @@ from app.models.ledger import (
     SourceStatement,
     ValidationError,
 )
+from app.repositories.research import ResearchRepository
 from app.scripts.run_ai_engine import run_engine
 from app.services.research_protocol import ResearchabilityResult
-from app.repositories.research import ResearchRepository
 from tests.protocol_provenance import seed_protocol_footprint
 
+
+class _ProviderCompletions:
+    def __init__(self, content: str, *failures: Exception) -> None:
+        self._content = content
+        self._failures = list(failures)
+        self.calls = 0
+
+    def create(self, **_kwargs):
+        self.calls += 1
+        if self._failures:
+            raise self._failures.pop(0)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=self._content),
+                    finish_reason="stop",
+                )
+            ]
+        )
+
+
+def _provider_client(completions: _ProviderCompletions):
+    return SimpleNamespace(chat=SimpleNamespace(completions=completions))
 
 # ---------------------------------------------------------------------------
 # Extraction
 # ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("response", [{}, {"links": None}, {"links": [None]}, {"links": [{"source_statement_id": "x"}]}])
-def test_invalid_proposal_schema_has_failed_audit_and_no_proposals(
-    session, document_service, research_service, thesis, document, response
-):
-    from app.models.proposals import Proposal
-    span = document_service.add_span(document.id, {"page": 99}, "GPU demand increased")
-    research_service.add_statement(span.id, "GPU demand increased", kind="disclosed_fact")
-    client = LLMClient(model_version="mock-test", mock=True)
-    with patch.object(client, "chat_json", return_value=response):
-        with pytest.raises(LLMMalformedResponseError):
-            EvidenceProposer(client).propose(thesis.id, session)
-    assert session.scalar(select(func.count()).select_from(Proposal)) == 0
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "propose")))
-    assert len(runs) == 1 and runs[0].status == "failed"
-
-
-@pytest.mark.parametrize("response", [
-    {}, {"conclusion": "supported", "rationale": "source supports"},
-    {"conclusion": "supported", "rationale": "source supports", "gaps": "unknown"},
-    {"conclusion": "supported", "rationale": 3, "gaps": []},
-    {"conclusion": "supported", "rationale": "source supports", "gaps": [None]},
-])
-def test_invalid_assessment_schema_cannot_freeze_snapshot(
-    session, research_service, thesis, statement, response
-):
-    research_service.link_evidence(thesis.id, statement.id, role="supports", reason="orders", scope={"segment": "DC"})
-    client = LLMClient(model_version="mock-test", mock=True)
-    with patch.object(client, "chat_json", return_value=response):
-        with pytest.raises(LLMMalformedResponseError):
-            AssessmentGenerator(client).generate(thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session)
-    assert session.scalar(select(func.count()).select_from(EvidenceSnapshot)) == 0
-    assert session.scalar(select(func.count()).select_from(AIAssessment)) == 0
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "assess")))
-    assert len(runs) == 1 and runs[0].status == "failed"
-
-
-@pytest.mark.parametrize("legacy_rewrite", [True, False])
-def test_assessment_rewrite_uses_remaining_operation_budget(
-    session, research_service, thesis, statement, monkeypatch, legacy_rewrite
-):
-    import json
-    from types import SimpleNamespace
-    from app.ai import client as client_module
-    from app.ai.client import LLMProviderError
-
-    research_service.link_evidence(thesis.id, statement.id, role="supports", reason="orders", scope={"segment": "DC"})
-    clock = [0.0]
-    timeouts = []
-    monkeypatch.setattr(client_module.time, "monotonic", lambda: clock[0])
-    if legacy_rewrite:
-        monkeypatch.setattr("app.ai.compliance_graph.build_compliance_graph", lambda client: None)
-    def completion(**kwargs):
-        timeouts.append(kwargs["timeout"])
-        if len(timeouts) == 1:
-            clock[0] += 1.5
-            payload = {"conclusion": "supported", "rationale": "证据支持命题。目标价85元。", "gaps": []}
-        else:
-            clock[0] += 0.6
-            payload = {"texts": ["证据支持命题。"]}
-        return SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(content=json.dumps(payload), refusal=None))])
-    client = LLMClient(model_version="fake", retry_budget_seconds=2, client=SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=completion))))
-    with pytest.raises(LLMProviderError, match="LLM provider request failed"):
-        AssessmentGenerator(client).generate(thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session)
-    assert timeouts == [2, 0.5]
-    assert session.scalar(select(func.count()).select_from(EvidenceSnapshot)) == 0
-    assert session.scalar(select(func.count()).select_from(AIAssessment)) == 0
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "assess")))
-    assert len(runs) == 1 and runs[0].status == "failed"
 
 
 def test_extraction_creates_review_gated_candidates_and_airun(session, span):
@@ -140,7 +109,7 @@ def test_extraction_creates_review_gated_candidates_and_airun(session, span):
     assert run.prompt_version == EXTRACT_PROMPT_VERSION
     assert "span_ids" in run.input_ref
     assert str(span.id) in run.input_ref["span_ids"]
-    assert "atomic candidates" in run.output_summary
+    assert "candidate extraction completed" in run.output_summary
     assert {
         candidate.structured_fields["run_ref"] for candidate in candidates
     } == {f"extract:{run.id}"}
@@ -148,37 +117,6 @@ def test_extraction_creates_review_gated_candidates_and_airun(session, span):
         candidate.validation_result["normalizer_version"]
         for candidate in candidates
     } == {"atomic-claim-normalizer-v1"}
-
-
-@pytest.mark.parametrize("response", [{}, {"statements": None}, {"statements": {}}, {"statements": ""}])
-def test_invalid_extraction_schema_fails_without_success_watermark(session, span, response):
-    from app.queries.extraction_runs import successful_extract_version_ids
-
-    version_id = span.document_version_id
-    client = LLMClient(model_version="mock-test", mock=True)
-    with patch.object(client, "chat_json", return_value=response):
-        with pytest.raises(LLMMalformedResponseError):
-            StatementExtractor(client).extract(version_id, session)
-    session.commit()
-
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
-    assert len(runs) == 1 and runs[0].status == "failed"
-    assert list(session.scalars(select(AtomicClaimCandidate))) == []
-    assert version_id not in successful_extract_version_ids(session)
-
-
-def test_explicit_empty_extraction_keeps_success_watermark(session, span):
-    from app.queries.extraction_runs import successful_extract_version_ids
-
-    version_id = span.document_version_id
-    client = LLMClient(model_version="mock-test", mock=True)
-    with patch.object(client, "chat_json", return_value={"statements": []}):
-        assert StatementExtractor(client).extract(version_id, session) == []
-    session.commit()
-
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
-    assert len(runs) == 1 and runs[0].status == "success"
-    assert version_id in successful_extract_version_ids(session)
 
 
 def test_extractor_releases_read_transaction_before_llm_provider(session, span):
@@ -204,6 +142,860 @@ def test_extractor_releases_read_transaction_before_llm_provider(session, span):
     assert len(candidates) == 1
 
 
+def test_extract_keeps_valid_candidate_and_audits_rejected_sibling(session, span):
+    client = LLMClient(model_version="provider-test", mock=True)
+    valid = {
+        "span_id": str(span.id),
+        "quote": span.verbatim_text,
+        "quote_start": 0,
+        "quote_end": len(span.verbatim_text),
+        "normalized_text": "valid audit-secret normalized text",
+        "kind": "reported_claim",
+    }
+    invalid = {
+        **valid,
+        "quote": "rejected audit-secret quote",
+        "normalized_text": "rejected audit-secret normalized text",
+    }
+
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": [valid, invalid]},
+    ):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert len(candidates) == 1
+    assert run is not None
+    assert run.output_summary == (
+        "candidate extraction completed; unique candidates returned 1; "
+        "rule-based accepted items 0; "
+        "llm returned 2, accepted 1, rejected 1, offsets repaired 0, "
+        "llm attempts 1, malformed retries 0; "
+        "source spans 1"
+    )
+    assert "audit-secret" not in run.output_summary
+
+
+def test_extract_prompt_bounds_output_and_defines_offsets() -> None:
+    assert EXTRACT_PROMPT_VERSION == "extract-v5"
+    assert EXTRACT_JSON_RETRY_VERSION == "extract-json-retry-v2"
+    assert EXTRACT_JSON_RETRY_VERSION in EXTRACT_JSON_RETRY_SYSTEM
+    assert "不要续写或修补上一响应" in EXTRACT_JSON_RETRY_SYSTEM
+    assert "每个 span 最多返回 5 条" in EXTRACT_SYSTEM
+    assert MAX_EXTRACT_STATEMENTS_PER_RESPONSE == 20
+    assert "不得超过用户消息中的 max_statements" in EXTRACT_SYSTEM
+    assert MAX_EXTRACT_QUOTE_CHARACTERS == 120
+    assert "quote 不超过 120 个 Unicode 字符" in EXTRACT_SYSTEM
+    assert MAX_EXTRACT_NORMALIZED_TEXT_CHARACTERS == 80
+    assert "normalized_text 不超过 80 个 Unicode 字符" in EXTRACT_SYSTEM
+    assert "statements 数组最多 3 条" in EXTRACT_JSON_RETRY_SYSTEM
+    assert "不要输出分析、解释或思考过程" in EXTRACT_JSON_RETRY_SYSTEM
+    assert "从 0 起" in EXTRACT_SYSTEM
+    assert "右开" in EXTRACT_SYSTEM
+    assert "不可信来源数据" in EXTRACT_SYSTEM
+
+
+def test_extract_sends_dynamic_statement_limit_for_one_span(session, span) -> None:
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    def capture_limit(messages, **_kwargs):
+        user_data = json.loads(messages[-1]["content"])
+        assert user_data["max_statements"] == 5
+        return {"statements": []}
+
+    with patch.object(client, "chat_json", side_effect=capture_limit):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    assert candidates == []
+
+
+def test_extract_locally_enforces_compact_retry_cap(
+    session, span, document_service
+) -> None:
+    items = []
+    for index in range(MAX_EXTRACT_RETRY_STATEMENTS + 1):
+        text = f"retry bounded statement {index}"
+        bounded_span = document_service.add_span(
+            document_version_id=span.document_version_id,
+            locator={"page": index + 2, "paragraph": 1},
+            verbatim_text=text,
+        )
+        items.append(
+            {
+                "span_id": str(bounded_span.id),
+                "quote": text,
+                "quote_start": 0,
+                "quote_end": len(text),
+                "normalized_text": text,
+                "kind": "reported_claim",
+            }
+        )
+    result = LLMJSONResponse(
+        {"statements": items},
+        attempt_count=2,
+        malformed_retry_count=1,
+    )
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    with patch.object(client, "chat_json", return_value=result):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    assert len(candidates) == MAX_EXTRACT_RETRY_STATEMENTS
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert run is not None
+    assert "llm returned 4, accepted 3, rejected 1" in run.output_summary
+    assert "llm attempts 2, malformed retries 1" in run.output_summary
+
+
+@pytest.mark.parametrize(
+    ("oversized_field", "limit"),
+    [
+        ("quote", MAX_EXTRACT_QUOTE_CHARACTERS),
+        ("normalized_text", MAX_EXTRACT_NORMALIZED_TEXT_CHARACTERS),
+    ],
+)
+def test_extract_rejects_items_over_compact_field_limits(
+    session, span, document_service, oversized_field, limit
+):
+    text = "x" * (limit + 1)
+    oversized_span = document_service.add_span(
+        document_version_id=span.document_version_id,
+        locator={"page": 2, "paragraph": 1},
+        verbatim_text=text,
+    )
+    model_item = {
+        "span_id": str(oversized_span.id),
+        "quote": text,
+        "quote_start": 0,
+        "quote_end": len(text),
+        "normalized_text": "bounded",
+        "kind": "reported_claim",
+    }
+    model_item[oversized_field] = text
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": [model_item]},
+    ):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    assert candidates == []
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert run is not None
+    assert "llm returned 1, accepted 0, rejected 1" in run.output_summary
+
+
+def test_extract_repairs_wrong_offsets_for_a_unique_verbatim_quote(
+    session,
+    span,
+    document_service,
+):
+    unicode_span = document_service.add_span(
+        document_version_id=span.document_version_id,
+        locator={"page": 1, "paragraph": 1},
+        verbatim_text="前缀寒武纪收入增长",
+    )
+    client = LLMClient(model_version="provider-test", mock=True)
+    unique_quote = "寒武纪"
+    model_item = {
+        "span_id": str(unicode_span.id),
+        "quote": unique_quote,
+        "quote_start": 0,
+        "quote_end": len(unique_quote),
+        "normalized_text": "unique quote with repaired offsets",
+        "kind": "reported_claim",
+    }
+
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": [model_item]},
+    ):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    assert len(candidates) == 1
+    expected_start = unicode_span.verbatim_text.index(unique_quote)
+    assert candidates[0].quote == unique_quote
+    assert candidates[0].quote_start == expected_start
+    assert candidates[0].quote_end == expected_start + len(unique_quote)
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert run is not None
+    assert (
+        "llm returned 1, accepted 1, rejected 0, offsets repaired 1"
+        in run.output_summary
+    )
+
+
+def test_extract_rejects_wrong_offsets_for_an_ambiguous_quote(
+    session,
+    span,
+    document_service,
+):
+    repeated_span = document_service.add_span(
+        document_version_id=span.document_version_id,
+        locator={"page": 1, "paragraph": 1},
+        verbatim_text="repeat and repeat",
+    )
+    client = LLMClient(model_version="provider-test", mock=True)
+    model_item = {
+        "span_id": str(repeated_span.id),
+        "quote": "repeat",
+        "quote_start": 1,
+        "quote_end": 7,
+        "normalized_text": "ambiguous quote must stay rejected",
+        "kind": "reported_claim",
+    }
+
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": [model_item]},
+    ):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    assert candidates == []
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert run is not None
+    assert "llm returned 1, accepted 0, rejected 1" in run.output_summary
+
+
+@pytest.mark.parametrize("quote", ["", " ", "\n", "\t"])
+def test_quote_offset_resolution_rejects_blank_only_quote(quote):
+    source_text = f"x{quote}y"
+    assert _resolve_verbatim_quote_offsets(
+        source_text=source_text,
+        quote=quote,
+        quote_start=1,
+        quote_end=1 + len(quote),
+    ) is None
+
+
+def test_quote_offset_resolution_keeps_exact_overlapping_match_but_will_not_guess():
+    assert _resolve_verbatim_quote_offsets(
+        source_text="aaaa",
+        quote="aa",
+        quote_start=1,
+        quote_end=3,
+    ) == (1, 3)
+    assert _resolve_verbatim_quote_offsets(
+        source_text="aaaa",
+        quote="aa",
+        quote_start=0,
+        quote_end=1,
+    ) is None
+
+
+def test_extract_enforces_per_span_cap_without_spending_another_spans_budget(
+    session,
+    span,
+    document_service,
+):
+    bounded_span = document_service.add_span(
+        document_version_id=span.document_version_id,
+        locator={"page": 1, "paragraph": 1},
+        verbatim_text="alpha beta gamma delta epsilon zeta",
+    )
+    items = []
+    for word in ("alpha", "beta", "gamma", "delta", "epsilon", "zeta"):
+        start = bounded_span.verbatim_text.index(word)
+        items.append(
+            {
+                "span_id": str(bounded_span.id),
+                "quote": word,
+                "quote_start": start,
+                "quote_end": start + len(word),
+                "normalized_text": f"claim {word}",
+                "kind": "reported_claim",
+            }
+        )
+    items.append(
+        {
+            "span_id": str(span.id),
+            "quote": span.verbatim_text,
+            "quote_start": 0,
+            "quote_end": len(span.verbatim_text),
+            "normalized_text": "independent span budget",
+            "kind": "reported_claim",
+        }
+    )
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": items},
+    ):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    assert len(candidates) == 6
+    assert {candidate.normalized_text for candidate in candidates} == {
+        "claim alpha",
+        "claim beta",
+        "claim gamma",
+        "claim delta",
+        "claim epsilon",
+        "independent span budget",
+    }
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert run is not None
+    assert (
+        "llm returned 7, accepted 6, rejected 1, offsets repaired 0"
+        in run.output_summary
+    )
+
+
+def test_extract_enforces_total_response_cap(session, span, document_service):
+    items = []
+    for index in range(21):
+        text = f"bounded statement {index}"
+        bounded_span = document_service.add_span(
+            document_version_id=span.document_version_id,
+            locator={"page": index + 2, "paragraph": 1},
+            verbatim_text=text,
+        )
+        items.append(
+            {
+                "span_id": str(bounded_span.id),
+                "quote": text,
+                "quote_start": 0,
+                "quote_end": len(text),
+                "normalized_text": text,
+                "kind": "reported_claim",
+            }
+        )
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": items},
+    ):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    assert len(candidates) == 20
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert run is not None
+    assert (
+        "llm returned 21, accepted 20, rejected 1, offsets repaired 0"
+        in run.output_summary
+    )
+
+
+def test_extract_enforces_dynamic_response_cap_before_per_span_validation(
+    session, span, document_service
+):
+    second_span = document_service.add_span(
+        document_version_id=span.document_version_id,
+        locator={"page": 2, "paragraph": 1},
+        verbatim_text="alpha beta gamma delta epsilon zeta",
+    )
+
+    first_items = [
+        {
+            "span_id": str(span.id),
+            "quote": span.verbatim_text,
+            "quote_start": 0,
+            "quote_end": len(span.verbatim_text),
+            "normalized_text": f"first span claim {index}",
+            "kind": "reported_claim",
+        }
+        for index in range(6)
+    ]
+    second_items = []
+    for word in ("alpha", "beta", "gamma", "delta", "epsilon"):
+        start = second_span.verbatim_text.index(word)
+        second_items.append(
+            {
+                "span_id": str(second_span.id),
+                "quote": word,
+                "quote_start": start,
+                "quote_end": start + len(word),
+                "normalized_text": f"second span claim {word}",
+                "kind": "reported_claim",
+            }
+        )
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": [*first_items, *second_items]},
+    ):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    assert len(candidates) == 9
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert run is not None
+    assert "llm returned 11, accepted 9, rejected 2" in run.output_summary
+
+
+def test_extract_counts_non_object_item_as_rejected_and_keeps_valid_sibling(
+    session, span
+):
+    client = LLMClient(model_version="provider-test", mock=True)
+    valid = {
+        "span_id": str(span.id),
+        "quote": span.verbatim_text,
+        "quote_start": 0,
+        "quote_end": len(span.verbatim_text),
+        "normalized_text": "valid sibling",
+        "kind": "reported_claim",
+    }
+
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": ["rejected audit-secret item", valid]},
+    ):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert len(candidates) == 1
+    assert run is not None
+    assert "llm returned 2, accepted 1, rejected 1" in run.output_summary
+    assert "audit-secret" not in run.output_summary
+
+
+def test_extract_reconciles_every_invalid_model_item_without_losing_valid_sibling(
+    session, span
+):
+    client = LLMClient(model_version="provider-test", mock=True)
+    valid = {
+        "span_id": str(span.id),
+        "quote": span.verbatim_text,
+        "quote_start": 0,
+        "quote_end": len(span.verbatim_text),
+        "normalized_text": "valid sibling",
+        "kind": "reported_claim",
+    }
+    missing_kind = dict(valid)
+    missing_kind.pop("kind")
+    invalid_items = [
+        {**valid, "span_id": ["unhashable audit-secret span"]},
+        {**valid, "span_id": str(uuid.uuid4())},
+        {**valid, "normalized_text": 123},
+        {**valid, "normalized_text": "   "},
+        missing_kind,
+        {**valid, "kind": ["reported_claim"]},
+        {**valid, "kind": "unsupported_claim_type"},
+        {
+            **valid,
+            "quote": span.verbatim_text[1:],
+            "quote_start": True,
+        },
+        {**valid, "observed_period": 2025},
+    ]
+    # Keep the valid sibling inside the one-span response budget. Items beyond
+    # that budget are still reconciled as rejected overflow.
+    returned_items = [valid, *invalid_items]
+
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": returned_items},
+    ):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert len(candidates) == 1
+    assert run is not None
+    assert (
+        f"llm returned {len(returned_items)}, accepted 1, "
+        f"rejected {len(invalid_items)}"
+    ) in run.output_summary
+    assert "audit-secret" not in run.output_summary
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("assertion_actor", ["audit-secret"]),
+        ("subject", {"audit-secret": "subject"}),
+        ("predicate", 123),
+        ("object_text", ["audit-secret"]),
+        ("numeric_value", 123),
+        ("unit", ["audit-secret"]),
+        ("scope", ["audit-secret"]),
+        ("scope", []),
+        ("scope", ""),
+        ("scope", 0),
+        ("scope", False),
+        ("scope", {"segment": ["audit-secret"]}),
+    ],
+)
+def test_extract_rejects_invalid_optional_field_shape_and_keeps_valid_sibling(
+    session, span, field, invalid_value
+):
+    client = LLMClient(model_version="provider-test", mock=True)
+    valid = {
+        "span_id": str(span.id),
+        "quote": span.verbatim_text,
+        "quote_start": 0,
+        "quote_end": len(span.verbatim_text),
+        "normalized_text": "valid sibling",
+        "kind": "reported_claim",
+    }
+    invalid = {**valid, field: invalid_value}
+
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": [invalid, valid]},
+    ):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert len(candidates) == 1
+    assert run is not None
+    assert "llm returned 2, accepted 1, rejected 1" in run.output_summary
+    assert "audit-secret" not in run.output_summary
+
+
+@pytest.mark.parametrize(
+    "provider_result",
+    [
+        None,
+        [],
+        {},
+        {"statements": None},
+        {"statements": "malformed audit-secret statements"},
+        {"statements": {"audit-secret": "item"}},
+    ],
+)
+def test_extract_requires_top_level_statements_list(session, span, provider_result):
+    client = LLMClient(model_version="provider-test", mock=True)
+
+    with (
+        patch.object(client, "chat_json", return_value=provider_result),
+        pytest.raises(LLMMalformedResponseError),
+    ):
+        StatementExtractor(client).extract(span.document_version_id, session)
+
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert run is not None
+    assert run.status == "failed"
+    assert run.output_summary == (
+        "llm attempts 1; failure category malformed_response"
+    )
+    assert run.error == "AI operation failed"
+    assert "audit-secret" not in run.error
+    assert list(session.scalars(select(AtomicClaimCandidate))) == []
+
+
+def test_extract_does_not_misclassify_pre_commit_guard_failure_as_rejection(
+    session, span
+):
+    client = LLMClient(model_version="provider-test", mock=True)
+    valid = {
+        "span_id": str(span.id),
+        "quote": span.verbatim_text,
+        "quote_start": 0,
+        "quote_end": len(span.verbatim_text),
+        "normalized_text": "valid sibling",
+        "kind": "reported_claim",
+    }
+    guard_calls = 0
+
+    def fail_candidate_write_guard(_session):
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls == 2:
+            raise ValidationError("stale output slot audit-secret")
+
+    with (
+        patch.object(client, "chat_json", return_value={"statements": [valid]}),
+        pytest.raises(ValidationError, match="stale output slot"),
+    ):
+        StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+            pre_commit_guard=fail_candidate_write_guard,
+        )
+
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert run is not None
+    assert run.status == "failed"
+    assert run.error == "AI operation failed"
+    assert "audit-secret" not in run.error
+    assert list(session.scalars(select(AtomicClaimCandidate))) == []
+
+
+def test_extract_does_not_misclassify_database_failure_as_model_rejection(
+    session, span
+):
+    from sqlalchemy.exc import OperationalError
+
+    client = LLMClient(model_version="provider-test", mock=True)
+    valid = {
+        "span_id": str(span.id),
+        "quote": span.verbatim_text,
+        "quote_start": 0,
+        "quote_end": len(span.verbatim_text),
+        "normalized_text": "valid sibling",
+        "kind": "reported_claim",
+    }
+    database_error = OperationalError(
+        "INSERT audit-secret",
+        {},
+        RuntimeError("database audit-secret"),
+    )
+
+    with (
+        patch.object(client, "chat_json", return_value={"statements": [valid]}),
+        patch(
+            "app.ai.extraction.AtomicClaimService.admit",
+            side_effect=database_error,
+        ),
+        pytest.raises(OperationalError),
+    ):
+        StatementExtractor(client).extract(span.document_version_id, session)
+
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert run is not None
+    assert run.status == "failed"
+    assert run.output_summary == "llm attempts 0; failure category unknown"
+    assert run.error == "AI operation failed"
+    assert "audit-secret" not in run.error
+    assert list(session.scalars(select(AtomicClaimCandidate))) == []
+
+
+def test_extract_counts_deduplicated_admission_as_accepted_model_item(session, span):
+    client = LLMClient(model_version="provider-test", mock=True)
+    valid = {
+        "span_id": str(span.id),
+        "quote": span.verbatim_text,
+        "quote_start": 0,
+        "quote_end": len(span.verbatim_text),
+        "normalized_text": "stable candidate",
+        "kind": "reported_claim",
+    }
+
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": [valid]},
+    ):
+        first = StatementExtractor(client).extract(span.document_version_id, session)
+        second = StatementExtractor(client).extract(span.document_version_id, session)
+
+    runs = list(
+        session.scalars(
+            select(AIRun)
+            .where(AIRun.kind == "extract")
+            .order_by(AIRun.started_at)
+        )
+    )
+    assert len(first) == len(second) == 1
+    assert first[0].id == second[0].id
+    assert session.scalar(select(func.count()).select_from(AtomicClaimCandidate)) == 1
+    assert len(runs) == 2
+    assert runs[-1].output_summary == (
+        "candidate extraction completed; unique candidates returned 1; "
+        "rule-based accepted items 0; "
+        "llm returned 1, accepted 1, rejected 0, offsets repaired 0, "
+        "llm attempts 1, malformed retries 0; "
+        "source spans 1"
+    )
+    assert "extracted" not in runs[-1].output_summary
+
+
+def test_extract_counts_duplicate_model_items_as_accepted_but_returns_unique(
+    session, span
+):
+    client = LLMClient(model_version="provider-test", mock=True)
+    valid = {
+        "span_id": str(span.id),
+        "quote": span.verbatim_text,
+        "quote_start": 0,
+        "quote_end": len(span.verbatim_text),
+        "normalized_text": "stable duplicate candidate",
+        "kind": "reported_claim",
+        "scope": None,
+    }
+
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": [valid, dict(valid)]},
+    ):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert len(candidates) == 1
+    assert len({candidate.id for candidate in candidates}) == 1
+    assert session.scalar(select(func.count()).select_from(AtomicClaimCandidate)) == 1
+    assert run is not None
+    assert run.output_summary == (
+        "candidate extraction completed; unique candidates returned 1; "
+        "rule-based accepted items 0; "
+        "llm returned 2, accepted 2, rejected 0, offsets repaired 0, "
+        "llm attempts 1, malformed retries 0; "
+        "source spans 1"
+    )
+    assert "extracted" not in run.output_summary
+
+
+def test_extract_reports_rule_based_candidates_separately_from_llm_admission(
+    session, span, document_service
+):
+    table_span = document_service.add_span(
+        document_version_id=span.document_version_id,
+        locator={"page": 2},
+        verbatim_text=(
+            "主要会计数据 单位：千元\n"
+            "指标 2025年 2024年\n"
+            "营业收入 50,000,000 40,000,000\n"
+        ),
+    )
+    client = LLMClient(model_version="provider-test", mock=True)
+    valid = {
+        "span_id": str(span.id),
+        "quote": span.verbatim_text,
+        "quote_start": 0,
+        "quote_end": len(span.verbatim_text),
+        "normalized_text": "valid narrative candidate",
+        "kind": "reported_claim",
+    }
+    invalid = {**valid, "quote": "not in the narrative span"}
+
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": [valid, invalid]},
+    ):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    rule_count = sum(
+        candidate.source_span_id == table_span.id for candidate in candidates
+    )
+    llm_count = sum(candidate.source_span_id == span.id for candidate in candidates)
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert rule_count > 0
+    assert llm_count == 1
+    assert run is not None
+    assert run.output_summary == (
+        f"candidate extraction completed; unique candidates returned "
+        f"{len(candidates)}; rule-based accepted items {rule_count}; "
+        "llm returned 2, accepted 1, rejected 1, offsets repaired 0, "
+        "llm attempts 1, malformed retries 0; "
+        "source spans 2"
+    )
+    assert len(candidates) == rule_count + llm_count
+
+
+def test_extract_returns_candidate_once_when_rule_and_llm_admissions_overlap(
+    session, span, document_service
+):
+    client = LLMClient(model_version="provider-test", mock=True)
+    valid = {
+        "span_id": str(span.id),
+        "quote": span.verbatim_text,
+        "quote_start": 0,
+        "quote_end": len(span.verbatim_text),
+        "normalized_text": "overlapping candidate",
+        "kind": "reported_claim",
+    }
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={"statements": [valid]},
+    ):
+        existing = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )[0]
+    document_service.add_span(
+        document_version_id=span.document_version_id,
+        locator={"page": 2},
+        verbatim_text=(
+            "主要会计数据 单位：千元\n"
+            "指标 2025年 2024年\n"
+            "营业收入 50,000,000 40,000,000\n"
+        ),
+    )
+
+    with (
+        patch.object(
+            client,
+            "chat_json",
+            return_value={"statements": [valid]},
+        ),
+        patch(
+            "app.ai.extraction.AtomicClaimService.admit",
+            return_value=existing,
+        ) as admit,
+    ):
+        candidates = StatementExtractor(client).extract(
+            span.document_version_id,
+            session,
+        )
+
+    latest_run = session.scalar(
+        select(AIRun)
+        .where(AIRun.kind == "extract")
+        .order_by(AIRun.started_at.desc())
+        .limit(1)
+    )
+    assert admit.call_count >= 2
+    assert [candidate.id for candidate in candidates] == [existing.id]
+    assert latest_run is not None
+    rule_accepted_count = admit.call_count - 1
+    assert latest_run.output_summary == (
+        "candidate extraction completed; unique candidates returned 1; "
+        f"rule-based accepted items {rule_accepted_count}; "
+        "llm returned 1, accepted 1, rejected 0, offsets repaired 0, "
+        "llm attempts 1, malformed retries 0; "
+        "source spans 2"
+    )
+    assert "extracted" not in latest_run.output_summary
+
+
 def test_extraction_records_no_spans(session, document_service):
     version = document_service.freeze(
         raw=b"empty doc", source_url="https://example.test/empty"
@@ -217,7 +1009,10 @@ def test_extraction_records_no_spans(session, document_service):
     runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
     assert len(runs) == 1
     assert runs[0].status == "success"
-    assert "no source spans" in runs[0].output_summary
+    assert runs[0].output_summary == (
+        "skipped: no source spans attached to this version; "
+        "llm returned 0, accepted 0, rejected 0"
+    )
 
 
 def test_no_span_extraction_honors_cancelled_output_slot(session, document_service):
@@ -852,6 +1647,217 @@ def test_assessment_rechecks_protocol_after_provider_and_blocks_persistence(
 # ---------------------------------------------------------------------------
 
 
+def test_extraction_persists_safe_timeout_attempt_diagnostics(session, span):
+    completions = _ProviderCompletions(
+        "unused sentinel-secret payload",
+        httpx.ReadTimeout("sentinel-secret timeout one"),
+        httpx.ReadTimeout("sentinel-secret timeout two"),
+    )
+    client = LLMClient(
+        model_version="provider-test",
+        client=_provider_client(completions),
+        max_attempts=2,
+        sleep=lambda _: None,
+    )
+
+    with pytest.raises(LLMProviderError) as exc_info:
+        StatementExtractor(client).extract(span.document_version_id, session)
+
+    assert str(exc_info.value) == "LLM provider request failed"
+    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
+    assert len(runs) == 1
+    assert runs[0].status == "failed"
+    assert runs[0].output_summary == (
+        "llm attempts 2; failure category timeout"
+    )
+    assert runs[0].error == "AI operation failed"
+    assert "sentinel-secret" not in runs[0].output_summary
+    assert completions.calls == 2
+
+
+def test_extraction_exhausts_one_shared_budget_for_transport_and_malformed(
+    session, span
+):
+    completions = _ProviderCompletions(
+        json.dumps({"statements": {"sentinel-secret": "not-a-list"}}),
+        httpx.ReadTimeout("sentinel-secret transient timeout"),
+    )
+    sleep_calls: list[float] = []
+    client = LLMClient(
+        model_version="provider-test",
+        client=_provider_client(completions),
+        max_attempts=3,
+        sleep=sleep_calls.append,
+    )
+
+    with pytest.raises(LLMMalformedResponseError) as exc_info:
+        StatementExtractor(client).extract(span.document_version_id, session)
+
+    assert exc_info.value.attempt_count == 3
+    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
+    assert len(runs) == 1
+    assert runs[0].status == "failed"
+    assert runs[0].output_summary == (
+        "llm attempts 3; failure category malformed_response"
+    )
+    assert runs[0].error == "AI operation failed"
+    assert "sentinel-secret" not in runs[0].output_summary
+    assert completions.calls == 3
+    assert len(sleep_calls) == 2
+
+
+def test_extraction_persists_safe_output_limit_category(session, span):
+    class AlwaysTruncatedCompletions:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def create(self, **_kwargs):
+            self.calls += 1
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content='{"statements":["sentinel-secret"'
+                        ),
+                        finish_reason="length",
+                    )
+                ]
+            )
+
+    completions = AlwaysTruncatedCompletions()
+    client = LLMClient(
+        model_version="provider-test",
+        client=_provider_client(completions),
+        max_attempts=2,
+        sleep=lambda _: None,
+    )
+
+    with pytest.raises(LLMMalformedResponseError) as exc_info:
+        StatementExtractor(client).extract(span.document_version_id, session)
+
+    assert exc_info.value.failure_category == "output_limit"
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert run is not None
+    assert run.status == "failed"
+    assert run.output_summary == "llm attempts 2; failure category output_limit"
+    assert run.error == "AI operation failed"
+    assert "sentinel-secret" not in run.output_summary
+    assert completions.calls == 2
+
+
+def test_extraction_successful_retry_records_only_one_success_airun(session, span):
+    statement = {
+        "span_id": str(span.id),
+        "quote": span.verbatim_text,
+        "quote_start": 0,
+        "quote_end": len(span.verbatim_text),
+        "normalized_text": "valid retried provider statement",
+        "kind": "reported_claim",
+    }
+    completions = _ProviderCompletions(
+        json.dumps({"statements": [statement]}),
+        httpx.ReadTimeout("sentinel-secret transient timeout"),
+    )
+    client = LLMClient(
+        model_version="provider-test",
+        client=_provider_client(completions),
+        max_attempts=2,
+        sleep=lambda _: None,
+    )
+
+    candidates = StatementExtractor(client).extract(span.document_version_id, session)
+
+    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
+    assert len(candidates) == 1
+    assert len(runs) == 1
+    assert runs[0].status == "success"
+    assert completions.calls == 2
+    assert "llm attempts 2, malformed retries 0" in runs[0].output_summary
+
+
+def test_extraction_malformed_retry_records_one_success_airun(session, span):
+    statement = {
+        "span_id": str(span.id),
+        "quote": span.verbatim_text,
+        "quote_start": 0,
+        "quote_end": len(span.verbatim_text),
+        "normalized_text": "valid corrected provider statement",
+        "kind": "reported_claim",
+    }
+
+    class MalformedThenValidCompletions:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            content = (
+                '{"sentinel-secret":'
+                if len(self.calls) == 1
+                else json.dumps({"statements": [statement]})
+            )
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content=content),
+                        finish_reason="stop",
+                    )
+                ]
+            )
+
+    completions = MalformedThenValidCompletions()
+    client = LLMClient(
+        model_version="provider-test",
+        client=_provider_client(completions),
+        max_attempts=2,
+        sleep=lambda _: None,
+    )
+
+    candidates = StatementExtractor(client).extract(span.document_version_id, session)
+
+    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
+    assert len(candidates) == 1
+    assert len(runs) == 1
+    assert runs[0].status == "success"
+    assert "llm attempts 2, malformed retries 1" in runs[0].output_summary
+    assert "sentinel-secret" not in runs[0].output_summary
+    assert len(completions.calls) == 2
+    assert completions.calls[1]["messages"][0] == {
+        "role": "system",
+        "content": EXTRACT_SYSTEM + "\n\n" + EXTRACT_JSON_RETRY_SYSTEM,
+    }
+    assert len(completions.calls[1]["messages"]) == 2
+
+
+def test_extraction_rejects_invalid_item_without_provider_retry(session, span):
+    invalid_statement = {
+        "span_id": str(span.id),
+        "quote": "invented quote",
+        "quote_start": 0,
+        "quote_end": len("invented quote"),
+        "normalized_text": "invalid provider statement",
+        "kind": "reported_claim",
+    }
+    completions = _ProviderCompletions(
+        json.dumps({"statements": [invalid_statement]})
+    )
+    client = LLMClient(
+        model_version="provider-test",
+        client=_provider_client(completions),
+        max_attempts=3,
+        sleep=lambda _: pytest.fail("item rejection must not retry"),
+    )
+
+    candidates = StatementExtractor(client).extract(span.document_version_id, session)
+
+    run = session.scalar(select(AIRun).where(AIRun.kind == "extract"))
+    assert candidates == []
+    assert completions.calls == 1
+    assert run is not None and run.status == "success"
+    assert "llm returned 1, accepted 0, rejected 1" in run.output_summary
+    assert "llm attempts 1, malformed retries 0" in run.output_summary
+
+
 def test_ai_run_records_failure_on_extraction_error(session, span):
     client = LLMClient(model_version="mock-test", mock=True)
 
@@ -868,7 +1874,9 @@ def test_ai_run_records_failure_on_extraction_error(session, span):
     assert len(runs) == 1
     run = runs[0]
     assert run.status == "failed"
+    assert run.output_summary == "llm attempts 0; failure category unknown"
     assert run.error == "AI operation failed"
+    assert "sentinel-secret" not in run.output_summary
     assert "sentinel-secret" not in run.error
     assert run.model_version == "mock-test"
     assert run.prompt_version == EXTRACT_PROMPT_VERSION
@@ -1082,7 +2090,7 @@ def test_cli_propose_partial_output_is_rolled_back_before_failed_audit(
         patch("app.scripts.run_ai_engine.LLMClient.from_env", return_value=client),
         patch.object(client, "chat_json", side_effect=partial_then_invalid),
         patch("app.scripts.run_ai_engine.AssessmentGenerator.generate") as assess,
-        pytest.raises(LLMMalformedResponseError),
+        pytest.raises(KeyError, match="role"),
     ):
         run_engine(session, research_case, skip_extract=True)
 

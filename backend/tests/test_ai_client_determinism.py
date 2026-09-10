@@ -14,20 +14,23 @@ temperature=0 plus a fixed seed closes the bulk of the variance.
 """
 from __future__ import annotations
 
-from typing import Any
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import httpx
+import openai
 import pytest
 
 from app.ai.client import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_TEMPERATURE,
     DEFAULT_TIMEOUT_SECONDS,
     LLMClient,
-    LLMProviderError,
     LLMMalformedResponseError,
+    LLMProviderError,
 )
+from app.ai.prompts import EXTRACT_JSON_RETRY_SYSTEM
 
 
 def _isolate_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,7 +42,9 @@ def _isolate_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "LLM_SEED",
         "LLM_TIMEOUT_SECONDS",
         "LLM_MAX_ATTEMPTS",
-        "LLM_RETRY_BUDGET_SECONDS",
+        "LLM_MAX_OUTPUT_TOKENS",
+        "LLM_RETRY_BASE_SECONDS",
+        "LLM_RETRY_MAX_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LLM_BASE_URL", "https://llm.example.invalid/v1")
@@ -58,10 +63,15 @@ class _FakeCompletions:
         self.calls.append(kwargs)
         # Mirror OpenAI's response shape enough for chat_json to extract content.
         response = MagicMock()
+        response.input_sensitive = None
+        response.output_sensitive = None
+        response.base_resp = None
         response.choices = [MagicMock()]
         response.choices[0].message.content = '{"conclusion": "supported"}'
-        response.choices[0].finish_reason = "stop"
         response.choices[0].message.refusal = None
+        response.choices[0].message.tool_calls = None
+        response.choices[0].message.function_call = None
+        response.choices[0].finish_reason = "stop"
         return response
 
 
@@ -85,6 +95,9 @@ class _FailingCompletions:
 class _MalformedCompletions:
     def create(self, **kwargs: Any) -> MagicMock:
         response = MagicMock()
+        response.input_sensitive = None
+        response.output_sensitive = None
+        response.base_resp = None
         response.choices = []
         return response
 
@@ -93,6 +106,73 @@ class _ClientWithCompletions:
     def __init__(self, completions: Any) -> None:
         self.chat = MagicMock()
         self.chat.completions = completions
+
+
+def _json_response(
+    content: str = '{"ok": true}', *, finish_reason: str = "stop"
+) -> MagicMock:
+    response = MagicMock()
+    response.input_sensitive = None
+    response.output_sensitive = None
+    response.base_resp = None
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = content
+    response.choices[0].message.refusal = None
+    response.choices[0].message.tool_calls = None
+    response.choices[0].message.function_call = None
+    response.choices[0].finish_reason = finish_reason
+    return response
+
+
+class _SequenceCompletions:
+    def __init__(self, *errors: Exception) -> None:
+        self._errors = list(errors)
+        self.calls = 0
+
+    def create(self, **_kwargs: Any) -> MagicMock:
+        self.calls += 1
+        if self._errors:
+            raise self._errors.pop(0)
+        return _json_response()
+
+
+class _HTTPStatusCompletions:
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        retry_after: str | None = None,
+        succeeds_after: bool = False,
+        sdk_error: bool = False,
+    ) -> None:
+        request = httpx.Request(
+            "POST", "https://llm.example.invalid/v1/chat/completions"
+        )
+        headers = {"Retry-After": retry_after} if retry_after is not None else {}
+        response = httpx.Response(
+            status_code,
+            request=request,
+            headers=headers,
+            json={"detail": "sentinel-secret-provider-body"},
+        )
+        if sdk_error:
+            self.error: Exception = openai.APIStatusError(
+                "sentinel-secret-provider-status",
+                response=response,
+                body={"detail": "sentinel-secret-provider-body"},
+            )
+        else:
+            self.error = httpx.HTTPStatusError(
+                "sentinel-secret-provider-status", request=request, response=response
+            )
+        self.calls = 0
+        self.succeeds_after = succeeds_after
+
+    def create(self, **_kwargs: Any) -> MagicMock:
+        self.calls += 1
+        if self.succeeds_after and self.calls > 1:
+            return _json_response()
+        raise self.error
 
 
 class TestLLMClientDeterminism:
@@ -135,6 +215,1330 @@ class TestLLMClientDeterminism:
 
         assert fake.chat.completions.calls[0]["timeout"] == 12.5
 
+    def test_live_call_forwards_configured_max_completion_tokens(self) -> None:
+        fake = _FakeOpenAIClient()
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=fake,
+            max_output_tokens=4096,
+        )
+
+        client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert DEFAULT_MAX_OUTPUT_TOKENS == 4096
+        assert fake.chat.completions.calls[0]["max_completion_tokens"] == 4096
+        assert "max_tokens" not in fake.chat.completions.calls[0]
+
+    def test_transient_failure_retries_with_bounded_backoff(self) -> None:
+        sleep_calls: list[float] = []
+        completions = _SequenceCompletions(
+            httpx.ReadTimeout("slow"),
+            httpx.ConnectError("disconnected"),
+            httpx.WriteError("write failed"),
+        )
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=4,
+            retry_base_seconds=0.25,
+            retry_max_seconds=0.6,
+            sleep=sleep_calls.append,
+        )
+
+        assert client.chat_json([{"role": "user", "content": "{}"}]) == {
+            "ok": True
+        }
+        assert completions.calls == 4
+        assert sleep_calls == [0.25, 0.5, 0.6]
+
+    def test_exhausted_timeouts_expose_safe_structured_diagnostics(self) -> None:
+        sleep_calls: list[float] = []
+        completions = _SequenceCompletions(
+            httpx.ReadTimeout("sentinel-secret first timeout"),
+            httpx.ReadTimeout("sentinel-secret second timeout"),
+        )
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=2,
+            sleep=sleep_calls.append,
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert str(exc_info.value) == "LLM provider request failed"
+        assert exc_info.value.attempt_count == 2
+        assert exc_info.value.failure_category == "timeout"
+        assert "sentinel-secret" not in str(exc_info.value)
+        assert completions.calls == 2
+        assert len(sleep_calls) == 1
+
+    @pytest.mark.parametrize("status_code", [408, 429, 500, 503, 599])
+    def test_retryable_http_status_retries(self, status_code: int) -> None:
+        sleep_calls: list[float] = []
+        completions = _HTTPStatusCompletions(status_code, succeeds_after=True)
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=2,
+            sleep=sleep_calls.append,
+        )
+
+        assert client.chat_json([{"role": "user", "content": "{}"}]) == {
+            "ok": True
+        }
+        assert completions.calls == 2
+        assert len(sleep_calls) == 1
+
+    def test_openai_connection_error_retries(self) -> None:
+        request = httpx.Request(
+            "POST", "https://llm.example.invalid/v1/chat/completions"
+        )
+        completions = _SequenceCompletions(
+            openai.APIConnectionError(message="disconnected", request=request)
+        )
+        sleep_calls: list[float] = []
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=2,
+            sleep=sleep_calls.append,
+        )
+
+        assert client.chat_json([{"role": "user", "content": "{}"}]) == {
+            "ok": True
+        }
+        assert completions.calls == 2
+        assert len(sleep_calls) == 1
+
+    def test_openai_retryable_status_uses_public_response_fields(self) -> None:
+        sleep_calls: list[float] = []
+        completions = _HTTPStatusCompletions(
+            429,
+            retry_after="0.75",
+            succeeds_after=True,
+            sdk_error=True,
+        )
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=2,
+            retry_base_seconds=0.25,
+            retry_max_seconds=2.0,
+            sleep=sleep_calls.append,
+        )
+
+        assert client.chat_json([{"role": "user", "content": "{}"}]) == {
+            "ok": True
+        }
+        assert completions.calls == 2
+        assert sleep_calls == [0.75]
+
+    @pytest.mark.parametrize(
+        ("status_code", "expected_category"),
+        [(408, "timeout"), (429, "rate_limit"), (503, "server_error")],
+    )
+    def test_exhausted_retryable_status_exposes_attempt_count_and_category(
+        self, status_code: int, expected_category: str
+    ) -> None:
+        completions = _HTTPStatusCompletions(status_code)
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=2,
+            sleep=lambda _: None,
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert str(exc_info.value) == "LLM provider request failed"
+        assert exc_info.value.attempt_count == 2
+        assert exc_info.value.failure_category == expected_category
+        assert completions.calls == 2
+
+    @pytest.mark.parametrize("status_code", [400, 401, 403, 404, 422])
+    def test_nonretryable_http_status_is_attempted_once(
+        self, status_code: int
+    ) -> None:
+        completions = _HTTPStatusCompletions(status_code)
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("terminal failures must not sleep"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert str(exc_info.value) == "LLM provider request failed"
+        assert "sentinel-secret" not in str(exc_info.value)
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "client_error"
+        assert completions.calls == 1
+
+    def test_response_validation_failure_is_attempted_once(self) -> None:
+        request = httpx.Request(
+            "POST", "https://llm.example.invalid/v1/chat/completions"
+        )
+        response = httpx.Response(200, request=request)
+        error = openai.APIResponseValidationError(
+            response=response,
+            body={"detail": "sentinel-secret-provider-body"},
+            message="sentinel-secret-invalid-response",
+        )
+        completions = _SequenceCompletions(error)
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("terminal failures must not sleep"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert str(exc_info.value) == "LLM provider request failed"
+        assert "sentinel-secret" not in str(exc_info.value)
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "response_validation"
+        assert completions.calls == 1
+
+    @pytest.mark.parametrize(
+        ("retry_after", "expected_delay"),
+        [
+            ("30", 2.0),
+            ("0", 0.0),
+            ("nan", 0.25),
+            ("inf", 0.25),
+            ("-1", 0.25),
+            ("tomorrow", 0.25),
+        ],
+    )
+    def test_retry_after_is_finite_nonnegative_and_clamped(
+        self, retry_after: str, expected_delay: float
+    ) -> None:
+        sleep_calls: list[float] = []
+        completions = _HTTPStatusCompletions(
+            429, retry_after=retry_after, succeeds_after=True
+        )
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=2,
+            retry_base_seconds=0.25,
+            retry_max_seconds=2.0,
+            sleep=sleep_calls.append,
+        )
+
+        assert client.chat_json([{"role": "user", "content": "{}"}]) == {
+            "ok": True
+        }
+        assert sleep_calls == [expected_delay]
+
+    def test_malformed_response_retries_with_safe_json_correction(self) -> None:
+        class MalformedThenValidCompletions:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, Any]] = []
+
+            def create(self, **kwargs: Any) -> MagicMock:
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    return _json_response('{"sentinel-secret":')
+                return _json_response('{"statements": []}')
+
+        completions = MalformedThenValidCompletions()
+        sleep_calls: list[float] = []
+        original_messages = [{"role": "user", "content": "{}"}]
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=2,
+            sleep=sleep_calls.append,
+        )
+
+        result = client.chat_json(
+            original_messages,
+            schema_hint="extract",
+            malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+        )
+
+        assert result == {"statements": []}
+        assert result.attempt_count == 2
+        assert result.malformed_retry_count == 1
+        assert len(completions.calls) == 2
+        assert completions.calls[0]["messages"] == original_messages
+        retry_messages = completions.calls[1]["messages"]
+        assert retry_messages[1:] == original_messages
+        assert retry_messages[0] == {
+            "role": "system",
+            "content": EXTRACT_JSON_RETRY_SYSTEM,
+        }
+        assert "sentinel-secret" not in retry_messages[0]["content"]
+        assert original_messages == [{"role": "user", "content": "{}"}]
+        assert sleep_calls == [0.25]
+
+    def test_extract_retry_merges_correction_into_existing_system_message(
+        self,
+    ) -> None:
+        class MalformedThenValidCompletions:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, Any]] = []
+
+            def create(self, **kwargs: Any) -> MagicMock:
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    return _json_response('{"sentinel-secret":')
+                return _json_response('{"statements": []}')
+
+        completions = MalformedThenValidCompletions()
+        original_messages = [
+            {"role": "system", "content": "trusted extraction contract"},
+            {"role": "user", "content": "sentinel-source-data"},
+        ]
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=2,
+            sleep=lambda _: None,
+        )
+
+        client.chat_json(
+            original_messages,
+            schema_hint="extract",
+            malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+        )
+
+        retry_messages = completions.calls[1]["messages"]
+        assert retry_messages == [
+            {
+                "role": "system",
+                "content": (
+                    "trusted extraction contract\n\n"
+                    + EXTRACT_JSON_RETRY_SYSTEM
+                ),
+            },
+            {"role": "user", "content": "sentinel-source-data"},
+        ]
+        assert original_messages == [
+            {"role": "system", "content": "trusted extraction contract"},
+            {"role": "user", "content": "sentinel-source-data"},
+        ]
+
+    @pytest.mark.parametrize("malformed_kind", ["length", "extract_schema"])
+    def test_extract_retry_accepts_length_or_schema_correction(
+        self, malformed_kind: str
+    ) -> None:
+        class MalformedThenValidCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> MagicMock:
+                self.calls += 1
+                if self.calls == 1:
+                    if malformed_kind == "length":
+                        return _json_response(
+                            '{"statements": [', finish_reason="length"
+                        )
+                    return _json_response('{"items": []}')
+                return _json_response('{"statements": []}')
+
+        completions = MalformedThenValidCompletions()
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=2,
+            sleep=lambda _: None,
+        )
+
+        result = client.chat_json(
+            [{"role": "user", "content": "{}"}],
+            schema_hint="extract",
+            malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+        )
+
+        assert result == {"statements": []}
+        assert result.attempt_count == 2
+        assert result.malformed_retry_count == 1
+        assert completions.calls == 2
+
+    @pytest.mark.parametrize("max_attempts", [1, 3])
+    def test_extract_malformed_retry_exhaustion_uses_one_total_budget(
+        self, max_attempts: int
+    ) -> None:
+        class AlwaysMalformedCompletions:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, Any]] = []
+
+            def create(self, **kwargs: Any) -> MagicMock:
+                self.calls.append(kwargs)
+                return _json_response('{"sentinel-secret":')
+
+        completions = AlwaysMalformedCompletions()
+        sleep_calls: list[float] = []
+        original_messages = [{"role": "user", "content": "{}"}]
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=max_attempts,
+            sleep=sleep_calls.append,
+        )
+
+        with pytest.raises(LLMMalformedResponseError) as exc_info:
+            client.chat_json(
+                original_messages,
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert exc_info.value.attempt_count == max_attempts
+        assert completions.calls[0]["messages"] == original_messages
+        assert len(completions.calls) == max_attempts
+        assert len(sleep_calls) == max_attempts - 1
+        for call in completions.calls[1:]:
+            assert call["messages"] == [
+                {"role": "system", "content": EXTRACT_JSON_RETRY_SYSTEM},
+                *original_messages,
+            ]
+            assert "sentinel-secret" not in call["messages"][0]["content"]
+
+    @pytest.mark.parametrize(
+        "failure_order", ["malformed_then_timeout", "timeout_then_malformed"]
+    )
+    def test_extract_malformed_and_transport_retries_share_budget_and_correction(
+        self, failure_order: str
+    ) -> None:
+        class MixedFailuresThenValidCompletions:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, Any]] = []
+
+            def create(self, **kwargs: Any) -> MagicMock:
+                self.calls.append(kwargs)
+                failures = failure_order.split("_then_")
+                if len(self.calls) > len(failures):
+                    return _json_response('{"statements": []}')
+                current_failure = failures[len(self.calls) - 1]
+                if current_failure == "malformed":
+                    return _json_response('{"sentinel-secret":')
+                if current_failure == "timeout":
+                    raise httpx.ReadTimeout("sentinel-secret timeout")
+                raise AssertionError("unexpected test failure kind")
+
+        completions = MixedFailuresThenValidCompletions()
+        sleep_calls: list[float] = []
+        original_messages = [{"role": "user", "content": "{}"}]
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=sleep_calls.append,
+        )
+
+        result = client.chat_json(
+            original_messages,
+            schema_hint="extract",
+            malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+        )
+
+        assert result == {"statements": []}
+        assert result.attempt_count == 3
+        assert result.malformed_retry_count == 1
+        correction_messages = [
+            call["messages"]
+            for call in completions.calls
+            if len(call["messages"]) == len(original_messages) + 1
+        ]
+        assert correction_messages
+        assert all(
+            messages[0]
+            == {"role": "system", "content": EXTRACT_JSON_RETRY_SYSTEM}
+            for messages in correction_messages
+        )
+        assert sleep_calls == [0.25, 0.5]
+
+    @pytest.mark.parametrize(
+        ("terminal_kind", "expected_category"),
+        [
+            ("http_400", "client_error"),
+            ("http_503", "server_error"),
+            ("refusal", "refusal"),
+        ],
+    )
+    def test_extract_malformed_then_terminal_failure_stops_shared_budget(
+        self, terminal_kind: str, expected_category: str
+    ) -> None:
+        terminal = (
+            _HTTPStatusCompletions(int(terminal_kind.removeprefix("http_"))).error
+            if terminal_kind.startswith("http_")
+            else None
+        )
+
+        class MalformedThenTerminalCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> MagicMock:
+                self.calls += 1
+                if self.calls == 1:
+                    return _json_response('{"sentinel-secret":')
+                if terminal is not None:
+                    raise terminal
+                response = _json_response('{"statements": []}')
+                response.choices[0].message.refusal = "sentinel-secret refusal"
+                return response
+
+        completions = MalformedThenTerminalCompletions()
+        sleep_calls: list[float] = []
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=2,
+            sleep=sleep_calls.append,
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert exc_info.value.attempt_count == 2
+        assert exc_info.value.failure_category == expected_category
+        assert "sentinel-secret" not in str(exc_info.value)
+        assert completions.calls == 2
+        assert sleep_calls == [0.25]
+
+    def test_extract_correction_messages_do_not_leak_into_the_next_call(self) -> None:
+        class MalformedThenValidCompletions:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, Any]] = []
+
+            def create(self, **kwargs: Any) -> MagicMock:
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    return _json_response('{"sentinel-secret":')
+                return _json_response('{"statements": []}')
+
+        completions = MalformedThenValidCompletions()
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=2,
+            sleep=lambda _: None,
+        )
+        first_messages = [{"role": "user", "content": "first"}]
+        second_messages = [{"role": "user", "content": "second"}]
+
+        client.chat_json(
+            first_messages,
+            schema_hint="extract",
+            malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+        )
+        client.chat_json(
+            second_messages,
+            schema_hint="extract",
+            malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+        )
+
+        assert completions.calls[1]["messages"][0] == {
+            "role": "system",
+            "content": EXTRACT_JSON_RETRY_SYSTEM,
+        }
+        assert completions.calls[2]["messages"] == second_messages
+
+    @pytest.mark.parametrize("terminal_kind", ["content_filter", "refusal"])
+    def test_extract_retry_does_not_retry_provider_refusal(
+        self, terminal_kind: str
+    ) -> None:
+        class RefusedCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> MagicMock:
+                self.calls += 1
+                response = _json_response(
+                    '{"statements": []}',
+                    finish_reason=(
+                        "content_filter"
+                        if terminal_kind == "content_filter"
+                        else "stop"
+                    ),
+                )
+                if terminal_kind == "refusal":
+                    response.choices[0].message.refusal = "sentinel-secret refusal"
+                return response
+
+        completions = RefusedCompletions()
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("refusal must not sleep"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert str(exc_info.value) == "LLM provider request failed"
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "refusal"
+        assert "sentinel-secret" not in str(exc_info.value)
+        assert completions.calls == 1
+
+    def test_truncated_finish_reason_is_malformed_without_retry(self) -> None:
+        class TruncatedCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> MagicMock:
+                self.calls += 1
+                if self.calls == 1:
+                    raise httpx.ReadTimeout("sentinel-secret transient timeout")
+                return _json_response('{"ok": tru', finish_reason="length")
+
+        completions = TruncatedCompletions()
+        sleep_calls: list[float] = []
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=sleep_calls.append,
+        )
+
+        with pytest.raises(LLMMalformedResponseError) as exc_info:
+            client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert str(exc_info.value) == "LLM provider returned an invalid response"
+        assert exc_info.value.attempt_count == 2
+        assert exc_info.value.failure_category == "output_limit"
+        assert completions.calls == 2
+        assert len(sleep_calls) == 1
+
+    def test_content_filter_without_message_is_terminal_refusal(self) -> None:
+        class FilteredCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> SimpleNamespace:
+                self.calls += 1
+                return SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            finish_reason="content_filter",
+                            message=None,
+                        )
+                    ]
+                )
+
+        completions = FilteredCompletions()
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("refusal must not retry"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "refusal"
+        assert completions.calls == 1
+
+    @pytest.mark.parametrize("sensitive_field", ["input_sensitive", "output_sensitive"])
+    def test_provider_sensitive_flag_is_terminal_refusal(
+        self, sensitive_field: str
+    ) -> None:
+        response = _json_response('{"statements": []}')
+        setattr(response, sensitive_field, True)
+
+        class SensitiveCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> MagicMock:
+                self.calls += 1
+                return response
+
+        completions = SensitiveCompletions()
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("refusal must not retry"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "refusal"
+        assert completions.calls == 1
+
+    def test_provider_sensitive_flag_precedes_missing_choices_validation(self) -> None:
+        response = SimpleNamespace(output_sensitive=True, choices=[])
+
+        class SensitiveWithoutChoicesCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> SimpleNamespace:
+                self.calls += 1
+                return response
+
+        completions = SensitiveWithoutChoicesCompletions()
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("refusal must not retry"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "refusal"
+        assert completions.calls == 1
+
+    @pytest.mark.parametrize("finish_reason", ["tool_calls", "function_call", "other"])
+    def test_non_stop_finish_reason_is_terminal_response_validation(
+        self, finish_reason: str
+    ) -> None:
+        response = _json_response('{"statements": []}', finish_reason=finish_reason)
+
+        class UnexpectedFinishCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> MagicMock:
+                self.calls += 1
+                return response
+
+        completions = UnexpectedFinishCompletions()
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("terminal envelope must not retry"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "response_validation"
+        assert completions.calls == 1
+
+    @pytest.mark.parametrize(
+        "message",
+        [None, SimpleNamespace(content=None)],
+    )
+    def test_explicit_tool_finish_precedes_missing_content_validation(
+        self, message: object
+    ) -> None:
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="tool_calls",
+                    message=message,
+                )
+            ]
+        )
+
+        class ToolFinishCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> SimpleNamespace:
+                self.calls += 1
+                return response
+
+        completions = ToolFinishCompletions()
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("terminal envelope must not retry"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "response_validation"
+        assert completions.calls == 1
+
+    def test_provider_base_status_error_precedes_missing_choices_validation(
+        self,
+    ) -> None:
+        response = SimpleNamespace(
+            base_resp=SimpleNamespace(
+                status_code=1234,
+                status_msg="sentinel-secret provider detail",
+            ),
+            choices=[],
+        )
+
+        class FailedEnvelopeCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> SimpleNamespace:
+                self.calls += 1
+                return response
+
+        completions = FailedEnvelopeCompletions()
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("terminal envelope must not retry"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "provider_error"
+        assert "sentinel-secret" not in str(exc_info.value)
+        assert completions.calls == 1
+
+    def test_provider_base_status_dict_from_sdk_is_terminal(self) -> None:
+        response = openai.types.chat.ChatCompletion.model_validate(
+            {
+                "id": "chatcmpl-test",
+                "choices": [],
+                "created": 0,
+                "model": "provider-test",
+                "object": "chat.completion",
+                "base_resp": {
+                    "status_code": 1234,
+                    "status_msg": "sentinel-secret provider detail",
+                },
+            }
+        )
+        assert isinstance(response.base_resp, dict)
+
+        class FailedSDKEnvelopeCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> object:
+                self.calls += 1
+                return response
+
+        completions = FailedSDKEnvelopeCompletions()
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("terminal envelope must not retry"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "provider_error"
+        assert "sentinel-secret" not in str(exc_info.value)
+        assert completions.calls == 1
+
+    @pytest.mark.parametrize(
+        ("status_code", "failure_category"),
+        [
+            (1000, "server_error"),
+            (1001, "timeout"),
+            (1002, "rate_limit"),
+            (1013, "server_error"),
+            (1024, "server_error"),
+            (1033, "server_error"),
+        ],
+    )
+    def test_transient_provider_base_status_retries_with_shared_budget(
+        self, status_code: int, failure_category: str
+    ) -> None:
+        failed_response = openai.types.chat.ChatCompletion.model_validate(
+            {
+                "id": "chatcmpl-test",
+                "choices": [],
+                "created": 0,
+                "model": "provider-test",
+                "object": "chat.completion",
+                "base_resp": {"status_code": status_code},
+            }
+        )
+
+        class TransientEnvelopeCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> object:
+                self.calls += 1
+                if self.calls == 1:
+                    return failed_response
+                return _json_response()
+
+        sleep_calls: list[float] = []
+        completions = TransientEnvelopeCompletions()
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(completions),
+            max_attempts=2,
+            sleep=sleep_calls.append,
+        )
+
+        result = client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert result == {"ok": True}
+        assert result.attempt_count == 2
+        assert completions.calls == 2
+        assert sleep_calls == [0.25]
+
+        exhausted = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(
+                SimpleNamespace(create=lambda **_kwargs: failed_response)
+            ),
+            max_attempts=1,
+        )
+        with pytest.raises(LLMProviderError) as exc_info:
+            exhausted.chat_json([{"role": "user", "content": "{}"}])
+        assert exc_info.value.failure_category == failure_category
+
+    @pytest.mark.parametrize(
+        ("response_field", "invalid_value"),
+        [
+            ("input_sensitive", 1),
+            ("output_sensitive", "false"),
+        ],
+    )
+    def test_malformed_sensitive_flag_shape_fails_closed(
+        self, response_field: str, invalid_value: object
+    ) -> None:
+        response = _json_response()
+        setattr(response, response_field, invalid_value)
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(
+                SimpleNamespace(create=lambda **_kwargs: response)
+            ),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert exc_info.value.failure_category == "response_validation"
+
+    def test_malformed_refusal_shape_fails_closed(self) -> None:
+        response = _json_response()
+        response.choices[0].message.refusal = {
+            "detail": "sentinel-secret refusal"
+        }
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(
+                SimpleNamespace(create=lambda **_kwargs: response)
+            ),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert exc_info.value.failure_category == "response_validation"
+        assert "sentinel-secret" not in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "invalid_status_code",
+        ["0", False, None],
+    )
+    def test_malformed_base_status_shape_fails_closed(
+        self, invalid_status_code: object
+    ) -> None:
+        response = _json_response()
+        response.base_resp = {"status_code": invalid_status_code}
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(
+                SimpleNamespace(create=lambda **_kwargs: response)
+            ),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert exc_info.value.failure_category == "provider_error"
+
+    @pytest.mark.parametrize("status_code", [1026, 1027])
+    def test_sensitive_base_status_is_terminal_refusal(
+        self, status_code: int
+    ) -> None:
+        response = openai.types.chat.ChatCompletion.model_validate(
+            {
+                "id": "chatcmpl-test",
+                "choices": [],
+                "created": 0,
+                "model": "provider-test",
+                "object": "chat.completion",
+                "base_resp": {"status_code": status_code},
+            }
+        )
+
+        class SensitiveEnvelopeCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> object:
+                self.calls += 1
+                return response
+
+        completions = SensitiveEnvelopeCompletions()
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("refusal must not retry"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "refusal"
+        assert completions.calls == 1
+
+    @pytest.mark.parametrize("message", [None, SimpleNamespace(content=None)])
+    def test_missing_finish_reason_precedes_missing_content_validation(
+        self, message: object
+    ) -> None:
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(finish_reason=None, message=message)]
+        )
+
+        class MissingFinishCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> SimpleNamespace:
+                self.calls += 1
+                return response
+
+        completions = MissingFinishCompletions()
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("terminal envelope must not retry"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "response_validation"
+        assert completions.calls == 1
+
+    @pytest.mark.parametrize("message_field", ["tool_calls", "function_call"])
+    def test_stop_response_with_call_payload_is_terminal_response_validation(
+        self, message_field: str
+    ) -> None:
+        response = _json_response('{"statements": []}')
+        value: object
+        if message_field == "tool_calls":
+            value = [{"id": "sentinel-call"}]
+        else:
+            value = {"name": "sentinel-function"}
+        setattr(response.choices[0].message, message_field, value)
+
+        class UnexpectedCallCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> MagicMock:
+                self.calls += 1
+                return response
+
+        completions = UnexpectedCallCompletions()
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("terminal envelope must not retry"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "response_validation"
+        assert "sentinel" not in str(exc_info.value)
+        assert completions.calls == 1
+
+    @pytest.mark.parametrize(
+        ("message_field", "invalid_payload"),
+        [
+            ("tool_calls", {"id": "sentinel-secret-call"}),
+            ("function_call", "sentinel-secret-function"),
+        ],
+    )
+    def test_sdk_loose_call_payload_shape_fails_closed(
+        self, message_field: str, invalid_payload: object
+    ) -> None:
+        message = openai.types.chat.ChatCompletionMessage.model_construct(
+            content='{"statements": []}',
+            role="assistant",
+            tool_calls=None,
+            function_call=None,
+        )
+        setattr(message, message_field, invalid_payload)
+        choice = openai.types.chat.chat_completion.Choice.model_construct(
+            finish_reason="stop",
+            index=0,
+            message=message,
+        )
+        response = openai.types.chat.ChatCompletion.model_construct(
+            id="chatcmpl-test",
+            choices=[choice],
+            created=0,
+            model="provider-test",
+            object="chat.completion",
+        )
+
+        class LoosePayloadCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> object:
+                self.calls += 1
+                return response
+
+        completions = LoosePayloadCompletions()
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("terminal envelope must not retry"),
+        )
+
+        with pytest.raises(LLMProviderError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "response_validation"
+        assert "sentinel-secret" not in str(exc_info.value)
+        assert completions.calls == 1
+
+    def test_literal_think_closing_tag_inside_json_is_not_stripped(self) -> None:
+        class LiteralTagCompletions:
+            def create(self, **_kwargs: Any) -> MagicMock:
+                return _json_response('{"ok": "literal </think> marker"}')
+
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(LiteralTagCompletions()),
+        )
+
+        assert client.chat_json([{"role": "user", "content": "{}"}]) == {
+            "ok": "literal </think> marker"
+        }
+
+    def test_anchored_complete_think_wrapper_is_stripped(self) -> None:
+        class WrappedCompletions:
+            def create(self, **_kwargs: Any) -> MagicMock:
+                return _json_response(
+                    '  \n<think>provider reasoning</think>{"ok": true}'
+                )
+
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(WrappedCompletions()),
+        )
+
+        assert client.chat_json([{"role": "user", "content": "{}"}]) == {
+            "ok": True
+        }
+
+    def test_unclosed_think_wrapper_uses_bounded_extract_retry(self) -> None:
+        class UnclosedThinkCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> MagicMock:
+                self.calls += 1
+                return _json_response("<think>sentinel-secret reasoning")
+
+        completions = UnclosedThinkCompletions()
+        client = LLMClient(
+            model_version="provider-test",
+            client=_ClientWithCompletions(completions),
+            max_attempts=2,
+            sleep=lambda _: None,
+        )
+
+        with pytest.raises(LLMMalformedResponseError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+                malformed_retry_system=EXTRACT_JSON_RETRY_SYSTEM,
+            )
+
+        assert exc_info.value.attempt_count == 2
+        assert exc_info.value.failure_category == "malformed_response"
+        assert "sentinel-secret" not in str(exc_info.value)
+        assert completions.calls == 2
+
+    def test_unclosed_json_object_is_not_repaired_as_truncated_output(self) -> None:
+        class UnclosedJSONCompletions:
+            def create(self, **_kwargs: Any) -> MagicMock:
+                return _json_response('{"ok": true')
+
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(UnclosedJSONCompletions()),
+        )
+
+        with pytest.raises(LLMMalformedResponseError):
+            client.chat_json([{"role": "user", "content": "{}"}])
+
+    @pytest.mark.parametrize(
+        "malformed_content",
+        [
+            '{"statements":[}',
+            '{"items":[1,2}',
+            '{"ok": tru}',
+        ],
+    )
+    def test_balanced_but_invalid_json_is_never_repaired(
+        self, malformed_content: str
+    ) -> None:
+        class InvalidJSONCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> MagicMock:
+                self.calls += 1
+                return _json_response(malformed_content)
+
+        completions = InvalidJSONCompletions()
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=lambda _: pytest.fail("malformed responses must not sleep"),
+        )
+
+        with pytest.raises(LLMMalformedResponseError) as exc_info:
+            client.chat_json([{"role": "user", "content": "{}"}])
+
+        assert str(exc_info.value) == "LLM provider returned an invalid response"
+        assert exc_info.value.attempt_count == 1
+        assert exc_info.value.failure_category == "malformed_response"
+        assert not hasattr(exc_info.value.__cause__, "doc")
+        assert completions.calls == 1
+
+    def test_markdown_wrapped_complete_json_remains_supported(self) -> None:
+        class WrappedJSONCompletions:
+            def create(self, **_kwargs: Any) -> MagicMock:
+                return _json_response('```json\n{"ok": true}\n```')
+
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(WrappedJSONCompletions()),
+        )
+
+        assert client.chat_json([{"role": "user", "content": "{}"}]) == {
+            "ok": True
+        }
+
+    @pytest.mark.parametrize(
+        "provider_content",
+        [
+            "{}",
+            '{"statements":{"sentinel-secret":"not-a-list"}}',
+        ],
+    )
+    def test_extract_schema_failure_preserves_attempt_count_after_retry(
+        self, provider_content: str
+    ) -> None:
+        class InvalidExtractCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **_kwargs: Any) -> MagicMock:
+                self.calls += 1
+                if self.calls == 1:
+                    raise httpx.ReadTimeout("sentinel-secret transient timeout")
+                return _json_response(provider_content)
+
+        completions = InvalidExtractCompletions()
+        sleep_calls: list[float] = []
+        client = LLMClient(
+            model_version="gpt-4o-mini",
+            client=_ClientWithCompletions(completions),
+            max_attempts=3,
+            sleep=sleep_calls.append,
+        )
+
+        with pytest.raises(LLMMalformedResponseError) as exc_info:
+            client.chat_json(
+                [{"role": "user", "content": "{}"}],
+                schema_hint="extract",
+            )
+
+        assert str(exc_info.value) == "LLM provider returned an invalid response"
+        assert exc_info.value.attempt_count == 2
+        assert exc_info.value.failure_category == "malformed_response"
+        assert "sentinel-secret" not in str(exc_info.value)
+        assert completions.calls == 2
+        assert len(sleep_calls) == 1
+
     def test_live_call_retries_one_transient_transport_failure(self) -> None:
         class FailsOnceCompletions:
             def __init__(self) -> None:
@@ -145,10 +1549,15 @@ class TestLLMClientDeterminism:
                 if self.calls == 1:
                     raise httpx.ConnectError("transient provider disconnect")
                 response = MagicMock()
+                response.input_sensitive = None
+                response.output_sensitive = None
+                response.base_resp = None
                 response.choices = [MagicMock()]
                 response.choices[0].message.content = '{"conclusion": "supported"}'
-                response.choices[0].finish_reason = "stop"
                 response.choices[0].message.refusal = None
+                response.choices[0].message.tool_calls = None
+                response.choices[0].message.function_call = None
+                response.choices[0].finish_reason = "stop"
                 return response
 
         completions = FailsOnceCompletions()
@@ -156,6 +1565,7 @@ class TestLLMClientDeterminism:
             model_version="gpt-4o-mini",
             client=_ClientWithCompletions(completions),
             max_attempts=2,
+            sleep=lambda _: None,
         )
 
         assert client.chat_json([{"role": "user", "content": "{}"}]) == {
@@ -199,6 +1609,7 @@ class TestLLMClientDeterminism:
         client = LLMClient(
             model_version="provider-test",
             client=_ClientWithCompletions(_FailingCompletions()),
+            sleep=lambda _: None,
         )
 
         with pytest.raises(LLMProviderError) as exc_info:
@@ -207,6 +1618,8 @@ class TestLLMClientDeterminism:
         assert str(exc_info.value) == "LLM provider request failed"
         assert "sentinel-secret" not in str(exc_info.value)
         assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+        assert exc_info.value.attempt_count == 2
+        assert exc_info.value.failure_category == "connection"
 
     @pytest.mark.parametrize(
         "programming_error", [TypeError, KeyError, AssertionError, AttributeError]
@@ -237,41 +1650,6 @@ class TestLLMClientDeterminism:
 
         assert str(exc_info.value) == "LLM provider returned an invalid response"
         assert isinstance(exc_info.value.__cause__, IndexError)
-
-
-@pytest.mark.parametrize("finish_reason", ["length", "content_filter", "tool_calls", "function_call", None, "unknown"])
-def test_nonstop_response_is_rejected_before_json_repair(finish_reason):
-    completions = MagicMock()
-    completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(
-        finish_reason=finish_reason,
-        message=SimpleNamespace(content='{"conclusion":"supported","rationale":"partial', refusal=None),
-    )])
-    client = LLMClient(model_version="test", client=_ClientWithCompletions(completions))
-    with pytest.raises(LLMMalformedResponseError, match="^LLM provider returned an invalid response$"):
-        client.chat_json([])
-    assert completions.create.call_count == 1
-
-
-def test_refusal_is_rejected_even_with_valid_json_content():
-    completions = MagicMock()
-    completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(
-        finish_reason="stop",
-        message=SimpleNamespace(content='{"conclusion":"supported"}', refusal="sentinel-refusal"),
-    )])
-    client = LLMClient(model_version="test", client=_ClientWithCompletions(completions))
-    with pytest.raises(LLMMalformedResponseError) as error:
-        client.chat_json([])
-    assert str(error.value) == "LLM provider returned an invalid response"
-    assert "sentinel-refusal" not in str(error.value)
-
-
-def test_stop_response_keeps_markdown_json_compatibility_without_optional_refusal():
-    completions = MagicMock()
-    completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(
-        finish_reason="stop", message=SimpleNamespace(content='```json\n{"statements": []}\n```'),
-    )])
-    client = LLMClient(model_version="test", client=_ClientWithCompletions(completions))
-    assert client.chat_json([]) == {"statements": []}
 
 
 class TestFromEnvReadsReproducibilityKnobs:
@@ -339,6 +1717,68 @@ class TestFromEnvReadsReproducibilityKnobs:
         assert client._timeout_seconds == 12.5
         assert captured["timeout"] == 12.5
         assert captured["max_retries"] == 0
+
+    def test_from_env_reads_output_and_retry_bounds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _isolate_llm_env(monkeypatch)
+        monkeypatch.setenv("APP_ENV", "test")
+        monkeypatch.setenv("LLM_MAX_ATTEMPTS", "4")
+        monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", "3072")
+        monkeypatch.setenv("LLM_RETRY_BASE_SECONDS", "0.125")
+        monkeypatch.setenv("LLM_RETRY_MAX_SECONDS", "1.5")
+
+        client = LLMClient.from_env()
+
+        assert client._max_attempts == 4
+        assert client._max_output_tokens == 3072
+        assert client._retry_base_seconds == 0.125
+        assert client._retry_max_seconds == 1.5
+
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        [
+            ("LLM_MAX_ATTEMPTS", "0"),
+            ("LLM_MAX_ATTEMPTS", "1.5"),
+            ("LLM_TIMEOUT_SECONDS", "0"),
+            ("LLM_TIMEOUT_SECONDS", "nan"),
+            ("LLM_TIMEOUT_SECONDS", "inf"),
+            ("LLM_MAX_OUTPUT_TOKENS", "0"),
+            ("LLM_MAX_OUTPUT_TOKENS", "1.5"),
+            ("LLM_RETRY_BASE_SECONDS", "0"),
+            ("LLM_RETRY_BASE_SECONDS", "nan"),
+            ("LLM_RETRY_MAX_SECONDS", "-1"),
+            ("LLM_RETRY_MAX_SECONDS", "inf"),
+        ],
+    )
+    def test_from_env_rejects_invalid_llm_bounds(
+        self, monkeypatch: pytest.MonkeyPatch, name: str, value: str
+    ) -> None:
+        _isolate_llm_env(monkeypatch)
+        monkeypatch.setenv("APP_ENV", "test")
+        monkeypatch.setenv(name, value)
+
+        with pytest.raises(ValueError):
+            LLMClient.from_env()
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"max_attempts": 0}, "max_attempts"),
+            ({"max_attempts": 1.5}, "max_attempts"),
+            ({"max_attempts": True}, "max_attempts"),
+            ({"max_output_tokens": 0}, "max_output_tokens"),
+            ({"max_output_tokens": 1.5}, "max_output_tokens"),
+            ({"max_output_tokens": True}, "max_output_tokens"),
+            ({"retry_base_seconds": float("nan")}, "retry_base_seconds"),
+            ({"retry_max_seconds": 0}, "retry_max_seconds"),
+        ],
+    )
+    def test_constructor_rejects_invalid_llm_bounds(
+        self, kwargs: dict[str, Any], message: str
+    ) -> None:
+        with pytest.raises((TypeError, ValueError), match=message):
+            LLMClient(model_version="gpt-4o-mini", **kwargs)
 
     def test_default_timeout_is_positive(self) -> None:
         assert DEFAULT_TIMEOUT_SECONDS > 0

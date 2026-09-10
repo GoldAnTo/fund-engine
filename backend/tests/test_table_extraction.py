@@ -223,7 +223,7 @@ def test_extractor_skips_llm_when_all_spans_are_tables(
     )
 
     class _FailIfCalled(LLMClient):
-        def chat_json(self, messages, schema_hint=""):  # pragma: no cover
+        def chat_json(self, messages, schema_hint="", **_kwargs):  # pragma: no cover
             raise AssertionError("LLM must not be called for table-only spans")
 
     client = _FailIfCalled(model_version="mock-test", mock=True)
@@ -232,6 +232,7 @@ def test_extractor_skips_llm_when_all_spans_are_tables(
 
     run = session.scalars(select(AIRun).where(AIRun.kind == "extract")).one()
     assert run.status == "success"
+    assert "llm attempts 0, malformed retries 0" in run.output_summary
 
 
 def test_extractor_llm_still_handles_narrative_spans(
@@ -262,7 +263,7 @@ def test_extractor_persists_fixed_safe_error_instead_of_provider_exception(
     class CredentialBearingFailureClient:
         model_version = "safe-error-test-v1"
 
-        def chat_json(self, messages, schema_hint=""):
+        def chat_json(self, messages, schema_hint="", **_kwargs):
             raise RuntimeError(
                 "Bearer credential-value "
                 "https://provider.example/run?access_token=credential-value"

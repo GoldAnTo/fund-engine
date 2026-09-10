@@ -246,8 +246,6 @@ class AtomicClaimCandidateDTO(V1Model):
 
 class AtomicClaimQueueResponse(V1Model):
     items: list[AtomicClaimCandidateDTO]
-    has_more: bool = False
-    next_cursor: str | None = None
 
 
 class AtomicClaimReviewRequest(V1Model):
@@ -366,7 +364,7 @@ class IngestRequest(V1Model):
     quote_query: str | None = None
     quote_stock_code: str | None = None
     # 宏观/行业时序查询（价格水平、环比增长率等）。每个查询会把返回的整段
-    # 时序冷冻为一份 DocumentVersion + SourceSpan，自然键 (query+metric)
+    # 时序冷冻为一份 DocumentVersion + SourceSpan，以确定性正文的内容哈希
     # 去重，append-only 不重复入库。
     macro_queries: list[str] | None = None
 
@@ -375,16 +373,23 @@ class IngestResponse(V1Model):
     """Summary of one ingest run.
 
     Idempotent: documents dedupe by content hash and valuation snapshots
-    by stock + date + metric + source, so re-runs report skips instead of
-    duplicating rows.
+    by stock + date + metric + source. Document and span counts describe
+    unique persisted entities encountered in this run; repeated upstream hits
+    are validated but do not inflate created or reused counts.
     """
 
     research_reports: int
+    research_reports_reused: int = 0
     announcements: int
+    announcements_reused: int = 0
     news: int
+    news_reused: int = 0
     macro_series: int = 0
+    macro_series_reused: int = 0
     spans: int
+    spans_reused: int = 0
     valuations_written: int
     valuations_skipped: int
+    quote_identity_verified: bool = False
     stock_id: str | None
     case_id: str | None

@@ -29,17 +29,6 @@ from tests.legacy_market_conflicts import (
 )
 
 
-def _expected_head() -> str:
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
-    backend = Path(__file__).parents[1]
-    config = Config(str(backend / "alembic.ini"))
-    config.set_main_option("script_location", str(backend / "alembic"))
-    head = ScriptDirectory.from_config(config).get_current_head()
-    assert head is not None
-    return head
-
-
 WAVE2_TABLES = {
     "uw_source_manifest_versions",
     "uw_metric_definition_versions",
@@ -195,7 +184,7 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             connection.execute(
                 sa.text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == _expected_head()
+            == "0071"
         )
         event_columns = {
             column["name"]: column
@@ -268,11 +257,12 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
         }.issubset(sa.inspect(connection).get_table_names())
         assert WAVE2_TABLES.issubset(sa.inspect(connection).get_table_names())
         assert CANDIDATE_EVIDENCE_TABLES.issubset(sa.inspect(connection).get_table_names())
-        research_source_type = {
+        source_contract_columns = {
             column["name"]: column
             for column in sa.inspect(connection).get_columns("source_contracts")
-        }["research_source_type"]
-        assert research_source_type["nullable"] is False
+        }
+        assert source_contract_columns["research_source_type"]["nullable"] is False
+        assert source_contract_columns["declared_by"]["type"].length == 512
         heartbeat_columns = {
             column["name"]
             for column in sa.inspect(connection).get_columns("research_worker_heartbeats")
@@ -324,6 +314,196 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             )
         ).scalar_one()
         assert immutable_company_research_trigger_count == 4
+
+
+def test_0071_expands_declared_by_and_downgrades_on_sqlite(tmp_path) -> None:
+    database_path = tmp_path / "source-contract-declared-by.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    upgraded_to_0070 = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0070"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded_to_0070.returncode == 0, upgraded_to_0070.stderr
+
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    document_id = UUID(int=701).hex
+    contract_id = UUID(int=702).hex
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO document_versions (
+                    id, content_sha256, source_url, available_at, acquired_at,
+                    parser_version, parse_state, source_authority
+                ) VALUES (
+                    :id, :content_sha256, 'https://provider.example/report',
+                    :now, :now, 'fixture-v1', 'partial', 'licensed_research'
+                )
+                """
+            ),
+            {"id": document_id, "content_sha256": "a" * 64, "now": now},
+        )
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO source_contracts (
+                    id, document_version_id, source_type, research_source_type,
+                    provider_or_tenant, allow_ai_processing, allow_display,
+                    allow_export, allow_api, region, retention_policy,
+                    deletion_policy, downstream_restrictions, intake_metadata,
+                    declared_by, created_at
+                ) VALUES (
+                    :id, :document_id, 'licensed_provider', 'licensed_provider',
+                    'gildata', 1, 1, 0, 0, 'CN', 'case_retained',
+                    'not_recorded', '[]', '{}', :declared_by, :now
+                )
+                """
+            ),
+            {
+                "id": contract_id,
+                "document_id": document_id,
+                "declared_by": "tenant:legacy",
+                "now": now,
+            },
+        )
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0071"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    with engine.connect() as connection:
+        columns = {
+            column["name"]: column
+            for column in sa.inspect(connection).get_columns("source_contracts")
+        }
+        assert columns["declared_by"]["type"].length == 512
+        assert connection.scalar(
+            sa.text("SELECT declared_by FROM source_contracts WHERE id = :id"),
+            {"id": contract_id},
+        ) == "tenant:legacy"
+        assert {constraint["name"] for constraint in sa.inspect(connection).get_unique_constraints("source_contracts")} >= {"uq_source_contracts_document"}
+
+    downgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0070"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert downgraded.returncode == 0, downgraded.stderr
+    with engine.connect() as connection:
+        columns = {
+            column["name"]: column
+            for column in sa.inspect(connection).get_columns("source_contracts")
+        }
+        assert columns["declared_by"]["type"].length == 128
+        assert connection.scalar(
+            sa.text("SELECT declared_by FROM source_contracts WHERE id = :id"),
+            {"id": contract_id},
+        ) == "tenant:legacy"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0070"
+    engine.dispose()
+
+
+def test_0071_refuses_to_truncate_long_declarers_on_sqlite_downgrade(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "source-contract-long-declarer.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0071"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    document_id = UUID(int=711).hex
+    contract_id = UUID(int=712).hex
+    declared_by = f"tenant:{'t' * 256}"
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO document_versions (
+                    id, content_sha256, source_url, available_at, acquired_at,
+                    parser_version, parse_state, source_authority
+                ) VALUES (
+                    :id, :content_sha256, 'https://provider.example/long',
+                    :now, :now, 'fixture-v1', 'partial', 'licensed_research'
+                )
+                """
+            ),
+            {"id": document_id, "content_sha256": "b" * 64, "now": now},
+        )
+        connection.execute(
+            sa.text(
+                """
+                INSERT INTO source_contracts (
+                    id, document_version_id, source_type, research_source_type,
+                    provider_or_tenant, allow_ai_processing, allow_display,
+                    allow_export, allow_api, region, retention_policy,
+                    deletion_policy, downstream_restrictions, intake_metadata,
+                    declared_by, created_at
+                ) VALUES (
+                    :id, :document_id, 'licensed_provider', 'licensed_provider',
+                    'gildata', 1, 1, 0, 0, 'CN', 'case_retained',
+                    'not_recorded', '[]', '{}', :declared_by, :now
+                )
+                """
+            ),
+            {
+                "id": contract_id,
+                "document_id": document_id,
+                "declared_by": declared_by,
+                "now": now,
+            },
+        )
+
+    downgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0070"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert downgraded.returncode != 0
+    assert "cannot downgrade source_contracts.declared_by without data loss" in (
+        downgraded.stderr
+    )
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT version_num FROM alembic_version")
+        ) == "0071"
+        assert connection.scalar(
+            sa.text("SELECT declared_by FROM source_contracts WHERE id = :id"),
+            {"id": contract_id},
+        ) == declared_by
+        columns = {
+            column["name"]: column
+            for column in sa.inspect(connection).get_columns("source_contracts")
+        }
+        assert columns["declared_by"]["type"].length == 512
+    engine.dispose()
 
 
 def test_0068_backfills_legacy_market_capture_and_makes_it_immutable(tmp_path) -> None:
@@ -1353,7 +1533,7 @@ def test_0070_repairs_a_stamped_0069_database_without_event_triggers(
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == _expected_head()
+        ).scalar_one() == "0071"
         for statement in (
             "UPDATE uw_company_research_events SET event_type = 'changed' "
             f"WHERE id = '{event_id}'",
@@ -1468,7 +1648,7 @@ def test_0070_authenticates_populated_stamped_0069_histories(
         with engine.connect() as connection:
             assert connection.scalar(
                 sa.text("SELECT version_num FROM alembic_version")
-            ) == _expected_head()
+            ) == "0071"
             assert tuple(
                 connection.scalars(
                     sa.text(
@@ -2100,7 +2280,7 @@ with SessionLocal() as session:
 
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == _expected_head()
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0071"
         assert {
             "research_preparations",
             "research_preparation_artifacts",
@@ -2864,7 +3044,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == _expected_head()
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0071"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -2928,7 +3108,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == _expected_head()
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0071"
         assert {
             row[0]
             for row in connection.execute(
@@ -3134,7 +3314,7 @@ def test_unmanaged_adoption_installs_the_0070_company_worker_index(
     with engine.connect() as connection:
         assert connection.scalar(
             sa.text("SELECT version_num FROM alembic_version")
-        ) == _expected_head()
+        ) == "0071"
         index = {
             row["name"]: row
             for row in sa.inspect(connection).get_indexes("jobs")
@@ -3383,7 +3563,7 @@ def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> 
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == _expected_head()
+        ).scalar_one() == "0071"
         assert connection.execute(
             sa.text(
                 "SELECT research_source_type FROM source_contracts WHERE id = :id"
@@ -3473,21 +3653,3 @@ with SessionLocal() as session:
         cwd=backend, env=environment, text=True, capture_output=True, check=False,
     )
     assert verified.returncode == 0, verified.stderr + verified.stdout
-
-
-def test_unmanaged_adoption_installs_ai_scope_index(tmp_path):
-    import app.models  # noqa: F401
-    from app.db_migrations import upgrade_database_to_head
-    from app.models.ledger import Base
-    url = f"sqlite:///{tmp_path / 'unmanaged-ai-scope.db'}"
-    engine = sa.create_engine(url)
-    try:
-        Base.metadata.create_all(engine)
-        with engine.begin() as connection:
-            connection.exec_driver_sql('DROP INDEX ix_ai_runs_research_scope')
-        upgrade_database_to_head(url)
-        with engine.connect() as connection:
-            indexes = connection.exec_driver_sql("PRAGMA index_list('ai_runs')").all()
-            assert any(row[1] == 'ix_ai_runs_research_scope' for row in indexes)
-    finally:
-        engine.dispose()

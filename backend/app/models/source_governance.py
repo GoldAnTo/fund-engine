@@ -42,7 +42,7 @@ class SourceContract(Base):
     downstream_restrictions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     contract_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     intake_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    declared_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    declared_by: Mapped[str] = mapped_column(String(512), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

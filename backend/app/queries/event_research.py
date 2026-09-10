@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.acquisition import AcquisitionJob, AutomaticAdmissionDecision
 from app.domain.event_research import PROTOCOL_COMPLETION_NEXT_HUMAN_ACTION
 from app.errors import NotFoundError
+from app.models.acquisition import AcquisitionJob, AutomaticAdmissionDecision
 from app.models.event_research import (
     CaseRelation,
     CaseRelationReview,
@@ -30,14 +30,12 @@ from app.models.ledger import (
     Thesis,
 )
 from app.models.operational import EventResearchLifecycle, ResearchRun
-from app.models.research_preparation import ResearchPreparation
 from app.models.proposals import Proposal
+from app.models.research_preparation import ResearchPreparation
 from app.models.source_governance import SourceContract
-from app.services.event_research_scope_evidence import current_mapped_evidence_ids
-from app.services.source_admission import classify_source, source_contract_is_active
 from app.schemas.v1.event_research import (
-    CaseRelationCaseDTO,
     CaseRelationCandidateOriginDTO,
+    CaseRelationCaseDTO,
     CaseRelationDTO,
     CaseRelationReviewDTO,
     EventConclusionDraftDTO,
@@ -54,12 +52,16 @@ from app.schemas.v1.event_research import (
     EventResearchScopeDTO,
     EventResearchScopeHistoryItemDTO,
     EventResearchScopeHistoryResponse,
-    EventWorkbenchProgressDTO,
     EventWorkbenchDTO,
+    EventWorkbenchProgressDTO,
     ResearchNetworkResponse,
 )
+from app.services.event_research_scope_evidence import current_mapped_evidence_ids
 from app.services.event_review_queue import EventReviewQueueService
-
+from app.services.source_admission import (
+    classify_document_source,
+    source_contract_is_active,
+)
 
 _PREPARATION_ERROR_MESSAGES = {
     "preparation_provider_unavailable": "准备服务暂时不可用",
@@ -744,13 +746,30 @@ class EventResearchQueries:
             DocumentVersion,
             {span.document_version_id for span in spans.values()},
         )
-        linked_document_ids = set(
-            self._session.scalars(
-                select(CaseDocumentVersion.document_version_id)
-                .where(CaseDocumentVersion.research_case_id == case_id)
-                .where(CaseDocumentVersion.document_version_id.in_(set(documents)))
+        document_ids = set(documents)
+        linked_document_ids = (
+            set(
+                self._session.scalars(
+                    select(CaseDocumentVersion.document_version_id)
+                    .where(CaseDocumentVersion.research_case_id == case_id)
+                    .where(CaseDocumentVersion.document_version_id.in_(document_ids))
+                )
             )
-        ) if documents else set()
+            if document_ids
+            else set()
+        )
+        contracts_by_document_id = (
+            {
+                contract.document_version_id: contract
+                for contract in self._session.scalars(
+                    select(SourceContract).where(
+                        SourceContract.document_version_id.in_(document_ids)
+                    )
+                )
+            }
+            if document_ids
+            else {}
+        )
         pending: dict[str, int] = {}
         for proposal in proposals:
             source_statement = statements.get(
@@ -763,10 +782,11 @@ class EventResearchQueries:
                 continue
             if document is None or document.id not in linked_document_ids:
                 continue
-            admission = classify_source(
-                document.source_url,
-                document.parser_version,
-                document.parse_state in {"success", "parsed"},
+            admission = classify_document_source(
+                source_url=document.source_url,
+                parser_version=document.parser_version,
+                content_verified=document.parse_state in {"success", "parsed"},
+                contract=contracts_by_document_id.get(document.id),
             )
             if admission.can_accept and thesis.statement in active_factors:
                 pending[thesis.statement] = pending.get(thesis.statement, 0) + 1

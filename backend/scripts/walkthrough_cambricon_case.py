@@ -27,138 +27,270 @@ run is auditable; a compact summary JSON is written at the end.
 Run from backend/:
     .venv/bin/python scripts/walkthrough_cambricon_case.py
 """
+
 from __future__ import annotations
 
 import json
 import os
 import sys
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_ROOT.parent
 OUT_DIR = REPO_ROOT / "docs" / "evaluation" / "walkthrough"
-RUN_ID = os.getenv("WALKTHROUGH_RUN_ID") or datetime.now(timezone.utc).strftime(
-    "%Y%m%dT%H%M%SZ"
-)
 
 sys.path.insert(0, str(BACKEND_ROOT))
-from app.scripts.walkthrough_support import (  # noqa: E402
+from app.scripts.walkthrough_support import (
+    WalkthroughResponseError,
     assessment_review_payload,
     atomic_claim_review_payload,
+    atomic_write_json,
+    classify_extract_reason,
     classify_historical_case_read,
     configured_research_headers,
+    ensure_walkthrough_directory,
+    prepare_walkthrough_artifact_targets,
+    prepare_walkthrough_database,
+    project_gildata_probes,
     proposal_review_payload,
+    safe_audit_data,
+    secure_append_text,
+    secure_read_json,
+    summarize_extract_response,
+    validate_live_walkthrough_environment,
+    validate_persisted_json,
     walkthrough_database_path,
     walkthrough_paths,
 )
 
-DB_PATH = walkthrough_database_path(BACKEND_ROOT, RUN_ID)
-os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
+# Runtime resources intentionally stay uninitialized at import time.  In
+# particular, ``argparse`` must be allowed to service ``--help`` without
+# loading local credentials, creating a database, or touching audit files.
+RUN_ID = ""
+DB_PATH = Path("__walkthrough_runtime_not_initialized__.db")
+STATE_PATH = Path("__walkthrough_runtime_not_initialized__state.json")
+JSONL_PATH = Path("__walkthrough_runtime_not_initialized__.jsonl")
+SUMMARY_PATH = Path("__walkthrough_runtime_not_initialized__summary.json")
+AUTH_HEADERS: dict[str, str] = {}
+client: object | None = None
+summary: dict = {"run_id": None, "phases": {}, "issues": [], "facts": {}}
+_FORBIDDEN_PERSISTED_KEYS = frozenset(
+    {
+        "api_key",
+        "authorization",
+        "body",
+        "headers",
+        "message",
+        "normalized_text",
+        "quote",
+        "raw",
+        "request",
+        "response_body",
+        "rows",
+        "token",
+        "verbatim_text",
+    }
+)
+_ACCEPTANCE_AUDIT_SOURCE = "gildata_ai_acceptance"
 
-from app.env import load_local_env  # noqa: E402
 
-load_local_env()  # GILDATA_TOKEN / LLM_API_KEY from backend/.env
+def _initialize_runtime(*, require_live_llm: bool) -> None:
+    """Initialize credentials, storage and ASGI only after argument parsing."""
+    global AUTH_HEADERS, DB_PATH, JSONL_PATH, RUN_ID, STATE_PATH, SUMMARY_PATH
+    global client, summary
 
-from app.models.ledger import Base  # noqa: E402
-from app.db import engine  # noqa: E402
+    configured_run_id = os.getenv("WALKTHROUGH_RUN_ID")
+    run_id = (
+        datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        if configured_run_id is None
+        else configured_run_id
+    )
+    database_path = walkthrough_database_path(BACKEND_ROOT, run_id)
+    paths = walkthrough_paths(OUT_DIR, run_id)
 
-Base.metadata.create_all(engine)
+    from app.env import load_local_env
 
-from fastapi.testclient import TestClient  # noqa: E402
+    load_local_env()
+    validate_live_walkthrough_environment(require_live_llm=require_live_llm)
+    auth_headers = configured_research_headers()
 
-from app.main import app  # noqa: E402
+    ensure_walkthrough_directory(OUT_DIR)
+    prepare_walkthrough_artifact_targets((paths.state, paths.jsonl, paths.summary))
+    prepare_walkthrough_database(database_path)
+    os.environ["DATABASE_URL"] = f"sqlite:///{database_path}"
 
-OUT_DIR.mkdir(parents=True, exist_ok=True)
-PATHS = walkthrough_paths(OUT_DIR, RUN_ID)
-STATE_PATH = PATHS.state
-JSONL_PATH = PATHS.jsonl
-SUMMARY_PATH = PATHS.summary
-AUTH_HEADERS = configured_research_headers()
+    from fastapi.testclient import TestClient
 
-client = TestClient(app)
-summary: dict = {"run_id": RUN_ID, "phases": {}, "issues": [], "facts": {}}
+    from app.db import engine
+    from app.main import app
+    from app.models.ledger import Base
+
+    previous_umask = os.umask(0o077)
+    try:
+        Base.metadata.create_all(engine)
+    finally:
+        os.umask(previous_umask)
+
+    RUN_ID = run_id
+    DB_PATH = database_path
+    STATE_PATH = paths.state
+    JSONL_PATH = paths.jsonl
+    SUMMARY_PATH = paths.summary
+    AUTH_HEADERS = auth_headers
+    client = TestClient(app)
+    summary = {"run_id": run_id, "phases": {}, "issues": [], "facts": {}}
 
 
 def rec(phase: str, step: str, data: dict) -> None:
     """Append one auditable observation to the JSONL log."""
-    with JSONL_PATH.open("a", encoding="utf-8") as fh:
-        fh.write(
-            json.dumps(
-                {
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                    "phase": phase,
-                    "step": step,
-                    "data": data,
-                },
-                ensure_ascii=False,
-                default=str,
-            )
-            + "\n"
+    projected = safe_audit_data(data)
+    secure_append_text(
+        JSONL_PATH,
+        json.dumps(
+            {
+                "ts": datetime.now(UTC).isoformat(),
+                "phase": phase,
+                "step": step,
+                "data": projected,
+            },
+            ensure_ascii=False,
         )
+        + "\n",
+    )
 
 
-def issue(code: str, detail: str) -> None:
-    summary["issues"].append({"code": code, "detail": detail})
-    rec("issue", code, {"detail": detail})
+def issue(code: str, *, http_status: int | None = None) -> None:
+    """Record a fixed failure category without persisting response text."""
+    observation: dict[str, object] = {"code": code}
+    if http_status is not None:
+        observation["http_status"] = http_status
+    summary["issues"].append(observation)
+    rec("issue", code, observation)
 
 
 def api(method: str, path: str, phase: str, step: str, **kwargs) -> tuple[int, dict]:
-    """Call the v1 API, record request/response, return (status, body)."""
+    """Call v1 and record only a non-content projection of the response."""
+    if client is None:
+        raise RuntimeError("walkthrough runtime is not initialized")
     request_headers = {**AUTH_HEADERS, **kwargs.pop("headers", {})}
-    resp = client.request(method, path, headers=request_headers, **kwargs)
+    try:
+        resp = client.request(method, path, headers=request_headers, **kwargs)
+    except Exception:  # noqa: BLE001 — never expose transport/provider details
+        raise WalkthroughResponseError(f"{phase} {step} API transport failed") from None
     try:
         body = resp.json()
     except ValueError:
-        body = {"_raw": resp.text[:500]}
-    rec(phase, step, {"method": method, "path": path, "status": resp.status_code,
-                      "request": {k: v for k, v in kwargs.items() if k in {"params", "json"}},
-                      "response": body})
+        body = {"error": {"code": "non_json_response"}}
+    if not isinstance(body, dict):
+        body = {"error": {"code": "invalid_json_shape"}}
+    audit: dict[str, object] = {
+        "method": method,
+        "path": path,
+        "status": resp.status_code,
+    }
+    if 200 <= resp.status_code < 400:
+        audit["response"] = body
+    else:
+        error_code = _safe_http_error_code(body)
+        if error_code is not None:
+            audit["error_code"] = error_code
+    rec(phase, step, audit)
     return resp.status_code, body
+
+
+def _safe_http_error_code(body: object) -> str | None:
+    if not isinstance(body, dict) or not isinstance(body.get("error"), dict):
+        return None
+    code = body["error"].get("code")
+    if not isinstance(code, str) or not 1 <= len(code) <= 80:
+        return None
+    if not all(char.isascii() and (char.isalnum() or char in "_-") for char in code):
+        return None
+    return code
+
+
+def _http_failure(status: int, body: object) -> dict[str, object]:
+    failure: dict[str, object] = {"http_status": status}
+    error_code = _safe_http_error_code(body)
+    if error_code is not None:
+        failure["error_code"] = error_code
+    return failure
+
+
+def _require_status(status: int, expected: int, operation: str) -> None:
+    if status != expected:
+        raise WalkthroughResponseError(f"{operation} returned HTTP {status}")
 
 
 # ---------------------------------------------------------------------------
 # P0 — preflight datasource probes
 # ---------------------------------------------------------------------------
 
+
 def phase0_preflight() -> dict:
     from app.datasources.gildata import adapters
     from app.datasources.gildata.client import GildataMCPClient
 
-    probes: dict = {}
-    with GildataMCPClient.from_env() as gc:
-        tools = [t.get("name") for t in gc.list_tools()]
-        probes["tools"] = tools
-        rec("P0", "list_tools", {"tools": tools})
+    tools: list[str] = []
+    quotes: object = []
+    annual: object = []
+    funds: object = []
+    smart_response_chars = 0
+    smart_failed = False
+    try:
+        with GildataMCPClient.from_env() as gc:
+            discovered_tools = [
+                name
+                for tool in gc.list_tools()
+                if isinstance(tool, dict)
+                and isinstance((name := tool.get("name")), str)
+            ]
+            projected_tools = safe_audit_data({"tools": discovered_tools}).get(
+                "tools", []
+            )
+            tools = projected_tools if isinstance(projected_tools, list) else []
+            rec("P0", "list_tools", {"tools": tools})
 
-        quotes = adapters.fetch_quote(gc, "寒武纪最新股价行情")
-        probes["quote_cambricon"] = quotes[0] if quotes else None
-        rec("P0", "quote_cambricon", {"row": probes["quote_cambricon"]})
+            quotes = adapters.fetch_quote(gc, "寒武纪最新股价行情")
 
-        # Historical verification data: 2025 annual results (published 2026-04).
-        annual = adapters.fetch_quote(gc, "寒武纪2025年年度报告 营业收入 归母净利润")
-        probes["annual_2025"] = annual
-        rec("P0", "annual_2025_probe", {"rows": annual})
+            # Historical verification data: 2025 annual results (published 2026-04).
+            annual = adapters.fetch_quote(
+                gc, "寒武纪2025年年度报告 营业收入 归母净利润"
+            )
 
-        # Fund-holding probe: which funds disclose 寒武纪 positions.
-        funds = adapters.fetch_quote(gc, "持有寒武纪股票的基金 持仓占净值比例 报告期")
-        probes["fund_holders"] = funds
-        rec("P0", "fund_holders_probe", {"rows": funds})
+            # Fund-holding probe: which funds disclose 寒武纪 positions.
+            funds = adapters.fetch_quote(
+                gc, "持有寒武纪股票的基金 持仓占净值比例 报告期"
+            )
 
-        try:
-            text = gc.call_tool("SmartFundSelection", {"query": "重仓持有寒武纪的基金"})
-            probes["smart_fund_selection_raw"] = text[:2000]
-            rec("P0", "smart_fund_selection", {"raw": text[:2000]})
-        except Exception as exc:  # noqa: BLE001 — probe must not kill the run
-            probes["smart_fund_selection_error"] = str(exc)
-            rec("P0", "smart_fund_selection_error", {"error": str(exc)})
+            try:
+                text = gc.call_tool(
+                    "SmartFundSelection", {"query": "重仓持有寒武纪的基金"}
+                )
+                smart_response_chars = len(text) if isinstance(text, str) else 0
+            except Exception:  # noqa: BLE001 — optional probe must not kill the run
+                smart_failed = True
+    except Exception:  # noqa: BLE001 — redact provider transport/configuration errors
+        raise WalkthroughResponseError("Gildata preflight probe failed") from None
+
+    probes = project_gildata_probes(
+        quote_rows=quotes,
+        annual_rows=annual,
+        fund_rows=funds,
+        smart_response_chars=smart_response_chars,
+        smart_failed=smart_failed,
+    )
+    probes["tools"] = tools
+    rec("P0", "projected_probes", probes)
 
     summary["phases"]["P0_preflight"] = {
-        "tools": probes["tools"],
-        "quote": probes["quote_cambricon"],
-        "annual_2025_rows": len(probes.get("annual_2025") or []),
+        "tools": tools,
+        "quote_metrics": probes["quote_metrics"],
+        "annual_2025": probes["annual_2025"],
         "fund_holders_rows": len(probes.get("fund_holders") or []),
+        "smart_fund_selection": probes["smart_fund_selection"],
     }
     return probes
 
@@ -203,7 +335,10 @@ THESES = [
 
 def phase1_create_case() -> dict:
     status, body = api(
-        "POST", "/api/v1/event-research", "P1", "create_case",
+        "POST",
+        "/api/v1/event-research",
+        "P1",
+        "create_case",
         json={
             "raw_input": (
                 "寒武纪（688256.SH）2024 年以来收入放量并出现盈利拐点。"
@@ -222,15 +357,15 @@ def phase1_create_case() -> dict:
             "created_by": "walkthrough-reviewer",
         },
     )
-    assert status == 201, body
+    _require_status(status, 201, "case creation")
     case_id = body["case_id"]
     status, dossier = api(
         "GET", f"/api/v1/research-cases/{case_id}/dossier", "P1", "created_dossier"
     )
-    assert status == 200, dossier
+    _require_status(status, 200, "created dossier read")
     thesis_by_statement = {item["statement"]: item for item in dossier["theses"]}
     theses = {
-        thesis["key"]: thesis_by_statement[thesis["statement"]]
+        thesis["key"]: {"id": thesis_by_statement[thesis["statement"]]["id"]}
         for thesis in THESES
     }
     out = {"case_id": case_id, "theses": theses}
@@ -272,12 +407,23 @@ def phase2_ingest(case_id: str) -> list[dict]:
     results = []
     for i, run in enumerate(INGEST_RUNS, 1):
         status, body = api(
-            "POST", "/api/v1/documents/ingest", "P2", f"ingest_round_{i}",
+            "POST",
+            "/api/v1/documents/ingest",
+            "P2",
+            f"ingest_round_{i}",
             json={"case_id": case_id, **run},
         )
         if status != 201:
-            issue("ingest_failed", f"round {i}: HTTP {status} {body}")
-        results.append(body)
+            issue("ingest_failed", http_status=status)
+            results.append({"round": i, **_http_failure(status, body)})
+            continue
+        results.append(
+            {
+                "round": i,
+                "http_status": status,
+                **safe_audit_data(body),
+            }
+        )
     summary["phases"]["P2_ingest"] = results
     return results
 
@@ -286,46 +432,225 @@ def phase2_ingest(case_id: str) -> list[dict]:
 # P3 — extraction over every frozen document version
 # ---------------------------------------------------------------------------
 
-def phase3_extract(max_docs: int = 8) -> dict:
-    status, body = api("GET", "/api/v1/documents", "P3", "list_documents",
-                       params={"limit": 100})
-    assert status == 200, body
-    items = body.get("items") or []
+_EXTRACTION_STATES = frozenset(
+    {"extracted", "extracted_empty", "failed", "not_attempted"}
+)
+_CONTENT_QUALITIES = frozenset({"ok", "degenerate", "unknown"})
+
+
+def _all_documents(case_id: str, *, step: str) -> list[dict]:
+    """Read every document page, failing closed on pagination drift."""
+    by_id: dict[str, dict] = {}
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+    page_number = 1
+    while True:
+        params: dict[str, object] = {"case_id": case_id, "limit": 100}
+        if cursor is not None:
+            params["cursor"] = cursor
+        status, body = api(
+            "GET",
+            "/api/v1/documents",
+            "P3",
+            f"{step}_page_{page_number}",
+            params=params,
+        )
+        if status != 200:
+            raise WalkthroughResponseError(f"document listing returned HTTP {status}")
+        if not isinstance(body, dict) or not isinstance(body.get("items"), list):
+            raise WalkthroughResponseError("document listing items must be a list")
+        page = body.get("page")
+        if not isinstance(page, dict):
+            raise WalkthroughResponseError("document listing page metadata is missing")
+        has_more = page.get("has_more")
+        next_cursor = page.get("next_cursor")
+        if not isinstance(has_more, bool):
+            raise WalkthroughResponseError(
+                "document listing has_more must be a boolean"
+            )
+
+        for item in body["items"]:
+            if not isinstance(item, dict):
+                raise WalkthroughResponseError(
+                    "document listing item must be an object"
+                )
+            version_id = item.get("id")
+            extraction_state = item.get("extraction_state")
+            content_quality = item.get("content_quality")
+            if not isinstance(version_id, str) or not version_id:
+                raise WalkthroughResponseError("document listing item id is missing")
+            if extraction_state not in _EXTRACTION_STATES:
+                raise WalkthroughResponseError(
+                    "document listing extraction_state is invalid"
+                )
+            if content_quality not in _CONTENT_QUALITIES:
+                raise WalkthroughResponseError(
+                    "document listing content_quality is invalid"
+                )
+            by_id[version_id] = item
+
+        if not has_more:
+            return list(by_id.values())
+        if not isinstance(next_cursor, str) or not next_cursor:
+            raise WalkthroughResponseError("document listing next_cursor is missing")
+        if next_cursor in seen_cursors:
+            raise WalkthroughResponseError("document listing next_cursor repeated")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+        page_number += 1
+
+
+def _pending_documents(items: list[dict]) -> list[dict]:
+    return [
+        item
+        for item in items
+        if item["extraction_state"] in {"not_attempted", "failed"}
+        and item["content_quality"] != "degenerate"
+    ]
+
+
+def _previous_extract_documents() -> list[dict]:
+    phase = summary.get("phases", {}).get("P3_extract", {})
+    previous = phase.get("per_document", []) if isinstance(phase, dict) else []
+    if not isinstance(previous, list):
+        raise WalkthroughResponseError("stored P3 per_document summary must be a list")
+    validated: list[dict] = []
+    for item in previous:
+        if not isinstance(item, dict):
+            raise WalkthroughResponseError(
+                "stored P3 per_document item must be an object"
+            )
+        version_id = item.get("version_id")
+        candidates = item.get("candidates")
+        claim_types = item.get("claim_types")
+        reason = item.get("reason")
+        if (
+            not isinstance(version_id, str)
+            or not version_id
+            or isinstance(candidates, bool)
+            or not isinstance(candidates, int)
+            or candidates < 0
+            or not isinstance(claim_types, dict)
+            or any(
+                not isinstance(kind, str)
+                or not kind
+                or isinstance(count, bool)
+                or not isinstance(count, int)
+                or count < 0
+                for kind, count in claim_types.items()
+            )
+            or (reason is not None and not isinstance(reason, str))
+        ):
+            raise WalkthroughResponseError("stored P3 per_document item is invalid")
+        validated.append(
+            {
+                "version_id": version_id,
+                "candidates": candidates,
+                "claim_types": claim_types,
+                "reason": classify_extract_reason(candidates, reason),
+            }
+        )
+    return validated
+
+
+def _extraction_totals(
+    *,
+    documents_total: int,
+    pending_before: int,
+    attempted_this_run: int,
+    extracted_this_run: int,
+    pending_after: int | None,
+    merged: dict[str, dict],
+) -> dict:
+    per_document = list(merged.values())
+    claim_types: dict[str, int] = {}
+    candidate_count = 0
+    for item in per_document:
+        candidate_count += item["candidates"]
+        for claim_type, count in item["claim_types"].items():
+            claim_types[claim_type] = claim_types.get(claim_type, 0) + count
+    return {
+        "documents_total": documents_total,
+        "pending_before": pending_before,
+        "attempted_this_run": attempted_this_run,
+        "extracted_this_run": extracted_this_run,
+        "pending_after": pending_after,
+        "candidates": candidate_count,
+        "claim_types": claim_types,
+        "per_document": per_document,
+    }
+
+
+def phase3_extract(
+    case_id: str, max_docs: int = 8, *, checkpoint_state: dict | None = None
+) -> dict:
+    if not isinstance(case_id, str) or not case_id:
+        raise WalkthroughResponseError("P3 case_id must be a non-empty string")
+    items = _all_documents(case_id, step="list_documents_before")
     # Extraction watermark (defect-3 fix): only attempt versions that were
     # never extracted or whose last run failed.  "extracted_empty" versions
     # (successful run, zero statements) used to be indistinguishable from
     # pending ones and were re-extracted every round — 5 docs × 5 rounds =
     # 25 wasted LLM calls in the original walkthrough.
-    pending = [
-        i
-        for i in items
-        if i.get("extraction_state") in ("not_attempted", "failed")
-        # Defect-4 fix: degenerate payloads (4-char bodies, orphan table
-        # headers) are flagged by content_quality and never LLM-extracted.
-        and i.get("content_quality") != "degenerate"
-    ]
+    pending = _pending_documents(items)
     batch = pending[:max_docs]
-    totals = {"documents_total": len(items), "pending_before": len(pending),
-              "extracted_this_run": 0, "statements": 0, "per_document": []}
+    merged = {item["version_id"]: item for item in _previous_extract_documents()}
+    attempted_this_run = 0
+    extracted_this_run = 0
     for item in batch:
         version_id = item["id"]
+        attempted_this_run += 1
         status, ext = api(
-            "POST", f"/api/v1/documents/{version_id}/extract", "P3", "extract",
+            "POST",
+            f"/api/v1/documents/{version_id}/extract",
+            "P3",
+            "extract",
         )
         if status != 201:
-            issue("extract_failed", f"{version_id}: HTTP {status} {ext}")
+            issue("extract_failed", http_status=status)
             continue
-        kinds = {}
-        for s in ext.get("statements", []):
-            kinds[s["kind"]] = kinds.get(s["kind"], 0) + 1
-        totals["statements"] += ext.get("statement_count", 0)
-        totals["extracted_this_run"] += 1
-        totals["per_document"].append(
-            {"version_id": version_id, "mode": ext.get("mode"),
-             "title": item.get("title"), "doc_kind": item.get("doc_kind"),
-             "statement_count": ext.get("statement_count"), "kinds": kinds}
+        extracted = summarize_extract_response(ext)
+        merged[version_id] = {
+            "version_id": version_id,
+            "candidates": extracted["candidate_count"],
+            "claim_types": extracted["claim_types"],
+            "reason": extracted["reason"],
+        }
+        extracted_this_run += 1
+        rec(
+            "P3",
+            "extract_summary",
+            {
+                "version_id": version_id,
+                "candidate_count": extracted["candidate_count"],
+                "claim_types": extracted["claim_types"],
+                "reason": extracted["reason"],
+            },
         )
-    totals["pending_after"] = totals["pending_before"] - totals["extracted_this_run"]
+
+        # A later extraction can fail after the service has already committed
+        # this document.  Persist the safe merged watermark before beginning
+        # the next call so resume accounting cannot lose the successful item.
+        summary["phases"]["P3_extract"] = _extraction_totals(
+            documents_total=len(items),
+            pending_before=len(pending),
+            attempted_this_run=attempted_this_run,
+            extracted_this_run=extracted_this_run,
+            pending_after=None,
+            merged=merged,
+        )
+        if checkpoint_state is not None:
+            _checkpoint(checkpoint_state)
+
+    refreshed_items = _all_documents(case_id, step="list_documents_after")
+    totals = _extraction_totals(
+        documents_total=len(refreshed_items),
+        pending_before=len(pending),
+        attempted_this_run=attempted_this_run,
+        extracted_this_run=extracted_this_run,
+        pending_after=len(_pending_documents(refreshed_items)),
+        merged=merged,
+    )
     summary["phases"]["P3_extract"] = totals
     return totals
 
@@ -338,21 +663,27 @@ def phase3_review_atomic_claims(case_id: str) -> dict:
     published source statements until a reviewer confirms them.
     """
     status, body = api(
-        "GET", f"/api/v1/research-cases/{case_id}/atomic-claims", "P3.5",
-        "list_atomic_claims", params={"review_state": "awaiting_review", "limit": 200},
+        "GET",
+        f"/api/v1/research-cases/{case_id}/atomic-claims",
+        "P3.5",
+        "list_atomic_claims",
+        params={"review_state": "awaiting_review", "limit": 200},
     )
-    assert status == 200, body
+    _require_status(status, 200, "atomic claim queue read")
     items = body.get("items", [])
     stats = {"queued": len(items), "confirmed": 0, "failed": 0}
     for item in items:
         claim_id = item["id"]
-        status, response = api(
-            "POST", f"/api/v1/atomic-claims/{claim_id}/reviews", "P3.5",
-            "review_atomic_claim", json=atomic_claim_review_payload(claim_id),
+        status, _ = api(
+            "POST",
+            f"/api/v1/atomic-claims/{claim_id}/reviews",
+            "P3.5",
+            "review_atomic_claim",
+            json=atomic_claim_review_payload(claim_id),
         )
         if status != 201:
             stats["failed"] += 1
-            issue("atomic_claim_review_failed", f"claim {claim_id}: HTTP {status} {response}")
+            issue("atomic_claim_review_failed", http_status=status)
             continue
         stats["confirmed"] += 1
     summary["phases"]["P3_5_atomic_claim_review"] = stats
@@ -363,21 +694,39 @@ def phase3_review_atomic_claims(case_id: str) -> dict:
 # P4 — evidence proposal per thesis
 # ---------------------------------------------------------------------------
 
+_PROPOSAL_ROLES = frozenset({"supports", "contradicts", "contextualizes"})
+
+
 def phase4_propose(theses: dict) -> dict:
     out = {}
     for key, thesis in theses.items():
         status, body = api(
-            "POST", f"/api/v1/theses/{thesis['id']}/propose", "P4", f"propose_{key}",
+            "POST",
+            f"/api/v1/theses/{thesis['id']}/propose",
+            "P4",
+            f"propose_{key}",
         )
         if status != 201:
-            issue("propose_failed", f"{key}: HTTP {status} {body}")
-            out[key] = {"error": body}
+            issue("propose_failed", http_status=status)
+            out[key] = _http_failure(status, body)
             continue
         roles = {}
         for link in body.get("links", []):
-            roles[link["role"]] = roles.get(link["role"], 0) + 1
-        out[key] = {"mode": body.get("mode"), "link_count": body.get("link_count"),
-                    "roles": roles}
+            role = link.get("role")
+            # The public command intentionally returns empty placeholder link
+            # fields; they prove only proposal identity/count, not content.
+            if role == "":
+                continue
+            if role not in _PROPOSAL_ROLES:
+                raise WalkthroughResponseError(
+                    "proposal response role is invalid"
+                )
+            roles[role] = roles.get(role, 0) + 1
+        out[key] = {
+            "mode": body.get("mode"),
+            "link_count": body.get("link_count"),
+            "roles": roles,
+        }
     summary["phases"]["P4_propose"] = out
     return out
 
@@ -385,18 +734,27 @@ def phase4_propose(theses: dict) -> dict:
 def phase4_review_proposals(case_id: str) -> dict:
     """Decide pending proposals using the event source-admission result."""
     status, body = api(
-        "GET", f"/api/v1/event-research/{case_id}/review-queue", "P4.5",
+        "GET",
+        f"/api/v1/event-research/{case_id}/review-queue",
+        "P4.5",
         "list_event_evidence_proposals",
     )
-    assert status == 200, body
+    _require_status(status, 200, "proposal queue read")
     items = body.get("items", [])
-    stats = {"queued": len(items), "confirmed": 0, "rejected_for_source": 0, "failed": 0,
-             "published_evidence_links": 0}
+    stats = {
+        "queued": len(items),
+        "confirmed": 0,
+        "rejected_for_source": 0,
+        "failed": 0,
+        "published_evidence_links": 0,
+    }
     for item in items:
         proposal_id = item["proposal_id"]
         can_accept = item["can_accept"]
         status, response = api(
-            "POST", f"/api/v1/review-proposals/{proposal_id}/decisions", "P4.5",
+            "POST",
+            f"/api/v1/review-proposals/{proposal_id}/decisions",
+            "P4.5",
             "review_evidence_proposal",
             json=proposal_review_payload(
                 item["proposal_version"], can_accept=can_accept
@@ -404,7 +762,7 @@ def phase4_review_proposals(case_id: str) -> dict:
         )
         if status != 201:
             stats["failed"] += 1
-            issue("proposal_review_failed", f"proposal {proposal_id}: HTTP {status} {response}")
+            issue("proposal_review_failed", http_status=status)
             continue
         if can_accept:
             stats["confirmed"] += 1
@@ -420,19 +778,28 @@ def phase4_review_proposals(case_id: str) -> dict:
 # P5 — pre-review assessment for T1 (baseline snapshot for compare)
 # ---------------------------------------------------------------------------
 
+
 def phase5_pre_review_assessment(theses: dict) -> dict:
     status, body = api(
-        "POST", f"/api/v1/theses/{theses['T1']['id']}/rerun", "P5", "rerun_T1_pre_review",
+        "POST",
+        f"/api/v1/theses/{theses['T1']['id']}/rerun",
+        "P5",
+        "rerun_T1_pre_review",
     )
     out: dict = {}
     if status == 201:
         a = body["assessment"]
-        out = {"conclusion": a["conclusion"], "rationale": a["rationale"],
-               "gaps": a["gaps"], "snapshot_id": a["snapshot_id"],
-               "assessment_id": a["id"], "mode": body.get("mode")}
+        gaps = a.get("gaps")
+        out = {
+            "conclusion": a["conclusion"],
+            "gap_count": len(gaps) if isinstance(gaps, list) else 0,
+            "snapshot_id": a["snapshot_id"],
+            "assessment_id": a["id"],
+            "mode": body.get("mode"),
+        }
     else:
-        out = {"http_status": status, "error": body}
-        issue("pre_review_assessment_refused", f"HTTP {status}: {body}")
+        out = _http_failure(status, body)
+        issue("pre_review_assessment_refused", http_status=status)
     summary["phases"]["P5_pre_review_assessment_T1"] = out
     return out
 
@@ -441,12 +808,50 @@ def phase5_pre_review_assessment(theses: dict) -> dict:
 # P6 — human review simulation over the review queue
 # ---------------------------------------------------------------------------
 
-RISK_WORDS = ("风险", "亏损", "透支", "泡沫", "回调", "谨慎", "存货", "应收账款",
-              "减持", "高估", "现金流", "赊销", "减值", "质疑")
-GROWTH_WORDS = ("增长", "扭亏", "盈利", "放量", "爆发", "突破", "新高", "订单",
-                "出货", "需求", "扩产", "超预期", "同比")
-BACKGROUND_WORDS = ("成立", "专注", "产品线", "研发", "行业", "市场", "生态",
-                    "芯片设计", "处理器", "背景", "概况")
+RISK_WORDS = (
+    "风险",
+    "亏损",
+    "透支",
+    "泡沫",
+    "回调",
+    "谨慎",
+    "存货",
+    "应收账款",
+    "减持",
+    "高估",
+    "现金流",
+    "赊销",
+    "减值",
+    "质疑",
+)
+GROWTH_WORDS = (
+    "增长",
+    "扭亏",
+    "盈利",
+    "放量",
+    "爆发",
+    "突破",
+    "新高",
+    "订单",
+    "出货",
+    "需求",
+    "扩产",
+    "超预期",
+    "同比",
+)
+BACKGROUND_WORDS = (
+    "成立",
+    "专注",
+    "产品线",
+    "研发",
+    "行业",
+    "市场",
+    "生态",
+    "芯片设计",
+    "处理器",
+    "背景",
+    "概况",
+)
 
 
 def _review_decision(thesis_key: str, text: str) -> dict:
@@ -460,48 +865,81 @@ def _review_decision(thesis_key: str, text: str) -> dict:
     growth = any(w in text for w in GROWTH_WORDS)
     background = any(w in text for w in BACKGROUND_WORDS)
     if not text.strip():
-        return {"outcome": "rejected", "relation": None,
-                "reason": "原文片段为空，无法构成证据"}
+        return {
+            "outcome": "rejected",
+            "relation": None,
+            "reason": "原文片段为空，无法构成证据",
+        }
     if thesis_key in {"T1", "T2"}:
         if risk and not growth:
-            return {"outcome": "confirmed", "relation": "contradicts",
-                    "reason": "人工复核：该陈述指向风险因素，构成对命题的反向证据"}
+            return {
+                "outcome": "confirmed",
+                "relation": "contradicts",
+                "reason": "人工复核：该陈述指向风险因素，构成对命题的反向证据",
+            }
         if growth:
-            return {"outcome": "confirmed", "relation": "supports",
-                    "reason": "人工复核：该陈述与命题方向一致，证据链可追溯"}
-        return {"outcome": "confirmed", "relation": "contextualizes",
-                "reason": "人工复核：该陈述提供行业/公司背景，限定命题适用范围"}
+            return {
+                "outcome": "confirmed",
+                "relation": "supports",
+                "reason": "人工复核：该陈述与命题方向一致，证据链可追溯",
+            }
+        return {
+            "outcome": "confirmed",
+            "relation": "contextualizes",
+            "reason": "人工复核：该陈述提供行业/公司背景，限定命题适用范围",
+        }
     # T3 估值风险命题：风险表述支持命题，增长表述反向
     if risk:
-        return {"outcome": "confirmed", "relation": "supports",
-                "reason": "人工复核：风险/估值类陈述支持估值透支命题"}
+        return {
+            "outcome": "confirmed",
+            "relation": "supports",
+            "reason": "人工复核：风险/估值类陈述支持估值透支命题",
+        }
     if growth:
-        return {"outcome": "confirmed", "relation": "contradicts",
-                "reason": "人工复核：基本面高增长对估值透支命题构成反向证据"}
+        return {
+            "outcome": "confirmed",
+            "relation": "contradicts",
+            "reason": "人工复核：基本面高增长对估值透支命题构成反向证据",
+        }
     if background:
-        return {"outcome": "confirmed", "relation": "contextualizes",
-                "reason": "人工复核：背景性陈述，限定估值讨论边界"}
-    return {"outcome": "needs_more_evidence", "relation": "evidence_gap",
-            "reason": "人工复核：与命题相关性不足，需要更直接证据"}
+        return {
+            "outcome": "confirmed",
+            "relation": "contextualizes",
+            "reason": "人工复核：背景性陈述，限定估值讨论边界",
+        }
+    return {
+        "outcome": "needs_more_evidence",
+        "relation": "evidence_gap",
+        "reason": "人工复核：与命题相关性不足，需要更直接证据",
+    }
 
 
 def phase6_review(theses: dict, case_id: str) -> dict:
     thesis_by_id = {t["id"]: k for k, t in theses.items()}
     status, body = api(
-        "GET", "/api/v1/review-queue", "P6", "review_queue",
+        "GET",
+        "/api/v1/review-queue",
+        "P6",
+        "review_queue",
         params={"case_id": case_id, "limit": 200},
     )
-    assert status == 200, body
+    _require_status(status, 200, "review queue read")
     items = body.get("items", [])
-    stats = {"queued": len(items), "confirmed": 0, "rejected": 0,
-             "needs_more_evidence": 0, "by_thesis": {}}
+    stats = {
+        "queued": len(items),
+        "confirmed": 0,
+        "rejected": 0,
+        "needs_more_evidence": 0,
+        "by_thesis": {},
+    }
     for item in items:
-        key = thesis_by_id.get(item["thesis_id"], "?")
+        key = thesis_by_id.get(item["thesis_id"], "unknown")
         decision = _review_decision(key, item.get("verbatim_text", ""))
         ai_scope = item.get("ai_scope") or {}
         scope_text = (
             "; ".join(f"{k}={v}" for k, v in ai_scope.items())
-            if ai_scope else "行业范围：国产AI算力芯片"
+            if ai_scope
+            else "行业范围：国产AI算力芯片"
         )
         payload = {
             "outcome": decision["outcome"],
@@ -511,23 +949,31 @@ def phase6_review(theses: dict, case_id: str) -> dict:
             "reason": decision["reason"],
             "reviewer": "walkthrough-reviewer",
         }
-        status, resp = api(
-            "POST", f"/api/v1/evidence-links/{item['link_id']}/reviews",
-            "P6", "review_link", json=payload,
+        status, _ = api(
+            "POST",
+            f"/api/v1/evidence-links/{item['link_id']}/reviews",
+            "P6",
+            "review_link",
+            json=payload,
         )
         if status != 201:
-            issue("review_failed", f"link {item['link_id']}: HTTP {status} {resp}")
+            issue("review_failed", http_status=status)
             continue
         stats[decision["outcome"]] += 1
-        per = stats["by_thesis"].setdefault(key, {"confirmed": 0, "rejected": 0,
-                                                  "needs_more_evidence": 0})
+        per = stats["by_thesis"].setdefault(
+            key, {"confirmed": 0, "rejected": 0, "needs_more_evidence": 0}
+        )
         per[decision["outcome"]] += 1
 
     # Queue must be drained afterwards.
     status, after = api(
-        "GET", "/api/v1/review-queue", "P6", "review_queue_after",
+        "GET",
+        "/api/v1/review-queue",
+        "P6",
+        "review_queue_after",
         params={"limit": 200},
     )
+    _require_status(status, 200, "post-review queue read")
     stats["remaining_after_review"] = len(after.get("items", []))
     summary["phases"]["P6_review"] = stats
     return stats
@@ -537,23 +983,35 @@ def phase6_review(theses: dict, case_id: str) -> dict:
 # P7 — post-review assessments for all theses
 # ---------------------------------------------------------------------------
 
+
 def phase7_assessments(theses: dict) -> dict:
     out = {}
     for key, thesis in theses.items():
         status, body = api(
-            "POST", f"/api/v1/theses/{thesis['id']}/rerun", "P7", f"rerun_{key}",
+            "POST",
+            f"/api/v1/theses/{thesis['id']}/rerun",
+            "P7",
+            f"rerun_{key}",
         )
         if status == 201:
             a = body["assessment"]
-            out[key] = {"conclusion": a["conclusion"], "rationale": a["rationale"],
-                        "gaps": a["gaps"], "snapshot_id": a["snapshot_id"],
-                        "assessment_id": a["id"], "mode": body.get("mode")}
+            gaps = a.get("gaps")
+            out[key] = {
+                "conclusion": a["conclusion"],
+                "gap_count": len(gaps) if isinstance(gaps, list) else 0,
+                "snapshot_id": a["snapshot_id"],
+                "assessment_id": a["id"],
+                "mode": body.get("mode"),
+            }
         elif status == 422:
-            out[key] = {"compliance_refused": True, "detail": body}
-            rec("P7", f"compliance_refusal_{key}", {"body": body})
+            out[key] = {
+                "compliance_refused": True,
+                **_http_failure(status, body),
+            }
+            rec("P7", f"compliance_refusal_{key}", out[key])
         else:
-            out[key] = {"http_status": status, "error": body}
-            issue("assessment_failed", f"{key}: HTTP {status} {body}")
+            out[key] = _http_failure(status, body)
+            issue("assessment_failed", http_status=status)
     summary["phases"]["P7_assessments"] = out
     return out
 
@@ -561,6 +1019,7 @@ def phase7_assessments(theses: dict) -> dict:
 # ---------------------------------------------------------------------------
 # P8 — human reviews of the AI assessments
 # ---------------------------------------------------------------------------
+
 
 def phase8_assessment_reviews(assessments: dict) -> dict:
     proposal_review = summary["phases"].get("P4_5_proposal_review", {})
@@ -575,15 +1034,21 @@ def phase8_assessment_reviews(assessments: dict) -> dict:
             ai_conclusion, evidence_count=evidence_count
         )
         status, resp = api(
-            "POST", f"/api/v1/assessments/{a['assessment_id']}/reviews",
-            "P8", f"review_assessment_{key}", json=payload,
+            "POST",
+            f"/api/v1/assessments/{a['assessment_id']}/reviews",
+            "P8",
+            f"review_assessment_{key}",
+            json=payload,
         )
         if status != 201:
-            issue("assessment_review_failed", f"{key}: HTTP {status} {resp}")
-            out[key] = {"error": resp}
+            issue("assessment_review_failed", http_status=status)
+            out[key] = _http_failure(status, resp)
             continue
-        out[key] = {"outcome": resp["outcome"], "human_conclusion": resp.get("conclusion"),
-                    "ai_conclusion": ai_conclusion}
+        out[key] = {
+            "outcome": resp["outcome"],
+            "human_conclusion": resp.get("conclusion"),
+            "ai_conclusion": ai_conclusion,
+        }
     summary["phases"]["P8_assessment_reviews"] = out
     return out
 
@@ -592,6 +1057,7 @@ def phase8_assessment_reviews(assessments: dict) -> dict:
 # P9 — instrument / fund enrichment (API-first since 2026-08-02)
 # ---------------------------------------------------------------------------
 
+
 def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
     """Write ThemeRole / Fund / HoldingDisclosure / CausalStep / CausalEdge
     through the v1 command APIs (instrument + causal, added 2026-08-02); the
@@ -599,24 +1065,30 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
     guard.  Fund holding data is only written when the P0 probe returned an
     explicit weight; no weights are fabricated.
     """
-    from decimal import Decimal
+    from decimal import Decimal, InvalidOperation
 
     from sqlalchemy import select
 
     from app.db import SessionLocal
     from app.models.ledger import Company, Fund, Stock
 
-    out: dict = {"theme_roles": 0, "causal_steps": 0, "causal_edges": 0,
-                 "funds": 0, "holding_disclosures": 0, "notes": []}
+    out: dict = {
+        "theme_roles": 0,
+        "causal_steps": 0,
+        "causal_edges": 0,
+        "funds": 0,
+        "holding_disclosures": 0,
+        "notes": [],
+    }
     with SessionLocal() as session:
-
         # Idempotency guard: enrichment writes have no dedupe key, so a
         # re-run of this stage must skip rather than duplicate rows.
         from app.models.ledger import ThemeRole
+
         existing = session.scalar(
-            select(ThemeRole).where(
-                ThemeRole.research_case_id == uuid.UUID(case_id)
-            ).limit(1)
+            select(ThemeRole)
+            .where(ThemeRole.research_case_id == uuid.UUID(case_id))
+            .limit(1)
         )
         if existing is not None:
             out["notes"].append("enrichment already applied — skipped (no dedupe key)")
@@ -630,7 +1102,7 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
             select(Company).where(Company.code.in_(["601138.SH", "601138"]))
         )
         if cambricon is None:
-            issue("stock_missing", "寒武纪 Company/Stock not created by ingest")
+            issue("stock_missing")
             out["notes"].append("寒武纪公司未由 ingest 自动创建，穿透链断裂")
             summary["phases"]["P9_enrichment"] = out
             return out
@@ -638,8 +1110,10 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
         # Theme roles via the v1 instrument command API (human, reviewed by
         # construction in this walkthrough).
         status, _ = api(
-            "POST", f"/api/v1/companies/{cambricon.id}/theme-roles",
-            "P9", "theme_role_cambricon",
+            "POST",
+            f"/api/v1/companies/{cambricon.id}/theme-roles",
+            "P9",
+            "theme_role_cambricon",
             json={
                 "research_case_id": case_id,
                 "role": "国产AI算力芯片核心设计商（云端训练/推理芯片）",
@@ -650,11 +1124,13 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
         if status == 201:
             out["theme_roles"] += 1
         else:
-            issue("theme_role_api_failed", f"寒武纪 theme-role HTTP {status}")
+            issue("theme_role_api_failed", http_status=status)
         if foxconn is not None:
             status, _ = api(
-                "POST", f"/api/v1/companies/{foxconn.id}/theme-roles",
-                "P9", "theme_role_foxconn",
+                "POST",
+                f"/api/v1/companies/{foxconn.id}/theme-roles",
+                "P9",
+                "theme_role_foxconn",
                 json={
                     "research_case_id": case_id,
                     "role": "AI服务器制造与系统集成（算力基础设施下游兑现方）",
@@ -665,7 +1141,7 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
             if status == 201:
                 out["theme_roles"] += 1
             else:
-                issue("theme_role_api_failed", f"工业富联 theme-role HTTP {status}")
+                issue("theme_role_api_failed", http_status=status)
 
         # Human-authored causal chain for T2 via the v1 causal command API
         # (added 2026-08-02; mirrors the storage-chain seed).
@@ -679,12 +1155,14 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
         steps = {}
         for seq, desc in enumerate(chain, 1):
             status, body = api(
-                "POST", f"/api/v1/theses/{theses['T2']['id']}/causal-steps",
-                "P9", f"causal_step_{seq}",
+                "POST",
+                f"/api/v1/theses/{theses['T2']['id']}/causal-steps",
+                "P9",
+                f"causal_step_{seq}",
                 json={"description": desc, "sequence": seq},
             )
             if status != 201:
-                issue("causal_api_failed", f"因果步骤 {seq} HTTP {status}")
+                issue("causal_api_failed", http_status=status)
                 continue
             steps[seq] = body["id"]
             out["causal_steps"] += 1
@@ -692,8 +1170,10 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
             if seq not in steps or seq + 1 not in steps:
                 continue
             status, _ = api(
-                "POST", f"/api/v1/theses/{theses['T2']['id']}/causal-edges",
-                "P9", f"causal_edge_{seq}",
+                "POST",
+                f"/api/v1/theses/{theses['T2']['id']}/causal-edges",
+                "P9",
+                f"causal_edge_{seq}",
                 json={
                     "source_step_id": steps[seq],
                     "target_step_id": steps[seq + 1],
@@ -702,7 +1182,7 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
                 },
             )
             if status != 201:
-                issue("causal_api_failed", f"因果边 {seq}->{seq+1} HTTP {status}")
+                issue("causal_api_failed", http_status=status)
                 continue
             out["causal_edges"] += 1
 
@@ -714,35 +1194,34 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
         cambricon_stock = session.scalar(
             select(Stock).where(Stock.company_id == cambricon.id)
         )
-        fund_rows = [
-            r for r in (probes.get("fund_holders") or [])
-            if r.get("机构类型") == "基金"
-            and str(r.get("交易代码", "")).endswith(".OF")
-        ]
+        fund_rows = probes.get("fund_holders") or []
         seen_fund_codes: set[str] = set()
         written = 0
         for row in fund_rows[:5]:
-            name = str(row.get("机构股东名称", "")).strip()
-            code = str(row.get("交易代码", "")).split(".")[0]
-            weight_raw = str(row.get("持股数量占流通A股比例(%)", "")).strip()
-            period_raw = str(row.get("报告日期", "")).strip()
+            name = str(row.get("fund_name", "")).strip()
+            code = str(row.get("fund_code", "")).strip()
+            weight_raw = str(row.get("weight_percent", "")).strip()
+            period_raw = str(row.get("report_date", "")).strip()
             try:
                 weight = Decimal(weight_raw)
                 period = date.fromisoformat(period_raw[:10])
-            except Exception:  # noqa: BLE001
+            except (InvalidOperation, ValueError):
                 continue
             if not name or not code or code in seen_fund_codes:
                 continue
             seen_fund_codes.add(code)
             # Company top-10-holder disclosures follow the reporting calendar:
             # Q1→4月底, 中报→8月底, Q3→10月底, 年报→次年4月底.
-            pub = {3: date(period.year, 4, 30), 6: date(period.year, 8, 31),
-                   9: date(period.year, 10, 31)}.get(
-                period.month, date(period.year + 1, 4, 30)
-            )
+            pub = {
+                3: date(period.year, 4, 30),
+                6: date(period.year, 8, 31),
+                9: date(period.year, 10, 31),
+            }.get(period.month, date(period.year + 1, 4, 30))
             status, body = api(
-                "POST", "/api/v1/funds",
-                "P9", f"fund_{code}",
+                "POST",
+                "/api/v1/funds",
+                "P9",
+                f"fund_{code}",
                 json={"code": code, "name": name, "fund_type": "指数基金/公募基金"},
             )
             if status == 201:
@@ -752,28 +1231,30 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
                 # reuse the existing fund rather than fail the stage.
                 fund = session.scalar(select(Fund).where(Fund.code == code))
                 if fund is None:
-                    issue("fund_api_failed", f"基金 {code} 422 但账本查无此行")
+                    issue("fund_api_failed", http_status=status)
                     continue
                 fund_id = str(fund.id)
             else:
-                issue("fund_api_failed", f"基金 {code} 创建 HTTP {status}")
+                issue("fund_api_failed", http_status=status)
                 continue
             out["funds"] += 1
             status, _ = api(
-                "POST", f"/api/v1/funds/{fund_id}/holding-disclosures",
-                "P9", f"holding_{code}",
+                "POST",
+                f"/api/v1/funds/{fund_id}/holding-disclosures",
+                "P9",
+                f"holding_{code}",
                 json={
                     "stock_id": str(cambricon_stock.id),
                     "weight": str(weight),
                     "report_period": period.isoformat(),
                     "published_at": datetime(
-                        pub.year, pub.month, pub.day, tzinfo=timezone.utc
+                        pub.year, pub.month, pub.day, tzinfo=UTC
                     ).isoformat(),
                     "source": "gildata-probe:top10-holder:占流通A股比例%",
                 },
             )
             if status != 201:
-                issue("holding_api_failed", f"基金 {code} 持仓披露 HTTP {status}")
+                issue("holding_api_failed", http_status=status)
                 continue
             written += 1
             out["holding_disclosures"] += 1
@@ -791,6 +1272,7 @@ def phase9_enrichment(case_id: str, theses: dict, probes: dict) -> dict:
 # ---------------------------------------------------------------------------
 # P10 — read models
 # ---------------------------------------------------------------------------
+
 
 def phase10_reads(case_id: str) -> dict:
     out: dict = {}
@@ -815,25 +1297,29 @@ def phase10_reads(case_id: str) -> dict:
                 entry["edges"] = len(body.get("edges", []))
                 entry["paths"] = len(body.get("paths", []))
             elif name == "search":
-                entry["groups"] = {
-                    g.get("object_type"): len(g.get("hits", []))
-                    for g in body.get("groups", [])
-                } if body.get("groups") else body.keys().__str__()
+                entry["groups"] = (
+                    {
+                        g.get("object_type"): len(g.get("hits", []))
+                        for g in body.get("groups", [])
+                    }
+                    if body.get("groups")
+                    else {}
+                )
             elif name == "kpis":
-                entry["body"] = body
+                entry["metrics"] = safe_audit_data(body)
             elif name == "dossier":
-                entry["keys"] = sorted(body.keys())
+                entry["field_count"] = len(body)
             elif name == "fund_exposure":
-                entry["body_keys"] = sorted(body.keys())
+                entry["field_count"] = len(body)
                 entry["funds"] = len(body.get("funds", []) or [])
             elif name == "snapshots":
                 items = body.get("items", body.get("snapshots", [])) or []
                 entry["count"] = len(items)
             else:
-                entry["keys"] = sorted(body.keys())[:20]
+                entry["field_count"] = len(body)
         else:
-            entry["error"] = body
-            issue(f"read_{name}_failed", f"HTTP {status}: {str(body)[:300]}")
+            entry.update(_http_failure(status, body))
+            issue(f"read_{name}_failed", http_status=status)
         out[name] = entry
     summary["phases"]["P10_reads"] = out
     return out
@@ -842,6 +1328,7 @@ def phase10_reads(case_id: str) -> dict:
 # ---------------------------------------------------------------------------
 # P11 — historical point-in-time replay
 # ---------------------------------------------------------------------------
+
 
 def phase11_time_travel(case_id: str) -> dict:
     """Replay the dossier at two historical cutoffs.  Documents carry real
@@ -855,8 +1342,11 @@ def phase11_time_travel(case_id: str) -> dict:
     ]:
         params = {} if cutoff is None else {"cutoff": cutoff}
         status, body = api(
-            "GET", f"/api/v1/research-cases/{case_id}/dossier",
-            "P11", f"dossier_{label}", params=params or None,
+            "GET",
+            f"/api/v1/research-cases/{case_id}/dossier",
+            "P11",
+            f"dossier_{label}",
+            params=params or None,
         )
         entry: dict = {"http_status": status}
         if status == 200:
@@ -864,14 +1354,13 @@ def phase11_time_travel(case_id: str) -> dict:
                 block = body.get(grp) or body.get("evidence", {}).get(grp)
                 if isinstance(block, list):
                     entry[grp] = len(block)
-            entry["basis"] = body.get("basis")
         else:
-            entry["error"] = body
+            entry.update(_http_failure(status, body))
             observation = classify_historical_case_read(status, body)
             if observation is not None:
                 entry["observation"] = observation
             else:
-                issue("time_travel_failed", f"{label}: HTTP {status} {str(body)[:300]}")
+                issue("time_travel_failed", http_status=status)
         out[label] = entry
 
     # Document-level time travel: does document visibility follow the
@@ -882,25 +1371,34 @@ def phase11_time_travel(case_id: str) -> dict:
         ("docs_2025_05_01", "2025-05-01T23:59:59+00:00"),
     ]:
         status, body = api(
-            "GET", "/api/v1/documents", "P11", label,
+            "GET",
+            "/api/v1/documents",
+            "P11",
+            label,
             params={"cutoff": cutoff, "limit": 100},
         )
         out[label] = {
             "http_status": status,
             "count": len(body.get("items", [])) if status == 200 else None,
-            "titles": [i.get("title") for i in body.get("items", [])][:8]
-            if status == 200 else body,
+            **({} if status == 200 else _http_failure(status, body)),
         }
 
     # Snapshot compare: earliest vs latest assessment state.
     status, body = api(
-        "GET", f"/api/v1/research-cases/{case_id}/compare",
-        "P11", "compare",
-        params={"base": "2024-06-01T00:00:00Z",
-                "compare": datetime.now(timezone.utc).isoformat()},
+        "GET",
+        f"/api/v1/research-cases/{case_id}/compare",
+        "P11",
+        "compare",
+        params={
+            "base": "2024-06-01T00:00:00Z",
+            "compare": datetime.now(UTC).isoformat(),
+        },
     )
-    out["compare"] = {"http_status": status,
-                      "body_keys": sorted(body.keys()) if status == 200 else body}
+    out["compare"] = (
+        {"http_status": status, "field_count": len(body)}
+        if status == 200
+        else _http_failure(status, body)
+    )
     summary["phases"]["P11_time_travel"] = out
     return out
 
@@ -908,6 +1406,7 @@ def phase11_time_travel(case_id: str) -> dict:
 # ---------------------------------------------------------------------------
 # P12 — fact cross-check against verified history
 # ---------------------------------------------------------------------------
+
 
 def phase12_fact_check(probes: dict) -> dict:
     """Cross-check ledger facts against independently verified history.
@@ -922,7 +1421,7 @@ def phase12_fact_check(probes: dict) -> dict:
         (annual turnaround confirmed by LYR earnings being positive).
     """
     checks = []
-    quote = probes.get("quote_cambricon") or {}
+    quote = probes.get("quote_metrics") or {}
 
     def _num(v):
         try:
@@ -934,37 +1433,44 @@ def phase12_fact_check(probes: dict) -> dict:
     total_mv = _num(quote.get("total_mv"))
     if pe_lyr and total_mv:
         implied_fy2025_net = total_mv / pe_lyr
-        checks.append({
-            "check": "2025年度扭亏（隐含）",
-            "ledger_fact": f"PE(LYR)={pe_lyr}, 总市值={total_mv}亿 → 隐含2025年度净利润≈{implied_fy2025_net:.1f}亿>0",
-            "verified": True,
-            "source": "gildata FinQuery 2026-07-31",
-        })
+        checks.append(
+            {
+                "check": "2025年度扭亏（隐含）",
+                "ledger_fact": f"PE(LYR)={pe_lyr}, 总市值={total_mv}亿 → 隐含2025年度净利润≈{implied_fy2025_net:.1f}亿>0",
+                "verified": True,
+                "source": "gildata FinQuery 2026-07-31",
+            }
+        )
     pe_ttm = _num(quote.get("pe_ttm"))
-    checks.append({
-        "check": "T3 估值水平证据",
-        "ledger_fact": f"PE(TTM)={pe_ttm}, PB={quote.get('pb')}（2026-07-31）",
-        "verified": pe_ttm is not None and pe_ttm > 50,
-        "source": "gildata FinQuery 2026-07-31",
-    })
-    annual_rows = probes.get("annual_2025") or []
-    rev_row = next(
-        (r for r in annual_rows if r.get("财务科目名称") == "营业收入"), None
+    checks.append(
+        {
+            "check": "T3 估值水平证据",
+            "ledger_fact": f"PE(TTM)={pe_ttm}, PB={quote.get('pb')}（2026-07-31）",
+            "verified": pe_ttm is not None and pe_ttm > 50,
+            "source": "gildata FinQuery 2026-07-31",
+        }
     )
-    checks.append({
-        "check": "2025年报营业收入（Gildata 探针）",
-        "ledger_fact": (
-            f"2025年报营业收入 {rev_row.get('财务科目数额')}亿，"
-            f"同比 +{rev_row.get('同比(%)')}%"
-            if rev_row else "annual_2025 probe 未返回营业收入行"
-        ),
-        "verified": rev_row is not None,
-        "source": "gildata FinQuery probe (2025年报)",
-    })
-    summary["facts"] = {"checks": checks,
-                        "quote_2026_07_31": {k: quote.get(k) for k in
-                                             ("latest_price", "total_mv", "pe_ttm",
-                                              "pe_lyr", "pb")}}
+    annual = probes.get("annual_2025") or {}
+    checks.append(
+        {
+            "check": "2025年报营业收入（Gildata 探针）",
+            "ledger_fact": (
+                f"2025年报营业收入 {annual.get('revenue_amount')}亿，"
+                f"同比 +{annual.get('revenue_yoy_percent')}%"
+                if annual
+                else "annual_2025 probe 未返回营业收入行"
+            ),
+            "verified": bool(annual),
+            "source": "gildata FinQuery probe (2025年报)",
+        }
+    )
+    summary["facts"] = {
+        "checks": checks,
+        "quote_2026_07_31": {
+            k: quote.get(k)
+            for k in ("latest_price", "total_mv", "pe_ttm", "pe_lyr", "pb")
+        },
+    }
     summary["phases"]["P12_fact_check"] = checks
     return {"checks": checks}
 
@@ -973,17 +1479,45 @@ def phase12_fact_check(probes: dict) -> dict:
 # main — staged runner (state persisted so each Bash call stays bounded)
 # ---------------------------------------------------------------------------
 
+
 def _load_state() -> dict:
-    if STATE_PATH.exists():
-        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    return {}
+    loaded = secure_read_json(STATE_PATH)
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise WalkthroughResponseError("walkthrough checkpoint must be an object")
+    _classify_stored_p3_reasons(loaded)
+    _ensure_safe_artifact(loaded)
+    return loaded
+
+
+def _classify_stored_p3_reasons(state: dict) -> None:
+    """Remove legacy provider prose before a checkpoint can be loaded or saved."""
+    phases = state.get("_summary_phases")
+    phase = phases.get("P3_extract") if isinstance(phases, dict) else None
+    per_document = phase.get("per_document") if isinstance(phase, dict) else None
+    if per_document is None:
+        return
+    if not isinstance(per_document, list):
+        raise WalkthroughResponseError("stored P3 per_document summary is invalid")
+    for item in per_document:
+        if not isinstance(item, dict):
+            raise WalkthroughResponseError("stored P3 per_document item is invalid")
+        candidates = item.get("candidates")
+        reason = item.get("reason")
+        if (
+            isinstance(candidates, bool)
+            or not isinstance(candidates, int)
+            or candidates < 0
+            or (reason is not None and not isinstance(reason, str))
+        ):
+            raise WalkthroughResponseError("stored P3 per_document item is invalid")
+        item["reason"] = classify_extract_reason(candidates, reason)
 
 
 def _save_state(state: dict) -> None:
-    STATE_PATH.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
+    _ensure_safe_artifact(state)
+    atomic_write_json(STATE_PATH, state)
 
 
 def _checkpoint(state: dict) -> None:
@@ -993,13 +1527,117 @@ def _checkpoint(state: dict) -> None:
     _save_state(state)
 
 
+def phase_terminal_acceptance_audit(session) -> None:
+    """Persist a content-free, idempotent verdict for the completed live run."""
+
+    from app.scripts.audit_gildata_ai_walkthrough import (
+        collect_walkthrough_facts,
+        evaluate_walkthrough_facts,
+    )
+
+    issues = summary.get("issues")
+    try:
+        if not isinstance(issues, list):
+            raise WalkthroughResponseError("stored summary issues are invalid")
+        summary["issues"] = [
+            item
+            for item in issues
+            if not (
+                isinstance(item, dict)
+                and item.get("source") == _ACCEPTANCE_AUDIT_SOURCE
+            )
+        ]
+        facts = collect_walkthrough_facts(session, summary)
+        result = evaluate_walkthrough_facts(facts)
+        if (
+            not isinstance(result.ok, bool)
+            or any(type(value) is not int for value in result.metrics.values())
+            or any(not isinstance(code, str) for code in result.issue_codes)
+        ):
+            raise WalkthroughResponseError("acceptance audit result is invalid")
+        audit = {
+            "ok": result.ok,
+            "issue_codes": list(result.issue_codes),
+            "metrics": dict(result.metrics),
+        }
+    except Exception:  # noqa: BLE001 -- durable audit boundary is fail-closed
+        if not isinstance(summary.get("issues"), list):
+            summary["issues"] = []
+        audit = {
+            "ok": False,
+            "issue_codes": ["audit_execution_failed"],
+            "metrics": {},
+        }
+
+    facts_summary = summary.get("facts")
+    if not isinstance(facts_summary, dict):
+        facts_summary = {}
+        summary["facts"] = facts_summary
+    facts_summary[_ACCEPTANCE_AUDIT_SOURCE] = audit
+    for code in audit["issue_codes"]:
+        observation = {
+            "code": f"{_ACCEPTANCE_AUDIT_SOURCE}_{code}",
+            "source": _ACCEPTANCE_AUDIT_SOURCE,
+        }
+        summary["issues"].append(observation)
+        rec("acceptance_audit", code, observation)
+
+
+def _ensure_safe_artifact(value: object) -> None:
+    """Refuse persistence if a raw-body or credential field escaped projection."""
+    validate_persisted_json(
+        value,
+        forbidden_keys=_FORBIDDEN_PERSISTED_KEYS,
+        forbidden_list_keys=frozenset({"candidates"}),
+    )
+
+
+def _saved_case(state: dict) -> dict | None:
+    case = state.get("case")
+    if case is None:
+        return None
+    if not isinstance(case, dict):
+        raise WalkthroughResponseError("stored walkthrough case is invalid")
+    case_id = case.get("case_id")
+    theses = case.get("theses")
+    if not isinstance(case_id, str) or not case_id or not isinstance(theses, dict):
+        raise WalkthroughResponseError("stored walkthrough case is invalid")
+    for key in ("T1", "T2", "T3"):
+        thesis = theses.get(key)
+        if (
+            not isinstance(thesis, dict)
+            or not isinstance(thesis.get("id"), str)
+            or not thesis["id"]
+        ):
+            raise WalkthroughResponseError("stored walkthrough case is invalid")
+    return case
+
+
+def _saved_probes(state: dict) -> dict | None:
+    probes = state.get("probes")
+    if probes is None:
+        return None
+    if not isinstance(probes, dict):
+        raise WalkthroughResponseError("stored walkthrough probes are invalid")
+    required_shapes = {
+        "quote_metrics": dict,
+        "annual_2025": dict,
+        "fund_holders": list,
+        "smart_fund_selection": dict,
+        "tools": list,
+    }
+    if any(
+        not isinstance(probes.get(key), kind) for key, kind in required_shapes.items()
+    ):
+        raise WalkthroughResponseError("stored walkthrough probes are invalid")
+    return probes
+
+
 def _finalize(state: dict, started: datetime) -> None:
     _checkpoint(state)
-    summary["elapsed_seconds"] = (
-        datetime.now(timezone.utc) - started
-    ).total_seconds()
-    with SUMMARY_PATH.open("w", encoding="utf-8") as fh:
-        json.dump(summary, fh, ensure_ascii=False, indent=2, default=str)
+    summary["elapsed_seconds"] = (datetime.now(UTC) - started).total_seconds()
+    _ensure_safe_artifact(summary)
+    atomic_write_json(SUMMARY_PATH, summary)
     print(f"walkthrough stages complete in {summary['elapsed_seconds']:.0f}s")
     print(f"  jsonl:   {JSONL_PATH}")
     print(f"  summary: {SUMMARY_PATH}")
@@ -1017,24 +1655,34 @@ def main() -> None:
     args = parser.parse_args()
     wanted = {s.strip() for s in args.stages.split(",") if s.strip()}
 
-    started = datetime.now(timezone.utc)
+    _initialize_runtime(require_live_llm=bool(wanted & {"p3", "p4_p5", "p7_p8"}))
+
+    started = datetime.now(UTC)
     state = _load_state()
+    _ensure_safe_artifact(state)
     state.setdefault("run_id", RUN_ID)
     # Merge observations from earlier stage-group invocations so the final
     # summary is cumulative across Bash calls.
     summary["phases"].update(state.get("_summary_phases", {}))
     summary["issues"].extend(state.get("_summary_issues", []))
-    rec("meta", "run_start", {"db": str(DB_PATH), "run_id": RUN_ID,
-                              "stages": sorted(wanted)})
+    rec(
+        "meta",
+        "run_start",
+        {"db": str(DB_PATH), "run_id": RUN_ID, "stages": sorted(wanted)},
+    )
 
     if "p0_p1_p2" in wanted:
-        state["probes"] = phase0_preflight()
-        state["case"] = phase1_create_case()
+        saved_probes = _saved_probes(state)
+        state["probes"] = saved_probes or phase0_preflight()
+        saved_case = _saved_case(state)
+        state["case"] = saved_case or phase1_create_case()
         phase2_ingest(state["case"]["case_id"])
         _checkpoint(state)
     if "p3" in wanted:
-        phase3_extract()
+        phase3_extract(state["case"]["case_id"], checkpoint_state=state)
+        _checkpoint(state)
         phase3_review_atomic_claims(state["case"]["case_id"])
+        _checkpoint(state)
     if "p4_p5" in wanted:
         phase4_propose(state["case"]["theses"])
         phase4_review_proposals(state["case"]["case_id"])
@@ -1055,6 +1703,10 @@ def main() -> None:
         phase10_reads(state["case"]["case_id"])
         phase11_time_travel(state["case"]["case_id"])
         phase12_fact_check(state["probes"])
+        from app.db import SessionLocal
+
+        with SessionLocal() as session:
+            phase_terminal_acceptance_audit(session)
         _finalize(state, started)
         return
 

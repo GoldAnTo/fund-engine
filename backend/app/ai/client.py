@@ -14,17 +14,19 @@ import json
 import math
 import os
 import re
-import random
 import time
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Callable, Mapping
+from enum import StrEnum
 from typing import Any
 
 import httpx
-from openai import APIConnectionError, APIStatusError, OpenAIError
-from app.ai.usage import record_attempt
+from openai import (
+    APIConnectionError,
+    APIResponseValidationError,
+    APIStatusError,
+    APITimeoutError,
+    OpenAIError,
+)
 
 DEFAULT_MODEL = "gpt-4o-mini"
 
@@ -34,69 +36,427 @@ DEFAULT_MODEL = "gpt-4o-mini"
 # (versions/regions may still drift), but combined with temperature=0 it
 # closes the bulk of the variance.  See walkthrough defect 7.
 DEFAULT_TEMPERATURE = 0.0
-# Socket inactivity timeout, not cancellation of an entire synchronous call.
+# A provider call is part of a synchronous worker/API request.  Keep a finite
+# ceiling so one unavailable upstream cannot indefinitely occupy that worker.
 DEFAULT_TIMEOUT_SECONDS = 90.0
 DEFAULT_MAX_ATTEMPTS = 2
-DEFAULT_RETRY_BUDGET_SECONDS = 180.0
-DEFAULT_MAX_INPUT_BYTES = 1_048_576
-DEFAULT_MAX_RESPONSE_BYTES = 2_097_152
-DEFAULT_MAX_COMPLETION_TOKENS = 16_384
+DEFAULT_MAX_OUTPUT_TOKENS = 4096
+DEFAULT_RETRY_BASE_SECONDS = 0.25
+DEFAULT_RETRY_MAX_SECONDS = 2.0
 LLM_PROVIDER_ERROR_MESSAGE = "LLM provider request failed"
 LLM_MALFORMED_RESPONSE_MESSAGE = "LLM provider returned an invalid response"
-_operation_deadline: ContextVar[float | None] = ContextVar("llm_operation_deadline", default=None)
 
 
-@contextmanager
-def operation_budget(client):
-    """Share a cooperative deadline across provider calls and compliance rewrite.
+class LLMFailureCategory(StrEnum):
+    """Stable, secret-free classifications safe for persisted diagnostics."""
 
-    Context-local state survives graph context propagation without placing a
-    mutable deadline on a potentially shared client. Nested scopes cannot
-    extend the caller's budget. This does not cancel synchronous I/O.
-    """
-    budget = getattr(client, "_retry_budget_seconds", DEFAULT_RETRY_BUDGET_SECONDS)
-    deadline = time.monotonic() + budget
-    parent = _operation_deadline.get()
-    token = _operation_deadline.set(min(parent, deadline) if parent is not None else deadline)
-    try:
-        yield
-    finally:
-        _operation_deadline.reset(token)
+    TIMEOUT = "timeout"
+    CONNECTION = "connection"
+    CLIENT_ERROR = "client_error"
+    RATE_LIMIT = "rate_limit"
+    SERVER_ERROR = "server_error"
+    RESPONSE_VALIDATION = "response_validation"
+    MALFORMED_RESPONSE = "malformed_response"
+    OUTPUT_LIMIT = "output_limit"
+    REFUSAL = "refusal"
+    PROVIDER_ERROR = "provider_error"
+    UNKNOWN = "unknown"
+
+
+_TRANSIENT_ENVELOPE_FAILURES = {
+    1000: LLMFailureCategory.SERVER_ERROR,
+    1001: LLMFailureCategory.TIMEOUT,
+    1002: LLMFailureCategory.RATE_LIMIT,
+    # 1013 has appeared as an internal error in older compatible responses;
+    # current MiniMax documentation uses 1024 and 1033.
+    1013: LLMFailureCategory.SERVER_ERROR,
+    1024: LLMFailureCategory.SERVER_ERROR,
+    1033: LLMFailureCategory.SERVER_ERROR,
+}
+_REFUSAL_ENVELOPE_STATUS_CODES = frozenset({1026, 1027})
+_RETRYABLE_LLM_FAILURE_CATEGORIES = frozenset(
+    {
+        LLMFailureCategory.TIMEOUT,
+        LLMFailureCategory.RATE_LIMIT,
+        LLMFailureCategory.SERVER_ERROR,
+    }
+)
 
 
 class LLMProviderError(RuntimeError):
     """Stable public boundary for live LLM request failures."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempt_count: int = 1,
+        failure_category: LLMFailureCategory | str = LLMFailureCategory.PROVIDER_ERROR,
+    ) -> None:
+        if (
+            isinstance(attempt_count, bool)
+            or not isinstance(attempt_count, int)
+            or attempt_count < 0
+        ):
+            raise ValueError("attempt_count must be a non-negative integer")
+        try:
+            normalized_category = LLMFailureCategory(failure_category)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("failure_category must be a known LLM category") from exc
+        super().__init__(message)
+        self.attempt_count = attempt_count
+        self.failure_category = normalized_category
+
 
 class LLMMalformedResponseError(LLMProviderError):
     """Raised when the provider response does not match the JSON protocol."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempt_count: int = 1,
+        failure_category: LLMFailureCategory | str = (
+            LLMFailureCategory.MALFORMED_RESPONSE
+        ),
+    ) -> None:
+        super().__init__(
+            message,
+            attempt_count=attempt_count,
+            failure_category=failure_category,
+        )
 
-def _retry_delay(exc: Exception, attempt: int) -> float | None:
+
+class LLMJSONResponse(dict[str, Any]):
+    """Parsed JSON plus call-local, secret-free provider diagnostics."""
+
+    def __init__(
+        self,
+        values: dict[str, Any],
+        *,
+        attempt_count: int,
+        malformed_retry_count: int,
+    ) -> None:
+        super().__init__(values)
+        self.attempt_count = attempt_count
+        self.malformed_retry_count = malformed_retry_count
+
+
+def _positive_finite_number(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be a finite positive number")
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized <= 0:
+        raise ValueError(f"{name} must be a finite positive number")
+    return normalized
+
+
+def _positive_integer(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be a positive integer")
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _provider_status_code(exc: BaseException) -> int | None:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int) and not isinstance(status_code, bool):
+        return status_code
     response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int) and not isinstance(status_code, bool):
+        return status_code
+    return None
+
+
+def _is_retryable_status(status_code: int | None) -> bool:
+    return status_code in (408, 429) or (
+        status_code is not None and 500 <= status_code <= 599
+    )
+
+
+def _is_transient_provider_error(exc: BaseException) -> bool:
+    if isinstance(
+        exc,
+        (
+            APIConnectionError,
+            httpx.TimeoutException,
+            httpx.NetworkError,
+            TimeoutError,
+            ConnectionError,
+        ),
+    ):
+        return True
     if isinstance(exc, (APIStatusError, httpx.HTTPStatusError)):
-        status = response.status_code
-        if status not in {408, 409, 429} and not 500 <= status < 600:
-            return None
-    elif not isinstance(exc, (APIConnectionError, httpx.TransportError, TimeoutError, ConnectionError)):
+        return _is_retryable_status(_provider_status_code(exc))
+    return False
+
+
+def _provider_failure_category(exc: BaseException) -> LLMFailureCategory:
+    if isinstance(exc, (APITimeoutError, httpx.TimeoutException, TimeoutError)):
+        return LLMFailureCategory.TIMEOUT
+    status_code = _provider_status_code(exc)
+    if status_code == 408:
+        return LLMFailureCategory.TIMEOUT
+    if status_code == 429:
+        return LLMFailureCategory.RATE_LIMIT
+    if status_code is not None and 500 <= status_code <= 599:
+        return LLMFailureCategory.SERVER_ERROR
+    if status_code is not None and 400 <= status_code <= 499:
+        return LLMFailureCategory.CLIENT_ERROR
+    if isinstance(exc, APIResponseValidationError):
+        return LLMFailureCategory.RESPONSE_VALIDATION
+    if isinstance(
+        exc,
+        (APIConnectionError, httpx.NetworkError, ConnectionError),
+    ):
+        return LLMFailureCategory.CONNECTION
+    return LLMFailureCategory.PROVIDER_ERROR
+
+
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    if not _is_retryable_status(_provider_status_code(exc)):
         return None
-    delay = random.uniform(0.5, 1.0) * min(2**attempt, 8)
-    if response is not None:
-        retry_after = response.headers.get("retry-after")
-        if retry_after:
-            try:
-                seconds = float(retry_after)
-            except ValueError:
-                try:
-                    seconds = (parsedate_to_datetime(retry_after) - datetime.now(timezone.utc)).total_seconds()
-                except (TypeError, ValueError, OverflowError):
-                    seconds = 0
-            if math.isfinite(seconds) and seconds > 0:
-                # Never retry earlier than requested; decline an excessive wait.
-                if seconds > 30:
-                    return None
-                delay = max(delay, seconds)
-    return delay
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    try:
+        raw_value = headers.get("Retry-After")
+    except (AttributeError, TypeError):
+        return None
+    if raw_value is None:
+        return None
+    try:
+        seconds = float(raw_value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(seconds) or seconds < 0:
+        return None
+    return seconds
+
+
+def _retry_delay_seconds(
+    exc: BaseException,
+    *,
+    attempt: int,
+    base_seconds: float,
+    max_seconds: float,
+) -> float:
+    retry_after = _retry_after_seconds(exc)
+    if retry_after is not None:
+        return min(retry_after, max_seconds)
+    try:
+        exponential_delay = math.ldexp(base_seconds, attempt)
+    except OverflowError:
+        return max_seconds
+    return min(exponential_delay, max_seconds)
+
+
+def _has_balanced_json_object_delimiters(content: str) -> bool:
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in content:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0 and not in_string
+
+
+def _parse_chat_json_response(
+    response: Any,
+    *,
+    schema_hint: str,
+    attempt_count: int,
+) -> dict:
+    sensitive_flags = (
+        getattr(response, "input_sensitive", None),
+        getattr(response, "output_sensitive", None),
+    )
+    if any(flag is True for flag in sensitive_flags):
+        exc = ValueError("LLM provider refused the response")
+        raise LLMProviderError(
+            LLM_PROVIDER_ERROR_MESSAGE,
+            attempt_count=attempt_count,
+            failure_category=LLMFailureCategory.REFUSAL,
+        ) from exc
+    if any(flag is not None and flag is not False for flag in sensitive_flags):
+        exc = TypeError("LLM provider returned malformed safety flags")
+        raise LLMProviderError(
+            LLM_PROVIDER_ERROR_MESSAGE,
+            attempt_count=attempt_count,
+            failure_category=LLMFailureCategory.RESPONSE_VALIDATION,
+        ) from exc
+    base_response = getattr(response, "base_resp", None)
+    if base_response is not None:
+        missing_status = object()
+        base_status_code = (
+            base_response.get("status_code", missing_status)
+            if isinstance(base_response, Mapping)
+            else getattr(base_response, "status_code", missing_status)
+        )
+        if isinstance(base_status_code, bool) or not isinstance(
+            base_status_code, int
+        ):
+            exc = TypeError("LLM provider returned a malformed response envelope")
+            raise LLMProviderError(
+                LLM_PROVIDER_ERROR_MESSAGE,
+                attempt_count=attempt_count,
+                failure_category=LLMFailureCategory.PROVIDER_ERROR,
+            ) from exc
+        if base_status_code != 0:
+            failure_category = _TRANSIENT_ENVELOPE_FAILURES.get(
+                base_status_code,
+                (
+                    LLMFailureCategory.REFUSAL
+                    if base_status_code in _REFUSAL_ENVELOPE_STATUS_CODES
+                    else LLMFailureCategory.PROVIDER_ERROR
+                ),
+            )
+            exc = ValueError("LLM provider returned a failed response envelope")
+            raise LLMProviderError(
+                LLM_PROVIDER_ERROR_MESSAGE,
+                attempt_count=attempt_count,
+                failure_category=failure_category,
+            ) from exc
+    try:
+        choice = response.choices[0]
+    except (AttributeError, IndexError, TypeError) as exc:
+        raise LLMMalformedResponseError(
+            LLM_MALFORMED_RESPONSE_MESSAGE,
+            attempt_count=attempt_count,
+        ) from exc
+    finish_reason = getattr(choice, "finish_reason", None)
+    message = getattr(choice, "message", None)
+    refusal = getattr(message, "refusal", None)
+    if finish_reason == "content_filter" or (
+        isinstance(refusal, str) and refusal.strip()
+    ):
+        exc = ValueError("LLM provider refused the response")
+        raise LLMProviderError(
+            LLM_PROVIDER_ERROR_MESSAGE,
+            attempt_count=attempt_count,
+            failure_category=LLMFailureCategory.REFUSAL,
+        ) from exc
+    if refusal is not None and not isinstance(refusal, str):
+        exc = TypeError("LLM provider returned a malformed refusal field")
+        raise LLMProviderError(
+            LLM_PROVIDER_ERROR_MESSAGE,
+            attempt_count=attempt_count,
+            failure_category=LLMFailureCategory.RESPONSE_VALIDATION,
+        ) from exc
+    if finish_reason == "length":
+        exc = ValueError("LLM response reached its output-token limit")
+        raise LLMMalformedResponseError(
+            LLM_MALFORMED_RESPONSE_MESSAGE,
+            attempt_count=attempt_count,
+            failure_category=LLMFailureCategory.OUTPUT_LIMIT,
+        ) from exc
+    if finish_reason != "stop":
+        exc = ValueError("LLM response ended with an unsupported finish reason")
+        raise LLMProviderError(
+            LLM_PROVIDER_ERROR_MESSAGE,
+            attempt_count=attempt_count,
+            failure_category=LLMFailureCategory.RESPONSE_VALIDATION,
+        ) from exc
+    tool_calls = getattr(message, "tool_calls", None)
+    function_call = getattr(message, "function_call", None)
+    has_tool_calls = not (
+        tool_calls is None
+        or (isinstance(tool_calls, (list, tuple)) and not tool_calls)
+    )
+    has_function_call = function_call is not None
+    if has_tool_calls or has_function_call:
+        exc = ValueError("LLM response unexpectedly requested a tool call")
+        raise LLMProviderError(
+            LLM_PROVIDER_ERROR_MESSAGE,
+            attempt_count=attempt_count,
+            failure_category=LLMFailureCategory.RESPONSE_VALIDATION,
+        ) from exc
+    try:
+        content = message.content
+    except AttributeError as exc:
+        raise LLMMalformedResponseError(
+            LLM_MALFORMED_RESPONSE_MESSAGE,
+            attempt_count=attempt_count,
+        ) from exc
+    if not isinstance(content, str):
+        exc = TypeError("LLM response content must be a string")
+        raise LLMMalformedResponseError(
+            LLM_MALFORMED_RESPONSE_MESSAGE,
+            attempt_count=attempt_count,
+        ) from exc
+    # 推理模型（如 MiniMax M2.x/M3）可能在 JSON 前加完整的
+    # ``<think>...</think>`` 块。只识别锚定前缀，避免把 JSON 字符串内的
+    # 字面 ``</think>`` 误当成协议包装。
+    stripped_content = content.lstrip()
+    if stripped_content.startswith("<think>"):
+        closing_tag = stripped_content.find("</think>")
+        if closing_tag < 0:
+            exc = ValueError("LLM reasoning wrapper is incomplete")
+            raise LLMMalformedResponseError(
+                LLM_MALFORMED_RESPONSE_MESSAGE,
+                attempt_count=attempt_count,
+            ) from exc
+        content = stripped_content[closing_tag + len("</think>") :].strip()
+    # 提取首个 JSON 对象（兼容模型偶尔加 markdown 包裹或多余文本）
+    start = content.find("{")
+    end = content.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        exc = ValueError("LLM response does not contain a complete JSON object")
+        raise LLMMalformedResponseError(
+            LLM_MALFORMED_RESPONSE_MESSAGE,
+            attempt_count=attempt_count,
+        ) from exc
+    content = content[start : end + 1]
+    if not _has_balanced_json_object_delimiters(content):
+        exc = ValueError("LLM response contains a truncated JSON object")
+        raise LLMMalformedResponseError(
+            LLM_MALFORMED_RESPONSE_MESSAGE,
+            attempt_count=attempt_count,
+        ) from exc
+    json_decode_failed = False
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        json_decode_failed = True
+        parsed = None
+    if json_decode_failed:
+        exc = ValueError("LLM response is not valid JSON")
+        raise LLMMalformedResponseError(
+            LLM_MALFORMED_RESPONSE_MESSAGE,
+            attempt_count=attempt_count,
+        ) from exc
+    if not isinstance(parsed, dict):
+        exc = TypeError("LLM JSON response must be an object")
+        raise LLMMalformedResponseError(
+            LLM_MALFORMED_RESPONSE_MESSAGE,
+            attempt_count=attempt_count,
+        ) from exc
+    if schema_hint == "extract" and (
+        "statements" not in parsed or not isinstance(parsed["statements"], list)
+    ):
+        exc = TypeError("LLM extract response must contain a statements list")
+        raise LLMMalformedResponseError(
+            LLM_MALFORMED_RESPONSE_MESSAGE,
+            attempt_count=attempt_count,
+        ) from exc
+    return parsed
 
 
 class LLMClient:
@@ -123,29 +483,24 @@ class LLMClient:
         seed: int | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
-        retry_budget_seconds: float = DEFAULT_RETRY_BUDGET_SECONDS,
-        max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES,
-        max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
-        max_completion_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+        retry_base_seconds: float = DEFAULT_RETRY_BASE_SECONDS,
+        retry_max_seconds: float = DEFAULT_RETRY_MAX_SECONDS,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        for name, value, lower, upper in (
-            ("timeout_seconds", timeout_seconds, 0.001, 300),
-            ("retry_budget_seconds", retry_budget_seconds, 0.001, 600),
-            ("temperature", temperature, 0, 2),
-        ):
-            if isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value) or not lower <= value <= upper:
-                raise ValueError(f"{name} must be finite and between {lower} and {upper}")
-        if type(max_attempts) is not int or not 1 <= max_attempts <= 5:
-            raise ValueError("max_attempts must be an integer from 1 through 5")
-        if type(max_completion_tokens) is not int or not 1 <= max_completion_tokens <= 131_072:
-            raise ValueError("max_completion_tokens must be an integer from 1 through 131072")
-        for name, value in (("max_input_bytes", max_input_bytes), ("max_response_bytes", max_response_bytes)):
-            if type(value) is not int or not 1 <= value <= 16_777_216:
-                raise ValueError(f"{name} must be an integer from 1 through 16777216")
-        if not isinstance(model_version, str) or not model_version.strip():
-            raise ValueError("model_version must not be blank")
-        if seed is not None and (type(seed) is not int or not -(2**63) <= seed < 2**63):
-            raise ValueError("seed must be a signed 64-bit integer")
+        timeout_seconds = _positive_finite_number(timeout_seconds, "timeout_seconds")
+        max_attempts = _positive_integer(max_attempts, "max_attempts")
+        max_output_tokens = _positive_integer(
+            max_output_tokens, "max_output_tokens"
+        )
+        retry_base_seconds = _positive_finite_number(
+            retry_base_seconds, "retry_base_seconds"
+        )
+        retry_max_seconds = _positive_finite_number(
+            retry_max_seconds, "retry_max_seconds"
+        )
+        if not callable(sleep):
+            raise TypeError("sleep must be callable")
         self.model_version = model_version
         self._client = client
         self._mock = mock
@@ -153,15 +508,15 @@ class LLMClient:
         self._seed = seed
         self._timeout_seconds = timeout_seconds
         self._max_attempts = max_attempts
-        self._retry_budget_seconds = retry_budget_seconds
-        self._max_input_bytes = max_input_bytes
-        self._max_response_bytes = max_response_bytes
-        self._max_completion_tokens = max_completion_tokens
+        self._max_output_tokens = max_output_tokens
+        self._retry_base_seconds = retry_base_seconds
+        self._retry_max_seconds = retry_max_seconds
+        self._sleep = sleep
 
     # ------------------------------------------------------------------ factory
 
     @classmethod
-    def from_env(cls) -> "LLMClient":
+    def from_env(cls) -> LLMClient:
         """Build a client from ``LLM_API_KEY`` / ``LLM_BASE_URL`` / ``LLM_MODEL``.
 
         Reproducibility knobs read from env:
@@ -169,15 +524,17 @@ class LLMClient:
           call.  Zero freezes sampling so reruns land on the same token.
         - ``LLM_SEED`` (default unset): forwarded to ``chat.completions.create``
           as ``seed``. Empty means "do not pin"; zero is a real seed.
-        - ``LLM_TIMEOUT_SECONDS`` (default 90): socket inactivity timeout.
-          Synchronous I/O cannot be forcibly cancelled by this wrapper.
-        - ``LLM_RETRY_BUDGET_SECONDS`` (default 180): shared time budget for
-          attempts and backoff within one chat_json call; late results fail.
-        - ``LLM_MAX_ATTEMPTS`` (default 2): bounded application-level retries
-          for transient provider transport errors.
-        - ``LLM_MAX_COMPLETION_TOKENS`` (default 16384): generation cap sent
-          on every provider attempt, including reasoning tokens where supported.
-          This is not a total task budget or a monetary spending limit.
+        - ``LLM_TIMEOUT_SECONDS`` (default 90): hard per-request limit for
+          live provider calls. The SDK's implicit retries are disabled so this
+          remains an actual bound rather than several stacked timeout windows.
+        - ``LLM_MAX_ATTEMPTS`` (default 2): one total application-level attempt
+          budget shared by transient transport retries and any caller-opted-in
+          malformed-JSON retry.
+        - ``LLM_MAX_OUTPUT_TOKENS`` (default 4096): hard completion-token
+          budget forwarded to the provider as ``max_completion_tokens``. The
+          completion budget includes reasoning tokens on reasoning models.
+        - ``LLM_RETRY_BASE_SECONDS`` / ``LLM_RETRY_MAX_SECONDS`` (defaults
+          0.25 / 2.0): bounded exponential retry delay.
 
         Without ``LLM_API_KEY``, only ``APP_ENV=test`` may build a deterministic
         mock client. Every other environment is a live runtime and fails
@@ -186,8 +543,6 @@ class LLMClient:
         api_key = os.getenv("LLM_API_KEY")
         base_url = os.getenv("LLM_BASE_URL")
         model = os.getenv("LLM_MODEL", DEFAULT_MODEL)
-        if not model.strip():
-            raise ValueError("LLM_MODEL must not be blank")
         app_env = os.getenv("APP_ENV", "").strip().lower()
 
         if not api_key and app_env != "test":
@@ -203,12 +558,15 @@ class LLMClient:
             os.getenv("LLM_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
         )
         max_attempts = int(os.getenv("LLM_MAX_ATTEMPTS", str(DEFAULT_MAX_ATTEMPTS)))
-        retry_budget_seconds = float(os.getenv("LLM_RETRY_BUDGET_SECONDS", str(DEFAULT_RETRY_BUDGET_SECONDS)))
-        resource_limits = {
-            "max_input_bytes": int(os.getenv("LLM_MAX_INPUT_BYTES", str(DEFAULT_MAX_INPUT_BYTES))),
-            "max_response_bytes": int(os.getenv("LLM_MAX_RESPONSE_BYTES", str(DEFAULT_MAX_RESPONSE_BYTES))),
-            "max_completion_tokens": int(os.getenv("LLM_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS))),
-        }
+        max_output_tokens = int(
+            os.getenv("LLM_MAX_OUTPUT_TOKENS", str(DEFAULT_MAX_OUTPUT_TOKENS))
+        )
+        retry_base_seconds = float(
+            os.getenv("LLM_RETRY_BASE_SECONDS", str(DEFAULT_RETRY_BASE_SECONDS))
+        )
+        retry_max_seconds = float(
+            os.getenv("LLM_RETRY_MAX_SECONDS", str(DEFAULT_RETRY_MAX_SECONDS))
+        )
 
         if not api_key:
             return cls(
@@ -218,8 +576,9 @@ class LLMClient:
                 seed=seed,
                 timeout_seconds=timeout_seconds,
                 max_attempts=max_attempts,
-                retry_budget_seconds=retry_budget_seconds,
-                **resource_limits,
+                max_output_tokens=max_output_tokens,
+                retry_base_seconds=retry_base_seconds,
+                retry_max_seconds=retry_max_seconds,
             )
 
         from openai import OpenAI
@@ -238,121 +597,131 @@ class LLMClient:
             seed=seed,
             timeout_seconds=timeout_seconds,
             max_attempts=max_attempts,
-            retry_budget_seconds=retry_budget_seconds,
-            **resource_limits,
+            max_output_tokens=max_output_tokens,
+            retry_base_seconds=retry_base_seconds,
+            retry_max_seconds=retry_max_seconds,
         )
 
     # ------------------------------------------------------------------ core
 
-    def operation_budget(self):
-        return operation_budget(self)
-
-    def chat_json(self, messages: list[dict], schema_hint: str = "") -> dict:
+    def chat_json(
+        self,
+        messages: list[dict],
+        schema_hint: str = "",
+        *,
+        malformed_retry_system: str | None = None,
+    ) -> LLMJSONResponse:
         """Call the model and return parsed JSON.
 
         ``schema_hint`` is a short tag (e.g. ``"extract"``, ``"propose"``,
         ``"assess"``) that the mock uses to pick the right response shape.
+        Malformed JSON is terminal unless the caller explicitly supplies a
+        fixed ``malformed_retry_system`` message. That opt-in retry shares the
+        same total attempt budget as transient transport retries.
         """
-        # Measure UTF-8 JSON messages, not characters or an estimated token
-        # count. Stop encoding once the limit is reached; never log content.
-        input_size = 0
-        for chunk in json.JSONEncoder(ensure_ascii=False, separators=(",", ":")).iterencode(messages):
-            try:
-                input_size += len(chunk.encode("utf-8"))
-            except UnicodeEncodeError as exc:
-                raise LLMProviderError("LLM input contains invalid UTF-8") from exc
-            if input_size > self._max_input_bytes:
-                raise LLMProviderError("LLM input exceeds configured size limit")
+        if malformed_retry_system is not None:
+            if not isinstance(malformed_retry_system, str):
+                raise TypeError("malformed_retry_system must be a string or None")
+            if not malformed_retry_system.strip():
+                raise ValueError("malformed_retry_system must not be blank")
         if self._mock:
-            return _mock_response(messages, schema_hint)
+            return LLMJSONResponse(
+                _mock_response(messages, schema_hint),
+                attempt_count=1,
+                malformed_retry_count=0,
+            )
 
-        assert self._client is not None  # noqa: S101
+        assert self._client is not None
         create_kwargs: dict[str, Any] = {
             "model": self.model_version,
-            "messages": messages,
             "response_format": {"type": "json_object"},
             "temperature": self._temperature,
-            "max_completion_tokens": self._max_completion_tokens,
             "timeout": self._timeout_seconds,
+            "max_completion_tokens": self._max_output_tokens,
         }
         if self._seed is not None:
             create_kwargs["seed"] = self._seed
-        deadline = time.monotonic() + self._retry_budget_seconds
-        parent_deadline = _operation_deadline.get()
-        if parent_deadline is not None:
-            deadline = min(deadline, parent_deadline)
+        request_messages = messages
+        malformed_retry_count = 0
         for attempt in range(self._max_attempts):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE)
-            create_kwargs["timeout"] = min(self._timeout_seconds, remaining)
             try:
-                response = self._client.chat.completions.create(**create_kwargs)
-                record_attempt(response, outcome="response_received")
-                if time.monotonic() >= deadline:
-                    # This rejects late results; it does not interrupt an
-                    # in-flight synchronous request or undo provider billing.
-                    raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE)
-                break
+                response = self._client.chat.completions.create(
+                    **create_kwargs,
+                    messages=request_messages,
+                )
             except (OpenAIError, httpx.HTTPError, TimeoutError, ConnectionError) as exc:
-                record_attempt(outcome="transport_error")
-                delay = _retry_delay(exc, attempt)
-                remaining = deadline - time.monotonic()
-                if attempt + 1 == self._max_attempts or delay is None or delay >= remaining:
-                    raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE) from exc
-                time.sleep(delay)
+                if (
+                    not _is_transient_provider_error(exc)
+                    or attempt + 1 == self._max_attempts
+                ):
+                    raise LLMProviderError(
+                        LLM_PROVIDER_ERROR_MESSAGE,
+                        attempt_count=attempt + 1,
+                        failure_category=_provider_failure_category(exc),
+                    ) from exc
+                retry_error: BaseException = exc
+            else:
+                try:
+                    parsed = _parse_chat_json_response(
+                        response,
+                        schema_hint=schema_hint,
+                        attempt_count=attempt + 1,
+                    )
+                except LLMMalformedResponseError as exc:
+                    if (
+                        malformed_retry_system is None
+                        or attempt + 1 == self._max_attempts
+                    ):
+                        raise
+                    retry_error = exc
+                    malformed_retry_count += 1
+                    request_messages = _messages_with_malformed_correction(
+                        messages,
+                        malformed_retry_system,
+                    )
+                except LLMProviderError as exc:
+                    if (
+                        exc.failure_category
+                        not in _RETRYABLE_LLM_FAILURE_CATEGORIES
+                        or attempt + 1 == self._max_attempts
+                    ):
+                        raise
+                    retry_error = exc
+                else:
+                    return LLMJSONResponse(
+                        parsed,
+                        attempt_count=attempt + 1,
+                        malformed_retry_count=malformed_retry_count,
+                    )
+            self._sleep(
+                _retry_delay_seconds(
+                    retry_error,
+                    attempt=attempt,
+                    base_seconds=self._retry_base_seconds,
+                    max_seconds=self._retry_max_seconds,
+                )
+            )
+        raise AssertionError("bounded LLM attempt loop exited unexpectedly")
 
-        try:
-            choice = response.choices[0]
-            content = choice.message.content
-            finish_reason = choice.finish_reason
-            refusal = getattr(choice.message, "refusal", None)
-        except (AttributeError, IndexError, TypeError) as exc:
-            raise LLMMalformedResponseError(
-                LLM_MALFORMED_RESPONSE_MESSAGE
-            ) from exc
-        # Repair may restore JSON syntax, but cannot restore missing evidence
-        # after truncation or make a provider refusal a valid research result.
-        if finish_reason != "stop" or refusal:
-            raise LLMMalformedResponseError(LLM_MALFORMED_RESPONSE_MESSAGE)
+
+def _messages_with_malformed_correction(
+    messages: list[dict],
+    correction: str,
+) -> list[dict]:
+    """Append a fixed correction to the trusted system contract, immutably."""
+    corrected = [dict(message) for message in messages]
+    for index, message in enumerate(corrected):
+        if message.get("role") != "system":
+            continue
+        content = message.get("content")
         if not isinstance(content, str):
-            exc = TypeError("LLM response content must be a string")
-            raise LLMMalformedResponseError(
-                LLM_MALFORMED_RESPONSE_MESSAGE
-            ) from exc
-        # The SDK has already buffered the HTTP response. This bounds our
-        # parsing/repair work, not network download size or provider billing.
-        try:
-            response_too_large = len(content) > self._max_response_bytes or len(content.encode("utf-8")) > self._max_response_bytes
-        except UnicodeEncodeError as exc:
-            raise LLMMalformedResponseError(LLM_MALFORMED_RESPONSE_MESSAGE) from exc
-        if response_too_large:
-            raise LLMMalformedResponseError("LLM response exceeds configured size limit")
-        # 推理模型（如 MiniMax-M3）可能在 JSON 前加 <think>...</think> 块
-        if "</think>" in content:
-            content = content.split("</think>", 1)[1].strip()
-        # 提取首个 JSON 对象（兼容模型偶尔加 markdown 包裹或多余文本）
-        start = content.find("{")
-        end = content.rfind("}")
-        if start != -1 and end != -1:
-            content = content[start : end + 1]
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError:
-            from json_repair import loads as repair_loads
-
-            try:
-                parsed = repair_loads(content)
-            except (TypeError, ValueError) as exc:
-                raise LLMMalformedResponseError(
-                    LLM_MALFORMED_RESPONSE_MESSAGE
-                ) from exc
-        if not isinstance(parsed, dict):
-            exc = TypeError("LLM JSON response must be an object")
-            raise LLMMalformedResponseError(
-                LLM_MALFORMED_RESPONSE_MESSAGE
-            ) from exc
-        return parsed
+            continue
+        corrected[index] = {
+            **message,
+            "content": f"{content}\n\n{correction}",
+        }
+        return corrected
+    return [{"role": "system", "content": correction}, *corrected]
 
 
 # ---------------------------------------------------------------------------

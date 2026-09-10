@@ -18,6 +18,7 @@ from app.models.ledger import (
 )
 from app.models.operational import EventResearchLifecycle
 from app.models.proposals import Proposal
+from app.models.source_governance import SourceContract
 from app.queries.review_queue import ProposalEvidenceContext, proposal_evidence_context
 from app.repositories.operational import TaskRepository
 from app.repositories.outbox import emit_event
@@ -26,8 +27,8 @@ from app.schemas.v1.event_research import (
     EventReviewQueueResponse,
     EventReviewQueueSummaryDTO,
 )
-from app.services.source_admission import SourceStatus, classify_source
 from app.services.event_research_scope_evidence import current_scope_thesis_ids
+from app.services.source_admission import SourceStatus, classify_document_source
 
 
 @dataclass(frozen=True)
@@ -124,13 +125,29 @@ class EventReviewQueueService:
             {span.document_version_id for span in spans.values()},
         )
         document_ids = set(documents)
-        linked_document_ids = set(
-            self._session.scalars(
-                select(CaseDocumentVersion.document_version_id)
-                .where(CaseDocumentVersion.research_case_id == case_id)
-                .where(CaseDocumentVersion.document_version_id.in_(document_ids))
+        linked_document_ids = (
+            set(
+                self._session.scalars(
+                    select(CaseDocumentVersion.document_version_id)
+                    .where(CaseDocumentVersion.research_case_id == case_id)
+                    .where(CaseDocumentVersion.document_version_id.in_(document_ids))
+                )
             )
-        ) if document_ids else set()
+            if document_ids
+            else set()
+        )
+        contracts_by_document_id = (
+            {
+                contract.document_version_id: contract
+                for contract in self._session.scalars(
+                    select(SourceContract).where(
+                        SourceContract.document_version_id.in_(document_ids)
+                    )
+                )
+            }
+            if document_ids
+            else {}
+        )
 
         admissible_pending = 0
         invalid_pending = 0
@@ -150,10 +167,15 @@ class EventReviewQueueService:
             if document is not None and document.id not in linked_document_ids:
                 invalid_pending += 1
                 continue
-            admission = classify_source(
-                document.source_url if document else None,
-                document.parser_version if document else "",
-                bool(document and document.parse_state in {"success", "parsed"}),
+            admission = classify_document_source(
+                source_url=document.source_url if document else None,
+                parser_version=document.parser_version if document else None,
+                content_verified=bool(
+                    document and document.parse_state in {"success", "parsed"}
+                ),
+                contract=(
+                    contracts_by_document_id.get(document.id) if document else None
+                ),
             )
             # Invalid/cross-case proposals must remain visible to reviewers
             # for provenance audit.  A valid proposal for a removed factor is
@@ -198,9 +220,7 @@ class EventReviewQueueService:
             context = proposal_evidence_context(self._session, proposal)
             if context.admission.status == SourceStatus.INVALID:
                 invalid_ids.append(proposal.id)
-                task_repo.close_review_task(
-                    "review_proposal", "proposal", proposal.id, research_case_id=case_id
-                )
+                task_repo.close_review_task("review_proposal", "proposal", proposal.id)
                 if not self._has_admission_audit(proposal.id):
                     emit_event(
                         self._session,
@@ -219,9 +239,7 @@ class EventReviewQueueService:
                     )
                 continue
             if not self._is_current_scope_proposal(proposal, active_thesis_ids):
-                task_repo.close_review_task(
-                    "review_proposal", "proposal", proposal.id, research_case_id=case_id
-                )
+                task_repo.close_review_task("review_proposal", "proposal", proposal.id)
                 if not self._has_out_of_scope_audit(proposal.id):
                     emit_event(
                         self._session,
@@ -248,7 +266,7 @@ class EventReviewQueueService:
             context.span,
             context.document,
         )
-        payload = proposal.payload if isinstance(proposal.payload, dict) and not context.display_withheld else {}
+        payload = proposal.payload if isinstance(proposal.payload, dict) else {}
         return EventReviewQueueItemDTO(
             proposal_id=str(proposal.id),
             proposal_version=proposal.version,
@@ -259,24 +277,41 @@ class EventReviewQueueService:
             case_id=str(case_id),
             thesis_statement=thesis.statement if thesis else None,
             ai_role=payload.get("role", ""),
-            ai_reason=payload.get("reason", ""),
-            ai_scope=payload.get("scope", {}),
+            ai_reason=payload.get("reason", "") if context.can_display else "",
+            ai_scope=payload.get("scope", {}) if context.can_display else {},
             statement_id=str(statement.id) if statement else None,
-            statement_text=statement.normalized_text if statement else None,
+            statement_text=(
+                statement.normalized_text
+                if statement and context.can_display
+                else None
+            ),
             statement_kind=statement.kind if statement else None,
             span_id=str(span.id) if span else None,
-            verbatim_text=span.verbatim_text if span else None,
-            locator=span.locator if span else {},
+            verbatim_text=(
+                span.verbatim_text if span and context.can_display else None
+            ),
+            locator=span.locator if span and context.can_display else {},
             document_version_id=str(document.id) if document else None,
-            document_source_url=document.source_url if document else None,
-            document_published_at=document.published_at if document else None,
-            available_at=document.available_at if document else proposal.basis_cutoff,
-            source_title=document.title if document else None,
+            document_source_url=(
+                document.source_url if document and context.can_display else None
+            ),
+            document_published_at=(
+                document.published_at if document and context.can_display else None
+            ),
+            available_at=(
+                document.available_at
+                if document and context.can_display
+                else proposal.basis_cutoff if context.can_display else None
+            ),
+            source_title=(
+                document.title if document and context.can_display else None
+            ),
             source_status=str(context.admission.status),
             source_status_reason=context.admission.reason,
             can_accept=context.admission.can_accept,
-            display_withheld=context.display_withheld,
-            proposal_reason=payload.get("reason", ""),
+            proposal_reason=(
+                payload.get("reason", "") if context.can_display else ""
+            ),
             position=self._factor_position(case_id, thesis.statement if thesis else None),
         )
 

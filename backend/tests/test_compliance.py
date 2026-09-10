@@ -157,6 +157,9 @@ def _isolate_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "LLM_SEED",
         "LLM_TIMEOUT_SECONDS",
         "LLM_MAX_ATTEMPTS",
+        "LLM_MAX_OUTPUT_TOKENS",
+        "LLM_RETRY_BASE_SECONDS",
+        "LLM_RETRY_MAX_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LLM_BASE_URL", "https://llm.example.invalid/v1")

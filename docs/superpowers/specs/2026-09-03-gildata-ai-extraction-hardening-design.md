@@ -114,22 +114,80 @@ admission result; there is no route-level bypass.
 `LLMClient` keeps SDK retries disabled so there is only one retry authority.
 The application client performs bounded attempts for transient transport,
 timeout, 408, 429, and 5xx provider failures. Authentication, permission,
-request-shape, and malformed-response failures are terminal.
+request-shape, SDK response-validation, explicit refusal, and content-filter
+failures are terminal. Malformed responses are also terminal by default.
+
+`StatementExtractor` is the sole narrow exception: it explicitly opts into the
+versioned `extract-json-retry-v2` protocol correction when the client parser
+cannot obtain a complete JSON object or the required top-level `statements`
+list. The fixed correction message asks for a fresh compact response under the
+original extraction contract, caps the retry at three statements, and repeats
+the quote and normalized-text character ceilings. It never contains the
+previous response, exception text, or source-derived content. When a trusted
+system message already exists, the correction is appended to that message so
+the provider receives one unambiguous system contract; the caller's messages
+remain unmodified. A later transport retry retains that one correction.
+The extractor independently enforces the three-statement retry cap before
+persistence, so prompt compliance is never the sole control.
+Transport and malformed-response retries consume the same `LLM_MAX_ATTEMPTS`
+budget and therefore cannot multiply into nested retries.
 
 Retries use bounded exponential backoff with injectable sleep for deterministic
 tests. A valid `Retry-After` value is honoured within the configured ceiling.
-The public and persisted error stays secret-free, while safe diagnostics record
-attempt count and failure category.
+The public and persisted error stays secret-free. A terminal failure records
+attempt count and failure category; a success records total LLM attempts and
+malformed-response retry count on its one `AIRun`.
 
 The existing `LLM_MAX_OUTPUT_TOKENS` setting is parsed as a finite positive
-integer and forwarded as `max_tokens` to the OpenAI-compatible endpoint. This
-bounds latency and cost. Extraction keeps a finite per-attempt timeout; the
-walkthrough's live configuration must allow at least two attempts and must not
-lower the output budget below the tested extraction floor.
+integer and forwarded as the current `max_completion_tokens` parameter to the
+OpenAI-compatible endpoint. The tested walkthrough floor is 4096 tokens. This
+matters for MiniMax M2.x because its non-disableable reasoning and final JSON
+share the completion budget; the previous 2048-token floor produced explicit
+`finish_reason=length` failures on 968–2416-character spans. The 4096-token
+ceiling plus the compact protocol completed the longest reproduced input in one
+attempt. The ceiling still bounds latency and cost, and extraction keeps a
+finite per-attempt timeout. MiniMax documents both the M2.x thinking behavior
+and `max_completion_tokens` semantics in its
+[OpenAI-compatible API schema](https://platform.minimaxi.com/docs/api-reference/text/api/openapi-chat-openai.json).
+Because the client uses `max_completion_tokens` unconditionally, the declared
+OpenAI SDK dependency floor is 1.45.0.
 
-No retry is used to paper over invalid candidates. Candidate validation remains
-per-item: malformed or non-contiguous quotes are rejected, valid siblings are
-kept, and the audit summary records returned, accepted, and rejected counts.
+No retry is used to paper over invalid individual candidates. The versioned
+`extract-v5` prompt asks for at most five high-value statements per span and
+receives a trusted `max_statements` equal to
+`min(20, narrative_span_count * 5)`. Thus the one-span Gildata path remains
+bounded at five while multi-span PDF and macro extraction retain up to twenty
+items. The prompt also limits verbatim quotes to 120 Unicode characters and
+normalized text to 80 Unicode characters. The extractor enforces the dynamic
+initial limit, the three-item malformed-retry limit, and both field ceilings,
+counting every overflow or oversized item as rejected. Candidate validation
+remains per-item.
+An already exact offset is retained even when the quote repeats. A wrong offset
+is repaired only when the non-blank verbatim quote occurs exactly once in its
+declared span; missing, blank, cross-span, or ambiguous quotes are rejected
+while valid siblings are kept. The audit summary records returned, accepted,
+rejected, deterministically repaired-offset, total-attempt, and malformed-retry
+counts. The acceptance parser requires the retry diagnostics on `extract-v4`
+and `extract-v5` but continues to recognize the earlier v1–v3 summary formats.
+
+The response envelope is normalized before content parsing. Provider
+`content_filter`, explicit refusal, and MiniMax `input_sensitive` /
+`output_sensitive` flags are terminal refusals. MiniMax's top-level
+`base_resp.status_code` is accepted in both SDK mapping and object forms.
+Documented retryable timeout, rate-limit, and internal/system codes consume the
+same bounded attempt budget as transport failures; sensitive-content codes are
+terminal refusals and all other non-zero codes are terminal provider-envelope
+errors, following MiniMax's
+[error-code table](https://platform.minimaxi.com/docs/api-reference/errorcode).
+Missing or type-confused safety, refusal, base-status, and call-payload
+fields fail closed without exposing their values. Only
+`finish_reason=stop` may reach the JSON parser; missing, tool-call, and unknown
+finish reasons, plus call payloads attached to a stop response, fail closed as
+response-validation errors. `finish_reason=length` remains eligible for the
+extraction-only compact retry but is persisted as the distinct safe
+`output_limit` category if the shared attempt budget is exhausted. A
+`<think>...</think>` wrapper is stripped only when anchored at the start of the
+response, so literal closing tags inside valid JSON strings are preserved.
 
 ## Walkthrough contract and recovery
 
@@ -178,8 +236,9 @@ Implementation follows red-green-refactor in these slices:
 3. Reproduce quote-code mismatch and prove transaction rollback.
 4. Add fail-closed rights parsing, immutable contract/provider-record creation,
    and contract-aware admission tests.
-5. Add LLM output-budget, retry classification, `Retry-After`, backoff, and
-   sanitized diagnostics tests.
+5. Add LLM output-budget, retry classification, `Retry-After`, shared-budget
+   backoff, extraction-only malformed correction, refusal, and sanitized
+   diagnostics tests.
 6. Add resumable P3 aggregation tests, including success-with-candidates,
    honest empty success, transient failure, and final database reconciliation.
 7. Run focused suites, the complete backend suite, and `git diff --check`.
@@ -204,4 +263,3 @@ A fresh run-scoped database must demonstrate all of the following:
    assessment receives non-empty evidence.
 7. The summary contains no unresolved issue and no credential or licensed raw
    content.
-

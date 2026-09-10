@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -10,20 +9,22 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
-
-from app.models.ledger import CaseTenantAdmission, DocumentVersion, ResearchCase, Thesis
+from app.ai.research_preparation import (
+    ResearchPreparationGenerator,
+    load_preparation_input,
+)
+from app.models.ledger import CaseTenantAdmission, DocumentVersion, Thesis
 from app.models.operational import Job, ResearchRun
+from app.models.research_preparation import ResearchPreparationArtifact
 from app.models.research_protocol import (
     MechanismEdgeVersion,
     MechanismNodeVersion,
     MechanismTemplateVersion,
 )
-from app.models.research_preparation import ResearchPreparationArtifact
 from app.repositories.research_preparation import ResearchPreparationRepository
 from app.scripts import run_research_preparation_worker as preparation_worker
-from app.ai.research_preparation import ResearchPreparationGenerator, load_preparation_input
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
 
 
 @dataclass
@@ -73,12 +74,20 @@ def fake_openai_server(monkeypatch):
     fake = _OpenAICompatibleFake()
 
     class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802 - stdlib callback name
+        def do_POST(self) -> None:
             assert self.path == "/v1/chat/completions"
             assert self.headers["Authorization"] == "Bearer preparation-integration-test-key"
             size = int(self.headers["Content-Length"])
             request = json.loads(self.rfile.read(size))
-            body = {"choices": [{"message": {"content": json.dumps(fake.response(request))}, "finish_reason": "stop"}]}
+            body = {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "message": {"content": json.dumps(fake.response(request))},
+                    }
+                ]
+            }
             encoded = json.dumps(body).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -119,7 +128,7 @@ def _create_case(client) -> uuid.UUID:
 
 
 def _worker_factory(session: Session):
-    return sessionmaker(bind=session.bind, future=True, autoflush=False)
+    return sessionmaker(bind=session.bind, future=True)
 
 
 def _run_worker_until_idle(session: Session) -> None:

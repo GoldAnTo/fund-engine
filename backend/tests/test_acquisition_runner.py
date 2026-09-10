@@ -63,7 +63,7 @@ class MutableClock:
 class FakeExtractionClient:
     model_version = "fake-task8-extractor-v1"
 
-    def chat_json(self, messages, schema_hint=""):
+    def chat_json(self, messages, schema_hint="", **_kwargs):
         assert schema_hint == "extract"
         payload = json.loads(messages[-1]["content"])
         span = next(

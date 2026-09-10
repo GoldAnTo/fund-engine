@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import uuid
-import json
-from datetime import datetime, timezone
 import hashlib
+import json
+import uuid
+from datetime import datetime, timezone
 
 import httpx
 import pytest
-from sqlalchemy import event as sqlalchemy_event, select
-
+from app.domain.research_preparation import preparation_input_fingerprint
 from app.models.event_research import (
     CaseRelation,
     EventResearchBrief,
@@ -20,8 +19,10 @@ from app.models.event_research import (
 )
 from app.models.ledger import (
     CaseDocumentVersion,
+    CaseTenantAdmission,
     DocumentVersion,
     EvidenceLink,
+    ResearchCase,
     SourceSpan,
     SourceStatement,
     Thesis,
@@ -29,13 +30,14 @@ from app.models.ledger import (
 from app.models.operational import EventResearchLifecycle, Job, ResearchRun
 from app.models.proposals import Proposal
 from app.models.research_preparation import ResearchPreparation
-from app.models.ledger import CaseTenantAdmission, ResearchCase
+from app.models.source_governance import SourceContract
 from app.repositories.operational import TaskRepository
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
 from app.services.research_preparation import ResearchPreparationService
 from app.services.source_governance import SourceGovernanceService
-from app.domain.research_preparation import preparation_input_fingerprint
+from sqlalchemy import event as sqlalchemy_event
+from sqlalchemy import select
 
 
 def _confirmed_event() -> dict:
@@ -68,6 +70,7 @@ def _evidence_proposal(
     document_case_id: uuid.UUID | None = None,
     thesis_case_id: uuid.UUID | None = None,
     thesis_id: uuid.UUID | None = None,
+    parser_version: str = "html-v1",
 ) -> Proposal:
     now = datetime.now(timezone.utc)
     if thesis_id is not None:
@@ -95,7 +98,7 @@ def _evidence_proposal(
         title=title,
         available_at=now,
         acquired_at=now,
-        parser_version="html-v1",
+        parser_version=parser_version,
         parse_state="success",
     )
     if thesis_id is None and thesis_case_id is not None:
@@ -142,6 +145,51 @@ def _evidence_proposal(
     cmd_session.add(proposal)
     cmd_session.commit()
     return proposal
+
+
+def _document_for_proposal(cmd_session, proposal: Proposal) -> DocumentVersion:
+    statement = cmd_session.get(
+        SourceStatement,
+        uuid.UUID(proposal.payload["source_statement_id"]),
+    )
+    assert statement is not None
+    span = cmd_session.get(SourceSpan, statement.source_span_id)
+    assert span is not None
+    document = cmd_session.get(DocumentVersion, span.document_version_id)
+    assert document is not None
+    return document
+
+
+def _add_gildata_contract(
+    cmd_session,
+    proposal: Proposal,
+    *,
+    allow_display: bool = True,
+) -> None:
+    document = _document_for_proposal(cmd_session, proposal)
+    cmd_session.add(
+        SourceContract(
+            document_version_id=document.id,
+            source_type="licensed_provider",
+            research_source_type="licensed_provider",
+            provider_or_tenant="gildata",
+            allow_ai_processing=True,
+            allow_display=allow_display,
+            allow_export=False,
+            allow_api=False,
+            region="cn",
+            effective_from=None,
+            effective_until=None,
+            retention_policy="case_retained",
+            deletion_policy="manual",
+            downstream_restrictions=["仅限测试 Case"],
+            contract_version="test-v1",
+            intake_metadata={},
+            declared_by="human:test",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    cmd_session.commit()
 
 
 def _mark_preparation_authorized(cmd_session, case_id: uuid.UUID) -> None:
@@ -1099,9 +1147,7 @@ def test_event_evidence_cannot_target_thesis_from_another_case(
         },
     )
 
-    # The persisted target disagrees with proposal ownership: fail closed
-    # before admitting the proposal to the review mutation boundary.
-    assert response.status_code == 404
+    assert response.status_code == 422
     assert cmd_session.get(Proposal, proposal.id).status == "pending"
     assert cmd_session.scalar(
         select(EvidenceLink.id).where(
@@ -1648,6 +1694,131 @@ def test_draft_workbench_exposes_only_current_reviewed_evidence_and_factor_pendi
     assert cmd_client.get(f"/api/v1/event-research/{case_id}/workbench").json()["conclusion"]["confidence"] == "high"
 
 
+def test_gildata_factor_pending_matches_summary_gap_and_confidence(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    factors = _confirmed_event()["candidate_factors"]
+    theses: list[Thesis] = []
+    for index, factor in enumerate(factors):
+        thesis = cmd_session.scalar(
+            select(Thesis).where(
+                Thesis.research_case_id == case_id,
+                Thesis.statement == factor,
+            )
+        )
+        assert thesis is not None
+        theses.append(thesis)
+        proposal = _evidence_proposal(
+            cmd_session,
+            case_id,
+            source_url=f"https://investor.tsmc.com/reviewed-{index}",
+            title=f"Reviewed {factor}",
+            thesis_id=thesis.id,
+        )
+        accepted = cmd_client.post(
+            f"/api/v1/review-proposals/{proposal.id}/decisions",
+            json={
+                "outcome": "confirmed",
+                "reason": "reviewed",
+                "reviewer_id": "reviewer",
+                "expected_version": proposal.version,
+            },
+        )
+        assert accepted.status_code == 201
+
+    authorised = _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="gildata://research-report/" + "a" * 64,
+        title="Authorised Gildata pending evidence",
+        thesis_id=theses[1].id,
+        parser_version="gildata-mcp-1",
+    )
+    _add_gildata_contract(cmd_session, authorised)
+    restricted = _evidence_proposal(
+        cmd_session,
+        case_id,
+        source_url="gildata://announcement/" + "b" * 64,
+        title="Restricted Gildata pending evidence",
+        thesis_id=theses[1].id,
+        parser_version="gildata-mcp-1",
+    )
+    _add_gildata_contract(cmd_session, restricted, allow_display=False)
+    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
+    assert lifecycle is not None
+    lifecycle.status = "draft_ready"
+    cmd_session.commit()
+
+    body = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench").json()
+
+    assert body["progress"]["pending"] == 1
+    assert body["progress"]["invalid_source"] == 0
+    assert [item["pending_proposal_count"] for item in body["factors"]] == [0, 1, 0]
+    assert [item["current_gap"] for item in body["factors"]] == [
+        None,
+        "有关键证据待审核",
+        None,
+    ]
+    assert body["conclusion"]["confidence"] == "medium"
+
+
+def test_workbench_batches_pending_contracts_at_fixed_query_count(
+    cmd_client, cmd_session
+) -> None:
+    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
+    case_id = uuid.UUID(created["case_id"])
+    thesis = cmd_session.scalar(
+        select(Thesis)
+        .where(Thesis.research_case_id == case_id)
+        .order_by(Thesis.created_at, Thesis.id)
+        .limit(1)
+    )
+    assert thesis is not None
+    engine = cmd_session.get_bind()
+
+    def add_proposal(index: int) -> None:
+        proposal = _evidence_proposal(
+            cmd_session,
+            case_id,
+            source_url=f"gildata://research-report/{index:064x}",
+            title=f"Gildata pending evidence {index}",
+            thesis_id=thesis.id,
+            parser_version="gildata-mcp-1",
+        )
+        _add_gildata_contract(cmd_session, proposal)
+
+    def workbench_select_counts() -> tuple[int, int]:
+        statements: list[str] = []
+
+        def record(_conn, _cursor, statement, _parameters, _context, _executemany):
+            if statement.lstrip().upper().startswith("SELECT"):
+                statements.append(statement)
+
+        cmd_session.expire_all()
+        sqlalchemy_event.listen(engine, "before_cursor_execute", record)
+        try:
+            response = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
+            assert response.status_code == 200
+        finally:
+            sqlalchemy_event.remove(engine, "before_cursor_execute", record)
+        contract_batch_selects = sum(
+            "FROM source_contracts" in statement for statement in statements
+        )
+        return len(statements), contract_batch_selects
+
+    add_proposal(1)
+    one_proposal_counts = workbench_select_counts()
+
+    for index in range(2, 8):
+        add_proposal(index)
+    seven_proposal_counts = workbench_select_counts()
+
+    assert one_proposal_counts[1] == 2
+    assert seven_proposal_counts == one_proposal_counts
+
+
 def test_scope_update_persists_optional_factor_descriptions_and_accepts_legacy_strings(
     cmd_client, cmd_session
 ) -> None:
@@ -1803,27 +1974,3 @@ def test_event_conclusion_publish_appends_a_human_confirmed_result(cmd_client, c
     assert view["lifecycle"]["status"] == "published"
     assert view["conclusion"]["state"] == "published"
     assert view["conclusion"]["text"] == "人工确认：当前材料不足以断定唯一原因。"
-
-
-@pytest.mark.parametrize('valid', [True, False])
-def test_event_extraction_usage_is_saved_without_creating_a_case(cmd_client, cmd_session, monkeypatch, valid):
-    from types import SimpleNamespace
-    from unittest.mock import MagicMock
-    from app.ai.client import LLMClient
-    from app.models.ledger import AIRun
-    output = {'research_question':'Does demand change?', 'candidate_factors':['Orders','Capacity','Inventory']} if valid else {}
-    sdk = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=MagicMock(return_value=SimpleNamespace(
-        usage=SimpleNamespace(prompt_tokens=7, completion_tokens=3, total_tokens=10),
-        choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(content=json.dumps(output), refusal=None))])))))
-    monkeypatch.setattr('app.services.event_extraction.LLMClient.from_env', lambda: LLMClient(model_version='test-model', client=sdk))
-    before = list(cmd_session.scalars(select(ResearchCase.id)))
-    response = cmd_client.post('/api/v1/event-research/extract', json={'raw_input':'private source material', 'source_url':None})
-    assert response.status_code == (200 if valid else 503)
-    audit = cmd_session.scalar(select(AIRun).where(AIRun.kind == 'event_extract'))
-    assert audit is not None
-    assert audit.status == ('success' if valid else 'failed')
-    assert audit.usage['attempts'][0]['total_tokens'] == 10
-    assert audit.input_ref['tenant_id'] == 'test-team'
-    assert uuid.UUID(audit.input_ref['extraction_id'])
-    assert 'private source material' not in str(audit.input_ref)
-    assert list(cmd_session.scalars(select(ResearchCase.id))) == before

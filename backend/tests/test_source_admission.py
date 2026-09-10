@@ -2,17 +2,404 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-
+from app.services import source_admission
 from app.services.source_admission import (
     SourceAdmission,
     SourceStatus,
     apply_source_contract,
     classify_source,
 )
+
+
+def _licensed_gildata_contract(
+    *,
+    ai: object = True,
+    display: object = True,
+    source_type: object = "licensed_provider",
+    research_source_type: object = "licensed_provider",
+    provider: object = "gildata",
+    effective_from: datetime | None = None,
+    effective_until: datetime | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        source_type=source_type,
+        research_source_type=research_source_type,
+        provider_or_tenant=provider,
+        allow_ai_processing=ai,
+        allow_display=display,
+        effective_from=effective_from,
+        effective_until=effective_until,
+    )
+
+
+def _classify_document_source(**kwargs) -> SourceAdmission:
+    assert hasattr(source_admission, "classify_document_source"), (
+        "document-aware source classifier is not implemented"
+    )
+    return source_admission.classify_document_source(**kwargs)
+
+
+def _document_source_can_display(**kwargs) -> bool:
+    assert hasattr(source_admission, "document_source_can_display"), (
+        "document-aware display policy is not implemented"
+    )
+    return source_admission.document_source_can_display(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "source_kind",
+    ["research-report", "announcement", "news", "macro-industry"],
+)
+def test_authorised_gildata_document_kinds_are_admissible(source_kind: str) -> None:
+    result = _classify_document_source(
+        source_url=f"gildata://{source_kind}/" + "a" * 64,
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=_licensed_gildata_contract(provider="GILDATA"),
+    )
+
+    assert result.status is SourceStatus.ACCESSIBLE
+    assert result.can_accept is True
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    [
+        "gildata://wrong-kind/" + "a" * 64,
+        "gildata://user@research-report/" + "a" * 64,
+        "gildata://research-report:443/" + "a" * 64,
+        "gildata://research-report/" + "a" * 64 + "?scope=all",
+        "gildata://research-report/" + "a" * 64 + "?",
+        "gildata://research-report/" + "a" * 64 + "#section",
+        "gildata://research-report/" + "a" * 64 + "#",
+        "gildata://research-report/" + "a" * 64 + "/extra",
+        "gildata://research-report/" + "a" * 63,
+        "gildata://research-report/" + "a" * 65,
+        "gildata://research-report/" + "A" * 64,
+        "gildata://research-report/" + "g" * 64,
+        "gildata://research-report/%61" + "a" * 62,
+        "GILDATA://research-report/" + "a" * 64,
+        "gildata://Research-Report/" + "a" * 64,
+    ],
+)
+def test_noncanonical_gildata_references_remain_invalid(source_url: str) -> None:
+    result = _classify_document_source(
+        source_url=source_url,
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=_licensed_gildata_contract(),
+    )
+
+    assert result.status is SourceStatus.INVALID
+    assert result.can_accept is False
+
+
+@pytest.mark.parametrize("parser_version", [None, "html-v1", "GILDATA-MCP-1"])
+def test_gildata_document_requires_exact_parser_prefix(
+    parser_version: str | None,
+) -> None:
+    result = _classify_document_source(
+        source_url="gildata://research-report/" + "a" * 64,
+        parser_version=parser_version,
+        content_verified=True,
+        contract=_licensed_gildata_contract(),
+    )
+
+    assert result.status is SourceStatus.INVALID
+    assert result.can_accept is False
+
+
+@pytest.mark.parametrize("content_verified", [False, 1])
+def test_gildata_document_requires_literal_verified_true(
+    content_verified: object,
+) -> None:
+    result = _classify_document_source(
+        source_url="gildata://research-report/" + "a" * 64,
+        parser_version="gildata-mcp-1",
+        content_verified=content_verified,
+        contract=_licensed_gildata_contract(),
+    )
+
+    assert result.status is SourceStatus.INVALID
+    assert result.can_accept is False
+
+
+@pytest.mark.parametrize(
+    "contract",
+    [
+        None,
+        _licensed_gildata_contract(source_type="company_disclosure"),
+        _licensed_gildata_contract(research_source_type="company_disclosure"),
+        _licensed_gildata_contract(provider="other-provider"),
+        _licensed_gildata_contract(provider=" gildata"),
+        _licensed_gildata_contract(provider=123),
+    ],
+)
+def test_gildata_document_requires_exact_contract_identity(contract: object) -> None:
+    result = _classify_document_source(
+        source_url="gildata://research-report/" + "a" * 64,
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=contract,
+    )
+
+    assert result.status is SourceStatus.INVALID
+    assert result.can_accept is False
+
+
+@pytest.mark.parametrize(
+    ("ai", "display"),
+    [(False, True), (True, False), (False, False), (1, True), (True, 1)],
+)
+def test_gildata_document_requires_both_literal_contract_rights(
+    ai: object, display: object
+) -> None:
+    result = _classify_document_source(
+        source_url="gildata://research-report/" + "a" * 64,
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=_licensed_gildata_contract(ai=ai, display=display),
+    )
+
+    assert result.status is SourceStatus.RESTRICTED
+    assert result.can_accept is False
+
+
+def test_gildata_contract_effective_boundaries_are_inclusive() -> None:
+    starts_at = datetime(2026, 9, 3, 10, tzinfo=timezone.utc)
+    expires_at = starts_at + timedelta(hours=1)
+    contract = _licensed_gildata_contract(
+        effective_from=starts_at,
+        effective_until=expires_at,
+    )
+
+    for instant in (starts_at, expires_at):
+        result = _classify_document_source(
+            source_url="gildata://research-report/" + "a" * 64,
+            parser_version="gildata-mcp-1",
+            content_verified=True,
+            contract=contract,
+            at=instant,
+        )
+        assert result.status is SourceStatus.ACCESSIBLE
+        assert result.can_accept is True
+
+
+@pytest.mark.parametrize(
+    "instant",
+    [
+        datetime(2026, 9, 3, 9, 59, 59, tzinfo=timezone.utc),
+        datetime(2026, 9, 3, 11, 0, 1, tzinfo=timezone.utc),
+    ],
+)
+def test_gildata_contract_outside_effective_window_is_restricted(
+    instant: datetime,
+) -> None:
+    result = _classify_document_source(
+        source_url="gildata://research-report/" + "a" * 64,
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=_licensed_gildata_contract(
+            effective_from=datetime(2026, 9, 3, 10, tzinfo=timezone.utc),
+            effective_until=datetime(2026, 9, 3, 11, tzinfo=timezone.utc),
+        ),
+        at=instant,
+    )
+
+    assert result.status is SourceStatus.RESTRICTED
+    assert result.can_accept is False
+
+
+def test_document_classifier_preserves_generic_http_admission() -> None:
+    result = _classify_document_source(
+        source_url="https://www.cninfo.com.cn/report.pdf",
+        parser_version="docling-v2",
+        content_verified=True,
+        contract=None,
+    )
+
+    assert result == SourceAdmission(
+        status=SourceStatus.ACCESSIBLE,
+        reason="来源链接可访问且内容已验证。",
+        can_accept=True,
+    )
+
+
+def test_gildata_display_permission_does_not_require_ai_processing() -> None:
+    assert _document_source_can_display(
+        source_url="gildata://research-report/" + "a" * 64,
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=_licensed_gildata_contract(ai=False, display=True),
+    )
+
+
+@pytest.mark.parametrize(
+    "source_url",
+    [
+        "gil\ndata://research-report/" + "b" * 64,
+        "gild\tata://research-report/" + "b" * 64,
+        "gildata\r://research-report/" + "b" * 64,
+        "\x00 gil\ndata://research-report/" + "b" * 64 + " \x1f",
+    ],
+    ids=["embedded-lf", "embedded-tab", "embedded-cr", "c0-trim-and-lf"],
+)
+def test_gildata_display_detection_uses_whatwg_scheme_normalization(
+    source_url: str,
+) -> None:
+    assert not _document_source_can_display(
+        source_url=source_url,
+        parser_version="html-v1",
+        content_verified=True,
+        contract=None,
+    )
+
+
+def test_gildata_parser_is_an_additional_fail_closed_display_signal() -> None:
+    assert not _document_source_can_display(
+        source_url="opaque-source:research-report/" + "b" * 64,
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_url", "parser_version", "content_verified", "contract"),
+    [
+        (
+            "gildata://research-report/" + "a" * 64,
+            "gildata-mcp-1",
+            True,
+            None,
+        ),
+        (
+            "gildata://research-report/" + "a" * 64,
+            "gildata-mcp-1",
+            True,
+            _licensed_gildata_contract(display=False),
+        ),
+        (
+            "gildata://research-report/" + "a" * 64,
+            "gildata-mcp-1",
+            True,
+            _licensed_gildata_contract(provider=" gildata"),
+        ),
+        (
+            "gildata://research-report/" + "a" * 63,
+            "gildata-mcp-1",
+            True,
+            _licensed_gildata_contract(),
+        ),
+        (
+            "gildata://research-report/" + "a" * 64,
+            "html-v1",
+            True,
+            _licensed_gildata_contract(),
+        ),
+        (
+            "gildata://research-report/" + "a" * 64,
+            "gildata-mcp-1",
+            False,
+            _licensed_gildata_contract(),
+        ),
+        (
+            "\x00gildata://research-report/" + "a" * 64,
+            "gildata-mcp-1",
+            True,
+            None,
+        ),
+    ],
+)
+def test_gildata_display_fails_closed_without_verified_contract_identity(
+    source_url: str,
+    parser_version: str,
+    content_verified: bool,
+    contract: object | None,
+) -> None:
+    assert not _document_source_can_display(
+        source_url=source_url,
+        parser_version=parser_version,
+        content_verified=content_verified,
+        contract=contract,
+    )
+
+
+def test_display_contract_effective_boundaries_are_inclusive() -> None:
+    starts_at = datetime(2026, 9, 3, 10, tzinfo=timezone.utc)
+    expires_at = starts_at + timedelta(hours=1)
+    contract = _licensed_gildata_contract(
+        effective_from=starts_at,
+        effective_until=expires_at,
+    )
+
+    assert _document_source_can_display(
+        source_url="gildata://research-report/" + "a" * 64,
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=contract,
+        at=starts_at,
+    )
+    assert _document_source_can_display(
+        source_url="gildata://research-report/" + "a" * 64,
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=contract,
+        at=expires_at,
+    )
+    assert not _document_source_can_display(
+        source_url="gildata://research-report/" + "a" * 64,
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=contract,
+        at=starts_at - timedelta(microseconds=1),
+    )
+    assert not _document_source_can_display(
+        source_url="gildata://research-report/" + "a" * 64,
+        parser_version="gildata-mcp-1",
+        content_verified=True,
+        contract=contract,
+        at=expires_at + timedelta(microseconds=1),
+    )
+
+
+def test_generic_http_without_contract_keeps_historical_display_behavior() -> None:
+    assert _document_source_can_display(
+        source_url="https://example.com/historical",
+        parser_version="html-v1",
+        content_verified=True,
+        contract=None,
+    )
+
+
+def test_generic_contract_display_requires_literal_right_and_active_window() -> None:
+    at = datetime(2026, 9, 3, 10, tzinfo=timezone.utc)
+
+    assert _document_source_can_display(
+        source_url="https://www.cninfo.com.cn/report.pdf",
+        parser_version="html-v1",
+        content_verified=True,
+        contract=_licensed_gildata_contract(ai=False, display=True),
+        at=at,
+    )
+    assert not _document_source_can_display(
+        source_url="https://www.cninfo.com.cn/report.pdf",
+        parser_version="html-v1",
+        content_verified=True,
+        contract=_licensed_gildata_contract(display=1),
+        at=at,
+    )
+    assert not _document_source_can_display(
+        source_url="https://www.cninfo.com.cn/report.pdf",
+        parser_version="html-v1",
+        content_verified=True,
+        contract=_licensed_gildata_contract(effective_until=at - timedelta(seconds=1)),
+        at=at,
+    )
 
 
 @pytest.mark.parametrize(

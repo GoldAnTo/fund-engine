@@ -50,7 +50,7 @@ RUNNER_NOW = datetime(2026, 8, 13, 12, tzinfo=UTC)
 class APIExtractionClient:
     model_version = "fake-task9-extractor-v1"
 
-    def chat_json(self, messages, schema_hint=""):
+    def chat_json(self, messages, schema_hint="", **_kwargs):
         assert schema_hint == "extract"
         extraction_input = json.loads(messages[-1]["content"])
         span = next(

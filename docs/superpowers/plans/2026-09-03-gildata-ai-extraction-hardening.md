@@ -619,9 +619,9 @@ class _HTTPStatusCompletions:
 
 def test_live_call_forwards_configured_max_output_tokens():
     fake = _FakeOpenAIClient()
-    client = LLMClient(model_version="test-model", client=fake, max_output_tokens=2048)
+    client = LLMClient(model_version="test-model", client=fake, max_output_tokens=4096)
     client.chat_json([{"role": "user", "content": "{}"}])
-    assert fake.chat.completions.calls[0]["max_tokens"] == 2048
+    assert fake.chat.completions.calls[0]["max_completion_tokens"] == 4096
 
 
 def test_transient_failure_retries_with_bounded_backoff():
@@ -681,13 +681,16 @@ Add constructor fields `max_output_tokens`, `retry_base_seconds`,
 `retry_max_seconds`, and injected `sleep`. Parse
 `LLM_MAX_OUTPUT_TOKENS`, `LLM_RETRY_BASE_SECONDS`, and
 `LLM_RETRY_MAX_SECONDS` in `from_env`; reject non-finite/non-positive bounds.
-Forward `max_tokens=self._max_output_tokens` in `create_kwargs`.
+Forward `max_completion_tokens=self._max_output_tokens` in `create_kwargs`.
 
 Use a private `_is_transient_provider_error(exc)` that returns true for
 `httpx.TimeoutException`, `httpx.NetworkError`, `TimeoutError`,
 `ConnectionError`, OpenAI connection/timeout failures, and OpenAI status
 errors with status 408, 429, or 500–599. Other 4xx and malformed successful
-responses are terminal. Read `Retry-After` only from a retryable status
+responses are terminal by default. The implemented extraction-only hardening
+subsequently added an explicit, fixed `extract-json-retry-v2` correction opt-in;
+it shares this same total attempt loop and does not change propose, assess,
+rewrite, preparation, or event-extraction behavior. Read `Retry-After` only from a retryable status
 response, accept finite non-negative seconds only, and clamp it to
 `retry_max_seconds`. Otherwise use exponential backoff. Before each retry call:
 
@@ -1025,7 +1028,7 @@ Run:
 RESEARCH_TENANT_TOKENS='{"walkthrough-token":{"tenant_id":"walkthrough","roles":[]}}' \
 LLM_MAX_ATTEMPTS=2 \
 LLM_TIMEOUT_SECONDS=90 \
-LLM_MAX_OUTPUT_TOKENS=2048 \
+LLM_MAX_OUTPUT_TOKENS=4096 \
 WALKTHROUGH_RUN_ID=gildata-ai-hardened-20260903 \
 backend/.venv/bin/python backend/scripts/walkthrough_cambricon_case.py --stages p0_p1_p2
 ```
@@ -1048,7 +1051,7 @@ Run:
 RESEARCH_TENANT_TOKENS='{"walkthrough-token":{"tenant_id":"walkthrough","roles":[]}}' \
 LLM_MAX_ATTEMPTS=2 \
 LLM_TIMEOUT_SECONDS=90 \
-LLM_MAX_OUTPUT_TOKENS=2048 \
+LLM_MAX_OUTPUT_TOKENS=4096 \
 WALKTHROUGH_RUN_ID=gildata-ai-hardened-20260903 \
 backend/.venv/bin/python backend/scripts/walkthrough_cambricon_case.py --stages p3
 ```

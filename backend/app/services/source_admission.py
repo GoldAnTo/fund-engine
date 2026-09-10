@@ -1,12 +1,19 @@
 """Pure rules for admitting event-evidence source links."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 from ipaddress import IPv4Address, IPv6Address, ip_address
 from unicodedata import normalize
 from urllib.parse import urlparse
+
+_GILDATA_REFERENCE = re.compile(
+    r"gildata://(?:research-report|announcement|news|macro-industry)/[0-9a-f]{64}"
+)
+_C0_CONTROL_AND_SPACE = "".join(chr(codepoint) for codepoint in range(0x21))
+_ASCII_TAB_OR_NEWLINE = str.maketrans("", "", "\t\n\r")
 
 
 class SourceStatus(StrEnum):
@@ -183,6 +190,107 @@ def classify_source(
         SourceStatus.ACCESSIBLE,
         "来源链接可访问且内容已验证。",
         True,
+    )
+
+
+def classify_document_source(
+    *,
+    source_url: str | None,
+    parser_version: str | None,
+    content_verified: bool,
+    contract: object | None,
+    at: datetime | None = None,
+) -> SourceAdmission:
+    """Classify a frozen document together with its immutable use contract."""
+    if _is_authorised_gildata_reference(
+        source_url=source_url,
+        parser_version=parser_version,
+        content_verified=content_verified,
+        contract=contract,
+    ):
+        admission = SourceAdmission(
+            SourceStatus.ACCESSIBLE,
+            "授权 Gildata 资料已冻结并可用于正式证据。",
+            True,
+        )
+    else:
+        admission = classify_source(
+            source_url,
+            parser_version if isinstance(parser_version, str) else "",
+            content_verified,
+        )
+    return apply_source_contract(admission, contract, at=at)
+
+
+def document_source_can_display(
+    *,
+    source_url: str | None,
+    parser_version: str | None,
+    content_verified: bool,
+    contract: object | None,
+    at: datetime | None = None,
+) -> bool:
+    """Whether frozen source material may be rendered in a review surface."""
+    if _has_gildata_scheme(source_url) or _has_gildata_parser(parser_version):
+        if not _is_authorised_gildata_reference(
+            source_url=source_url,
+            parser_version=parser_version,
+            content_verified=content_verified,
+            contract=contract,
+        ):
+            return False
+    elif contract is None:
+        # Pre-governance generic HTTP documents have no frozen contract.  Keep
+        # their historical review visibility until they are explicitly re-admitted.
+        return True
+    return (
+        getattr(contract, "allow_display", False) is True
+        and source_contract_is_active(contract, at=at)
+    )
+
+
+def _has_gildata_scheme(source_url: str | None) -> bool:
+    """Recognize even malformed/case-polluted Gildata references fail-closed."""
+    if not isinstance(source_url, str):
+        return False
+    candidate = source_url.strip(_C0_CONTROL_AND_SPACE)
+    prefix_start = 0
+    while prefix_start < len(candidate) and _has_browser_ambiguous_characters(
+        candidate[prefix_start]
+    ):
+        prefix_start += 1
+    scheme, separator, _remainder = candidate[prefix_start:].partition(":")
+    return bool(
+        separator
+        and scheme.translate(_ASCII_TAB_OR_NEWLINE).casefold() == "gildata"
+    )
+
+
+def _has_gildata_parser(parser_version: str | None) -> bool:
+    return isinstance(parser_version, str) and parser_version.casefold().startswith(
+        "gildata-mcp-"
+    )
+
+
+def _is_authorised_gildata_reference(
+    *,
+    source_url: str | None,
+    parser_version: str | None,
+    content_verified: bool,
+    contract: object | None,
+) -> bool:
+    provider = getattr(contract, "provider_or_tenant", None)
+    return bool(
+        isinstance(source_url, str)
+        and _GILDATA_REFERENCE.fullmatch(source_url)
+        and isinstance(parser_version, str)
+        and parser_version.startswith("gildata-mcp-")
+        and content_verified is True
+        and getattr(contract, "source_type", None) == "licensed_provider"
+        and getattr(contract, "research_source_type", None)
+        == "licensed_provider"
+        and isinstance(provider, str)
+        and provider.casefold() == "gildata"
     )
 
 

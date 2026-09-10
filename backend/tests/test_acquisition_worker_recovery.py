@@ -702,7 +702,7 @@ def test_extractor_internal_commit_cannot_publish_after_lease_rotation(
         def __init__(self) -> None:
             self.claim_b = None
 
-        def chat_json(self, messages, schema_hint=""):
+        def chat_json(self, messages, schema_hint="", **_kwargs):
             assert schema_hint == "extract"
             # The runner renews the lease to its own budget (default 1800s)
             # before each document, so the rotation must outlive the RENEWED
@@ -740,7 +740,7 @@ def test_extractor_internal_commit_cannot_publish_after_lease_rotation(
     class RecoveryExtractionClient:
         model_version = "fake-task8-recovery-extraction-v1"
 
-        def chat_json(self, messages, schema_hint=""):
+        def chat_json(self, messages, schema_hint="", **_kwargs):
             assert schema_hint == "extract"
             return {"statements": []}
 

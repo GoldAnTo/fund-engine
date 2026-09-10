@@ -116,7 +116,6 @@ def upgrade_database_to_head(database_url: str) -> None:
             # rejected instead of being falsely marked current.
             _repair_company_event_schema(engine)
             _install_company_worker_index(engine)
-            _install_ai_scope_index(engine)
             command.stamp(config, "head")
         else:
             command.upgrade(config, "head")
@@ -238,19 +237,6 @@ def _repair_company_event_schema(engine) -> None:
             raise UnmanagedDatabaseSchemaError(
                 "cannot authenticate or repair company research event schema"
             ) from exc
-
-
-def _install_ai_scope_index(engine) -> None:
-    """Install the current audit index before stamping an unmanaged database."""
-    index = next(index for index in Base.metadata.tables['ai_runs'].indexes
-                 if index.name == 'ix_ai_runs_research_scope')
-    with engine.begin() as connection:
-        if connection.dialect.name == 'sqlite':
-            if any(row[1] == index.name for row in connection.exec_driver_sql("PRAGMA index_list('ai_runs')")):
-                return
-            index.create(connection)
-        else:
-            index.create(connection, checkfirst=True)
 
 
 def _install_company_worker_index(engine) -> None:
