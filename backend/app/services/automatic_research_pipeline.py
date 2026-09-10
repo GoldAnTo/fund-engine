@@ -1,8 +1,6 @@
 """Governed source dispatch for one-click automatic research runs."""
 from __future__ import annotations
 
-from app.ai.runs import research_audit_context
-
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -572,28 +570,27 @@ class AutomaticResearchPipeline:
             if assessment is None:
                 job_attempt = research_job.attempt
                 job_claim_token = research_job.claim_token
-                with research_audit_context(case_id=run.research_case_id, run_id=run.id, task_id=task.id):
-                    assessment = generator.generate(
-                        task.thesis_id,
-                        datetime.now(UTC),
-                        self._session,
-                        evidence_link_ids=allowed_ids,
-                        before_persist=partial(
-                            self._claim_assessment_output_slot,
-                            run_id=run.id,
-                            case_id=run.research_case_id,
-                            job_id=research_job.id,
-                            job_attempt=job_attempt,
-                            job_claim_token=job_claim_token,
-                            task_id=task.id,
-                            thesis_id=task.thesis_id,
-                            round=run.round,
-                            frozen_scope=frozen_scope,
-                            scope_version_id=scope_version_id,
-                            evidence_link_ids=tuple(allowed_ids),
-                            source_binding_fingerprint=source_binding_fingerprint,
-                        ),
-                    )
+                assessment = generator.generate(
+                    task.thesis_id,
+                    datetime.now(UTC),
+                    self._session,
+                    evidence_link_ids=allowed_ids,
+                    before_persist=partial(
+                        self._claim_assessment_output_slot,
+                        run_id=run.id,
+                        case_id=run.research_case_id,
+                        job_id=research_job.id,
+                        job_attempt=job_attempt,
+                        job_claim_token=job_claim_token,
+                        task_id=task.id,
+                        thesis_id=task.thesis_id,
+                        round=run.round,
+                        frozen_scope=frozen_scope,
+                        scope_version_id=scope_version_id,
+                        evidence_link_ids=tuple(allowed_ids),
+                        source_binding_fingerprint=source_binding_fingerprint,
+                    ),
+                )
                 if assessment is None:
                     raise ValueError("automatic assessment was cancelled or stale")
                 run = self._session.get(ResearchRun, run.id)

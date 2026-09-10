@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -20,6 +21,66 @@ _ASSESSMENT_STATUSES = frozenset(
     {"supported", "contradicted", "insufficient_evidence"}
 )
 _RESEARCH_PROTOCOL_STATUSES = frozenset({"single_metric_monitoring", "ready"})
+_FACTOR_RELEVANCE = frozenset({"direct", "indirect", "unclear"})
+_FACTOR_CAUSAL_IMPACT = frozenset({"high", "medium", "low", "unclear"})
+_FACTOR_EVIDENCE_STRENGTH = frozenset({"strong", "moderate", "weak", "none"})
+_FACTOR_COUNTER_EVIDENCE = frozenset({"none", "mixed", "material", "unknown"})
+
+
+def normalize_factor_judgement(
+    *,
+    conclusion: str,
+    raw_judgement: object,
+    has_material_counter_evidence: bool = False,
+) -> dict[str, str]:
+    """Make factor status reproducible from the four required gates.
+
+    The model may supply explanatory labels, but it cannot self-certify a
+    factor as key: the classification is derived here and frozen alongside
+    the assessment.
+    """
+    source = raw_judgement if isinstance(raw_judgement, Mapping) else {}
+
+    def value(name: str, allowed: frozenset[str], fallback: str) -> str:
+        candidate = source.get(name)
+        return candidate if isinstance(candidate, str) and candidate in allowed else fallback
+
+    relevance = value("relevance", _FACTOR_RELEVANCE, "unclear")
+    causal_impact = value("causal_impact", _FACTOR_CAUSAL_IMPACT, "unclear")
+    evidence_strength = value("evidence_strength", _FACTOR_EVIDENCE_STRENGTH, "none")
+    counter_evidence = value("counter_evidence", _FACTOR_COUNTER_EVIDENCE, "unknown")
+    if has_material_counter_evidence:
+        counter_evidence = "material"
+
+    if conclusion == "contradicted" or counter_evidence == "material":
+        classification = "excluded"
+    elif conclusion != "supported" or evidence_strength in {"weak", "none"}:
+        classification = "pending"
+    elif (
+        relevance == "direct"
+        and causal_impact == "high"
+        and evidence_strength == "strong"
+        and counter_evidence == "none"
+    ):
+        classification = "key"
+    else:
+        classification = "secondary"
+
+    ranking_reason = source.get("ranking_reason")
+    if not isinstance(ranking_reason, str) or not ranking_reason.strip():
+        ranking_reason = (
+            "该因素与研究命题直接相关，具有高因果影响，且当前冻结证据充分并未发现实质反证。"
+            if classification == "key"
+            else "该因素尚未同时满足直接相关、因果影响、证据强度和反证检验四项条件。"
+        )
+    return {
+        "relevance": relevance,
+        "causal_impact": causal_impact,
+        "evidence_strength": evidence_strength,
+        "counter_evidence": counter_evidence,
+        "classification": classification,
+        "ranking_reason": ranking_reason.strip(),
+    }
 
 
 class AssessmentService:
@@ -71,6 +132,7 @@ class AssessmentService:
         effective_binding_id: uuid.UUID | None = None,
         mechanism_template_version_id: uuid.UUID | None = None,
         verification_rule_ids: list[uuid.UUID | str] | None = None,
+        factor_judgement: object = None,
     ) -> AIAssessment:
         session = self._session
         snapshot = session.get(EvidenceSnapshot, snapshot_id)
@@ -158,6 +220,10 @@ class AssessmentService:
             effective_binding_id=effective_binding_id,
             mechanism_template_version_id=mechanism_template_version_id,
             verification_rule_ids=normalized_rule_ids,
+            factor_judgement=normalize_factor_judgement(
+                conclusion=conclusion,
+                raw_judgement=factor_judgement,
+            ),
             displayed_as_provisional=True,
         )
 

@@ -30,6 +30,7 @@ from app.models.research_protocol import (
 )
 from app.models.research_monitor import ResearchRunEvent
 from app.models.research_preparation import ResearchPreparation
+from app.models.source_governance import SourceContract
 from app.services.automatic_research_intake import AutomaticResearchIntakeService
 from app.repositories.auto_research import AutoResearchRepository
 from app.services.event_extraction import EventExtraction
@@ -241,6 +242,132 @@ def test_pasted_material_creates_queued_run_without_human_preparation(session) -
     assert all(task.round == 1 and task.status == "queued" for task in material_tasks)
     assert started.preparation_id is None
     assert preparations == []
+
+
+def test_uploaded_original_uses_filename_when_input_is_blank(session) -> None:
+    extractor = FakeExtractor()
+
+    started = AutomaticResearchIntakeService(session, extractor=extractor).start_uploaded(
+        raw_input=" \t\n ",
+        raw=b"company disclosure contents",
+        file_name="issuer-update.md",
+        mime_type="text/markdown",
+        tenant_id="upload-team",
+    )
+
+    case_id = uuid.UUID(started.case_id)
+    run_id = uuid.UUID(started.run_id)
+    case = session.get(ResearchCase, case_id)
+    run = session.get(ResearchRun, run_id)
+    admission = session.scalar(
+        select(CaseTenantAdmission).where(
+            CaseTenantAdmission.research_case_id == case_id
+        )
+    )
+    documents = list(
+        session.scalars(
+            select(DocumentVersion).join(
+                CaseTenantAdmission,
+                CaseTenantAdmission.initial_document_version_id == DocumentVersion.id,
+            ).where(CaseTenantAdmission.research_case_id == case_id)
+        )
+    )
+    lifecycles = list(
+        session.scalars(
+            select(EventResearchLifecycle).where(
+                EventResearchLifecycle.research_case_id == case_id
+            )
+        )
+    )
+    assert extractor.calls == [("issuer-update.md", None)]
+    assert case is not None and case.title == "issuer-update.md"
+    assert run is not None and run.research_case_id == case_id
+    assert admission is not None
+    assert len(documents) == 1
+    assert len(lifecycles) == 1
+    assert _scope_event(session, run_id).payload_json["input_kind"] == "material"
+
+
+def test_uploaded_blank_prompt_keeps_filename_as_title_over_extractor_title(
+    session,
+) -> None:
+    class DifferentTitleExtractor(FakeExtractor):
+        def extract(self, raw_input: str, source_url: str | None) -> EventExtraction:
+            extraction = super().extract(raw_input, source_url)
+            return EventExtraction(
+                event_title="extractor-selected title",
+                company_name=extraction.company_name,
+                ticker=extraction.ticker,
+                event_at=extraction.event_at,
+                market_reaction=extraction.market_reaction,
+                summary=extraction.summary,
+                research_question=extraction.research_question,
+                candidate_factors=extraction.candidate_factors,
+                input_kind=extraction.input_kind,
+            )
+
+    started = AutomaticResearchIntakeService(
+        session, extractor=DifferentTitleExtractor()
+    ).start_uploaded(
+        raw_input="  \n\t",
+        raw=b"issuer update",
+        file_name="issuer-update.csv",
+        mime_type="text/csv",
+        tenant_id="upload-team",
+    )
+
+    case = session.get(ResearchCase, uuid.UUID(started.case_id))
+    assert case is not None
+    assert case.title == "issuer-update.csv"
+
+
+def test_uploaded_original_deduplication_blocks_a_different_tenant(session) -> None:
+    raw = b"same user-supplied original"
+    first = AutomaticResearchIntakeService(
+        session, extractor=FakeExtractor()
+    ).start_uploaded(
+        raw_input="first tenant prompt",
+        raw=raw,
+        file_name="shared.txt",
+        mime_type="text/plain",
+        tenant_id="  first-team \n",
+    )
+    first_document_id = session.scalar(
+        select(CaseTenantAdmission.initial_document_version_id).where(
+            CaseTenantAdmission.research_case_id == uuid.UUID(first.case_id)
+        )
+    )
+    assert first_document_id is not None
+    contract = session.scalar(
+        select(SourceContract).where(
+            SourceContract.document_version_id == first_document_id
+        )
+    )
+    assert contract is not None
+    assert contract.provider_or_tenant == "first-team"
+    assert contract.intake_metadata["tenant"] == "first-team"
+
+    with pytest.raises(
+        ValueError,
+        match="deduplicated original has a different source contract",
+    ):
+        AutomaticResearchIntakeService(
+            session, extractor=FakeExtractor()
+        ).start_uploaded(
+            raw_input="second tenant prompt",
+            raw=raw,
+            file_name="shared.txt",
+            mime_type="text/plain",
+            tenant_id="second-team",
+        )
+
+    assert list(session.scalars(select(ResearchCase.id))) == [
+        uuid.UUID(first.case_id)
+    ]
+    assert list(session.scalars(select(ResearchRun.id))) == [
+        uuid.UUID(first.run_id)
+    ]
+    assert len(list(session.scalars(select(DocumentVersion.id)))) == 1
 
 
 def test_blank_input_is_rejected_before_extraction(session) -> None:

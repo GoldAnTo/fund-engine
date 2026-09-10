@@ -24,8 +24,6 @@ an audit row for the superseded run.
 """
 from __future__ import annotations
 
-from app.ai.usage import capture_usage
-
 import json
 import uuid
 from collections.abc import Callable
@@ -33,8 +31,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.ai.client import LLMClient, operation_budget
-from app.ai.output_schema import AssessmentOutput, validate_output
+from app.ai.client import LLMClient
 from app.ai.error_safety import (
     AI_COMPLIANCE_ERROR_MESSAGE,
     AI_OPERATION_ERROR_MESSAGE,
@@ -53,7 +50,7 @@ from app.models.ledger import (
     ValidationError,
 )
 from app.repositories.research import ResearchRepository
-from app.services.assessment import AssessmentService
+from app.services.assessment import AssessmentService, normalize_factor_judgement
 from app.services.event_research_scope_evidence import lock_event_scope_case
 from app.services.research_protocol import ResearchProtocolService
 from app.services.compliance import (
@@ -73,7 +70,6 @@ class AssessmentGenerator:
     def __init__(self, client: LLMClient) -> None:
         self._client = client
 
-    @capture_usage()
     def generate(
         self,
         thesis_id: uuid.UUID,
@@ -167,16 +163,21 @@ class AssessmentGenerator:
             # Only reads have occurred so far.  Do not retain an idle
             # database transaction while waiting on an external provider.
             session.commit()
-            with operation_budget(self._client):
-                result = self._client.chat_json(messages, schema_hint="assess")
-                result = validate_output(result, AssessmentOutput)
-                conclusion = result["conclusion"]
-                rationale = result["rationale"]
-                gaps = result["gaps"]
-                # Non-investment-advice gate (with one bounded rewrite attempt
-                # for REWRITE-category hits): refused text never reaches the
-                # ledger; the failure is recorded on the AIRun below.
-                rationale, gaps, rewritten = self._ensure_compliant(rationale, gaps)
+            result = self._client.chat_json(messages, schema_hint="assess")
+            conclusion = result["conclusion"]
+            rationale = result["rationale"]
+            gaps = result.get("gaps", [])
+            factor_judgement = normalize_factor_judgement(
+                conclusion=conclusion,
+                raw_judgement=result.get("factor_judgement"),
+                has_material_counter_evidence=any(
+                    link.role == "contradicts" for link in links
+                ),
+            )
+            # Non-investment-advice gate (with one bounded rewrite attempt
+            # for REWRITE-category hits): refused text never reaches the
+            # ledger; the failure is recorded on the AIRun below.
+            rationale, gaps, rewritten = self._ensure_compliant(rationale, gaps)
 
             # Auto research supplies a case/run/task output slot here.  If a
             # scope replacement committed while the provider was in flight,
@@ -257,6 +258,7 @@ class AssessmentGenerator:
                 verification_rule_ids=(
                     frozen_rule_ids if thesis.research_protocol_required else None
                 ),
+                factor_judgement=factor_judgement,
             )
 
             input_ref["snapshot_id"] = str(snapshot.id)

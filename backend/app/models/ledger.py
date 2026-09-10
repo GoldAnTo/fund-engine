@@ -6,9 +6,8 @@ Corrections append a successor record carrying ``supersedes_id``.
 Immutability is enforced at two layers:
 1. Application layer: a SQLAlchemy ``before_execute`` guard rejects any
    UPDATE/DELETE targeting an immutable table, raising ImmutableLedgerError.
-2. Database layer: PostgreSQL triggers raise on UPDATE/DELETE. Migration 0065
-   also installs SQLite triggers for the product tables; older SQLite ledger
-   tables continue to rely on the application guard.
+2. Database layer: PostgreSQL triggers (see Alembic migration 0001) raise on
+   UPDATE/DELETE as defence-in-depth against connections bypassing the app.
 """
 from __future__ import annotations
 
@@ -129,45 +128,8 @@ IMMUTABLE_TABLES = frozenset(
         "case_theme_tag_events",
         "ai_runs",
         "audit_logs",
-        "uw_research_objects",
-        "uw_object_relations",
-        "uw_mandate_versions",
-        "uw_historical_bases",
-        "uw_ledger_entries",
-        "uw_research_versions",
-        "uw_answerability_evaluations",
-        "uw_source_manifest_versions",
-        "uw_metric_definition_versions",
-        "uw_metric_observations",
-        "uw_mechanism_pack_versions",
-        "uw_industry_state_versions",
-        "uw_industry_scenario_versions",
-        "uw_company_exposure_versions",
-        "uw_earnings_engine_versions",
-        "uw_forecast_input_versions",
-        "uw_falsifier_versions",
-        "uw_evidence_candidate_dossier_versions",
-        "uw_evidence_candidate_review_versions",
-        "uw_object_identity_versions",
-        "uw_research_object_aliases",
-        "uw_research_object_search_terms",
-        "uw_research_projects",
-        "uw_research_project_securities",
-        "uw_research_scope_versions",
-        "uw_research_agenda_versions",
-        "uw_price_snapshots",
-        "uw_fx_snapshots",
-        "uw_capital_structure_snapshots",
-        "uw_security_rights_versions",
-        "uw_research_assessment_versions",
-        "uw_revision_boundaries",
-        "uw_revision_manifests",
-        "uw_company_research_artifact_versions",
-        "uw_company_research_events",
     }
 )
-
-DELETE_PROTECTED_TABLES = frozenset({"uw_workspace_drafts"})
 
 
 class ImmutableLedgerError(Exception):
@@ -218,10 +180,6 @@ def _guard_immutable_tables(*args: Any, **kwargs: Any) -> None:
         if name in IMMUTABLE_TABLES:
             raise ImmutableLedgerError(
                 f"table '{name}' is append-only: UPDATE/DELETE is not allowed"
-            )
-        if isinstance(statement, Delete) and name in DELETE_PROTECTED_TABLES:
-            raise ImmutableLedgerError(
-                f"table '{name}' is delete-protected: DELETE is not allowed"
             )
 
 
@@ -657,6 +615,12 @@ class AIAssessment(Base):
         Uuid, ForeignKey("mechanism_template_versions.id"), nullable=True
     )
     verification_rule_ids: Mapped[list[str] | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
+    # Immutable user-facing judgement of this thesis as a research factor.
+    # Historical assessments remain NULL; all newly generated assessments
+    # carry the normalized six-key footprint.
+    factor_judgement: Mapped[dict | None] = mapped_column(
         JSON(none_as_null=True), nullable=True
     )
     displayed_as_provisional: Mapped[bool] = mapped_column(
@@ -1255,9 +1219,6 @@ class AIRun(Base):
 
     __tablename__ = "ai_runs"
 
-    # Null means historical/uninstrumented, not zero provider consumption.
-    usage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     model_version: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -1272,11 +1233,6 @@ class AIRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-
-
-# Use the exact fixed-path expressions used by usage queries on both dialects.
-from app.ai.scope_columns import AuditCaseRef, AuditRunRef
-Index("ix_ai_runs_research_scope", AuditCaseRef(AIRun.input_ref), AuditRunRef(AIRun.input_ref))
 
 
 class AuditLog(Base):

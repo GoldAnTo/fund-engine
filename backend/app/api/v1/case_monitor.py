@@ -17,7 +17,6 @@ from app.schemas.v1.case_monitor import (
     UpdateCaseMonitorRequest,
     SetCaseMonitorStatusRequest,
     StartFactorMonitorRunRequest,
-    StartManualMonitorRunRequest,
 )
 from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
 from app.services.auto_research import AutoResearchService
@@ -96,7 +95,6 @@ def save_monitor(
         monitor = CaseMonitorService(db).save(
             case_id,
             actor=request.actor,
-            expected_version=request.expected_version,
             config=CaseMonitorConfig(
                 frequency=request.frequency,
                 factor_ids=[uuid.UUID(value) for value in request.factor_ids],
@@ -120,16 +118,12 @@ def save_monitor(
 )
 def start_manual_monitor_run(
     case_id: uuid.UUID,
-    request: StartManualMonitorRunRequest | None = None,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(require_research_tenant),
 ):
     """Queue an explicit replenishment using the effective monitor version."""
     _require_case(db, case_id, tenant_id)
     try:
-        if request is not None:
-            from app.services.manual_monitor_command import start_manual_monitor_command
-            return start_manual_monitor_command(db, case_id, tenant_id, request)
         service = AutoResearchService(db)
         run = service.start_from_monitor(case_id)
         return service.detail(run.id)
@@ -169,7 +163,7 @@ def set_monitor_status(
 ):
     _require_case(db, case_id, tenant_id)
     try:
-        monitor = CaseMonitorService(db).set_status(case_id, actor=request.actor, status=target_status, reason=request.change_reason, expected_version=request.expected_version)
+        monitor = CaseMonitorService(db).set_status(case_id, actor=request.actor, status=target_status, reason=request.change_reason)
         db.commit()
     except (ValueError, TypeError) as exc:
         db.rollback()

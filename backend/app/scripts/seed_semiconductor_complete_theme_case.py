@@ -9,33 +9,6 @@ valuation, and counter-evidence.
 The fixture set is a reproducible project demo corpus. Each evidence link
 records its source URL, period, evidence status, and verification caveat in
 scope; no claim is promoted beyond what the frozen source text supports.
-
-What this script does
----------------------
-- Freezes every fixture under ``tests/fixtures/semiconductor`` into a
-  ``document_versions`` row (idempotent by content hash).
-- Creates the ``半导体设备国产化：…完整研究 v2`` research case, six theses,
-  and the corresponding evidence links / causal edges.
-- Attaches every frozen document to the case via ``case_document_versions``
-  so the dossier view can resolve its evidence chain.
-
-What this script does NOT do
-----------------------------
-- It does NOT create a ``case_tenant_admissions`` row. The v1
-  ``/api/v1/research-cases`` list filters cases by tenant, so a freshly
-  seeded case is invisible there until you explicitly admit it, e.g.:
-
-    from app.services.case_tenant_access import CaseTenantAccess
-    CaseTenantAccess(session).admit_legacy_case(
-        case_id=<the seeded case id>,
-        tenant_id="local-one-click",
-        initial_document_version_id=<any document already attached to the case>,
-        admitted_by="seed-script",
-        admission_reason="auto-admit seeded fixtures",
-    )
-
-  Pick a tenant id that exists in ``RESEARCH_TENANT_TOKENS``. The default
-  one-click runtime uses ``"local-one-click"``.
 """
 from __future__ import annotations
 
@@ -188,11 +161,10 @@ SOURCE_FILES = {
 }
 
 
-def _freeze_sources(session: Session) -> tuple[dict[tuple[str, int, int], tuple[object, datetime]], list[object]]:
+def _freeze_sources(session: Session) -> dict[tuple[str, int, int], tuple[object, datetime]]:
     documents = DocumentRepository(session)
     ingest = DocumentService(documents)
     spans: dict[tuple[str, int, int], tuple[object, datetime]] = {}
-    versions: list[object] = []
     for key, filename in SOURCE_FILES.items():
         path = FIXTURES_DIR / filename
         meta, raw, parsed = _parse_txt_fixture(path)
@@ -203,7 +175,6 @@ def _freeze_sources(session: Session) -> tuple[dict[tuple[str, int, int], tuple[
             title=meta.get("TITLE"),
             language="zh",
         )
-        versions.append(version)
         for locator, verbatim in parsed:
             existing_span = next(
                 (
@@ -219,7 +190,7 @@ def _freeze_sources(session: Session) -> tuple[dict[tuple[str, int, int], tuple[
             )
             span = existing_span or ingest.add_span(version.id, locator, verbatim)
             spans[(key, locator["page"], locator["paragraph"])] = (span, version.available_at)
-    return spans, versions
+    return spans
 
 
 def _get_or_create_case(session: Session, research: ResearchService) -> ResearchCase:
@@ -243,14 +214,8 @@ def seed(session: Session) -> str:
     research_repo = ResearchRepository(session)
     research = ResearchService(research_repo)
     assessment = AssessmentService(research_repo, session)
-    spans, versions = _freeze_sources(session)
+    spans = _freeze_sources(session)
     case = _get_or_create_case(session, research)
-
-    document_service = DocumentService(DocumentRepository(session))
-    for version in versions:
-        document_service.attach_to_case(
-            research_case_id=case.id, document_version_id=version.id
-        )
 
     for spec in THESIS_SPECS:
         thesis = session.scalar(select(Thesis).where(Thesis.research_case_id == case.id, Thesis.title == spec["title"]))

@@ -37,6 +37,7 @@ from app.models.operational import EventResearchLifecycle, ResearchRun, Research
 from app.models.research_monitor import ResearchRunEvent
 from app.models.source_governance import SourceContract
 from app.schemas.v1.automatic_research import (
+    AutomaticResearchFactorDTO,
     AutomaticResearchResultDTO,
     AutomaticResearchViewDTO,
 )
@@ -54,6 +55,7 @@ from app.services.automatic_research_scope import (
 )
 from app.services.automatic_research_projection import (
     automatic_research_status,
+    project_factor_judgement,
     project_automatic_research_progress,
     project_automatic_research_result,
 )
@@ -213,11 +215,65 @@ class AutomaticResearchQueries:
             status=progress.status,
             stages=progress.stages,
             stats=progress.stats,
-            recent_activity=progress.recent_activity,
+            narrative=progress.narrative,
+            activities=progress.activities,
             exceptions=progress.exceptions,
+            factors=self._factors(run, validated_scope, links),
             failure_reason=progress.failure_reason,
             result=projection.result,
         )
+
+    def _factors(
+        self,
+        run: ResearchRun,
+        scope: ValidatedAutomaticResearchScope,
+        links: list[
+            tuple[EvidenceLink, SourceStatement, DocumentVersion, SourceContract | None]
+        ],
+    ) -> list[AutomaticResearchFactorDTO]:
+        tasks = list(
+            self._session.scalars(
+                select(ResearchTask)
+                .where(
+                    ResearchTask.run_id == run.id,
+                    ResearchTask.round == run.round,
+                    ResearchTask.task_type == "result",
+                )
+                .order_by(ResearchTask.created_at, ResearchTask.id)
+            )
+        )
+        task_by_thesis = {
+            task.thesis_id: task
+            for task in tasks
+            if task.thesis_id is not None
+        }
+        links_by_thesis: dict[uuid.UUID, list[EvidenceLink]] = {}
+        for link, _, _, _ in links:
+            links_by_thesis.setdefault(link.thesis_id, []).append(link)
+
+        projected: list[AutomaticResearchFactorDTO] = []
+        for thesis_id, statement in zip(scope.factor_ids, scope.factor_statements):
+            assessment = None
+            task = task_by_thesis.get(thesis_id)
+            if task is not None:
+                try:
+                    assessment_id = uuid.UUID(str((task.result or {})["assessment_id"]))
+                except (KeyError, TypeError, ValueError, AttributeError):
+                    assessment_id = None
+                if assessment_id is not None:
+                    assessment = self._session.get(AIAssessment, assessment_id)
+            factor_links = links_by_thesis.get(thesis_id, [])
+            projected.append(
+                project_factor_judgement(
+                    statement=statement,
+                    assessment=assessment,
+                    support_count=sum(link.role == "supports" for link in factor_links),
+                    counter_evidence_count=sum(
+                        link.role == "contradicts" for link in factor_links
+                    ),
+                )
+            )
+        return projected
 
     def _validated_links(
         self,

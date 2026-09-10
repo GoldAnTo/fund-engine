@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import copy
 import json
 import uuid
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -24,6 +26,9 @@ from app.models.event_research import (
 )
 from app.models.ledger import (
     AIAssessment,
+    CaseTenantAdmission,
+    DocumentUploadArtifact,
+    DocumentVersion,
     EvidenceSnapshot,
     ResearchCase,
     SourceSpan,
@@ -79,6 +84,299 @@ def test_start_accepts_only_input_and_returns_queued_ids(
     assert response.status_code == 201
     assert set(response.json()) == {"case_id", "run_id", "status"}
     assert response.json()["status"] == "queued"
+
+
+def test_uploaded_start_freezes_pdf_and_queues_one_automatic_run(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    from app.api.v1 import automatic_research as api
+
+    monkeypatch.setattr(
+        api,
+        "AutomaticResearchIntakeService",
+        lambda db: AutomaticResearchIntakeService(db, extractor=_FakeExtractor()),
+    )
+    from reportlab.pdfgen import canvas
+
+    pdf = BytesIO()
+    document_canvas = canvas.Canvas(pdf)
+    document_canvas.drawString(72, 720, "quarterly update")
+    document_canvas.save()
+    raw = pdf.getvalue()
+
+    response = cmd_client.post(
+        "/api/v1/automatic-research/uploaded",
+        data={"input": " \t\n "},
+        files={"file": ("quarterly-update.pdf", raw, "application/pdf")},
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "queued"
+    case_id = uuid.UUID(body["case_id"])
+    run_id = uuid.UUID(body["run_id"])
+    case = cmd_session.get(ResearchCase, case_id)
+    assert case is not None
+    assert case.title == "quarterly-update.pdf"
+    assert list(
+        cmd_session.scalars(
+            select(ResearchRun).where(ResearchRun.research_case_id == case_id)
+        )
+    ) == [cmd_session.get(ResearchRun, run_id)]
+    admission = cmd_session.scalar(
+        select(CaseTenantAdmission).where(
+            CaseTenantAdmission.research_case_id == case_id
+        )
+    )
+    assert admission is not None
+    document = cmd_session.get(DocumentVersion, admission.initial_document_version_id)
+    assert document is not None and document.parse_state == "success"
+    assert cmd_session.scalar(
+        select(DocumentUploadArtifact.raw_bytes).where(
+            DocumentUploadArtifact.document_version_id == document.id
+        )
+    ) == raw
+    assert len(
+        list(
+            cmd_session.scalars(
+                select(EventResearchLifecycle).where(
+                    EventResearchLifecycle.research_case_id == case_id
+                )
+            )
+        )
+    ) == 1
+
+
+def test_uploaded_start_rejects_unsupported_files_without_residual_rows(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    from app.api.v1 import automatic_research as api
+
+    monkeypatch.setattr(
+        api,
+        "AutomaticResearchIntakeService",
+        lambda db: AutomaticResearchIntakeService(db, extractor=_FakeExtractor()),
+    )
+
+    response = cmd_client.post(
+        "/api/v1/automatic-research/uploaded",
+        files={"file": ("payload.docx", b"not supported", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_failed"
+    assert list(cmd_session.scalars(select(ResearchCase.id))) == []
+    assert list(cmd_session.scalars(select(ResearchRun.id))) == []
+    assert list(cmd_session.scalars(select(DocumentVersion.id))) == []
+
+
+def test_uploaded_start_rolls_back_when_freezing_empty_original_fails(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    from app.api.v1 import automatic_research as api
+
+    monkeypatch.setattr(
+        api,
+        "AutomaticResearchIntakeService",
+        lambda db: AutomaticResearchIntakeService(db, extractor=_FakeExtractor()),
+    )
+
+    response = cmd_client.post(
+        "/api/v1/automatic-research/uploaded",
+        files={"file": ("empty.txt", b"", "text/plain")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_failed"
+    assert list(cmd_session.scalars(select(ResearchCase.id))) == []
+    assert list(cmd_session.scalars(select(ResearchRun.id))) == []
+    assert list(cmd_session.scalars(select(DocumentVersion.id))) == []
+
+
+def test_uploaded_start_rejects_more_than_one_file(cmd_client) -> None:
+    response = cmd_client.post(
+        "/api/v1/automatic-research/uploaded",
+        files=[
+            ("file", ("first.txt", b"first", "text/plain")),
+            ("file", ("second.txt", b"second", "text/plain")),
+        ],
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_failed"
+
+
+@pytest.mark.parametrize(
+    ("file_name", "raw", "mime_type"),
+    [
+        ("pretending.pdf", b"not a PDF", "application/pdf"),
+        ("nul.txt", b"text\x00with a NUL", "text/plain"),
+        ("binary.md", b"\xff\xfe", "text/markdown"),
+        ("binary.csv", b"column\x00value", "text/csv"),
+    ],
+)
+def test_uploaded_start_rejects_bytes_that_do_not_match_file_type(
+    cmd_client,
+    cmd_session,
+    monkeypatch,
+    file_name: str,
+    raw: bytes,
+    mime_type: str,
+) -> None:
+    from app.api.v1 import automatic_research as api
+
+    monkeypatch.setattr(
+        api,
+        "AutomaticResearchIntakeService",
+        lambda db: AutomaticResearchIntakeService(db, extractor=_FakeExtractor()),
+    )
+
+    response = cmd_client.post(
+        "/api/v1/automatic-research/uploaded",
+        files={"file": (file_name, raw, mime_type)},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_failed"
+    assert list(cmd_session.scalars(select(ResearchCase.id))) == []
+    assert list(cmd_session.scalars(select(ResearchRun.id))) == []
+    assert list(cmd_session.scalars(select(DocumentVersion.id))) == []
+
+
+def test_uploaded_start_rejects_overlong_file_name_without_residual_rows(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    from app.api.v1 import automatic_research as api
+
+    monkeypatch.setattr(
+        api,
+        "AutomaticResearchIntakeService",
+        lambda db: AutomaticResearchIntakeService(db, extractor=_FakeExtractor()),
+    )
+
+    response = cmd_client.post(
+        "/api/v1/automatic-research/uploaded",
+        files={"file": (f"{'x' * 509}.txt", b"valid text", "text/plain")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_failed"
+    assert list(cmd_session.scalars(select(ResearchCase.id))) == []
+    assert list(cmd_session.scalars(select(ResearchRun.id))) == []
+    assert list(cmd_session.scalars(select(DocumentVersion.id))) == []
+
+
+def _asgi_events_for_upload_body(
+    *, body: bytes, forged_content_length: bool
+) -> list[dict]:
+    from app.main import app
+
+    headers = [
+        (b"authorization", b"Bearer test-tenant-token"),
+        (b"content-type", b"multipart/form-data; boundary=unused"),
+    ]
+    if forged_content_length:
+        headers.append((b"content-length", b"1"))
+    request_messages = [{"type": "http.request", "body": body, "more_body": False}]
+    response_messages: list[dict] = []
+
+    async def invoke() -> None:
+        async def receive() -> dict:
+            if request_messages:
+                return request_messages.pop(0)
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict) -> None:
+            response_messages.append(message)
+
+        await app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/api/v1/automatic-research/uploaded",
+                "raw_path": b"/api/v1/automatic-research/uploaded",
+                "query_string": b"",
+                "headers": headers,
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "root_path": "",
+                "state": {},
+            },
+            receive,
+            send,
+        )
+
+    asyncio.run(invoke())
+    return response_messages
+
+
+@pytest.mark.parametrize("forged_content_length", [False, True])
+def test_uploaded_body_cap_streams_past_absent_or_forged_content_length(
+    monkeypatch, forged_content_length: bool
+) -> None:
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS", '{"test-tenant-token":"test-team"}'
+    )
+
+    events = _asgi_events_for_upload_body(
+        body=b"x" * (20 * 1024 * 1024 + 1),
+        forged_content_length=forged_content_length,
+    )
+
+    response_start = next(event for event in events if event["type"] == "http.response.start")
+    response_body = b"".join(
+        event.get("body", b"")
+        for event in events
+        if event["type"] == "http.response.body"
+    )
+    assert response_start["status"] == 413
+    assert json.loads(response_body)["error"]["code"] == "request_too_large"
+
+
+def test_uploaded_body_cap_does_not_apply_to_an_unrelated_route() -> None:
+    from app.main import app
+
+    response_messages: list[dict] = []
+
+    async def invoke() -> None:
+        async def receive() -> dict:
+            return {
+                "type": "http.request",
+                "body": b"x" * (20 * 1024 * 1024 + 1),
+                "more_body": False,
+            }
+
+        async def send(message: dict) -> None:
+            response_messages.append(message)
+
+        await app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "GET",
+                "scheme": "http",
+                "path": "/api/v1/health",
+                "raw_path": b"/api/v1/health",
+                "query_string": b"",
+                "headers": [],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "root_path": "",
+                "state": {},
+            },
+            receive,
+            send,
+        )
+
+    asyncio.run(invoke())
+    response_start = next(
+        event for event in response_messages if event["type"] == "http.response.start"
+    )
+    assert response_start["status"] == 200
 
 
 def test_start_trims_input_and_rejects_whitespace_without_rows(
@@ -179,25 +477,57 @@ def test_openapi_marks_exact_automatic_research_wire_fields_required(client) -> 
             "limitations",
             "sources",
         },
-        "AutomaticResearchStatsDTO": {
-            "source_count",
-            "admitted_evidence_count",
-            "skipped_count",
-            "duration_seconds",
-        },
-        "AutomaticResearchExceptionDTO": {"reason", "stage", "count"},
-        "AutomaticResearchViewDTO": {
-            "case_id",
-            "run_id",
-            "title",
-            "status",
-            "stages",
-            "stats",
-            "recent_activity",
-            "exceptions",
-            "failure_reason",
-            "result",
-        },
+            "AutomaticResearchStatsDTO": {
+                "source_count",
+                "admitted_evidence_count",
+                "skipped_count",
+                "duration_seconds",
+            },
+            "AutomaticResearchNarrativeDTO": {
+                "current_action",
+                "completed_count",
+                "total_count",
+                "next_action",
+                "elapsed_seconds",
+            },
+            "AutomaticResearchActivityDetailDTO": {
+                "occurred_at",
+                "work_item",
+                "internal_status",
+            },
+            "AutomaticResearchActivityDTO": {
+                "label",
+                "count",
+                "technical_details",
+            },
+            "AutomaticResearchExceptionDTO": {
+                "reason",
+                "count",
+                "impact",
+                "system_action",
+            },
+            "AutomaticResearchFactorDTO": {
+                "statement",
+                "classification",
+                "ranking_reason",
+                "support_count",
+                "counter_evidence_count",
+                "evidence_gap",
+            },
+            "AutomaticResearchViewDTO": {
+                "case_id",
+                "run_id",
+                "title",
+                "status",
+                "stages",
+                "stats",
+                "narrative",
+                "activities",
+                "exceptions",
+                "factors",
+                "failure_reason",
+                "result",
+            },
     }
     for name, fields in expected_required.items():
         assert set(schemas[name]["required"]) == fields
@@ -207,10 +537,6 @@ def test_openapi_marks_exact_automatic_research_wire_fields_required(client) -> 
         ]
         == "integer"
     )
-    assert schemas["AutomaticResearchExceptionDTO"]["properties"]["stage"] == {
-        "title": "Stage",
-        "type": "string",
-    }
     source_properties = schemas["AutomaticResearchSourceDTO"]["properties"]
     assert {item["type"] for item in source_properties["title"]["anyOf"]} == {
         "string",
@@ -223,6 +549,9 @@ def test_openapi_marks_exact_automatic_research_wire_fields_required(client) -> 
     exception_properties = schemas["AutomaticResearchExceptionDTO"]["properties"]
     assert exception_properties["reason"]["type"] == "string"
     assert exception_properties["count"]["type"] == "integer"
+    assert "stage" not in exception_properties
+    assert exception_properties["impact"]["type"] == "string"
+    assert exception_properties["system_action"]["type"] == "string"
 
 
 def _start(cmd_client, monkeypatch) -> dict:

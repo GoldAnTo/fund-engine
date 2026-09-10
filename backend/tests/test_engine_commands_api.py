@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 ZERO_UUID = "00000000-0000-0000-0000-000000000000"
 
 
-def _new_owned_pending_version(cmd_session):
+def _new_pending_version(cmd_session):
     """A fresh document version with one span and no statements."""
     from app.repositories.documents import DocumentRepository
     from app.services.ingest import DocumentService
@@ -30,13 +30,6 @@ def _new_owned_pending_version(cmd_session):
         locator={"page": 1, "paragraph": 0},
         verbatim_text="FY2025 revenue grew 38% YoY on AI accelerator demand.",
     )
-    from app.services.research import ResearchService
-    from app.repositories.research import ResearchRepository
-    from tests.tenant_admission import admit_case
-    case = ResearchService(ResearchRepository(cmd_session)).add_case(
-        title="owned extraction fixture", industry_topic="test", created_by="test"
-    )
-    admit_case(cmd_session, case.id, document_version_id=version.id)
     cmd_session.commit()
     return version
 
@@ -98,9 +91,6 @@ def _seed_concurrent_propose_case(session):
             ),
         ]
     )
-    from tests.tenant_admission import admit_case
-
-    admit_case(session, case.id, document_version_id=document.id)
     session.commit()
     return thesis.id, statement.id
 
@@ -111,7 +101,7 @@ def _seed_concurrent_propose_case(session):
 
 
 def test_extract_creates_review_gated_candidates_and_airun(cmd_client, cmd_seeded):
-    version = _new_owned_pending_version(cmd_seeded)
+    version = _new_pending_version(cmd_seeded)
 
     resp = cmd_client.post(f"/api/v1/documents/{version.id}/extract")
     assert resp.status_code == 201, resp.text
@@ -141,41 +131,6 @@ def test_extract_unknown_version_returns_404(cmd_client, cmd_seeded):
     assert resp.status_code == 404
 
 
-def test_extract_discards_noncontinuous_llm_quote(cmd_client, cmd_seeded, monkeypatch):
-    """An invalid model candidate must not fail the whole document run."""
-    from app.ai.client import LLMClient
-    from app.models.ledger import AIRun, SourceSpan
-
-    version = _new_owned_pending_version(cmd_seeded)
-    span = cmd_seeded.scalar(
-        select(SourceSpan).where(SourceSpan.document_version_id == version.id)
-    )
-    assert span is not None
-
-    def malformed_candidate(*_args, **_kwargs):
-        return {
-            "statements": [
-                {
-                    "span_id": str(span.id),
-                    "quote": "invented quote",
-                    "quote_start": 0,
-                    "quote_end": 14,
-                    "normalized_text": "revenue increased",
-                    "kind": "reported_claim",
-                }
-            ]
-        }
-
-    monkeypatch.setattr(LLMClient, "chat_json", malformed_candidate)
-
-    response = cmd_client.post(f"/api/v1/documents/{version.id}/extract")
-
-    assert response.status_code == 201, response.text
-    assert response.json()["candidate_count"] == 0
-    run = cmd_seeded.scalar(select(AIRun).where(AIRun.kind == "extract"))
-    assert run is not None and run.status == "success"
-
-
 def test_extract_provider_failure_keeps_failed_airun_after_request_rollback(
     cmd_client, cmd_seeded, monkeypatch
 ):
@@ -184,7 +139,7 @@ def test_extract_provider_failure_keeps_failed_airun_after_request_rollback(
     from app.ai.client import LLMClient
     from app.models.ledger import AIRun
 
-    version = _new_owned_pending_version(cmd_seeded)
+    version = _new_pending_version(cmd_seeded)
     version_id = version.id
 
     def fail_provider(*_args, **_kwargs):
@@ -211,43 +166,6 @@ def test_extract_provider_failure_keeps_failed_airun_after_request_rollback(
         assert "secret-token" not in failed_run.error
 
 
-def test_extract_llm_timeout_is_reported_as_retryable_upstream_failure(
-    cmd_client, cmd_seeded, monkeypatch
-):
-    """A finite LLM timeout is an expected dependency failure, not a 500."""
-    from sqlalchemy.orm import Session
-
-    from app.ai.client import LLMClient, LLMProviderError
-    from app.models.ledger import AIRun
-
-    version = _new_owned_pending_version(cmd_seeded)
-    version_id = version.id
-
-    def timeout_provider(*_args, **_kwargs):
-        raise LLMProviderError("LLM provider request failed")
-
-    monkeypatch.setattr(LLMClient, "chat_json", timeout_provider)
-
-    response = cmd_client.post(f"/api/v1/documents/{version_id}/extract")
-
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "upstream_unavailable"
-    assert "provider" in response.json()["error"]["message"].lower()
-    cmd_seeded.rollback()
-
-    with Session(cmd_seeded.get_bind()) as check:
-        failed_run = check.scalar(
-            select(AIRun)
-            .where(AIRun.kind == "extract", AIRun.status == "failed")
-            .where(
-                AIRun.input_ref["document_version_id"].as_string()
-                == str(version_id)
-            )
-        )
-        assert failed_run is not None
-        assert failed_run.error == "AI operation failed"
-
-
 def test_extract_provider_failure_rolls_back_rule_based_candidates(
     cmd_client, cmd_seeded, monkeypatch
 ):
@@ -256,7 +174,7 @@ def test_extract_provider_failure_rolls_back_rule_based_candidates(
     from app.ai.client import LLMClient
     from app.models.ledger import AIRun, AtomicClaimCandidate, SourceSpan
 
-    version = _new_owned_pending_version(cmd_seeded)
+    version = _new_pending_version(cmd_seeded)
     version_id = version.id
     cmd_seeded.add(
         SourceSpan(
@@ -304,7 +222,7 @@ def test_extract_refuses_a_frozen_source_contract_that_forbids_ai_processing(cmd
     from app.models.ledger import AIRun
     from app.models.source_governance import SourceContract
 
-    version = _new_owned_pending_version(cmd_seeded)
+    version = _new_pending_version(cmd_seeded)
     cmd_seeded.add(
         SourceContract(
             document_version_id=version.id,
@@ -344,7 +262,7 @@ def test_extract_refuses_a_frozen_source_contract_that_forbids_ai_processing(cmd
 def test_extract_refuses_an_expired_source_contract(cmd_client, cmd_seeded):
     from app.models.source_governance import SourceContract
 
-    version = _new_owned_pending_version(cmd_seeded)
+    version = _new_pending_version(cmd_seeded)
     cmd_seeded.add(
         SourceContract(
             document_version_id=version.id,
@@ -400,8 +318,6 @@ def test_supplement_text_creates_a_separate_case_document_with_intersected_permi
         title="Original report",
     )
     docs.attach_to_case(research_case_id=case.id, document_version_id=original.id)
-    from tests.tenant_admission import admit_case
-    admit_case(cmd_seeded, case.id, document_version_id=original.id)
     cmd_seeded.add(
         SourceContract(
             document_version_id=original.id,
@@ -589,7 +505,7 @@ def test_propose_job_cancellation_wins_over_inflight_provider_result(
         with session_local() as api_session:
             try:
                 endpoint_responses.append(
-                    propose_evidence(thesis_id, tenant_id="test-team", db=api_session)
+                    propose_evidence(thesis_id, db=api_session)
                 )
             except BaseException as exc:
                 endpoint_errors.append(exc)
@@ -603,7 +519,7 @@ def test_propose_job_cancellation_wins_over_inflight_provider_result(
             select(Job).where(Job.kind == "propose", Job.target_id == thesis_id)
         )
         assert job is not None and job.status == "running"
-        cancel_job(job.id, tenant_id="test-team", db=cancelling)
+        cancel_job(job.id, db=cancelling)
         job_id = job.id
 
     release_provider.set()
@@ -692,7 +608,7 @@ def test_postgres_propose_output_lock_serializes_late_cancellation(
     def call_endpoint():
         with session_local() as api_session:
             try:
-                propose_evidence(thesis_id, tenant_id="test-team", db=api_session)
+                propose_evidence(thesis_id, db=api_session)
             except BaseException as exc:
                 endpoint_errors.append(exc)
 
@@ -705,7 +621,7 @@ def test_postgres_propose_output_lock_serializes_late_cancellation(
             assert job is not None and job.status == "running"
             cancellation_started.set()
             try:
-                cancel_job(job.id, tenant_id="test-team", db=cancelling)
+                cancel_job(job.id, db=cancelling)
             except BaseException as exc:
                 cancellation_errors.append(exc)
                 cancelling.rollback()

@@ -18,20 +18,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.assessment_gen import AssessmentGenerator
-from app.ai.client import LLMClient, LLMProviderError
+from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
-from app.ai.prompts import EXTRACT_PROMPT_VERSION
 from app.ai.runs import record_run
 from app.ai.proposal import EvidenceProposer
 from app.api.v1.commands.common import commit_or_rollback
-from app.api.v1.tenant_context import require_research_tenant
-from app.services.review_tenant_access import ReviewTenantAccess
-from app.services.case_tenant_access import CaseTenantAccess
 from app.db import get_db
-from app.errors import NotFoundError, UpstreamUnavailableError, ValidationFailedError
+from app.errors import NotFoundError, ValidationFailedError
 from app.models.ledger import (
     CaseDocumentVersion,
     DocumentVersion,
+    Thesis,
     ValidationError,
 )
 from app.models.operational import Job
@@ -118,21 +115,24 @@ def _propose_response(
 def create_document_supplement(
     document_version_id: uuid.UUID,
     payload: CreateDocumentSupplementRequest,
-    tenant_id: str = Depends(require_research_tenant),
     db: Session = Depends(get_db),
 ):
     """Freeze user-supplied recovery text without changing the original file."""
+    original = db.get(DocumentVersion, document_version_id)
+    if original is None:
+        raise NotFoundError("document version not found")
     try:
         case_id = uuid.UUID(payload.case_id)
     except ValueError as exc:
         raise ValidationFailedError("case_id must be a UUID") from exc
-    CaseTenantAccess(db).require_case(case_id, tenant_id)
-    original = db.scalar(select(DocumentVersion).where(
-        DocumentVersion.id == document_version_id,
-        DocumentRepository.owned_attachment(tenant_id, case_id),
-    ))
-    if original is None:
-        raise NotFoundError("document version not found")
+    attached = db.scalar(
+        select(CaseDocumentVersion.id).where(
+            CaseDocumentVersion.research_case_id == case_id,
+            CaseDocumentVersion.document_version_id == document_version_id,
+        )
+    )
+    if attached is None:
+        raise ValidationFailedError("original document is not attached to this Case")
     original_contract = db.scalar(
         select(SourceContract).where(SourceContract.document_version_id == document_version_id)
     )
@@ -197,10 +197,8 @@ def create_document_supplement(
 )
 def rerun_assessment(
     thesis_id: uuid.UUID,
-    tenant_id: str = Depends(require_research_tenant),
     db: Session = Depends(get_db),
 ):
-    ReviewTenantAccess(db).require_thesis(thesis_id, tenant_id)
     client = LLMClient.from_env()
     try:
         assessment = AssessmentGenerator(client).generate(
@@ -244,7 +242,6 @@ def rerun_assessment(
 )
 def propose_evidence(
     thesis_id: uuid.UUID,
-    tenant_id: str = Depends(require_research_tenant),
     db: Session = Depends(get_db),
 ):
     """Run the propose step for one thesis.
@@ -254,7 +251,9 @@ def propose_evidence(
     — nothing is auto-confirmed; a human decision publishes the formal link.
     The work runs inside a Job row so progress / cancellation are observable.
     """
-    thesis = ReviewTenantAccess(db).require_thesis(thesis_id, tenant_id)
+    thesis = db.get(Thesis, thesis_id)
+    if thesis is None:
+        raise NotFoundError(f"thesis {thesis_id} not found")
     client = LLMClient.from_env()
     jobs = JobService(db)
     job = jobs.create(
@@ -332,8 +331,6 @@ def propose_evidence(
 )
 def extract_statements(
     document_version_id: uuid.UUID,
-    case_id: uuid.UUID | None = None,
-    tenant_id: str = Depends(require_research_tenant),
     db: Session = Depends(get_db),
 ):
     """Run the extract step without publishing formal statements.
@@ -341,14 +338,9 @@ def extract_statements(
     Returned candidates retain an exact original quote and await an explicit
     human decision in the Case review workbench.
     """
-    if case_id is not None:
-        CaseTenantAccess(db).require_case(case_id, tenant_id)
-    version = db.scalar(select(DocumentVersion).where(
-        DocumentVersion.id == document_version_id,
-        DocumentRepository.owned_attachment(tenant_id, case_id),
-    ))
+    version = db.get(DocumentVersion, document_version_id)
     if version is None:
-        raise NotFoundError("document version not found")
+        raise NotFoundError(f"document version {document_version_id} not found")
     contract = db.scalar(
         select(SourceContract).where(
             SourceContract.document_version_id == document_version_id
@@ -371,27 +363,9 @@ def extract_statements(
         )
         commit_or_rollback(db)
         raise ValidationFailedError(message)
-    try:
-        client = LLMClient.from_env()
-    except (ValueError, RuntimeError) as exc:
-        message = "document extraction model configuration is unavailable"
-        record_run(
-            db, kind="extract", model_version="not_run",
-            prompt_version=EXTRACT_PROMPT_VERSION,
-            input_ref={"document_version_id": str(document_version_id), "span_ids": []},
-            output_summary="not started: model configuration unavailable",
-            status="failed", error=message, started_at=datetime.now(timezone.utc),
-        )
-        commit_or_rollback(db)
-        raise UpstreamUnavailableError(message) from exc
+    client = LLMClient.from_env()
     try:
         candidates = StatementExtractor(client).extract(document_version_id, db)
-    except LLMProviderError as exc:
-        # A timeout / connection error is a retryable dependency failure, not
-        # an application defect. StatementExtractor has already persisted the
-        # failed AIRun in its clean post-provider transaction.
-        commit_or_rollback(db)
-        raise UpstreamUnavailableError("LLM provider is temporarily unavailable") from exc
     except Exception:
         # StatementExtractor appends the failed AIRun in the post-provider
         # transaction; preserve it before the request unwinds to a generic 500.

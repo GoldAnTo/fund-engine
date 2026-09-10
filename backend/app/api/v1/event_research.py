@@ -2,21 +2,16 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import uuid
-from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, Header, UploadFile, Query, status
+from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.repositories.operational import IdempotencyRepository
 from app.db import get_db
-from app.ai.runs import record_run
-from app.ai.usage import capture_usage, current_usage
-from app.errors import ConflictError, UpstreamUnavailableError, ValidationFailedError
+from app.errors import UpstreamUnavailableError, ValidationFailedError
 from app.schemas.v1.event_research import (
     CreateEventResearchRequest,
     CreateEventResearchResponse,
@@ -50,12 +45,11 @@ from app.schemas.v1.event_research import (
 )
 from app.queries.event_research import EventResearchQueries
 from app.services.event_extraction import (
-    EVENT_EXTRACTION_PROMPT_VERSION,
     EventExtractionProviderError,
     EventExtractionService,
 )
 from app.services.event_research import EventResearchService, InitialUploadedOriginal
-from app.services.document_uploads import DocumentUploadService, MAX_UPLOAD_BYTES
+from app.services.document_uploads import DocumentUploadService
 from app.services.source_governance import SourceGovernanceService
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
@@ -213,8 +207,6 @@ def event_research_network(
 @router.get("/{case_id}/documents", response_model=DocumentListResponse)
 def event_case_documents(
     case_id: uuid.UUID,
-    limit: int = Query(default=100, ge=1, le=100),
-    cursor: str | None = Query(default=None, max_length=2048),
     db: Session = Depends(get_db),
     tenant_id: str = Depends(require_research_tenant),
 ) -> DocumentListResponse:
@@ -223,9 +215,8 @@ def event_case_documents(
         query=None,
         case_id=case_id,
         basis=HistoricalBasis.from_cutoff(None),
-        limit=limit,
-        cursor=cursor,
-        tenant_id=tenant_id,
+        limit=100,
+        cursor=None,
     )
 
 
@@ -299,42 +290,18 @@ def review_case_relation(
 
 
 @router.post("/extract", response_model=ExtractEventResearchResponse)
-@capture_usage()
 def extract_event(
     payload: ExtractEventResearchRequest,
-    db: Session = Depends(get_db),
     tenant_id: str = Depends(require_research_tenant),
 ) -> ExtractEventResearchResponse:
-    started_at = datetime.now(timezone.utc)
-    extraction_id = uuid.uuid4()
-    service = None
-    extraction_status = "failed"
     try:
-        service = EventExtractionService()
-        extracted = service.extract(
+        extracted = EventExtractionService().extract(
             raw_input=payload.raw_input, source_url=payload.source_url
         )
-        extraction_status = "success"
     except EventExtractionProviderError as exc:
         raise UpstreamUnavailableError(
             "event extraction LLM is unavailable or returned an invalid response"
         ) from exc
-    finally:
-        usage = current_usage()
-        if usage and usage["attempts"]:
-            record_run(
-                db, kind="event_extract",
-                model_version=service.model_version if service is not None else "unknown",
-                prompt_version=EVENT_EXTRACTION_PROMPT_VERSION,
-                input_ref={"tenant_id": tenant_id, "extraction_id": str(extraction_id)},
-                output_summary="event extraction provider stage",
-                status=extraction_status,
-                error="event extraction failed" if extraction_status == "failed" else None,
-                started_at=started_at,
-            )
-            # This endpoint creates no research artifacts. Preserve the usage
-            # even when the dependency rolls back the subsequent HTTP error.
-            db.commit()
     return ExtractEventResearchResponse(
         event_title=extracted.event_title,
         company_name=extracted.company_name,
@@ -353,58 +320,25 @@ def create_event_research(
     payload: CreateEventResearchRequest,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(require_research_tenant),
-    idempotency_key: str | None = Header(default=None, min_length=1, max_length=256),
 ) -> CreateEventResearchResponse:
-    # Cache and intake share a transaction: a lost HTTP response can be replayed
-    # without another Case, admission, or preparation job.
-    repository = IdempotencyRepository(db)
-    slot = None
     try:
-        if idempotency_key is not None:
-            if not idempotency_key.strip():
-                raise ValidationFailedError("Idempotency-Key must not be blank")
-            fingerprint = hashlib.sha256(json.dumps(
-                payload.model_dump(mode="json"), sort_keys=True, separators=(",", ":"),
-            ).encode()).hexdigest()
-            key = "event-create:" + hashlib.sha256(json.dumps(
-                [tenant_id, idempotency_key], separators=(",", ":"),
-            ).encode()).hexdigest()
-            # sqlite legacy transaction mode does not BEGIN for a SAVEPOINT.
-            # Start its outer transaction so a failed intake rolls the key back.
-            connection = db.connection()
-            if connection.dialect.name == "sqlite" and not connection.connection.driver_connection.in_transaction:
-                connection.exec_driver_sql("BEGIN")
-            slot, acquired = repository.acquire(key=key, request_fingerprint=fingerprint)
-            if not acquired:
-                if slot.request_fingerprint != fingerprint or slot.status != "completed":
-                    raise ConflictError("idempotency_conflict")
-                response = CreateEventResearchResponse.model_validate(slot.response_payload)
-                db.rollback()  # Release the replay row lock; no writes to commit.
-                return response
-        created = EventResearchService(db).create(payload, tenant_id=tenant_id, commit=False)
-        lifecycle = created.lifecycle
-        response = CreateEventResearchResponse(
-            case_id=created.case_id,
-            brief_id=created.brief_id,
-            lifecycle=EventResearchLifecycleDTO(
-                status=lifecycle.status,
-                active_run_id=str(lifecycle.active_run_id) if lifecycle.active_run_id else None,
-                current_round=lifecycle.current_round,
-                status_summary=lifecycle.status_summary,
-                current_gap=lifecycle.current_gap,
-                next_human_action=lifecycle.next_human_action,
-            ),
-        )
-        if slot is not None:
-            repository.complete(slot, response_status=201, response_payload=response.model_dump(mode="json"))
-        db.commit()
-        return response
+        created = EventResearchService(db).create(payload, tenant_id=tenant_id)
     except (ValueError, ValidationFailedError) as exc:
         db.rollback()
         raise ValidationFailedError(str(exc)) from exc
-    except Exception:
-        db.rollback()
-        raise
+    lifecycle = created.lifecycle
+    return CreateEventResearchResponse(
+        case_id=created.case_id,
+        brief_id=created.brief_id,
+        lifecycle=EventResearchLifecycleDTO(
+            status=lifecycle.status,
+            active_run_id=str(lifecycle.active_run_id) if lifecycle.active_run_id else None,
+            current_round=lifecycle.current_round,
+            status_summary=lifecycle.status_summary,
+            current_gap=lifecycle.current_gap,
+            next_human_action=lifecycle.next_human_action,
+        ),
+    )
 
 
 @router.post("/uploaded", response_model=CreateEventResearchResponse, status_code=status.HTTP_201_CREATED)
@@ -424,8 +358,8 @@ async def create_event_research_from_uploaded_original(
         request = CreateEventResearchRequest.model_validate_json(payload)
         if not file.filename:
             raise ValidationFailedError("uploaded file must have a file name")
-        raw = await file.read(MAX_UPLOAD_BYTES + 1)
-        if len(raw) > MAX_UPLOAD_BYTES:
+        raw = await file.read(20 * 1024 * 1024 + 1)
+        if len(raw) > 20 * 1024 * 1024:
             raise ValidationFailedError("uploaded original must not exceed 20 MiB")
         source_metadata = {**request.source_metadata, "tenant": tenant_id}
         request = request.model_copy(update={
@@ -669,8 +603,8 @@ async def upload_event_material(
         metadata = {**metadata, "tenant": tenant_id}
         if not actor.strip():
             raise ValidationFailedError("actor must not be empty")
-        raw = await file.read(MAX_UPLOAD_BYTES + 1)
-        if len(raw) > MAX_UPLOAD_BYTES:
+        raw = await file.read(20 * 1024 * 1024 + 1)
+        if len(raw) > 20 * 1024 * 1024:
             raise ValidationFailedError("uploaded original must not exceed 20 MiB")
         frozen = DocumentUploadService(db).freeze_case_material(
             case_id=case_id,
@@ -785,8 +719,8 @@ async def decide_published_uploaded_material(
             raise ValidationFailedError(
                 "current source declaration does not permit research"
             )
-        raw = await file.read(MAX_UPLOAD_BYTES + 1)
-        if len(raw) > MAX_UPLOAD_BYTES:
+        raw = await file.read(20 * 1024 * 1024 + 1)
+        if len(raw) > 20 * 1024 * 1024:
             raise ValidationFailedError("uploaded original must not exceed 20 MiB")
         frozen = DocumentUploadService(db).freeze_published_case_material(
             case_id=case_id,

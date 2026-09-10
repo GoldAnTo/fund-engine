@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 from app.models.ledger import (
     AIAssessment,
     CaseTenantAdmission,
-    CaseDocumentVersion,
     CaseThemeTagEvent,
     CausalEdge,
     CausalStep,
@@ -383,21 +382,6 @@ class ResearchRepository:
             )
         )
 
-    def document_attached_to_case(self, document_id: uuid.UUID, case_id: uuid.UUID) -> bool:
-        return self._session.scalar(select(CaseDocumentVersion.id).where(
-            CaseDocumentVersion.document_version_id == document_id,
-            CaseDocumentVersion.research_case_id == case_id,
-        ).limit(1)) is not None
-
-    def get_thesis(self, thesis_id: uuid.UUID) -> Thesis | None:
-        return self._session.get(Thesis, thesis_id)
-
-    def source_contract_for_document(self, document_id: uuid.UUID):
-        from app.models.source_governance import SourceContract
-        return self._session.scalar(select(SourceContract).where(
-            SourceContract.document_version_id == document_id,
-        ))
-
     def visible_links(
         self,
         *,
@@ -477,6 +461,7 @@ class ResearchRepository:
         effective_binding_id: uuid.UUID | None = None,
         mechanism_template_version_id: uuid.UUID | None = None,
         verification_rule_ids: list[str] | None = None,
+        factor_judgement: dict | None = None,
         displayed_as_provisional: bool = True,
         creator_type: str = "ai",
         model_version: str | None = None,
@@ -490,6 +475,7 @@ class ResearchRepository:
             effective_binding_id=effective_binding_id,
             mechanism_template_version_id=mechanism_template_version_id,
             verification_rule_ids=verification_rule_ids,
+            factor_judgement=factor_judgement,
             displayed_as_provisional=displayed_as_provisional,
             creator_type=creator_type,
             model_version=model_version,

@@ -1,8 +1,10 @@
 """Gap-fill read API tests (对接清单 G1–G4)."""
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import select
-from tests.event_case_factory import create_event_case
+from tests.tenant_admission import admit_case
 
 
 # ---------------------------------------------------------------------------
@@ -99,28 +101,35 @@ def test_knowledge_layer_surfaces_link_review(cmd_client, cmd_seeded):
 
 
 def test_dossier_exposes_falsifiable_thesis_fields(cmd_client, cmd_session):
-    case_id = create_event_case(cmd_client, title="G4 case")
     created = cmd_client.post(
-        f"/api/v1/research-cases/{case_id}/theses",
+        "/api/v1/research-cases",
         json={
+            "title": "G4 case",
+            "industry_topic": "ai_compute",
             "created_by": "g4",
-            "statement": "可反证命题",
-            "title": "命题 1",
-            "observation_start": "2026-01-01",
-            "observation_end": "2027-12-31",
-            "support_condition": "支持条件",
-            "falsification_condition": "反证条件",
-            "next_verification_event": "下一验证事件",
-            "creator_type": "ai",
+            "initial_theses": [
+                {
+                    "statement": "可反证命题",
+                    "title": "命题 1",
+                    "observation_start": "2026-01-01",
+                    "observation_end": "2027-12-31",
+                    "support_condition": "支持条件",
+                    "falsification_condition": "反证条件",
+                    "next_verification_event": "下一验证事件",
+                    "creator_type": "ai",
+                }
+            ],
         },
     )
-    assert created.status_code == 201, created.text
-    thesis_id = created.json()["thesis"]["id"]
+    assert created.status_code == 201
+    case_id = created.json()["case_id"]
+    admit_case(cmd_session, uuid.UUID(case_id))
 
     dossier = cmd_client.get(f"/api/v1/research-cases/{case_id}/dossier")
     assert dossier.status_code == 200, dossier.text
     theses = dossier.json()["theses"]
-    thesis = next(item for item in theses if item["id"] == thesis_id)
+    assert len(theses) == 1
+    thesis = theses[0]
     assert thesis["title"] == "命题 1"
     assert thesis["observation_start"] == "2026-01-01"
     assert thesis["observation_end"] == "2027-12-31"

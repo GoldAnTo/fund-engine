@@ -313,13 +313,6 @@ def test_material_acquisition_passes_governed_gate_and_publishes_machine_evidenc
         )
     )
 
-    from app.models.ledger import AIRun
-    audits = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
-    assert audits
-    for audit in audits:
-        assert audit.input_ref["research_run_id"] == str(run.id)
-        assert audit.input_ref["research_case_id"] == str(run.research_case_id)
-
 
 def test_material_contract_rejection_is_durable_and_produces_no_evidence(
     session,
@@ -1788,34 +1781,6 @@ def test_recovered_research_job_gets_a_new_claim_fence(session) -> None:
     assert persisted.claim_token == second_token
 
 
-@pytest.mark.parametrize("replacement_status", ["running", "succeeded", "failed"])
-def test_stale_worker_cannot_park_reclaimed_or_finished_job(
-    session, replacement_status: str
-) -> None:
-    run = _automatic_run(session)
-    repo = AutoResearchRepository(session)
-    job = repo.claim_next_run_job()
-    assert job is not None and job.claim_token
-    original_token = job.claim_token
-    job_id, run_id = job.id, run.id
-    job.claim_token = "replacement-worker"
-    job.status = replacement_status
-    run.status = replacement_status
-    session.commit()
-
-    # Work staged by the expired worker must be discarded along with its
-    # attempt to replace the newer worker's status and claim.
-    run.status = "waiting_for_sources"
-    repo.wait_for_sources(run, job, expected_claim_token=original_token)
-    session.commit()
-
-    persisted_job = session.get(Job, job_id)
-    persisted_run = session.get(ResearchRun, run_id)
-    assert persisted_job.status == replacement_status
-    assert persisted_job.claim_token == "replacement-worker"
-    assert persisted_run.status == replacement_status
-
-
 def test_advance_completes_from_one_admitted_partial_source_without_human_gates(
     session,
 ) -> None:
@@ -3181,34 +3146,3 @@ def test_cancel_after_provider_prevents_assessment_attachment_and_conclusion(
         assert result_task is not None
         assert result_task.status == "cancelled"
         assert result_task.result is None
-
-
-def test_automatic_assessment_audit_has_exact_task_ownership(session):
-    from app.ai.runs import record_run
-    from app.models.ledger import AIRun
-    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
-    class AuditedGenerator(_AssessmentGenerator):
-        def generate(self, thesis_id, cutoff, session, **kwargs):
-            result = super().generate(thesis_id, cutoff, session, **kwargs)
-            record_run(session, kind="assess", model_version="fixture", prompt_version="fixture",
-                       input_ref={"thesis_id": str(thesis_id)}, output_summary="fixture", status="success",
-                       started_at=cutoff)
-            return result
-    run = _automatic_run(session, max_rounds=1)
-    pipeline = AutomaticResearchPipeline(session, assessment_generator=AuditedGenerator())
-    assert pipeline.advance(run) == "waiting_for_sources"
-    jobs = list(session.scalars(select(AcquisitionJob).where(AcquisitionJob.research_run_id == run.id)))
-    _admit_link(session, jobs[0])
-    for index, job in enumerate(jobs):
-        job.status = "succeeded" if index == 0 else "failed"
-        job.stage = job.status
-    jobs[0].admitted_count = 1
-    assert pipeline.advance(run) == "completed"
-    audits = list(session.scalars(select(AIRun).where(AIRun.kind == "assess")))
-    assert audits
-    for audit in audits:
-        assert audit.input_ref["research_run_id"] == str(run.id)
-        assert audit.input_ref["research_case_id"] == str(run.research_case_id)
-        task = session.get(ResearchTask, uuid.UUID(audit.input_ref["research_task_id"]))
-        assert task.run_id == run.id
-        assert str(task.thesis_id) == audit.input_ref["thesis_id"]

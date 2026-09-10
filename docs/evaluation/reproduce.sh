@@ -21,7 +21,7 @@ RELEASE_DB="$RELEASE_DIR/ledger.db"
 trap 'rm -rf "$RELEASE_DIR"' EXIT
 export DATABASE_URL="sqlite:///$RELEASE_DB"
 
-"$PY" -m scripts.verify_ai_compute_slice
+"$PY" scripts/verify_ai_compute_slice.py
 "$PY" -c '
 import os
 from sqlalchemy import create_engine
@@ -34,4 +34,4 @@ with sessionmaker(bind=engine, future=True)() as session:
     seed(session)
     session.commit()
 '
-"$PY" -m scripts.verify_semiconductor_complete_case
+"$PY" scripts/verify_semiconductor_complete_case.py

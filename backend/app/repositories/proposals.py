@@ -90,12 +90,9 @@ class ProposalRepository:
         )
 
     def pending_for_case(
-        self, *, case_id: uuid.UUID | None = None, kind: str | None = None, limit: int = 50, tenant_id: str | None = None
+        self, *, case_id: uuid.UUID | None = None, kind: str | None = None, limit: int = 50
     ) -> list[Proposal]:
         query = select(Proposal).where(Proposal.status == "pending")
-        if tenant_id is not None:
-            from app.services.review_tenant_access import proposal_tenant_predicate
-            query = query.where(proposal_tenant_predicate(tenant_id))
         if case_id is not None:
             query = query.where(Proposal.research_case_id == case_id)
         if kind is not None:

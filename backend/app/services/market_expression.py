@@ -4,7 +4,6 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session

@@ -30,13 +30,6 @@ from app.ai.research_preparation import (
     load_preparation_input,
 )
 from app.db import SessionLocal
-from app.ai.runs import record_run
-from app.ai.usage import capture_usage, current_usage
-from app.ai.prompts import (
-    PREPARATION_PARSE_CLAIMS_PROMPT_VERSION,
-    PREPARATION_PROTOCOL_PROMPT_VERSION,
-    PREPARATION_EVIDENCE_PLAN_PROMPT_VERSION,
-)
 from app.errors import ConflictError, NotFoundError
 from app.models.operational import Job
 from app.models.research_preparation import ResearchPreparation
@@ -408,50 +401,6 @@ def _complete(
         session.commit()
 
 
-def _generate_with_usage(session_factory, *, generator, loaded_input, input, job_id):
-    """Persist provider consumption separately from review-gated artifacts.
-
-    A later stale-output guard may discard drafts but cannot undo a request.
-    This audit is not a publication or a declaration that preparation succeeded.
-    """
-    methods = {
-        "parse_claims": ("validate_claim_drafts", PREPARATION_PARSE_CLAIMS_PROMPT_VERSION),
-        "draft_protocol": ("draft_protocol", PREPARATION_PROTOCOL_PROMPT_VERSION),
-        "draft_evidence_plan": ("draft_evidence_plan", PREPARATION_EVIDENCE_PLAN_PROMPT_VERSION),
-    }
-    method, prompt_version = methods[input.step]
-    started_at = _utcnow()
-    status = "failed"
-    with capture_usage():
-        try:
-            output = getattr(generator, method)(loaded_input)
-            status = "success"
-            return output
-        finally:
-            usage = current_usage()
-            if usage and usage["attempts"]:
-                with session_factory() as audit_session:
-                    record_run(
-                        audit_session,
-                        kind="prepare",
-                        model_version=getattr(generator, "model_version", "unknown"),
-                        prompt_version=prompt_version,
-                        input_ref={
-                            "research_case_id": str(input.case_id),
-                            "preparation_id": str(input.preparation_id),
-                            "preparation_version": input.version,
-                            "input_fingerprint": input.fingerprint,
-                            "job_id": str(job_id),
-                            "step": input.step,
-                        },
-                        output_summary="preparation provider stage",
-                        status=status,
-                        error="preparation provider stage failed" if status == "failed" else None,
-                        started_at=started_at,
-                    )
-                    audit_session.commit()
-
-
 def run_once(
     *,
     recover_after_minutes: int = 30,
@@ -502,10 +451,13 @@ def run_once(
             loaded_input = load_preparation_input(session, input.case_id)
         if not _ready_for_provider(session_factory, job_id=job_id, input=input):
             return True
-        output = _generate_with_usage(
-            session_factory, generator=generator, loaded_input=loaded_input,
-            input=input, job_id=job_id,
-        )
+        with session_factory() as session:
+            if input.step == "parse_claims":
+                output = generator.validate_claim_drafts(loaded_input)
+            elif input.step == "draft_protocol":
+                output = generator.draft_protocol(loaded_input)
+            else:
+                output = generator.draft_evidence_plan(loaded_input)
     except ResearchPreparationProviderError:
         _provider_failure(session_factory, job_id=job_id, input=input)
         return True

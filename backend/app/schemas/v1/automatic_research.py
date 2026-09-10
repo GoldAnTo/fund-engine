@@ -18,6 +18,17 @@ class AutomaticResearchStartRequest(V1Model):
         return value.strip() if isinstance(value, str) else value
 
 
+class AutomaticResearchUploadedStartRequest(V1Model):
+    """Optional human prompt accompanying one uploaded original."""
+
+    input: str | None = Field(default=None, max_length=100_000)
+
+    @field_validator("input", mode="before")
+    @classmethod
+    def trim_input(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
 class AutomaticResearchStartResponse(V1Model):
     case_id: str
     run_id: str
@@ -57,10 +68,42 @@ class AutomaticResearchStatsDTO(V1Model):
     duration_seconds: int = Field(ge=0)
 
 
+class AutomaticResearchNarrativeDTO(V1Model):
+    current_action: str
+    completed_count: int = Field(ge=0)
+    total_count: int = Field(ge=0)
+    next_action: str
+    elapsed_seconds: int = Field(ge=0)
+    estimated_remaining_seconds_min: int | None = Field(default=None, ge=0)
+    estimated_remaining_seconds_max: int | None = Field(default=None, ge=0)
+
+
+class AutomaticResearchActivityDetailDTO(V1Model):
+    occurred_at: datetime
+    work_item: str
+    internal_status: str
+
+
+class AutomaticResearchActivityDTO(V1Model):
+    label: str
+    count: int = Field(ge=1)
+    technical_details: list[AutomaticResearchActivityDetailDTO] = Field(min_length=1)
+
+
 class AutomaticResearchExceptionDTO(V1Model):
     reason: str
-    stage: str
     count: int = Field(ge=1)
+    impact: str
+    system_action: str
+
+
+class AutomaticResearchFactorDTO(V1Model):
+    statement: str
+    classification: Literal["key", "secondary", "pending", "excluded"]
+    ranking_reason: str
+    support_count: int = Field(ge=0)
+    counter_evidence_count: int = Field(ge=0)
+    evidence_gap: str | None
 
 
 class AutomaticResearchViewDTO(V1Model):
@@ -70,7 +113,9 @@ class AutomaticResearchViewDTO(V1Model):
     status: Literal["queued", "running", "completed", "failed"]
     stages: list[AutomaticResearchStageDTO] = Field(min_length=5, max_length=5)
     stats: AutomaticResearchStatsDTO
-    recent_activity: list[str]
+    narrative: AutomaticResearchNarrativeDTO
+    activities: list[AutomaticResearchActivityDTO]
     exceptions: list[AutomaticResearchExceptionDTO]
+    factors: list[AutomaticResearchFactorDTO]
     failure_reason: str | None
     result: AutomaticResearchResultDTO | None

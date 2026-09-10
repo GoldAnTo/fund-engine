@@ -100,7 +100,9 @@ ASSESS_SYSTEM = f"""你是投研证据评估引擎（{ASSESS_PROMPT_VERSION}）�
 7. 此判断为临时判断（provisional），未经人工复核。
 
 输出 JSON 格式：
-{{"conclusion": "supported|contradicted|insufficient_evidence", "rationale": "...", "gaps": ["...", "..."]}}
+{{"conclusion": "supported|contradicted|insufficient_evidence", "rationale": "...", "gaps": ["...", "..."], "factor_judgement": {{"relevance": "direct|indirect|unclear", "causal_impact": "high|medium|low|unclear", "evidence_strength": "strong|moderate|weak|none", "counter_evidence": "none|mixed|material|unknown", "classification": "key|secondary|pending|excluded", "ranking_reason": "..."}}}}
+
+关键因素只能在同时满足以下条件时标为 key：结论为 supported、与命题直接相关、因果影响为 high、证据强度为 strong，且无实质反证。其余情况使用 secondary、pending 或 excluded；系统会再次校验分类，不会采纳自报的 key。
 
 用户消息为 JSON，包含 thesis（命题文本）和 links 数组（每条有 role、reason、statement_text）。
 基于 links 推理结论。

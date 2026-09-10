@@ -216,17 +216,6 @@ class AtomicClaimService:
             raise ValidationError(
                 "only a modified atomic claim may change published fields"
             )
-        # Compare the persisted semantic decision before replaying its result.
-        # Normalization must precede both lookup and insertion.
-        reviewer, reason, idempotency_key = reviewer.strip(), reason.strip(), idempotency_key.strip()
-        candidate = self._session.get(AtomicClaimCandidate, candidate_id)
-        assert candidate is not None
-        published_text = None
-        published_period = None
-        if outcome in {"confirmed", "modified"}:
-            candidate_period = candidate.structured_fields.get("observed_period")
-            published_text = (normalized_text or candidate.normalized_text).strip()
-            published_period = observed_period or (date.fromisoformat(candidate_period) if candidate_period else None)
         existing = self._session.scalar(
             select(AtomicClaimReview).where(
                 AtomicClaimReview.atomic_claim_candidate_id == candidate_id,
@@ -234,23 +223,19 @@ class AtomicClaimService:
             )
         )
         if existing is not None:
-            published = self._session.get(SourceStatement, existing.published_source_statement_id) if existing.published_source_statement_id else None
-            if (
-                existing.outcome != outcome or existing.reviewer != reviewer or existing.reason != reason
-                or (published.normalized_text if published else None) != published_text
-                or (published.observed_period if published else None) != published_period
-            ):
-                from app.errors import ConflictError
-                raise ConflictError("atomic claim review key was already used for a different decision")
             return existing
+        candidate = self._session.get(AtomicClaimCandidate, candidate_id)
+        assert candidate is not None
         statement = None
         if outcome in {"confirmed", "modified"}:
+            candidate_period = candidate.structured_fields.get("observed_period")
             statement = SourceStatement(
                 source_span_id=candidate.source_span_id,
                 atomic_claim_candidate_id=candidate.id,
                 kind=candidate.claim_type,
-                normalized_text=published_text,
-                observed_period=published_period,
+                normalized_text=(normalized_text or candidate.normalized_text).strip(),
+                observed_period=observed_period
+                or (date.fromisoformat(candidate_period) if candidate_period else None),
                 created_at=datetime.now(timezone.utc),
             )
             self._session.add(statement)

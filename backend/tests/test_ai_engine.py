@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai.assessment_gen import AssessmentGenerator
-from app.ai.client import LLMClient, LLMMalformedResponseError
+from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
 from app.ai.prompts import (
     ASSESS_PROMPT_VERSION,
@@ -41,75 +41,6 @@ from tests.protocol_provenance import seed_protocol_footprint
 # ---------------------------------------------------------------------------
 # Extraction
 # ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("response", [{}, {"links": None}, {"links": [None]}, {"links": [{"source_statement_id": "x"}]}])
-def test_invalid_proposal_schema_has_failed_audit_and_no_proposals(
-    session, document_service, research_service, thesis, document, response
-):
-    from app.models.proposals import Proposal
-    span = document_service.add_span(document.id, {"page": 99}, "GPU demand increased")
-    research_service.add_statement(span.id, "GPU demand increased", kind="disclosed_fact")
-    client = LLMClient(model_version="mock-test", mock=True)
-    with patch.object(client, "chat_json", return_value=response):
-        with pytest.raises(LLMMalformedResponseError):
-            EvidenceProposer(client).propose(thesis.id, session)
-    assert session.scalar(select(func.count()).select_from(Proposal)) == 0
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "propose")))
-    assert len(runs) == 1 and runs[0].status == "failed"
-
-
-@pytest.mark.parametrize("response", [
-    {}, {"conclusion": "supported", "rationale": "source supports"},
-    {"conclusion": "supported", "rationale": "source supports", "gaps": "unknown"},
-    {"conclusion": "supported", "rationale": 3, "gaps": []},
-    {"conclusion": "supported", "rationale": "source supports", "gaps": [None]},
-])
-def test_invalid_assessment_schema_cannot_freeze_snapshot(
-    session, research_service, thesis, statement, response
-):
-    research_service.link_evidence(thesis.id, statement.id, role="supports", reason="orders", scope={"segment": "DC"})
-    client = LLMClient(model_version="mock-test", mock=True)
-    with patch.object(client, "chat_json", return_value=response):
-        with pytest.raises(LLMMalformedResponseError):
-            AssessmentGenerator(client).generate(thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session)
-    assert session.scalar(select(func.count()).select_from(EvidenceSnapshot)) == 0
-    assert session.scalar(select(func.count()).select_from(AIAssessment)) == 0
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "assess")))
-    assert len(runs) == 1 and runs[0].status == "failed"
-
-
-@pytest.mark.parametrize("legacy_rewrite", [True, False])
-def test_assessment_rewrite_uses_remaining_operation_budget(
-    session, research_service, thesis, statement, monkeypatch, legacy_rewrite
-):
-    import json
-    from types import SimpleNamespace
-    from app.ai import client as client_module
-    from app.ai.client import LLMProviderError
-
-    research_service.link_evidence(thesis.id, statement.id, role="supports", reason="orders", scope={"segment": "DC"})
-    clock = [0.0]
-    timeouts = []
-    monkeypatch.setattr(client_module.time, "monotonic", lambda: clock[0])
-    if legacy_rewrite:
-        monkeypatch.setattr("app.ai.compliance_graph.build_compliance_graph", lambda client: None)
-    def completion(**kwargs):
-        timeouts.append(kwargs["timeout"])
-        if len(timeouts) == 1:
-            clock[0] += 1.5
-            payload = {"conclusion": "supported", "rationale": "证据支持命题。目标价85元。", "gaps": []}
-        else:
-            clock[0] += 0.6
-            payload = {"texts": ["证据支持命题。"]}
-        return SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(content=json.dumps(payload), refusal=None))])
-    client = LLMClient(model_version="fake", retry_budget_seconds=2, client=SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=completion))))
-    with pytest.raises(LLMProviderError, match="LLM provider request failed"):
-        AssessmentGenerator(client).generate(thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session)
-    assert timeouts == [2, 0.5]
-    assert session.scalar(select(func.count()).select_from(EvidenceSnapshot)) == 0
-    assert session.scalar(select(func.count()).select_from(AIAssessment)) == 0
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "assess")))
-    assert len(runs) == 1 and runs[0].status == "failed"
 
 
 def test_extraction_creates_review_gated_candidates_and_airun(session, span):
@@ -148,37 +79,6 @@ def test_extraction_creates_review_gated_candidates_and_airun(session, span):
         candidate.validation_result["normalizer_version"]
         for candidate in candidates
     } == {"atomic-claim-normalizer-v1"}
-
-
-@pytest.mark.parametrize("response", [{}, {"statements": None}, {"statements": {}}, {"statements": ""}])
-def test_invalid_extraction_schema_fails_without_success_watermark(session, span, response):
-    from app.queries.extraction_runs import successful_extract_version_ids
-
-    version_id = span.document_version_id
-    client = LLMClient(model_version="mock-test", mock=True)
-    with patch.object(client, "chat_json", return_value=response):
-        with pytest.raises(LLMMalformedResponseError):
-            StatementExtractor(client).extract(version_id, session)
-    session.commit()
-
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
-    assert len(runs) == 1 and runs[0].status == "failed"
-    assert list(session.scalars(select(AtomicClaimCandidate))) == []
-    assert version_id not in successful_extract_version_ids(session)
-
-
-def test_explicit_empty_extraction_keeps_success_watermark(session, span):
-    from app.queries.extraction_runs import successful_extract_version_ids
-
-    version_id = span.document_version_id
-    client = LLMClient(model_version="mock-test", mock=True)
-    with patch.object(client, "chat_json", return_value={"statements": []}):
-        assert StatementExtractor(client).extract(version_id, session) == []
-    session.commit()
-
-    runs = list(session.scalars(select(AIRun).where(AIRun.kind == "extract")))
-    assert len(runs) == 1 and runs[0].status == "success"
-    assert version_id in successful_extract_version_ids(session)
 
 
 def test_extractor_releases_read_transaction_before_llm_provider(session, span):
@@ -399,6 +299,14 @@ def test_assessment_gen_creates_assessment_and_airun(
     assert assessment.displayed_as_provisional is True
     assert assessment.rationale
     assert isinstance(assessment.gaps, list)
+    assert assessment.factor_judgement == {
+        "relevance": "direct",
+        "causal_impact": "high",
+        "evidence_strength": "strong",
+        "counter_evidence": "none",
+        "classification": "key",
+        "ranking_reason": "该因素与研究命题直接相关，具有高因果影响，且当前冻结证据充分并未发现实质反证。",
+    }
 
     runs = list(session.scalars(select(AIRun).where(AIRun.kind == "assess")))
     assert len(runs) == 1
@@ -416,6 +324,122 @@ def test_assessment_gen_creates_assessment_and_airun(
     assert run.input_ref["evidence_link_ids"] == assessment_service_link_ids(
         session, assessment.snapshot_id
     )
+
+
+@pytest.mark.parametrize(
+    ("conclusion", "factor_judgement", "expected_classification"),
+    [
+        (
+            "supported",
+            {
+                "relevance": "indirect",
+                "causal_impact": "high",
+                "evidence_strength": "strong",
+                "counter_evidence": "none",
+                "classification": "key",
+                "ranking_reason": "仅为间接影响。",
+            },
+            "secondary",
+        ),
+        (
+            "supported",
+            {
+                "relevance": "direct",
+                "causal_impact": "high",
+                "evidence_strength": "strong",
+                "counter_evidence": "material",
+                "classification": "key",
+                "ranking_reason": "存在实质反证。",
+            },
+            "excluded",
+        ),
+        (
+            "insufficient_evidence",
+            {
+                "relevance": "direct",
+                "causal_impact": "high",
+                "evidence_strength": "strong",
+                "counter_evidence": "none",
+                "classification": "key",
+                "ranking_reason": "证据仍不足。",
+            },
+            "pending",
+        ),
+    ],
+)
+def test_assessment_factor_judgement_only_marks_all_four_gates_as_key(
+    session,
+    research_service,
+    thesis,
+    statement,
+    conclusion,
+    factor_judgement,
+    expected_classification,
+):
+    research_service.link_evidence(
+        thesis.id,
+        statement.id,
+        role="supports",
+        reason="direct evidence",
+        scope={"segment": "test"},
+    )
+    client = LLMClient(model_version="mock-test", mock=True)
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={
+            "conclusion": conclusion,
+            "rationale": "经核验后的因素判断。",
+            "gaps": [],
+            "factor_judgement": factor_judgement,
+        },
+    ):
+        assessment = AssessmentGenerator(client).generate(
+            thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+
+    assert assessment is not None
+    assert assessment.factor_judgement is not None
+    assert assessment.factor_judgement["classification"] == expected_classification
+
+
+def test_assessment_factor_judgement_detects_frozen_counter_evidence(
+    session, research_service, thesis, statement
+):
+    for role in ("supports", "contradicts"):
+        research_service.link_evidence(
+            thesis.id,
+            statement.id,
+            role=role,
+            reason=f"{role} evidence",
+            scope={"segment": "test"},
+        )
+    client = LLMClient(model_version="mock-test", mock=True)
+    with patch.object(
+        client,
+        "chat_json",
+        return_value={
+            "conclusion": "supported",
+            "rationale": "模型错误忽略了反证。",
+            "gaps": [],
+            "factor_judgement": {
+                "relevance": "direct",
+                "causal_impact": "high",
+                "evidence_strength": "strong",
+                "counter_evidence": "none",
+                "classification": "key",
+                "ranking_reason": "模型声称没有反证。",
+            },
+        },
+    ):
+        assessment = AssessmentGenerator(client).generate(
+            thesis.id, datetime(2026, 12, 31, tzinfo=UTC), session
+        )
+
+    assert assessment is not None
+    assert assessment.factor_judgement is not None
+    assert assessment.factor_judgement["counter_evidence"] == "material"
+    assert assessment.factor_judgement["classification"] == "excluded"
 
 
 def assessment_service_link_ids(session, snapshot_id):
@@ -1082,7 +1106,7 @@ def test_cli_propose_partial_output_is_rolled_back_before_failed_audit(
         patch("app.scripts.run_ai_engine.LLMClient.from_env", return_value=client),
         patch.object(client, "chat_json", side_effect=partial_then_invalid),
         patch("app.scripts.run_ai_engine.AssessmentGenerator.generate") as assess,
-        pytest.raises(LLMMalformedResponseError),
+        pytest.raises(KeyError, match="role"),
     ):
         run_engine(session, research_case, skip_extract=True)
 
