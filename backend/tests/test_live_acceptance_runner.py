@@ -90,7 +90,14 @@ def test_live_runner_uses_an_isolated_stack_and_always_collects_evidence() -> No
     assert "${COMPOSE_PROJECT_NAME:-" not in runner
     assert "umask 077" in runner
     assert "LIVE_CONTROL_URL" in runner
-    assert "live-stack-control.mjs" in runner
+    assert 'node "$ROOT_DIR/scripts/live-stack-control.mjs"' in runner
+    assert "LIVE_API_BASE_URL" in runner
+    assert '"${LIVE_API_BASE_URL%/}/api/v1/health"' in runner
+    assert "API and runtime health only" in runner
+    assert "Research workflow completion is not evaluated." in runner
+    assert "frontend/" not in runner
+    assert "playwright" not in runner.lower()
+    assert "e2e:live" not in runner
     assert "docker compose" in runner
     assert "logs --no-color" in runner
     assert "down --volumes" in runner

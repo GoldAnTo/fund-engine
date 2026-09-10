@@ -36,23 +36,17 @@ collect_evidence() {
   "${COMPOSE[@]}" ps --all >"$ARTIFACT_DIR/compose-ps.txt" 2>&1 || failed=1
   "${COMPOSE[@]}" images --format json >"$ARTIFACT_DIR/compose-images.jsonl" 2>&1 || failed=1
   "${COMPOSE[@]}" logs --no-color >"$ARTIFACT_DIR/compose.log" 2>&1 || failed=1
-  if [[ -d "$ROOT_DIR/frontend/test-results/live" ]]; then
-    cp -R "$ROOT_DIR/frontend/test-results/live" "$ARTIFACT_DIR/playwright-test-results" || failed=1
-  fi
-  if [[ -d "$ROOT_DIR/frontend/playwright-report/live" ]]; then
-    cp -R "$ROOT_DIR/frontend/playwright-report/live" "$ARTIFACT_DIR/playwright-html-report" || failed=1
-  fi
   {
-    echo "# Live mainline verification"
+    echo "# Live backend runtime verification"
     echo
     echo "- Compose project: \`$COMPOSE_PROJECT_NAME\`"
     echo "- Started: \`$RUN_STAMP\`"
     echo "- Result: \`$([[ $TEST_STATUS == 0 ]] && echo passed || echo failed)\`"
-    echo "- Browser artifacts: \`$ARTIFACT_DIR/playwright-test-results\` and \`$ARTIFACT_DIR/playwright-html-report\`"
+    echo "- Verification scope: API and runtime health only"
     echo "- Runtime artifacts: \`$ARTIFACT_DIR\`"
     echo
-    echo "Case, orchestration, research-run, query-plan, adapter, restart timestamps, hashes, and citation IDs are recorded by the redacted Playwright attachments."
-    echo "Compose logs, traces, and videos are private raw diagnostics and must be reviewed before sharing."
+    echo "This verifies backend startup, migration completion, and declared service health. Research workflow completion is not evaluated."
+    echo "Compose logs are private raw diagnostics and must be reviewed before sharing."
   } >"$ARTIFACT_DIR/verification.md" || failed=1
   return "$failed"
 }
@@ -101,17 +95,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-export LIVE_BASE_URL=${LIVE_BASE_URL:-http://127.0.0.1:8080}
-export LIVE_KEYCLOAK_USER=${LIVE_KEYCLOAK_USER:-$(env_value LIVE_KEYCLOAK_USER)}
-export LIVE_KEYCLOAK_PASSWORD=${LIVE_KEYCLOAK_PASSWORD:-$(env_value LIVE_KEYCLOAK_PASSWORD)}
-export LIVE_SECOND_KEYCLOAK_USER=${LIVE_SECOND_KEYCLOAK_USER:-$(env_value LIVE_SECOND_KEYCLOAK_USER)}
-export LIVE_SECOND_KEYCLOAK_PASSWORD=${LIVE_SECOND_KEYCLOAK_PASSWORD:-$(env_value LIVE_SECOND_KEYCLOAK_PASSWORD)}
-export LIVE_OFFICIAL_ADAPTERS=${LIVE_OFFICIAL_ADAPTERS:-$(env_value ACQUISITION_ENABLED_ADAPTERS)}
-export LIVE_WORKFLOW_TIMEOUT_MS=${LIVE_WORKFLOW_TIMEOUT_MS:-900000}
+api_port=$(env_value API_PORT); api_port=${api_port:-8000}
+export LIVE_API_BASE_URL=${LIVE_API_BASE_URL:-"http://127.0.0.1:$api_port"}
 
 mkdir -p "$ARTIFACT_DIR"
 bash "$ROOT_DIR/scripts/research-stack.sh" up
-node "$ROOT_DIR/frontend/scripts/with-project-node.mjs" "$ROOT_DIR/scripts/live-stack-control.mjs" \
+node "$ROOT_DIR/scripts/live-stack-control.mjs" \
   >"$ARTIFACT_DIR/live-control.log" 2>&1 &
 CONTROL_PID=$!
 
@@ -124,7 +113,8 @@ done
 curl --fail --silent "$LIVE_CONTROL_URL/health" >"$ARTIFACT_DIR/live-control-health.json"
 
 set +e
-npm --prefix "$ROOT_DIR/frontend" run e2e:live
+curl --fail --silent --show-error "${LIVE_API_BASE_URL%/}/api/v1/health" \
+  >"$ARTIFACT_DIR/api-health.json"
 TEST_STATUS=$?
 set -e
 exit "$TEST_STATUS"

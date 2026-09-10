@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 ENV_FILE=${COMPOSE_ENV_FILE:-"$ROOT_DIR/.env.compose"}
 COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$ROOT_DIR/docker-compose.yml" -f "$ROOT_DIR/docker-compose.live.yml")
-LONG_RUNNING=(postgres keycloak-db keycloak api research-worker acquisition-worker scheduler frontend)
+LONG_RUNNING=(postgres keycloak-db keycloak api research-worker acquisition-worker scheduler)
 
 usage() {
   echo "usage: $0 {up|status|logs|restart-api|restart-research-worker|restart-acquisition-worker|restart-scheduler|down [--volumes]}"
@@ -148,11 +148,10 @@ case "$command" in
   up)
     validate_providers
     validate_local_identity
-    "${COMPOSE[@]}" build migrate frontend
+    "${COMPOSE[@]}" build migrate
     "${COMPOSE[@]}" up -d
     wait_for_stack
     api_port=$(env_value API_PORT); api_port=${api_port:-8000}
-    echo "frontend: http://localhost:8080/"
     echo "api: http://localhost:${api_port}/api/v1/health"
     echo "keycloak: http://localhost:8081/realms/fund-engine"
     "${COMPOSE[@]}" ps
