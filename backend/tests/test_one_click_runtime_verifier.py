@@ -59,7 +59,7 @@ if args[:7] != prefix or len(args) not in (8, 10) or (len(args) == 10 and args[7
 url = args[-1]
 api = "http://127.0.0.1:8000"
 frontend = "http://127.0.0.1:8080"
-allowed = {f"{api}/health", f"{frontend}/health", f"{frontend}/research", f"{api}/api/underwriting/v1/product/objects?query=CATL"}
+allowed = {f"{api}/health", f"{frontend}/health", f"{frontend}/", f"{api}/api/underwriting/v1/product/objects?query=CATL"}
 product = f"{api}/api/underwriting/v1/product/objects?query=CATL"
 if url not in allowed or not ((url == product and len(args) == 10 and args[7:9] == ["--header", "@-"]) or (url != product and len(args) == 8)): sys.exit(97)
 if url == product and sys.stdin.read() != "Authorization: Bearer not-for-output\n": sys.exit(97)
@@ -69,7 +69,7 @@ except OSError: n = 1
 open(counter, "w").write(str(n))
 if os.environ.get("HARNESS_MODE") == "http-second" and url.endswith("/health") and n >= 4:
     sys.exit(22)
-if url.endswith("/research"): print("投资研究")
+if url == f"{frontend}/": print("前端页面已清理，新原型待设计。")
 elif "product/objects" in url: print('{"items":[{"external_key":"CN:300750:COMPANY"},{"external_key":"SZSE:300750"}]}')
 else: print("ok")
 ''', True)
@@ -189,7 +189,7 @@ def assert_complete_poll_counts(calls: str, polls: int) -> None:
     lines = calls.splitlines()
     assert sum(line.endswith("http://127.0.0.1:8000/health") for line in lines) == polls
     assert sum(line.endswith("http://127.0.0.1:8080/health") for line in lines) == polls
-    assert sum(line.endswith("http://127.0.0.1:8080/research") for line in lines) == polls
+    assert sum(line.endswith("http://127.0.0.1:8080/") for line in lines) == polls
     assert sum("product/objects?query=CATL" in line for line in lines) == polls
     assert sum("pg_stat_activity" in line for line in lines) == polls
     assert sum("docker compose" in line and "version_num" in line for line in lines) == polls

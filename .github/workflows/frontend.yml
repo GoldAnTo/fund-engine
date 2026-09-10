@@ -35,6 +35,7 @@ jobs:
       - run: npm test
 
   e2e:
+    # Keep the required GitHub status name; the spec now checks retired pages.
     name: Playwright e2e
     runs-on: ubuntu-latest
     defaults:
@@ -48,7 +49,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      # 当前 FundClaw 演示界面的浏览器回归；不代表真实 API 联调。
+      # 仅验证退役说明、旧路由无页面及无 API 请求；不代表研究业务验收。
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
       - if: failure()
@@ -59,33 +60,3 @@ jobs:
             frontend/test-results/
             frontend/playwright-report/
           retention-days: 14
-
-  live-entry:
-    name: 真实事件流程与页面导航验收
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: python -m venv backend/.venv
-      - run: backend/.venv/bin/python -m pip install -e "./backend[dev]"
-      - name: 部署代理上传边界
-        run: backend/.venv/bin/python backend/scripts/verify_upload_proxy.py
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: ".nvmrc"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-        working-directory: frontend
-      - run: npx playwright install --with-deps chromium
-        working-directory: frontend
-      - run: npm run e2e:live
-        working-directory: frontend
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: live-entry-results
-          path: frontend/test-results/

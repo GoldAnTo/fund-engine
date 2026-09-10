@@ -133,7 +133,7 @@ http_checks() {
   local bearer_token="$1" product_objects
   curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "$API_URL/health" >/dev/null || die 'API health endpoint check failed'
   curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "$FRONTEND_URL/health" >/dev/null || die 'frontend health endpoint check failed'
-  curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "$FRONTEND_URL/research" | grep -q '投资研究' || die 'frontend research route check failed'
+  curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "$FRONTEND_URL/" | grep -q '前端页面已清理，新原型待设计。' || die 'frontend retired-page check failed'
   product_objects="$(printf 'Authorization: Bearer %s\n' "$bearer_token" | curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --header @- "$API_URL/api/underwriting/v1/product/objects?query=CATL")" || die 'product foundation API check failed'
   printf '%s' "$product_objects" | python3 -c 'import json,sys; value=json.load(sys.stdin); items=value.get("items") if isinstance(value,dict) else None; keys={item.get("external_key") for item in items if isinstance(item,dict)} if isinstance(items,list) else set(); required={"CN:300750:COMPANY","SZSE:300750"}; required.issubset(keys) or (_ for _ in ()).throw(SystemExit("CATL object foundation is incomplete"))'
 }

@@ -752,7 +752,8 @@ def test_readme_documents_the_local_one_click_runtime_without_secrets() -> None:
         "scripts/one-click-runtime.sh restore /absolute/path/to/backup",
     ):
         assert command in readme
-    assert "http://127.0.0.1:8080/events/new" in readme
+    assert "http://127.0.0.1:8080" in readme
+    assert "前端页面已清理，新原型待设计。" in readme
     assert "http://127.0.0.1:8000" in readme
     assert "`.env`" in readme
     assert "不会打印密钥" in readme

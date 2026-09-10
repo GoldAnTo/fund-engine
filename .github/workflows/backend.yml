@@ -76,8 +76,8 @@ jobs:
       - run: python -m pytest -q
         working-directory: backend
 
-  company-research-live:
-    name: Company Research 真实浏览器闭环
+  api-boundaries:
+    name: 真实 HTTP API 与部署上传边界
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -89,21 +89,12 @@ jobs:
           cache-dependency-path: backend/pyproject.toml
       - run: python -m venv backend/.venv
       - run: backend/.venv/bin/python -m pip install -e "./backend[dev]"
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: ".nvmrc"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-        working-directory: frontend
-      - run: npx playwright install --with-deps chromium
-        working-directory: frontend
-      # Process ownership checks must finish before the live stack starts.
-      - run: npm run test:live-company-research-support
-        working-directory: frontend
-      - run: backend/.venv/bin/python -m pytest backend/tests/test_verify_live_company_research_ui.py -q
+      - name: 隔离数据库真实事件 API 验证
+        run: backend/.venv/bin/python backend/scripts/verify_live_event_api.py
         env:
-          RUN_LIVE_COMPANY_RESEARCH: "1"
+          APP_ENV: test
+      - name: 部署代理上传边界
+        run: backend/.venv/bin/python backend/scripts/verify_upload_proxy.py
 
   release-gate:
     name: 发布门禁（10 项检查）
