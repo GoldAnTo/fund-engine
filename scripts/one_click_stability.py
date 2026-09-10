@@ -16,7 +16,7 @@ MONITORED_SERVICES = frozenset(
         "research-worker",
         "acquisition-worker",
         "company-research-worker",
-        "frontend",
+        "api-proxy",
     }
 )
 

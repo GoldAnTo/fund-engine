@@ -8,7 +8,6 @@
     ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "jsx": "react-jsx",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -19,9 +18,8 @@
     "allowSyntheticDefaultImports": true,
     "verbatimModuleSyntax": true,
     "types": [
-      "vite/client",
-      "vitest/globals",
-      "@testing-library/jest-dom"
+      "node",
+      "vitest/globals"
     ],
     "baseUrl": ".",
     "paths": {
@@ -32,8 +30,6 @@
   },
   "include": [
     "src",
-    "vite.config.ts",
-    "playwright.config.ts",
-    "e2e"
+    "vitest.config.ts"
   ]
 }

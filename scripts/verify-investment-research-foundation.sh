@@ -32,10 +32,9 @@ fi
 )
 
 (
-  cd "$REPO_ROOT/frontend"
+  cd "$REPO_ROOT/clients/research"
   npm test -- InvestmentResearchApi.test.ts
   npm run typecheck
-  npm run build
 )
 
 printf 'Investment research foundation gate passed.\n'

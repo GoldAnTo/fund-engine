@@ -6,7 +6,11 @@ on:
     branches: [main]
     paths:
       - "backend/**"
-      - "frontend/**"
+      - "clients/research/**"
+      - "deploy/**"
+      - "scripts/**"
+      - "docker-compose.one-click.yml"
+      - ".env.one-click.example"
       - ".nvmrc"
       - "README.md"
       - "docs/evaluation/**"
@@ -14,7 +18,11 @@ on:
   pull_request:
     paths:
       - "backend/**"
-      - "frontend/**"
+      - "clients/research/**"
+      - "deploy/**"
+      - "scripts/**"
+      - "docker-compose.one-click.yml"
+      - ".env.one-click.example"
       - ".nvmrc"
       - "README.md"
       - "docs/evaluation/**"

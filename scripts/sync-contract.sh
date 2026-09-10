@@ -21,16 +21,16 @@ if [ ! -x "$PY" ]; then
 fi
 
 PYTHONPATH="$ROOT/backend${PYTHONPATH:+:$PYTHONPATH}" "$PY" backend/scripts/dump_openapi.py
-( cd frontend && npx openapi-typescript openapi.json -o src/contracts/v1.ts )
+( cd clients/research && npx openapi-typescript openapi.json -o src/contracts/v1.ts )
 
 if [ "$MODE" = "--update" ]; then
   echo "contract updated."
   exit 0
 fi
 
-if ! git diff --exit-code -- frontend/openapi.json frontend/src/contracts/v1.ts; then
+if ! git diff --exit-code -- clients/research/openapi.json clients/research/src/contracts/v1.ts; then
   echo "" >&2
-  echo "ERROR: frontend contract is out of sync with the backend OpenAPI spec." >&2
+  echo "ERROR: research client contract is out of sync with the backend OpenAPI spec." >&2
   echo "Run 'bash scripts/sync-contract.sh --update' and commit the result." >&2
   exit 1
 fi

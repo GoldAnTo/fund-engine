@@ -161,15 +161,15 @@ services:
       retries: 4
       start_period: 20s
 
-  frontend:
-    image: ${ONE_CLICK_FRONTEND_IMAGE:-fund-engine-one-click-frontend:local}
+  api-proxy:
+    image: ${ONE_CLICK_API_PROXY_IMAGE:-fund-engine-one-click-api-proxy:local}
     build:
-      context: ./frontend
+      context: ./deploy/api-proxy
     restart: unless-stopped
-    mem_limit: ${ONE_CLICK_FRONTEND_MEMORY_LIMIT:-256m}
-    cpus: ${ONE_CLICK_FRONTEND_CPU_LIMIT:-0.5}
+    mem_limit: ${ONE_CLICK_API_PROXY_MEMORY_LIMIT:-256m}
+    cpus: ${ONE_CLICK_API_PROXY_CPU_LIMIT:-0.5}
     ports:
-      - 127.0.0.1:${ONE_CLICK_FRONTEND_PORT:-8080}:8080
+      - 127.0.0.1:${ONE_CLICK_API_PROXY_PORT:-8080}:8080
     environment:
       RESEARCH_BEARER_TOKEN: ${RESEARCH_BEARER_TOKEN:?}
     depends_on:

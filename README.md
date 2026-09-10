@@ -1,9 +1,9 @@
 # Fund Engine · 证据驱动的行业研究系统
 
-> 旧前端页面和 `prototype/` 已清理。当前页面仅显示“前端页面已清理，新原型待设计。”；后端、数据客户端、API 契约及相关测试保留。
+> `frontend/` 和 `prototype/` 已完整移除，不启动任何网页服务器。后端研究能力保留；数据客户端、API 契约及单元测试位于 `clients/research/`。新统一原型待讨论与设计。参见[完整清理记录](docs/2026-09-10-complete-frontend-cleanup.md)。
 
 [![backend-ci](https://github.com/GoldAnTo/fund-engine/actions/workflows/backend.yml/badge.svg)](https://github.com/GoldAnTo/fund-engine/actions/workflows/backend.yml)
-[![frontend-ci](https://github.com/GoldAnTo/fund-engine/actions/workflows/frontend.yml/badge.svg)](https://github.com/GoldAnTo/fund-engine/actions/workflows/frontend.yml)
+[![research-client-ci](https://github.com/GoldAnTo/fund-engine/actions/workflows/research-client.yml/badge.svg)](https://github.com/GoldAnTo/fund-engine/actions/workflows/research-client.yml)
 
 把原始资料变成**可审计的行业研究判断**：每个结论都能沿
 `评估 → 证据快照 → 证据关系 → 原子陈述 → 原文片段`
@@ -46,7 +46,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ 前端（Vite 退役说明；保留数据客户端与契约）             │
+│ 数据客户端（clients/research；无界面或开发服务器）     │
 │ 新统一原型待设计                                      │
 ├─────────────────────────────────────────────────────┤
 │ 契约层（OpenAPI → openapi-typescript 生成类型）        │
@@ -70,16 +70,13 @@ backend/.venv/bin/python -m pip install -e "./backend[dev]"
 # 冻结账本发布门禁，使用临时 SQLite；非在线 LLM 质量测试
 APP_ENV=test bash docs/evaluation/reproduce.sh
 
-# 前端需要 .nvmrc 指定的 Node 24
+# 无界面数据客户端需要 .nvmrc 指定的 Node 24
 nvm install
 nvm use
-cd frontend
+cd clients/research
 npm ci
-npm run dev                         # 仅显示页面清理状态
+npm run typecheck
 npm test
-npm run build
-npx playwright install chromium
-npm run e2e                         # 退役状态与旧路由无页面、无 API 请求的冒烟检查
 ```
 
 旧页面专用浏览器验收和包装测试已移除。后端真实 HTTP 事件检查仍可独立运行 `APP_ENV=test backend/.venv/bin/python backend/scripts/verify_live_event_api.py`；部署代理上传边界检查仍由 `backend/scripts/verify_upload_proxy.py` 验证。
@@ -168,13 +165,13 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 
 ### 当前验收边界
 
-CI 保留后端测试、真实 HTTP API 检查、部署代理上传边界、数据库迁移与发布门禁。前端保留数据客户端和契约测试、构建，以及静态退役说明的浏览器冒烟检查。
+CI 保留后端测试、真实 HTTP API 检查、部署代理上传边界、数据库迁移与发布门禁。`clients/research` 仅运行数据客户端类型检查与单元测试。既有必需状态名 `Playwright e2e` 仅执行旧界面清理检查，不启动浏览器或界面服务器。
 
 这些检查不代表新的研究页面已经实现或通过浏览器业务验收。新原型完成后再建立对应的页面操作验证。
 
 ## 一键本地运行（Docker）
 
-以下命令启动 API、研究 worker、资料采集 worker 和静态退役说明页面，
+以下命令启动 API、研究 worker、资料采集 worker 和无页面的 API 代理，
 首次启动会构建当前代码镜像并创建独立的本地 PostgreSQL 数据卷。
 
 ```bash
@@ -211,9 +208,9 @@ scripts/verify-one-click-runtime.sh --stability-seconds 600
 `DATABASE_POOL_RECYCLE_SECONDS` 仅用于高级本地调优。各服务的内存、CPU 资源上限及
 默认值在 `.env.one-click.example` 中列出，可通过同名变量配置。
 
-前端地址 [http://127.0.0.1:8080](http://127.0.0.1:8080) 仅显示页面清理状态，不提供研究操作。
+API 代理监听 `http://127.0.0.1:8080`，仅提供 `/health` 和 `/api/`；首页、旧路由及静态文件路径全部返回 404。代理端口与资源配置使用 `ONE_CLICK_API_PROXY_*`。
 API 地址是 [http://127.0.0.1:8000](http://127.0.0.1:8000)。查看状态、停止新运行环境或
-恢复旧应用服务分别使用：
+恢复旧后端应用服务分别使用（已退休的前端不会被恢复）：
 
 ```bash
 scripts/one-click-runtime.sh status
@@ -221,7 +218,7 @@ scripts/one-click-runtime.sh down
 scripts/one-click-runtime.sh rollback
 ```
 
-备份和恢复都要求 API、前端和 worker 已停止，但 PostgreSQL 保持运行，以保证数据库与
+备份和恢复都要求 API、API 代理和 worker 已停止，但 PostgreSQL 保持运行，以保证数据库与
 文件处于同一个静止边界。备份目标必须是尚不存在的具体绝对目录。恢复会先校验精确的
 三件套、SHA-256 和 tar 路径，再在隔离的暂存数据库与文件卷中验证迁移、身份 fixture
 和研究版本回放，通过后才切换。恢复只会写入带有当前 Compose project/logical-volume
@@ -330,7 +327,8 @@ worker 目前没有独立健康端点，应由 supervisor 检查进程存活并�
 | 路径 | 内容 |
 |---|---|
 | `backend/` | FastAPI 账本服务、召回/合规/KPI 引擎与后端测试 |
-| `frontend/` | 静态退役说明、数据客户端、API 契约及单元与冒烟测试 |
+| `clients/research/` | 无界面数据客户端、API 契约、类型检查与单元测试 |
+| `deploy/api-proxy/` | 专职 API 认证与上传限额代理，无页面或静态资源 |
 | `docs/evaluation/` | 证据包：数据集清单、金标数据集、门禁报告、一键复现 |
 | `docs/evidence-driven-research-report.md` | 技术报告（[PDF 版](docs/evidence-driven-research-report.pdf)） |
 | `CONTEXT.md` | 研究上下文：核心词汇表、实现状态、验证体系 |
@@ -338,10 +336,10 @@ worker 目前没有独立健康端点，应由 supervisor 检查进程存活并�
 
 ## 质量保障
 
-- **CI**：`backend-ci`（pytest + 发布门禁）与 `frontend-ci`（tsc + vitest + e2e）
+- **CI**：`backend-ci`（pytest + 发布门禁）与 `research-client-ci`（tsc + vitest + 清理检查）
   双流水线，按目录变更触发
 - **远端分支保护**：需在托管平台独立核实，本地配置不能证明远端保护状态。
-- **浏览器覆盖**：仅检查退役说明及旧路由不再提供页面或发起 API 请求；业务能力由保留的 API 与后端测试验证。
+- **界面状态**：无界面和浏览器业务覆盖；既有 `Playwright e2e` 状态仅验证旧目录与界面入口已清除。业务能力由 API 与后端测试验证。
 
 ## 文档导航
 
