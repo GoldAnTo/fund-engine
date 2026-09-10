@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
-
+from pathlib import Path
 
 _ID = re.compile(r"^[0-9a-f]{64}$")
 MONITORED_SERVICES = frozenset(
@@ -19,6 +20,46 @@ MONITORED_SERVICES = frozenset(
         "api-proxy",
     }
 )
+
+
+def repository_head(versions: Path) -> str:
+    """Read literal migration links without executing migrations or importing the app."""
+    revisions: dict[str, tuple[str, ...]] = {}
+    for path in sorted(versions.glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        fields = {}
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            targets = node.targets if isinstance(node, ast.Assign) else (
+                [node.target] if isinstance(node, ast.AnnAssign) else []
+            )
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id in {"revision", "down_revision", "depends_on"}:
+                    fields[target.id] = ast.literal_eval(node.value)
+        revision = fields.get("revision")
+        if not isinstance(revision, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", revision) or revision in revisions:
+            raise ValueError("invalid Alembic revision declaration")
+        if "down_revision" not in fields or fields.get("depends_on") is not None:
+            raise ValueError("unsupported Alembic revision links")
+        parent = fields["down_revision"]
+        parents = () if parent is None else (parent,) if isinstance(parent, str) else parent
+        if not isinstance(parents, tuple) or any(not isinstance(item, str) for item in parents):
+            raise ValueError("invalid Alembic parent declaration")
+        revisions[revision] = parents
+    referenced = {parent for parents in revisions.values() for parent in parents}
+    if referenced - revisions.keys():
+        raise ValueError("missing Alembic parent revision")
+    heads = revisions.keys() - referenced
+    if len(heads) != 1:
+        raise ValueError("repository must contain a single Alembic head")
+    pending = dict(revisions)
+    while pending:
+        roots = {revision for revision, parents in pending.items() if not set(parents) & pending.keys()}
+        if not roots:
+            raise ValueError("Alembic revision graph contains a cycle")
+        for revision in roots:
+            del pending[revision]
+    return next(iter(heads))
 
 
 def connection_cap(replicas: int, pool_size: int, max_overflow: int) -> int:
@@ -196,6 +237,8 @@ def main(argv=None):
     cap.add_argument("--replicas", required=True)
     cap.add_argument("--pool-size", required=True)
     cap.add_argument("--max-overflow", required=True)
+    head = sub.add_parser("alembic-head")
+    head.add_argument("versions", type=Path)
     try:
         args = parser.parse_args(argv)
         if args.command == "snapshot":
@@ -210,6 +253,8 @@ def main(argv=None):
             )
         elif args.command == "compare":
             stable_snapshot(_load_json(args.baseline), _load_json(args.current))
+        elif args.command == "alembic-head":
+            print(repository_head(args.versions))
         else:
             values = []
             for raw in (args.replicas, args.pool_size, args.max_overflow):
@@ -226,7 +271,7 @@ def main(argv=None):
                     raise ValueError("connection-cap inputs are invalid") from None
             print(connection_cap(*values))
         return 0
-    except (ValueError, json.JSONDecodeError, OSError) as exc:
+    except (ValueError, SyntaxError, json.JSONDecodeError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

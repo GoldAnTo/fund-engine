@@ -24,7 +24,7 @@ readonly LEGACY_DATABASE_SERVICE="postgres"
 readonly LEGACY_DATABASE_CONTAINER="fund-engine-event-postgres-1"
 readonly API_URL="${ONE_CLICK_API_URL:-http://127.0.0.1:${ONE_CLICK_API_PORT:-8000}}" API_PROXY_URL="${ONE_CLICK_API_PROXY_URL:-http://127.0.0.1:${ONE_CLICK_API_PROXY_PORT:-8080}}"
 readonly MONITORED_SERVICES=(postgres api research-worker acquisition-worker company-research-worker api-proxy)
-TMPDIR_EXACT='' SETUP_COMPLETE=false BASELINE_SNAPSHOT='' BASELINE_LEGACY_ID='' ACQUISITION_REPLICAS='' CONNECTION_CAP=''
+TMPDIR_EXACT='' SETUP_COMPLETE=false BASELINE_SNAPSHOT='' BASELINE_LEGACY_ID='' ACQUISITION_REPLICAS='' CONNECTION_CAP='' EXPECTED_REVISION=''
 PREEXISTING_TEMP_PATHS=('')
 
 die() { printf 'one-click runtime verification: %s\n' "$*" >&2; exit 1; }
@@ -152,12 +152,13 @@ poll_runtime() {
   if [[ -z "$BASELINE_SNAPSHOT" ]]; then BASELINE_SNAPSHOT="$TMPDIR_EXACT/baseline.json"; cp "$snapshot" "$BASELINE_SNAPSHOT"; elif ! python3 "$STABILITY_HELPER" compare "$BASELINE_SNAPSHOT" "$snapshot"; then die 'container stability comparison failed'; fi
   http_checks "$bearer_token"
   connection_count="$(compose exec -T postgres psql -U "$database_user" -d "$database_name" -Atc 'SELECT count(*) FROM pg_stat_activity WHERE datname = current_database();')"; at_most "$connection_count" "$CONNECTION_CAP"
-  new_revision="$(compose exec -T postgres psql -U "$database_user" -d "$database_name" -Atc 'SELECT version_num FROM alembic_version;')"; require_revision "$new_revision" 0070
+  new_revision="$(compose exec -T postgres psql -U "$database_user" -d "$database_name" -Atc 'SELECT version_num FROM alembic_version;')"; require_revision "$new_revision" "$EXPECTED_REVISION"
   legacy_checks
 }
 main() {
   local database_user database_name bearer_token pool_size max_overflow remaining sleep_seconds
   require_command docker; require_command curl; require_command python3; require_file "$STABILITY_HELPER"; require_file "$COMPOSE_FILE"; require_file "$BASE_ENV_FILE"; require_file "$RUNTIME_ENV_FILE"
+  EXPECTED_REVISION="$(python3 "$STABILITY_HELPER" alembic-head "$REPO_ROOT/backend/alembic/versions")" || die 'unable to derive a single Alembic head from repository migrations'
   umask 077; record_existing_private_directories; TMPDIR_EXACT="$(mktemp -d "$REPO_ROOT/.verify-one-click-runtime.XXXXXX")" || die 'unable to create private verification directory'
   valid_private_directory || die 'private verification directory validation failed'
   trap cleanup EXIT; SETUP_COMPLETE=true
@@ -167,6 +168,6 @@ main() {
   database_user="$(runtime_environment_value ONE_CLICK_POSTGRES_USER)"; database_name="$(runtime_environment_value ONE_CLICK_POSTGRES_DB)"; bearer_token="$(runtime_environment_value RESEARCH_BEARER_TOKEN)"
   poll_runtime "$database_user" "$database_name" "$bearer_token"
   remaining="$STABILITY_SECONDS"; while (( remaining > 0 )); do sleep_seconds=5; (( remaining < sleep_seconds )) && sleep_seconds="$remaining"; sleep "$sleep_seconds" || die 'stability sleep failed'; poll_runtime "$database_user" "$database_name" "$bearer_token"; remaining=$((remaining - sleep_seconds)); done
-  printf 'One-click investment-research runtime is healthy; isolated database is at 0070 and legacy database remains at 0062.\n'
+  printf 'One-click investment-research runtime is healthy; isolated database is at %s and legacy database remains at 0062.\n' "$EXPECTED_REVISION"
 }
 main

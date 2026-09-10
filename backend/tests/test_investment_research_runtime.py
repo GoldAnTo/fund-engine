@@ -983,6 +983,10 @@ def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
     tmp_path: Path,
 ) -> None:
     script = _runtime_copy(tmp_path)
+    archive = tmp_path / "fixture-research-files.tar.gz"
+    # The two TAR end blocks form a portable empty archive. GNU tar adds
+    # 10 KiB of zero padding, which legitimately exceeds the bomb guard.
+    archive.write_bytes(gzip.compress(bytes(1024), mtime=0))
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     log = tmp_path / "docker.log"
@@ -996,7 +1000,7 @@ def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
         "  *'volume inspect --format'*' custom-task11-db'*) printf '%s\\n' 'custom-task11-db|test-project|fund-engine-one-click-data|||' ;;\n"
         "  *'volume inspect --format'*' custom-task11-files'*) printf '%s\\n' 'custom-task11-files|test-project|fund-engine-one-click-files|||' ;;\n"
         "  *' pg_dump -Fc '*) if [ \"${FAIL_DUMP:-0}\" = 1 ]; then exit 17; else printf 'custom-dump'; fi ;;\n"
-        "  *' alpine sh -eu -c '*) tar -czf - --files-from /dev/null ;;\n"
+        "  *' alpine sh -eu -c '*) cat \"$FIXTURE_RESEARCH_ARCHIVE\" ;;\n"
         "esac\n"
     )
     docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
@@ -1004,6 +1008,7 @@ def test_backup_preserves_quoted_path_and_cleans_up_after_dump_failure(
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "DOCKER_LOG": str(log),
+        "FIXTURE_RESEARCH_ARCHIVE": str(archive),
     }
     with (tmp_path / ".env.one-click.local").open("a") as runtime_env:
         runtime_env.write("ONE_CLICK_FILES_VOLUME=custom-task11-files\n")
@@ -1178,8 +1183,9 @@ def test_restore_uses_private_snapshot_after_source_bundle_changes(
 def test_runtime_verifier_checks_retired_shell_api_and_revision() -> None:
     script = (ROOT / "scripts" / "verify-one-click-runtime.sh").read_text()
 
-    assert 'require_revision "$new_revision" 0070' in script
-    assert "isolated database is at 0070" in script
+    assert 'require_revision "$new_revision" "$EXPECTED_REVISION"' in script
+    assert 'alembic-head "$REPO_ROOT/backend/alembic/versions"' in script
+    assert 'isolated database is at %s' in script
     assert 'API_PROXY_URL="${ONE_CLICK_API_PROXY_URL:-http://127.0.0.1:' in script
     assert 'API_URL="${ONE_CLICK_API_URL:-http://127.0.0.1:' in script
     assert '"$API_PROXY_URL/"' in script

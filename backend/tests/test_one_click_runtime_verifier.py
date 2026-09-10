@@ -37,6 +37,9 @@ def copied_verifier(tmp_path: Path) -> tuple[Path, Path]:
     verifier = scripts / "verify-one-click-runtime.sh"
     shutil.copy2(ROOT / "scripts" / verifier.name, verifier)
     shutil.copy2(ROOT / "scripts" / "one_click_stability.py", scripts / "one_click_stability.py")
+    versions = tmp_path / "backend" / "alembic" / "versions"
+    versions.mkdir(parents=True)
+    _write(versions / "base.py", "revision = '0070'\ndown_revision = None\n")
     _write(tmp_path / "docker-compose.one-click.yml", "name: test\n")
     _write(tmp_path / ".env", "DATABASE_POOL_SIZE=2\nDATABASE_MAX_OVERFLOW=2\n")
     runtime = tmp_path / ".env.one-click.local"
@@ -46,7 +49,16 @@ def copied_verifier(tmp_path: Path) -> tuple[Path, Path]:
     bin_dir.mkdir()
     (tmp_path / "calls").touch()
     _write(bin_dir / "python3", f"#!/bin/sh\nexec {shutil.which('python3')} \"$@\"\n", True)
-    _write(bin_dir / "mktemp", "#!/bin/sh\nfor template; do :; done\nbase=${template%.XXXXXX}\nif [ \"${HARNESS_MODE:-}\" = malicious-mktemp ]; then /bin/mkdir -p \"$base/nested\"; echo \"$base/nested\"; exit 0; fi\nif [ \"${HARNESS_MODE:-}\" = victim-mktemp ]; then echo \"${base}ABC123\"; exit 0; fi\npath=$(/usr/bin/mktemp \"$@\") || exit $?\necho \"mktemp:$path:$(stat -f %Lp \"$path\")\" >> \"$HARNESS_CALLS\"\necho \"$path\"\n", True)
+    _write(bin_dir / "mktemp", r'''#!/bin/sh
+for template; do :; done
+base=${template%.XXXXXX}
+if [ "${HARNESS_MODE:-}" = malicious-mktemp ]; then /bin/mkdir -p "$base/nested"; echo "$base/nested"; exit 0; fi
+if [ "${HARNESS_MODE:-}" = victim-mktemp ]; then echo "${base}ABC123"; exit 0; fi
+path=$(/usr/bin/mktemp "$@") || exit $?
+mode=$(python3 -c 'import os, stat, sys; print(format(stat.S_IMODE(os.stat(sys.argv[1]).st_mode), "o"))' "$path") || exit $?
+echo "mktemp:$path:$mode" >> "$HARNESS_CALLS"
+echo "$path"
+''', True)
     _write(bin_dir / "rm", "#!/bin/sh\necho rm:$* >> \"$HARNESS_CALLS\"\nif [ \"${HARNESS_RM_FAIL:-}\" = 1 ]; then /bin/rm \"$@\"; exit 71; fi\nexec /bin/rm \"$@\"\n", True)
     _write(bin_dir / "sleep", "#!/bin/sh\n[ \"$#\" = 1 ] && { [ \"$1\" = 1 ] || [ \"$1\" = 5 ]; } || exit 97\necho sleep:$1 >> \"$HARNESS_CALLS\"\nexit 0\n", True)
     _write(bin_dir / "curl", r'''#!/usr/bin/env python3
@@ -127,7 +139,7 @@ if args and args[0] == "compose":
     if command == [*exact_exec, connection_query]:
         if mode == "connections": mutate_private_directory()
         print("999" if mode == "connections" else "3"); sys.exit(0)
-    if command == [*exact_exec, revision_query]: print("0069" if mode == "revision-second" and os.path.exists(root + "/seen-revision") else "0070"); open(root + "/seen-revision", "w").write("1"); sys.exit(0)
+    if command == [*exact_exec, revision_query]: print("0069" if mode == "revision-second" and os.path.exists(root + "/seen-revision") else os.environ.get("HARNESS_REVISION", "0070")); open(root + "/seen-revision", "w").write("1"); sys.exit(0)
     sys.exit(97)
 if args and args[0] == "inspect":
     if "--format" in args:
@@ -340,6 +352,31 @@ def test_zero_duration_runs_one_complete_poll(tmp_path: Path) -> None:
     assert_complete_poll_counts(calls, 1)
     assert "mktemp:" in calls and calls.split("mktemp:")[1].splitlines()[0].endswith(":700")
     assert not list(tmp_path.glob(".verify-one-click-runtime.*"))
+
+
+@pytest.mark.parametrize("database_revision, succeeds", [("future-head", True), ("0070", False)])
+def test_verifier_compares_database_with_repository_head(tmp_path: Path, database_revision: str, succeeds: bool) -> None:
+    verifier, bin_dir = copied_verifier(tmp_path)
+    _write(tmp_path / "backend/alembic/versions/new.py", "revision: str = 'future-head'\ndown_revision: str = '0070'\n")
+    result = subprocess.run(
+        ["/bin/bash", str(verifier)], cwd=tmp_path, text=True, capture_output=True,
+        env=harness_environment(tmp_path, bin_dir, HARNESS_REVISION=database_revision),
+    )
+    assert (result.returncode == 0) is succeeds, result.stderr
+    assert "future-head" in (result.stdout if succeeds else result.stderr)
+    assert_no_lifecycle_commands((tmp_path / "calls").read_text())
+
+
+def test_verifier_rejects_multiple_repository_heads_before_docker(tmp_path: Path) -> None:
+    verifier, bin_dir = copied_verifier(tmp_path)
+    _write(tmp_path / "backend/alembic/versions/branch.py", "revision = 'branch'\ndown_revision = None\n")
+    result = subprocess.run(
+        ["/bin/bash", str(verifier)], cwd=tmp_path, text=True, capture_output=True,
+        env=harness_environment(tmp_path, bin_dir),
+    )
+    assert result.returncode != 0
+    assert "single Alembic head" in result.stderr
+    assert not (tmp_path / "calls").read_text()
 
 
 def test_failure_cleans_private_directory_and_keeps_diagnostics_if_rm_fails(tmp_path: Path) -> None:

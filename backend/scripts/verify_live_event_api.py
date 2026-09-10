@@ -17,7 +17,6 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "live-verifier-token"
 TENANT = "live-verifier-team"
@@ -60,8 +59,29 @@ def _request(url: str, *, method: str = "GET", body: dict | None = None) -> tupl
         return exc.code, decoded if isinstance(decoded, dict) else {}
 
 
+def _wait_until_ready(process: subprocess.Popen, url: str) -> None:
+    # Importing the real route graph can exceed three seconds on a cold CI
+    # runner. Bound elapsed time instead of assuming 30 probes are enough.
+    deadline = time.monotonic() + 30
+    status = 0
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"live API exited before readiness (exit {process.returncode})")
+        try:
+            status, _ = _request(url)
+        except urllib.error.URLError:
+            status = 0
+        if status == 200:
+            return
+        time.sleep(0.1)
+    raise RuntimeError(f"live API did not become ready within 30s (last HTTP status: {status})")
+
+
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="fund-engine-live-") as directory:
+    with (
+        tempfile.TemporaryDirectory(prefix="fund-engine-live-") as directory,
+        tempfile.TemporaryFile() as server_log,
+    ):
         database_url = f"sqlite:///{Path(directory) / 'live.db'}"
         env = {
             **os.environ,
@@ -95,22 +115,14 @@ def main() -> int:
             cwd=ROOT,
             env=env,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            # A file cannot fill up an unread pipe and block Uvicorn, and
+            # preserves startup failures for the caller's CI log.
+            stderr=server_log,
             text=True,
         )
         base_url = f"http://127.0.0.1:{port}/api/v1"
         try:
-            for _ in range(30):
-                try:
-                    status, _ = _request(f"{base_url}/event-research")
-                except urllib.error.URLError:
-                    time.sleep(0.1)
-                    continue
-                if status == 200:
-                    break
-                time.sleep(0.1)
-            else:
-                raise RuntimeError("live API did not become ready")
+            _wait_until_ready(process, f"{base_url}/event-research")
 
             title = "真实 API 验收事件"
             created_status, created = _request(
@@ -141,6 +153,11 @@ def main() -> int:
                 raise RuntimeError(f"created Case missing from event desk: {listed}")
             print("PASS: authenticated live API created and listed the same Case")
             return 0
+        except RuntimeError as exc:
+            server_log.seek(0, os.SEEK_END)
+            server_log.seek(max(0, server_log.tell() - 16_384))
+            details = server_log.read().decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"{exc}\nUvicorn stderr:\n{details or '(empty)'}") from exc
         finally:
             process.terminate()
             try:

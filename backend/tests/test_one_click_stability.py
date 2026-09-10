@@ -9,9 +9,26 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[2]))
 from scripts.one_click_stability import (
     connection_cap,
+    repository_head,
     stable_snapshot,
     validate_snapshot,
 )
+
+
+def test_repository_head_rejects_a_cycle_reachable_from_a_single_head(tmp_path):
+    for revision, parent in (("a", "b"), ("b", "a"), ("c", "a")):
+        (tmp_path / f"{revision}.py").write_text(
+            f"revision = {revision!r}\ndown_revision = {parent!r}\n"
+        )
+    with pytest.raises(ValueError, match="cycle"):
+        repository_head(tmp_path)
+
+
+def test_repository_head_matches_alembic_for_current_migrations():
+    from alembic.script import ScriptDirectory
+
+    migrations = Path(__file__).parents[1] / "alembic"
+    assert repository_head(migrations / "versions") == ScriptDirectory(str(migrations)).get_current_head()
 
 
 SERVICES = [
