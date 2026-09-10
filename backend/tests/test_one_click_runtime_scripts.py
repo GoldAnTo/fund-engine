@@ -21,13 +21,13 @@ PROFILE_KEYS = (
     "ONE_CLICK_RESEARCH_WORKER_MEMORY_LIMIT",
     "ONE_CLICK_ACQUISITION_WORKER_MEMORY_LIMIT",
     "ONE_CLICK_COMPANY_RESEARCH_WORKER_MEMORY_LIMIT",
-    "ONE_CLICK_FRONTEND_MEMORY_LIMIT",
+    "ONE_CLICK_ACQUISITION_WORKER_MEMORY_LIMIT",
     "ONE_CLICK_POSTGRES_CPU_LIMIT",
     "ONE_CLICK_API_CPU_LIMIT",
     "ONE_CLICK_RESEARCH_WORKER_CPU_LIMIT",
     "ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT",
     "ONE_CLICK_COMPANY_RESEARCH_WORKER_CPU_LIMIT",
-    "ONE_CLICK_FRONTEND_CPU_LIMIT",
+    "ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT",
 )
 
 
@@ -45,7 +45,7 @@ def test_runtime_control_script_keeps_credentials_local_and_switches_only_app_se
     assert "ACQUISITION_ENABLED_ADAPTERS=sse,szse" in script
     assert 'LEGACY_PROJECT="fund-engine-event"' in script
     assert "label=com.docker.compose.project=" in script
-    for service in ("api", "frontend", "research-worker", "acquisition-worker", "scheduler"):
+    for service in ("api", "research-worker", "acquisition-worker", "scheduler"):
         assert service in script
     assert "postgres" not in script[script.index("stop_legacy_application_services"): script.index("start_one_click_runtime")]
     assert '--scale "acquisition-worker=${acquisition_replicas}"' in script
@@ -64,7 +64,7 @@ def test_runtime_stops_existing_writers_before_schema_migration() -> None:
 
     stop = start.index(
         "compose stop api research-worker acquisition-worker "
-        "company-research-worker frontend"
+        "company-research-worker"
     )
     launch = start.index("compose up -d --no-build")
     assert stop < launch
@@ -104,7 +104,6 @@ def test_rendered_compose_services_match_the_one_click_stop_command() -> None:
         "research-worker",
         "acquisition-worker",
         "company-research-worker",
-        "frontend",
     }.issubset(services)
     migrate_command = services["migrate"]["command"]
     if isinstance(migrate_command, list):
@@ -132,7 +131,7 @@ def test_rollback_restarts_only_legacy_application_containers() -> None:
     assert "LEGACY_STOPPED_STATE_FILE" in rollback
     assert "docker ps" not in rollback
     allowed_services = script[script.index("legacy_service_is_allowed"): script.index("begin_legacy_stop_state")]
-    for service in ("api", "frontend", "research-worker", "acquisition-worker", "scheduler"):
+    for service in ("api", "research-worker", "acquisition-worker", "scheduler"):
         assert service in allowed_services
     assert "postgres" not in legacy_restore
     assert "keycloak" not in legacy_restore
@@ -150,8 +149,8 @@ def run_fake_up(
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     api_short = "89c5b6eb2322"
     api_full = api_short + "a" * 52
-    frontend_short = "3d70c9b8e735"
-    frontend_full = frontend_short + "b" * 52
+    acquisition_short = "3d70c9b8e735"
+    acquisition_full = acquisition_short + "b" * 52
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir(parents=True)
     script = scripts_dir / "one-click-runtime.sh"
@@ -179,7 +178,7 @@ case "$1" in
     [[ "$*" == *" config --format json"* ]] && {{ printf '%s' '{{"name":"test-project","volumes":{{"fund-engine-one-click-data":{{"name":"test-db"}}}}}}'; exit 0; }}
     [[ "$*" == *" config -q"* || "$*" == *" build"* ]] && exit 0
     [[ "$*" == *" create postgres"* ]] && exit 0
-    [[ "$*" == *" stop api research-worker acquisition-worker company-research-worker frontend"* ]] && exit 0
+    [[ "$*" == *" stop api research-worker acquisition-worker company-research-worker"* ]] && exit 0
     [[ "$*" == *" up -d --no-build"* ]] && {{ [[ "${{FAIL_UP:-0}}" == 1 ]] && exit 1 || exit 0; }}
     [[ "$*" == *" down"* ]] && {{ [[ "${{FAIL_DOWN:-0}}" == 1 ]] && exit 39 || exit 0; }}
     ;;
@@ -192,14 +191,14 @@ case "$1" in
     ;;
   ps)
     [[ "$*" == *"service=api"* ]] && printf '{api_short}\\n'
-    [[ "$*" == *"service=frontend"* ]] && printf '{frontend_short}\\n'
+    [[ "$*" == *"service=acquisition-worker"* ]] && printf '{acquisition_short}\\n'
     exit 0
     ;;
   inspect)
     container_id="${{!#}}"
     case "$container_id" in
       {api_short}|{api_full}) canonical_id="{api_full}"; service="api" ;;
-      {frontend_short}|{frontend_full}) canonical_id="{frontend_full}"; service="frontend" ;;
+      {acquisition_short}|{acquisition_full}) canonical_id="{acquisition_full}"; service="acquisition-worker" ;;
       *) exit 1 ;;
     esac
     [[ "$*" == *"{{{{.Id}}}}"* ]] && printf '%s\\n' "$canonical_id"
@@ -301,7 +300,7 @@ def test_first_up_rejects_invalid_profile_before_credential_creation_or_commands
 
 def test_up_builds_before_cutover_and_restores_only_recorded_containers_on_failure(tmp_path: Path) -> None:
     api_full = "89c5b6eb2322" + "a" * 52
-    frontend_full = "3d70c9b8e735" + "b" * 52
+    acquisition_full = "3d70c9b8e735" + "b" * 52
     completed, commands = run_fake_up(
         tmp_path,
         docker_memory=8 * 1024**3,
@@ -313,20 +312,17 @@ def test_up_builds_before_cutover_and_restores_only_recorded_containers_on_failu
     migrate_build_index = next(
         index for index, command in enumerate(commands) if command.endswith(" build migrate")
     )
-    frontend_build_index = next(
-        index for index, command in enumerate(commands) if command.endswith(" build frontend")
-    )
     first_stop_index = next(index for index, command in enumerate(commands) if command.startswith("stop "))
     up_index = next(index for index, command in enumerate(commands) if " up -d --no-build" in command)
     down_index = next(index for index, command in enumerate(commands) if command.endswith(" down"))
     first_start_index = next(
         index for index, command in enumerate(commands) if command.startswith("start ")
     )
-    assert config_index < migrate_build_index < frontend_build_index < first_stop_index < up_index
+    assert config_index < migrate_build_index < first_stop_index < up_index
     assert commands[up_index].endswith("--scale acquisition-worker=1")
     assert up_index < down_index < first_start_index
-    assert {command for command in commands if command.startswith("stop ")} == {f"stop {api_full}", f"stop {frontend_full}"}
-    assert {command for command in commands if command.startswith("start ")} == {f"start {api_full}", f"start {frontend_full}"}
+    assert {command for command in commands if command.startswith("stop ")} == {f"stop {api_full}", f"stop {acquisition_full}"}
+    assert {command for command in commands if command.startswith("start ")} == {f"start {api_full}", f"start {acquisition_full}"}
     assert not (tmp_path / ".one-click-runtime" / "legacy-stopped-containers").exists()
 
     blocked, blocked_commands = run_fake_up(
@@ -382,9 +378,9 @@ def test_up_prefers_exported_acquisition_replica_count_over_runtime_file(tmp_pat
             "ONE_CLICK_API_MEMORY_LIMIT has an invalid one-click resource limit",
         ),
         (
-            "ONE_CLICK_FRONTEND_CPU_LIMIT",
+            "ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT",
             "0",
-            "ONE_CLICK_FRONTEND_CPU_LIMIT has an invalid one-click resource limit",
+            "ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT has an invalid one-click resource limit",
         ),
     ),
 )
@@ -567,10 +563,10 @@ def test_up_accepts_an_oversized_canonical_docker_memory_total(tmp_path: Path) -
         ("ONE_CLICK_POSTGRES_CPU_LIMIT", "0"),
         ("ONE_CLICK_POSTGRES_CPU_LIMIT", "0.0"),
         ("ONE_CLICK_API_MEMORY_LIMIT", "unbounded"),
-        ("ONE_CLICK_FRONTEND_MEMORY_LIMIT", "0m"),
+        ("ONE_CLICK_ACQUISITION_WORKER_MEMORY_LIMIT", "0m"),
         ("ONE_CLICK_API_CPU_LIMIT", "all"),
-        ("ONE_CLICK_FRONTEND_CPU_LIMIT", "0"),
-        ("ONE_CLICK_FRONTEND_CPU_LIMIT", "0.0"),
+        ("ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT", "0"),
+        ("ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT", "0.0"),
     ),
 )
 def test_up_rejects_invalid_resource_limits_before_build_or_cutover(
@@ -611,8 +607,8 @@ def test_up_restores_every_prerecorded_container_when_stop_reports_failure(
 ) -> None:
     api_short = "89c5b6eb2322"
     api_full = api_short + "a" * 52
-    frontend_short = "3d70c9b8e735"
-    frontend_full = frontend_short + "b" * 52
+    acquisition_short = "3d70c9b8e735"
+    acquisition_full = acquisition_short + "b" * 52
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
     script = scripts_dir / "one-click-runtime.sh"
@@ -644,14 +640,14 @@ case "$1" in
     ;;
   ps)
     [[ "$*" == *"service=api"* ]] && printf '{api_short}\\n'
-    [[ "$*" == *"service=frontend"* ]] && printf '{frontend_short}\\n'
+    [[ "$*" == *"service=acquisition-worker"* ]] && printf '{acquisition_short}\\n'
     exit 0
     ;;
   inspect)
     container_id="${{!#}}"
     case "$container_id" in
       {api_short}|{api_full}) canonical_id="{api_full}"; service="api" ;;
-      {frontend_short}|{frontend_full}) canonical_id="{frontend_full}"; service="frontend" ;;
+      {acquisition_short}|{acquisition_full}) canonical_id="{acquisition_full}"; service="acquisition-worker" ;;
       *) exit 1 ;;
     esac
     [[ "$*" == *"{{{{.Id}}}}"* ]] && printf '%s\\n' "$canonical_id"
@@ -690,16 +686,16 @@ esac
         for index, value in enumerate(commands)
         if value == f"inspect --format {{{{.Id}}}} {api_short}"
     )
-    frontend_recorded = next(
+    acquisition_recorded = next(
         index
         for index, value in enumerate(commands)
-        if value == f"inspect --format {{{{.Id}}}} {frontend_short}"
+        if value == f"inspect --format {{{{.Id}}}} {acquisition_short}"
     )
     assert api_recorded < first_stop
-    assert frontend_recorded < first_stop
+    assert acquisition_recorded < first_stop
     assert {value for value in commands if value.startswith("start ")} == {
         f"start {api_full}",
-        f"start {frontend_full}",
+        f"start {acquisition_full}",
     }
     assert not (tmp_path / ".one-click-runtime" / "legacy-stopped-containers").exists()
 
@@ -709,16 +705,13 @@ def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> Non
 
     assert "config -q" in script
     assert 'API_URL="${ONE_CLICK_API_URL:-http://127.0.0.1:' in script
-    assert 'FRONTEND_URL="${ONE_CLICK_FRONTEND_URL:-http://127.0.0.1:' in script
     assert '"$API_URL/health"' in script
-    assert '"$FRONTEND_URL/health"' in script
     for service in (
         "postgres",
         "api",
         "research-worker",
         "acquisition-worker",
         "company-research-worker",
-        "frontend",
     ):
         assert service in script
     assert 'require_revision "$new_revision" 0070' in script

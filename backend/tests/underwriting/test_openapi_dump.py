@@ -183,8 +183,8 @@ def test_dump_openapi_includes_underwriting_routes_without_touching_default(
     tmp_path: Path,
 ) -> None:
     backend = Path(__file__).parents[2]
-    default_output = backend.parent / "frontend" / "openapi.json"
-    default_before = default_output.read_bytes() if default_output.exists() else None
+    default_output = backend.parent / "contracts" / "openapi.json"
+    default_before = default_output.read_bytes() if default_output.exists() else None if default_output.exists() else None
     output = tmp_path / "explicit-output" / "openapi.json"
     subprocess.run(
         [

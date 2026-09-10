@@ -62,6 +62,8 @@ services:
       <<: [*database, *provider]
       GATEWAY_DATABASE_URL: postgresql+psycopg://gateway:${GATEWAY_DB_PASSWORD:?}@postgres:5432/gateway
       RESEARCH_TENANT_TOKENS: ${RESEARCH_TENANT_TOKENS:?}
+    ports:
+      - "127.0.0.1:${GATEWAY_API_PORT:-8100}:8000"
     volumes:
       - gateway-files:/data/research-files
     depends_on:
@@ -153,26 +155,6 @@ services:
       timeout: 5s
       retries: 4
       start_period: 20s
-
-  frontend:
-    build:
-      context: ./frontend
-    image: fundclaw-gateway-frontend:local
-    restart: unless-stopped
-    ports:
-      - 127.0.0.1:${GATEWAY_PUBLIC_PORT:-8080}:8080
-    environment:
-      GATEWAY_PROXY_TOKEN: ${GATEWAY_PROXY_TOKEN:?}
-      GATEWAY_API_BASE: http://api:8000
-      GATEWAY_PUBLIC_PORT: ${GATEWAY_PUBLIC_PORT:-8080}
-    depends_on:
-      api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
 
 volumes:
   gateway-data:

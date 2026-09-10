@@ -20,7 +20,6 @@ SERVICES = [
     "research-worker",
     "acquisition-worker",
     "company-research-worker",
-    "frontend",
 ]
 
 
@@ -253,7 +252,7 @@ def test_stable_snapshot_rejects_duplicates_empty_maps_and_unknown_keys():
 
 def test_stable_snapshot_service_set_mismatch_is_bounded():
     baseline = {"api": [{"id": "a" * 64, "restart_count": 0}]}
-    current = {"frontend": [{"id": "a" * 64, "restart_count": 0}]}
+    current = {"research-worker": [{"id": "a" * 64, "restart_count": 0}]}
     with pytest.raises(
         ValueError, match="stability snapshot service structure is malformed"
     ):
@@ -425,7 +424,7 @@ def test_cli_compare_errors_are_bounded(tmp_path):
     assert result.stderr == "error: current snapshot is malformed\n"
 
     mismatch = tmp_path / "mismatch.json"
-    mismatch.write_text(json.dumps({"frontend": baseline["api"]}))
+    mismatch.write_text(json.dumps({"research-worker": baseline["api"]}))
     result = subprocess.run(
         [sys.executable, str(script), "compare", str(valid), str(mismatch)],
         capture_output=True,

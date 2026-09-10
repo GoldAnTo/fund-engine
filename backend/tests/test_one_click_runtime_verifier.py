@@ -15,7 +15,7 @@ import pytest
 ROOT = Path(__file__).parents[2]
 SERVICES = (
     "postgres", "api", "research-worker", "acquisition-worker",
-    "company-research-worker", "frontend",
+    "company-research-worker",
 )
 PROFILE_KEYS = (
     "ONE_CLICK_ACQUISITION_REPLICAS",
@@ -58,8 +58,7 @@ prefix = ["--fail", "--silent", "--show-error", "--connect-timeout", "2", "--max
 if args[:7] != prefix or len(args) not in (8, 10) or (len(args) == 10 and args[7:9] != ["--header", "@-"]): sys.exit(97)
 url = args[-1]
 api = "http://127.0.0.1:8000"
-frontend = "http://127.0.0.1:8080"
-allowed = {f"{api}/health", f"{frontend}/health", f"{frontend}/research", f"{api}/api/underwriting/v1/product/objects?query=CATL"}
+allowed = {f"{api}/health", f"{api}/api/underwriting/v1/product/objects?query=CATL"}
 product = f"{api}/api/underwriting/v1/product/objects?query=CATL"
 if url not in allowed or not ((url == product and len(args) == 10 and args[7:9] == ["--header", "@-"]) or (url != product and len(args) == 8)): sys.exit(97)
 if url == product and sys.stdin.read() != "Authorization: Bearer not-for-output\n": sys.exit(97)
@@ -67,10 +66,9 @@ counter = os.environ["HARNESS_ROOT"] + "/curl-count"
 try: n = int(open(counter).read()) + 1
 except OSError: n = 1
 open(counter, "w").write(str(n))
-if os.environ.get("HARNESS_MODE") == "http-second" and url.endswith("/health") and n >= 4:
+if os.environ.get("HARNESS_MODE") == "http-second" and url.endswith("/health") and n >= 3:
     sys.exit(22)
-if url.endswith("/research"): print("投资研究")
-elif "product/objects" in url: print('{"items":[{"external_key":"CN:300750:COMPANY"},{"external_key":"SZSE:300750"}]}')
+if "product/objects" in url: print('{"items":[{"external_key":"CN:300750:COMPANY"},{"external_key":"SZSE:300750"}]}')
 else: print("ok")
 ''', True)
     _write(bin_dir / "docker", r'''#!/usr/bin/env python3
@@ -78,7 +76,7 @@ import hashlib, json, os, shutil, sys
 root, calls, mode = os.environ["HARNESS_ROOT"], os.environ["HARNESS_CALLS"], os.environ.get("HARNESS_MODE", "healthy")
 args = sys.argv[1:]
 with open(calls, "a") as f: f.write("docker " + " ".join(args) + "\n")
-services = ["postgres", "api", "research-worker", "acquisition-worker", "company-research-worker", "frontend"]
+services = ["postgres", "api", "research-worker", "acquisition-worker", "company-research-worker"]
 replicas = int(os.environ.get("HARNESS_REPLICAS", "1"))
 def ident(value): return hashlib.sha256(value.encode()).hexdigest()
 def ids():
@@ -188,8 +186,6 @@ def run_verifier(tmp_path: Path, *arguments: str, mode: str = "healthy", **env_v
 def assert_complete_poll_counts(calls: str, polls: int) -> None:
     lines = calls.splitlines()
     assert sum(line.endswith("http://127.0.0.1:8000/health") for line in lines) == polls
-    assert sum(line.endswith("http://127.0.0.1:8080/health") for line in lines) == polls
-    assert sum(line.endswith("http://127.0.0.1:8080/research") for line in lines) == polls
     assert sum("product/objects?query=CATL" in line for line in lines) == polls
     assert sum("pg_stat_activity" in line for line in lines) == polls
     assert sum("docker compose" in line and "version_num" in line for line in lines) == polls
@@ -248,7 +244,7 @@ def test_stability_duration_polls_without_diagnostics(tmp_path: Path) -> None:
     assert (tmp_path / "snapshot-count").read_text() == "2"
     assert_complete_poll_counts(calls, 2)
     assert calls.count("sleep:1") == 1
-    assert calls.count("curl ") == 8
+    assert calls.count("curl ") == 4
     assert "logs --tail 40" not in calls and "stats --no-stream" not in calls
     assert_no_lifecycle_commands(calls)
 
@@ -260,7 +256,7 @@ def test_failures_are_safe_and_collect_bounded_diagnostics(tmp_path: Path, mode:
     assert result.returncode != 0
     assert message.lower() in result.stderr.lower()
     assert "logs --tail 40" in calls and "stats --no-stream" in calls
-    assert calls.count("docker logs --tail 40") == 6
+    assert calls.count("docker logs --tail 40") == 5
     assert calls.count("docker stats --no-stream") == 1
     expected = expected_ids()
     formatted = [line.rsplit(" ", 1)[1] for line in calls.splitlines() if line.startswith("docker inspect --format Name=")]
@@ -291,9 +287,7 @@ def test_exported_replica_count_controls_the_exact_snapshot_expectation(tmp_path
 def test_harness_uses_only_explicit_environment_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hostile = {
         "ONE_CLICK_API_URL": "http://hostile.invalid",
-        "ONE_CLICK_FRONTEND_URL": "http://hostile.invalid",
         "ONE_CLICK_API_PORT": "9999",
-        "ONE_CLICK_FRONTEND_PORT": "9998",
         "ONE_CLICK_POSTGRES_USER": "hostile",
         "ONE_CLICK_POSTGRES_DB": "hostile",
         "RESEARCH_BEARER_TOKEN": "hostile",
@@ -319,7 +313,7 @@ def test_verifier_filters_one_shot_compose_containers_and_allows_scale_four(tmp_
     result = run_verifier(tmp_path, ONE_CLICK_ACQUISITION_REPLICAS="4", HARNESS_REPLICAS="4")
     assert result.returncode == 0, result.stderr
     calls = (tmp_path / "calls").read_text()
-    assert "ps --all --quiet postgres api research-worker acquisition-worker company-research-worker frontend" in calls
+    assert "ps --all --quiet postgres api research-worker acquisition-worker company-research-worker" in calls
 
 
 @pytest.mark.parametrize("value", ["", "01", "5", "999999999999999999999"])

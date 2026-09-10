@@ -161,27 +161,6 @@ services:
       retries: 4
       start_period: 20s
 
-  frontend:
-    image: ${ONE_CLICK_FRONTEND_IMAGE:-fund-engine-one-click-frontend:local}
-    build:
-      context: ./frontend
-    restart: unless-stopped
-    mem_limit: ${ONE_CLICK_FRONTEND_MEMORY_LIMIT:-256m}
-    cpus: ${ONE_CLICK_FRONTEND_CPU_LIMIT:-0.5}
-    ports:
-      - 127.0.0.1:${ONE_CLICK_FRONTEND_PORT:-8080}:8080
-    environment:
-      RESEARCH_BEARER_TOKEN: ${RESEARCH_BEARER_TOKEN:?}
-    depends_on:
-      api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-      start_period: 5s
-
 volumes:
   fund-engine-one-click-data:
     name: ${ONE_CLICK_POSTGRES_VOLUME:-fund-engine-one-click-data}
