@@ -216,10 +216,10 @@ def test_runtime_compose_installs_fixture_and_has_optional_integrations() -> Non
         assert f"${{{value}:?}}" not in compose
     assert "${ACQUISITION_ENABLED_ADAPTERS:-sse,szse}" in compose
     assert "${ONE_CLICK_API_PORT:-8000}" in compose
-    assert "${ONE_CLICK_FRONTEND_PORT:-8080}" in compose
+    assert "${ONE_CLICK_API_PROXY_PORT:-8080}" in compose
     assert "${ONE_CLICK_BACKEND_IMAGE:-fund-engine-one-click-backend:local}" in compose
     assert (
-        "${ONE_CLICK_FRONTEND_IMAGE:-fund-engine-one-click-frontend:local}" in compose
+        "${ONE_CLICK_API_PROXY_IMAGE:-fund-engine-one-click-api-proxy:local}" in compose
     )
     assert "file-store-init:" in compose
     assert compose.count("context: ./backend") == 1
@@ -228,7 +228,7 @@ def test_runtime_compose_installs_fixture_and_has_optional_integrations() -> Non
         "api": "research-worker",
         "research-worker": "acquisition-worker",
         "acquisition-worker": "company-research-worker",
-        "company-research-worker": "frontend",
+        "company-research-worker": "api-proxy",
     }
     for service in (
         "api",
@@ -702,7 +702,7 @@ def test_up_creates_and_validates_fresh_postgres_volume_before_full_start(
         "  *' config -q'*) exit 0 ;;\n"
         "  *' build'*) exit 0 ;;\n"
         "  *' create postgres'*) : > \"$VOLUME_STATE\"; exit 0 ;;\n"
-        "  *' stop api research-worker acquisition-worker company-research-worker frontend'*) exit 0 ;;\n"
+        "  *' stop api research-worker acquisition-worker company-research-worker api-proxy'*) exit 0 ;;\n"
         "  *' up -d --no-build'*) exit 0 ;;\n"
         "esac\n"
         'if [[ "$*" == "info --format {{.MemTotal}}" ]]; then printf \'8589934592\\n\'; exit 0; fi\n'
@@ -714,7 +714,7 @@ def test_up_creates_and_validates_fresh_postgres_volume_before_full_start(
         'if [[ "$*" == "volume ls --quiet" ]]; then exit 0; fi\n'
         'case "$*" in\n'
         '  "ps -q --filter label=com.docker.compose.project=fund-engine-event --filter label=com.docker.compose.service=api") exit 0 ;;\n'
-        '  "ps -q --filter label=com.docker.compose.project=fund-engine-event --filter label=com.docker.compose.service=frontend") exit 0 ;;\n'
+        '  "ps -q --filter label=com.docker.compose.project=fund-engine-event --filter label=com.docker.compose.service=api-proxy") exit 0 ;;\n'
         '  "ps -q --filter label=com.docker.compose.project=fund-engine-event --filter label=com.docker.compose.service=research-worker") exit 0 ;;\n'
         '  "ps -q --filter label=com.docker.compose.project=fund-engine-event --filter label=com.docker.compose.service=acquisition-worker") exit 0 ;;\n'
         '  "ps -q --filter label=com.docker.compose.project=fund-engine-event --filter label=com.docker.compose.service=scheduler") exit 0 ;;\n'
@@ -1180,10 +1180,10 @@ def test_runtime_verifier_checks_retired_shell_api_and_revision() -> None:
 
     assert 'require_revision "$new_revision" 0070' in script
     assert "isolated database is at 0070" in script
-    assert 'FRONTEND_URL="${ONE_CLICK_FRONTEND_URL:-http://127.0.0.1:' in script
+    assert 'API_PROXY_URL="${ONE_CLICK_API_PROXY_URL:-http://127.0.0.1:' in script
     assert 'API_URL="${ONE_CLICK_API_URL:-http://127.0.0.1:' in script
-    assert '"$FRONTEND_URL/"' in script
-    assert "前端页面已清理，新原型待设计。" in script
+    assert '"$API_PROXY_URL/"' in script
+    assert "API proxy must not serve pages" in script
     assert '"$API_URL/api/underwriting/v1/product/objects?query=CATL"' in script
     assert "CATL object foundation is incomplete" in script
     assert "printf 'Authorization: Bearer %s\\n'" in script
@@ -1203,7 +1203,8 @@ def test_increment_a_gate_uses_repo_python_and_covers_all_layers() -> None:
     assert "test_investment_research_runtime.py" in contents
     assert "npm test" in contents
     assert "npm run typecheck" in contents
-    assert "npm run build" in contents
+    assert "npm run build" not in contents
+    assert "clients/research" in contents
     assert "compileall" in contents
     assert "set -euo pipefail" in contents
 

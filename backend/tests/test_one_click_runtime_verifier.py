@@ -15,7 +15,7 @@ import pytest
 ROOT = Path(__file__).parents[2]
 SERVICES = (
     "postgres", "api", "research-worker", "acquisition-worker",
-    "company-research-worker", "frontend",
+    "company-research-worker", "api-proxy",
 )
 PROFILE_KEYS = (
     "ONE_CLICK_ACQUISITION_REPLICAS",
@@ -55,11 +55,14 @@ calls = os.environ["HARNESS_CALLS"]
 args = sys.argv[1:]
 with open(calls, "a") as f: f.write("curl " + " ".join(args) + "\n")
 prefix = ["--fail", "--silent", "--show-error", "--connect-timeout", "2", "--max-time", "5"]
+root_probe = ["--silent", "--show-error", "--connect-timeout", "2", "--max-time", "5", "--output", "/dev/null", "--write-out", "%{http_code}", "http://127.0.0.1:8080/"]
+if args == root_probe:
+    print("200" if os.environ.get("HARNESS_MODE") == "proxy-page" else "404"); sys.exit(0)
 if args[:7] != prefix or len(args) not in (8, 10) or (len(args) == 10 and args[7:9] != ["--header", "@-"]): sys.exit(97)
 url = args[-1]
 api = "http://127.0.0.1:8000"
-frontend = "http://127.0.0.1:8080"
-allowed = {f"{api}/health", f"{frontend}/health", f"{frontend}/", f"{api}/api/underwriting/v1/product/objects?query=CATL"}
+api_proxy = "http://127.0.0.1:8080"
+allowed = {f"{api}/health", f"{api_proxy}/health", f"{api_proxy}/", f"{api}/api/underwriting/v1/product/objects?query=CATL"}
 product = f"{api}/api/underwriting/v1/product/objects?query=CATL"
 if url not in allowed or not ((url == product and len(args) == 10 and args[7:9] == ["--header", "@-"]) or (url != product and len(args) == 8)): sys.exit(97)
 if url == product and sys.stdin.read() != "Authorization: Bearer not-for-output\n": sys.exit(97)
@@ -69,8 +72,7 @@ except OSError: n = 1
 open(counter, "w").write(str(n))
 if os.environ.get("HARNESS_MODE") == "http-second" and url.endswith("/health") and n >= 4:
     sys.exit(22)
-if url == f"{frontend}/": print("前端页面已清理，新原型待设计。")
-elif "product/objects" in url: print('{"items":[{"external_key":"CN:300750:COMPANY"},{"external_key":"SZSE:300750"}]}')
+if "product/objects" in url: print('{"items":[{"external_key":"CN:300750:COMPANY"},{"external_key":"SZSE:300750"}]}')
 else: print("ok")
 ''', True)
     _write(bin_dir / "docker", r'''#!/usr/bin/env python3
@@ -78,7 +80,7 @@ import hashlib, json, os, shutil, sys
 root, calls, mode = os.environ["HARNESS_ROOT"], os.environ["HARNESS_CALLS"], os.environ.get("HARNESS_MODE", "healthy")
 args = sys.argv[1:]
 with open(calls, "a") as f: f.write("docker " + " ".join(args) + "\n")
-services = ["postgres", "api", "research-worker", "acquisition-worker", "company-research-worker", "frontend"]
+services = ["postgres", "api", "research-worker", "acquisition-worker", "company-research-worker", "api-proxy"]
 replicas = int(os.environ.get("HARNESS_REPLICAS", "1"))
 def ident(value): return hashlib.sha256(value.encode()).hexdigest()
 def ids():
@@ -291,9 +293,9 @@ def test_exported_replica_count_controls_the_exact_snapshot_expectation(tmp_path
 def test_harness_uses_only_explicit_environment_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hostile = {
         "ONE_CLICK_API_URL": "http://hostile.invalid",
-        "ONE_CLICK_FRONTEND_URL": "http://hostile.invalid",
+        "ONE_CLICK_API_PROXY_URL": "http://hostile.invalid",
         "ONE_CLICK_API_PORT": "9999",
-        "ONE_CLICK_FRONTEND_PORT": "9998",
+        "ONE_CLICK_API_PROXY_PORT": "9998",
         "ONE_CLICK_POSTGRES_USER": "hostile",
         "ONE_CLICK_POSTGRES_DB": "hostile",
         "RESEARCH_BEARER_TOKEN": "hostile",
@@ -319,7 +321,7 @@ def test_verifier_filters_one_shot_compose_containers_and_allows_scale_four(tmp_
     result = run_verifier(tmp_path, ONE_CLICK_ACQUISITION_REPLICAS="4", HARNESS_REPLICAS="4")
     assert result.returncode == 0, result.stderr
     calls = (tmp_path / "calls").read_text()
-    assert "ps --all --quiet postgres api research-worker acquisition-worker company-research-worker frontend" in calls
+    assert "ps --all --quiet postgres api research-worker acquisition-worker company-research-worker api-proxy" in calls
 
 
 @pytest.mark.parametrize("value", ["", "01", "5", "999999999999999999999"])
@@ -532,3 +534,9 @@ def test_source_locks_safe_sustained_verification_contract() -> None:
     assert "acquisition-worker=${ACQUISITION_REPLICAS}" in source
     assert "acquisition-worker 3" not in source
     assert "trap" in source and "rm -rf" in source
+
+
+def test_verifier_rejects_proxy_serving_a_page(tmp_path: Path) -> None:
+    result = run_verifier(tmp_path, mode="proxy-page")
+    assert result.returncode != 0
+    assert "API proxy must not serve pages" in result.stderr

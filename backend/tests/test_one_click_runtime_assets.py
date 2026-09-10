@@ -6,24 +6,32 @@ ROOT = Path(__file__).parents[2]
 
 def test_runtime_images_include_migrations_and_server_side_auth() -> None:
     backend = (ROOT / "backend" / "Dockerfile").read_text()
-    frontend = (ROOT / "frontend" / "Dockerfile").read_text()
-    nginx = (ROOT / "frontend" / "nginx.one-click.conf.template").read_text()
+    api_proxy = (ROOT / "deploy" / "api-proxy" / "Dockerfile").read_text()
+    nginx = (ROOT / "deploy" / "api-proxy" / "nginx.conf.template").read_text()
 
     assert "COPY alembic ./alembic" in backend
     assert "USER app" in backend
-    assert "npm run build" in frontend
+    assert "FROM nginxinc/nginx-unprivileged:" in api_proxy
+    assert "node:" not in api_proxy
+    assert "npm" not in api_proxy
+    assert "/usr/share/nginx/html" not in api_proxy
+    assert "try_files" not in nginx
+    assert "root " not in nginx
+    assert "index " not in nginx
+    assert "return 404;" in nginx
+    assert "client_max_body_size 21m;" in nginx
     assert 'proxy_set_header Authorization "Bearer ${RESEARCH_BEARER_TOKEN}";' in nginx
     assert "VITE_RESEARCH_BEARER_TOKEN" not in nginx
 
 
-def test_frontend_docker_build_context_excludes_client_environment_files() -> None:
-    dockerignore_path = ROOT / "frontend" / ".dockerignore"
-    frontend = (ROOT / "frontend" / "Dockerfile").read_text()
+def test_api_proxy_docker_build_context_excludes_client_environment_files() -> None:
+    dockerignore_path = ROOT / "deploy" / "api-proxy" / ".dockerignore"
+    api_proxy = (ROOT / "deploy" / "api-proxy" / "Dockerfile").read_text()
 
     assert dockerignore_path.is_file()
     dockerignore = dockerignore_path.read_text().splitlines()
     assert ".env*" in dockerignore
-    assert "VITE_RESEARCH_BEARER_TOKEN" not in frontend
+    assert "VITE_RESEARCH_BEARER_TOKEN" not in api_proxy
 
 
 def test_compose_has_separate_data_and_automatic_services() -> None:
@@ -40,11 +48,11 @@ def test_compose_has_separate_data_and_automatic_services() -> None:
         "research-worker:",
         "acquisition-worker:",
         "company-research-worker:",
-        "frontend:",
+        "api-proxy:",
     ):
         assert name in compose
     assert "127.0.0.1:${ONE_CLICK_API_PORT:-8000}:8000" in compose
-    assert "127.0.0.1:${ONE_CLICK_FRONTEND_PORT:-8080}:8080" in compose
+    assert "127.0.0.1:${ONE_CLICK_API_PROXY_PORT:-8080}:8080" in compose
     assert "alembic upgrade head" in compose
     assert "condition: service_completed_successfully" in compose
     assert "postgresql+psycopg://${ONE_CLICK_POSTGRES_USER:?}:${ONE_CLICK_POSTGRES_PASSWORD:?}@postgres:5432/${ONE_CLICK_POSTGRES_DB:?}" in compose
@@ -59,10 +67,10 @@ def test_compose_has_separate_data_and_automatic_services() -> None:
     assert ".env.one-click.local" in ignore
 
 
-def test_compose_applies_the_low_resource_profile_without_exposing_database_to_frontend() -> None:
+def test_compose_applies_the_low_resource_profile_without_exposing_database_to_api_proxy() -> None:
     compose = (ROOT / "docker-compose.one-click.yml").read_text()
     environment = (ROOT / ".env.one-click.example").read_text()
-    frontend = compose[compose.index("  frontend:\n") : compose.index("\nvolumes:\n")]
+    api_proxy = compose[compose.index("  api-proxy:\n") : compose.index("\nvolumes:\n")]
     environment_values: dict[str, str] = {}
     for line in environment.splitlines():
         line = line.strip()
@@ -90,14 +98,14 @@ def test_compose_applies_the_low_resource_profile_without_exposing_database_to_f
             ("api", "research-worker"),
             ("research-worker", "acquisition-worker"),
             ("acquisition-worker", "company-research-worker"),
-            ("company-research-worker", "frontend"),
+            ("company-research-worker", "api-proxy"),
         )
     }
-    service_slices["frontend"] = frontend
+    service_slices["api-proxy"] = api_proxy
 
     for service in ("api", "research-worker", "acquisition-worker", "company-research-worker"):
         assert "<<: *database-pool-environment" in service_slices[service]
-    for service in ("postgres", "migrate", "file-store-init", "frontend"):
+    for service in ("postgres", "migrate", "file-store-init", "api-proxy"):
         assert "<<: *database-pool-environment" not in service_slices[service]
 
     for service, name, value in (
@@ -106,7 +114,7 @@ def test_compose_applies_the_low_resource_profile_without_exposing_database_to_f
         ("research-worker", "ONE_CLICK_RESEARCH_WORKER_MEMORY_LIMIT", "768m"),
         ("acquisition-worker", "ONE_CLICK_ACQUISITION_WORKER_MEMORY_LIMIT", "768m"),
         ("company-research-worker", "ONE_CLICK_COMPANY_RESEARCH_WORKER_MEMORY_LIMIT", "1280m"),
-        ("frontend", "ONE_CLICK_FRONTEND_MEMORY_LIMIT", "256m"),
+        ("api-proxy", "ONE_CLICK_API_PROXY_MEMORY_LIMIT", "256m"),
     ):
         assert f"mem_limit: ${{{name}:-{value}}}" in service_slices[service]
         assert environment_values[name] == value
@@ -117,7 +125,7 @@ def test_compose_applies_the_low_resource_profile_without_exposing_database_to_f
         ("research-worker", "ONE_CLICK_RESEARCH_WORKER_CPU_LIMIT", "1.0"),
         ("acquisition-worker", "ONE_CLICK_ACQUISITION_WORKER_CPU_LIMIT", "1.0"),
         ("company-research-worker", "ONE_CLICK_COMPANY_RESEARCH_WORKER_CPU_LIMIT", "1.5"),
-        ("frontend", "ONE_CLICK_FRONTEND_CPU_LIMIT", "0.5"),
+        ("api-proxy", "ONE_CLICK_API_PROXY_CPU_LIMIT", "0.5"),
     ):
         assert f"cpus: ${{{name}:-{value}}}" in service_slices[service]
         assert environment_values[name] == value
@@ -131,22 +139,22 @@ def test_compose_applies_the_low_resource_profile_without_exposing_database_to_f
         "DATABASE_POOL_RECYCLE_SECONDS",
         "DATABASE_URL",
     ):
-        assert name not in frontend
+        assert name not in api_proxy
 
 
-def test_compose_healthchecks_http_services_before_starting_frontend() -> None:
+def test_compose_healthchecks_http_services_before_starting_api_proxy() -> None:
     compose = (ROOT / "docker-compose.one-click.yml").read_text()
     api = compose[compose.index("  api:\n") : compose.index("  research-worker:\n")]
     research_worker = compose[compose.index("  research-worker:\n") : compose.index("  acquisition-worker:\n")]
     acquisition_worker = compose[compose.index("  acquisition-worker:\n") : compose.index("  company-research-worker:\n")]
-    company_research_worker = compose[compose.index("  company-research-worker:\n") : compose.index("  frontend:\n")]
-    frontend = compose[compose.index("  frontend:\n") : compose.index("\nvolumes:\n")]
+    company_research_worker = compose[compose.index("  company-research-worker:\n") : compose.index("  api-proxy:\n")]
+    api_proxy = compose[compose.index("  api-proxy:\n") : compose.index("\nvolumes:\n")]
 
     assert "http://127.0.0.1:8000/health" in api
-    assert "http://127.0.0.1:8080/health" in frontend
+    assert "http://127.0.0.1:8080/health" in api_proxy
     assert "healthcheck:" in api
-    assert "healthcheck:" in frontend
-    assert "api:\n        condition: service_healthy" in frontend
+    assert "healthcheck:" in api_proxy
+    assert "api:\n        condition: service_healthy" in api_proxy
     for worker, kind in (
         (research_worker, "research_run"),
         (acquisition_worker, "acquisition"),

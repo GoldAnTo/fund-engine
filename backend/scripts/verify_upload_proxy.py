@@ -3,11 +3,11 @@ from pathlib import Path
 import subprocess,tempfile,http.client,time,uuid
 root=Path(__file__).resolve().parents[2]
 name=f'fund-engine-upload-proxy-audit-{uuid.uuid4().hex[:12]}'
-image=next(line.split()[1] for line in (root/'frontend/Dockerfile').read_text().splitlines() if line.startswith('FROM nginx'))
+image=next(line.split()[1] for line in (root/'deploy/api-proxy/Dockerfile').read_text().splitlines() if line.startswith('FROM nginx'))
 def docker(*args):return subprocess.check_output(['docker',*args],text=True).strip()
 with tempfile.TemporaryDirectory() as tmp:
  p=Path(tmp)/'default.conf'
- config=(root/'frontend/nginx.one-click.conf.template').read_text().replace('${RESEARCH_BEARER_TOKEN}','test-only').replace('http://api:8000','http://127.0.0.1:8081')
+ config=(root/'deploy/api-proxy/nginx.conf.template').read_text().replace('${RESEARCH_BEARER_TOKEN}','test-only').replace('http://api:8000','http://127.0.0.1:8081')
  p.write_text(config+'\nserver { listen 8081; client_max_body_size 32m; access_log /tmp/upstream.log; location / { return 204; } }\n')
  docker('run','--detach','--rm','--name',name,'-p','127.0.0.1::8080','-v',f'{p}:/etc/nginx/conf.d/default.conf:ro',image)
  try:
@@ -17,6 +17,10 @@ with tempfile.TemporaryDirectory() as tmp:
     c=http.client.HTTPConnection('127.0.0.1',port,timeout=5);c.request('GET','/health');r=c.getresponse();r.read();c.close()
     if r.status==200:break
    except OSError:time.sleep(.1)
+  for path in ('/', '/index.html', '/research', '/assets/app.js'):
+   c=http.client.HTTPConnection('127.0.0.1',port,timeout=5)
+   c.request('GET',path);r=c.getresponse();r.read();c.close()
+   assert r.status==404, f'API proxy served a retired page: {path}'
   def request(size,header_only=False,chunked=False):
    c=http.client.HTTPConnection('127.0.0.1',port,timeout=10)
    try:

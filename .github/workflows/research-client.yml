@@ -1,0 +1,66 @@
+name: research-client-ci
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      # Trigger the cleanup gate if a retired directory is reintroduced.
+      - "frontend/**"
+      - "prototype/**"
+      - "docs/prototypes/**"
+      - ".superpowers/brainstorm/**"
+      - "clients/research/**"
+      - "backend/**"
+      - "deploy/**"
+      - "scripts/**"
+      - ".nvmrc"
+      - ".github/workflows/research-client.yml"
+  pull_request:
+    paths:
+      # Trigger the cleanup gate if a retired directory is reintroduced.
+      - "frontend/**"
+      - "prototype/**"
+      - "docs/prototypes/**"
+      - ".superpowers/brainstorm/**"
+      - "clients/research/**"
+      - "backend/**"
+      - "deploy/**"
+      - "scripts/**"
+      - ".nvmrc"
+      - ".github/workflows/research-client.yml"
+
+jobs:
+  unit:
+    name: 类型检查 + 单元测试
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/research
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: npm
+          cache-dependency-path: clients/research/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  e2e:
+    # Preserve the required status name; no UI exists and no browser is run.
+    # This cleanup check is not a browser business-flow acceptance test.
+    name: Playwright e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 验证旧界面已彻底移除（非浏览器业务验收）
+        run: |
+          test ! -e frontend
+          test ! -e prototype
+          test ! -e docs/prototypes
+          test ! -e .superpowers/brainstorm
+          test ! -e .reference
+          test ! -e clients/research/index.html
+          python3 -c 'import json; p = json.load(open("clients/research/package.json")); assert set(p["scripts"]) == {"typecheck", "test"}'

@@ -1,7 +1,5 @@
 server {
     listen 8080;
-    root /usr/share/nginx/html;
-    index index.html;
     # 20 MiB original plus bounded multipart metadata. The application keeps
     # its exact per-file 20 MiB check; this bounds the complete HTTP request.
     client_max_body_size 21m;
@@ -20,7 +18,8 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # This service has no pages or static assets.
     location / {
-        try_files $uri $uri/ /index.html;
+        return 404;
     }
 }

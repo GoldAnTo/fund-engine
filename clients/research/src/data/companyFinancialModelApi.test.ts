@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import actualBaseline from "../../../backend/app/underwriting/data/alphabet_financial_baseline/baseline.json";
+import actualBaseline from "../../../../backend/app/underwriting/data/alphabet_financial_baseline/baseline.json";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InvestmentResearchApi } from "./investmentResearchApi";
 import { modelHash, modelIds, modelRecord, modelWorkspace } from "./companyFinancialModel.test-fixtures";

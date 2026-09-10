@@ -1,11 +1,11 @@
-"""Dump the FastAPI OpenAPI spec to frontend/openapi.json.
+"""Dump the FastAPI OpenAPI spec to clients/research/openapi.json.
 
-Run from the repo root after backend schema changes so the frontend contract
+Run from the repo root after backend schema changes so the research client contract
 can be regenerated and drift-checked:
     backend/.venv/bin/python backend/scripts/dump_openapi.py
 
 Pass ``--output PATH`` to write a disposable or alternate contract without
-touching the frontend's default contract file.
+touching the research client's default contract file.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ sys.path.insert(0, str(BACKEND_ROOT))
 from app.main import app  # noqa: E402
 
 
-DEFAULT_OUTPUT = Path(__file__).resolve().parents[2] / "frontend" / "openapi.json"
+DEFAULT_OUTPUT = Path(__file__).resolve().parents[2] / "clients" / "research" / "openapi.json"
 
 
 def main() -> None:
