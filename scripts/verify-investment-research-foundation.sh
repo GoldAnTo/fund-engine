@@ -33,12 +33,7 @@ fi
 
 (
   cd "$REPO_ROOT/frontend"
-  npm test -- \
-    InvestmentResearchShell.test.tsx \
-    NewResearchPage.test.tsx \
-    InvestmentResearchApi.test.ts \
-    productAccessibility.test.ts \
-    researchFoundation.test.ts
+  npm test -- InvestmentResearchApi.test.ts
   npm run typecheck
   npm run build
 )

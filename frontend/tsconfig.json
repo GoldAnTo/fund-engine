@@ -34,8 +34,6 @@
     "src",
     "vite.config.ts",
     "playwright.config.ts",
-    "e2e",
-    "playwright.live.config.ts",
-    "e2e-live"
+    "e2e"
   ]
 }

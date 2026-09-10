@@ -1,5 +1,7 @@
 # Fund Engine · 证据驱动的行业研究系统
 
+> 旧前端页面和 `prototype/` 已清理。当前页面仅显示“前端页面已清理，新原型待设计。”；后端、数据客户端、API 契约及相关测试保留。
+
 [![backend-ci](https://github.com/GoldAnTo/fund-engine/actions/workflows/backend.yml/badge.svg)](https://github.com/GoldAnTo/fund-engine/actions/workflows/backend.yml)
 [![frontend-ci](https://github.com/GoldAnTo/fund-engine/actions/workflows/frontend.yml/badge.svg)](https://github.com/GoldAnTo/fund-engine/actions/workflows/frontend.yml)
 
@@ -11,13 +13,13 @@
 系统的成功标准不是"生成一份看起来完整的研究报告"，而是让研究员持续回答：
 当前命题得到什么支持、受到什么反驳、仍缺什么证据、判断如何随时间变化。
 
-## 当前 checkout 状态（2026-09-06）
+## 当前 checkout 状态（2026-09-10）
 
-前端默认使用 **FundClaw 真实事件研究工作台**，已接入研究列表、创建与详情；`/?client=mock` 显式打开演示。API 失败不会回退示例。完整研究审核、冻结回放与导出仍在恢复中，详见实施跟踪；下述架构包含目标能力。
+公司研究、事件研究、归档及演示页面均已退役，旧路由不再提供研究操作。新统一原型尚在讨论；本次清理没有删除后端研究数据、API、worker 或冻结版本。
 
 旧 `POST /api/v1/research-cases` 无来源创建入口现已退役：未认证返回 401，认证后返回 409，并指引使用 `POST /api/v1/event-research` 建立有原始资料和租户归属的 Case；旧 workbench 与新增 thesis 均检查归属。
 
-完整检查、已实施修复和后续优先级见 [项目检测报告](docs/evaluation/2026-09-06-project-audit.md)。旧 Company Research 浏览器验收脚本随旧前端退役而缺失，相关验收目前不能通过，不能用演示 E2E 替代。
+历史检查记录见 [项目检测报告](docs/evaluation/2026-09-06-project-audit.md)。这些记录描述当时的页面与验证结果，不代表当前存在可操作的研究界面。
 
 ## 三条不可妥协的原则
 
@@ -44,8 +46,8 @@
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ 前端（React 18 + Vite，主题化研究外壳）                 │
-│ 主题 → 工作台 → 审核中心 → 数据中心 → 快照版本           │
+│ 前端（Vite 退役说明；保留数据客户端与契约）             │
+│ 新统一原型待设计                                      │
 ├─────────────────────────────────────────────────────┤
 │ 契约层（OpenAPI → openapi-typescript 生成类型）        │
 ├─────────────────────────────────────────────────────┤
@@ -73,15 +75,14 @@ nvm install
 nvm use
 cd frontend
 npm ci
-npm run dev                         # 配置 frontend/.env.local 后连接真实 API
+npm run dev                         # 仅显示页面清理状态
 npm test
 npm run build
 npx playwright install chromium
-npm run e2e                         # 桌面/移动演示交互回归
-npm run e2e:live                    # 隔离后端真实 HTTP 创建/刷新
+npm run e2e                         # 退役状态与旧路由无页面、无 API 请求的冒烟检查
 ```
 
-后端全量测试仍保留旧前端联调契约，缺失脚本相关失败见检测报告。当前不提供 `dev:live`、`dev:mock` 或 `verify:live-company-research` 命令。后端真实 HTTP 事件检查可独立运行 `backend/.venv/bin/python backend/scripts/verify_live_event_api.py`。
+旧页面专用浏览器验收和包装测试已移除。后端真实 HTTP 事件检查仍可独立运行 `APP_ENV=test backend/.venv/bin/python backend/scripts/verify_live_event_api.py`；部署代理上传边界检查仍由 `backend/scripts/verify_upload_proxy.py` 验证。
 
 ### 灌入示例业务数据
 
@@ -157,7 +158,7 @@ with Session(engine) as session:
 PY
 ```
 
-完成后用前端投资研究入口 (http://127.0.0.1:8080/research) 或直接调 API 验证：
+完成后直接调用 API 验证：
 
 ```bash
 TOKEN=$(grep ^RESEARCH_BEARER_TOKEN .env.one-click.local | cut -d= -f2)
@@ -165,15 +166,15 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
   'http://127.0.0.1:8000/api/v1/research-cases?limit=10'
 ```
 
-### 旧 Company Research 浏览器验收待恢复
+### 当前验收边界
 
-旧验收覆盖临时 SQLite、真实 API/worker、Bearer 代理、人工复核、冻结版本回放和 Markdown 导出。新前端尚未接入这些流程，相应 `frontend/scripts` 已不存在。`.github/workflows/backend.yml` 中的真实浏览器门禁仍会失败，保留这个缺口有助于避免把演示发布误认为产品验收。
+CI 保留后端测试、真实 HTTP API 检查、部署代理上传边界、数据库迁移与发布门禁。前端保留数据客户端和契约测试、构建，以及静态退役说明的浏览器冒烟检查。
 
-研究列表、创建与详情已接入，`npm run e2e:live` 验证隔离后端上的创建/刷新。下一步继续恢复任务进度、证据复核、版本回放和导出；`npm run e2e` 仍只验证演示交互。
+这些检查不代表新的研究页面已经实现或通过浏览器业务验收。新原型完成后再建立对应的页面操作验证。
 
 ## 一键本地运行（Docker）
 
-日常使用只需执行以下命令；它会启动 API、研究 worker、资料采集 worker 和前端，
+以下命令启动 API、研究 worker、资料采集 worker 和静态退役说明页面，
 首次启动会构建当前代码镜像并创建独立的本地 PostgreSQL 数据卷。
 
 ```bash
@@ -210,8 +211,7 @@ scripts/verify-one-click-runtime.sh --stability-seconds 600
 `DATABASE_POOL_RECYCLE_SECONDS` 仅用于高级本地调优。各服务的内存、CPU 资源上限及
 默认值在 `.env.one-click.example` 中列出，可通过同名变量配置。
 
-独立投资研究入口是 [http://127.0.0.1:8080/research](http://127.0.0.1:8080/research)；
-旧事件研究入口仍是 [http://127.0.0.1:8080/events/new](http://127.0.0.1:8080/events/new)。
+前端地址 [http://127.0.0.1:8080](http://127.0.0.1:8080) 仅显示页面清理状态，不提供研究操作。
 API 地址是 [http://127.0.0.1:8000](http://127.0.0.1:8000)。查看状态、停止新运行环境或
 恢复旧应用服务分别使用：
 
@@ -330,7 +330,7 @@ worker 目前没有独立健康端点，应由 supervisor 检查进程存活并�
 | 路径 | 内容 |
 |---|---|
 | `backend/` | FastAPI 账本服务、召回/合规/KPI 引擎与后端测试 |
-| `frontend/` | FundClaw 真实事件入口与显式演示、单元和浏览器回归 |
+| `frontend/` | 静态退役说明、数据客户端、API 契约及单元与冒烟测试 |
 | `docs/evaluation/` | 证据包：数据集清单、金标数据集、门禁报告、一键复现 |
 | `docs/evidence-driven-research-report.md` | 技术报告（[PDF 版](docs/evidence-driven-research-report.pdf)） |
 | `CONTEXT.md` | 研究上下文：核心词汇表、实现状态、验证体系 |
@@ -341,7 +341,7 @@ worker 目前没有独立健康端点，应由 supervisor 检查进程存活并�
 - **CI**：`backend-ci`（pytest + 发布门禁）与 `frontend-ci`（tsc + vitest + e2e）
   双流水线，按目录变更触发
 - **远端分支保护**：需在托管平台独立核实，本地配置不能证明远端保护状态。
-- **浏览器覆盖**：桌面/移动演示交互、隔离后端真实事件入口；旧 Company Research 完整闭环尚待恢复。
+- **浏览器覆盖**：仅检查退役说明及旧路由不再提供页面或发起 API 请求；业务能力由保留的 API 与后端测试验证。
 
 ## 文档导航
 
