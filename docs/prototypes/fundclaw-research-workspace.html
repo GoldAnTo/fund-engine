@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FundClaw · 对话投研工作台</title>
+<style>
+:root{color-scheme:light;--paper:oklch(98% .008 80);--surface:oklch(96.7% .01 80);--rail:oklch(94.8% .014 80);--ink:oklch(28% .014 70);--muted:oklch(48% .019 70);--line:oklch(87% .018 80);--accent:oklch(46% .12 34);--accent-pale:oklch(93.5% .027 34);--green:oklch(42% .065 147);--green-pale:oklch(94% .022 147);--amber:oklch(45% .09 70);--amber-pale:oklch(95% .04 85);--blue:oklch(43% .08 252);--blue-pale:oklch(94% .022 252);--radius:8px}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.65}
+button,input,textarea{font:inherit}
+button{cursor:pointer;color:inherit;background:none;border:0}
+button:disabled{cursor:not-allowed;opacity:.48}
+button,a,textarea,summary{outline-offset:4px}
+:focus-visible{outline:2px solid var(--accent)}
+button:hover:not(:disabled){background:var(--rail)}
+a{color:var(--accent)}
+button.primary{background:var(--accent);color:var(--paper);border:1px solid var(--accent)}
+button.primary:hover{background:oklch(39% .105 34)}
+button.secondary{border:1px solid var(--line);background:var(--paper)}
+small{font-size:12px}
+h1,h2,h3,p{margin:0}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+.skip{position:fixed;top:-60px;left:20px;z-index:90;background:var(--paper);padding:12px}
+.skip:focus{top:8px}
+.prototype{height:38px;padding:0 22px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);font-size:12px;background:var(--surface)}
+.prototype strong{font-weight:650;margin-right:12px}
+.prototype span{color:var(--muted)}
+.prototype button{font-size:12px;text-decoration:underline;padding:3px 6px;white-space:nowrap}
+.shell{display:grid;grid-template-columns:218px minmax(460px,1fr) 334px;height:calc(100dvh - 38px);min-height:650px}
+.sidebar{background:var(--rail);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:25px 14px 16px;min-height:0}
+.brand{display:flex;align-items:center;gap:9px;font-size:22px;letter-spacing:-.7px;font-weight:650;padding:0 9px 26px}
+.brand-mark{color:var(--accent);width:29px;height:29px}
+.brand small{font-size:10px;letter-spacing:.6px;color:var(--muted);display:block;font-weight:500;line-height:1}
+.new{display:flex;gap:10px;align-items:center;width:100%;padding:9px 13px;border-radius:var(--radius);text-align:left;font-weight:550}
+.plus{font-size:21px;line-height:1}
+.nav-row{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;padding:9px 12px;border-radius:6px}
+.nav-row.active{background:var(--paper)}
+.nav-group{margin-top:22px}
+.nav-label{padding:0 12px 8px;color:var(--muted);font-size:11px;letter-spacing:.09em}
+.count{font-size:11px;min-width:20px;padding:0 5px;background:var(--paper);border-radius:5px;text-align:center}
+.thread-list{overflow:auto;flex:1;margin-top:22px}
+.thread{display:block;width:100%;padding:11px 12px;border-radius:7px;text-align:left;margin-bottom:3px}
+.thread.selected{background:var(--paper)}
+.thread-title{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:13px;font-weight:550}
+.thread-meta{display:flex;gap:5px;align-items:center;color:var(--muted);font-size:11px;margin-top:5px}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green)}
+.dot.amber{background:var(--amber)}
+.side-bottom{padding:15px 10px 0;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px}
+.avatar{width:28px;height:28px;display:grid;place-items:center;border:1px solid var(--line);border-radius:50%;background:var(--paper);font-size:11px}
+.side-bottom p{font-size:12px}.side-bottom small{color:var(--muted);font-size:10px}
+.workspace{min-width:0;display:flex;flex-direction:column;min-height:0}
+.topbar{height:64px;border-bottom:1px solid var(--line);padding:0 32px;display:flex;align-items:center;justify-content:space-between;font-size:12px;flex-shrink:0;color:var(--muted);gap:8px}
+.breadcrumb{display:flex;gap:10px;align-items:center;min-width:0}
+.breadcrumb>span:not(:last-child){flex-shrink:0}
+#short-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.privacy{display:flex;align-items:center;gap:6px;font-size:11px;white-space:nowrap}
+.workspace-content{flex:1;overflow:auto;padding:29px 38px 20px;scroll-behavior:smooth}
+.research-heading{display:flex;gap:12px;align-items:flex-start;justify-content:space-between}
+.research-heading>div{min-width:0}
+h1,.scope,.document-sheet h4{overflow-wrap:anywhere}
+.eyebrow{font-size:11px;color:var(--muted);letter-spacing:.09em;margin-bottom:8px}
+h1{font-size:25px;line-height:1.4;font-weight:600;letter-spacing:-.5px}
+.heading-meta{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px 14px;font-size:11px;color:var(--muted)}
+.badge{border-radius:5px;padding:2px 7px;font-size:10px;font-weight:550;display:inline-block;white-space:nowrap;background:var(--green-pale);color:var(--green)}
+.badge.amber{background:var(--amber-pale);color:var(--amber)}
+.badge.blue{background:var(--blue-pale);color:var(--blue)}
+.badge.neutral{background:var(--rail);color:var(--muted)}
+.scope{display:flex;flex-wrap:wrap;gap:5px 20px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:12px 0;margin:21px 0 26px;font-size:11px;color:var(--muted)}
+.scope b{color:var(--ink);font-weight:500;margin-left:5px}
+.timeline-heading{display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:11px;margin-bottom:17px}
+.user-message{background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:16px 18px;margin-left:30px;margin-bottom:27px}
+.message-meta{font-size:10px;color:var(--muted);margin-bottom:7px;display:flex;justify-content:space-between}
+.user-message p{font-size:13px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere}
+.historical-question{white-space:pre-wrap;overflow-wrap:anywhere}
+.event{display:grid;grid-template-columns:27px 1fr;gap:13px;margin:0 0 24px}
+.event-icon{width:26px;height:26px;border:1px solid var(--line);border-radius:7px;display:grid;place-items:center;font-size:11px;background:var(--paper);font-weight:650}
+.event-icon.green{color:var(--green);background:var(--green-pale);border-color:transparent}
+.event-icon.clay{color:var(--accent);background:var(--accent-pale);border-color:transparent}
+.event-head{display:flex;align-items:center;gap:8px;font-size:12px;margin:1px 0 5px;flex-wrap:wrap}
+.event-head strong{font-weight:600}
+.event-head time{margin-left:auto;color:var(--muted);font-size:10px}
+.event-body{font-size:13px;line-height:1.85}
+.event-sub{font-size:12px;color:var(--muted);margin-top:5px}
+.receipt{display:flex;flex-wrap:wrap;gap:10px;font-size:10px;color:var(--muted);margin-top:8px}
+.evidence-inline{margin-top:11px;border-top:1px solid var(--line)}
+.evidence-link{display:flex;align-items:center;gap:10px;text-align:left;width:100%;padding:11px 3px;border-bottom:1px solid var(--line);font-size:12px}
+.evidence-num{color:var(--accent);font-size:10px;letter-spacing:.03em}
+.evidence-link .arrow{margin-left:auto;color:var(--muted)}
+.evidence-link small{font-size:10px;color:var(--muted);display:block}
+.blocker{border:1px solid oklch(83% .05 85);background:var(--amber-pale);border-radius:8px;padding:16px 18px;margin:4px 0 24px 40px}
+.blocker-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.blocker h3{font-size:13px;font-weight:600}
+.blocker p{font-size:12px;margin:7px 0 12px;line-height:1.85;color:var(--muted)}
+.blocker button,.draft button{padding:6px 11px;border-radius:6px;font-size:11px}
+.blocker .hint{font-size:10px;margin-top:9px;margin-bottom:0}
+.draft{margin:3px 0 24px 40px;padding:18px;background:var(--surface);border:1px solid var(--line);border-radius:8px}
+.draft h3{font-size:15px;margin:8px 0}
+.draft p{font-size:12px;color:var(--muted);margin-bottom:13px}
+.composer-wrap{padding:13px 32px 14px;background:var(--paper);border-top:1px solid var(--line)}
+.composer{border:1px solid oklch(79% .021 75);border-radius:10px;padding:11px 13px;background:var(--paper)}
+.composer:focus-within{border-color:var(--accent)}
+textarea{background:transparent;color:var(--ink);width:100%;resize:none;min-height:48px;max-height:110px;border:0;outline:none!important;font-size:13px;line-height:1.7}
+textarea::placeholder{color:var(--muted)}
+.composer-bottom{display:flex;align-items:center;justify-content:space-between;gap:9px}
+.composer-label{color:var(--muted);font-size:10px}
+.send{padding:7px 11px;border-radius:6px;font-size:11px;white-space:nowrap}
+.composer-note{margin-top:7px;text-align:center;font-size:10px;color:var(--muted)}
+.inspector{border-left:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column;min-height:0}
+.inspector-top{height:64px;border-bottom:1px solid var(--line);padding:0 22px;display:flex;align-items:center;justify-content:space-between}
+.inspector-top h2{font-size:13px;font-weight:600}
+.inspector-top small{font-size:10px;color:var(--muted)}
+.inspector-scroll{overflow:auto;padding:20px 20px 16px}
+.section-label{font-size:11px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.roles{border-bottom:1px solid var(--line);padding-bottom:16px}
+.role{width:100%;display:grid;grid-template-columns:25px 1fr auto;gap:10px;text-align:left;align-items:start;padding:10px 8px;border:1px solid transparent;border-radius:7px;margin:3px 0}
+.role.selected{border-color:var(--line);background:var(--paper)}
+.role-number{font-size:10px;color:var(--muted);padding-top:4px}
+.role-name{font-size:12px;font-weight:600;display:block}
+.role-current{font-size:10px;color:var(--muted);display:block;margin-top:3px}
+.role .badge{font-size:9px;margin-top:3px;padding:1px 5px}
+.role-detail{padding:18px 0;border-bottom:1px solid var(--line)}
+.detail-title{font-size:12px;font-weight:600;margin-bottom:13px}
+dl{margin:0}
+.detail-row{display:grid;grid-template-columns:48px 1fr;gap:9px;margin:9px 0;font-size:11px;line-height:1.8}
+dt{color:var(--muted)}dd{margin:0}
+.steps{list-style:none;padding:0;margin:12px 0 0}
+.steps li{display:flex;gap:9px;font-size:10px;color:var(--muted);padding:3px 0}
+.steps li span:first-child{width:14px;color:var(--green)}
+.side-evidence{padding-top:19px}
+.side-evidence .evidence-link{font-size:11px;align-items:flex-start;padding:10px 0}
+.side-evidence .evidence-link small{font-size:10px;margin-top:2px}
+.inspector-note{font-size:10px;line-height:1.8;color:var(--muted);margin-top:19px;padding-top:13px;border-top:1px solid var(--line)}
+.mobile-nav{display:none}
+.empty{padding:65px 0 35px;text-align:center}
+.empty .empty-mark{color:var(--accent);font-size:30px}
+.empty h2{font-size:24px;margin:16px 0 12px;font-weight:550}
+.empty p{font-size:13px;color:var(--muted);max-width:400px;margin:auto}
+.prompts{display:flex;flex-direction:column;gap:9px;max-width:380px;margin:28px auto 0}
+.prompts button{border:1px solid var(--line);padding:11px 14px;border-radius:7px;text-align:left;font-size:12px;background:var(--surface)}
+dialog{position:fixed;inset:0 0 0 auto;margin:0;width:min(580px,95vw);height:100dvh;max-height:100dvh;max-width:none;border:0;border-left:1px solid var(--line);padding:0;background:var(--paper);color:var(--ink);box-shadow:-10px 0 60px oklch(25% .01 75 / .1)}
+dialog::backdrop{background:oklch(30% .01 75 / .24)}
+.dialog-header{display:flex;align-items:center;justify-content:space-between;padding:21px 28px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--paper);z-index:1}
+.dialog-header h2{font-size:15px;font-weight:600}
+.close{font-size:22px;line-height:1;padding:7px;border-radius:5px}
+.dialog-content{padding:28px;font-size:13px}
+.dialog-content h3{font-size:22px;line-height:1.5;font-weight:550;margin:10px 0 17px}
+.dialog-content h4{font-size:13px;font-weight:600;margin:23px 0 10px}
+.dialog-content p{margin:10px 0;line-height:1.9;color:var(--muted)}
+.sample-note{padding:11px 13px;background:var(--amber-pale);font-size:11px;color:var(--amber);border-radius:6px}
+.document-sheet{margin:20px 0;padding:24px;background:var(--surface);border:1px solid var(--line)}
+.document-sheet .page{font-size:10px;color:var(--muted);margin-bottom:22px}
+.document-sheet p{font-size:13px;color:var(--ink);line-height:2}
+mark{background:oklch(90% .06 85);color:inherit;padding:2px 3px}
+.dialog-content .detail-row{grid-template-columns:75px 1fr;font-size:12px}
+.backend-row{padding:14px 0;border-bottom:1px solid var(--line);display:flex;align-items:start;gap:12px}
+.backend-row strong{font-size:13px;display:block}
+.backend-row small{display:block;color:var(--muted);font-size:11px;margin-top:4px}
+.backend-row .badge{margin-left:auto;margin-top:3px}
+#toast{position:fixed;left:50%;bottom:30px;transform:translateX(-50%);max-width:calc(100vw - 30px);padding:11px 18px;border-radius:8px;box-shadow:0 5px 25px oklch(28% .01 75 / .16);background:var(--ink);color:var(--paper);font-size:12px;z-index:100}
+#toast:empty{display:none}
+@media(min-width:1500px){.shell{grid-template-columns:238px minmax(600px,1fr) 366px}.workspace-content{padding:35px 58px 20px}.inspector-scroll{padding:22px 25px}.composer-wrap{padding-left:52px;padding-right:52px}}
+@media(max-width:1199px){.shell{grid-template-columns:190px minmax(380px,1fr) 296px}.sidebar{padding-left:10px;padding-right:10px}.workspace-content{padding:24px}.topbar{padding:0 24px}.inspector-scroll{padding:17px 15px}.role{gap:7px}.composer-wrap{padding:12px 20px}h1{font-size:22px}}
+@media(max-width:999px){.shell{grid-template-columns:minmax(370px,1fr) 305px;min-height:0;height:calc(100dvh - 84px)}.sidebar{display:none}.mobile-nav{height:46px;display:flex;border-bottom:1px solid var(--line);align-items:center;background:var(--rail);padding:0 14px;gap:8px}.mobile-nav strong{font-size:17px;margin-right:auto;letter-spacing:-.3px}.mobile-nav button{font-size:12px;padding:5px 10px;border-radius:5px}.mobile-nav button[aria-pressed=true]{background:var(--paper);color:var(--accent)}.mobile-nav [data-panel=team]{display:none}body[data-panel=threads] .shell{display:block}body[data-panel=threads] .sidebar{display:flex;height:100%}body[data-panel=threads] .workspace,body[data-panel=threads] .inspector{display:none}.prototype{padding:0 16px}}
+@media(max-width:699px){.prototype{height:auto;min-height:43px;font-size:10px;padding:5px 12px;align-items:start}.prototype strong{margin-right:5px}.prototype span{display:block}.prototype button{font-size:10px;padding-top:4px}.shell{display:block;height:calc(100dvh - 89px)}.workspace{height:100%}.inspector{display:none}.topbar{height:49px;padding:0 20px}.workspace-content{padding:23px 20px 14px}.mobile-nav [data-panel=team]{display:block}.research-heading{gap:5px}h1{font-size:22px}.heading-meta{gap:3px 9px}.scope{gap:6px 12px;font-size:10px;margin:18px 0 22px}.user-message{margin-left:0;padding:13px 14px}.event{gap:10px;grid-template-columns:24px 1fr}.event-head{gap:5px}.event-head time{font-size:9px}.blocker,.draft{margin-left:0}.composer-wrap{padding:10px 14px 12px}.composer-label{font-size:9px}.composer-note{font-size:9px}.composer-bottom{gap:5px}body[data-panel=team] .workspace,body[data-panel=team] .sidebar{display:none}body[data-panel=team] .inspector{display:flex;height:100%;border:0}.inspector-scroll{padding:20px 24px}.empty{padding-top:34px}.privacy{font-size:10px}.dialog-content{padding:21px}.dialog-header{padding:16px 21px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+</style>
+</head>
+<body data-panel="conversation">
+<a class="skip" href="#main">跳到研究对话</a>
+<div class="prototype"><div><strong>交互原型 · 演示数据</strong><span>尚未连接研究引擎，操作仅演示界面效果</span></div><button id="backend">查看开发进度 ↗</button></div>
+<nav class="mobile-nav" aria-label="工作区面板"><strong>FundClaw</strong><button data-panel="threads" aria-pressed="false">研究列表</button><button data-panel="conversation" aria-pressed="true">对话</button><button data-panel="team" aria-pressed="false">团队与证据</button></nav>
+<div class="shell">
+<aside class="sidebar" aria-label="研究导航">
+<div class="brand"><svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M7 25V7h18M7 16h13M16 25V7" stroke="currentColor" stroke-width="2.5"/><circle cx="24" cy="24" r="4" fill="currentColor"/></svg><div>FundClaw<small>RESEARCH WORKSPACE</small></div></div>
+<button class="new primary" id="new-research"><span class="plus" aria-hidden="true">＋</span>发起研究</button>
+<div class="nav-group"><button class="nav-row active" id="all-threads"><span>研究对话</span><span class="count" id="thread-count">2</span></button><button class="nav-row" id="attention"><span>需要关注</span><span class="count" id="attention-count">1</span></button></div>
+<div class="thread-list"><div class="nav-label">最近的研究</div><div id="threads"></div></div>
+<div class="side-bottom"><span class="avatar">研</span><div><p>我的研究空间</p><small>私有对话 · 本地演示</small></div></div>
+</aside>
+<main class="workspace" id="main" tabindex="-1">
+<header class="topbar"><div class="breadcrumb"><span>研究对话</span><span aria-hidden="true">/</span><span id="short-title">光模块行业</span></div><span class="privacy">◈ 仅自己可见</span></header>
+<div class="workspace-content" id="content"></div>
+<div class="composer-wrap"><form class="composer" id="compose"><label class="sr-only" for="message">输入研究问题或补充研究范围</label><textarea id="message" rows="2" maxlength="20000" placeholder="继续追问，或描述新的研究范围…"></textarea><div class="composer-bottom"><span class="composer-label">四位固定投研角色 · 保留历史范围</span><button class="send primary" type="submit" id="send">发送并演示 ↑</button></div></form><div class="composer-note">Enter 发送 · Shift + Enter 换行 · AI 草案需人工复核</div></div>
+</main>
+<aside class="inspector" aria-label="投研团队和证据"><div class="inspector-top"><h2>研究现场</h2><small id="stage-label">演示 · 进行中</small></div><div class="inspector-scroll"><div class="section-label"><span>固定投研团队</span><span>4 个角色</span></div><div class="roles" id="roles"></div><div class="role-detail" id="role-detail"></div><div class="side-evidence"><div class="section-label"><span>已获得的证据</span><span id="evidence-count">2 份样例</span></div><div id="evidence-list"></div></div><p class="inspector-note">只展示可核查的行动、证据和阻塞。原始推理与内部提示不进入研究现场。</p></div></aside>
+</div>
+<dialog id="inspector-dialog" aria-labelledby="dialog-title"><div class="dialog-header"><h2 id="dialog-title"></h2><button class="close" id="close-dialog" aria-label="关闭详情">×</button></div><div class="dialog-content" id="dialog-content"></div></dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+<script>
+const $ = (s) => document.querySelector(s);
+const escapeText = (s) => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const evidence = [
+ {id:'E01',title:'公司 A · 半年度报告',subtitle:'样例披露文件 · 第 18 页',kind:'报告期经营数据',page:'18',text:'报告期内，高速光模块产品的交付量增加。相关收入按产品类别列示，但未单独披露下一季度订单取消与延期情况。',gap:'披露可用于说明报告期经营变化，不能单独证明未来订单兑现。'},
+ {id:'E02',title:'公司 B · 投资者交流纪要',subtitle:'样例交流记录 · 第 6 页',kind:'管理层陈述',page:'6',text:'公司表示将根据客户项目进度安排产能。客户验收、产品组合及交付时点可能影响收入确认，具体订单规模未披露。',gap:'管理层陈述需要与正式披露交叉验证，订单规模仍为未知。'}
+];
+const roleDefs = [
+ {name:'范围与身份',purpose:'把问题转为可执行、可回看的研究范围',done:'研究主题和材料范围已记录',next:'保持当前范围，新的要求建立后续研究',steps:['识别研究主题','记录范围与时间边界','交接给证据角色']},
+ {name:'来源与证据',purpose:'寻找允许使用的材料，并定位到原文',done:'2 份样例资料已定位到页码',next:'补充订单兑现的公开披露',steps:['检索允许使用的来源','冻结资料与原文定位','标记未找到的必要材料']},
+ {name:'分析与反证',purpose:'比较支持与反驳，保留尚未验证的判断',done:'找到需求改善线索，同时记录交付风险',next:'核对订单、交付与收入的对应关系',steps:['提取候选陈述','交叉检查支持和反证','输出证据缺口']},
+ {name:'编写与检查',purpose:'整理研究草案，核对引用与未知项',done:'等待分析角色的证据清单',next:'逐条检查结论与原文引用',steps:['汇总候选判断','检查引用和未知项','生成待人工复核草案']}
+];
+const threads = [
+ {id:1,title:'光模块需求：订单兑现与反证',short:'光模块行业',question:'研究光模块行业的需求变化，重点看订单能否兑现，并找出可能推翻乐观判断的证据。',phase:'running',run:1,notes:[]},
+ {id:2,title:'储能产业链：需求与价格变化',short:'储能产业链',question:'研究储能产业链的需求与价格变化，区分已披露的事实和仍然缺少依据的判断。',phase:'blocked',run:1,notes:[]}
+];
+let active=1, selectedRole=1, timer, toastTimer, previousFocus;
+const current=()=>threads.find(t=>t.id===active);
+function toast(text){$('#toast').textContent=text;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').textContent='',4500)}
+function panel(name){document.body.dataset.panel=name;document.querySelectorAll('.mobile-nav button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.panel===name)))}
+function statuses(t){if(!t)return ['等待开始','等待开始','等待开始','等待开始'];if(t.phase==='draft')return ['已完成','已完成','已完成','待复核'];return t.phase==='blocked'?['已完成','缺少材料','被阻塞','等待前序']:['已完成','搜集中','分析中','等待前序']}
+function badge(s){return s==='已完成'?'':s==='缺少材料'||s==='被阻塞'?'amber':s==='搜集中'||s==='分析中'||s==='待复核'?'blue':'neutral'}
+function evidenceButton(e){return '<button class="evidence-link" data-evidence="'+e.id+'"><span class="evidence-num">'+e.id+'</span><span>'+e.title+'<small>'+e.subtitle+'</small></span><span class="arrow" aria-hidden="true">↗</span></button>'}
+function renderThreads(){$('#attention-count').textContent=threads.filter(t=>t.phase==='blocked').length;$('#thread-count').textContent=threads.length;$('#threads').innerHTML=threads.map(t=>'<button class="thread '+(t.id===active?'selected':'')+'" data-thread="'+t.id+'" '+(t.id===active?'aria-current="page"':'')+'><span class="thread-title">'+escapeText(t.title)+'</span><span class="thread-meta"><i class="dot '+(t.phase==='blocked'?'amber':'')+'"></i>'+(t.phase==='draft'?'草案待复核':t.phase==='blocked'?'等待补证':'进行中')+' · 演示</span></button>').join('')}
+function renderInspector(){const t=current(), states=statuses(t);$('#stage-label').textContent='演示 · '+(!t?'未开始':t.phase==='draft'?'草案完成':t.phase==='blocked'?'等待补证':'进行中');
+$('#roles').innerHTML=roleDefs.map((r,i)=>'<button class="role '+(selectedRole===i?'selected':'')+'" data-role="'+i+'" aria-pressed="'+(selectedRole===i)+'"><span class="role-number">0'+(i+1)+'</span><span><span class="role-name">'+r.name+'</span><span class="role-current">'+(!t?r.purpose: t.phase==='blocked'&&i===2?'等待订单兑现材料':t.phase==='draft'&&i===3?'草案已生成，等待人工复核':i===1?'公开来源检索 · 原文定位':r.steps[0])+'</span></span><span class="badge '+badge(states[i])+'">'+states[i]+'</span></button>').join('');
+const r=roleDefs[selectedRole], completedSteps=!t?0:t.phase==='draft'?3:(t.phase==='blocked'?[3,3,2,0]:[3,2,1,0])[selectedRole];
+$('#role-detail').innerHTML='<div class="detail-title">'+r.name+' · 工作详情</div><dl><div class="detail-row"><dt>职责</dt><dd>'+r.purpose+'</dd></div><div class="detail-row"><dt>已完成</dt><dd>'+(!t?'尚未开始':t.phase==='draft'?'本轮材料与引用检查已完成（演示）':r.done)+'</dd></div><div class="detail-row"><dt>下一步</dt><dd>'+(!t?'等待你发起研究':t.phase==='draft'?'由研究员复核草案与证据':r.next)+'</dd></div></dl><ol class="steps">'+r.steps.map((s,i)=>'<li><span aria-hidden="true">'+(i<completedSteps?'✓':'○')+'</span><span>'+s+'</span></li>').join('')+'</ol>'+(t&&t.phase==='blocked'&&(selectedRole===1||selectedRole===2)?'<p class="event-sub">阻塞原因：缺少订单兑现的公开披露。无法据此形成确定判断。</p>':'');
+$('#evidence-count').textContent=t?'2 份样例':'0 份';$('#evidence-list').innerHTML=t?evidence.map(evidenceButton).join(''):'<p class="event-sub">研究开始后，资料、页码与证据缺口会显示在这里。</p>'}
+function event(icon,name,time,body,extra='',type=''){return '<article class="event"><span class="event-icon '+type+'" aria-hidden="true">'+icon+'</span><div><div class="event-head"><strong>'+name+'</strong><time>'+time+'</time></div><div class="event-body">'+body+'</div>'+extra+'</div></article>'}
+function renderMain(){const t=current();$('#short-title').textContent=t?t.short:'新研究';
+if(!t){$('#content').innerHTML='<div class="empty"><div class="empty-mark" aria-hidden="true">⌘</div><h2>从一个问题开始研究</h2><p>描述你想弄清楚的事。固定投研团队会展开资料搜集、分析与反证，并把进展留在这段对话里。</p><div class="prompts"><button data-prompt="研究光模块行业的需求变化，重点看订单兑现与反证。">研究光模块需求，找到支持与反证 ↗</button><button data-prompt="研究储能产业链的需求与价格变化，列出证据缺口。">梳理储能产业链，列出证据缺口 ↗</button></div></div>';return}
+let body='<div class="research-heading"><div><div class="eyebrow">RESEARCH THREAD <span aria-hidden="true">/</span> 研究对话</div><h1>'+escapeText(t.title)+'</h1><div class="heading-meta"><span>本轮研究 0'+t.run+'</span><span>四位 AI 协作</span><span>所有材料均为原型样例</span></div></div><span class="badge '+(t.phase==='blocked'?'amber':t.phase==='draft'?'blue':'')+'">'+(t.phase==='blocked'?'等待补证':t.phase==='draft'?'待人工复核':'研究进行中')+'</span></div><div class="scope"><span>研究范围<b>'+escapeText(t.short)+'</b></span><span>材料范围<b>公开披露</b></span><span>时点<b>2026.09.03（样例）</b></span></div><div class="timeline-heading"><span>本轮研究进展</span><button id="demo-step" class="badge neutral">'+(t.phase==='running'?'演示：遇到阻塞 →':t.phase==='blocked'?'演示：补证后继续 →':'重播流程 ↺')+'</button></div><article class="user-message"><div class="message-meta"><span>你</span><span>09:41 · 样例时间</span></div><p>'+escapeText(t.question)+'</p></article>';
+body+=event('F','FundClaw','09:41','研究已建立。团队会先核对研究范围，再从公开材料中寻找支持、反证和缺口。','<div class="receipt"><span>✓ 范围已记录</span><span>✓ 4 个角色就绪</span><span>✓ 原始问题保留</span></div>','clay');
+body+=event('✓','范围与身份','09:41','已记录本轮主题与公开材料范围。新增范围会建立后续研究，保留这一轮记录。','','green');
+body+=event('02','来源与证据','09:42','已整理 2 份样例材料，可逐份查看出处和原文位置。','<div class="evidence-inline">'+evidence.map(evidenceButton).join('')+'</div>');
+body+=event('03','分析与反证','09:43','正在核对“需求改善”与“订单兑现”之间的证据。','<p class="event-sub">已记录：经营变化线索 1 项 · 交付风险 1 项 · 待验证关系 1 项</p>');
+if(t.phase==='blocked')body+='<section class="blocker"><div class="blocker-top"><h3>缺一块关键证据</h3><span class="badge amber">来源与证据 · 被阻塞</span></div><p>现有样例材料未披露订单取消、延期与实际交付的对应情况。分析角色已保留候选判断，正在等待补充材料。</p><button class="secondary" id="view-gap">查看待补材料</button><p class="hint">后续可补充公开披露；已有证据和研究历史会继续保留。</p></section>';
+if(t.phase==='draft')body+='<section class="draft"><span class="badge blue">AI 草案 · 尚未人工复核</span><h3>研究草案已整理，保留 1 项未知</h3><p>材料能支持经营变化的线索，但不足以确认订单全面兑现。草案已把支持、反证和未验证关系分别列出。</p><button class="secondary" id="view-draft">阅读草案与引用 ↗</button></section>';
+if(t.run>1)body+='<p class="event-sub">前 '+(t.run-1)+' 轮范围已保留。 <button id="view-history" class="badge neutral">查看历史范围 ↗</button></p>';
+$('#content').innerHTML=body}
+function render(){renderThreads();renderMain();renderInspector();$('#send').disabled=false}
+function openDialog(title,html){if(!$('#inspector-dialog').open)previousFocus=document.activeElement;$('#dialog-title').textContent=title;$('#dialog-content').innerHTML=html;$('#inspector-dialog').showModal();$('#close-dialog').focus()}
+function closeDialog(){$('#inspector-dialog').close();if(previousFocus&&previousFocus.isConnected)previousFocus.focus()}
+function showEvidence(id){const e=evidence.find(e=>e.id===id);if(!e)return;openDialog('证据 '+id+' · 原文定位','<div class="sample-note">样例证据，非真实公告。以下文字仅用于演示原文追溯，不构成投研依据。</div><h3>'+e.title+'</h3><span class="badge blue">候选材料 · 未人工复核</span><dl><div class="detail-row"><dt>材料类型</dt><dd>'+e.kind+'</dd></div><div class="detail-row"><dt>原文位置</dt><dd>第 '+e.page+' 页 · 样例段落 02</dd></div><div class="detail-row"><dt>材料时点</dt><dd>2026-09-03（演示值）</dd></div><div class="detail-row"><dt>本轮用途</dt><dd>检查经营变化与订单兑现的对应关系</dd></div></dl><div class="document-sheet"><div class="page">样例文件 / 第 '+e.page+' 页</div><p><mark>'+e.text+'</mark></p></div><h4>这份材料能说明什么</h4><p>'+e.gap+'</p><h4>证据链</h4><p>样例披露文件 → 冻结版本 → 原文定位 → 候选陈述 → 人工复核</p>')}
+function showGap(){openDialog('待补材料 · 订单兑现','<span class="badge amber">证据缺口</span><h3>把订单与实际交付接起来</h3><p>当前样例只说明经营变化，缺少对订单取消、延期与交付的直接披露。</p><dl><div class="detail-row"><dt>负责角色</dt><dd>来源与证据</dd></div><div class="detail-row"><dt>需要材料</dt><dd>公开披露的订单进展、交付周期或客户验收信息</dd></div><div class="detail-row"><dt>阻塞影响</dt><dd>分析与反证无法确认“需求改善可持续兑现”</dd></div><div class="detail-row"><dt>保留内容</dt><dd>已搜集材料、原文位置、候选判断与前序事件</dd></div></dl><p class="sample-note">原型演示可直接切换到草案状态；正式产品需要实际补齐材料并通过后端校验。</p><button class="primary send" id="resolve-gap">模拟补证并继续</button>')}
+function showDraft(){openDialog('研究草案 · 待人工复核','<div class="sample-note">这是样例草案，内容和引用均为演示数据。</div><h3>需求变化与订单兑现</h3><span class="badge blue">AI 草案 · 未发布</span><h4>当前判断</h4><p>样例材料提供经营变化的线索，尚不足以确认未来订单的兑现程度。</p><h4>支持与反证</h4><p>报告期交付量变化属于支持线索。客户验收与交付时点的不确定性提示了反证方向。</p>'+evidence.map(evidenceButton).join('')+'<h4>仍然未知</h4><p>订单取消、延期和实际交付之间的关系尚未被样例材料直接验证，应保留为未知。</p><h4>下一步</h4><p>由研究员核对资料出处、引用与结论是否匹配。正式复核和发布功能待后端接口接通。</p>')}
+function setPhase(phase){clearTimeout(timer);const focusId=document.activeElement?.id;const t=current();if(!t)return;t.phase=phase;render();if(focusId==='demo-step')$('#demo-step').focus();if(focusId==='view-gap'&&phase==='draft')$('#view-draft').focus();toast(phase==='draft'?'演示：补证后形成草案，仍需人工复核。':phase==='blocked'?'演示：已出现证据缺口，团队状态同步更新。':'已重置到进行中（演示）。')}
+function newResearch(){clearTimeout(timer);active=null;render();panel('conversation');$('#message').value='';$('#message').focus()}
+$('#compose').addEventListener('submit',e=>{e.preventDefault();const input=$('#message').value.trim();if(!input){$('#message').focus();toast('先输入一个研究问题。');return}clearTimeout(timer);let t=current();if(!t){t={id:Date.now(),title:input.slice(0,35),short:input.slice(0,16),question:input,phase:'running',run:1,notes:[]};threads.unshift(t);active=t.id}else{t.notes.push({question:t.question,run:t.run,scope:t.short});t.question=input;t.run+=1;t.phase='running'}$('#message').value='';selectedRole=1;render();panel('conversation');toast('演示研究已建立；没有调用模型或保存到后端。');timer=setTimeout(()=>{if(current()===t)setPhase('blocked')},5000)});
+$('#message').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('#compose').requestSubmit()}});
+$('#new-research').addEventListener('click',newResearch);
+$('#all-threads').addEventListener('click',()=>{active=threads[0].id;render();panel('conversation')});
+$('#attention').addEventListener('click',()=>{const t=threads.find(t=>t.phase==='blocked');if(t){active=t.id;render();panel('conversation')}else toast('当前没有等待补证的演示研究。')});
+$('#close-dialog').addEventListener('click',closeDialog);
+$('#inspector-dialog').addEventListener('cancel',e=>{e.preventDefault();closeDialog()});
+$('#backend').addEventListener('click',()=>openDialog('已实现与待接通','<h3>从数据基础到可用研究工作台</h3><p>当前预览说明产品交互。以下状态依据当前分支代码，未表示页面已接入真实任务。</p><div class="backend-row"><div><strong>会话与研究记录持久化</strong><small>身份隔离、幂等记录、四角色事件、迁移保护</small></div><span class="badge">已完成</span></div><div class="backend-row"><div><strong>对话发起研究服务</strong><small>解析请求、启动原生研究、返回真实任务回执</small></div><span class="badge amber">下一阶段</span></div><div class="backend-row"><div><strong>实时研究现场</strong><small>原生任务投影、认证事件流、断线续传</small></div><span class="badge neutral">待接通</span></div><div class="backend-row"><div><strong>网页交互</strong><small>角色详情、证据查看、阻塞和草案预览</small></div><span class="badge blue">当前原型</span></div><p>后端基础已提交至 03bf8446；正式控制 API、角色事件投影和网页绑定仍需后续实现。</p>'));
+document.addEventListener('click',e=>{const target=e.target.closest('button');if(!target)return;
+if(target.dataset.thread){clearTimeout(timer);active=Number(target.dataset.thread);render();panel('conversation');$('#main').focus()}
+if(target.dataset.role){selectedRole=Number(target.dataset.role);renderInspector();document.querySelector('[data-role="'+selectedRole+'"]').focus()}
+if(target.dataset.evidence)showEvidence(target.dataset.evidence);
+if(target.dataset.panel)panel(target.dataset.panel);
+if(target.dataset.prompt){$('#message').value=target.dataset.prompt;$('#message').focus()}
+if(target.id==='demo-step'){const t=current();setPhase(t.phase==='running'?'blocked':t.phase==='blocked'?'draft':'running')}
+if(target.id==='view-history'){const t=current();openDialog('历史范围 · 当前对话', '<p>以下为本地演示保存的前序研究问题。每次补充范围都保留原始问题。</p>'+t.notes.map(n=>'<section class="document-sheet"><div class="eyebrow">研究 0'+n.run+'</div><h4>'+escapeText(n.scope)+'</h4><p class="historical-question">'+escapeText(n.question)+'</p></section>').join(''))}
+if(target.id==='view-gap')showGap();
+if(target.id==='view-draft')showDraft();
+if(target.id==='resolve-gap'){closeDialog();setPhase('draft')}
+});
+render();
+</script>
+</body></html>

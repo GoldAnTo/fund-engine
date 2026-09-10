@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from calendar import monthrange
 from datetime import date, datetime, timezone
 from typing import Literal
 
@@ -12,8 +11,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.domain.atomic_claims import AtomicClaimDraft
 from app.acquisition.policy import B_SCOPE_POLICY, INTAKE_MATERIAL_POLICY
+from app.domain.atomic_claims import (
+    AtomicClaimDraft,
+    claim_period_end,
+    normalize_claim_period,
+)
 from app.models.acquisition import (
     AcquisitionAttempt,
     AcquisitionJob,
@@ -32,8 +35,10 @@ from app.models.ledger import (
     SourceStatement,
     ValidationError,
 )
+from app.models.source_governance import SourceContract
 from app.repositories.acquisition import StaleLeaseError
 from app.repositories.research import ResearchRepository
+from app.repositories.research_preparation import ResearchPreparationRepository
 from app.services.automatic_admission import (
     ADAPTER_SOURCE_IDENTITY,
     adapter_url_is_authorized,
@@ -48,9 +53,6 @@ from app.services.automatic_admission import (
     worker_replay_identity,
 )
 from app.services.source_admission import source_contract_is_active
-from app.models.source_governance import SourceContract
-from app.repositories.research_preparation import ResearchPreparationRepository
-
 
 _CLAIM_TYPES = frozenset(
     {
@@ -159,9 +161,7 @@ class AtomicClaimService:
                 "object_text": draft.object_text,
                 "numeric_value": draft.numeric_value,
                 "unit": draft.unit,
-                "observed_period": draft.observed_period.isoformat()
-                if draft.observed_period
-                else None,
+                "observed_period": normalize_claim_period(draft.observed_period),
                 "scope": draft.scope,
                 "run_ref": run_ref,
             },
@@ -216,17 +216,6 @@ class AtomicClaimService:
             raise ValidationError(
                 "only a modified atomic claim may change published fields"
             )
-        # Compare the persisted semantic decision before replaying its result.
-        # Normalization must precede both lookup and insertion.
-        reviewer, reason, idempotency_key = reviewer.strip(), reason.strip(), idempotency_key.strip()
-        candidate = self._session.get(AtomicClaimCandidate, candidate_id)
-        assert candidate is not None
-        published_text = None
-        published_period = None
-        if outcome in {"confirmed", "modified"}:
-            candidate_period = candidate.structured_fields.get("observed_period")
-            published_text = (normalized_text or candidate.normalized_text).strip()
-            published_period = observed_period or (date.fromisoformat(candidate_period) if candidate_period else None)
         existing = self._session.scalar(
             select(AtomicClaimReview).where(
                 AtomicClaimReview.atomic_claim_candidate_id == candidate_id,
@@ -234,23 +223,19 @@ class AtomicClaimService:
             )
         )
         if existing is not None:
-            published = self._session.get(SourceStatement, existing.published_source_statement_id) if existing.published_source_statement_id else None
-            if (
-                existing.outcome != outcome or existing.reviewer != reviewer or existing.reason != reason
-                or (published.normalized_text if published else None) != published_text
-                or (published.observed_period if published else None) != published_period
-            ):
-                from app.errors import ConflictError
-                raise ConflictError("atomic claim review key was already used for a different decision")
             return existing
+        candidate = self._session.get(AtomicClaimCandidate, candidate_id)
+        assert candidate is not None
         statement = None
         if outcome in {"confirmed", "modified"}:
+            candidate_period = candidate.structured_fields.get("observed_period")
             statement = SourceStatement(
                 source_span_id=candidate.source_span_id,
                 atomic_claim_candidate_id=candidate.id,
                 kind=candidate.claim_type,
-                normalized_text=published_text,
-                observed_period=published_period,
+                normalized_text=(normalized_text or candidate.normalized_text).strip(),
+                observed_period=observed_period
+                or claim_period_end(candidate_period),
                 created_at=datetime.now(timezone.utc),
             )
             self._session.add(statement)
@@ -617,6 +602,7 @@ class AtomicClaimService:
                     document,
                     cutoff=cutoff,
                     evaluation_at=checked_at,
+                    binding=binding,
                 )
             )
             if temporal_failures:
@@ -654,21 +640,7 @@ class AtomicClaimService:
 
         period = candidate.structured_fields.get("observed_period")
         try:
-            observed_period = (
-                date(int(period), 12, 31)
-                if isinstance(period, str) and len(period) == 4 and period.isdigit()
-                else date(
-                    int(period[:4]),
-                    int(period[5:7]),
-                    monthrange(int(period[:4]), int(period[5:7]))[1],
-                )
-                if isinstance(period, str)
-                and len(period) == 7
-                and period[4] == "-"
-                else date.fromisoformat(period)
-                if period
-                else None
-            )
+            observed_period = claim_period_end(period)
         except (TypeError, ValueError) as exc:
             raise ValidationError("automatic publication period is invalid") from exc
         semantic_facts = semantic_audit

@@ -122,10 +122,6 @@ def authorize(case_id:uuid.UUID,payload:AuthorizeEvidencePlanRequest,db:Session=
     if not acquired:
         if row.request_fingerprint != fingerprint: raise ConflictError("idempotency_key_conflict")
         if row.status == "completed" and isinstance(row.response_payload, dict):
-            # Another connection may have completed authorization while this
-            # session waited for its idempotency row. Refresh the pre-read
-            # preparation before returning current, display-filtered state.
-            db.expire_all()
             return _dto(db, case_id)
         raise ConflictError("idempotency_conflict")
     try:

@@ -7,6 +7,7 @@ import json
 import uuid
 from dataclasses import FrozenInstanceError, dataclass, replace
 from datetime import UTC, date, datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import event, func, select
@@ -51,6 +52,7 @@ from app.services.automatic_admission import (
     AdmissionContext,
     AutomaticAdmissionGate,
     GateResult,
+    automatic_temporal_failures,
 )
 from app.services.retrieved_documents import (
     FrozenRequestContext,
@@ -139,6 +141,7 @@ def _seed(
     span_context_hash: str | None = None,
     document_source_url: str | None = None,
     binding_relation: str = "created",
+    binding_created_at: datetime = NOW,
     quote_sha256: str | None = None,
     span_text_sha256: str | None = None,
     subject: str | None = "示例公司",
@@ -271,7 +274,7 @@ def _seed(
         document_version_id=document.id,
         relation=binding_relation,
         publication_key=hashlib.sha256(b"publication").hexdigest(),
-        created_at=NOW,
+        created_at=binding_created_at,
     )
     span = SourceSpan(
         document_version_id=document.id,
@@ -1349,6 +1352,169 @@ def test_temporal_gate_accepts_post_cutoff_backfill_of_pre_cutoff_announcement(
     assert decision.gate_results["temporal"]["passed"] is True
 
 
+def test_duplicate_source_admits_and_publishes_without_rewriting_original_acquired_at(
+    session,
+) -> None:
+    original_acquired_at = NOW - timedelta(hours=1)
+    seeded = _seed(
+        session,
+        published_at=NOW - timedelta(hours=2),
+        reference_published_at=NOW - timedelta(hours=2),
+        available_at=NOW - timedelta(hours=2),
+        acquired_at=original_acquired_at,
+        retrieved_at=NOW,
+        binding_relation="content_duplicate",
+    )
+
+    decision = AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+        seeded.candidate, seeded.context
+    )
+
+    assert decision.outcome == "admitted"
+    assert all(result["passed"] for result in decision.gate_results.values())
+    statement, link = AtomicClaimService(session, clock=lambda: NOW).publish_automatically(
+        seeded.candidate.id, decision.id, lease_token=LEASE_TOKEN,
+    )
+    session.refresh(seeded.document)
+    assert seeded.document.acquired_at.replace(tzinfo=UTC) == original_acquired_at
+    assert seeded.artifact.retrieved_at.replace(tzinfo=UTC) == NOW
+    assert statement.automatic_admission_decision_id == decision.id
+    assert link.review_state == "automatically_admitted"
+    assert link.available_at.replace(tzinfo=UTC) == NOW - timedelta(hours=2)
+
+
+@pytest.mark.parametrize("overrides,reason", [
+    ({"binding_relation": "created"}, "temporal_retrieved_at_after_acquired_at"),
+    ({"binding_created_at": NOW - timedelta(seconds=1)},
+     "temporal_retrieved_at_after_acquired_at"),
+    ({"binding_created_at": NOW + timedelta(seconds=1)},
+     "temporal_retrieved_at_after_acquired_at"),
+    ({"document_source_url": "https://www.sse.com.cn/other.txt"},
+     "temporal_retrieved_at_after_acquired_at"),
+    ({"published_at": CUTOFF + timedelta(seconds=1)}, "temporal_published_at_after_cutoff"),
+    ({"reference_published_at": CUTOFF + timedelta(seconds=1)},
+     "temporal_reference_published_at_after_cutoff"),
+    ({"available_at": CUTOFF + timedelta(seconds=1)}, "temporal_available_at_after_cutoff"),
+    ({"reference_created_at": NOW + timedelta(seconds=1)},
+     "temporal_reference_created_at_after_attempt_started_at"),
+    ({"attempt_started_at": NOW + timedelta(seconds=1)},
+     "temporal_attempt_started_at_after_attempt_finished_at"),
+    ({"attempt_finished_at": NOW + timedelta(seconds=1)},
+     "temporal_attempt_finished_at_after_retrieved_at"),
+    ({"acquired_at": NOW + timedelta(seconds=1)}, "temporal_acquired_at_after_evaluation"),
+])
+def test_duplicate_relation_does_not_bypass_remaining_temporal_checks(
+    session, overrides, reason,
+) -> None:
+    values = {
+        "published_at": NOW - timedelta(hours=2),
+        "reference_published_at": NOW - timedelta(hours=2),
+        "available_at": NOW - timedelta(hours=2),
+        "acquired_at": NOW - timedelta(hours=1),
+        "binding_relation": "content_duplicate",
+        **overrides,
+    }
+    seeded = _seed(session, **values)
+
+    decision = AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+        seeded.candidate, seeded.context
+    )
+
+    assert decision.outcome == "quarantined"
+    assert reason in decision.gate_results["temporal"]["facts"]["failures"]
+
+
+@pytest.mark.parametrize("invalid_proof", [
+    "missing_binding", "created_relation", "wrong_artifact_id", "wrong_document_id",
+    "wrong_reference_id", "wrong_artifact_hash", "wrong_document_hash", "empty_hashes",
+    "wrong_document_url", "wrong_reference_url", "missing_binding_time",
+    "binding_before_retrieval", "binding_before_acquisition", "future_binding",
+])
+def test_duplicate_temporal_exception_requires_exact_content_and_binding_proof(
+    session, invalid_proof,
+) -> None:
+    seeded = _seed(
+        session,
+        acquired_at=NOW - timedelta(hours=1),
+        binding_relation="content_duplicate",
+    )
+    attempt = session.get(AcquisitionAttempt, seeded.artifact.attempt_id)
+    persisted_binding = session.scalar(select(RetrievalArtifactDocument).where(
+        RetrievalArtifactDocument.retrieval_artifact_id == seeded.artifact.id,
+    ))
+
+    def clone(row):
+        # Tamper with detached proof values, never immutable database records.
+        return SimpleNamespace(**{
+            column.key: getattr(row, column.key) for column in row.__table__.columns
+        })
+
+    reference, artifact, document, binding = (
+        clone(row) for row in (seeded.reference, seeded.artifact, seeded.document, persisted_binding)
+    )
+    assert automatic_temporal_failures(
+        reference, attempt, artifact, document, cutoff=CUTOFF,
+        evaluation_at=NOW, binding=binding,
+    ) == []
+    if invalid_proof == "missing_binding":
+        binding = None
+    elif invalid_proof == "created_relation":
+        binding.relation = "created"
+    elif invalid_proof == "wrong_artifact_id":
+        binding.retrieval_artifact_id = uuid.uuid4()
+    elif invalid_proof == "wrong_document_id":
+        binding.document_version_id = uuid.uuid4()
+    elif invalid_proof == "wrong_reference_id":
+        artifact.source_reference_id = uuid.uuid4()
+    elif invalid_proof == "wrong_artifact_hash":
+        artifact.content_sha256 = "f" * 64
+    elif invalid_proof == "wrong_document_hash":
+        document.content_sha256 = "f" * 64
+    elif invalid_proof == "empty_hashes":
+        artifact.content_sha256 = document.content_sha256 = ""
+    elif invalid_proof == "wrong_document_url":
+        document.source_url = "https://www.sse.com.cn/other.txt"
+    elif invalid_proof == "wrong_reference_url":
+        reference.canonical_url = "https://www.sse.com.cn/other.txt"
+    elif invalid_proof == "missing_binding_time":
+        binding.created_at = None
+    elif invalid_proof == "binding_before_retrieval":
+        binding.created_at = NOW - timedelta(seconds=1)
+    elif invalid_proof == "binding_before_acquisition":
+        binding.created_at = NOW - timedelta(hours=2)
+    elif invalid_proof == "future_binding":
+        binding.created_at = NOW + timedelta(seconds=1)
+
+    kwargs = {} if binding is None else {"binding": binding}
+    failures = automatic_temporal_failures(
+        reference, attempt, artifact, document, cutoff=CUTOFF,
+        evaluation_at=NOW, **kwargs,
+    )
+
+    assert "temporal_retrieved_at_after_acquired_at" in failures
+
+
+@pytest.mark.parametrize("overrides,gate_name", [
+    ({"provider_identity": "Untrusted issuer"}, "source"),
+    ({"quote_sha256": "f" * 64}, "locator"),
+])
+def test_duplicate_temporal_proof_does_not_replace_source_or_locator_checks(
+    session, overrides, gate_name,
+) -> None:
+    seeded = _seed(
+        session, acquired_at=NOW - timedelta(hours=1),
+        binding_relation="content_duplicate", **overrides,
+    )
+
+    decision = AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+        seeded.candidate, seeded.context,
+    )
+
+    assert decision.outcome == "quarantined"
+    assert decision.gate_results["temporal"]["passed"] is True
+    assert decision.gate_results[gate_name]["passed"] is False
+
+
 def test_temporal_gate_requires_reference_and_document_publication_to_match(
     session,
 ) -> None:
@@ -1717,6 +1883,134 @@ def test_semantic_gate_rejects_year_supported_only_by_english_exact_day(
 
     assert decision.outcome == "quarantined"
     assert decision.gate_results["semantic"]["passed"] is False
+
+
+@pytest.mark.parametrize("source_period", [
+    "2025年上半年", "2025年下半年", "2025年半年度", "2025年第一季度",
+    "2025年第4季度", "2025年前三季度", "2025年1-6月",
+    "2025 H1", "2025 H2", "2025 Q1", "2025 Q4", "H1 2025", "Q2 2025",
+    "first half of 2025", "2025 first half", "first quarter of 2025",
+    "2025 first quarter", "June 2025", "2025 June",
+])
+@pytest.mark.parametrize("drops_qualifier", [False, True])
+def test_semantic_year_cannot_erase_adjacent_subannual_period(
+    session, source_period, drops_qualifier,
+) -> None:
+    text = f"示例公司{source_period}营业收入为100亿元。"
+    normalized = (
+        "示例公司2025年营业收入为100亿元。" if drops_qualifier else text
+    )
+    seeded = _seed(
+        session, text=text, raw_bytes=text.encode(), observed_period="2025",
+        normalized_text=normalized,
+        request_extras={"period_start": "2025-01-01", "period_end": "2025-12-31"},
+    )
+
+    decision = AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+        seeded.candidate, seeded.context,
+    )
+
+    assert decision.outcome == "quarantined"
+    assert decision.gate_results["semantic"]["passed"] is False
+    assert "semantic_single_segment_support_missing" in (
+        decision.gate_results["semantic"]["facts"]["failures"]
+    )
+
+
+@pytest.mark.parametrize("numeric_value,expected_outcome", [
+    ("100", "admitted"), ("40", "quarantined"),
+])
+@pytest.mark.parametrize("comparison_period", ["2025年上半年", "上半年", "2025年前6个月", "2025 YTD"])
+def test_semantic_explicit_annual_fact_survives_separate_half_year_comparison(
+    session, numeric_value, expected_outcome, comparison_period,
+) -> None:
+    text = f"示例公司2025年营业收入为100亿元，{comparison_period}营业收入为40亿元。"
+    seeded = _seed(
+        session, text=text, raw_bytes=text.encode(), observed_period="2025",
+        numeric_value=numeric_value,
+        normalized_text=f"示例公司2025年营业收入为{numeric_value}亿元。",
+        request_extras={"period_start": "2025-01-01", "period_end": "2025-12-31"},
+    )
+
+    decision = AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+        seeded.candidate, seeded.context,
+    )
+
+    assert decision.outcome == expected_outcome
+
+
+@pytest.mark.parametrize("source_period", ["2025年前6个月", "2025 YTD", "YTD 2025"])
+def test_semantic_year_cannot_erase_partial_year_to_date_period(session, source_period) -> None:
+    text = f"示例公司{source_period}营业收入为100亿元。"
+    seeded = _seed(
+        session, text=text, raw_bytes=text.encode(), observed_period="2025",
+        normalized_text="示例公司2025年营业收入为100亿元。",
+        request_extras={"period_start": "2025-01-01", "period_end": "2025-12-31"},
+    )
+
+    decision = AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+        seeded.candidate, seeded.context,
+    )
+
+    assert decision.outcome == "quarantined"
+
+
+@pytest.mark.parametrize("text,predicate,numeric_value", [
+    ("示例公司2025年营业收入为100亿元及2025年上半年营业收入为40亿元。", "营业收入", "40"),
+    ("示例公司2025年营业收入为100亿元，上半年营业收入为40亿元，净利润为10亿元。", "净利润", "10"),
+])
+def test_semantic_period_follows_matching_value_and_narrower_continuation(
+    session, text, predicate, numeric_value,
+) -> None:
+    seeded = _seed(
+        session, text=text, raw_bytes=text.encode(), observed_period="2025",
+        predicate=predicate, metric_terms=(predicate,), numeric_value=numeric_value,
+        normalized_text=f"示例公司2025年{predicate}为{numeric_value}亿元。",
+        request_extras={"period_start": "2025-01-01", "period_end": "2025-12-31"},
+    )
+
+    decision = AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+        seeded.candidate, seeded.context,
+    )
+
+    assert decision.outcome == "quarantined"
+
+
+@pytest.mark.parametrize("text,period,numeric_value", [
+    ("示例公司2025年6月营业收入为100亿元，7月营业收入为40亿元。", "2025-06", "40"),
+    ("示例公司2025年6月30日营业收入为100亿元，7月1日营业收入为40亿元。", "2025-06-30", "40"),
+    ("示例公司2025年营业收入为100亿元，上半年净利润为40亿元，营业收入为50亿元。", "2025", "50"),
+])
+def test_semantic_new_period_invalidates_inheritance_even_on_a_different_metric(
+    session, text, period, numeric_value,
+) -> None:
+    seeded = _seed(
+        session, text=text, raw_bytes=text.encode(), observed_period=period,
+        numeric_value=numeric_value,
+        normalized_text=f"示例公司{period}营业收入为{numeric_value}亿元。",
+        request_extras={"period_start": "2025-01-01", "period_end": "2025-12-31"},
+    )
+
+    decision = AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+        seeded.candidate, seeded.context,
+    )
+
+    assert decision.outcome == "quarantined"
+
+
+def test_semantic_metric_value_that_looks_like_year_does_not_change_period(session) -> None:
+    text = "示例公司2025年净利润为100亿元，营业收入为2024亿元。"
+    seeded = _seed(
+        session, text=text, raw_bytes=text.encode(), observed_period="2025",
+        numeric_value="2024", normalized_text="示例公司2025年营业收入为2024亿元。",
+        request_extras={"period_start": "2025-01-01", "period_end": "2025-12-31"},
+    )
+
+    decision = AutomaticAdmissionGate(session, clock=lambda: NOW).evaluate(
+        seeded.candidate, seeded.context,
+    )
+
+    assert decision.outcome == "admitted"
 
 
 @pytest.mark.parametrize(

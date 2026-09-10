@@ -15,7 +15,9 @@ import socket
 import sys
 import threading
 from collections.abc import Mapping, Sequence
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import func, select
 
 from app.acquisition.sources import SourceAdapter
 from app.ai.client import LLMClient, LLMProviderError
@@ -24,7 +26,9 @@ from app.datasources.exchanges.szse import SZSEAnnouncementSource
 from app.datasources.gildata.client import GildataMCPClient
 from app.datasources.gildata.research_source import GildataResearchSource
 from app.db import SessionLocal
+from app.models.acquisition import AcquisitionException
 from app.repositories.acquisition import (
+    AcquisitionClaim,
     AcquisitionRepository,
     StaleLeaseError,
 )
@@ -35,6 +39,7 @@ from app.services.worker_heartbeat_publisher import WorkerHeartbeatPublisher
 
 _KNOWN_ADAPTERS = frozenset({"gildata", "sse", "szse"})
 _IDENTITY_PART = re.compile(r"^[A-Za-z0-9_.-]+$")
+_MAX_ATTEMPTS = 3
 
 
 def _production() -> bool:
@@ -157,12 +162,56 @@ def _touch(*, mode: str, state: str) -> None:
         session.commit()
 
 
+def _record_claim_failure(
+    claim: AcquisitionClaim,
+    *,
+    session_factory,
+    retry_delay: timedelta,
+    max_attempts: int,
+) -> str:
+    """Recover an execution failure in a fresh, lease-fenced transaction."""
+    with session_factory() as session:
+        repository = AcquisitionRepository(session)
+        job = repository.fence(claim.job_id, lease_token=claim.lease_token)
+        stage = job.stage
+        repository.record_exception(
+            claim.job_id,
+            lease_token=claim.lease_token,
+            reason_code="acquisition_execution_failed",
+            detail_json={"claim_attempt": claim.attempt},
+        )
+        exception_count = session.scalar(
+            select(func.count()).select_from(AcquisitionException).where(
+                AcquisitionException.job_id == claim.job_id
+            )
+        ) or 0
+        status = "retry_wait" if claim.attempt < max_attempts else "failed"
+        repository.advance(
+            claim.job_id,
+            lease_token=claim.lease_token,
+            stage=stage if status == "retry_wait" else "failed",
+            status=status,
+            retry_at=datetime.now(UTC) + retry_delay if status == "retry_wait" else None,
+            counters={"exception_count": exception_count},
+            message=(
+                "acquisition execution failed; waiting for retry"
+                if status == "retry_wait"
+                else "acquisition execution failed; retry limit reached"
+            ),
+            error_code="acquisition_execution_failed",
+        )
+        session.commit()
+    return status
+
+
 def run_once(
     *,
     runner: AcquisitionRunner,
     session_factory=SessionLocal,
     worker_id: str,
     lease_for: timedelta,
+    retry_delay: timedelta = timedelta(seconds=60),
+    max_attempts: int = _MAX_ATTEMPTS,
 ) -> bool:
     """Claim, commit, and execute at most one job."""
     with session_factory() as session:
@@ -181,6 +230,30 @@ def run_once(
         print(
             f"acquisition lease lost for job {claim.job_id}; "
             "it will be re-claimed from its checkpoints",
+            file=sys.stderr,
+            flush=True,
+        )
+    except Exception:
+        # Startup and claim failures remain outside this boundary. The runner's
+        # failed unit of work has unwound; persist only a fixed safe reason in a
+        # fresh transaction, then allow the loop to serve other queued jobs.
+        try:
+            status = _record_claim_failure(
+                claim,
+                session_factory=session_factory,
+                retry_delay=retry_delay,
+                max_attempts=max_attempts,
+            )
+        except StaleLeaseError:
+            # A newer owner or a terminal transition must never be overwritten.
+            status = "lease_lost"
+        except Exception:
+            # A persistence outage cannot honestly be reported as recovered.
+            # Preserve a visible worker failure without rendering SQL/provider
+            # details from either exception chain into operational logs.
+            raise RuntimeError("acquisition failure recovery could not be persisted") from None
+        print(
+            f"acquisition execution failed for job {claim.job_id}; {status}",
             file=sys.stderr,
             flush=True,
         )
@@ -226,6 +299,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             adapters=adapters,
             llm_client=build_llm_client(),
             retry_delay=timedelta(seconds=args.retry_seconds),
+            max_attempts=_MAX_ATTEMPTS,
             lease_for=timedelta(seconds=args.lease_seconds),
         )
         common = {
@@ -233,6 +307,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "session_factory": SessionLocal,
             "worker_id": worker_id_from_env(),
             "lease_for": timedelta(seconds=args.lease_seconds),
+            "retry_delay": timedelta(seconds=args.retry_seconds),
         }
         if args.once:
             _touch(mode="once", state="executing")

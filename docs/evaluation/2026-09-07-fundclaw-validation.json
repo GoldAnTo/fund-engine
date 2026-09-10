@@ -1,0 +1,102 @@
+{
+  "date": "2026-09-07",
+  "scope": "<project-root>",
+  "prototype_preview": "http://localhost:63297/",
+  "full_backend": {
+    "passed": 4862,
+    "failed": 9,
+    "skipped": 41,
+    "seconds": 1001.63,
+    "failed_tests": [
+      "tests/test_one_click_runtime_assets.py::test_runtime_images_include_migrations_and_server_side_auth",
+      "tests/test_one_click_runtime_assets.py::test_frontend_docker_build_context_excludes_client_environment_files",
+      "tests/test_one_click_stability.py::test_cli_rejects_deep_json_without_traceback",
+      "tests/test_verify_live_company_research_ui.py::test_package_exposes_the_closed_live_company_research_command",
+      "tests/test_verify_live_event_ui.py::test_live_event_ui_verifier_keeps_reviewed_case_pages_working_through_default_http_client",
+      "tests/underwriting/test_company_research_initializer.py::test_preview_is_read_only_and_resolves_all_effective_alphabet_securities",
+      "tests/underwriting/test_company_research_initializer.py::test_initialize_replays_an_idempotency_key_for_later_supported_cutoff",
+      "tests/underwriting/test_openapi_dump.py::test_dump_openapi_includes_underwriting_routes_without_touching_default",
+      "tests/underwriting/test_openapi_dump.py::test_archive_contract_and_ui_sources_do_not_introduce_investment_fields"
+    ],
+    "note": "Completed before final no-store middleware; API regression after that change is separate."
+  },
+  "post_cache_api_regression": {
+    "passed": 68,
+    "seconds": 7.28
+  },
+  "postgresql": {
+    "version": "16.15",
+    "migration_head": "0074",
+    "passed": 7,
+    "deselected": 62,
+    "seconds": 26.01,
+    "note": "Selected migration and worker terminalization cases only."
+  },
+  "frontend": {
+    "passed": 163,
+    "files": 8,
+    "node": "24.15.0",
+    "typecheck": "passed",
+    "production_build": "passed"
+  },
+  "prototype": {
+    "passed": 4,
+    "source_and_served_sha256": "2ab4332e24b592356e8a38bdcb93096591a02f243c96f092a4b890764880370b"
+  },
+  "npm_audit": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "performance": {
+    "fixture_native_events": 4161,
+    "role_events": 4170,
+    "snapshot_before": {
+      "sql": 20880,
+      "seconds": 3.597142
+    },
+    "snapshot_after": {
+      "sql": 51,
+      "seconds": 0.279847
+    },
+    "idle_replay_before": {
+      "sql": 20880,
+      "seconds": 3.268389
+    },
+    "idle_replay_after": {
+      "sql": 51,
+      "seconds": 0.297447
+    },
+    "note": "Single local SQLite samples; initial catch-up not improved."
+  },
+  "browser": {
+    "fixture_data": "synthetic authorized evidence via actual isolated Gateway read API",
+    "viewport_widths": [
+      320,
+      390,
+      980,
+      1280,
+      1440
+    ],
+    "console_errors": 0,
+    "console_warnings": 0,
+    "notes": [
+      "No horizontal overflow in measured viewports.",
+      "Short prototype viewport deliberately uses document scrolling.",
+      "Evidence source focus returns on close.",
+      "Mobile research menu switches research and clears stale evidence."
+    ]
+  },
+  "not_validated": [
+    "Paid provider calls and model factual accuracy",
+    "Production data and live provider availability",
+    "All PostgreSQL/Neo4j suites",
+    "Production load capacity",
+    "Complete WCAG compliance",
+    "Four independent professional-role tasks and human publication loop"
+  ],
+  "counting_note": "Do not sum overlapping suites. Remaining full-suite failures are documented, not hidden."
+}

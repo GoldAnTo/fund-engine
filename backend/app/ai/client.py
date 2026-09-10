@@ -1,67 +1,52 @@
-"""LLM client with an OpenAI-compatible protocol and test-only mock mode.
+"""Strict, bounded OpenAI-compatible JSON calls with per-attempt telemetry.
 
-Live runtimes require ``LLM_API_KEY`` and fail closed when it is absent. Only
-``APP_ENV=test`` may select deterministic mock responses, allowing tests to
-exercise the full AI-engine pipeline without contacting an external service.
-
-Every call goes through ``chat_json`` which forces JSON output.  The
-``model_version`` attribute records the model used (or ``mock-<model>`` in
-mock mode) and is persisted on every ``AIRun`` audit record.
+The public return type remains dict. Provider text is never included in public
+errors or attempt metadata; exceptions retain causes for controlled diagnosis.
+Do not expose their tracebacks in public or shared logs.
 """
 from __future__ import annotations
 
 import json
 import math
 import os
-import re
 import random
+import re
 import time
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpx
-from openai import APIConnectionError, APIStatusError, OpenAIError
-from app.ai.usage import record_attempt
+from openai import APIConnectionError, APIStatusError, OpenAI, OpenAIError
+
+from app.ai.llm_config import (
+    DEFAULT_OPERATION_BUDGETS,
+    LLMCallBudget,
+    LLMRetryPolicy,
+    bounded_integer,
+    bounded_number,
+    env_number,
+)
 
 DEFAULT_MODEL = "gpt-4o-mini"
-
-# Default temperature=0.0: every live call freezes sampling so the citation
-# manifest + assessment conclusion are reproducible for the same input under
-# the same model.  OpenAI's seed is a best-effort hint, not a guarantee
-# (versions/regions may still drift), but combined with temperature=0 it
-# closes the bulk of the variance.  See walkthrough defect 7.
 DEFAULT_TEMPERATURE = 0.0
-# Socket inactivity timeout, not cancellation of an entire synchronous call.
 DEFAULT_TIMEOUT_SECONDS = 90.0
 DEFAULT_MAX_ATTEMPTS = 2
-DEFAULT_RETRY_BUDGET_SECONDS = 180.0
-DEFAULT_MAX_INPUT_BYTES = 1_048_576
-DEFAULT_MAX_RESPONSE_BYTES = 2_097_152
-DEFAULT_MAX_COMPLETION_TOKENS = 16_384
+DEFAULT_DEADLINE_SECONDS = 180.0
 LLM_PROVIDER_ERROR_MESSAGE = "LLM provider request failed"
 LLM_MALFORMED_RESPONSE_MESSAGE = "LLM provider returned an invalid response"
-_operation_deadline: ContextVar[float | None] = ContextVar("llm_operation_deadline", default=None)
-
-
-@contextmanager
-def operation_budget(client):
-    """Share a cooperative deadline across provider calls and compliance rewrite.
-
-    Context-local state survives graph context propagation without placing a
-    mutable deadline on a potentially shared client. Nested scopes cannot
-    extend the caller's budget. This does not cancel synchronous I/O.
-    """
-    budget = getattr(client, "_retry_budget_seconds", DEFAULT_RETRY_BUDGET_SECONDS)
-    deadline = time.monotonic() + budget
-    parent = _operation_deadline.get()
-    token = _operation_deadline.set(min(parent, deadline) if parent is not None else deadline)
-    try:
-        yield
-    finally:
-        _operation_deadline.reset(token)
+LLM_DEADLINE_MESSAGE = "LLM operation deadline exceeded"
+JSON_TRANSPORT_CONTRACT = (
+    "输出传输契约：只返回一个非空 JSON 对象的原始文本。不要使用 Markdown、代码块、"
+    "```json、标签、说明文字、<think> 标签，也不要在 JSON 前后添加任何字符；"
+    "首个非空白字符必须是 {，最后一个非空白字符必须是 }。"
+    "如果任务格式与本契约冲突，以本契约为准。"
+)
 
 
 class LLMProviderError(RuntimeError):
@@ -69,290 +54,494 @@ class LLMProviderError(RuntimeError):
 
 
 class LLMMalformedResponseError(LLMProviderError):
-    """Raised when the provider response does not match the JSON protocol."""
+    """The provider response failed the strict JSON/result protocol."""
 
 
-def _retry_delay(exc: Exception, attempt: int) -> float | None:
-    response = getattr(exc, "response", None)
-    if isinstance(exc, (APIStatusError, httpx.HTTPStatusError)):
-        status = response.status_code
-        if status not in {408, 409, 429} and not 500 <= status < 600:
-            return None
-    elif not isinstance(exc, (APIConnectionError, httpx.TransportError, TimeoutError, ConnectionError)):
-        return None
-    delay = random.uniform(0.5, 1.0) * min(2**attempt, 8)
-    if response is not None:
-        retry_after = response.headers.get("retry-after")
-        if retry_after:
-            try:
-                seconds = float(retry_after)
-            except ValueError:
-                try:
-                    seconds = (parsedate_to_datetime(retry_after) - datetime.now(timezone.utc)).total_seconds()
-                except (TypeError, ValueError, OverflowError):
-                    seconds = 0
-            if math.isfinite(seconds) and seconds > 0:
-                # Never retry earlier than requested; decline an excessive wait.
-                if seconds > 30:
-                    return None
-                delay = max(delay, seconds)
-    return delay
+class LLMInputBudgetError(LLMProviderError):
+    """Input exceeded a configured budget; no request was started."""
+
+
+class LLMDeadlineError(LLMProviderError):
+    """The operation's monotonic time budget was exhausted."""
+
+
+@dataclass(frozen=True)
+class LLMAttempt:
+    """Safe request metadata. None usage is unknown, never a zero-cost claim."""
+
+    call_id: str
+    attempt: int
+    operation: str
+    provider: str
+    requested_model: str
+    model: str | None
+    provider_request_id: str | None
+    finish_reason: str | None
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    total_tokens: int | None
+    usage_status: str
+    latency_ms: float
+    outcome: str
+    retryable: bool = False
+    retry_delay_seconds: float | None = None
+    repaired: bool = False
+
+
+AttemptCallback = Callable[[LLMAttempt], None]
+JSONValidator = Callable[[dict], object]
 
 
 class LLMClient:
-    """Thin OpenAI SDK wrapper with deterministic mocks restricted to tests.
+    """Synchronous transport with strict JSON, finite budgets and attempt hooks.
 
-    Reproducibility contract (defect-7 fix, 2026-08-02):
-    - ``temperature`` defaults to 0.0; pass a higher value only when you have
-      a reason (eval harness sweep, exploratory research).
-    - ``seed`` is forwarded to OpenAI's ``chat.completions.create`` as the
-      ``seed`` field when set; unset (None) means "do not pin" — callers that
-      need identical manifests across reruns should set this.
-    - Test-only mock mode is deterministic by construction (keyword heuristics
-      in ``_mock_response``); the same temperature/seed plumbing still
-      exercises the configuration path used by live runtimes.
+    ``deadline_seconds`` bounds retries, waits and response acceptance. Each
+    SDK timeout is clamped to remaining time, but synchronous HTTP phase
+    timeouts cannot forcibly cancel every in-flight request at that instant.
+    No retry is admitted after the deadline and late output is never accepted.
     """
 
     def __init__(
-        self,
-        *,
-        model_version: str,
-        client: Any | None = None,
-        mock: bool = False,
-        temperature: float = DEFAULT_TEMPERATURE,
-        seed: int | None = None,
+        self, *, model_version: str, client: Any | None = None, mock: bool = False,
+        temperature: float = DEFAULT_TEMPERATURE, seed: int | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
-        retry_budget_seconds: float = DEFAULT_RETRY_BUDGET_SECONDS,
-        max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES,
-        max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
-        max_completion_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
+        deadline_seconds: float = DEFAULT_DEADLINE_SECONDS,
+        backoff_base_seconds: float = 0.5, backoff_max_seconds: float = 8.0,
+        retry_after_max_seconds: float = 30.0,
+        budget: LLMCallBudget | None = None,
+        operation_budgets: Mapping[str, LLMCallBudget] | None = None,
+        output_token_parameter: str = "max_completion_tokens",
+        reasoning_split: bool = False,
+        provider: str = "openai-compatible", on_attempt: AttemptCallback | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+        random_value: Callable[[], float] = random.random,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
-        for name, value, lower, upper in (
-            ("timeout_seconds", timeout_seconds, 0.001, 300),
-            ("retry_budget_seconds", retry_budget_seconds, 0.001, 600),
-            ("temperature", temperature, 0, 2),
-        ):
-            if isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value) or not lower <= value <= upper:
-                raise ValueError(f"{name} must be finite and between {lower} and {upper}")
-        if type(max_attempts) is not int or not 1 <= max_attempts <= 5:
-            raise ValueError("max_attempts must be an integer from 1 through 5")
-        if type(max_completion_tokens) is not int or not 1 <= max_completion_tokens <= 131_072:
-            raise ValueError("max_completion_tokens must be an integer from 1 through 131072")
-        for name, value in (("max_input_bytes", max_input_bytes), ("max_response_bytes", max_response_bytes)):
-            if type(value) is not int or not 1 <= value <= 16_777_216:
-                raise ValueError(f"{name} must be an integer from 1 through 16777216")
-        if not isinstance(model_version, str) or not model_version.strip():
-            raise ValueError("model_version must not be blank")
-        if seed is not None and (type(seed) is not int or not -(2**63) <= seed < 2**63):
-            raise ValueError("seed must be a signed 64-bit integer")
+        self._retry = LLMRetryPolicy(
+            timeout_seconds=timeout_seconds, max_attempts=max_attempts,
+            deadline_seconds=deadline_seconds, backoff_base_seconds=backoff_base_seconds,
+            backoff_max_seconds=backoff_max_seconds,
+            retry_after_max_seconds=retry_after_max_seconds,
+        )
+        bounded_number("temperature", temperature, 0, 2)
+        if seed is not None:
+            bounded_integer("seed", seed, -(2**63), 2**63 - 1)
+        if _safe_identifier(model_version) is None:
+            raise ValueError("model_version must be a nonempty model identifier")
+        if _safe_identifier(provider) is None:
+            raise ValueError("provider must be a nonempty provider identifier")
+        if output_token_parameter not in ("max_tokens", "max_completion_tokens"):
+            raise ValueError("output_token_parameter must be max_tokens or max_completion_tokens")
+        if type(reasoning_split) is not bool:
+            raise ValueError("reasoning_split must be boolean")
+        self._reasoning_split = reasoning_split
+        self._budget = budget if budget is not None else LLMCallBudget()
+        if not isinstance(self._budget, LLMCallBudget):
+            raise TypeError("budget must be an LLMCallBudget")
+        self._operation_budgets = dict(DEFAULT_OPERATION_BUDGETS)
+        if operation_budgets is not None:
+            for operation, operation_budget in operation_budgets.items():
+                if _safe_identifier(operation) is None or not isinstance(operation_budget, LLMCallBudget):
+                    raise ValueError("operation_budgets must map operation identifiers to LLMCallBudget")
+                self._operation_budgets[operation] = operation_budget
+        if on_attempt is not None and not callable(on_attempt):
+            raise ValueError("on_attempt must be callable")
         self.model_version = model_version
-        self._client = client
+        # An injected genuine SDK client can otherwise silently multiply retries.
+        # Keep simple test/provider adapters unchanged; they own no SDK retries.
+        self._client = client.with_options(max_retries=0) if isinstance(client, OpenAI) else client
         self._mock = mock
-        self._temperature = temperature
-        self._seed = seed
-        self._timeout_seconds = timeout_seconds
-        self._max_attempts = max_attempts
-        self._retry_budget_seconds = retry_budget_seconds
-        self._max_input_bytes = max_input_bytes
-        self._max_response_bytes = max_response_bytes
-        self._max_completion_tokens = max_completion_tokens
-
-    # ------------------------------------------------------------------ factory
+        self._temperature, self._seed = temperature, seed
+        self._timeout_seconds, self._max_attempts = timeout_seconds, max_attempts
+        self._output_token_parameter, self._provider = output_token_parameter, provider
+        self._on_attempt = on_attempt
+        self._clock, self._sleep = clock, sleep
+        self._random_value, self._wall_clock = random_value, wall_clock
+        self._attempt_callbacks: ContextVar[tuple[AttemptCallback, ...]] = ContextVar(
+            f"llm_attempt_callbacks_{id(self)}", default=(),
+        )
 
     @classmethod
-    def from_env(cls) -> "LLMClient":
-        """Build a client from ``LLM_API_KEY`` / ``LLM_BASE_URL`` / ``LLM_MODEL``.
+    def from_env(cls) -> LLMClient:
+        """Load explicit finite configuration; only APP_ENV=test may mock.
 
-        Reproducibility knobs read from env:
-        - ``LLM_TEMPERATURE`` (default 0.0): passed straight to the OpenAI
-          call.  Zero freezes sampling so reruns land on the same token.
-        - ``LLM_SEED`` (default unset): forwarded to ``chat.completions.create``
-          as ``seed``. Empty means "do not pin"; zero is a real seed.
-        - ``LLM_TIMEOUT_SECONDS`` (default 90): socket inactivity timeout.
-          Synchronous I/O cannot be forcibly cancelled by this wrapper.
-        - ``LLM_RETRY_BUDGET_SECONDS`` (default 180): shared time budget for
-          attempts and backoff within one chat_json call; late results fail.
-        - ``LLM_MAX_ATTEMPTS`` (default 2): bounded application-level retries
-          for transient provider transport errors.
-        - ``LLM_MAX_COMPLETION_TOKENS`` (default 16384): generation cap sent
-          on every provider attempt, including reasoning tokens where supported.
-          This is not a total task budget or a monetary spending limit.
-
-        Without ``LLM_API_KEY``, only ``APP_ENV=test`` may build a deterministic
-        mock client. Every other environment is a live runtime and fails
-        immediately rather than producing mock research output.
+        LLM_MAX_INPUT_CHARS / LLM_MAX_OUTPUT_TOKENS / LLM_MAX_RESPONSE_CHARS
+        control resource budgets. LLM_OUTPUT_TOKEN_PARAMETER selects exactly
+        one provider-supported cap field. LLM_DEADLINE_SECONDS and LLM_BACKOFF_*
+        control application retries; SDK retries are always disabled.
         """
         api_key = os.getenv("LLM_API_KEY")
-        base_url = os.getenv("LLM_BASE_URL")
         model = os.getenv("LLM_MODEL", DEFAULT_MODEL)
-        if not model.strip():
-            raise ValueError("LLM_MODEL must not be blank")
-        app_env = os.getenv("APP_ENV", "").strip().lower()
-
-        if not api_key and app_env != "test":
+        if not api_key and os.getenv("APP_ENV", "").strip().lower() != "test":
             raise RuntimeError(
                 "LLM_API_KEY is required outside APP_ENV=test; "
                 "live runtimes never fall back to mock output"
             )
-
-        temperature = float(os.getenv("LLM_TEMPERATURE", str(DEFAULT_TEMPERATURE)))
-        raw_seed = os.getenv("LLM_SEED", "").strip()
-        seed: int | None = int(raw_seed) if raw_seed else None
-        timeout_seconds = float(
-            os.getenv("LLM_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
-        )
-        max_attempts = int(os.getenv("LLM_MAX_ATTEMPTS", str(DEFAULT_MAX_ATTEMPTS)))
-        retry_budget_seconds = float(os.getenv("LLM_RETRY_BUDGET_SECONDS", str(DEFAULT_RETRY_BUDGET_SECONDS)))
-        resource_limits = {
-            "max_input_bytes": int(os.getenv("LLM_MAX_INPUT_BYTES", str(DEFAULT_MAX_INPUT_BYTES))),
-            "max_response_bytes": int(os.getenv("LLM_MAX_RESPONSE_BYTES", str(DEFAULT_MAX_RESPONSE_BYTES))),
-            "max_completion_tokens": int(os.getenv("LLM_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS))),
+        seed = None
+        if os.getenv("LLM_SEED", "").strip():
+            seed = env_number("LLM_SEED", 0, integer=True)
+        split_setting = os.getenv("LLM_REASONING_SPLIT", "").strip().lower()
+        if split_setting not in {"", "true", "false", "1", "0"}:
+            raise ValueError("LLM_REASONING_SPLIT must be true or false")
+        minimax = urlsplit(os.getenv("LLM_BASE_URL", "")).hostname in {
+            "api.minimaxi.com", "api.minimax.io", "api.minimax.cn",
         }
+        split_reasoning = split_setting in {"true", "1"} if split_setting else minimax
+        # Validate before constructing a network client, including mock runtimes.
+        instance = cls(
+            model_version=model if api_key else f"mock-{model}", mock=not api_key,
+            temperature=env_number("LLM_TEMPERATURE", DEFAULT_TEMPERATURE), seed=seed,
+            timeout_seconds=env_number("LLM_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),
+            max_attempts=env_number("LLM_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS, integer=True),
+            deadline_seconds=env_number("LLM_DEADLINE_SECONDS", DEFAULT_DEADLINE_SECONDS),
+            backoff_base_seconds=env_number("LLM_BACKOFF_BASE_SECONDS", 0.5),
+            backoff_max_seconds=env_number("LLM_BACKOFF_MAX_SECONDS", 8.0),
+            retry_after_max_seconds=env_number("LLM_RETRY_AFTER_MAX_SECONDS", 30.0),
+            output_token_parameter=os.getenv("LLM_OUTPUT_TOKEN_PARAMETER", "max_completion_tokens"),
+            provider=os.getenv("LLM_PROVIDER", "minimax" if minimax else "openai-compatible"),
+            reasoning_split=split_reasoning,
+            budget=LLMCallBudget(
+                max_input_chars=env_number("LLM_MAX_INPUT_CHARS", 160_000, integer=True),
+                max_output_tokens=env_number("LLM_MAX_OUTPUT_TOKENS", 8192, integer=True),
+                max_response_chars=env_number("LLM_MAX_RESPONSE_CHARS", 100_000, integer=True),
+            ),
+        )
+        if api_key:
+            from openai import OpenAI as SDKClient
 
-        if not api_key:
-            return cls(
-                model_version=f"mock-{model}",
-                mock=True,
-                temperature=temperature,
-                seed=seed,
-                timeout_seconds=timeout_seconds,
-                max_attempts=max_attempts,
-                retry_budget_seconds=retry_budget_seconds,
-                **resource_limits,
+            instance._client = SDKClient(
+                api_key=api_key, base_url=os.getenv("LLM_BASE_URL"),
+                timeout=instance._timeout_seconds, max_retries=0,
             )
+        return instance
 
-        from openai import OpenAI
+    @contextmanager
+    def capture_attempts(self, callback: AttemptCallback) -> Iterator[None]:
+        """Collect this context's calls, including nested rewrite calls.
 
-        client = OpenAI(
-            api_key=api_key,
-            base_url=base_url,
-            timeout=timeout_seconds,
-            max_retries=0,
-        )
-        return cls(
-            model_version=model,
-            client=client,
-            mock=False,
-            temperature=temperature,
-            seed=seed,
-            timeout_seconds=timeout_seconds,
-            max_attempts=max_attempts,
-            retry_budget_seconds=retry_budget_seconds,
-            **resource_limits,
-        )
-
-    # ------------------------------------------------------------------ core
-
-    def operation_budget(self):
-        return operation_budget(self)
-
-    def chat_json(self, messages: list[dict], schema_hint: str = "") -> dict:
-        """Call the model and return parsed JSON.
-
-        ``schema_hint`` is a short tag (e.g. ``"extract"``, ``"propose"``,
-        ``"assess"``) that the mock uses to pick the right response shape.
+        ContextVar isolates concurrent requests. Callbacks should append to an
+        operation-local collection; persist it after the network phase so no
+        database transaction remains open while waiting on the provider.
         """
-        # Measure UTF-8 JSON messages, not characters or an estimated token
-        # count. Stop encoding once the limit is reached; never log content.
-        input_size = 0
-        for chunk in json.JSONEncoder(ensure_ascii=False, separators=(",", ":")).iterencode(messages):
-            try:
-                input_size += len(chunk.encode("utf-8"))
-            except UnicodeEncodeError as exc:
-                raise LLMProviderError("LLM input contains invalid UTF-8") from exc
-            if input_size > self._max_input_bytes:
-                raise LLMProviderError("LLM input exceeds configured size limit")
-        if self._mock:
-            return _mock_response(messages, schema_hint)
+        if not callable(callback):
+            raise TypeError("attempt callback must be callable")
+        token = self._attempt_callbacks.set((*self._attempt_callbacks.get(), callback))
+        try:
+            yield
+        finally:
+            self._attempt_callbacks.reset(token)
 
-        assert self._client is not None  # noqa: S101
+    def chat_json(
+        self, messages: list[dict], schema_hint: str = "", *,
+        validator: JSONValidator | None = None, on_attempt: AttemptCallback | None = None,
+        budget: LLMCallBudget | None = None,
+    ) -> dict:
+        """Return one complete object, optionally checked by a schema validator.
+
+        Non-JSON wrappers, repairable JSON, refusals and non-stop completion
+        reasons fail closed. The validator may raise ValueError/TypeError or
+        return False to reject. Successful validator return values are ignored.
+        """
+        started = self._clock()
+        deadline = started + self._retry.deadline_seconds
+        if schema_hint and _safe_identifier(schema_hint) is None:
+            raise ValueError("schema_hint must be an operation identifier")
+        if validator is not None and not callable(validator):
+            raise ValueError("validator must be callable")
+        if on_attempt is not None and not callable(on_attempt):
+            raise ValueError("on_attempt must be callable")
+        effective_budget = self._budget
+        if schema_hint in self._operation_budgets:
+            effective_budget = effective_budget.tighten(self._operation_budgets[schema_hint])
+        if budget is not None:
+            effective_budget = effective_budget.tighten(budget)
+        messages = _with_json_transport_contract(messages)
+        _check_input(messages, effective_budget.max_input_chars)
+        call_id = str(uuid4())
+        callbacks = tuple(cb for cb in (self._on_attempt, *self._attempt_callbacks.get(), on_attempt)
+                          if cb is not None)
+        if self._mock:
+            return self._mock_call(messages, schema_hint, validator, effective_budget,
+                                   call_id, callbacks, deadline)
+        if self._client is None:
+            raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE)
         create_kwargs: dict[str, Any] = {
-            "model": self.model_version,
-            "messages": messages,
+            "model": self.model_version, "messages": messages,
             "response_format": {"type": "json_object"},
             "temperature": self._temperature,
-            "max_completion_tokens": self._max_completion_tokens,
-            "timeout": self._timeout_seconds,
+            self._output_token_parameter: effective_budget.max_output_tokens,
         }
+        if self._reasoning_split:
+            create_kwargs["extra_body"] = {"reasoning_split": True}
         if self._seed is not None:
             create_kwargs["seed"] = self._seed
-        deadline = time.monotonic() + self._retry_budget_seconds
-        parent_deadline = _operation_deadline.get()
-        if parent_deadline is not None:
-            deadline = min(deadline, parent_deadline)
-        for attempt in range(self._max_attempts):
-            remaining = deadline - time.monotonic()
+        for attempt in range(1, self._max_attempts + 1):
+            remaining = deadline - self._clock()
             if remaining <= 0:
-                raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE)
+                raise LLMDeadlineError(LLM_DEADLINE_MESSAGE)
             create_kwargs["timeout"] = min(self._timeout_seconds, remaining)
+            attempt_started = self._clock()
+            response = None
+            failure: Exception | None = None
+            retryable = False
+            delay = None
+            outcome = "internal_error"
             try:
                 response = self._client.chat.completions.create(**create_kwargs)
-                record_attempt(response, outcome="response_received")
-                if time.monotonic() >= deadline:
-                    # This rejects late results; it does not interrupt an
-                    # in-flight synchronous request or undo provider billing.
-                    raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE)
-                break
+                self._check_deadline(deadline)
+                outcome = "malformed_response"
+                parsed = _parse_response(response, effective_budget.max_response_chars)
+                outcome = "schema_error"
+                _validate_object(parsed, validator)
+                self._check_deadline(deadline)
+                outcome = "succeeded"
             except (OpenAIError, httpx.HTTPError, TimeoutError, ConnectionError) as exc:
-                record_attempt(outcome="transport_error")
-                delay = _retry_delay(exc, attempt)
-                remaining = deadline - time.monotonic()
-                if attempt + 1 == self._max_attempts or delay is None or delay >= remaining:
-                    raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE) from exc
-                time.sleep(delay)
+                failure = exc
+                retryable = _retryable(exc)
+                if self._clock() >= deadline:
+                    outcome = "deadline_exceeded"
+                else:
+                    outcome = "provider_error"
+                    if retryable and attempt < self._max_attempts:
+                        delay = self._retry_delay(exc, attempt)
+                        if delay >= deadline - self._clock():
+                            outcome = "deadline_exceeded"
+                            delay = None
+            except LLMDeadlineError:
+                outcome = "deadline_exceeded"
+                raise
+            finally:
+                event = self._make_attempt(
+                    call_id, attempt, schema_hint, attempt_started, response, failure,
+                    outcome, retryable, delay,
+                )
+                self._emit_attempt(event, callbacks)
+            if outcome == "succeeded":
+                self._check_deadline(deadline)
+                return parsed
+            if outcome == "deadline_exceeded":
+                raise LLMDeadlineError(LLM_DEADLINE_MESSAGE) from failure
+            if delay is None:
+                raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE) from failure
+            self._check_deadline(deadline)
+            # A callback may have consumed time since the delay was computed.
+            if delay >= deadline - self._clock():
+                raise LLMDeadlineError(LLM_DEADLINE_MESSAGE) from failure
+            self._sleep(delay)
+        raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE)  # guarded by validated attempts
 
-        try:
-            choice = response.choices[0]
-            content = choice.message.content
-            finish_reason = choice.finish_reason
-            refusal = getattr(choice.message, "refusal", None)
-        except (AttributeError, IndexError, TypeError) as exc:
-            raise LLMMalformedResponseError(
-                LLM_MALFORMED_RESPONSE_MESSAGE
-            ) from exc
-        # Repair may restore JSON syntax, but cannot restore missing evidence
-        # after truncation or make a provider refusal a valid research result.
-        if finish_reason != "stop" or refusal:
-            raise LLMMalformedResponseError(LLM_MALFORMED_RESPONSE_MESSAGE)
-        if not isinstance(content, str):
-            exc = TypeError("LLM response content must be a string")
-            raise LLMMalformedResponseError(
-                LLM_MALFORMED_RESPONSE_MESSAGE
-            ) from exc
-        # The SDK has already buffered the HTTP response. This bounds our
-        # parsing/repair work, not network download size or provider billing.
-        try:
-            response_too_large = len(content) > self._max_response_bytes or len(content.encode("utf-8")) > self._max_response_bytes
-        except UnicodeEncodeError as exc:
-            raise LLMMalformedResponseError(LLM_MALFORMED_RESPONSE_MESSAGE) from exc
-        if response_too_large:
-            raise LLMMalformedResponseError("LLM response exceeds configured size limit")
-        # 推理模型（如 MiniMax-M3）可能在 JSON 前加 <think>...</think> 块
-        if "</think>" in content:
-            content = content.split("</think>", 1)[1].strip()
-        # 提取首个 JSON 对象（兼容模型偶尔加 markdown 包裹或多余文本）
-        start = content.find("{")
-        end = content.rfind("}")
-        if start != -1 and end != -1:
-            content = content[start : end + 1]
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError:
-            from json_repair import loads as repair_loads
+    def _check_deadline(self, deadline: float) -> None:
+        if self._clock() >= deadline:
+            raise LLMDeadlineError(LLM_DEADLINE_MESSAGE)
 
+    def _retry_delay(self, error: Exception, attempt: int) -> float:
+        header_delay = _retry_after(error, self._wall_clock())
+        if header_delay is not None:
+            return min(header_delay, self._retry.retry_after_max_seconds)
+        base = min(self._retry.backoff_max_seconds,
+                   self._retry.backoff_base_seconds * (2 ** (attempt - 1)))
+        jitter = self._random_value()
+        bounded_number("random_value", jitter, 0, 1)
+        # Equal jitter avoids a synchronized zero-delay retry storm.
+        return base * (0.5 + jitter / 2)
+
+    def _make_attempt(
+        self, call_id: str, attempt: int, operation: str, started: float,
+        response: Any, error: Exception | None, outcome: str,
+        retryable: bool = False, delay: float | None = None,
+    ) -> LLMAttempt:
+        usage = getattr(response, "usage", None)
+        prompt = _usage_int(getattr(usage, "prompt_tokens", None))
+        completion_tokens = _usage_int(getattr(usage, "completion_tokens", None))
+        total = _usage_int(getattr(usage, "total_tokens", None))
+        known = sum(value is not None for value in (prompt, completion_tokens, total))
+        usage_status = "known" if known == 3 else "partial" if known else "unknown"
+        request_id = _safe_identifier(getattr(response, "_request_id", None))
+        if request_id is None and isinstance(error, (APIStatusError, httpx.HTTPStatusError)):
+            request_id = _safe_identifier(error.response.headers.get("x-request-id"))
+        choices = getattr(response, "choices", None)
+        finish_reason = None
+        if isinstance(choices, list) and choices:
+            reason = getattr(choices[0], "finish_reason", None)
+            if reason in ("stop", "length", "content_filter", "tool_calls", "function_call"):
+                finish_reason = reason
+        return LLMAttempt(
+            call_id=call_id, attempt=attempt, operation=operation,
+            provider="mock" if self._mock else self._provider,
+            requested_model=self.model_version,
+            model=_safe_identifier(getattr(response, "model", None)),
+            provider_request_id=request_id, finish_reason=finish_reason,
+            prompt_tokens=prompt, completion_tokens=completion_tokens, total_tokens=total,
+            usage_status=usage_status, latency_ms=max(0.0, (self._clock() - started) * 1000),
+            outcome=outcome, retryable=retryable, retry_delay_seconds=delay,
+        )
+
+    @staticmethod
+    def _emit_attempt(event: LLMAttempt, callbacks: tuple[AttemptCallback, ...]) -> None:
+        delivered: list[AttemptCallback] = []
+        for callback in callbacks:
+            if callback in delivered:
+                continue
             try:
-                parsed = repair_loads(content)
-            except (TypeError, ValueError) as exc:
-                raise LLMMalformedResponseError(
-                    LLM_MALFORMED_RESPONSE_MESSAGE
-                ) from exc
-        if not isinstance(parsed, dict):
-            exc = TypeError("LLM JSON response must be an object")
-            raise LLMMalformedResponseError(
-                LLM_MALFORMED_RESPONSE_MESSAGE
-            ) from exc
+                callback(event)
+            except Exception as exc:
+                # Never silently lose accounting and continue spending.
+                raise LLMProviderError("LLM attempt recording failed") from exc
+            delivered.append(callback)
+
+    def _mock_call(
+        self, messages: list[dict], operation: str, validator: JSONValidator | None,
+        budget: LLMCallBudget, call_id: str, callbacks: tuple[AttemptCallback, ...],
+        deadline: float,
+    ) -> dict:
+        self._check_deadline(deadline)
+        started = self._clock()
+        outcome = "malformed_response"
+        try:
+            parsed = _mock_response(messages, operation)
+            if len(json.dumps(parsed, ensure_ascii=False, allow_nan=False)) > budget.max_response_chars:
+                raise LLMMalformedResponseError(LLM_MALFORMED_RESPONSE_MESSAGE)
+            outcome = "schema_error"
+            _validate_object(parsed, validator)
+            self._check_deadline(deadline)
+            outcome = "mock"
+        except LLMDeadlineError:
+            outcome = "deadline_exceeded"
+            raise
+        finally:
+            self._emit_attempt(self._make_attempt(call_id, 1, operation, started, None, None, outcome), callbacks)
+        self._check_deadline(deadline)
         return parsed
+
+
+def _check_input(messages: list[dict], max_chars: int) -> None:
+    try:
+        if not isinstance(messages, list):
+            raise TypeError("messages must be a list")
+        for message in messages:
+            if (not isinstance(message, dict) or not isinstance(message.get("content"), str)
+                    or message.get("role") not in ("system", "developer", "user", "assistant", "tool")):
+                raise ValueError("messages must contain text content and supported roles")
+        # iterencode bounds serialized allocation; no silent truncation of sources.
+        size = 0
+        for chunk in json.JSONEncoder(ensure_ascii=False, allow_nan=False).iterencode(messages):
+            size += len(chunk)
+            if size > max_chars:
+                raise LLMInputBudgetError("LLM input exceeds the configured budget")
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise LLMProviderError("LLM input is invalid") from exc
+
+
+def _with_json_transport_contract(messages: Any) -> Any:
+    if not isinstance(messages, list):
+        return messages
+    enhanced: list[dict] = []
+    system_index = None
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            return messages
+        copy = dict(message)
+        enhanced.append(copy)
+        if (
+            system_index is None
+            and copy.get("role") == "system"
+            and isinstance(copy.get("content"), str)
+        ):
+            system_index = index
+    if system_index is None:
+        return [{"role": "system", "content": JSON_TRANSPORT_CONTRACT}, *enhanced]
+    content = enhanced[system_index]["content"].rstrip()
+    enhanced[system_index]["content"] = f"{content}\n\n{JSON_TRANSPORT_CONTRACT}"
+    return enhanced
+
+
+def _parse_response(response: Any, max_chars: int) -> dict:
+    try:
+        choices = response.choices
+        choice = choices[0]  # retain precise cause for empty choices
+        if not isinstance(choices, list) or len(choices) != 1:
+            raise ValueError("Expected exactly one completion")
+        if choice.finish_reason != "stop" or choice.message.refusal:
+            raise ValueError("LLM completion did not finish normally")
+        content = choice.message.content
+        if not isinstance(content, str) or len(content) > max_chars:
+            raise ValueError("LLM response content is invalid or too large")
+        parsed = json.loads(content, object_pairs_hook=_unique_object,
+                            parse_constant=_reject_nonfinite, parse_float=_finite_float)
+        if not isinstance(parsed, dict) or not parsed:
+            raise ValueError("LLM JSON response must be a nonempty object")
+        return parsed
+    except (AttributeError, IndexError, TypeError, ValueError, RecursionError) as exc:
+        raise LLMMalformedResponseError(LLM_MALFORMED_RESPONSE_MESSAGE) from exc
+
+
+def _validate_object(parsed: dict, validator: JSONValidator | None) -> None:
+    try:
+        if not isinstance(parsed, dict) or not parsed:
+            raise ValueError("LLM JSON response must be a nonempty object")
+        if validator is not None and validator(parsed) is False:
+            raise ValueError("LLM JSON response failed schema validation")
+    except (ValueError, TypeError) as exc:
+        raise LLMMalformedResponseError(LLM_MALFORMED_RESPONSE_MESSAGE) from exc
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict:
+    result: dict = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite(value: str) -> None:
+    raise ValueError("Nonfinite JSON number")
+
+
+def _finite_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("Nonfinite JSON number")
+    return number
+
+
+def _safe_identifier(value: object) -> str | None:
+    return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}", value) else None
+
+
+def _usage_int(value: object) -> int | None:
+    return value if type(value) is int and 0 <= value <= 2**63 - 1 else None
+
+
+def _retryable(error: Exception) -> bool:
+    if isinstance(error, (APIStatusError, httpx.HTTPStatusError)):
+        status = error.status_code if isinstance(error, APIStatusError) else error.response.status_code
+        return status in (408, 409, 429) or 500 <= status < 600
+    return isinstance(error, (APIConnectionError, httpx.TransportError, TimeoutError, ConnectionError))
+
+
+def _retry_after(error: Exception, now: float) -> float | None:
+    if not isinstance(error, (APIStatusError, httpx.HTTPStatusError)):
+        return None
+    headers = error.response.headers
+    for name, divisor in (("retry-after-ms", 1000), ("retry-after", 1)):
+        raw = headers.get(name)
+        if raw is None or len(raw) > 128:
+            continue
+        try:
+            seconds = float(raw) / divisor
+        except ValueError:
+            if name != "retry-after":
+                continue
+            try:
+                seconds = parsedate_to_datetime(raw).timestamp() - now
+            except (ValueError, TypeError, OverflowError):
+                continue
+        if math.isfinite(seconds) and seconds >= 0:
+            return seconds
+    return None
 
 
 # ---------------------------------------------------------------------------

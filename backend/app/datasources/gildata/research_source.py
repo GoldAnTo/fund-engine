@@ -357,6 +357,7 @@ class GildataResearchSource(SourceAdapter):
             metadata={
                 "source_type": "research_report",
                 "security_code": _safe_security_code(security_code),
+                "provider_identity": self.descriptor.provider_identity,
                 "publisher": provider_identity,
                 "author": author,
             },

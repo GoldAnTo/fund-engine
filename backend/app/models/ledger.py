@@ -164,10 +164,24 @@ IMMUTABLE_TABLES = frozenset(
         "uw_revision_manifests",
         "uw_company_research_artifact_versions",
         "uw_company_research_events",
+        "research_messages",
+        "research_intents",
+        "research_run_specs",
+        "role_events",
+        "gateway_commands",
+        "professional_dependencies",
+        "professional_outputs",
+        "professional_attempts",
+        "professional_events",
+        "professional_requests",
+        "professional_reviews",
+        "company_study_revisions",
+        "company_study_monitors",
+        "company_study_requests",
     }
 )
 
-DELETE_PROTECTED_TABLES = frozenset({"uw_workspace_drafts"})
+DELETE_PROTECTED_TABLES = frozenset({"uw_workspace_drafts", "research_teams", "professional_tasks", "company_studies", "company_study_activities"})
 
 
 class ImmutableLedgerError(Exception):
@@ -312,7 +326,7 @@ class DocumentUploadArtifact(Base):
     mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
     byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
     raw_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    uploaded_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    uploaded_by: Mapped[str] = mapped_column(String(256), nullable=False)
     retention_policy: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -377,7 +391,7 @@ class ResearchCase(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(256), nullable=False)
     # Research-question framing (prototype 新建研究 step 1).  All optional so
     # legacy/seeded cases stay valid; a fully framed case carries them.
     research_object: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -410,7 +424,7 @@ class CaseTenantAdmission(Base):
     initial_document_version_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("document_versions.id"), nullable=False
     )
-    admitted_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    admitted_by: Mapped[str] = mapped_column(String(256), nullable=False)
     admission_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     admitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -431,7 +445,7 @@ class Thesis(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(256), nullable=False)
     # Falsifiable-proposition framing (prototype 新建研究 step 2): a thesis is
     # verifiable only when its observation window, support/falsification
     # conditions, and next verification event are written down.  Optional so
@@ -1255,9 +1269,6 @@ class AIRun(Base):
 
     __tablename__ = "ai_runs"
 
-    # Null means historical/uninstrumented, not zero provider consumption.
-    usage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     model_version: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -1272,11 +1283,6 @@ class AIRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-
-
-# Use the exact fixed-path expressions used by usage queries on both dialects.
-from app.ai.scope_columns import AuditCaseRef, AuditRunRef
-Index("ix_ai_runs_research_scope", AuditCaseRef(AIRun.input_ref), AuditRunRef(AIRun.input_ref))
 
 
 class AuditLog(Base):

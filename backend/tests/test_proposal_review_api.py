@@ -36,13 +36,22 @@ from app.services.auto_research import AutoResearchService
 
 
 def _seed_proposal(cmd_session, *, research_case_id=None) -> Proposal:
-    proposal = _seed_event_evidence_proposal(
-        cmd_session, source_url=f"https://www.cninfo.com.cn/new/disclosure/detail?announcementId={uuid.uuid4()}"
+    from app.repositories.proposals import ProposalRepository
+
+    repo = ProposalRepository(cmd_session)
+    return repo.add_proposal(
+        kind="evidence_link",
+        payload={
+            "source_statement_id": str(uuid.uuid4()),
+            "role": "supports",
+            "reason": "orders rose",
+            "scope": {"segment": "DC"},
+        },
+        target_context={"thesis_id": str(uuid.uuid4()), "entity_type": "evidence_link"},
+        proposed_by_type="ai",
+        proposed_by_ref="mock",
+        research_case_id=research_case_id,
     )
-    assert research_case_id is None, "use an explicitly scoped fixture for another Case"
-    cmd_session.add(proposal)
-    cmd_session.flush()
-    return proposal
 
 
 def _seed_waiting_run_with_proposals(cmd_session, *, proposal_count: int):
@@ -63,8 +72,6 @@ def _seed_waiting_run_with_proposals(cmd_session, *, proposal_count: int):
         created_at=now,
     )
     cmd_session.add(thesis)
-    from tests.tenant_admission import admit_case
-    admit_case(cmd_session, case.id)
     run = ResearchRun(
         research_case_id=case.id,
         status="waiting_for_review",
@@ -174,8 +181,6 @@ def _seed_event_evidence_proposal(cmd_session, *, source_url: str) -> Proposal:
     )
     cmd_session.add(statement)
     cmd_session.flush()
-    from tests.tenant_admission import admit_case
-    admit_case(cmd_session, case.id, document_version_id=document.id)
     return Proposal(
         kind="evidence_link",
         payload={
@@ -242,7 +247,6 @@ def test_invalid_event_source_decision_is_rejected_without_publication(
         status="open",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     cmd_session.commit()
 
@@ -397,7 +401,6 @@ def test_modified_event_proposal_rejects_invalid_replacement_source(
         status="open",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     cmd_session.commit()
 
@@ -589,7 +592,6 @@ def test_decision_closes_review_proposal_task(cmd_client, cmd_session):
         status="open",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     in_progress_other = task_repo.add_task(
         title="Review other proposal",
@@ -597,7 +599,6 @@ def test_decision_closes_review_proposal_task(cmd_client, cmd_session):
         status="in_progress",
         ref_type="proposal",
         ref_id=other.id,
-        research_case_id=other.research_case_id,
     )
     cmd_session.commit()
 
@@ -795,7 +796,6 @@ def test_confirmed_decision_closes_in_progress_review_task(
         status="in_progress",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     cmd_session.commit()
 

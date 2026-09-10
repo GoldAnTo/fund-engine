@@ -78,7 +78,13 @@ def fake_openai_server(monkeypatch):
             assert self.headers["Authorization"] == "Bearer preparation-integration-test-key"
             size = int(self.headers["Content-Length"])
             request = json.loads(self.rfile.read(size))
-            body = {"choices": [{"message": {"content": json.dumps(fake.response(request))}, "finish_reason": "stop"}]}
+            body = {
+                "id": "chatcmpl-preparation-integration", "object": "chat.completion",
+                "created": 0, "model": "preparation-integration-test-model",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                    "role": "assistant", "content": json.dumps(fake.response(request)),
+                }}],
+            }
             encoded = json.dumps(body).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -119,7 +125,7 @@ def _create_case(client) -> uuid.UUID:
 
 
 def _worker_factory(session: Session):
-    return sessionmaker(bind=session.bind, future=True, autoflush=False)
+    return sessionmaker(bind=session.bind, future=True)
 
 
 def _run_worker_until_idle(session: Session) -> None:

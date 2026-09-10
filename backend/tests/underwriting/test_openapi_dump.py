@@ -184,7 +184,7 @@ def test_dump_openapi_includes_underwriting_routes_without_touching_default(
 ) -> None:
     backend = Path(__file__).parents[2]
     default_output = backend.parent / "frontend" / "openapi.json"
-    default_before = default_output.read_bytes()
+    default_before = default_output.read_bytes() if default_output.exists() else None
     output = tmp_path / "explicit-output" / "openapi.json"
     subprocess.run(
         [
@@ -196,7 +196,7 @@ def test_dump_openapi_includes_underwriting_routes_without_touching_default(
         cwd=backend,
         check=True,
     )
-    assert default_output.read_bytes() == default_before
+    assert (default_output.read_bytes() if default_output.exists() else None) == default_before
     openapi = json.loads(output.read_text())
     assert "/api/underwriting/v1/objects" in openapi["paths"]
     assert "UnderwritingErrorEnvelope" in openapi["components"]["schemas"]
@@ -535,8 +535,8 @@ def test_archive_contract_and_ui_sources_do_not_introduce_investment_fields() ->
 
     frontend = Path(__file__).parents[3] / "frontend" / "src"
     sources = [
-        frontend / "data" / "underwritingResearchApi.ts",
-        frontend / "features" / "underwriting" / "ResearchArchivePage.tsx",
+        frontend / "gateway" / "contracts.ts",
+        frontend / "workbench" / "GatewayAssessmentReview.tsx",
     ]
     ui_source = "\n".join(source.read_text(encoding="utf-8") for source in sources)
     forbidden_copy = {

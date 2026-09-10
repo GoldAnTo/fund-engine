@@ -34,7 +34,6 @@ from app.acquisition.sources import (
 )
 from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
-from app.ai.runs import research_audit_context
 from app.documents.locators import (
     SourceLocatorV1,
     TextPosition,
@@ -43,7 +42,6 @@ from app.documents.locators import (
 )
 from app.domain.acquisition import AcquisitionRequest, EvidenceObjective
 from app.models.acquisition import (
-    AcquisitionJob,
     AcquisitionAttempt,
     AcquisitionException,
     AutomaticAdmissionDecision,
@@ -119,6 +117,17 @@ def _thaw(value: Any) -> Any:
         return {str(key): _thaw(child) for key, child in value.items()}
     if isinstance(value, (tuple, list)):
         return [_thaw(child) for child in value]
+    return value
+
+
+def _diagnostics_for_storage(value: Any) -> Any:
+    """Preserve provider diagnostics as JSON, treating non-finite numbers as absent."""
+    if isinstance(value, Mapping):
+        return {str(key): _diagnostics_for_storage(child) for key, child in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_diagnostics_for_storage(child) for child in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     return value
 
 
@@ -409,6 +418,31 @@ class AcquisitionRunner:
                 )
                 session.commit()
                 return None
+            entities = request_snapshot.get("entity_names", ())
+            if entities is None:
+                entities = ()
+            if (isinstance(entities, (list, tuple))
+                    and all(isinstance(entity, str) for entity in entities)
+                    and not any(entity.strip() for entity in entities)):
+                # Every automatic semantic admission requires a subject from
+                # the frozen entity names, including material intake. A ticker
+                # or metric can form a query but cannot satisfy that gate.
+                # Check before DTO construction to contain legacy blank names,
+                # while leaving the original immutable request untouched.
+                repository.record_exception(
+                    claim.job_id, lease_token=claim.lease_token,
+                    reason_code="research_subject_missing", detail_json={},
+                )
+                exception_count = session.scalar(select(func.count()).select_from(AcquisitionException).where(
+                    AcquisitionException.job_id == claim.job_id)) or 0
+                repository.advance(
+                    claim.job_id, lease_token=claim.lease_token, stage="failed", status="failed",
+                    counters={"exception_count": exception_count},
+                    message="acquisition requires a frozen research subject",
+                    error_code="research_subject_missing",
+                )
+                session.commit()
+                return None
             session.commit()
         request = AcquisitionRequest(
             tenant_id=request_snapshot["tenant_id"],
@@ -667,13 +701,18 @@ class AcquisitionRunner:
                     text_quote=TextQuote(exact=brief.raw_input),
                     extra={"kind": "intake_material"},
                 ).to_storage_dict()
-                replay_span = session.scalar(
-                    select(SourceSpan.id).where(
-                        SourceSpan.document_version_id == document.id,
-                        SourceSpan.locator_v1 == locator,
+                # PostgreSQL's JSON type has no equality operator. Compare
+                # decoded locators structurally after scoping to this document;
+                # this also ignores object-key serialization order on SQLite.
+                replay_span_exists = any(
+                    stored_locator == locator
+                    for stored_locator in session.scalars(
+                        select(SourceSpan.locator_v1).where(
+                            SourceSpan.document_version_id == document.id
+                        )
                     )
                 )
-                if replay_span is None:
+                if not replay_span_exists:
                     DocumentService(DocumentRepository(session)).add_span(
                         document_version_id=document.id,
                         locator=locator,
@@ -783,7 +822,7 @@ class AcquisitionRunner:
                     started_at=started_at,
                     outcome="failed",
                     retryable=exc.retryable,
-                    metadata={"diagnostics": _thaw(exc.diagnostics)},
+                    metadata={"diagnostics": _diagnostics_for_storage(exc.diagnostics)},
                     error_code="SourceUnavailable",
                 )
                 self._record_exception(
@@ -794,7 +833,7 @@ class AcquisitionRunner:
                         "operation": "search",
                         "retryable": exc.retryable,
                         "claim_attempt": claim.attempt,
-                        "diagnostics": _thaw(exc.diagnostics),
+                        "diagnostics": _diagnostics_for_storage(exc.diagnostics),
                     },
                 )
                 continue
@@ -982,7 +1021,7 @@ class AcquisitionRunner:
                     retryable=exc.retryable,
                     metadata={
                         "source_reference_id": str(reference.id),
-                        "diagnostics": _thaw(exc.diagnostics),
+                        "diagnostics": _diagnostics_for_storage(exc.diagnostics),
                     },
                     error_code="SourceUnavailable",
                 )
@@ -994,7 +1033,7 @@ class AcquisitionRunner:
                         "operation": "fetch",
                         "retryable": exc.retryable,
                         "claim_attempt": claim.attempt,
-                        "diagnostics": _thaw(exc.diagnostics),
+                        "diagnostics": _diagnostics_for_storage(exc.diagnostics),
                     },
                     reference_id=reference.id,
                 )
@@ -1140,21 +1179,17 @@ class AcquisitionRunner:
             session = self._session_factory()
             try:
                 try:
-                    job = session.get(AcquisitionJob, claim.job_id)
-                    if job is None:
-                        raise StaleLeaseError("acquisition job no longer exists")
-                    with research_audit_context(case_id=job.research_case_id, run_id=job.research_run_id, acquisition_job_id=job.id):
-                        self._extractor.extract(
-                            document_id,
-                            session,
-                            pre_commit_guard=lambda guarded_session: lease_write_fence(
-                                guarded_session,
-                                job_id=claim.job_id,
-                                lease_token=claim.lease_token,
-                                now=self._now(),
-                                allowed_stages=frozenset({"extracting"}),
-                            ),
-                        )
+                    self._extractor.extract(
+                        document_id,
+                        session,
+                        pre_commit_guard=lambda guarded_session: lease_write_fence(
+                            guarded_session,
+                            job_id=claim.job_id,
+                            lease_token=claim.lease_token,
+                            now=self._now(),
+                            allowed_stages=frozenset({"extracting"}),
+                        ),
+                    )
                 except Exception as exc:
                     # A rotated lease surfaces here as StaleLeaseError; let
                     # it propagate so run_once / run_claim can decide whether

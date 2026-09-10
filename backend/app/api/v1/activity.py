@@ -6,20 +6,16 @@ rebuildable.  Cursors are opaque event-id references; clients pass ``after=``
 the last seen ``event_id`` to page forward.  SSE is an optimization only — the
 plain GET here is sufficient to recover full state.
 """
+
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import select
-from app.api.v1.tenant_context import require_research_tenant
-from app.errors import NotFoundError, ValidationFailedError
-from app.services.case_tenant_access import CaseTenantAccess
-from app.models.operational import TaskItem
-from app.repositories.operational import task_tenant_predicate
-from app.queries.activity import resource_case_predicate
 from sqlalchemy.orm import Session
 
+from app.api.v1.tenant_context import ResearchActor, require_research_actor
 from app.db import get_db
 from app.queries.activity import ActivityQueries
 from app.repositories.operational import TaskRepository
@@ -31,9 +27,12 @@ from app.schemas.v1.operational import (
     TasksResponse,
     TaskUpdateRequest,
 )
+from app.services.operational_access import OperationalAccess, parse_operational_uuid
 
 # NOTE: no prefix here — the parent v1 router already mounts under /api/v1.
-router = APIRouter(tags=["activity-v1"])
+router = APIRouter(tags=["activity-v1"], dependencies=[Depends(require_research_actor)])
+Actor = Annotated[ResearchActor, Depends(require_research_actor)]
+Database = Annotated[Session, Depends(get_db)]
 
 
 def _to_dto(event) -> ActivityItemDTO:
@@ -53,19 +52,21 @@ def _to_dto(event) -> ActivityItemDTO:
 
 @router.get("/activity", response_model=ActivityResponse)
 def get_activity(
-    case_id: uuid.UUID | None = None,
+    case_id: uuid.UUID,
+    actor: Actor,
+    db: Database,
     actor_id: str | None = None,
     event_type: str | None = None,
-    after: uuid.UUID | None = Query(default=None, description="opaque cursor = last event_id"),
+    after: str | None = Query(
+        default=None, description="opaque cursor = last event_id"
+    ),
     limit: int = Query(default=50, ge=1, le=200),
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
-    after_id = after
-    if case_id is not None:
-        CaseTenantAccess(db).require_case(case_id, tenant_id)
+    access = OperationalAccess(db)
+    access.require_compatibility_case(actor, case_id)
+    after_id = parse_operational_uuid(after)
+    access.require_event_cursor(case_id, after_id)
     rows, has_more = ActivityQueries(db).activity(
-        tenant_id=tenant_id,
         case_id=case_id,
         actor_id=actor_id,
         event_type=event_type,
@@ -79,17 +80,19 @@ def get_activity(
 
 @router.get("/evidence-changes", response_model=ActivityResponse)
 def get_evidence_changes(
-    case_id: uuid.UUID | None = None,
-    after: uuid.UUID | None = Query(default=None, description="opaque cursor = last event_id"),
+    case_id: uuid.UUID,
+    actor: Actor,
+    db: Database,
+    after: str | None = Query(
+        default=None, description="opaque cursor = last event_id"
+    ),
     limit: int = Query(default=50, ge=1, le=200),
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
-    after_id = after
-    if case_id is not None:
-        CaseTenantAccess(db).require_case(case_id, tenant_id)
+    access = OperationalAccess(db)
+    access.require_compatibility_case(actor, case_id)
+    after_id = parse_operational_uuid(after)
+    access.require_event_cursor(case_id, after_id)
     rows, has_more = ActivityQueries(db).evidence_changes(
-        tenant_id=tenant_id,
         case_id=case_id, after_id=after_id, limit=limit
     )
     items = [_to_dto(e) for e in rows]
@@ -100,25 +103,14 @@ def get_evidence_changes(
 @router.post("/tasks", response_model=TaskItemDTO, status_code=status.HTTP_201_CREATED)
 def create_task(
     payload: TaskCreateRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: Actor,
+    db: Database,
 ):
-    if not payload.research_case_id:
-        raise ValidationFailedError("research_case_id is required")
-    try:
-        case_id = uuid.UUID(payload.research_case_id)
-        ref_id = uuid.UUID(payload.ref_id) if payload.ref_id else None
-    except ValueError as exc:
-        raise ValidationFailedError("invalid resource UUID") from exc
-    CaseTenantAccess(db).require_case(case_id, tenant_id)
-    if bool(payload.ref_type) != (ref_id is not None):
-        raise ValidationFailedError("ref_type and ref_id must be supplied together")
-    if ref_id is not None:
-        predicate = resource_case_predicate(payload.ref_type, str(ref_id), case_id)
-        if predicate is None:
-            raise ValidationFailedError("unsupported task reference type")
-        if not db.scalar(select(predicate)):
-            raise NotFoundError("task reference not found")
+    case_id = parse_operational_uuid(payload.research_case_id, required=True)
+    access = OperationalAccess(db)
+    access.require_compatibility_case(actor, case_id)
+    ref_id = parse_operational_uuid(payload.ref_id)
+    access.require_reference(case_id, payload.ref_type, ref_id)
     repo = TaskRepository(db)
     task = repo.add_task(
         title=payload.title,
@@ -138,13 +130,11 @@ def create_task(
 def update_task(
     task_id: uuid.UUID,
     payload: TaskUpdateRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
+    actor: Actor,
+    db: Database,
 ):
     repo = TaskRepository(db)
-    task = db.scalar(select(TaskItem).where(TaskItem.id == task_id, task_tenant_predicate(tenant_id)))
-    if task is None:
-        raise NotFoundError(f"task {task_id} not found")
+    task = OperationalAccess(db).require_task(actor, task_id)
     repo.set_status(task, status=payload.status, assignee=payload.assignee)
     db.commit()
     return _task_to_dto(task)
@@ -166,35 +156,26 @@ def _task_to_dto(task) -> TaskItemDTO:
         due_at=task.due_at.isoformat() if task.due_at else None,
     )
 
+
 @router.get("/tasks", response_model=TasksResponse)
 def get_tasks(
-    case_id: uuid.UUID | None = None,
+    case_id: uuid.UUID,
+    actor: Actor,
+    db: Database,
     status: str | None = None,
     assignee: str | None = None,
-    after: uuid.UUID | None = Query(default=None, description="opaque cursor = last task id"),
+    after: str | None = Query(default=None, description="opaque cursor = last task id"),
     limit: int = Query(default=50, ge=1, le=200),
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
+    access = OperationalAccess(db)
+    access.require_compatibility_case(actor, case_id)
     repo = TaskRepository(db)
-    after_id = after
-    if case_id is not None:
-        CaseTenantAccess(db).require_case(case_id, tenant_id)
+    after_id = parse_operational_uuid(after)
     after_created = None
     if after_id is not None:
-        query = select(TaskItem).where(TaskItem.id == after_id, task_tenant_predicate(tenant_id))
-        if case_id is not None:
-            query = query.where(TaskItem.research_case_id == case_id)
-        if status is not None:
-            query = query.where(TaskItem.status == status)
-        if assignee is not None:
-            query = query.where(TaskItem.assignee == assignee)
-        task = db.scalar(query)
-        if task is None:
-            raise NotFoundError("task cursor not found")
+        task = access.require_task(actor, after_id, case_id=case_id)
         after_created = task.created_at
     rows = repo.tasks_page(
-        tenant_id=tenant_id,
         case_id=case_id,
         status=status,
         assignee=assignee,
@@ -204,6 +185,8 @@ def get_tasks(
     )
     has_more = len(rows) > limit
     page = rows[:limit]
+    for task in page:
+        access.require_task(actor, task.id, case_id=case_id)
     items = [
         TaskItemDTO(
             id=str(t.id),

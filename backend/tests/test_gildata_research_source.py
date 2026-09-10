@@ -146,6 +146,7 @@ def test_search_maps_reports_and_announcements_to_governed_references():
     assert report.metadata == {
         "source_type": "research_report",
         "security_code": "600000",
+        "provider_identity": "Gildata",
         "publisher": "示例机构",
         "author": "研究员甲",
     }
@@ -696,7 +697,7 @@ def test_fetch_returns_exact_cached_provider_text_without_another_call():
         "adapter_key": "gildata",
         "external_record_id": reference.external_record_id,
         "source_type": "research_report",
-        "provider_identity": "示例机构",
+        "provider_identity": "Gildata",
     }
     assert tuple(client.calls) == calls_after_search
 

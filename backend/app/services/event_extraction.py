@@ -12,11 +12,9 @@ from openai import OpenAIError
 
 from app.ai.client import LLMClient, LLMProviderError
 
-
 EVENT_EXTRACTION_PROVIDER_ERROR_MESSAGE = (
     "event extraction LLM is unavailable or returned an invalid response"
 )
-EVENT_EXTRACTION_PROMPT_VERSION = "event-extraction-v1"
 
 
 class EventExtractionProviderError(Exception):
@@ -49,10 +47,6 @@ class EventExtractionService:
     def __init__(self, client: Any | None = None) -> None:
         self._client = client if client is not None else self._provider_client()
 
-    @property
-    def model_version(self) -> str:
-        return getattr(self._client, "model_version", "unknown")
-
     @staticmethod
     def _provider_client() -> Any:
         try:
@@ -66,7 +60,7 @@ class EventExtractionService:
         raw_input = raw_input.strip()
         result = self._ask_model(raw_input, source_url)
         title = _supported_text(result.get("event_title"), raw_input) or _fallback_title(raw_input)
-        company_name = _supported_text(result.get("company_name"), raw_input)
+        company_name = _explicit_company_name(raw_input) or _supported_text(result.get("company_name"), raw_input)
         ticker = _supported_ticker(result.get("ticker"), raw_input)
         market_reaction = _supported_text(result.get("market_reaction"), raw_input)
         summary = _supported_text(result.get("summary"), raw_input)
@@ -74,6 +68,12 @@ class EventExtractionService:
         question = _question(result.get("research_question"))
         factors = _factors(result.get("candidate_factors"))
         input_kind = _input_kind(result.get("input_kind"), raw_input)
+        if company_name is None and "company_name" in result:
+            # A model may translate a literal name (e.g. 谷歌) into a corporate
+            # alias absent from the input. Recheck once, never insert an alias
+            # table or use the second response to overwrite other event facts.
+            rechecked = self._ask_model(raw_input, source_url, recheck_subject=True)
+            company_name = _supported_text(rechecked.get("company_name"), raw_input)
         return EventExtraction(
             event_title=title,
             company_name=company_name,
@@ -86,7 +86,9 @@ class EventExtractionService:
             input_kind=input_kind,
         )
 
-    def _ask_model(self, raw_input: str, source_url: str | None) -> dict[str, Any]:
+    def _ask_model(
+        self, raw_input: str, source_url: str | None, *, recheck_subject: bool = False
+    ) -> dict[str, Any]:
         messages = [
             {
                 "role": "system",
@@ -95,7 +97,20 @@ class EventExtractionService:
                     "时间、市场反应和摘要；无法确认必须返回 null。研究问题和候选因素"
                     "是待验证假设，返回一个问题和 3 到 5 个因素。判断输入是仅提出研究"
                     "主题（topic）还是包含可抽取事实的用户材料（material），并返回"
-                    "input_kind。仅返回 JSON。"
+                    "input_kind。仅返回 JSON，严格使用以下键名和类型，不得改成"
+                    "company、code、time、factors 等别名："
+                    '{"event_title":null,"company_name":null,"ticker":null,'
+                    '"event_at":null,"market_reaction":null,"summary":null,'
+                    '"research_question":"待验证的非空研究问题",'
+                    '"candidate_factors":["待验证因素一","待验证因素二","待验证因素三"],'
+                    '"input_kind":"topic"}。'
+                    "只输出这个 JSON 对象的原始文本，不得使用 Markdown、代码块或 ```json 包裹，"
+                    "不得在 JSON 前后添加说明文字。"
+                    "前六个事实字段只可为原文支持的字符串或 null，event_at 为 ISO 时间或 null；"
+                    "research_question 必须为非空字符串，candidate_factors 必须为"
+                    "3 到 5 个互不重复的非空字符串，不可返回对象；input_kind 仅可为 topic 或 material。"
+                    "company_name 必须逐字复制原文的公司名称，不得翻译、扩写公司全称或替换为母公司。"
+                    "研究主体仅表示用户希望核验的对象，不代表原文业绩或数字已被核实。"
                 ),
             },
             {
@@ -105,6 +120,11 @@ class EventExtractionService:
                 ),
             },
         ]
+        if recheck_subject:
+            messages[0]["content"] += (
+                "上次未取得原文支持的公司主体。请仅重新核对原文中明确出现的公司名称，"
+                "company_name 必须为原文的连续片段；确实未提供公司名称则返回 null，禁止猜测。"
+            )
         return self._provider_result(messages)
 
     def _provider_result(self, messages: list[dict[str, str]]) -> dict[str, Any]:
@@ -130,6 +150,16 @@ class EventExtractionService:
 
 def _normalise(value: str) -> str:
     return "".join(value.lower().split())
+
+
+def _explicit_company_name(raw_input: str) -> str | None:
+    """Honor a bounded user-specified study subject, not a verified fact."""
+    matches = re.findall(
+        r"(?m)^[ \t]*研究主体[：:][ \t]*([^\r\n；;。]{1,100})(?:[；;。]|$)",
+        raw_input,
+    )
+    names = {name.strip() for name in matches if name.strip()}
+    return next(iter(names)) if len(names) == 1 else None
 
 
 def _supported_text(value: object, raw_input: str) -> str | None:
@@ -161,7 +191,7 @@ def _supported_datetime(value: object, raw_input: str) -> datetime | None:
     if not re.search(rf"(?<!\d){re.escape(candidate)}(?!\d)", source):
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.fromisoformat(value)
     except ValueError:
         return None
 

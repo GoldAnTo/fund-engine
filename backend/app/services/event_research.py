@@ -68,13 +68,38 @@ class EventResearchService:
         self._session = session
 
     def create(
-        self, payload: CreateEventResearchRequest, *, tenant_id: str,
+        self,
+        payload: CreateEventResearchRequest,
+        *,
+        tenant_id: str,
         initial_uploaded_original: InitialUploadedOriginal | None = None,
         workflow_mode: str = "reviewed",
         commit: bool = True,
     ) -> CreatedEventResearch:
         if workflow_mode not in {"reviewed", "automatic"}:
             raise ValueError("workflow_mode must be 'reviewed' or 'automatic'")
+        try:
+            return self._create(
+                payload,
+                tenant_id=tenant_id,
+                initial_uploaded_original=initial_uploaded_original,
+                workflow_mode=workflow_mode,
+                commit=commit,
+            )
+        except Exception:
+            if commit:
+                self._session.rollback()
+            raise
+
+    def _create(
+        self,
+        payload: CreateEventResearchRequest,
+        *,
+        tenant_id: str,
+        initial_uploaded_original: InitialUploadedOriginal | None = None,
+        workflow_mode: str = "reviewed",
+        commit: bool = True,
+    ) -> CreatedEventResearch:
         scope_actor = (
             payload.created_by
             if workflow_mode == "reviewed"
@@ -315,10 +340,8 @@ class EventResearchService:
             else:
                 self._session.flush()
         except Exception:
-            # Preparation is part of event intake's one unit of work.  In
-            # particular, a failed job enqueue must not leave a half-created
-            # Case, frozen document, or tenant admission behind.
-            self._session.rollback()
+            # The public create method owns the unit-of-work boundary.  A
+            # commit=False caller retains control of its outer transaction.
             raise
         return CreatedEventResearch(
             case_id=str(case.id),

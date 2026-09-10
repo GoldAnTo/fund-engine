@@ -757,6 +757,14 @@ class RetrievedDocumentFreezer:
             reference.metadata_json if isinstance(reference.metadata_json, dict) else {}
         )
         provider = metadata.get("provider_identity") or metadata.get("publisher")
+        if (
+            reference.adapter_key == "gildata"
+            and metadata.get("source_type") == "research_report"
+        ):
+            # Gildata transports reports from different publishers. Keep the
+            # publisher in the historical publication-key slot; the trusted
+            # transport identity remains separate in reference metadata.
+            provider = metadata.get("publisher") or provider
         discriminator = metadata.get("security_code") or metadata.get("issuer_identity")
         publication_value = metadata.get("source_publication")
         if not publication_value and reference.published_at is not None:

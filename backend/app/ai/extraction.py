@@ -13,8 +13,6 @@ statement count (split into rule-based and LLM), and success/failure status.
 """
 from __future__ import annotations
 
-from app.ai.usage import capture_usage
-
 import json
 import uuid
 from collections.abc import Callable
@@ -23,15 +21,11 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai.client import (
-    LLMClient,
-    LLMMalformedResponseError,
-    LLM_MALFORMED_RESPONSE_MESSAGE,
-)
+from app.ai.client import LLMClient
 from app.ai.error_safety import AI_OPERATION_ERROR_MESSAGE
 from app.ai.prompts import EXTRACT_PROMPT_VERSION, EXTRACT_SYSTEM
 from app.ai.runs import record_run
-from app.domain.atomic_claims import AtomicClaimDraft
+from app.domain.atomic_claims import AtomicClaimDraft, normalize_claim_period
 from app.models.ledger import (
     AtomicClaimCandidate,
     DocumentVersion,
@@ -49,7 +43,6 @@ class StatementExtractor:
         self._client = client
         self._table_extractor = FinancialTableExtractor()
 
-    @capture_usage()
     def extract(
         self,
         document_version_id: uuid.UUID,
@@ -136,10 +129,14 @@ class StatementExtractor:
             # 2. LLM pass: narrative spans only.
             statements_data: list[dict] = []
             span_ids_by_text_id: dict[str, uuid.UUID] = {}
+            span_text_by_id: dict[str, str] = {}
             llm_spans = [s for s in spans if str(s.id) not in handled_span_ids]
             if llm_spans:
                 span_ids_by_text_id = {
                     str(span.id): span.id for span in llm_spans
+                }
+                span_text_by_id = {
+                    str(span.id): span.verbatim_text for span in llm_spans
                 }
                 user_data = {
                     "spans": [
@@ -159,12 +156,7 @@ class StatementExtractor:
                     pre_commit_guard(session)
                 session.commit()
                 result = self._client.chat_json(messages, schema_hint="extract")
-                # Only an explicit array can establish an empty extraction.
-                # Treating a missing/wrong-shaped field as [] would create a
-                # success watermark and permanently suppress automatic retry.
-                if not isinstance(result.get("statements"), list):
-                    raise LLMMalformedResponseError(LLM_MALFORMED_RESPONSE_MESSAGE)
-                statements_data = result["statements"]
+                statements_data = result.get("statements", [])
 
             # Every output path, including deterministic table-only
             # extraction, must claim the caller's current output slot before
@@ -184,6 +176,7 @@ class StatementExtractor:
                     )
                 )
 
+            reanchored_quotes = 0
             for stmt_data in statements_data:
                 span_id = stmt_data.get("span_id", "")
                 source_span_id = span_ids_by_text_id.get(span_id)
@@ -192,8 +185,17 @@ class StatementExtractor:
                 quote = stmt_data.get("quote")
                 quote_start = stmt_data.get("quote_start")
                 quote_end = stmt_data.get("quote_end")
-                if not isinstance(quote, str) or not isinstance(quote_start, int) or not isinstance(quote_end, int):
+                offsets = _literal_quote_offsets(
+                    span_text_by_id[span_id], quote, quote_start, quote_end
+                )
+                if offsets is None:
                     continue
+                was_reanchored = (
+                    type(quote_start) is not int
+                    or type(quote_end) is not int
+                    or offsets != (quote_start, quote_end)
+                )
+                quote_start, quote_end = offsets
                 try:
                     if pre_commit_guard is not None:
                         pre_commit_guard(session)
@@ -226,6 +228,7 @@ class StatementExtractor:
                 except (KeyError, TypeError, ValueError, ValidationError):
                     continue
                 created.append(candidate)
+                reanchored_quotes += int(was_reanchored)
 
             if pre_commit_guard is not None:
                 pre_commit_guard(session)
@@ -239,6 +242,8 @@ class StatementExtractor:
                     f"extracted {len(created)} atomic candidates awaiting review "
                     f"({len(rule_drafts)} rule-based, "
                     f"{len(created) - len(rule_drafts)} llm) from {len(spans)} spans"
+                    + (f"; {reanchored_quotes} exact quotes reanchored"
+                       if reanchored_quotes else "")
                     + (
                         "; llm returned 0 statements"
                         if len(created) - len(rule_drafts) == 0
@@ -286,12 +291,26 @@ class StatementExtractor:
             raise
 
 
-def _parse_period(value):
-    """Parse an ISO date string or pass through ``date`` / ``None``."""
-    if value is None or value == "":
-        return None
-    if isinstance(value, str):
-        from datetime import date
+def _literal_quote_offsets(
+    text: str, quote: object, start: object, end: object,
+) -> tuple[int, int] | None:
+    """Resolve literal source identity, never repair or normalize quote content.
 
-        return date.fromisoformat(value)
-    return value
+    Models often miscount Unicode characters. A valid bounded slice is trusted;
+    otherwise only one exact occurrence in this same frozen span can anchor it.
+    Ambiguous, empty, modified or cross-span quotes remain unextractable.
+    """
+    if not isinstance(quote, str) or not quote:
+        return None
+    if (type(start) is int and type(end) is int
+            and 0 <= start < end <= len(text) and text[start:end] == quote):
+        return start, end
+    position = text.find(quote)
+    if position < 0 or text.find(quote, position + 1) >= 0:
+        return None
+    return position, position + len(quote)
+
+
+def _parse_period(value):
+    """Keep only valid source periods, preserving year/month/day precision."""
+    return normalize_claim_period(value)

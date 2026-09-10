@@ -11,12 +11,12 @@ from app.models.events import DomainEvent
 from app.models.operational import Job, JobEvent
 from app.repositories.operational import TaskRepository
 from app.services.jobs import JobService
+from tests.test_operational_access_api import make_case
 
 
-def _make_job(session, *, kind="propose", client=None) -> Job:
-    from tests.event_case_factory import create_event_case
-    case_id = uuid.UUID(create_event_case(client)) if client is not None else uuid.uuid4()
-    return JobService(session).create(kind=kind, research_case_id=case_id)
+def _make_job(session, *, kind="propose") -> Job:
+    case = make_case(session, tenant_id="test-team")
+    return JobService(session).create(kind=kind, research_case_id=case.id)
 
 
 def test_job_lifecycle_states(cmd_session):
@@ -51,7 +51,7 @@ def test_cancel_rejected_on_terminal_job(cmd_session):
 
 
 def test_job_retry_endpoint_resets_to_queued(cmd_client, cmd_session):
-    job = _make_job(cmd_session, client=cmd_client)
+    job = _make_job(cmd_session)
     js = JobService(cmd_session)
     js.start(job)
     js.finish(job, status="failed", error="boom")
@@ -67,7 +67,7 @@ def test_job_retry_endpoint_resets_to_queued(cmd_client, cmd_session):
 
 
 def test_jobs_api_get_and_events(cmd_client, cmd_session):
-    job = _make_job(cmd_session, client=cmd_client)
+    job = _make_job(cmd_session)
     JobService(cmd_session).start(job, step="x")
     JobService(cmd_session).finish(job, status="succeeded")
     cmd_session.commit()
@@ -82,7 +82,7 @@ def test_jobs_api_get_and_events(cmd_client, cmd_session):
 
 
 def test_jobs_api_cancel_endpoint(cmd_client, cmd_session):
-    job = _make_job(cmd_session, client=cmd_client)
+    job = _make_job(cmd_session)
     JobService(cmd_session).start(job)
     cmd_session.commit()
     resp = cmd_client.post(f"/api/v1/jobs/{job.id}/cancel")
@@ -91,7 +91,7 @@ def test_jobs_api_cancel_endpoint(cmd_client, cmd_session):
 
 
 def test_jobs_api_cancel_rejects_terminal_job_as_conflict(cmd_client, cmd_session):
-    job = _make_job(cmd_session, client=cmd_client)
+    job = _make_job(cmd_session)
     service = JobService(cmd_session)
     service.start(job)
     service.finish(job, status="succeeded")
@@ -141,15 +141,14 @@ def test_evidence_changes_feed(cmd_session):
 
 
 def test_tasks_api(cmd_client, cmd_session):
-    from tests.event_case_factory import create_event_case
-    case_id = uuid.UUID(create_event_case(cmd_client))
+    case = make_case(cmd_session, tenant_id="test-team")
     TaskRepository(cmd_session).add_task(
         title="Review proposal",
         task_type="review_proposal",
-        research_case_id=case_id,
+        research_case_id=case.id,
     )
     cmd_session.commit()
-    resp = cmd_client.get("/api/v1/tasks")
+    resp = cmd_client.get("/api/v1/tasks", params={"case_id": str(case.id)})
     assert resp.status_code == 200
     assert resp.json()["items"]
 

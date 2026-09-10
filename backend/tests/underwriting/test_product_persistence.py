@@ -131,7 +131,7 @@ def test_product_orm_models_are_exported_and_mapped() -> None:
 def test_product_tables_have_the_required_guard_registration() -> None:
     assert IMMUTABLE_PRODUCT_TABLES <= IMMUTABLE_TABLES
     assert "uw_workspace_drafts" not in IMMUTABLE_TABLES
-    assert DELETE_PROTECTED_TABLES == frozenset({"uw_workspace_drafts"})
+    assert DELETE_PROTECTED_TABLES.intersection(PRODUCT_TABLES) == frozenset({"uw_workspace_drafts"})
 
 
 def test_product_immutable_tables_reject_update_and_delete() -> None:

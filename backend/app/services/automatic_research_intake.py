@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol
+from unicodedata import category
 
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,10 @@ class AutomaticResearchStart:
     preparation_id: None = None
 
 
+def _contains_control_characters(value: str) -> bool:
+    return any(category(character) == "Cc" for character in value)
+
+
 class AutomaticResearchIntakeService:
     def __init__(
         self, session: Session, extractor: _EventExtractor | None = None
@@ -31,17 +36,45 @@ class AutomaticResearchIntakeService:
         self._session = session
         self._extractor = extractor or EventExtractionService()
 
-    def start(self, raw_input: str, *, tenant_id: str) -> AutomaticResearchStart:
+    def start(
+        self,
+        raw_input: str,
+        *,
+        tenant_id: str,
+        actor_subject_id: str | None,
+        commit: bool = True,
+    ) -> AutomaticResearchStart:
         text = raw_input.strip()
         if not text:
             raise ValueError("automatic research input must not be blank")
         normalized_tenant_id = tenant_id.strip()
         if not normalized_tenant_id:
             raise ValueError("automatic research tenant_id must not be blank")
+        if _contains_control_characters(normalized_tenant_id):
+            raise ValueError(
+                "automatic research tenant_id must not contain control characters"
+            )
         if len(normalized_tenant_id) > 121:
             raise ValueError(
                 "automatic research tenant_id must not exceed 121 characters"
             )
+        if actor_subject_id is None:
+            audit_actor = f"tenant:{normalized_tenant_id}"
+        else:
+            if not actor_subject_id.strip():
+                raise ValueError(
+                    "automatic research actor_subject_id must not be blank"
+                )
+            if _contains_control_characters(actor_subject_id):
+                raise ValueError(
+                    "automatic research actor_subject_id must not contain "
+                    "control characters"
+                )
+            if len(actor_subject_id) > 128:
+                raise ValueError(
+                    "automatic research actor_subject_id must not exceed 128 characters"
+                )
+            audit_actor = f"human:{actor_subject_id}"
 
         extracted = self._extractor.extract(raw_input=text, source_url=None)
         input_kind = (
@@ -82,10 +115,11 @@ class AutomaticResearchIntakeService:
                 research_question=extracted.research_question,
                 candidate_factors=list(extracted.candidate_factors),
                 research_protocol_required=False,
-                created_by=f"tenant:{normalized_tenant_id}",
+                created_by=audit_actor,
             ),
             tenant_id=normalized_tenant_id,
             workflow_mode="automatic",
+            commit=commit,
         )
         if created.run_id is None:
             raise RuntimeError("automatic research intake did not create a run")

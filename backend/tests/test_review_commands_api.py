@@ -9,7 +9,6 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
-from app.models.ledger import Thesis
 
 
 def _error_code(response) -> str:
@@ -21,56 +20,55 @@ def _error_code(response) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_retired_case_creation_requires_auth_and_never_writes(cmd_client, cmd_session):
-    from sqlalchemy import func
-    from app.models.ledger import ResearchCase, Thesis, DocumentVersion
+def test_create_case_with_framing_and_initial_theses(cmd_client, cmd_session):
+    from app.models.ledger import ResearchCase, Thesis
 
-    payload = {"title": "旧无来源创建", "industry_topic": "ai_compute", "created_by": "u"}
-    anonymous = cmd_client.post(
-        "/api/v1/research-cases", json=payload, headers={"Authorization": ""}
+    response = cmd_client.post(
+        "/api/v1/research-cases",
+        json={
+            "title": "AI 算力产业链",
+            "industry_topic": "ai_compute",
+            "created_by": "analyst-test",
+            "research_object": "从云厂商资本开支到芯片收入的传导",
+            "phenomenon": "AI 资本开支持续扩张但订单收入确认节奏分化",
+            "core_question": "截至 2026-06-30 算力资本开支能否通过已披露订单验证？",
+            "period_start": "2026-01-01",
+            "period_end": "2027-12-31",
+            "evidence_cutoff": "2026-06-30",
+            "initial_theses": [
+                {
+                    "statement": "云厂商资本开支形成持续算力需求",
+                    "title": "命题 1",
+                    "observation_start": "2026-01-01",
+                    "observation_end": "2027-12-31",
+                    "support_condition": "至少两家主要云厂商给出资本开支扩张指引",
+                    "falsification_condition": "主要云厂商下调资本开支",
+                    "next_verification_event": "核对 2026Q2 云厂商财报",
+                },
+                {
+                    "statement": "AI 草案命题·未经人工复核",
+                    "creator_type": "ai",
+                },
+            ],
+        },
     )
-    assert anonymous.status_code == 401
-    authenticated = cmd_client.post("/api/v1/research-cases", json=payload)
-    assert authenticated.status_code == 409
-    assert _error_code(authenticated) == "conflict"
-    assert "/api/v1/event-research" in authenticated.json()["error"]["message"]
-    operation = cmd_client.get("/openapi.json").json()["paths"]["/api/v1/research-cases"]["post"]
-    assert operation["deprecated"] is True
-    assert "409" in operation["responses"]
-    assert "201" not in operation["responses"]
-    for model in (ResearchCase, Thesis, DocumentVersion):
-        assert cmd_session.scalar(select(func.count()).select_from(model)) == 0
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["theses"][0]["review_state"] == "confirmed"
+    assert body["theses"][1]["review_state"] == "draft"
+
+    case = cmd_session.scalar(select(ResearchCase))
+    assert case.core_question.startswith("截至 2026-06-30")
+    assert str(case.evidence_cutoff) == "2026-06-30"
+
+    theses = cmd_session.scalars(select(Thesis)).all()
+    assert len(theses) == 2
+    assert theses[0].falsification_condition == "主要云厂商下调资本开支"
+    assert theses[1].creator_type == "ai"
 
 
-def test_event_creation_can_open_legacy_workbench_and_add_theses(cmd_client, cmd_session):
-    from tests.event_case_factory import create_event_case
-    from app.models.ledger import Thesis
-
-    case_id = create_event_case(cmd_client)
-    workbench = cmd_client.get(f"/api/research-cases/{case_id}/workbench")
-    assert workbench.status_code == 200, workbench.text
-    for creator, expected_state in (("human", "confirmed"), ("ai", "draft")):
-        response = cmd_client.post(
-            f"/api/v1/research-cases/{case_id}/theses",
-            json={
-                "statement": f"{creator} 资本开支形成持续算力需求",
-                "created_by": "analyst-test",
-                "creator_type": creator,
-                "title": "新增论点",
-                "observation_start": "2026-01-01",
-                "observation_end": "2027-12-31",
-                "support_condition": "主要云厂商给出扩张指引",
-                "falsification_condition": "主要云厂商下调资本开支",
-                "next_verification_event": "核对季度财报",
-            },
-        )
-        assert response.status_code == 201, response.text
-        assert response.json()["thesis"]["review_state"] == expected_state
-        thesis = cmd_session.get(Thesis, uuid.UUID(response.json()["thesis"]["id"]))
-        assert thesis.falsification_condition == "主要云厂商下调资本开支"
-
-
-def test_retired_case_creation_does_not_resume_legacy_period_validation(cmd_client):
+def test_create_case_rejects_inverted_period(cmd_client):
     response = cmd_client.post(
         "/api/v1/research-cases",
         json={
@@ -81,23 +79,27 @@ def test_retired_case_creation_does_not_resume_legacy_period_validation(cmd_clie
             "period_end": "2026-01-01",
         },
     )
-    assert response.status_code == 409
-    assert _error_code(response) == "conflict"
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
 
 
-def test_add_thesis_to_missing_case_is_404(cmd_client):
+def test_add_thesis_to_missing_case_is_422(cmd_client):
     response = cmd_client.post(
         "/api/v1/research-cases/00000000-0000-0000-0000-000000000000/theses",
         json={"statement": "x", "created_by": "u"},
     )
-    assert response.status_code == 404
-    assert _error_code(response) == "not_found"
+    assert response.status_code == 422
+    assert _error_code(response) == "validation_failed"
 
 
 def test_add_thesis_rejects_inverted_observation_window(cmd_client, cmd_session):
-    from tests.event_case_factory import create_event_case
+    from app.models.ledger import ResearchCase
 
-    case_id = create_event_case(cmd_client)
+    created = cmd_client.post(
+        "/api/v1/research-cases",
+        json={"title": "c", "industry_topic": "t", "created_by": "u"},
+    )
+    case_id = created.json()["case_id"]
 
     response = cmd_client.post(
         f"/api/v1/research-cases/{case_id}/theses",
@@ -319,7 +321,6 @@ def test_assessment_review_roundtrip(cmd_client, cmd_seeded):
         status="in_progress",
         ref_type="ai_assessment",
         ref_id=assessment.id,
-        research_case_id=cmd_seeded.scalar(select(Thesis.research_case_id)),
     )
     cmd_seeded.commit()
     response = cmd_client.post(
@@ -434,7 +435,6 @@ def test_assessment_review_closes_open_task(cmd_client, cmd_seeded):
         status="open",
         ref_type="ai_assessment",
         ref_id=assessment.id,
-        research_case_id=cmd_seeded.scalar(select(Thesis.research_case_id)),
     )
     cmd_seeded.commit()
 

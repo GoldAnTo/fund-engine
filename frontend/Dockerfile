@@ -1,16 +1,17 @@
-FROM node:24-alpine AS build
-
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
-
 COPY package.json package-lock.json ./
 RUN npm ci
-
-COPY . .
+COPY index.html tsconfig.json vite.config.ts ./
+COPY src ./src
+COPY server/localGatewayProxy.ts ./server/localGatewayProxy.ts
 RUN npm run build
 
-FROM nginxinc/nginx-unprivileged:1.27-alpine
-
-COPY nginx.one-click.conf.template /etc/nginx/templates/default.conf.template
-COPY --from=build /app/dist /usr/share/nginx/html
-
+FROM node:24-bookworm-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build /app/dist ./dist
+COPY server/gatewayServer.mjs ./server/gatewayServer.mjs
+USER node
 EXPOSE 8080
+CMD ["node", "server/gatewayServer.mjs"]

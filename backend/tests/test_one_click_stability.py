@@ -498,7 +498,13 @@ def test_cli_rejects_deep_json_without_traceback(tmp_path):
         text=True,
     )
     assert result.returncode == 2
-    assert result.stderr == "error: JSON input is invalid\n"
+    # Python versions differ in how deeply json.load can parse. Either the
+    # parser or the container schema must reject safely, without printing input.
+    assert result.stdout == ""
+    assert result.stderr in {
+        "error: JSON input is invalid\n",
+        "error: inspected container is malformed\n",
+    }
     deep_file = tmp_path / "deep.json"
     deep_file.write_text(deep)
     valid = tmp_path / "valid.json"
@@ -509,4 +515,8 @@ def test_cli_rejects_deep_json_without_traceback(tmp_path):
         text=True,
     )
     assert result.returncode == 2
-    assert result.stderr == "error: JSON file is unreadable or invalid\n"
+    assert result.stdout == ""
+    assert result.stderr in {
+        "error: JSON file is unreadable or invalid\n",
+        "error: baseline snapshot is malformed\n",
+    }

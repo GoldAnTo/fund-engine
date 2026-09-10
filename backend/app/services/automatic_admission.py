@@ -67,6 +67,7 @@ from app.repositories.acquisition import (
     validate_persistable_json,
     validate_persistable_text,
 )
+from app.services.pdf_replay_cache import DEFAULT_PDF_REPLAY_CACHE
 from app.services.source_admission import source_contract_is_active
 
 
@@ -115,6 +116,16 @@ _METRIC_VALUE_CONNECTOR_RE: Final = re.compile(
 )
 _SEGMENT_BOUNDARY_RE: Final = re.compile(
     r"(?:[\r\n]+|[。！？!?；;]+|(?<!\d)\.(?!\d))"
+)
+_CLAUSE_BOUNDARY_RE: Final = re.compile(r"，|(?<!\d),|,(?!\s*\d)")
+_SUBANNUAL_PERIOD_PATTERN: Final = (
+    r"(?:[上下]半年(?:度)?|半年(?:度)?|(?:第|前)?[一二三四1-4]季(?:度)?"
+    r"|前[一二三四五六七八九十0-9]+个?月|年初至今|至今"
+    r"|\d{1,2}\s*(?:[-/~—至到]\s*\d{1,2}\s*)?月"
+    r"|(?:[qh]\s*[1-4]|ytd|year[ -]to[ -]date"
+    r"|(?:first|second|third|fourth|[1-4](?:st|nd|rd|th))\s+(?:half|quarter)"
+    r"|january|february|march|april|may|june|july|august|september|october|november|december"
+    r")(?![a-z0-9]))"
 )
 _NEGATION_MARKERS: Final = ("没有", "未", "不", "not", "no ")
 _DIRECTION_MARKERS: Final = {
@@ -415,6 +426,7 @@ def automatic_temporal_failures(
     *,
     cutoff: datetime,
     evaluation_at: datetime,
+    binding: RetrievalArtifactDocument | None = None,
 ) -> list[str]:
     """Return fail-closed chronology errors for one automatic source lineage."""
     failures: list[str] = []
@@ -436,6 +448,28 @@ def automatic_temporal_failures(
     if any(value is None for value in values.values()):
         return failures
     normalized = {name: _as_utc(value) for name, value in values.items()}
+    # Re-fetching identical bytes may attach a previously frozen document.
+    # Its original acquisition time is immutable; only a proven duplicate
+    # binding can replace the new-fetch -> new-document chronology edge.
+    proven_duplicate = (
+        binding is not None
+        and binding.relation == "content_duplicate"
+        and artifact.id is not None
+        and document.id is not None
+        and reference.id is not None
+        and binding.retrieval_artifact_id == artifact.id
+        and binding.document_version_id == document.id
+        and artifact.source_reference_id == reference.id
+        and isinstance(document.content_sha256, str)
+        and re.fullmatch(r"[0-9a-f]{64}", document.content_sha256) is not None
+        and document.content_sha256 == artifact.content_sha256
+        and bool(document.source_url)
+        and document.source_url == reference.canonical_url
+        and isinstance(binding.created_at, datetime)
+        and max(normalized["retrieved_at"], normalized["acquired_at"])
+        <= _as_utc(binding.created_at)
+        <= evaluation_at
+    )
     for name in ("reference_published_at", "published_at", "available_at"):
         if normalized[name] > cutoff:
             failures.append(f"temporal_{name}_after_cutoff")
@@ -455,6 +489,8 @@ def automatic_temporal_failures(
         ("retrieved_at", "acquired_at"),
     )
     for earlier, later in chronology:
+        if (earlier, later) == ("retrieved_at", "acquired_at") and proven_duplicate:
+            continue
         if normalized[earlier] > normalized[later]:
             failures.append(f"temporal_{earlier}_after_{later}")
     if normalized["published_at"] != normalized["reference_published_at"]:
@@ -724,6 +760,7 @@ class AutomaticAdmissionGate:
         self._session = session
         self._clock = clock
         self._pdf_parser = pdf_parser or PypdfAdapter()
+        self._cache_default_pdf_replay = pdf_parser is None
 
     def _now(self) -> datetime:
         value = self._clock()
@@ -1216,6 +1253,7 @@ class AutomaticAdmissionGate:
                 lineage.document,
                 cutoff=context.cutoff,
                 evaluation_at=evaluation_at,
+                binding=lineage.binding,
             )
         if snapshot_cutoff is None:
             failures.append("temporal_snapshot_cutoff_missing")
@@ -1262,10 +1300,17 @@ class AutomaticAdmissionGate:
         self, lineage: _Lineage, locator: SourceLocatorV1
     ) -> ParsedSpan:
         wanted_identity = self._locator_identity(locator)
-        replayed = self._pdf_parser.extract_spans(
-            lineage.artifact.raw_bytes,
-            document_sha256=lineage.artifact.content_sha256,
-        )
+        if self._cache_default_pdf_replay:
+            replayed = DEFAULT_PDF_REPLAY_CACHE.parse(
+                self._pdf_parser,
+                lineage.artifact.raw_bytes,
+                document_sha256=lineage.artifact.content_sha256,
+            )
+        else:
+            replayed = self._pdf_parser.extract_spans(
+                lineage.artifact.raw_bytes,
+                document_sha256=lineage.artifact.content_sha256,
+            )
         for parsed in replayed:
             if self._locator_identity(parsed.locator) != wanted_identity:
                 continue
@@ -1502,14 +1547,31 @@ class AutomaticAdmissionGate:
         numeric: Decimal,
         unit: object,
     ) -> bool:
+        return bool(cls._metric_value_positions(
+            text, predicate=predicate, metric_terms=metric_terms,
+            numeric=numeric, unit=unit,
+        ))
+
+    @classmethod
+    def _metric_value_positions(
+        cls,
+        text: object,
+        *,
+        predicate: object,
+        metric_terms: tuple[str, ...],
+        numeric: Decimal,
+        unit: object,
+    ) -> tuple[int, ...]:
+        """Locate metric/value pairs using the same strict numeric rules."""
         normalized_text = cls._normalize_grounding(text)
         normalized_predicate = cls._normalize_grounding(predicate)
         normalized_unit = cls._normalize_grounding(unit)
         if not normalized_text or not normalized_predicate or not normalized_unit:
-            return False
+            return ()
         anchors = cls._metric_anchors(
             normalized_text, (*metric_terms, normalized_predicate)
         )
+        matches: list[int] = []
         for index, (start, end, term) in enumerate(anchors):
             if term != normalized_predicate:
                 continue
@@ -1547,10 +1609,10 @@ class AutomaticAdmissionGate:
             if after_separator and after[after_separator.end() :].startswith(
                 normalized_unit
             ):
-                return True
-            if unit_prefixed:
-                return True
-        return False
+                matches.append(start)
+            elif unit_prefixed:
+                matches.append(start)
+        return tuple(matches)
 
     @classmethod
     def _period_grounded(
@@ -1589,6 +1651,14 @@ class AutomaticAdmissionGate:
                 haystack,
                 flags=re.IGNORECASE,
             )
+            # A year adjacent to a narrower reporting period is not annual
+            # evidence, even if normalization omitted that qualifier. Remove
+            # only those occurrences, preserving independent annual facts.
+            for qualified_year in (
+                rf"(?<!\d){year}(?!\d)\s*(?:年(?:度)?)?\s*[-/]?\s*{_SUBANNUAL_PERIOD_PATTERN}",
+                rf"{_SUBANNUAL_PERIOD_PATTERN}\s*(?:of\s+)?{year}(?!\d)",
+            ):
+                search_text = re.sub(qualified_year, " ", search_text, flags=re.IGNORECASE)
             patterns = (
                 rf"(?<!\d){year}\s*年(?!\s*\d{{1,2}}\s*月)",
                 rf"(?<![\d-]){year}(?!\s*[-/]\s*\d{{1,2}})(?!\s*年)(?!\d)",
@@ -1637,6 +1707,65 @@ class AutomaticAdmissionGate:
         return negated, next(iter(directions), "neutral")
 
     @classmethod
+    def _period_metric_value_grounded(
+        cls,
+        segment: str,
+        *,
+        predicate: str,
+        numeric: Decimal | None,
+        unit: object,
+        period: date,
+        period_grain: str,
+        metric_terms: tuple[str, ...],
+    ) -> bool:
+        """Bind a value to its own clause's period, with bounded inheritance.
+
+        A later metric may share an earlier period only until another period
+        is stated. This preserves multi-metric sentences without borrowing an
+        annual date from one clause and a half-year value from another.
+        Numeric grouping commas and English date commas remain in their clause.
+        """
+        period_context = ""
+        for clause in _CLAUSE_BOUNDARY_RE.split(segment):
+            anchors = cls._metric_anchors(clause, (*metric_terms, predicate))
+            # Period declarations precede the metric. Do not treat a value
+            # such as "营业收入为2024亿元" as a new reporting year.
+            context_prefix = clause[:anchors[-1][0]] if anchors else clause
+            years = list(re.finditer(r"(?<!\d)20\d{2}(?!\d)", context_prefix))
+            if years:
+                period_context = (
+                    context_prefix[years[-2].end():] if len(years) > 1 else context_prefix
+                )
+            elif re.search(_SUBANNUAL_PERIOD_PATTERN, context_prefix, re.IGNORECASE):
+                # A new partial period invalidates inherited context for all
+                # grains, including when it qualifies a different metric.
+                period_context = ""
+            positions = (
+                cls._metric_value_positions(
+                    clause, predicate=predicate, metric_terms=metric_terms,
+                    numeric=numeric, unit=unit,
+                )
+                if numeric is not None
+                else tuple(start for start, _end, term in anchors if term == predicate)
+            )
+            for position in positions:
+                prefix = clause[:position]
+                prefix_years = list(re.finditer(r"(?<!\d)20\d{2}(?!\d)", prefix))
+                own_context = period_context
+                if prefix_years:
+                    own_context = (
+                        prefix[prefix_years[-2].end():] if len(prefix_years) > 1 else prefix
+                    )
+                    prefix = prefix[prefix_years[-1].end():]
+                if period_grain == "year" and re.search(
+                    _SUBANNUAL_PERIOD_PATTERN, prefix, re.IGNORECASE
+                ):
+                    continue
+                if cls._period_grounded(period, period_grain, own_context):
+                    return True
+        return False
+
+    @classmethod
     def _segment_supports_claim(
         cls,
         segment: str,
@@ -1660,12 +1789,14 @@ class AutomaticAdmissionGate:
             or not cls._period_grounded(period, period_grain, segment)
         ):
             return False
-        if numeric is not None and not cls._metric_value_grounded(
+        if not cls._period_metric_value_grounded(
             segment,
-            predicate=predicate,
+            predicate=normalized_predicate,
             metric_terms=metric_terms,
             numeric=numeric,
             unit=unit,
+            period=period,
+            period_grain=period_grain,
         ):
             return False
         source_polarity = cls._polarity(segment)

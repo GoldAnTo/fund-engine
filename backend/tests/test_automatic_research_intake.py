@@ -23,18 +23,18 @@ from app.models.operational import (
     ResearchRun,
     ResearchTask,
 )
+from app.models.research_monitor import ResearchRunEvent
+from app.models.research_preparation import ResearchPreparation
 from app.models.research_protocol import (
     CaseMechanismSelectionVersion,
     OutcomeBindingVersion,
     VerificationRuleVersion,
 )
-from app.models.research_monitor import ResearchRunEvent
-from app.models.research_preparation import ResearchPreparation
-from app.services.automatic_research_intake import AutomaticResearchIntakeService
 from app.repositories.auto_research import AutoResearchRepository
+from app.schemas.v1.event_research import CreateEventResearchRequest
+from app.services.automatic_research_intake import AutomaticResearchIntakeService
 from app.services.event_extraction import EventExtraction
 from app.services.event_research import EventResearchService, InitialUploadedOriginal
-from app.schemas.v1.event_research import CreateEventResearchRequest
 
 
 class FakeExtractor:
@@ -90,7 +90,9 @@ def test_topic_input_creates_one_automatic_case_and_queued_run(session) -> None:
     raw_input = "光模块行业需求会如何变化"
 
     started = AutomaticResearchIntakeService(session, extractor=extractor).start(
-        raw_input, tenant_id="research-team"
+        raw_input,
+        tenant_id="research-team",
+        actor_subject_id="researcher",
     )
 
     case_id = uuid.UUID(started.case_id)
@@ -152,9 +154,9 @@ def test_topic_input_creates_one_automatic_case_and_queued_run(session) -> None:
     assert len(runs) == 1
     assert runs[0].id == run_id
     assert runs[0].status == "queued"
-    assert case is not None and case.created_by == "tenant:research-team"
+    assert case is not None and case.created_by == "human:researcher"
     assert admission is not None
-    assert admission.admitted_by == "tenant:research-team"
+    assert admission.admitted_by == "human:researcher"
     assert {draft.created_by for draft in factor_drafts} == {
         "system:automatic-intake"
     }
@@ -195,7 +197,11 @@ def test_pasted_material_creates_queued_run_without_human_preparation(session) -
 
     started = AutomaticResearchIntakeService(
         session, extractor=FakeExtractor(input_kind="material")
-    ).start(raw_input, tenant_id="material-team")
+    ).start(
+        raw_input,
+        tenant_id="material-team",
+        actor_subject_id="researcher",
+    )
 
     case_id = uuid.UUID(started.case_id)
     run_id = uuid.UUID(started.run_id)
@@ -248,7 +254,9 @@ def test_blank_input_is_rejected_before_extraction(session) -> None:
 
     with pytest.raises(ValueError, match="automatic research input must not be blank"):
         AutomaticResearchIntakeService(session, extractor=extractor).start(
-            "  \n\t ", tenant_id="research-team"
+            "  \n\t ",
+            tenant_id="research-team",
+            actor_subject_id="researcher",
         )
 
     assert extractor.calls == []
@@ -272,7 +280,9 @@ def test_invalid_tenant_is_rejected_before_extraction_or_writes(
 
     with pytest.raises(ValueError, match=message):
         AutomaticResearchIntakeService(session, extractor=extractor).start(
-            "有效的研究主题", tenant_id=tenant_id
+            "有效的研究主题",
+            tenant_id=tenant_id,
+            actor_subject_id="researcher",
         )
 
     assert extractor.calls == []
@@ -282,7 +292,11 @@ def test_invalid_tenant_is_rejected_before_extraction_or_writes(
 def test_padded_tenant_is_normalized_for_case_and_admission(session) -> None:
     started = AutomaticResearchIntakeService(
         session, extractor=FakeExtractor()
-    ).start("有效的研究主题", tenant_id="  padded-team \n")
+    ).start(
+        "有效的研究主题",
+        tenant_id="  padded-team \n",
+        actor_subject_id="researcher",
+    )
 
     case_id = uuid.UUID(started.case_id)
     case = session.get(ResearchCase, case_id)
@@ -292,10 +306,30 @@ def test_padded_tenant_is_normalized_for_case_and_admission(session) -> None:
         )
     )
     assert case is not None
-    assert case.created_by == "tenant:padded-team"
+    assert case.created_by == "human:researcher"
     assert admission is not None
     assert admission.tenant_id == "padded-team"
-    assert admission.admitted_by == "tenant:padded-team"
+    assert admission.admitted_by == "human:researcher"
+
+
+@pytest.mark.parametrize("tenant_id", ["  padded-\x00team \n", "  padded-\u0085team \n"])
+def test_tenant_control_characters_remaining_after_normalization_are_rejected(
+    session, tenant_id: str
+) -> None:
+    extractor = FakeExtractor()
+
+    with pytest.raises(
+        ValueError,
+        match="automatic research tenant_id must not contain control characters",
+    ):
+        AutomaticResearchIntakeService(session, extractor=extractor).start(
+            "有效的研究主题",
+            tenant_id=tenant_id,
+            actor_subject_id="researcher",
+        )
+
+    assert extractor.calls == []
+    assert list(session.scalars(select(ResearchCase))) == []
 
 
 def test_automatic_uploaded_original_reuses_and_transitions_one_lifecycle(

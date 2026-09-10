@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -280,6 +281,85 @@ def enqueue_and_claim(session, research_case, thesis, clock, *, request=None):
     return module, principal, request, job, claim
 
 
+@pytest.mark.parametrize(("names", "codes"), [((), ()), ((), ("GOOGL",)), (("  ", "\t"), ("GOOGL",)), (None, ("GOOGL",))])
+def test_missing_subject_fails_before_planning_or_provider_calls(
+    session, research_case, thesis, names, codes,
+):
+    clock = MutableClock()
+    request = replace(make_request(research_case, thesis), entity_names=(), security_codes=codes)
+    _, _, _, job, claim = enqueue_and_claim(session, research_case, thesis, clock, request=request)
+    # Simulate a pre-validation legacy snapshot containing blank entity names.
+    persisted = session.get(AcquisitionJob, job.id)
+    persisted.request_snapshot = {**persisted.request_snapshot, "entity_names": None if names is None else list(names)}
+    session.commit()
+    original = dict(persisted.request_snapshot)
+
+    class ForbiddenPlanner:
+        def plan(self, request, policy):
+            pytest.fail("a missing subject must stop before query planning")
+
+    class ForbiddenClient:
+        model_version = "unused"
+
+        def chat_json(self, *args, **kwargs):
+            pytest.fail("a missing subject must never reach the model")
+
+    adapter = FakeSSEAdapter()
+    AcquisitionRunner(make_session_factory(session), adapters={"sse": adapter},
+        llm_client=ForbiddenClient(), planner=ForbiddenPlanner(), clock=clock).run_claim(claim)
+    session.expire_all()
+    persisted = session.get(AcquisitionJob, job.id)
+    assert persisted.status == persisted.stage == "failed"
+    assert persisted.error_code == "research_subject_missing"
+    assert persisted.retry_at is None and persisted.lease_token is None
+    assert persisted.request_snapshot == original
+    assert persisted.exception_count == 1
+    assert (adapter.search_calls, adapter.fetch_calls) == (0, 0)
+    assert session.scalar(select(func.count()).select_from(AcquisitionAttempt)) == 0
+    assert AcquisitionRepository(session, clock=clock).claim_next(
+        worker_id="replacement-worker", lease_for=timedelta(minutes=5)) is None
+
+
+def test_missing_subject_guard_cannot_overwrite_a_newer_lease(session, research_case, thesis):
+    clock = MutableClock()
+    request = replace(make_request(research_case, thesis), entity_names=())
+    _, _, _, job, stale = enqueue_and_claim(session, research_case, thesis, clock, request=request)
+    clock.advance(timedelta(minutes=6))
+    replacement = AcquisitionRepository(session, clock=clock).claim_next(
+        worker_id="new-owner", lease_for=timedelta(minutes=5))
+    assert replacement is not None and replacement.lease_token != stale.lease_token
+    session.commit()
+    adapter = FakeSSEAdapter()
+    with pytest.raises(StaleLeaseError):
+        AcquisitionRunner(make_session_factory(session), adapters={"sse": adapter},
+            llm_client=FakeExtractionClient(), clock=clock).run_claim(stale)
+    session.expire_all()
+    persisted = session.get(AcquisitionJob, job.id)
+    assert persisted.status == "running" and persisted.lease_token == replacement.lease_token
+    assert persisted.error_code is None and persisted.exception_count == 0
+    assert (adapter.search_calls, adapter.fetch_calls) == (0, 0)
+
+
+def test_missing_subject_resumed_extraction_preserves_completed_acquisition_counts(session, research_case, thesis):
+    clock = MutableClock()
+    request = replace(make_request(research_case, thesis), entity_names=())
+    _, _, _, job, claim = enqueue_and_claim(session, research_case, thesis, clock, request=request)
+    persisted = session.get(AcquisitionJob, job.id)
+    persisted.stage = "extracting"
+    persisted.reference_count, persisted.fetched_count, persisted.frozen_count = 3, 2, 1
+    session.commit()
+    original = dict(persisted.request_snapshot)
+    adapter = FakeSSEAdapter()
+    AcquisitionRunner(make_session_factory(session), adapters={"sse": adapter},
+        llm_client=FakeExtractionClient(), clock=clock).run_claim(claim)
+    session.expire_all()
+    persisted = session.get(AcquisitionJob, job.id)
+    assert persisted.status == "failed" and persisted.error_code == "research_subject_missing"
+    assert (persisted.reference_count, persisted.fetched_count, persisted.frozen_count) == (3, 2, 1)
+    assert persisted.request_snapshot == original
+    assert (adapter.search_calls, adapter.fetch_calls) == (0, 0)
+
+
 def test_runner_executes_real_freeze_extract_gate_and_publish_chain(
     session, research_case, thesis, document
 ):
@@ -472,6 +552,7 @@ def test_retry_backoff_adds_injected_bounded_jitter(
     [
         (float("nan"), 45),
         (float("inf"), 45),
+        (float("-inf"), 45),
         (-1, 45),
         (True, 45),
         ("120", 45),
@@ -525,6 +606,17 @@ def test_invalid_retry_after_is_ignored_and_oversized_value_is_clamped(
     assert persisted.retry_at.replace(tzinfo=UTC) == NOW + timedelta(
         seconds=expected_seconds
     )
+    attempt = session.scalar(
+        select(AcquisitionAttempt).where(AcquisitionAttempt.job_id == job.id)
+    )
+    exception = session.scalar(
+        select(AcquisitionException).where(AcquisitionException.job_id == job.id)
+    )
+    assert attempt is not None and exception is not None
+    # Diagnostics must remain valid JSON even when the provider sends invalid
+    # numeric retry hints; PostgreSQL rejects NaN and Infinity at persistence.
+    json.dumps(attempt.safe_metadata, allow_nan=False)
+    json.dumps(exception.detail_json, allow_nan=False)
 
 
 def test_empty_nonretryable_search_fails_closed(

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import traceback
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine, func, select
@@ -111,6 +112,200 @@ def test_run_once_survives_stale_lease_and_keeps_polling(monkeypatch):
         )
         is True
     )
+
+
+def _enqueue_worker_job(session, research_case, thesis, *, key):
+    job = AcquisitionModule(session, policy=SSE_ONLY_POLICY).request(
+        make_request(research_case, thesis, idempotency_key=key),
+        principal=AcquisitionPrincipal("team-a", "system:task8-requester"),
+    )
+    session.commit()
+    return job.id
+
+
+def _freeze_worker_clock(monkeypatch, worker, clock):
+    class ClockedRepository(AcquisitionRepository):
+        def __init__(self, session):
+            super().__init__(session, clock=clock)
+
+    class ClockedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock().astimezone(tz)
+
+    monkeypatch.setattr(worker, "AcquisitionRepository", ClockedRepository)
+    monkeypatch.setattr(worker, "datetime", ClockedDatetime, raising=False)
+
+
+@pytest.mark.parametrize("stage", ["searching", "extracting", "admitting"])
+def test_run_once_bounds_unexpected_job_failures_without_stopping_other_work(
+    session, research_case, thesis, document, monkeypatch, capsys, stage
+):
+    worker = importlib.import_module("app.scripts.run_acquisition_worker")
+    clock = MutableClock()
+    _freeze_worker_clock(monkeypatch, worker, clock)
+    sessions = make_session_factory(session)
+    admit_case(session, research_case.id, tenant_id="team-a", document_version_id=document.id)
+    broken_id = _enqueue_worker_job(
+        session, research_case, thesis, key=f"broken-worker-{stage}"
+    )
+    healthy_id = _enqueue_worker_job(
+        session, research_case, thesis, key=f"healthy-worker-{stage}"
+    )
+    marker = "private-source-and-provider-credential-marker"
+
+    class OneBrokenJobRunner(AcquisitionRunner):
+        def run_claim(self, claim):
+            if claim.job_id == broken_id:
+                self._advance(claim, stage)
+                raise RuntimeError(marker)
+            super().run_claim(claim)
+
+    common = {
+        "runner": OneBrokenJobRunner(
+            sessions,
+            adapters={"sse": FakeSSEAdapter()},
+            llm_client=FakeExtractionClient(),
+            clock=clock,
+        ),
+        "session_factory": sessions,
+        "worker_id": "system:acquisition-worker@test#bounded-recovery",
+        "lease_for": timedelta(minutes=5),
+    }
+
+    assert worker.run_once(**common) is True
+    with sessions() as check:
+        broken = check.get(AcquisitionJob, broken_id)
+        assert (broken.status, broken.stage, broken.attempt) == ("retry_wait", stage, 1)
+        assert broken.retry_at.replace(tzinfo=UTC) > clock()
+        assert broken.lease_token is None
+        assert broken.exception_count == 1
+        assert broken.error_code == "acquisition_execution_failed"
+
+    # A delayed failed job must not starve another queued job in the same loop.
+    assert worker.run_once(**common) is True
+    with sessions() as check:
+        assert check.get(AcquisitionJob, healthy_id).status == "succeeded"
+    assert worker.run_once(**common) is False
+
+    for attempt in (2, 3):
+        with sessions() as check:
+            clock.now = check.get(AcquisitionJob, broken_id).retry_at.replace(tzinfo=UTC)
+        assert worker.run_once(**common) is True
+        with sessions() as check:
+            broken = check.get(AcquisitionJob, broken_id)
+            assert broken.attempt == attempt
+            assert broken.exception_count == attempt
+            assert broken.lease_token is None
+            if attempt < 3:
+                assert (broken.status, broken.stage) == ("retry_wait", stage)
+                assert broken.retry_at.replace(tzinfo=UTC) > clock()
+            else:
+                assert (broken.status, broken.stage) == ("failed", "failed")
+                assert broken.retry_at is None
+                assert broken.finished_at is not None
+    assert worker.run_once(**common) is False
+
+    with sessions() as check:
+        exceptions = check.scalars(select(AcquisitionException).where(
+            AcquisitionException.job_id == broken_id
+        )).all()
+        events = check.scalars(select(AcquisitionJobEvent).where(
+            AcquisitionJobEvent.job_id == broken_id
+        )).all()
+        assert len(exceptions) == 3
+        assert {row.reason_code for row in exceptions} == {"acquisition_execution_failed"}
+        assert {row.detail_json["claim_attempt"] for row in exceptions} == {1, 2, 3}
+        assert all(set(row.detail_json) == {"claim_attempt"} for row in exceptions)
+        assert any(row.status == "retry_wait" for row in events)
+        assert any(row.status == "failed" for row in events)
+        assert marker not in repr([row.__dict__ for row in (*exceptions, *events)])
+        assert check.get(AcquisitionJob, broken_id).error_detail is None
+    output = capsys.readouterr()
+    assert marker not in output.out + output.err
+    assert "retry_wait" in output.err
+    assert "failed" in output.err
+
+
+def test_run_once_does_not_overwrite_new_owner_after_unexpected_failure(
+    session, research_case, thesis, document, monkeypatch, capsys
+):
+    worker = importlib.import_module("app.scripts.run_acquisition_worker")
+    clock = MutableClock()
+    _freeze_worker_clock(monkeypatch, worker, clock)
+    sessions = make_session_factory(session)
+    admit_case(session, research_case.id, tenant_id="team-a", document_version_id=document.id)
+    job_id = _enqueue_worker_job(
+        session, research_case, thesis, key="rotated-failed-worker"
+    )
+    new_owner = "system:acquisition-worker@test#new-owner"
+    marker = "private-failed-request-marker"
+
+    class ReclaimedRunner:
+        def run_claim(self, claim):
+            clock.advance(timedelta(minutes=6))
+            with sessions() as recovery:
+                replacement = AcquisitionRepository(recovery, clock=clock).claim_next(
+                    worker_id=new_owner, lease_for=timedelta(minutes=5)
+                )
+                assert replacement is not None
+                assert replacement.job_id == claim.job_id
+                recovery.commit()
+            raise RuntimeError(marker)
+
+    assert worker.run_once(
+        runner=ReclaimedRunner(),
+        session_factory=sessions,
+        worker_id="system:acquisition-worker@test#old-owner",
+        lease_for=timedelta(minutes=5),
+    ) is True
+    with sessions() as check:
+        job = check.get(AcquisitionJob, job_id)
+        assert (job.status, job.stage, job.attempt) == ("running", "searching", 2)
+        assert job.lease_owner == new_owner
+        assert job.exception_count == 0
+        assert job.error_code is None
+        assert check.scalar(select(func.count()).select_from(AcquisitionException)) == 0
+    output = capsys.readouterr()
+    assert marker not in output.out + output.err
+
+
+def test_run_once_reports_safe_failure_when_recovery_cannot_be_persisted(
+    session, research_case, thesis, document, monkeypatch
+):
+    worker = importlib.import_module("app.scripts.run_acquisition_worker")
+    clock = MutableClock()
+    _freeze_worker_clock(monkeypatch, worker, clock)
+    sessions = make_session_factory(session)
+    admit_case(session, research_case.id, tenant_id="team-a", document_version_id=document.id)
+    job_id = _enqueue_worker_job(session, research_case, thesis, key="recovery-write-failure")
+    runner_marker = "private-provider-execution-marker"
+    recovery_marker = "private-recovery-sql-marker"
+
+    class FailedRecoveryRepository(worker.AcquisitionRepository):
+        def record_exception(self, *args, **kwargs):
+            super().record_exception(*args, **kwargs)
+            raise RuntimeError(recovery_marker)
+
+    class FailingRunner:
+        def run_claim(self, claim):
+            raise RuntimeError(runner_marker)
+
+    monkeypatch.setattr(worker, "AcquisitionRepository", FailedRecoveryRepository)
+    with pytest.raises(RuntimeError, match="acquisition failure recovery could not be persisted") as failure:
+        worker.run_once(
+            runner=FailingRunner(),
+            session_factory=sessions,
+            worker_id="system:acquisition-worker@test#failed-recovery",
+            lease_for=timedelta(minutes=5),
+        )
+    reported = "".join(traceback.format_exception(failure.value))
+    assert runner_marker not in reported
+    assert recovery_marker not in reported
+    with sessions() as check:
+        job = check.get(AcquisitionJob, job_id)
+        assert (job.status, job.stage, job.exception_count) == ("running", "searching", 0)
+        assert check.scalar(select(func.count()).select_from(AcquisitionException)) == 0
 
 
 class CrashAfterArtifactFreezer(RetrievedDocumentFreezer):

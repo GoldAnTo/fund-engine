@@ -45,6 +45,11 @@ NOW = datetime(2026, 8, 13, 9, 30, tzinfo=UTC)
 LEASE_TOKEN = "fixture-lease-token"
 
 
+def _utc_datetime(value: datetime) -> datetime:
+    # SQLite drops tzinfo; PostgreSQL preserves it. Compare the same instant.
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 class MutableClock:
     def __init__(self, now: datetime = NOW) -> None:
         self.now = now
@@ -335,8 +340,8 @@ def test_fetch_checkpoint_preserves_exact_provider_observation_and_retry_is_idem
         artifact = verify.get(RetrievalArtifact, first_artifact_id)
         attempt = verify.get(AcquisitionAttempt, first_attempt_id)
         assert artifact is not None and attempt is not None
-        assert attempt.finished_at == observed_at.replace(tzinfo=None)
-        assert artifact.retrieved_at == observed_at.replace(tzinfo=None)
+        assert _utc_datetime(attempt.finished_at) == observed_at
+        assert _utc_datetime(artifact.retrieved_at) == observed_at
         assert verify.scalar(select(func.count(RetrievalArtifact.id))) == 1
         assert verify.scalar(select(func.count(AcquisitionAttempt.id))) == 1
 
@@ -385,7 +390,7 @@ def test_inline_checkpoint_retains_provider_observation_and_monotonic_persisted_
         assert persisted_reference.created_at <= attempt.started_at
         assert attempt.started_at <= attempt.finished_at
         assert attempt.finished_at == artifact.retrieved_at
-        assert attempt.finished_at == checkpoint_at.replace(tzinfo=None)
+        assert _utc_datetime(attempt.finished_at) == checkpoint_at
         assert verify.scalar(select(func.count(SourceReference.id))) == 1
         assert verify.scalar(select(func.count(RetrievalArtifact.id))) == 1
         assert verify.scalar(select(func.count(AcquisitionAttempt.id))) == 1
@@ -570,6 +575,85 @@ def test_same_publication_different_url_and_bytes_is_variant_conflict(session):
             )
             is None
         )
+
+
+@pytest.mark.parametrize("legacy_first", [False, True], ids=["current", "historical"])
+@pytest.mark.parametrize(
+    ("publisher", "suffix", "content", "expected_relation"),
+    [
+        ("Broker B", "b", b"second report", "created"),
+        ("Broker A", "variant", b"changed report", "variant_conflict"),
+        ("Broker A", "a", b"original report", "content_duplicate"),
+        ("Broker B", "b", b"original report", "incompatible_source_contract"),
+    ],
+    ids=["different-publisher", "true-variant", "exact-content-replay", "different-source"],
+)
+def test_gildata_reports_keep_publisher_identity_and_historical_replay(
+    session, legacy_first, publisher, suffix, content, expected_relation
+):
+    case, job = _seed_job(session)
+    freezer = RetrievedDocumentFreezer(_factory(session))
+
+    def freeze_report(publisher, suffix, content, *, legacy=False):
+        metadata = {
+            "source_type": "research_report",
+            "publisher": publisher,
+            "security_code": "600001",
+        }
+        if not legacy:
+            metadata["provider_identity"] = "Gildata"
+        reference, attempt = _add_reference(
+            session,
+            job,
+            adapter_key="gildata",
+            source_role="licensed_provider",
+            canonical_url=f"gildata://research-report/{suffix}",
+            title="Same security, date and report title",
+            metadata=metadata,
+        )
+        result = freezer.freeze(
+            reference,
+            RetrievedEnvelope(
+                content=content,
+                mime_type="text/plain; charset=utf-8",
+                final_url=reference.canonical_url,
+                etag=None,
+                last_modified=None,
+                provider_request_id=None,
+                metadata={
+                    "adapter_key": "gildata",
+                    "provider_identity": publisher if legacy else "Gildata",
+                },
+            ),
+            _context(job, attempt, case),
+        )
+        return reference, result
+
+    first_reference, first = freeze_report(
+        "Broker A", "a", b"original report", legacy=legacy_first
+    )
+    assert first.relation == "created"
+    original_key = first.binding.publication_key
+    original_metadata = dict(first_reference.metadata_json)
+
+    next_reference, result = freeze_report(publisher, suffix, content)
+    assert result.relation == expected_relation
+    assert next_reference.metadata_json["provider_identity"] == "Gildata"
+    assert next_reference.metadata_json["publisher"] == publisher
+    if publisher == "Broker A":
+        assert freezer.publication_key(next_reference)[0] == original_key
+    else:
+        assert freezer.publication_key(next_reference)[0] != original_key
+    if expected_relation == "created":
+        assert result.document.id != first.document.id
+    elif expected_relation == "content_duplicate":
+        assert result.document.id == first.document.id
+    else:
+        assert result.document is None
+        assert result.exception.reason_code == expected_relation
+    session.expire_all()
+    assert session.get(SourceReference, first_reference.id).metadata_json == original_metadata
+    assert session.get(RetrievalArtifactDocument, first.binding.id).publication_key == original_key
 
 
 def test_postgresql_publication_locks_are_namespaced_sorted_and_parameterized():

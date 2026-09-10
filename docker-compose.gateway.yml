@@ -1,0 +1,179 @@
+# Local, single-principal Gateway. Never combine with the legacy compose file.
+name: fundclaw-gateway
+
+x-backend-image: &backend-image
+  image: fundclaw-gateway-backend:local
+
+x-backend-build: &backend-build
+  <<: *backend-image
+  build:
+    context: ./backend
+
+x-database: &database
+  DATABASE_URL: postgresql+psycopg://gateway:${GATEWAY_DB_PASSWORD:?}@postgres:5432/gateway
+  APP_ENV: production
+  DATABASE_POOL_SIZE: 2
+  DATABASE_MAX_OVERFLOW: 2
+
+x-provider: &provider
+  LLM_API_KEY: ${LLM_API_KEY:?}
+  LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+  LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gateway
+      POSTGRES_DB: gateway
+      POSTGRES_PASSWORD: ${GATEWAY_DB_PASSWORD:?}
+    volumes:
+      - gateway-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    <<: *backend-build
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *database
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  file-store-init:
+    <<: *backend-image
+    user: root
+    restart: "no"
+    command: ["sh", "-eu", "-c", "install -d -o app -g app -m 700 /data/research-files"]
+    volumes:
+      - gateway-files:/data/research-files
+
+  api:
+    <<: *backend-image
+    restart: unless-stopped
+    command: ["uvicorn", "app.gateway_main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: [*database, *provider]
+      GATEWAY_DATABASE_URL: postgresql+psycopg://gateway:${GATEWAY_DB_PASSWORD:?}@postgres:5432/gateway
+      RESEARCH_TENANT_TOKENS: ${RESEARCH_TENANT_TOKENS:?}
+    volumes:
+      - gateway-files:/data/research-files
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      file-store-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; assert urlopen('http://127.0.0.1:8000/api/v1/health', timeout=2).status == 200"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  research-worker:
+    <<: *backend-image
+    init: true
+    restart: unless-stopped
+    command: ["python", "-m", "app.scripts.run_research_worker", "--loop", "--poll-seconds", "1"]
+    environment:
+      <<: [*database, *provider]
+    volumes:
+      - gateway-files:/data/research-files
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec python -m app.scripts.check_worker_heartbeat --worker-kind research_run --worker-id $$HOSTNAME --max-age-seconds 300"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  acquisition-worker:
+    <<: *backend-image
+    init: true
+    restart: unless-stopped
+    command: ["python", "-m", "app.scripts.run_acquisition_worker", "--loop", "--poll-seconds", "1"]
+    environment:
+      <<: [*database, *provider]
+      GILDATA_TOKEN: ${GILDATA_TOKEN:?}
+      ACQUISITION_ENABLED_ADAPTERS: gildata,sse,szse
+    volumes:
+      - gateway-files:/data/research-files
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec python -m app.scripts.check_worker_heartbeat --worker-kind acquisition --worker-id $$HOSTNAME --max-age-seconds 300"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  professional-worker:
+    <<: *backend-image
+    init: true
+    restart: unless-stopped
+    command: ["python", "-m", "app.scripts.run_professional_worker", "--loop"]
+    environment:
+      <<: [*database, *provider]
+    volumes:
+      - gateway-files:/data/research-files
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec python -m app.scripts.check_worker_heartbeat --worker-kind professional_team --worker-id $$HOSTNAME --max-age-seconds 300"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  company-study-worker:
+    <<: *backend-image
+    init: true
+    restart: unless-stopped
+    command: ["python", "-m", "app.scripts.run_company_study_worker", "--loop"]
+    environment:
+      <<: [*database, *provider]
+      GATEWAY_DATABASE_URL: postgresql+psycopg://gateway:${GATEWAY_DB_PASSWORD:?}@postgres:5432/gateway
+    volumes:
+      - gateway-files:/data/research-files
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec python -m app.scripts.check_worker_heartbeat --worker-kind company_study --worker-id $$HOSTNAME --max-age-seconds 300"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+    image: fundclaw-gateway-frontend:local
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:${GATEWAY_PUBLIC_PORT:-8080}:8080
+    environment:
+      GATEWAY_PROXY_TOKEN: ${GATEWAY_PROXY_TOKEN:?}
+      GATEWAY_API_BASE: http://api:8000
+      GATEWAY_PUBLIC_PORT: ${GATEWAY_PUBLIC_PORT:-8080}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  gateway-data:
+  gateway-files:

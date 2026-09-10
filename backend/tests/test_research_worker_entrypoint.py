@@ -4,9 +4,9 @@ import os
 import subprocess
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Thread, current_thread
 
 import pytest
 from sqlalchemy import create_engine, func, select
@@ -16,8 +16,9 @@ from sqlalchemy.orm import Session, sessionmaker
 def _seed_terminal_race(session_local):
     from app.models.ledger import ResearchCase
     from app.repositories.auto_research import AutoResearchRepository
+    from tests.tenant_admission import admit_case
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with session_local() as setup:
         case = ResearchCase(
             title="research worker terminal race",
@@ -27,7 +28,6 @@ def _seed_terminal_race(session_local):
         )
         setup.add(case)
         setup.flush()
-        from tests.tenant_admission import admit_case
         admit_case(setup, case.id)
         run = AutoResearchRepository(setup).create_run(
             research_case_id=case.id,
@@ -49,6 +49,184 @@ def _patch_worker_dependencies(monkeypatch, run_research_worker, session_local):
         "dispatch_due",
         lambda _self: [],
     )
+
+
+@pytest.mark.parametrize("reopen_transaction", [False, True])
+def test_sqlite_worker_dispatch_survives_concurrent_gateway_projection(
+    tmp_path: Path, monkeypatch, reopen_transaction
+) -> None:
+    """A real DEFERRED savepoint must not lose its read-to-write upgrade."""
+    from sqlalchemy import event
+
+    from app.models.acquisition import AcquisitionJob
+    from app.models.ledger import Base
+    from app.models.operational import Job, ResearchRun
+    from app.scripts import run_research_worker
+    from app.services.auto_research import AutoResearchService
+    from app.services.automatic_research_pipeline import AutomaticResearchPipeline
+    from app.services.research_gateway_automatic_adapter import (
+        GatewayAutomaticResearchAdapter,
+    )
+    from tests.test_research_gateway_automatic_adapter import seed_spec
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'worker-gateway-contention.db'}",
+        connect_args={"timeout": 2, "check_same_thread": False},
+        future=True,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, future=True)
+    with factory() as setup:
+        spec, run = seed_spec(setup)
+        spec_id, run_id = spec.id, run.id
+        assert setup.connection().exec_driver_sql("PRAGMA journal_mode").scalar() == "delete"
+    _patch_worker_dependencies(monkeypatch, run_research_worker, factory)
+    if reopen_transaction:
+        original_execute = AutoResearchService.execute
+
+        def commit_before_native_execution(self, native):
+            # Native provider adapters commit their input-read transaction and
+            # later reopen one to publish. The worker must cover both roots.
+            self.session.scalar(select(ResearchRun.id).where(ResearchRun.id == native.id))
+            self.session.commit()
+            return original_execute(self, native)
+
+        monkeypatch.setattr(AutoResearchService, "execute", commit_before_native_execution)
+    writer_acquired = Event()
+    writer_attempted = Event()
+    projection_finished = Event()
+    errors = []
+    timeline = []
+
+    def project():
+        try:
+            with factory() as projection:
+                GatewayAutomaticResearchAdapter(projection).sync(run_spec_id=spec_id)
+                projection.commit()
+        except BaseException as exc:  # noqa: BLE001 - propagate thread failures to the test assertion
+            errors.append(exc)
+        finally:
+            projection_finished.set()
+
+    projector = Thread(target=project, name="gateway-contention-poll")
+
+    def before_statement(_connection, _cursor, statement, _parameters, _context, _many):
+        if current_thread() is projector and statement.startswith("UPDATE research_conversations"):
+            writer_attempted.set()
+
+    def after_statement(_connection, _cursor, statement, _parameters, _context, _many):
+        if current_thread() is projector and statement.startswith("UPDATE research_conversations"):
+            timeline.append("projector_write")
+            writer_acquired.set()
+
+    event.listen(engine, "before_cursor_execute", before_statement)
+    event.listen(engine, "after_cursor_execute", after_statement)
+    original_dispatch = AutomaticResearchPipeline._dispatch_locked
+
+    def overlap_dispatch(self, native):
+        # The native begin_nested() has started a savepoint. Establish the read
+        # snapshot before the independent Gateway writer arrives, as production
+        # scope/provenance reads do with autoflush=False.
+        self._session.scalar(select(ResearchRun.id).where(ResearchRun.id == native.id))
+        projector.start()
+        assert writer_attempted.wait(timeout=5), "projector did not reach the competing UPDATE"
+        # Old DEFERRED behavior lets the competing writer reserve immediately.
+        # Correct writer reservation blocks it until this dispatch commits.
+        writer_acquired.wait(timeout=0.2)
+        result = original_dispatch(self, native)
+        timeline.append("native_dispatch")
+        return result
+
+    monkeypatch.setattr(AutomaticResearchPipeline, "_dispatch_locked", overlap_dispatch)
+    try:
+        assert run_research_worker.run_once() is True
+    finally:
+        projector.join(timeout=5)
+        event.remove(engine, "before_cursor_execute", before_statement)
+        event.remove(engine, "after_cursor_execute", after_statement)
+    assert not projector.is_alive()
+    assert projection_finished.is_set()
+    assert errors == []
+    assert timeline.index("native_dispatch") < timeline.index("projector_write")
+    with factory() as check:
+        assert check.get(ResearchRun, run_id).status == "waiting_for_sources"
+        assert check.scalar(select(Job).where(Job.target_id == run_id)).status == "waiting_for_sources"
+        assert check.scalar(select(func.count()).select_from(AcquisitionJob).where(
+            AcquisitionJob.research_run_id == run_id)) == 9
+
+
+def test_worker_recovers_failed_flush_before_persisting_safe_terminal_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models.ledger import Base
+    from app.models.operational import Job, ResearchRun
+    from app.scripts import run_research_worker
+    from app.services.auto_research import AutoResearchService
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'worker-failed-transaction.db'}", future=True)
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, future=True)
+    run_id, job_id = _seed_terminal_race(factory)
+    _patch_worker_dependencies(monkeypatch, run_research_worker, factory)
+
+    def fail_flush(self, run):
+        run.budget = None
+        self.session.flush()
+
+    monkeypatch.setattr(AutoResearchService, "execute", fail_flush)
+    with pytest.raises(IntegrityError):
+        run_research_worker.run_once()
+    with factory() as check:
+        assert check.get(ResearchRun, run_id).status == "failed"
+        job = check.get(Job, job_id)
+        assert job.status == "failed"
+        assert job.error == "AI operation failed"
+
+
+def test_gateway_sqlite_worker_fence_releases_writer_during_real_assessment_provider(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from sqlalchemy import event
+
+    from app.ai.assessment_gen import AssessmentGenerator
+    from app.ai.client import LLMClient
+    from app.models.ledger import AIAssessment, Base
+    from app.scripts.run_research_worker import _begin_sqlite_worker_transaction
+    from tests.test_research_gateway_automatic_adapter import seed_spec
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'worker-assessment-provider-boundary.db'}",
+        connect_args={"timeout": 0.1}, future=True,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, future=True)
+    with factory() as setup:
+        _, run = seed_spec(setup)
+        thesis_id = uuid.UUID(run.scope_thesis_ids[0])
+    client = LLMClient(model_version="gateway-boundary-test", mock=True)
+    boundaries = []
+    with factory() as worker:
+        event.listen(worker, "after_begin", _begin_sqlite_worker_transaction)
+
+        def provider_response(*_args, **_kwargs):
+            assert not worker.in_transaction()
+            with factory() as concurrent:
+                concurrent.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                concurrent.rollback()
+            boundaries.append("provider_without_writer")
+            return {"conclusion": "insufficient_evidence", "rationale": "缺少可核验的证据。", "gaps": ["证据不足"]}
+
+        monkeypatch.setattr(client, "chat_json", provider_response)
+        assessment = AssessmentGenerator(client).generate(
+            thesis_id, datetime.now(UTC), worker, evidence_link_ids=[],
+        )
+        assessment_id = assessment.id
+        worker.commit()
+    assert boundaries == ["provider_without_writer"]
+    with factory() as check:
+        assert check.get(AIAssessment, assessment_id) is not None
 
 
 def test_worker_loads_local_env_before_database_import(tmp_path: Path) -> None:
@@ -109,7 +287,7 @@ def test_worker_commits_failed_run_job_event_and_airun_atomically(
     engine = create_engine(f"sqlite:///{tmp_path / 'worker-atomic.db'}", future=True)
     Base.metadata.create_all(engine)
     session_local = sessionmaker(bind=engine, future=True)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with session_local() as setup:
         case = ResearchCase(
             title="worker atomic failure",
@@ -159,7 +337,15 @@ def test_worker_commits_failed_run_job_event_and_airun_atomically(
 
     client = LLMClient(model_version="provider-test", mock=True)
 
+    provider_transactions_released = []
+
     def fail_provider(*_args, **_kwargs):
+        # A separate SQLite writer must remain available while the real native
+        # extraction adapter waits on its provider, even under worker fencing.
+        with Session(engine) as concurrent:
+            concurrent.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            concurrent.rollback()
+        provider_transactions_released.append(True)
         raise RuntimeError("provider transport failed")
 
     monkeypatch.setattr(client, "chat_json", fail_provider)
@@ -193,6 +379,7 @@ def test_worker_commits_failed_run_job_event_and_airun_atomically(
     )
 
     assert run_research_worker.run_once()
+    assert provider_transactions_released == [True]
 
     with Session(engine) as check:
         persisted_run = check.get(ResearchRun, run_id)
@@ -356,7 +543,6 @@ def test_worker_stops_on_first_proposal_failure_and_commits_terminal_state_atomi
     from app.models.operational import Job, ResearchRun, ResearchTask
     from app.repositories.auto_research import AutoResearchRepository
     from app.scripts import run_research_worker
-    from app.services.auto_research import AutoResearchService
 
     engine = create_engine(
         f"sqlite:///{tmp_path / 'worker-proposal-failure-atomic.db'}",
@@ -364,7 +550,7 @@ def test_worker_stops_on_first_proposal_failure_and_commits_terminal_state_atomi
     )
     Base.metadata.create_all(engine)
     session_local = sessionmaker(bind=engine, future=True)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with session_local() as setup:
         case = ResearchCase(
             title="first provider failure is terminal",
@@ -538,7 +724,8 @@ def test_worker_terminalization_honors_a_committed_job_cancellation(
 
     def cancel_before_completion(self, job, **kwargs):
         with session_local() as cancelling:
-            response = cancel_job(job.id, db=cancelling, tenant_id="test-team")
+            from app.api.v1.tenant_context import ResearchActor
+            response = cancel_job(job.id, actor=ResearchActor("test-team", frozenset()), db=cancelling)
             assert response.cancel_requested is True
         original_completion(self, job, **kwargs)
 
@@ -593,7 +780,7 @@ def test_worker_discards_outputs_when_another_worker_already_terminalized_job(
             assert persisted_job is not None
             persisted_job.status = "succeeded"
             persisted_job.step = "stopped"
-            persisted_job.finished_at = datetime.now(timezone.utc)
+            persisted_job.finished_at = datetime.now(UTC)
             winner.commit()
 
         losing_run = kwargs["run"]
@@ -609,7 +796,7 @@ def test_worker_discards_outputs_when_another_worker_already_terminalized_job(
                     status="failed",
                     message="losing worker event",
                     payload_json={},
-                    created_at=datetime.now(timezone.utc),
+                    created_at=datetime.now(UTC),
                 ),
                 TaskItem(
                     title="losing worker handoff",
@@ -620,7 +807,7 @@ def test_worker_discards_outputs_when_another_worker_already_terminalized_job(
                     ref_type="research_run",
                     ref_id=run_id,
                     research_case_id=losing_run.research_case_id,
-                    created_at=datetime.now(timezone.utc),
+                    created_at=datetime.now(UTC),
                 ),
             ]
         )
@@ -662,7 +849,6 @@ def test_worker_discards_outputs_when_another_worker_already_terminalized_job(
 )
 def test_postgres_worker_terminalization_serializes_public_job_cancel(
     engine,
-    session,  # Own fixture teardown for rows committed by independent workers.
     monkeypatch,
     winner,
     terminal_status,
@@ -715,7 +901,7 @@ def test_postgres_worker_terminalization_serializes_public_job_cancel(
                 ref_type="research_run",
                 ref_id=run.id,
                 research_case_id=run.research_case_id,
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             )
         )
         self.session.flush()
@@ -769,7 +955,7 @@ def test_postgres_worker_terminalization_serializes_public_job_cancel(
     def run_worker():
         try:
             run_research_worker.run_once()
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - propagate thread failures to the test assertion
             worker_errors.append(exc)
 
     try:

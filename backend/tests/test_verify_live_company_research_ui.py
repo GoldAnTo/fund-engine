@@ -2185,15 +2185,16 @@ def test_pinned_node_major_rejects_a_newer_launcher_result() -> None:
         assert_pinned_node_major(result, expected_major=24)
 
 
-def test_package_exposes_the_closed_live_company_research_command() -> None:
+def test_package_and_container_expose_current_gateway_delivery_commands() -> None:
+    """Legacy company UI is retired; validate the supported build and server."""
     package = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))
-    assert package["scripts"]["verify:live-company-research"] == (
-        "node scripts/with-project-node.mjs scripts/verify-live-company-research-ui.mjs"
-    )
-    assert package["scripts"]["test:live-company-research-support"] == (
-        "node scripts/with-project-node.mjs --test "
-        "scripts/live-company-research-support.test.mjs"
-    )
+    assert package["scripts"]["build"] == "tsc --noEmit && vite build"
+    assert package["scripts"]["test"] == "vitest run"
+    dockerfile = (FRONTEND / "Dockerfile").read_text(encoding="utf-8")
+    assert 'CMD ["node", "server/gatewayServer.mjs"]' in dockerfile
+    assert (FRONTEND / "server" / "gatewayServer.test.mjs").is_file()
+    routes = (FRONTEND / "src" / "app" / "GatewayRoutes.tsx").read_text()
+    assert "GatewayConversationPanel" in routes
 
 
 @pytest.mark.live_company_research

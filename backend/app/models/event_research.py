@@ -151,7 +151,7 @@ class EventResearchScopeVersion(Base):
         Uuid, ForeignKey("research_cases.id"), nullable=False, index=True
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
-    changed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    changed_by: Mapped[str] = mapped_column(String(256), nullable=False)
     change_summary: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

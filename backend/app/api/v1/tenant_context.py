@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import json
 import os
-from secrets import compare_digest
 from dataclasses import dataclass
+from secrets import compare_digest
+from unicodedata import category
 
 from fastapi import Depends, Header
 
 from app.errors import AuthenticationRequiredError, PermissionDeniedError
-
 
 _TENANT_TOKEN_ENV = "RESEARCH_TENANT_TOKENS"
 
@@ -26,6 +26,20 @@ class ResearchActor:
 
     tenant_id: str
     roles: frozenset[str]
+    subject_id: str | None = None
+
+
+def _contains_control_characters(value: str) -> bool:
+    return any(category(character) == "Cc" for character in value)
+
+
+def _normalized_tenant_id(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized or _contains_control_characters(normalized):
+        return None
+    return normalized
 
 
 def _configured_tokens() -> tuple[tuple[str, ResearchActor], ...]:
@@ -42,20 +56,34 @@ def _configured_tokens() -> tuple[tuple[str, ResearchActor], ...]:
             continue
         # Keep the original {"opaque-token": "tenant"} shape valid while
         # allowing hosting configuration to grant narrow administrative roles.
-        if isinstance(configuration, str) and configuration.strip():
-            configured.append((token, ResearchActor(configuration, frozenset())))
+        if isinstance(configuration, str):
+            tenant_id = _normalized_tenant_id(configuration)
+            if tenant_id is not None:
+                configured.append((token, ResearchActor(tenant_id, frozenset())))
             continue
         if not isinstance(configuration, dict):
             continue
-        tenant_id = configuration.get("tenant_id")
+        tenant_id = _normalized_tenant_id(configuration.get("tenant_id"))
         roles = configuration.get("roles", [])
-        if not isinstance(tenant_id, str) or not tenant_id.strip():
+        if tenant_id is None:
             continue
         if not isinstance(roles, list) or not all(
             isinstance(role, str) and role.strip() for role in roles
         ):
             continue
-        configured.append((token, ResearchActor(tenant_id, frozenset(roles))))
+        subject_id = None
+        if "subject_id" in configuration:
+            subject_id = configuration["subject_id"]
+            if (
+                not isinstance(subject_id, str)
+                or not subject_id.strip()
+                or len(subject_id) > 128
+                or _contains_control_characters(subject_id)
+            ):
+                continue
+        configured.append(
+            (token, ResearchActor(tenant_id, frozenset(roles), subject_id))
+        )
     return tuple(configured)
 
 
@@ -85,6 +113,17 @@ def require_research_tenant(
 ) -> str:
     """Return the tenant bound to a configured opaque bearer credential."""
     return require_research_actor(authorization).tenant_id
+
+
+def require_gateway_actor(
+    actor: ResearchActor = Depends(require_research_actor),
+) -> ResearchActor:
+    """Require the host-configured human subject used by Gateway routes."""
+    if not actor.subject_id:
+        raise PermissionDeniedError(
+            "a stable research subject is required for Gateway access"
+        )
+    return actor
 
 
 def require_case_administrator(

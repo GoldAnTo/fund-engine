@@ -20,6 +20,8 @@ from types import SimpleNamespace
 
 import sqlalchemy as sa
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy.orm import registry, sessionmaker
 
 from tests.legacy_market_conflicts import (
@@ -27,17 +29,6 @@ from tests.legacy_market_conflicts import (
     clone_conflicting_insert_sql,
     seed_0067_market_conflicts,
 )
-
-
-def _expected_head() -> str:
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
-    backend = Path(__file__).parents[1]
-    config = Config(str(backend / "alembic.ini"))
-    config.set_main_option("script_location", str(backend / "alembic"))
-    head = ScriptDirectory.from_config(config).get_current_head()
-    assert head is not None
-    return head
 
 
 WAVE2_TABLES = {
@@ -52,6 +43,103 @@ WAVE2_TABLES = {
     "uw_forecast_input_versions",
     "uw_falsifier_versions",
 }
+
+GATEWAY_TABLES = frozenset(
+    {
+        "research_conversations",
+        "gateway_idempotency_requests",
+        "research_messages",
+        "research_intents",
+        "research_run_specs",
+        "role_runs",
+        "role_events",
+        "gateway_commands",
+    }
+)
+PROFESSIONAL_TEAM_TABLES = frozenset(
+    {
+        "research_teams",
+        "professional_tasks",
+        "professional_dependencies",
+        "professional_outputs",
+        "professional_attempts",
+        "professional_events",
+        "professional_requests",
+        "professional_reviews",
+    }
+)
+GATEWAY_IMMUTABLE_TABLES = (
+    "research_messages",
+    "research_intents",
+    "research_run_specs",
+    "role_events",
+    "gateway_commands",
+)
+GATEWAY_IMMUTABLE_TRIGGER_NAMES = tuple(
+    f"no_{operation}_{table_name}"
+    for table_name in GATEWAY_IMMUTABLE_TABLES
+    for operation in ("update", "delete")
+)
+GATEWAY_ARTIFACT_VALIDATOR_TRIGGER_NAMES = (
+    "validate_insert_research_run_specs_input_artifact_refs",
+    "validate_insert_role_events_artifact_refs",
+)
+GATEWAY_REPLACE_GUARD_TRIGGER_NAMES = (
+    "reject_replace_research_messages",
+    "reject_replace_research_intents",
+    "reject_replace_research_run_specs",
+    "reject_replace_role_events",
+    "reject_replace_gateway_commands",
+)
+GATEWAY_0073_MANAGED_TRIGGER_NAMES = (
+    GATEWAY_IMMUTABLE_TRIGGER_NAMES
+    + GATEWAY_ARTIFACT_VALIDATOR_TRIGGER_NAMES
+    + GATEWAY_REPLACE_GUARD_TRIGGER_NAMES
+)
+GATEWAY_NUL_GUARD_TRIGGER_NAMES = (
+    "validate_insert_gateway_commands_target_hash_nul",
+    "validate_insert_gateway_idempotency_receipt_cache",
+    "validate_insert_gateway_idempotency_request_fingerprint_nul",
+    "validate_insert_research_intents_input_sha256_nul",
+    "validate_insert_research_messages_input_sha256_nul",
+    "validate_insert_research_run_specs_input_artifact_refs_nul",
+    "validate_insert_role_events_artifact_refs_nul",
+    "validate_insert_role_events_source_key_nul",
+    "validate_update_gateway_idempotency_receipt_cache",
+    "validate_update_gateway_idempotency_request_fingerprint_nul",
+)
+GATEWAY_MANAGED_TRIGGER_NAMES = (
+    GATEWAY_0073_MANAGED_TRIGGER_NAMES + GATEWAY_NUL_GUARD_TRIGGER_NAMES
+)
+LEGACY_0072_GATEWAY_TRIGGER_NAMES = frozenset(GATEWAY_IMMUTABLE_TRIGGER_NAMES)
+
+
+def _create_pre_gateway_orm_schema(engine, metadata) -> None:
+    """Create the complete historical ORM shape that existed before 0072."""
+    metadata.create_all(
+        engine,
+        tables=[
+            table
+            for table in metadata.sorted_tables
+            if table.name not in GATEWAY_TABLES
+            and table.name not in PROFESSIONAL_TEAM_TABLES
+            and not table.name.startswith("company_stud")
+        ],
+    )
+
+
+def test_pre_gateway_orm_fixture_matches_historical_table_shape(tmp_path) -> None:
+    import app.models  # noqa: F401
+    from app.models.ledger import Base
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'historical-shape.db'}")
+    _create_pre_gateway_orm_schema(engine, Base.metadata)
+
+    with engine.connect() as connection:
+        tables = set(sa.inspect(connection).get_table_names())
+        assert not GATEWAY_TABLES & tables
+        assert not PROFESSIONAL_TEAM_TABLES & tables
+    engine.dispose()
 
 
 def _search_term_digest(value: str) -> str:
@@ -195,7 +283,7 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             connection.execute(
                 sa.text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == _expected_head()
+            == "0076"
         )
         event_columns = {
             column["name"]: column
@@ -273,6 +361,19 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             for column in sa.inspect(connection).get_columns("source_contracts")
         }["research_source_type"]
         assert research_source_type["nullable"] is False
+        for table_name, column_name in (
+            ("research_cases", "created_by"),
+            ("theses", "created_by"),
+            ("event_research_scope_versions", "changed_by"),
+            ("source_contracts", "declared_by"),
+            ("document_upload_artifacts", "uploaded_by"),
+            ("case_tenant_admissions", "admitted_by"),
+        ):
+            columns = {
+                column["name"]: column
+                for column in sa.inspect(connection).get_columns(table_name)
+            }
+            assert columns[column_name]["type"].length == 256
         heartbeat_columns = {
             column["name"]
             for column in sa.inspect(connection).get_columns("research_worker_heartbeats")
@@ -324,6 +425,598 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             )
         ).scalar_one()
         assert immutable_company_research_trigger_count == 4
+
+
+def _load_0071_gateway_audit_identity_migration():
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0071_widen_gateway_audit_identities.py"
+    )
+    module_spec = importlib.util.spec_from_file_location(
+        "migration_0071_gateway_audit_identities",
+        migration_path,
+    )
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    migration = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(migration)
+    return migration
+
+
+def test_0071_downgrade_refuses_long_audit_data_before_schema_changes(tmp_path) -> None:
+    database_path = tmp_path / "gateway-audit-identity-downgrade.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0071"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    audit_identity = "human:" + ("s" * 128)
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO research_cases "
+                "(id, title, industry_topic, created_at, created_by) "
+                "VALUES (:id, :title, :industry_topic, :created_at, :created_by)"
+            ),
+            {
+                "id": "00000000000000000000000000000071",
+                "title": "long audit identity",
+                "industry_topic": "test",
+                "created_at": "2026-09-04 00:00:00",
+                "created_by": audit_identity,
+            },
+        )
+
+    downgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0070"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert downgraded.returncode != 0
+    assert "cannot downgrade 0071: immutable audit data exceeds 128 characters" in (
+        downgraded.stderr + downgraded.stdout
+    )
+    with engine.connect() as connection:
+        assert connection.execute(
+            sa.text("SELECT version_num FROM alembic_version")
+        ).scalar_one() == "0071"
+        created_by = {
+            column["name"]: column
+            for column in sa.inspect(connection).get_columns("research_cases")
+        }["created_by"]
+        assert created_by["type"].length == 256
+        assert connection.execute(
+            sa.text("SELECT created_by FROM research_cases WHERE id = :id"),
+            {"id": "00000000000000000000000000000071"},
+        ).scalar_one() == audit_identity
+
+
+def test_0071_downgrade_refuses_nul_audit_data_before_schema_changes(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "gateway-audit-identity-nul-downgrade.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0071"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    audit_identity = "tenant:legacy" + chr(0) + "identity"
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO research_cases "
+                "(id, title, industry_topic, created_at, created_by) "
+                "VALUES (:id, :title, :industry_topic, :created_at, :created_by)"
+            ),
+            {
+                "id": "00000000000000000000000000000073",
+                "title": "NUL audit identity",
+                "industry_topic": "test",
+                "created_at": "2026-09-04 00:00:00",
+                "created_by": audit_identity,
+            },
+        )
+
+    downgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0070"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert downgraded.returncode != 0
+    assert "cannot downgrade 0071: immutable audit data exceeds 128 characters" in (
+        downgraded.stderr + downgraded.stdout
+    )
+    with engine.connect() as connection:
+        assert connection.execute(
+            sa.text("SELECT version_num FROM alembic_version")
+        ).scalar_one() == "0071"
+        created_by = {
+            column["name"]: column
+            for column in sa.inspect(connection).get_columns("research_cases")
+        }["created_by"]
+        assert created_by["type"].length == 256
+        assert connection.execute(
+            sa.text("SELECT created_by FROM research_cases WHERE id = :id"),
+            {"id": "00000000000000000000000000000073"},
+        ).scalar_one() == audit_identity
+
+
+def test_0071_downgrade_preflights_every_audit_column_before_ddl() -> None:
+    migration = _load_0071_gateway_audit_identity_migration()
+    queries: list[tuple[str, dict]] = []
+
+    class _Result:
+        def scalar_one_or_none(self):
+            return 1
+
+    class _Bind:
+        dialect = SimpleNamespace(name="postgresql")
+
+        def execute(self, statement, parameters):
+            queries.append((str(statement), parameters))
+            return _Result()
+
+    def unexpected_ddl(*args, **kwargs):
+        pytest.fail("downgrade performed DDL before its audit-data preflight")
+
+    migration.op = SimpleNamespace(
+        get_bind=lambda: _Bind(),
+        alter_column=unexpected_ddl,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="cannot downgrade 0071: immutable audit data exceeds 128 characters",
+    ):
+        migration.downgrade()
+
+    assert len(queries) == 6
+    assert [parameters for _, parameters in queries] == [
+        {"max_length": 128}
+    ] * 6
+    for (table_name, column_name), (statement, _) in zip(
+        migration._AUDIT_COLUMNS, queries, strict=True
+    ):
+        assert f"FROM {table_name}" in statement
+        assert f"length({column_name})" in statement
+
+
+def test_0071_restores_sqlite_assessment_trigger_after_batch_failure() -> None:
+    from app.models.ledger import _SQLITE_ASSESSMENT_PROTOCOL_TRIGGER
+
+    migration = _load_0071_gateway_audit_identity_migration()
+    engine = sa.create_engine("sqlite://")
+    sa.event.listen(
+        engine,
+        "connect",
+        lambda dbapi_connection, _connection_record: dbapi_connection.execute(
+            "PRAGMA foreign_keys=ON"
+        ),
+    )
+    with engine.begin() as connection:
+        assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+        connection.execute(sa.text("CREATE TABLE ai_assessments (id TEXT)"))
+        connection.execute(sa.text(str(_SQLITE_ASSESSMENT_PROTOCOL_TRIGGER)))
+
+        class _FailingBatch:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def alter_column(self, *args, **kwargs) -> None:
+                raise RuntimeError("simulated SQLite batch rebuild failure")
+
+        def execute(statement):
+            if isinstance(statement, str):
+                statement = sa.text(statement)
+            return connection.execute(statement)
+
+        migration.op = SimpleNamespace(
+            get_bind=lambda: connection,
+            execute=execute,
+            batch_alter_table=lambda _table_name: _FailingBatch(),
+        )
+
+        with pytest.raises(RuntimeError, match="simulated SQLite batch rebuild failure"):
+            migration._set_audit_identity_length(256, 128)
+
+        assert connection.execute(
+            sa.text(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'trg_ai_assessments_protocol_scope'"
+            )
+        ).scalar_one() == 1
+        assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+
+
+@pytest.mark.parametrize("mutation", ["missing", "noncanonical"])
+def test_0071_fk_enabled_rejects_invalid_protocol_trigger_before_width_ddl(
+    tmp_path, mutation: str
+) -> None:
+    database_path = tmp_path / f"gateway-audit-identity-{mutation}-trigger.db"
+    backend = Path(__file__).parents[1]
+    database_url = f"sqlite:///{database_path}"
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0070")
+
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        canonical_trigger_sql = connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'trg_ai_assessments_protocol_scope'"
+            )
+        )
+        assert canonical_trigger_sql is not None
+        connection.exec_driver_sql(
+            "DROP TRIGGER trg_ai_assessments_protocol_scope"
+        )
+        if mutation == "noncanonical":
+            connection.exec_driver_sql(
+                canonical_trigger_sql.replace(
+                    "assessment binding does not match snapshot thesis",
+                    "ASSESSMENT BINDING DOES NOT MATCH SNAPSHOT THESIS",
+                )
+            )
+    engine.dispose()
+
+    migration_fk_settings: list[int] = []
+
+    def enable_foreign_keys(dbapi_connection, _connection_record) -> None:
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+    def record_foreign_keys(dbapi_connection, _connection_record) -> None:
+        migration_fk_settings.append(
+            dbapi_connection.execute("PRAGMA foreign_keys").fetchone()[0]
+        )
+
+    sa.event.listen(sa.engine.Engine, "connect", enable_foreign_keys)
+    sa.event.listen(sa.pool.Pool, "checkin", record_foreign_keys)
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="assessment protocol trigger is missing or noncanonical",
+        ):
+            command.upgrade(config, "0071")
+
+        assert migration_fk_settings == [1]
+        verify_engine = sa.create_engine(database_url)
+        with verify_engine.connect() as connection:
+            assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+            assert connection.execute(
+                sa.text("SELECT version_num FROM alembic_version")
+            ).scalar_one() == "0070"
+            for table_name, column_name in (
+                ("research_cases", "created_by"),
+                ("theses", "created_by"),
+                ("event_research_scope_versions", "changed_by"),
+                ("source_contracts", "declared_by"),
+                ("document_upload_artifacts", "uploaded_by"),
+                ("case_tenant_admissions", "admitted_by"),
+            ):
+                columns = {
+                    column["name"]: column
+                    for column in sa.inspect(connection).get_columns(table_name)
+                }
+                assert columns[column_name]["type"].length == 128
+            trigger_sql = connection.scalar(
+                sa.text(
+                    "SELECT sql FROM sqlite_master "
+                    "WHERE type = 'trigger' "
+                    "AND name = 'trg_ai_assessments_protocol_scope'"
+                )
+            )
+            if mutation == "missing":
+                assert trigger_sql is None
+            else:
+                assert trigger_sql is not None
+                assert "ASSESSMENT BINDING DOES NOT MATCH SNAPSHOT THESIS" in trigger_sql
+            assert (
+                connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+                == []
+            )
+    finally:
+        sa.event.remove(sa.pool.Pool, "checkin", record_foreign_keys)
+        sa.event.remove(sa.engine.Engine, "connect", enable_foreign_keys)
+
+
+def test_0071_rejects_unicode_trigger_that_bypasses_protocol_enforcement(
+    tmp_path,
+) -> None:
+    """A long-s identifier is distinct to SQLite but folded by Unicode casefold."""
+    from sqlalchemy.orm import Session
+
+    import app.models  # noqa: F401 - register protocol mappings
+    from app.models.ledger import AIAssessment, EvidenceSnapshot, ResearchCase, Thesis
+    from tests.protocol_provenance import seed_protocol_footprint
+
+    database_path = tmp_path / "unicode-protocol-trigger.db"
+    backend = Path(__file__).parents[1]
+    database_url = f"sqlite:///{database_path}"
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0070")
+
+    engine = sa.create_engine(database_url)
+    now = datetime.now(UTC)
+    with Session(engine) as session:
+        case = ResearchCase(
+            title="Unicode protocol trigger",
+            industry_topic="test",
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(case)
+        session.flush()
+        thesis = Thesis(
+            research_case_id=case.id,
+            statement="A non-strict thesis must not accept a protocol footprint",
+            research_protocol_required=False,
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(thesis)
+        session.flush()
+        snapshot = EvidenceSnapshot(
+            thesis_id=thesis.id,
+            cutoff=now,
+            evidence_link_ids=[],
+            created_at=now,
+        )
+        session.add(snapshot)
+        session.flush()
+        footprint = seed_protocol_footprint(session, thesis, status="ready")
+        protocol = {
+            "research_protocol_status": "ready",
+            "effective_binding_id": footprint.binding.id,
+            "mechanism_template_version_id": footprint.template.id,
+            "verification_rule_ids": [str(rule.id) for rule in footprint.rules],
+        }
+        snapshot_id = snapshot.id
+        session.commit()
+
+    def invalid_assessment() -> AIAssessment:
+        return AIAssessment(
+            snapshot_id=snapshot_id,
+            conclusion="insufficient_evidence",
+            rationale="Unicode trigger bypass probe",
+            gaps=[],
+            displayed_as_provisional=True,
+            creator_type="ai",
+            created_at=now,
+            **protocol,
+        )
+
+    with Session(engine) as session:
+        with pytest.raises(
+            sa.exc.IntegrityError,
+            match="assessment binding does not match snapshot thesis",
+        ), session.begin_nested():
+            session.add(invalid_assessment())
+            session.flush()
+
+    with engine.begin() as connection:
+        trigger_sql = connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'trg_ai_assessments_protocol_scope'"
+            )
+        )
+        assert trigger_sql is not None
+        tampered_trigger_sql = trigger_sql.replace(
+            "t.research_protocol_required = 1",
+            "t.reſearch_protocol_required = 1",
+        )
+        assert tampered_trigger_sql != trigger_sql
+        connection.exec_driver_sql(
+            "DROP TRIGGER trg_ai_assessments_protocol_scope"
+        )
+        connection.exec_driver_sql(
+            "ALTER TABLE theses "
+            "ADD COLUMN reſearch_protocol_required INTEGER NOT NULL DEFAULT 1"
+        )
+        connection.exec_driver_sql(tampered_trigger_sql)
+
+    with Session(engine) as session:
+        session.add(invalid_assessment())
+        session.commit()
+        assert session.scalar(sa.select(sa.func.count()).select_from(AIAssessment)) == 1
+
+    migration_fk_settings: list[int] = []
+
+    def enable_foreign_keys(dbapi_connection, _connection_record) -> None:
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+    def record_foreign_keys(dbapi_connection, _connection_record) -> None:
+        migration_fk_settings.append(
+            dbapi_connection.execute("PRAGMA foreign_keys").fetchone()[0]
+        )
+
+    sa.event.listen(sa.engine.Engine, "connect", enable_foreign_keys)
+    sa.event.listen(sa.pool.Pool, "checkin", record_foreign_keys)
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="assessment protocol trigger is missing or noncanonical",
+        ):
+            command.upgrade(config, "0071")
+
+        assert migration_fk_settings == [1]
+        verify_engine = sa.create_engine(database_url)
+        with verify_engine.connect() as connection:
+            assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+            assert connection.scalar(
+                sa.text("SELECT version_num FROM alembic_version")
+            ) == "0070"
+            for table_name, column_name in (
+                ("research_cases", "created_by"),
+                ("theses", "created_by"),
+                ("event_research_scope_versions", "changed_by"),
+                ("source_contracts", "declared_by"),
+                ("document_upload_artifacts", "uploaded_by"),
+                ("case_tenant_admissions", "admitted_by"),
+            ):
+                columns = {
+                    column["name"]: column
+                    for column in sa.inspect(connection).get_columns(table_name)
+                }
+                assert columns[column_name]["type"].length == 128
+            assert connection.scalar(
+                sa.text(
+                    "SELECT sql FROM sqlite_master "
+                    "WHERE type = 'trigger' "
+                    "AND name = 'trg_ai_assessments_protocol_scope'"
+                )
+            ) == tampered_trigger_sql
+        verify_engine.dispose()
+    finally:
+        sa.event.remove(sa.pool.Pool, "checkin", record_foreign_keys)
+        sa.event.remove(sa.engine.Engine, "connect", enable_foreign_keys)
+        engine.dispose()
+
+
+def test_0071_fk_enabled_populated_upgrade_and_downgrade_preserve_integrity(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "gateway-audit-identity-fk.db"
+    backend = Path(__file__).parents[1]
+    database_url = f"sqlite:///{database_path}"
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0070")
+
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO research_cases "
+                "(id, title, industry_topic, created_at, created_by) "
+                "VALUES (:id, :title, :industry_topic, :created_at, :created_by)"
+            ),
+            {
+                "id": "00000000000000000000000000000071",
+                "title": "FK-protected case",
+                "industry_topic": "test",
+                "created_at": "2026-09-04 00:00:00",
+                "created_by": "seed",
+            },
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO theses "
+                "(id, research_case_id, statement, created_at, created_by, "
+                "creator_type, review_state, research_protocol_required) "
+                "VALUES (:id, :research_case_id, :statement, :created_at, "
+                ":created_by, 'human', 'confirmed', 0)"
+            ),
+            {
+                "id": "00000000000000000000000000000072",
+                "research_case_id": "00000000000000000000000000000071",
+                "statement": "FK-protected thesis",
+                "created_at": "2026-09-04 00:00:00",
+                "created_by": "seed",
+            },
+        )
+
+    def enable_foreign_keys(dbapi_connection, _connection_record) -> None:
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+    sa.event.listen(sa.engine.Engine, "connect", enable_foreign_keys)
+    try:
+        command.upgrade(config, "0071")
+
+        fk_engine = sa.create_engine(database_url)
+        with fk_engine.connect() as connection:
+            assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+            assert connection.execute(
+                sa.text("SELECT version_num FROM alembic_version")
+            ).scalar_one() == "0071"
+            for table_name, column_name in (
+                ("research_cases", "created_by"),
+                ("theses", "created_by"),
+                ("event_research_scope_versions", "changed_by"),
+                ("source_contracts", "declared_by"),
+                ("document_upload_artifacts", "uploaded_by"),
+                ("case_tenant_admissions", "admitted_by"),
+            ):
+                columns = {
+                    column["name"]: column
+                    for column in sa.inspect(connection).get_columns(table_name)
+                }
+                assert columns[column_name]["type"].length == 256
+            assert connection.execute(
+                sa.text(
+                    "SELECT COUNT(*) FROM sqlite_master "
+                    "WHERE type = 'trigger' "
+                    "AND name = 'trg_ai_assessments_protocol_scope'"
+                )
+            ).scalar_one() == 1
+            assert connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall() == []
+
+        command.downgrade(config, "0070")
+
+        with fk_engine.connect() as connection:
+            assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+            assert connection.execute(
+                sa.text("SELECT version_num FROM alembic_version")
+            ).scalar_one() == "0070"
+            for table_name, column_name in (
+                ("research_cases", "created_by"),
+                ("theses", "created_by"),
+                ("event_research_scope_versions", "changed_by"),
+                ("source_contracts", "declared_by"),
+                ("document_upload_artifacts", "uploaded_by"),
+                ("case_tenant_admissions", "admitted_by"),
+            ):
+                columns = {
+                    column["name"]: column
+                    for column in sa.inspect(connection).get_columns(table_name)
+                }
+                assert columns[column_name]["type"].length == 128
+            assert connection.execute(
+                sa.text(
+                    "SELECT COUNT(*) FROM sqlite_master "
+                    "WHERE type = 'trigger' "
+                    "AND name = 'trg_ai_assessments_protocol_scope'"
+                )
+            ).scalar_one() == 1
+            assert connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        sa.event.remove(sa.engine.Engine, "connect", enable_foreign_keys)
 
 
 def test_0068_backfills_legacy_market_capture_and_makes_it_immutable(tmp_path) -> None:
@@ -1353,7 +2046,7 @@ def test_0070_repairs_a_stamped_0069_database_without_event_triggers(
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == _expected_head()
+        ).scalar_one() == "0076"
         for statement in (
             "UPDATE uw_company_research_events SET event_type = 'changed' "
             f"WHERE id = '{event_id}'",
@@ -1468,7 +2161,7 @@ def test_0070_authenticates_populated_stamped_0069_histories(
         with engine.connect() as connection:
             assert connection.scalar(
                 sa.text("SELECT version_num FROM alembic_version")
-            ) == _expected_head()
+            ) == "0076"
             assert tuple(
                 connection.scalars(
                     sa.text(
@@ -2100,7 +2793,7 @@ with SessionLocal() as session:
 
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == _expected_head()
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0076"
         assert {
             "research_preparations",
             "research_preparation_artifacts",
@@ -2864,7 +3557,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == _expected_head()
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0076"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -2896,6 +3589,588 @@ def test_live_case_runner_bootstraps_its_database_before_materializing(
     assert calls == [database_url]
 
 
+@pytest.mark.parametrize("revision", ("0070", "0071"))
+def test_versioned_sqlite_bootstrap_rejects_noop_protocol_trigger_before_repairs(
+    tmp_path, revision: str
+) -> None:
+    """A version marker never substitutes for the frozen protocol boundary."""
+    from sqlalchemy.orm import Session
+
+    import app.models  # noqa: F401 - register protocol mappings
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+    from app.models.ledger import AIAssessment, EvidenceSnapshot, ResearchCase, Thesis
+    from tests.protocol_provenance import seed_protocol_footprint
+
+    database_url = f"sqlite:///{tmp_path / f'versioned-{revision}-noop-protocol-trigger.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, revision)
+
+    engine = sa.create_engine(database_url)
+    now = datetime.now(UTC)
+    with Session(engine) as session:
+        case = ResearchCase(
+            title="Versioned noop protocol trigger",
+            industry_topic="test",
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(case)
+        session.flush()
+        thesis = Thesis(
+            research_case_id=case.id,
+            statement="A non-strict thesis cannot accept a protocol footprint",
+            research_protocol_required=False,
+            created_by="tester",
+            created_at=now,
+        )
+        session.add(thesis)
+        session.flush()
+        snapshot = EvidenceSnapshot(
+            thesis_id=thesis.id,
+            cutoff=now,
+            evidence_link_ids=[],
+            created_at=now,
+        )
+        session.add(snapshot)
+        session.flush()
+        footprint = seed_protocol_footprint(session, thesis, status="ready")
+        protocol = {
+            "research_protocol_status": "ready",
+            "effective_binding_id": footprint.binding.id,
+            "mechanism_template_version_id": footprint.template.id,
+            "verification_rule_ids": [str(rule.id) for rule in footprint.rules],
+        }
+        snapshot_id = snapshot.id
+        session.commit()
+
+    def invalid_assessment() -> AIAssessment:
+        return AIAssessment(
+            snapshot_id=snapshot_id,
+            conclusion="insufficient_evidence",
+            rationale="Versioned noop trigger bypass probe",
+            gaps=[],
+            displayed_as_provisional=True,
+            creator_type="ai",
+            created_at=now,
+            **protocol,
+        )
+
+    # First prove that this is a real enforcement boundary, rather than only a
+    # DDL fingerprint: the canonical trigger blocks the invalid assessment.
+    with Session(engine) as session:
+        with pytest.raises(
+            sa.exc.IntegrityError,
+            match="assessment binding does not match snapshot thesis",
+        ), session.begin_nested():
+            session.add(invalid_assessment())
+            session.flush()
+
+    noop_trigger_sql = (
+        "CREATE TRIGGER trg_ai_assessments_protocol_scope "
+        "BEFORE INSERT ON ai_assessments "
+        "WHEN NEW.research_protocol_status IS NOT NULL "
+        "BEGIN SELECT 1; END"
+    )
+    marker_trigger_sql = (
+        "CREATE TRIGGER no_update_uw_company_research_events "
+        "BEFORE UPDATE ON uw_company_research_events "
+        "BEGIN SELECT RAISE(ABORT, 'versioned preflight marker'); END"
+    )
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "DROP TRIGGER trg_ai_assessments_protocol_scope"
+        )
+        connection.exec_driver_sql(noop_trigger_sql)
+        connection.exec_driver_sql(
+            "DROP TRIGGER no_update_uw_company_research_events"
+        )
+        connection.exec_driver_sql(marker_trigger_sql)
+        protocol_trigger_sql_before = connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'trg_ai_assessments_protocol_scope'"
+            )
+        )
+        company_trigger_sql_before = dict(
+            connection.execute(
+                sa.text(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE type = 'trigger' "
+                    "AND tbl_name = 'uw_company_research_events'"
+                )
+            ).all()
+        )
+
+    # The noop permits the very same invalid row.  A bootstrap must therefore
+    # authenticate its frozen DDL even when Alembic is already at 0070 or 0071.
+    with Session(engine) as session:
+        session.add(invalid_assessment())
+        session.commit()
+        assert session.scalar(sa.select(sa.func.count()).select_from(AIAssessment)) == 1
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="canonical assessment protocol trigger",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT version_num FROM alembic_version")
+        ) == revision
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'trg_ai_assessments_protocol_scope'"
+            )
+        ) == protocol_trigger_sql_before
+        assert dict(
+            connection.execute(
+                sa.text(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE type = 'trigger' "
+                    "AND tbl_name = 'uw_company_research_events'"
+                )
+            ).all()
+        ) == company_trigger_sql_before
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'no_update_uw_company_research_events'"
+            )
+        ) == marker_trigger_sql
+    engine.dispose()
+
+
+@pytest.mark.parametrize("revision", ("0070", "0071"))
+def test_versioned_sqlite_bootstrap_accepts_canonical_protocol_trigger(
+    tmp_path, revision: str
+) -> None:
+    from app.db_migrations import upgrade_database_to_head
+
+    database_url = f"sqlite:///{tmp_path / f'versioned-{revision}-protocol.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, revision)
+
+    upgrade_database_to_head(database_url)
+
+    engine = sa.create_engine(database_url)
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT version_num FROM alembic_version")
+        ) == "0076"
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'trg_ai_assessments_protocol_scope'"
+            )
+        ) is not None
+    engine.dispose()
+
+
+def test_versioned_sqlite_bootstrap_upgrades_pre_protocol_revision_before_preflight(
+    tmp_path,
+) -> None:
+    """A legitimate 0050 database gains the 0051 guard before it is checked."""
+    from app.db_migrations import upgrade_database_to_head
+
+    database_url = f"sqlite:///{tmp_path / 'versioned-0050-protocol.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0050")
+
+    upgrade_database_to_head(database_url)
+
+    engine = sa.create_engine(database_url)
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT version_num FROM alembic_version")
+        ) == "0076"
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'trg_ai_assessments_protocol_scope'"
+            )
+        ) is not None
+    engine.dispose()
+
+
+def test_versioned_legacy_0072_bootstrap_authenticates_then_upgrades_to_0073(
+    tmp_path,
+) -> None:
+    """A clean released 0072 boundary is authenticated before successor DDL."""
+    from app.db_migrations import upgrade_database_to_head
+
+    database_url = f"sqlite:///{tmp_path / 'versioned-legacy-0072-gateway.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0072")
+    engine = sa.create_engine(database_url)
+
+    with engine.connect() as connection:
+        assert {
+            row[0]
+            for row in connection.execute(
+                sa.text(
+                    "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                    "AND tbl_name IN ('gateway_idempotency_requests', "
+                    "'research_messages', 'research_intents', 'research_run_specs', "
+                    "'role_events', 'gateway_commands')"
+                )
+            )
+        } == LEGACY_0072_GATEWAY_TRIGGER_NAMES
+
+    upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT version_num FROM alembic_version")
+        ) == "0076"
+        assert {
+            row[0]
+            for row in connection.execute(
+                sa.text(
+                    "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                    "AND tbl_name IN ('gateway_idempotency_requests', "
+                    "'research_messages', 'research_intents', 'research_run_specs', "
+                    "'role_events', 'gateway_commands')"
+                )
+            )
+        } == set(GATEWAY_MANAGED_TRIGGER_NAMES)
+    engine.dispose()
+
+
+def test_versioned_legacy_0072_bootstrap_refuses_tampering_before_0073_ddl(
+    tmp_path,
+) -> None:
+    """A tampered legacy guard cannot be repaired or upgraded implicitly."""
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+
+    database_url = f"sqlite:///{tmp_path / 'tampered-legacy-0072-gateway.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0072")
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TRIGGER no_update_role_events")
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="canonical Gateway append-only trigger",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT version_num FROM alembic_version")
+        ) == "0072"
+        assert connection.scalar(
+            sa.text(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                "AND name = 'no_update_role_events'"
+            )
+        ) is None
+    engine.dispose()
+
+
+@pytest.mark.parametrize("trigger_name", GATEWAY_IMMUTABLE_TRIGGER_NAMES)
+def test_versioned_0072_bootstrap_rejects_missing_gateway_guard_before_repairs(
+    tmp_path, trigger_name: str
+) -> None:
+    """A 0072 marker cannot mask one missing Gateway append-only trigger."""
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+
+    database_url = f"sqlite:///{tmp_path / f'missing-{trigger_name}.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0072")
+
+    marker_trigger_sql = (
+        "CREATE TRIGGER no_update_uw_company_research_events "
+        "BEFORE UPDATE ON uw_company_research_events "
+        "BEGIN SELECT RAISE(ABORT, 'gateway preflight marker'); END"
+    )
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(f"DROP TRIGGER {trigger_name}")
+        connection.exec_driver_sql(
+            "DROP TRIGGER no_update_uw_company_research_events"
+        )
+        connection.exec_driver_sql(marker_trigger_sql)
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="canonical Gateway append-only trigger",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT version_num FROM alembic_version")
+        ) == "0072"
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' AND name = :trigger_name"
+            ),
+            {"trigger_name": trigger_name},
+        ) is None
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'no_update_uw_company_research_events'"
+            )
+        ) == marker_trigger_sql
+    engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "trigger_name",
+    GATEWAY_ARTIFACT_VALIDATOR_TRIGGER_NAMES + GATEWAY_REPLACE_GUARD_TRIGGER_NAMES,
+)
+def test_versioned_0073_bootstrap_rejects_missing_gateway_insert_guard_before_repairs(
+    tmp_path,
+    trigger_name: str,
+) -> None:
+    """A head marker cannot conceal a missing JSON or REPLACE insert guard."""
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+
+    database_url = f"sqlite:///{tmp_path / f'missing-{trigger_name}.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0073")
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(f"DROP TRIGGER {trigger_name}")
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="canonical Gateway append-only trigger",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT version_num FROM alembic_version")
+        ) == "0073"
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' "
+                "AND name = :trigger_name"
+            ),
+            {"trigger_name": trigger_name},
+        ) is None
+    engine.dispose()
+
+
+@pytest.mark.parametrize("trigger_name", GATEWAY_NUL_GUARD_TRIGGER_NAMES)
+def test_versioned_0074_bootstrap_rejects_missing_nul_guard_before_repairs(
+    tmp_path,
+    trigger_name: str,
+) -> None:
+    """A 0074 marker requires every exact successor NUL/cache guard."""
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+
+    database_url = f"sqlite:///{tmp_path / f'missing-0074-{trigger_name}.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0074")
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(f"DROP TRIGGER {trigger_name}")
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="canonical Gateway append-only trigger",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT version_num FROM alembic_version")
+        ) == "0074"
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' "
+                "AND name = :trigger_name"
+            ),
+            {"trigger_name": trigger_name},
+        ) is None
+    engine.dispose()
+
+
+def test_versioned_0073_bootstrap_rejects_noop_gateway_artifact_validator(
+    tmp_path,
+) -> None:
+    """A validation trigger's name alone is not an authentication boundary."""
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+
+    database_url = f"sqlite:///{tmp_path / 'noop-gateway-validator.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0073")
+    noop_trigger_sql = (
+        "CREATE TRIGGER validate_insert_role_events_artifact_refs "
+        "BEFORE INSERT ON role_events BEGIN SELECT 1; END"
+    )
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "DROP TRIGGER validate_insert_role_events_artifact_refs"
+        )
+        connection.exec_driver_sql(noop_trigger_sql)
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="canonical Gateway append-only trigger",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' "
+                "AND name = 'validate_insert_role_events_artifact_refs'"
+            )
+        ) == noop_trigger_sql
+    engine.dispose()
+
+
+def test_versioned_0072_bootstrap_rejects_noop_gateway_guard_before_repairs(
+    tmp_path,
+) -> None:
+    """A named Gateway trigger must retain its canonical rejecting body."""
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+
+    database_url = f"sqlite:///{tmp_path / 'noop-gateway-trigger.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0072")
+
+    noop_trigger_sql = (
+        "CREATE TRIGGER no_update_role_events BEFORE UPDATE ON role_events "
+        "BEGIN SELECT 1; END"
+    )
+    marker_trigger_sql = (
+        "CREATE TRIGGER no_update_uw_company_research_events "
+        "BEFORE UPDATE ON uw_company_research_events "
+        "BEGIN SELECT RAISE(ABORT, 'gateway noop preflight marker'); END"
+    )
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TRIGGER no_update_role_events")
+        connection.exec_driver_sql(noop_trigger_sql)
+        connection.exec_driver_sql(
+            "DROP TRIGGER no_update_uw_company_research_events"
+        )
+        connection.exec_driver_sql(marker_trigger_sql)
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="canonical Gateway append-only trigger",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT version_num FROM alembic_version")
+        ) == "0072"
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' AND name = 'no_update_role_events'"
+            )
+        ) == noop_trigger_sql
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'no_update_uw_company_research_events'"
+            )
+        ) == marker_trigger_sql
+    engine.dispose()
+
+
+def test_versioned_0072_bootstrap_rejects_extra_gateway_trigger_before_repairs(
+    tmp_path,
+) -> None:
+    """An unknown Gateway mutation trigger cannot hide behind a head marker."""
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+
+    database_url = f"sqlite:///{tmp_path / 'extra-gateway-trigger.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0072")
+    engine = sa.create_engine(database_url)
+    extra_trigger_sql = (
+        "CREATE TRIGGER zz_rewrite_gateway_artifact_refs BEFORE INSERT ON role_events "
+        "BEGIN SELECT 1; END"
+    )
+    with engine.begin() as connection:
+        connection.exec_driver_sql(extra_trigger_sql)
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="canonical Gateway append-only trigger",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT version_num FROM alembic_version")
+        ) == "0072"
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' "
+                "AND name = 'zz_rewrite_gateway_artifact_refs'"
+            )
+        ) == extra_trigger_sql
+    engine.dispose()
+
+
 def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> None:
     import app.models  # noqa: F401 - register the complete metadata
     from app.db_migrations import (
@@ -2908,7 +4183,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     database_url = f"sqlite:///{tmp_path / 'legacy-demo.db'}"
     engine = sa.create_engine(database_url)
-    Base.metadata.create_all(engine)
+    _create_pre_gateway_orm_schema(engine, Base.metadata)
     with Session(engine) as session:
         session.add(
             ResearchCase(
@@ -2928,7 +4203,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == _expected_head()
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0076"
         assert {
             row[0]
             for row in connection.execute(
@@ -2942,6 +4217,62 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
             "no_delete_uw_company_research_events",
         }
     require_company_research_event_schema(database_url)
+
+    expected_gateway_trigger_names = {
+        "gateway_idempotency_requests": {
+            "validate_insert_gateway_idempotency_request_fingerprint_nul",
+            "validate_update_gateway_idempotency_request_fingerprint_nul",
+            "validate_insert_gateway_idempotency_receipt_cache",
+            "validate_update_gateway_idempotency_receipt_cache",
+        },
+        "research_messages": {
+            "no_update_research_messages",
+            "no_delete_research_messages",
+            "reject_replace_research_messages",
+            "validate_insert_research_messages_input_sha256_nul",
+        },
+        "research_intents": {
+            "no_update_research_intents",
+            "no_delete_research_intents",
+            "reject_replace_research_intents",
+            "validate_insert_research_intents_input_sha256_nul",
+        },
+        "research_run_specs": {
+            "no_update_research_run_specs",
+            "no_delete_research_run_specs",
+            "validate_insert_research_run_specs_input_artifact_refs",
+            "validate_insert_research_run_specs_input_artifact_refs_nul",
+            "reject_replace_research_run_specs",
+        },
+        "role_events": {
+            "no_update_role_events",
+            "no_delete_role_events",
+            "validate_insert_role_events_artifact_refs",
+            "validate_insert_role_events_artifact_refs_nul",
+            "validate_insert_role_events_source_key_nul",
+            "reject_replace_role_events",
+        },
+        "gateway_commands": {
+            "no_update_gateway_commands",
+            "no_delete_gateway_commands",
+            "reject_replace_gateway_commands",
+            "validate_insert_gateway_commands_target_hash_nul",
+        },
+    }
+    with engine.connect() as connection:
+        for table_name, expected_trigger_names in (
+            expected_gateway_trigger_names.items()
+        ):
+            assert {
+                row[0]
+                for row in connection.execute(
+                    sa.text(
+                        "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                        "AND tbl_name = :table_name"
+                    ),
+                    {"table_name": table_name},
+                )
+            } == expected_trigger_names
 
     with engine.connect() as connection:
         connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
@@ -2969,6 +4300,385 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
         ).scalar_one() == 1
 
 
+def test_refuses_to_stamp_unmanaged_gateway_metadata_without_0072_guards(
+    tmp_path,
+) -> None:
+    import app.models  # noqa: F401 - register the complete metadata
+    from app.db_migrations import UnmanagedDatabaseSchemaError, upgrade_database_to_head
+    from app.models.ledger import Base
+
+    database_url = f"sqlite:///{tmp_path / 'unmanaged-gateway-metadata.db'}"
+    engine = sa.create_engine(database_url)
+    Base.metadata.create_all(engine)
+
+    with pytest.raises(UnmanagedDatabaseSchemaError, match="Gateway tables"):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert "alembic_version" not in sa.inspect(connection).get_table_names()
+        assert connection.scalar(
+            sa.text(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' "
+                "AND tbl_name = 'research_messages'"
+            )
+        ) == 0
+    engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "table_names",
+    [
+        ("research_teams",),
+        tuple(sorted(PROFESSIONAL_TEAM_TABLES)),
+    ],
+)
+def test_refuses_to_stamp_unmanaged_professional_team_footprints(
+    tmp_path,
+    table_names: tuple[str, ...],
+) -> None:
+    from app.db_migrations import UnmanagedDatabaseSchemaError, upgrade_database_to_head
+
+    database_url = f"sqlite:///{tmp_path / 'unmanaged-professional-team.db'}"
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        for table_name in table_names:
+            connection.exec_driver_sql(f"CREATE TABLE {table_name} (id INTEGER)")
+
+    with pytest.raises(UnmanagedDatabaseSchemaError, match="professional team tables"):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert "alembic_version" not in sa.inspect(connection).get_table_names()
+        assert set(table_names).issubset(sa.inspect(connection).get_table_names())
+    engine.dispose()
+
+
+def test_adopts_unmanaged_0070_audit_widths_by_running_0071(tmp_path) -> None:
+    from app.db_migrations import upgrade_database_to_head
+    from app.models.ledger import Base
+
+    database_url = f"sqlite:///{tmp_path / 'unmanaged-0070-audit-widths.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0070")
+
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO research_cases "
+                "(id, title, industry_topic, created_at, created_by) "
+                "VALUES (:id, :title, :industry_topic, :created_at, :created_by)"
+            ),
+            {
+                "id": "00000000000000000000000000000074",
+                "title": "unmanaged 0070 case",
+                "industry_topic": "test",
+                "created_at": "2026-09-04 00:00:00",
+                "created_by": "legacy",
+            },
+        )
+        connection.execute(
+            sa.text(
+                "INSERT INTO theses "
+                "(id, research_case_id, statement, created_at, created_by, "
+                "creator_type, review_state, research_protocol_required) "
+                "VALUES (:id, :research_case_id, :statement, :created_at, "
+                ":created_by, 'human', 'confirmed', 0)"
+            ),
+            {
+                "id": "00000000000000000000000000000075",
+                "research_case_id": "00000000000000000000000000000074",
+                "statement": "unmanaged 0070 thesis",
+                "created_at": "2026-09-04 00:00:00",
+                "created_by": "legacy",
+            },
+        )
+        connection.exec_driver_sql("DROP TABLE alembic_version")
+
+    upgrade_database_to_head(database_url)
+
+    audit_columns = (
+        ("research_cases", "created_by"),
+        ("theses", "created_by"),
+        ("event_research_scope_versions", "changed_by"),
+        ("source_contracts", "declared_by"),
+        ("document_upload_artifacts", "uploaded_by"),
+        ("case_tenant_admissions", "admitted_by"),
+    )
+    with engine.connect() as connection:
+        assert connection.scalar(
+            sa.text("SELECT version_num FROM alembic_version")
+        ) == "0076"
+        assert connection.scalar(sa.text("SELECT COUNT(*) FROM research_cases")) == 1
+        assert connection.scalar(sa.text("SELECT COUNT(*) FROM theses")) == 1
+        inspector = sa.inspect(connection)
+        for table_name, column_name in audit_columns:
+            database_column = {
+                column["name"]: column
+                for column in inspector.get_columns(table_name)
+            }[column_name]
+            assert database_column["type"].__visit_name__.upper() == "VARCHAR"
+            assert database_column["type"].length == 256
+            assert Base.metadata.tables[table_name].c[column_name].type.length == 256
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall() == []
+
+
+@pytest.mark.parametrize("revision", ["0070", "0071"])
+def test_unmanaged_adoption_rejects_foreign_key_violations_before_stamping(
+    tmp_path, revision: str
+) -> None:
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+
+    database_url = f"sqlite:///{tmp_path / f'unmanaged-{revision}-broken-fk.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, revision)
+
+    marker_trigger_sql = (
+        "CREATE TRIGGER no_update_uw_company_research_events "
+        "BEFORE UPDATE ON uw_company_research_events "
+        "BEGIN SELECT RAISE(ABORT, 'foreign key preflight marker'); END"
+    )
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.execute(
+            sa.text(
+                "INSERT INTO theses "
+                "(id, research_case_id, statement, created_at, created_by, "
+                "creator_type, review_state, research_protocol_required) "
+                "VALUES (:id, :research_case_id, :statement, :created_at, "
+                ":created_by, 'human', 'confirmed', 0)"
+            ),
+            {
+                "id": "00000000000000000000000000000076",
+                "research_case_id": "00000000000000000000000000000077",
+                "statement": "orphaned thesis",
+                "created_at": "2026-09-04 00:00:00",
+                "created_by": "legacy",
+            },
+        )
+        connection.exec_driver_sql(
+            "DROP TRIGGER no_update_uw_company_research_events"
+        )
+        connection.exec_driver_sql(marker_trigger_sql)
+        company_trigger_sql_before = dict(
+            connection.execute(
+                sa.text(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE type = 'trigger' "
+                    "AND tbl_name = 'uw_company_research_events'"
+                )
+            ).all()
+        )
+        connection.exec_driver_sql("DROP TABLE alembic_version")
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="foreign key violations",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert "alembic_version" not in sa.inspect(connection).get_table_names()
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+        assert dict(
+            connection.execute(
+                sa.text(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE type = 'trigger' "
+                    "AND tbl_name = 'uw_company_research_events'"
+                )
+            ).all()
+        ) == company_trigger_sql_before
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'no_update_uw_company_research_events'"
+            )
+        ) == marker_trigger_sql
+
+
+def test_unmanaged_adoption_rejects_missing_protocol_trigger_before_stamping(
+    tmp_path,
+) -> None:
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+
+    database_url = f"sqlite:///{tmp_path / 'unmanaged-missing-protocol-trigger.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0071")
+
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "DROP TRIGGER trg_ai_assessments_protocol_scope"
+        )
+        connection.exec_driver_sql("DROP TABLE alembic_version")
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall() == []
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="assessment protocol trigger",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert "alembic_version" not in sa.inspect(connection).get_table_names()
+        assert connection.scalar(
+            sa.text(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'trg_ai_assessments_protocol_scope'"
+            )
+        ) == 0
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["unicode_identifier", "quoted_literal", "unicode_literal"],
+)
+def test_unmanaged_adoption_rejects_tampered_protocol_trigger_before_stamping(
+    tmp_path, mutation: str
+) -> None:
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+
+    database_url = f"sqlite:///{tmp_path / f'unmanaged-{mutation}-trigger.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0071")
+
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        trigger_sql = connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'trg_ai_assessments_protocol_scope'"
+            )
+        )
+        assert trigger_sql is not None
+        if mutation == "unicode_identifier":
+            tampered_trigger_sql = trigger_sql.replace(
+                "t.research_protocol_required = 1",
+                "t.reſearch_protocol_required = 1",
+            )
+        elif mutation == "quoted_literal":
+            tampered_trigger_sql = trigger_sql.replace(
+                "assessment binding does not match snapshot thesis",
+                "ASSESSMENT BINDING DOES NOT MATCH SNAPSHOT THESIS",
+            )
+        else:
+            tampered_trigger_sql = trigger_sql.replace(
+                "assessment binding does not match snapshot thesis",
+                "aſſessment binding does not match snapshot thesis",
+            )
+        assert tampered_trigger_sql != trigger_sql
+        connection.exec_driver_sql(
+            "DROP TRIGGER trg_ai_assessments_protocol_scope"
+        )
+        connection.exec_driver_sql(tampered_trigger_sql)
+        connection.exec_driver_sql("DROP TABLE alembic_version")
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="canonical assessment protocol trigger",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert "alembic_version" not in sa.inspect(connection).get_table_names()
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'trg_ai_assessments_protocol_scope'"
+            )
+        ) == tampered_trigger_sql
+    engine.dispose()
+
+
+def test_unmanaged_adoption_checks_protocol_trigger_before_company_event_repair(
+    tmp_path,
+) -> None:
+    from app.db_migrations import (
+        UnmanagedDatabaseSchemaError,
+        upgrade_database_to_head,
+    )
+
+    database_url = f"sqlite:///{tmp_path / 'unmanaged-trigger-preflight.db'}"
+    backend = Path(__file__).parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "0071")
+
+    marker_trigger_sql = (
+        "CREATE TRIGGER no_update_uw_company_research_events "
+        "BEFORE UPDATE ON uw_company_research_events "
+        "BEGIN SELECT RAISE(ABORT, 'unmanaged preflight marker'); END"
+    )
+    engine = sa.create_engine(database_url)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "DROP TRIGGER trg_ai_assessments_protocol_scope"
+        )
+        connection.exec_driver_sql(
+            "DROP TRIGGER no_update_uw_company_research_events"
+        )
+        connection.exec_driver_sql(marker_trigger_sql)
+        company_trigger_sql_before = dict(
+            connection.execute(
+                sa.text(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE type = 'trigger' "
+                    "AND tbl_name = 'uw_company_research_events'"
+                )
+            ).all()
+        )
+        connection.exec_driver_sql("DROP TABLE alembic_version")
+
+    with pytest.raises(
+        UnmanagedDatabaseSchemaError,
+        match="canonical assessment protocol trigger",
+    ):
+        upgrade_database_to_head(database_url)
+
+    with engine.connect() as connection:
+        assert "alembic_version" not in sa.inspect(connection).get_table_names()
+        assert dict(
+            connection.execute(
+                sa.text(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE type = 'trigger' "
+                    "AND tbl_name = 'uw_company_research_events'"
+                )
+            ).all()
+        ) == company_trigger_sql_before
+        assert connection.scalar(
+            sa.text(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'trigger' "
+                "AND name = 'no_update_uw_company_research_events'"
+            )
+        ) == marker_trigger_sql
+    engine.dispose()
+
+
 @pytest.mark.parametrize(
     "mutation",
     (
@@ -2991,7 +4701,7 @@ def test_unmanaged_adoption_authenticates_existing_company_event_history(
 
     database_url = f"sqlite:///{tmp_path / f'invalid-adoption-{mutation}.db'}"
     engine = sa.create_engine(database_url)
-    Base.metadata.create_all(engine)
+    _create_pre_gateway_orm_schema(engine, Base.metadata)
     with engine.connect() as connection:
         preparation_id, event_id = _seed_stamped_company_event(connection)
         if mutation == "invalid_digest":
@@ -3066,10 +4776,12 @@ def test_unmanaged_adoption_authenticates_existing_company_event_history(
         connection.exec_driver_sql("PRAGMA ignore_check_constraints=OFF")
         connection.commit()
 
-    with pytest.raises(
-        UnmanagedDatabaseSchemaError,
-        match="authenticate or repair company research event schema",
-    ):
+    expected_error = (
+        "foreign key violations"
+        if mutation == "broken_preparation_fk"
+        else "authenticate or repair company research event schema"
+    )
+    with pytest.raises(UnmanagedDatabaseSchemaError, match=expected_error):
         upgrade_database_to_head(database_url)
 
     with engine.connect() as connection:
@@ -3096,7 +4808,7 @@ def test_unmanaged_adoption_rejects_unknown_required_company_event_column(
 
     database_url = f"sqlite:///{tmp_path / 'required-extra-event-column.db'}"
     engine = sa.create_engine(database_url)
-    Base.metadata.create_all(engine)
+    _create_pre_gateway_orm_schema(engine, Base.metadata)
     with engine.begin() as connection:
         connection.exec_driver_sql(
             "ALTER TABLE uw_company_research_events "
@@ -3123,7 +4835,7 @@ def test_unmanaged_adoption_installs_the_0070_company_worker_index(
 
     database_url = f"sqlite:///{tmp_path / 'legacy-without-worker-index.db'}"
     engine = sa.create_engine(database_url)
-    Base.metadata.create_all(engine)
+    _create_pre_gateway_orm_schema(engine, Base.metadata)
     with engine.begin() as connection:
         connection.exec_driver_sql(
             "DROP INDEX ix_jobs_company_research_worker_candidates"
@@ -3134,7 +4846,7 @@ def test_unmanaged_adoption_installs_the_0070_company_worker_index(
     with engine.connect() as connection:
         assert connection.scalar(
             sa.text("SELECT version_num FROM alembic_version")
-        ) == _expected_head()
+        ) == "0076"
         index = {
             row["name"]: row
             for row in sa.inspect(connection).get_indexes("jobs")
@@ -3329,6 +5041,165 @@ def test_postgresql_worker_index_catalog_uses_the_visible_jobs_relation() -> Non
     assert "current_schema()" not in normalized
 
 
+def test_postgresql_gateway_trigger_catalog_binds_visible_relation_oids() -> None:
+    """A same-named table in another schema cannot satisfy Gateway auth."""
+    from app.db_migrations import _POSTGRESQL_GATEWAY_TRIGGER_STATE_SQL
+
+    normalized = " ".join(
+        _POSTGRESQL_GATEWAY_TRIGGER_STATE_SQL.lower().split()
+    )
+    assert "trigger_row.tgrelid in (" in normalized
+    assert "trigger_rel.relname in" not in normalized
+
+
+def test_postgresql_gateway_trigger_catalog_anchors_configured_schema() -> None:
+    """A later search-path decoy cannot replace the configured migration schema."""
+    from app.db_migrations import _POSTGRESQL_GATEWAY_TRIGGER_STATE_SQL
+
+    normalized = " ".join(
+        _POSTGRESQL_GATEWAY_TRIGGER_STATE_SQL.lower().split()
+    )
+    assert "trigger_namespace.nspname = :schema_name" in normalized
+    for table_name in GATEWAY_IMMUTABLE_TABLES:
+        assert (
+            "to_regclass(format('%i.%i', cast(:schema_name as text), "
+            f"'{table_name}'))"
+        ) in normalized
+
+
+def test_postgresql_gateway_trigger_catalog_types_schema_parameter_for_format() -> None:
+    """psycopg must not send an unknown parameter into polymorphic format()."""
+    from app.db_migrations import _POSTGRESQL_GATEWAY_TRIGGER_STATE_SQL
+
+    normalized = " ".join(
+        _POSTGRESQL_GATEWAY_TRIGGER_STATE_SQL.lower().split()
+    )
+    assert "format('%i.%i', cast(:schema_name as text), " in normalized
+
+
+def test_postgresql_gateway_trigger_catalog_reads_the_full_gateway_trigger_set() -> None:
+    """Unknown user triggers must fail authentication, not be filtered away."""
+    from app.db_migrations import _POSTGRESQL_GATEWAY_TRIGGER_STATE_SQL
+
+    normalized = " ".join(
+        _POSTGRESQL_GATEWAY_TRIGGER_STATE_SQL.lower().split()
+    )
+    assert "trigger_row.tgname in" not in normalized
+    for table_name in GATEWAY_TABLES:
+        assert (
+            "to_regclass(format('%i.%i', cast(:schema_name as text), "
+            f"'{table_name}'))"
+        ) in normalized
+
+
+def test_postgresql_gateway_trigger_catalog_requires_function_owner_to_match_table() -> None:
+    """A separately owned mutable trigger function is not a trusted guard."""
+    from app.db_migrations import (
+        _POSTGRESQL_GATEWAY_TRIGGER_STATE_SQL,
+        _postgresql_gateway_trigger_ownership_is_canonical,
+    )
+
+    normalized = " ".join(
+        _POSTGRESQL_GATEWAY_TRIGGER_STATE_SQL.lower().split()
+    )
+    assert "trigger_rel.relowner as table_owner" in normalized
+    assert "function_row.proowner as function_owner" in normalized
+    assert _postgresql_gateway_trigger_ownership_is_canonical(
+        {"table_owner": 41, "function_owner": 41}
+    )
+    assert not _postgresql_gateway_trigger_ownership_is_canonical(
+        {"table_owner": 41, "function_owner": 99}
+    )
+
+
+def test_postgresql_gateway_trigger_catalog_rejects_conditional_or_column_scoped_guards() -> None:
+    """Gateway guards must apply to every matching row and UPDATE column.
+
+    ``tgtype`` alone does not distinguish ``UPDATE`` from ``UPDATE OF id``,
+    nor does it record a ``WHEN (false)`` predicate.  Both changes leave a
+    same-name, same-function trigger that can silently bypass immutability.
+    """
+    from app.db_migrations import (
+        _POSTGRESQL_GATEWAY_TRIGGER_CONTRACTS,
+        _POSTGRESQL_GATEWAY_TRIGGER_STATE_SQL,
+        _postgresql_gateway_trigger_state_is_canonical,
+    )
+
+    normalized_sql = " ".join(
+        _POSTGRESQL_GATEWAY_TRIGGER_STATE_SQL.lower().split()
+    )
+    assert "trigger_row.tgqual as trigger_qual" in normalized_sql
+    assert "trigger_row.tgattr <> ''::int2vector as is_column_specific" in normalized_sql
+    assert "pg_get_triggerdef(trigger_row.oid, true) as trigger_definition" in normalized_sql
+
+    operations = {7: "INSERT", 11: "DELETE", 19: "UPDATE"}
+    for (table_name, trigger_name), (
+        trigger_type,
+        function_name,
+        _contract_source_sha256,
+    ) in _POSTGRESQL_GATEWAY_TRIGGER_CONTRACTS.items():
+        operation = operations[trigger_type]
+        definition = (
+            f"CREATE TRIGGER {trigger_name} BEFORE {operation} ON {table_name} "
+            f"FOR EACH ROW EXECUTE FUNCTION {function_name}()"
+        )
+        state = {
+            "table_name": table_name,
+            "table_owner": 41,
+            "trigger_name": trigger_name,
+            "enabled": "O",
+            "trigger_type": trigger_type,
+            "trigger_qual": None,
+            "is_column_specific": False,
+            "trigger_definition": definition,
+            "function_schema": "trusted",
+            "function_name": function_name,
+            "function_owner": 41,
+            "function_source": "body",
+            "function_language": "plpgsql",
+            "function_result": "trigger",
+            "function_arguments": "",
+            "trigger_arguments": "",
+        }
+        kwargs = {
+            "table_name": table_name,
+            "trigger_name": trigger_name,
+            "trigger_type": trigger_type,
+            "function_name": function_name,
+            "function_source_sha256": hashlib.sha256(b"body").hexdigest(),
+            "schema_name": "trusted",
+        }
+
+        assert _postgresql_gateway_trigger_state_is_canonical(state, **kwargs)
+        assert not _postgresql_gateway_trigger_state_is_canonical(
+            {**state, "trigger_qual": "{BOOLEXPR :boolop and}"},
+            **kwargs,
+        )
+        assert not _postgresql_gateway_trigger_state_is_canonical(
+            {**state, "is_column_specific": True},
+            **kwargs,
+        )
+        assert not _postgresql_gateway_trigger_state_is_canonical(
+            {
+                **state,
+                "trigger_definition": definition.replace(
+                    "FOR EACH ROW EXECUTE", "FOR EACH ROW WHEN (false) EXECUTE"
+                ),
+            },
+            **kwargs,
+        )
+        if operation == "UPDATE":
+            assert not _postgresql_gateway_trigger_state_is_canonical(
+                {
+                    **state,
+                    "trigger_definition": definition.replace(
+                        "BEFORE UPDATE ON", "BEFORE UPDATE OF created_at ON"
+                    ),
+                },
+                **kwargs,
+            )
+
+
 def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> None:
     database_path = tmp_path / "source-contracts-0051.db"
     backend = Path(__file__).parents[1]
@@ -3383,7 +5254,7 @@ def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> 
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == _expected_head()
+        ).scalar_one() == "0076"
         assert connection.execute(
             sa.text(
                 "SELECT research_source_type FROM source_contracts WHERE id = :id"
@@ -3473,21 +5344,3 @@ with SessionLocal() as session:
         cwd=backend, env=environment, text=True, capture_output=True, check=False,
     )
     assert verified.returncode == 0, verified.stderr + verified.stdout
-
-
-def test_unmanaged_adoption_installs_ai_scope_index(tmp_path):
-    import app.models  # noqa: F401
-    from app.db_migrations import upgrade_database_to_head
-    from app.models.ledger import Base
-    url = f"sqlite:///{tmp_path / 'unmanaged-ai-scope.db'}"
-    engine = sa.create_engine(url)
-    try:
-        Base.metadata.create_all(engine)
-        with engine.begin() as connection:
-            connection.exec_driver_sql('DROP INDEX ix_ai_runs_research_scope')
-        upgrade_database_to_head(url)
-        with engine.connect() as connection:
-            indexes = connection.exec_driver_sql("PRAGMA index_list('ai_runs')").all()
-            assert any(row[1] == 'ix_ai_runs_research_scope' for row in indexes)
-    finally:
-        engine.dispose()

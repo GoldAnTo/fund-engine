@@ -1,28 +1,24 @@
+"""Current Gateway HTTP/SSE acceptance; legacy Case browser UI is retired."""
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 
-def test_live_event_ui_verifier_keeps_reviewed_case_pages_working_through_default_http_client() -> None:
-    """Use live HTTP/browser adapters with an explicit external-provider fake."""
+def test_gateway_delivery_streams_authenticated_http_without_legacy_routes() -> None:
     frontend = Path(__file__).parents[2] / "frontend"
-    script = frontend / "scripts" / "verify-live-event-ui.mjs"
     node = shutil.which("node")
-    assert node, "Node.js is required for the live frontend verifier"
-
+    assert node, "Node.js is required for the Gateway HTTP acceptance"
     result = subprocess.run(
-        [node, "scripts/with-project-node.mjs", "scripts/verify-live-event-ui.mjs"],
+        [node, "--test", "--test-reporter=tap", "server/gatewayServer.test.mjs"],
         cwd=frontend,
-        env={**os.environ, "PYTHON": sys.executable, "PW_BROWSER_CHANNEL": "chrome"},
         text=True,
         capture_output=True,
-        timeout=90,
+        timeout=30,
         check=False,
     )
-
-    assert result.returncode == 0, result.stderr
-    assert "PASS: default frontend operated a seeded reviewed Case, configured and registered a market factor and reviewed company-stock-fund chain, replayed a transparent fund-disclosure failure, ran, paused its future schedule, and listed the same Case through the live API" in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "SSE sends a live frame" in result.stdout
+    assert "deny legacy" in result.stdout
+    assert "fail 0" in result.stdout

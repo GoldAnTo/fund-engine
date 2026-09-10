@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import httpx
 import pytest
-from unittest.mock import MagicMock
 
 from app.ai.client import LLMMalformedResponseError
 from app.services.event_extraction import (
     EventExtractionProviderError,
     EventExtractionService,
 )
-
 
 PROVIDER_ERROR_MESSAGE = (
     "event extraction LLM is unavailable or returned an invalid response"
@@ -23,6 +23,74 @@ class ValidExtractionClient:
             "research_question": "新指引是否改变了市场对公司前景的判断？",
             "candidate_factors": ["新指引", "盘后交易", "市场预期"],
         }
+
+
+def test_company_alias_is_rechecked_as_literal_user_subject_without_inventing_facts() -> None:
+    class AliasClient(ValidExtractionClient):
+        calls = 0
+
+        def chat_json(self, messages, schema_hint):
+            self.calls += 1
+            result = super().chat_json(messages, schema_hint)
+            result["company_name"] = "Alphabet" if self.calls == 1 else "谷歌"
+            result["ticker"] = "GOOGL"
+            result["event_at"] = "2026-07-23T00:00:00"
+            return result
+
+    client = AliasClient()
+    result = EventExtractionService(client=client).extract(
+        raw_input="北京时间7月23日凌晨，谷歌股价下跌，财报资本开支增加。", source_url=None,
+    )
+    assert result.company_name == "谷歌"
+    assert client.calls == 2
+    assert result.ticker is None
+    assert result.event_at is None
+
+
+def test_company_recheck_is_bounded_and_still_rejects_unsupported_names() -> None:
+    class MissingClient(ValidExtractionClient):
+        calls = 0
+
+        def chat_json(self, messages, schema_hint):
+            self.calls += 1
+            return {**super().chat_json(messages, schema_hint), "company_name": "Invented Corp"}
+
+    client = MissingClient()
+    result = EventExtractionService(client=client).extract(raw_input="公司股价下跌。", source_url=None)
+    assert result.company_name is None
+    assert client.calls == 2
+
+
+def test_explicit_research_subject_is_preserved_even_when_model_returns_null() -> None:
+    class MissingClient(ValidExtractionClient):
+        def chat_json(self, messages, schema_hint):
+            return {**super().chat_json(messages, schema_hint), "company_name": None}
+
+    result = EventExtractionService(client=MissingClient()).extract(
+        raw_input="研究主体：谷歌；待核验材料：财报资本开支增加。", source_url=None,
+    )
+    assert result.company_name == "谷歌"
+    assert result.confirmation_required is True
+
+
+def test_live_prompt_defines_exact_json_keys_and_factor_shape() -> None:
+    class ContractCheckingClient(ValidExtractionClient):
+        def chat_json(self, messages, schema_hint):
+            instructions = messages[0]["content"]
+            for key in ("event_title", "company_name", "ticker", "event_at",
+                        "market_reaction", "summary", "research_question",
+                        "candidate_factors", "input_kind"):
+                assert f'"{key}"' in instructions
+            assert "3 到 5 个互不重复的非空字符串" in instructions
+            assert "company、code、time、factors" in instructions
+            assert "不得使用 Markdown" in instructions
+            assert "```json" in instructions
+            return super().chat_json(messages, schema_hint)
+
+    result = EventExtractionService(client=ContractCheckingClient()).extract(
+        raw_input="研究半导体设备需求", source_url=None,
+    )
+    assert len(result.candidate_factors) == 3
 
 
 def test_extraction_keeps_unknown_event_facts_empty_and_marks_confirmation() -> None:

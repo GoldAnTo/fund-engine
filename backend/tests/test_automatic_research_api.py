@@ -61,7 +61,7 @@ class _FakeExtractor:
 
 
 def test_start_accepts_only_input_and_returns_queued_ids(
-    cmd_client, monkeypatch
+    cmd_client, cmd_session, monkeypatch
 ) -> None:
     from app.api.v1 import automatic_research as api
 
@@ -79,6 +79,91 @@ def test_start_accepts_only_input_and_returns_queued_ids(
     assert response.status_code == 201
     assert set(response.json()) == {"case_id", "run_id", "status"}
     assert response.json()["status"] == "queued"
+    case = cmd_session.get(ResearchCase, uuid.UUID(response.json()["case_id"]))
+    assert case is not None
+    assert case.created_by == "tenant:test-team"
+
+
+def test_start_passes_nullable_host_subject_to_intake(
+    cmd_client, monkeypatch
+) -> None:
+    from app.api.v1 import automatic_research as api
+
+    calls = []
+
+    class _Started:
+        case_id = "captured-case"
+        run_id = "captured-run"
+
+    class _CapturingIntake:
+        def __init__(self, _db) -> None:
+            pass
+
+        def start(
+            self,
+            raw_input: str,
+            *,
+            tenant_id: str,
+            actor_subject_id: str | None,
+            commit: bool = True,
+        ) -> _Started:
+            calls.append(
+                {
+                    "raw_input": raw_input,
+                    "tenant_id": tenant_id,
+                    "actor_subject_id": actor_subject_id,
+                    "commit": commit,
+                }
+            )
+            return _Started()
+
+    monkeypatch.setattr(api, "AutomaticResearchIntakeService", _CapturingIntake)
+
+    response = cmd_client.post(
+        "/api/v1/automatic-research",
+        json={"input": "旧令牌仍由服务端派生审计主体"},
+    )
+
+    assert response.status_code == 201
+    assert calls == [
+        {
+            "raw_input": "旧令牌仍由服务端派生审计主体",
+            "tenant_id": "test-team",
+            "actor_subject_id": None,
+            "commit": True,
+        }
+    ]
+
+
+def test_start_uses_host_configured_subject_not_client_values(
+    cmd_client, cmd_session, monkeypatch
+) -> None:
+    from app.api.v1 import automatic_research as api
+
+    monkeypatch.setenv(
+        "RESEARCH_TENANT_TOKENS",
+        '{"gateway-token":{"tenant_id":"team-a","subject_id":" host-alice ","roles":[]}}',
+    )
+    monkeypatch.setattr(
+        api,
+        "AutomaticResearchIntakeService",
+        lambda db: AutomaticResearchIntakeService(db, extractor=_FakeExtractor()),
+    )
+
+    response = cmd_client.post(
+        "/api/v1/automatic-research",
+        params={"actor_subject_id": "query-attacker"},
+        headers={
+            "Authorization": "Bearer gateway-token",
+            "X-Research-Subject": "header-attacker",
+        },
+        json={"input": "服务器配置的研究主体应被记录"},
+    )
+
+    assert response.status_code == 201
+    case = cmd_session.get(ResearchCase, uuid.UUID(response.json()["case_id"]))
+    assert case is not None
+    assert case.created_by == "human: host-alice "
 
 
 def test_start_trims_input_and_rejects_whitespace_without_rows(
@@ -129,7 +214,14 @@ def test_start_maps_intake_failures_safely_and_rolls_back(
         def __init__(self, db) -> None:
             self._db = db
 
-        def start(self, raw_input: str, *, tenant_id: str):
+        def start(
+            self,
+            raw_input: str,
+            *,
+            tenant_id: str,
+            actor_subject_id: str | None,
+            commit: bool = True,
+        ):
             self._db.add(
                 ResearchCase(
                     title="must roll back",
@@ -931,7 +1023,11 @@ def test_postgres_duplicate_retry_creates_exactly_one_new_active_run(
 
     started = AutomaticResearchIntakeService(
         session, extractor=_FakeExtractor()
-    ).start("automatic retry race", tenant_id="test-team")
+    ).start(
+        "automatic retry race",
+        tenant_id="test-team",
+        actor_subject_id="researcher",
+    )
     old_run = session.get(ResearchRun, uuid.UUID(started.run_id))
     lifecycle = session.get(
         EventResearchLifecycle, uuid.UUID(started.case_id)
